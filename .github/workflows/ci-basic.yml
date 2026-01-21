@@ -1,0 +1,28 @@
+name: CI Basic (No Deploy)
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  sanity:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Repo structure sanity check
+        run: |
+          test -d frontend
+          test -d supabase
+          test -d docs
+          test -d .github
+
+      - name: Block accidental deploy
+        run: |
+          echo "CI OK. No deploy steps allowed at Gate-0 / Gate-1."
