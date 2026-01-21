@@ -1,2 +1,4 @@
 - Frontend must not include any backend SDK (e.g., @supabase/supabase-js).
 - Any attempt to add backend SDKs to frontend is a SSOT violation.
+- Frontend must not hardcode API URLs or domains.
+- All frontend network targets must come from VITE_API_BASE.
