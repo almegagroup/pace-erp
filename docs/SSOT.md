@@ -21,3 +21,7 @@
 ## Supabase Region Lock
 - Project region is fixed to South Asia (Mumbai).
 - Region will not be changed under any circumstance.
+## Single Backend Entry
+- All backend APIs must pass through a single Edge Function entry named `api`.
+- No other Edge Functions may expose business APIs.
+- Internal routing will be handled inside the `api` function.
