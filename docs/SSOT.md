@@ -18,3 +18,6 @@
 - Frontend must not set or read auth cookies.
 - Cookie Domain, SameSite, Secure decisions are backend-only.
 - Frontend must not infer auth state from window.location or cookies.
+## Supabase Region Lock
+- Project region is fixed to South Asia (Mumbai).
+- Region will not be changed under any circumstance.
