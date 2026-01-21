@@ -14,3 +14,7 @@
   - No browser-only hacks (location, cookie authority).
   - No localhost or environment-specific branching in code.
   - Same bundle must work for Web, Electron, and PWA.
+- Frontend is domain-bound but not domain-authoritative.
+- Frontend must not set or read auth cookies.
+- Cookie Domain, SameSite, Secure decisions are backend-only.
+- Frontend must not infer auth state from window.location or cookies.
