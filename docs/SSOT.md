@@ -10,3 +10,7 @@
 - Same keys must exist in Local, Preview, and Production.
 - Values may differ per environment.
 - No hardcoded domains or URLs in frontend code.
+- Frontend must remain deploy-neutral:
+  - No browser-only hacks (location, cookie authority).
+  - No localhost or environment-specific branching in code.
+  - Same bundle must work for Web, Electron, and PWA.
