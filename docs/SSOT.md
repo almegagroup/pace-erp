@@ -1,0 +1,2 @@
+- Frontend must not include any backend SDK (e.g., @supabase/supabase-js).
+- Any attempt to add backend SDKs to frontend is a SSOT violation.
