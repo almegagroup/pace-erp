@@ -1,0 +1,5 @@
+# PACE-ERP CODEOWNERS
+# Gate-0 Governance Control
+# Rule: No file can be merged without owner review
+
+* @repo-owner
