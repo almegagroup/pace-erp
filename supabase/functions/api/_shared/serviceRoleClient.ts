@@ -15,3 +15,17 @@ export const serviceRoleClient = createClient(
   SERVICE_ROLE_KEY,
   { auth: { persistSession: false } }
 );
+/*
+ * File-ID: 12A
+ * Gate: 1
+ * Phase: 1
+ * Domain: DB
+ * Purpose: Service role authority assertion
+ * Authority: Backend
+ */
+export function assertServiceRole(): void {
+  // Presence of service role key = authority lock
+  if (!SERVICE_ROLE_KEY) {
+    throw new Error("DB_SERVICE_ROLE_ASSERTION_FAILED");
+  }
+}

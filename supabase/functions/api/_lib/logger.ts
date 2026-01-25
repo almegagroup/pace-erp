@@ -8,8 +8,7 @@
  * Authority: Backend
  */
 
-type LogLevel = "INFO" | "WARN" | "ERROR" | "SECURITY";
-
+type LogLevel = "INFO" | "WARN" | "ERROR" | "SECURITY" | "OBSERVABILITY";
 interface LogPayload {
   level: LogLevel;
   request_id?: string;
