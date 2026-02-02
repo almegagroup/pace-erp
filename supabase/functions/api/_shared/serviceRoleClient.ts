@@ -1,10 +1,21 @@
+/*
+ * File-ID: 0.5A
+ * Gate: 0
+ * Phase: 0
+ * Domain: SECURITY
+ * Purpose: Service role usage policy
+ * Rule: Service role key may only be used by backend code
+ * Authority: Backend-only
+ */
 // supabase/functions/_shared/serviceRoleClient.ts
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2?target=deno";
+import { buildRlsContextHeaders } from "./context_headers.ts";
+import type { ContextResolution } from "../_pipeline/context.ts";
 
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY");
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
   throw new Error("SERVICE ROLE NOT CONFIGURED");
@@ -28,4 +39,24 @@ export function assertServiceRole(): void {
   if (!SERVICE_ROLE_KEY) {
     throw new Error("DB_SERVICE_ROLE_ASSERTION_FAILED");
   }
+}
+/*
+ * File-ID: 5.7
+ * Gate: 5
+ * Phase: 5
+ * Domain: DB
+ * Purpose: Context-aware service role client (RLS alignment)
+ * Authority: Backend
+ */
+export function getServiceRoleClientWithContext(ctx: ContextResolution) {
+  const headers = buildRlsContextHeaders(ctx);
+
+ return createClient(
+  SUPABASE_URL!,
+  SERVICE_ROLE_KEY!,
+  {
+    auth: { persistSession: false },
+    global: { headers },
+  }
+);
 }

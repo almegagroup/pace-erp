@@ -71,7 +71,7 @@ export function enforceIdleLifecycle(
      * SYMBOLIC TTL
      * Real value will be locked in config / later ID
      */
-    const ABSOLUTE_TTL_MS = 0;
+    const ABSOLUTE_TTL_MS = 12 * 60 * 60 * 1000;
 
     if (ageMs >= ABSOLUTE_TTL_MS) {
         log({
@@ -100,8 +100,9 @@ export function enforceIdleLifecycle(
    * SYMBOLIC thresholds
    * Real values will be locked later
    */
-  const IDLE_WARNING_MS = 0;
-  const IDLE_EXPIRE_MS = 0;
+  const IDLE_WARNING_MS = 10 * 60 * 1000; // 10 min
+const IDLE_EXPIRE_MS  = 30 * 60 * 1000; // 30 min
+
 
   if (idleMs >= IDLE_EXPIRE_MS) {
      log({

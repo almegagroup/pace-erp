@@ -2,4 +2,4 @@
 // Gate: 0 | Phase: 0 | Domain: BACKEND
 // Purpose: Single shared backend surface
 
-export { requireEnv } from "./env.ts";
+export { ENV, requireEnv } from "./env.ts";

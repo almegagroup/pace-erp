@@ -42,9 +42,11 @@ if (preflight) {
 }
 
 // ---- ID-11: Public endpoint isolation ----
-// Only /health may bypass pipeline. No other path is allowed.
+// Only /health may bypass pipeline.
+// All other endpoints (including public ones like /api/signup)
+// MUST go through the full pipeline and be handled downstream.
 if (url.pathname !== "/health") {
-  // governance lock: all non-health requests must go through pipeline
+  // governance lock: no bypass, no special-casing
 }
 
   // ---- PIPELINE (ID 1A) ----
