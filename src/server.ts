@@ -1,5 +1,5 @@
 import Fastify from "fastify"
-import handler from "./supabase/functions/api/index.ts"
+import handler from "../supabase/functions/api/index.ts"
 
 const app = Fastify()
 
