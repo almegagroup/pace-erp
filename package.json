@@ -1,0 +1,23 @@
+{
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.0",
+    "fastify": "^5.8.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  },
+  "name": "pace-erp",
+  "version": "1.0.0",
+  "description": "This frontend must not hardcode any backend URLs.\r All network targets must be read from `VITE_API_BASE`.\r ### Deploy Neutrality\r This frontend is deploy-neutral and must not assume browser-only behavior.\r ### Domain Boundary\r This frontend does not control or inspect auth cookies or domains.\r All auth/session/domain decisions are handled by the backend.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
