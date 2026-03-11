@@ -1,7 +1,7 @@
 /*
  * File-ID: 2.1A-AUTH-LOGIN-HANDLER
  * File-Path: supabase/functions/api/_core/auth/login.handler.ts
- * Gate: 2
+ * gate_id: 2
  * Phase: 2
  * Domain: AUTH
  * Purpose: Verify user identity via Supabase Auth (hardened validation)
@@ -15,20 +15,19 @@ import { createSession } from "../session/session.create.ts";
 import { buildSessionCookie } from "../session/session.cookie.ts";
 import { resolveIdentifier } from "./identifierResolver.ts";
 import { log } from "../../_lib/logger.ts";
+import { authClient } from "./authClient.ts";
+import { recordSessionTimeline } from "../session/session_timeline.ts";
 
 /**
  * STEP 8.1 — Device tagging (soft)
  * Signal only. No allow/deny.
  */
-function extractDeviceInfo(ctx: LoginContext) {
+function extractDeviceInfo(_ctx: LoginContext) {
   const ua =
-    typeof (globalThis as any)?.navigator === "undefined"
+    typeof globalThis.navigator === "undefined"
       ? "unknown"
-      : "unknown";
+      : globalThis.navigator.userAgent ?? "unknown";
 
-  // NOTE:
-  // We do NOT have raw Request here by design.
-  // This is a soft, best-effort signal only.
   return {
     device_id: ua,
     device_summary: ua.slice(0, 255),
@@ -71,7 +70,7 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
   log({
     level: "SECURITY",
     request_id: requestId,
-    gate: "2.7",
+    gate_id: "2.7",
     event: "AUTH_LOGIN_FAILED",
   });
 
@@ -94,7 +93,7 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
   log({
     level: "SECURITY",
     request_id: requestId,
-    gate: "2.7",
+    gate_id: "2.7",
     event: "AUTH_LOGIN_FAILED",
   });
 
@@ -120,7 +119,7 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
   log({
     level: "SECURITY",
     request_id: requestId,
-    gate: "2.7",
+    gate_id: "2.7",
     event: "AUTH_LOGIN_FAILED",
   });
 
@@ -135,29 +134,55 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
 
 
     authUserId = result.user.id;
-  } else {
-    // ERP code path (identity already resolved)
-    const result = await verifyPassword("", password);
+ } else {
+  // ERP code path (identity already resolved)
+
+  // Step 1: Fetch email from Supabase using auth_user_id
+  const { data: userData, error: userError } =
+    await authClient.auth.admin.getUserById(resolved.authUserId);
+
+  if (userError || !userData?.user?.email) {
+    log({
+      level: "SECURITY",
+      request_id: requestId,
+      gate_id: "2.7",
+      event: "AUTH_LOGIN_FAILED",
+    });
+
+    return errorResponse(
+      GENERIC_CODE,
+      GENERIC_MESSAGE,
+      requestId,
+      "NONE",
+      403
+    );
+  }
+
+  // Step 2: Verify password against correct email
+  const result = await verifyPassword(
+    userData.user.email,
+    password
+  );
 
   if (!result.ok) {
-  log({
-    level: "SECURITY",
-    request_id: requestId,
-    gate: "2.7",
-    event: "AUTH_LOGIN_FAILED",
-  });
+    log({
+      level: "SECURITY",
+      request_id: requestId,
+      gate_id: "2.7",
+      event: "AUTH_LOGIN_FAILED",
+    });
 
-  return errorResponse(
-    GENERIC_CODE,
-    GENERIC_MESSAGE,
-    requestId,
-    "NONE",
-    403
-  );
-}
-
-    authUserId = resolved.authUserId;
+    return errorResponse(
+      GENERIC_CODE,
+      GENERIC_MESSAGE,
+      requestId,
+      "NONE",
+      403
+    );
   }
+
+  authUserId = resolved.authUserId;
+}
 
   /**
    * STEP 6: ERP account state check
@@ -168,7 +193,7 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
   log({
     level: "SECURITY",
     request_id: requestId,
-    gate: "2.7",
+    gate_id: "2.7",
     event: "AUTH_LOGIN_FAILED",
   });
 
@@ -188,6 +213,16 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
 const device = extractDeviceInfo(ctx);
 const sessionId = await createSession(authUserId, device);
 
+/**
+ * Gate-10.3 — Session lifecycle trace
+ */
+recordSessionTimeline({
+  requestId: requestId,
+  sessionId: sessionId,
+  userId: authUserId,
+  event: "LOGIN",
+});
+
  /**
  * STEP 9.2 — Cookie regeneration rule (3.6A)
  * A fresh cookie MUST be issued on every successful authentication.
@@ -198,7 +233,7 @@ const cookie = buildSessionCookie(sessionId, requestUrl);
 log({
   level: "SECURITY",
   request_id: requestId,
-  gate: "2.7",
+  gate_id: "2.7",
   event: "AUTH_LOGIN_SUCCESS",
 });
 

@@ -26,6 +26,7 @@ export type ContextResolution =
       companyId: string;
       projectId?: string;
       departmentId?: string;
+      roleCode: string;  
       isAdmin?: boolean;
     };
 
@@ -77,6 +78,24 @@ async function resolveContextFromDb(
       errorCode: "CONTEXT_UNRESOLVED",
     };
   }
+  /* ---- User role (ID-6.6 role binding) ---- */
+const { data: roleRow } = await db
+  .from("erp_map.user_company_roles")
+  .select("role_code")
+  .eq("auth_user_id", authUserId)
+  .eq("company_id", companyId)
+  .maybeSingle();
+
+if (!roleRow?.role_code) {
+  return {
+    status: "UNRESOLVED",
+    source: "BACKEND",
+    errorCode: "CONTEXT_UNRESOLVED",
+  };
+}
+
+const roleCode = roleRow.role_code;
+
 
   /* ---- Optional project (ID-6.7 / 6.7A) ---- */
   let projectId: string | undefined;
@@ -124,13 +143,14 @@ async function resolveContextFromDb(
     departmentId = deptHeader;
   }
 
-  return {
-    status: "RESOLVED",
-    source: "BACKEND",
-    companyId,
-    projectId,
-    departmentId,
-  };
+ return {
+  status: "RESOLVED",
+  source: "BACKEND",
+  companyId,
+  projectId,
+  departmentId,
+  roleCode,
+};
 }
 
 /* =========================================================
@@ -146,6 +166,7 @@ function applyAdminBypass(
     status: "RESOLVED",
     source: "BACKEND",
     companyId: "ADMIN_UNIVERSE",
+    roleCode: session.roleCode!,
     isAdmin: true,
   };
 }

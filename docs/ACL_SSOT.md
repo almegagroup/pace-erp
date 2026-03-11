@@ -435,3 +435,20 @@ Work Company approval is optional and secondary.
 **Status:** 🔒 LOCKED
 
 This version is COMPLETE and contains ALL 7 issues + ALL 7 solutions without missing anything.
+
+HR mane Primary company r work company seta decided agei.
+ebar asi approval system e
+HR r work e approver same o hote pare aladao hote pare. Max 3 jon, min 2 jon approver hobe,
+Approver er sequence hobe Lower role approver, higher role approver r higher er uporer role er approver. Higher approver lower approver er decision change korte parbe.
+Approval type jeta hobe example diye bojhachhi
+1. Anyone - Dhoro, keu leave request korlo, ebar jotojon approver ache oi module er tader sobar kache request jabe, kintu je kono ekjon decision diye diile baki ar karo decision er dorkar nei, bakider kach theke request r thakbena, kintu report e approver ra dekhte pabe ke ki decision nilo.
+2. Sequential - Same jinis e first e lower role approver er kache request jabe, baki der kache jabena, se decision nilo, then sei request jabe tar porer immediate higher role approver je ache, se dicision nilo, tar por jabe last je approver ache, se decision nilo. eksathe sobar kache jabena. ebar proti higher role approver tar lower approver er decision change korte pare. last decision will be the final decision.
+3. Must all - Tin joner kachei jabe eksathe , tin jon kei tader decision janate hobe. Tin joner decision na pele request complete hobena, dekhte gele 2 r 3 fundamentally aki, kintu method alada.
+
+ebar asi second plan, amar kache multiple module thakbe, kintu sob module e approval system er dorkar nei. seta SA deide korte parbe, kon kon kaj e approval system lagbe, kon kon guloy lagbena.
+
+last je ta plan, ei approver jakhon set korbo, takhon role alada alada hote hobe, aki role er dujon approver thakte parbena, and bivinno module er jonno amra differ approver set korte parbo, mane specific user ke approver banate parbo, ebar seta jodi compatibility pack  e incorporate kora jay setao kora jete pare, je simple, stable, secure, fast r sclable hobe seta korte hobe.
+
+Diroctor role er kajer kono approver thakbena, director er kaj ke keu approve korbena, r director will be higher approver.
+
+

@@ -4,59 +4,72 @@
  * Phase: 0
  * Domain: SECURITY
  * Purpose: Service role usage policy
- * Rule: Service role key may only be used by backend code
  * Authority: Backend-only
  */
-// supabase/functions/_shared/serviceRoleClient.ts
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2?target=deno";
+import { createClient } from "@supabase/supabase-js";
 import { buildRlsContextHeaders } from "./context_headers.ts";
 import type { ContextResolution } from "../_pipeline/context.ts";
 
+/* --------------------------------------------------
+ * ENV RESOLUTION (Deno + Node compatible)
+ * -------------------------------------------------- */
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const SUPABASE_URL =
+  typeof Deno !== "undefined"
+    ? Deno.env.get("SUPABASE_URL")
+    : process.env.SUPABASE_URL;
+
+const SERVICE_ROLE_KEY =
+  typeof Deno !== "undefined"
+    ? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
+    : process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+/* --------------------------------------------------
+ * ENV SAFETY ASSERTION
+ * -------------------------------------------------- */
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
-  throw new Error("SERVICE ROLE NOT CONFIGURED");
+  throw new Error("SERVICE_ROLE_NOT_CONFIGURED");
 }
+
+/* --------------------------------------------------
+ * BASE SERVICE ROLE CLIENT
+ * -------------------------------------------------- */
 
 export const serviceRoleClient = createClient(
   SUPABASE_URL,
   SERVICE_ROLE_KEY,
-  { auth: { persistSession: false } }
+  {
+    auth: { persistSession: false },
+    global: { fetch },
+  }
 );
-/*
- * File-ID: 12A
- * Gate: 1
- * Phase: 1
- * Domain: DB
- * Purpose: Service role authority assertion
- * Authority: Backend
- */
+
+/* --------------------------------------------------
+ * SERVICE ROLE ASSERTION
+ * -------------------------------------------------- */
+
 export function assertServiceRole(): void {
-  // Presence of service role key = authority lock
   if (!SERVICE_ROLE_KEY) {
     throw new Error("DB_SERVICE_ROLE_ASSERTION_FAILED");
   }
 }
-/*
- * File-ID: 5.7
- * Gate: 5
- * Phase: 5
- * Domain: DB
- * Purpose: Context-aware service role client (RLS alignment)
- * Authority: Backend
- */
+
+/* --------------------------------------------------
+ * CONTEXT-AWARE SERVICE ROLE CLIENT
+ * (RLS context injection)
+ * -------------------------------------------------- */
+
 export function getServiceRoleClientWithContext(ctx: ContextResolution) {
   const headers = buildRlsContextHeaders(ctx);
 
- return createClient(
-  SUPABASE_URL!,
-  SERVICE_ROLE_KEY!,
-  {
-    auth: { persistSession: false },
-    global: { headers },
-  }
-);
+  return createClient(
+    SUPABASE_URL!,
+    SERVICE_ROLE_KEY!,
+    {
+      auth: { persistSession: false },
+      global: { headers, fetch },
+    }
+  );
 }

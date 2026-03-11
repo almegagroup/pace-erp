@@ -20,22 +20,15 @@ export function buildSessionCookie(
    * No browser defaults relied upon.   
    */
   const parts = [
-    `erp_session=${sessionId}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Strict",
-  ];
+  `erp_session=${sessionId}`,
+  "Path=/",
+  "HttpOnly",
+  "SameSite=Lax",
+];
 
-  if (isHttps) {
-    parts.push("Secure");
-  }
-
-  /**
-   * Explicit domain binding
-   */
-  if (url.hostname) {
-    parts.push(`Domain=${url.hostname}`);
-  }
+if (isHttps) {
+  parts.push("Secure");
+}
 
   return parts.join("; ");
 }

@@ -11,23 +11,34 @@
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS acl.user_overrides (
-  override_id     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  override_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 
-  user_id         uuid NOT NULL,
-  company_id      uuid NOT NULL,
+  user_id uuid NOT NULL
+    REFERENCES auth.users(id)
+    ON DELETE CASCADE,
 
-  resource_code   text NOT NULL,
-  action_code     text NOT NULL,
+  company_id uuid NOT NULL
+    REFERENCES erp_master.companies(id)
+    ON DELETE CASCADE,
 
-  effect          text NOT NULL CHECK (effect IN ('ALLOW', 'DENY')),
+  resource_code text NOT NULL,
+  action_code   text NOT NULL,
 
-  reason          text NOT NULL,
+  effect text NOT NULL
+    CHECK (effect IN ('ALLOW', 'DENY')),
 
-  created_by      uuid NOT NULL,
-  created_at      timestamptz NOT NULL DEFAULT now(),
+  reason text NOT NULL,
 
-  revoked_at      timestamptz NULL,
-  revoked_by      uuid NULL,
+  created_by uuid NOT NULL
+    REFERENCES auth.users(id)
+    ON DELETE RESTRICT,
+
+  created_at timestamptz NOT NULL DEFAULT now(),
+
+  revoked_at timestamptz NULL,
+  revoked_by uuid NULL
+    REFERENCES auth.users(id)
+    ON DELETE RESTRICT,
 
   CONSTRAINT uq_active_user_override
     UNIQUE (user_id, company_id, resource_code, action_code)
@@ -36,7 +47,6 @@ CREATE TABLE IF NOT EXISTS acl.user_overrides (
 COMMENT ON TABLE acl.user_overrides IS
 'Explicit per-user permission overrides. Evaluated by ACL decision engine before role and capability layers.';
 
--- RLS posture (policies bound in Gate-13)
 ALTER TABLE acl.user_overrides ENABLE ROW LEVEL SECURITY;
 
 COMMIT;

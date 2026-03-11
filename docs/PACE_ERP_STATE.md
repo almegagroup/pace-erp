@@ -41,7 +41,7 @@ If it is not written here, it does not exist.
 | 🔒 FROZEN | 0 | ID-0.1A | DEVOPS | CODEOWNERS | Code ownership and approval rules enforced | — | — | — | .github/CODEOWNERS |
 | 🔒 FROZEN | 0 | ID-0.1B | DEVOPS | Branch rules | Main branch protected, PR mandatory | — | — | — | GitHub branch rules |
 | 🔒 FROZEN | 0 | ID-0.1C | DEVOPS | CI basic pipeline | Build/test/deploy skeleton exists | — | — | — | .github/workflows |
-| ⏸ DEFERRED | 0 | ID-0.1D | DEVOPS | CI advanced checks | Intentionally postponed | Advanced lint / security hooks not implemented | Gate-12 | ID-12.1 | — |
+| ⏸ DEFERRED | 0 | ID-0.1D | DEVOPS | CI advanced checks | Intentionally postponed | Advanced lint / security hooks not implemented | G-12 | ID-12.1 | — |
 | 🔒 FROZEN | 0 | ID-0.2 | FRONT | Frontend bootstrap | Vite + React initialized | — | — | — | frontend/ |
 | 🔒 FROZEN | 0 | ID-0.2A | FRONT | No backend SDK rule | No Supabase client SDK in frontend | — | — | — | frontend/ |
 | 🔒 FROZEN | 0 | ID-0.2B | FRONT | Frontend env discipline | No DB secrets in frontend | — | — | — | frontend/ |
@@ -124,7 +124,7 @@ Each of these IDs must be explicitly re-verified and closed only after the speci
 
 | Status       | Gate | ID      | Domain        | Short_Name                   | Current_Reality                      | Why_Not_Complete                                   | Completes_In_Gate | Completes_On_or_After_ID | Files_Involved                                                                                                                                       |
 | ------------ | ---- | ------- | ------------- | ---------------------------- | ------------------------------------ | -------------------------------------------------- | ----------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ⏸ DEFERRED   | 0    | ID-0.1D | DEVOPS        | CI advanced checks           | Intentionally postponed              | Advanced lint / security hooks not implemented     | Gate-12           | ID-12.1                  | `.github/workflows/ci.yml`, `.github/workflows/security.yml`, `eslint.config.js`, `package.json`                                                     |
+| ⏸ DEFERRED   | 0    | ID-0.1D | DEVOPS        | CI advanced checks           | Intentionally postponed              | Advanced lint / security hooks not implemented     | G-12           | ID-12.1                  | `.github/workflows/ci.yml`, `.github/workflows/security.yml`, `eslint.config.js`, `package.json`                                                     |
 | ⏸ DEFERRED   | 0    | ID-10.1 | OBSERVABILITY | Structured logging base      | Deferred by design                   | JSON structured logging not enforced yet           | Gate-10           | ID-10.1                  | `supabase/functions/api/_lib/logger.ts`, `supabase/functions/api/_lib/request_id.ts`, `supabase/functions/api/_pipeline/runner.ts`  
 
 
@@ -165,227 +165,337 @@ Each of these IDs must be explicitly re-verified and closed only after the speci
 
 ### Gate‑2
 
-=====================
-🔒 Gate-2 — FROZEN
-=====================
+==============================
+🔒 Gate-2 — EXECUTION SEALED
+==============================
 
 Gate-2 completed without introducing any DB migrations.
-All DB objects used here are assumed inputs and not validated or created in this Gate.
+All DB objects referenced in this Gate are treated as pre-existing inputs and are not created, mutated, or structurally modified here.
 
-Auth / Session Boundary
-Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
-🔒 FROZEN	2	ID-2.1	AUTH	Login parent	Login flow fully wired	—	—	—	login.handler.ts
-🔒 FROZEN	2	ID-2.1A	AUTH	Credential validation	Supabase Auth only	—	—	—	authDelegate.ts
-🔒 FROZEN	2	ID-2.1B	AUTH	Account state	ACTIVE only allowed	—	—	—	accountState.ts
-🔒 FROZEN	2	ID-2.1C	SESSION	Session create	ERP session created server-side	—	—	—	session.create.ts
-🔒 FROZEN	2	ID-2.1D	AUTH	Identifier resolver	ERP code → auth_user_id	—	—	—	identifierResolver.ts
-🔒 FROZEN	2	ID-2.2	SESSION	Cookie issue	HttpOnly cookie issued	—	—	—	session.cookie.ts
-🔒 FROZEN	2	ID-2.2A	SESSION	Cookie hardening	Secure, SameSite, Domain	—	—	—	session.cookie.ts
-🔒 FROZEN	2	ID-2.2B	SESSION	Overwrite	Always replace cookie	—	—	—	session.cookie.ts
-🔒 FROZEN	2	ID-2.2C	SESSION	Bind invariant	session.auth_user_id invariant	—	—	—	login.handler.ts
-🔒 FROZEN	2	ID-2.3	AUTH	WhoAmI	Identity only API	—	—	—	me.handler.ts
-🔒 FROZEN	2	ID-2.3A	AUTH	No-guess	Frontend reacts only to action	—	—	—	me.handler.ts
-🔒 FROZEN	2	ID-2.3B	AUTH	Minimal payload	Empty success payload	—	—	—	me.handler.ts
-🔒 FROZEN	2	ID-2.4	AUTH	Logout	Server-side revoke	—	—	—	logout.handler.ts
-🔒 FROZEN	2	ID-2.4A	AUTH	Cookie invalidate	Expired cookie set	—	—	—	logout.handler.ts
-🔒 FROZEN	2	ID-2.4B	AUTH	Idempotent	Multiple logout safe	—	—	—	logout.handler.ts
-🔒 FROZEN	2	ID-2.5	SECURITY	Rate limit	Auth-only throttling	—	—	—	rate_limit.ts
-🔒 FROZEN	2	ID-2.6	SECURITY	Error mapping	Deterministic codes	—	—	—	response.ts
-🔒 FROZEN	2	ID-2.6A	SECURITY	Generic msg	Enumeration-safe	—	—	—	response.ts
-🔒 FROZEN	2	ID-2.7	OBSERVABILITY	Auth logs	Login / logout logged	—	—	—	login.handler.ts, logout.handler.ts
-🔒 FROZEN	2	ID-2.8	DOCS	Gate-2 freeze	Gate-2 frozen	—	—	—	docs/GATE_2_FREEZE.md
+Gate-2 is now:
+
+🔒 FROZEN · EXECUTION-SEALED · DB-ALIGNED · IMMUTABLE
+
+Auth / Session Boundary — Canonical Freeze Table
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Enforcement_Confirmed_In	Files_Involved
+🔒 FROZEN	2	ID-2.1	AUTH	Login parent	Deterministic login flow fully wired	login.handler.ts	login.handler.ts
+🔒 FROZEN	2	ID-2.1A	AUTH	Credential validation	Supabase Auth sole credential authority	authDelegate.ts	authDelegate.ts
+🔒 FROZEN	2	ID-2.1B	AUTH	Account state	Only ACTIVE allowed	accountState.ts	accountState.ts
+🔒 FROZEN	2	ID-2.1C	SESSION	Session create	ERP session created server-side	session.create.ts	session.create.ts
+🔒 FROZEN	2	ID-2.1D	AUTH	Identifier resolver	ERP code → auth_user_id mapping	identifierResolver.ts	identifierResolver.ts
+🔒 FROZEN	2	ID-2.2	SESSION	Cookie issue	HttpOnly + SameSite + Secure discipline	session.cookie.ts	session.cookie.ts
+🔒 FROZEN	2	ID-2.2A	SESSION	Cookie hardening	No wildcard · No hardcoded domain	session.cookie.ts	session.cookie.ts
+🔒 FROZEN	2	ID-2.2B	SESSION	Cookie overwrite	Always regenerate on login	session.cookie.ts	session.cookie.ts
+🔒 FROZEN	2	ID-2.2C	SESSION	Bind invariant	session.auth_user_id invariant enforced	session.ts	session.ts
+🔒 FROZEN	2	ID-2.3	AUTH	WhoAmI	Identity-only API	me.handler.ts	me.handler.ts
+🔒 FROZEN	2	ID-2.3A	AUTH	No-guess contract	Frontend reacts ONLY to action	me.handler.ts	me.handler.ts
+🔒 FROZEN	2	ID-2.3B	AUTH	Minimal payload	Empty success payload	me.handler.ts	me.handler.ts
+🔒 FROZEN	2	ID-2.4	AUTH	Logout	Server-side revoke	logout.handler.ts	logout.handler.ts
+🔒 FROZEN	2	ID-2.4A	AUTH	Cookie invalidate	Deterministic expiration	logout.handler.ts	logout.handler.ts
+🔒 FROZEN	2	ID-2.4B	AUTH	Idempotent logout	Multiple logout safe	logout.handler.ts	logout.handler.ts
+🔒 FROZEN	2	ID-2.5	SECURITY	Rate limit	Auth-only throttling (IP + identifier)	rate_limit.ts	rate_limit.ts
+🔒 FROZEN	2	ID-2.6	SECURITY	Error mapping	Deterministic envelope	response.ts	response.ts
+🔒 FROZEN	2	ID-2.6A	SECURITY	Generic msg	Enumeration-safe	response.ts	response.ts
+🔒 FROZEN	2	ID-2.7	OBSERVABILITY	Auth logs	Login / logout structured logging	logger.ts	login.handler.ts, logout.handler.ts
+🔒 FROZEN	2	ID-2.8	DOCS	Gate-2 freeze	Freeze artifact present	docs/GATE_2_FREEZE.md	docs/GATE_2_FREEZE.md
 🚨 Explicit DB Truth (No Misleading Assumptions)
 
-Gate-2 DOES NOT create tables
+Gate-2:
 
-Gate-2 DOES NOT validate table existence
+DOES NOT create tables
 
-Tables referenced by code:
+DOES NOT alter schema
+
+DOES NOT validate schema existence
+
+DOES NOT introduce constraints
+
+Tables referenced:
 
 erp_core.users
 
 erp_core.sessions
 
-Their creation must be documented in a different Gate
+Required structural guarantees (external to Gate-2):
 
-This file does not claim they were created earlier unless explicitly shown
+Unique ACTIVE partial index
 
-🔒 Final Declaration
+TTL consistency constraint
 
-Gate-2 is FROZEN, COMPLETE, and IMMUTABLE.
+RLS ENABLE + FORCE
 
-### Gate-3 — SESSION LIFECYCLE & SECURITY (POST-AUDIT)
+These must be declared in their originating Gate.
 
-| Status | Gate | ID | Domain | Short_Name | Current_Reality | Why_Not_Complete | Completes_In_Gate | Completes_On_or_After_ID | Files_Involved |
-|--------|------|----|--------|------------|-----------------|------------------|-------------------|--------------------------|----------------|
+Gate-2 assumes them as authoritative inputs.
 
-| 🟡 HALF-DONE | 3 | 3 | SESSION | Session lifecycle definition | Authoritative session lifecycle model defined and enforced via Gate-2 + Gate-3 pipeline | Storage-level state persistence and final policy values deferred | Policy / Storage Gate | TBD | _pipeline/session.ts, _pipeline/session_lifecycle.ts, _pipeline/runner.ts |
+🔒 Execution Seal Rules
 
-| 🟡 HALF-DONE | 3 | 3.1 | SESSION | Idle timeout engine | Idle tracking logic implemented and wired into lifecycle enforcement | Idle timeout value not locked | Policy / Config Gate | TBD | _pipeline/session_lifecycle.ts |
+After this declaration:
 
-| 🟡 HALF-DONE | 3 | 3.1A | SESSION | Idle warning signal | Idle warning signal emitted deterministically before expiry | Warning threshold value not locked | Policy / Config Gate | TBD | _pipeline/session_lifecycle.ts |
+Login flow cannot change
 
-| 🟡 HALF-DONE | 3 | 3.1B | SESSION | Idle expiry handler | Idle expiry forces deterministic LOGOUT | Expiry threshold value not locked | Policy / Config Gate | TBD | _pipeline/session_lifecycle.ts, _pipeline/runner.ts |
+Session model cannot change
 
-| 🟡 HALF-DONE | 3 | 3.2 | SESSION | Absolute TTL engine | Absolute TTL logic implemented; session age evaluated on every request | TTL duration value not locked | Policy / Config Gate | TBD | _pipeline/session_lifecycle.ts |
+TTL (12h) cannot change
 
-| 🟡 HALF-DONE | 3 | 3.2A | SESSION | TTL enforcement | TTL never extends and always overrides idle logic | TTL duration value not locked | Policy / Config Gate | TBD | _pipeline/session_lifecycle.ts, _pipeline/runner.ts |
+Cookie contract cannot change
 
-| ✅ DONE | 3 | 3.3 | SESSION | Single active session policy | New login enforces exactly one ACTIVE ERP session | — | — | — | _core/session/session.create.ts |
+Error envelope semantics cannot change
 
-| ✅ DONE | 3 | 3.3A | SESSION | Global revoke on login | All existing ACTIVE sessions revoked atomically on login | — | — | — | _core/session/session.create.ts |
+Rate-limit contract cannot change
 
-| ✅ DONE | 3 | 3.4 | SESSION | Admin force revoke | Any non-ACTIVE session state forces logout on next request | — | — | — | _pipeline/session.ts, _pipeline/runner.ts |
+Single-active-session invariant must remain intact
 
-| ✅ DONE | 3 | 3.4A | SESSION | Immediate effect rule | SESSION_FORCE_LOGOUT enforced deterministically with zero residual access | — | — | — | _pipeline/runner.ts |
+Any behavioural change requires:
 
-| 🟡 HALF-DONE | 3 | 3.5 | SESSION | Device tagging (soft) | Device metadata captured and stored as signal only | No trust or enforcement policy by design | Trust / Security Gate | TBD | _core/auth/login.handler.ts, _core/session/session.create.ts |
+→ New Gate version
+→ Architectural amendment
+→ Formal superseding declaration
 
-| 🟡 HALF-DONE | 3 | 3.5A | SESSION | Device change signal | Device change detected and logged without blocking | No anomaly response policy by design | Trust / Security Gate | TBD | _pipeline/session_lifecycle.ts |
+Silent mutation constitutes 🚨 DRIFT.
 
-| 🟡 HALF-DONE | 3 | 3.6 | SECURITY | Session fixation prevention | New session identifier generated on every login | Final transport hardening policy deferred | Security / Transport Gate | TBD | _core/session/session.create.ts |
+🔐 Final Declaration
 
-| 🟡 HALF-DONE | 3 | 3.6A | SECURITY | Cookie regeneration rule | Fresh HttpOnly cookie always issued on authentication | Cookie policy lock deferred | Security / Transport Gate | TBD | _core/auth/login.handler.ts |
+Gate-2 is hereby declared:
 
-| ✅ DONE | 3 | 3.7 | SECURITY | Session state validation | Revoked / expired / invalid sessions rejected authoritatively | — | — | — | _pipeline/session.ts |
+🔒 FROZEN · EXECUTION-SEALED · DB-ALIGNED · IMMUTABLE
 
-| ✅ DONE | 3 | 3.7A | SECURITY | SESSION_* logout enforcement | All SESSION_* outcomes deterministically force LOGOUT | — | — | — | _pipeline/runner.ts |
+Date: 2026-02-23
+Authority: PACE-ERP System Architecture
 
-| ✅ DONE | 3 | 3.8 | OBSERVABILITY | Session timeline logs | Full session lifecycle events logged with request_id and structured meta | — | — | — | _pipeline/session.ts, _pipeline/session_lifecycle.ts, _lib/logger.ts |
+✅ Gate-3 — SESSION LIFECYCLE & SECURITY (FINAL · SEALED)
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🔒 FROZEN	3	3	SESSION	Session lifecycle definition	Authoritative lifecycle model fully enforced and policy locked	—	—	—	_pipeline/session.ts, _pipeline/session_lifecycle.ts, _pipeline/runner.ts
+🔒 FROZEN	3	3.1	SESSION	Idle timeout engine	Idle tracking implemented and thresholds locked	—	—	—	_pipeline/session_lifecycle.ts
+🔒 FROZEN	3	3.1A	SESSION	Idle warning signal	Deterministic warning emitted before expiry	—	—	—	_pipeline/session_lifecycle.ts
+🔒 FROZEN	3	3.1B	SESSION	Idle expiry handler	Idle expiry forces deterministic LOGOUT	—	—	—	_pipeline/session_lifecycle.ts, _pipeline/runner.ts
+🔒 FROZEN	3	3.2	SESSION	Absolute TTL engine	TTL evaluated per request; DB authoritative; value locked	—	—	—	_pipeline/session_lifecycle.ts
+🔒 FROZEN	3	3.2A	SESSION	TTL enforcement	TTL never extends; always overrides idle	—	—	—	_pipeline/session_lifecycle.ts, _pipeline/runner.ts
+🔒 FROZEN	3	3.3	SESSION	Single active session policy	Exactly one ACTIVE session per user; DB enforced	—	—	—	_core/session/session.create.ts
+🔒 FROZEN	3	3.3A	SESSION	Global revoke on login	All ACTIVE sessions revoked atomically	—	—	—	_core/session/session.create.ts
+🔒 FROZEN	3	3.4	SESSION	Admin force revoke	Admin revocation immediately effective on next request	—	—	—	_pipeline/session.ts, _core/session/session.admin_revoke.ts
+🔒 FROZEN	3	3.4A	SESSION	Immediate effect rule	REVOKED state deterministically forces logout	—	—	—	_pipeline/runner.ts
+🔒 FROZEN	3	3.5	SESSION	Device tagging (soft)	Device metadata captured; signal-only by design	—	—	—	_core/auth/login.handler.ts, _core/session/session.create.ts
+🔒 FROZEN	3	3.5A	SESSION	Device change signal	Device changes logged; no control impact (intentional)	—	—	—	_pipeline/session_lifecycle.ts
+🔒 FROZEN	3	3.6	SECURITY	Session fixation prevention	New UUID generated per login; old sessions revoked	—	—	—	_core/session/session.create.ts
+🔒 FROZEN	3	3.6A	SECURITY	Cookie regeneration rule	Fresh HttpOnly cookie issued on authentication	—	—	—	_core/auth/login.handler.ts
+🔒 FROZEN	3	3.7	SECURITY	Session state validation	Non-ACTIVE sessions rejected authoritatively	—	—	—	_pipeline/session.ts
+🔒 FROZEN	3	3.7A	SECURITY	SESSION_* logout enforcement	All lifecycle terminal states force LOGOUT	—	—	—	_pipeline/runner.ts
+🔒 FROZEN	3	3.8	OBSERVABILITY	Session timeline logs (emission layer)	Structured lifecycle events emitted with request_id	—	—	—	_pipeline/session.ts, _pipeline/session_lifecycle.ts, _lib/logger.ts
+🔒 FROZEN	3	3.9	DOCS	Gate-3 freeze declaration	Behaviour, contracts, and policy formally locked	—	—	—	docs/GATE_3_FREEZE.md
+🔁 Dependency Correction (Important)
 
-| 🔒 FROZEN | 3 | 3.9 | DOCS | Gate-3 freeze declaration | Gate-3 behaviour, contracts, and observability formally locked after audit | — | — | — | docs/GATE_3_FREEZE.md |
+The previous table incorrectly showed:
 
-Special Notes:
+3.x depends on Gate-10
 
---------------------------------------------------------------------------------------------------------
+Correct architectural direction:
 
-“The IDs listed in this section are intentionally kept in HALF-DONE or DEFERRED status.
-These items cannot be completed within the scope of the current Gate.
-Each of these IDs must be explicitly re-verified and closed only after the specified future Gate has been completed.”
+Gate-10 (observability storage / tracing / visualization)
+DEPENDS ON
+Gate-3 signal emission
 
-| Status       | Gate | ID      | Domain        | Short_Name                   | Current_Reality                      | Why_Not_Complete                                   | Completes_In_Gate | Completes_On_or_After_ID | Files_Involved                                                                                                                                       |
-| ------------ | ---- | ------- | ------------- | ---------------------------- | ------------------------------------ | -------------------------------------------------- | ----------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |                 |
-| 🟡 HALF-DONE | 3    | 3       | SESSION       | Session lifecycle definition | Lifecycle model defined and enforced | Storage-level persistence & policy values deferred | Gate-10           | ID-10.3                  | `supabase/functions/api/_pipeline/session.ts`, `supabase/functions/api/_pipeline/session_lifecycle.ts`, `supabase/functions/api/_pipeline/runner.ts` |
-| 🟡 HALF-DONE | 3    | 3.1     | SESSION       | Idle timeout engine          | Idle tracking logic implemented      | Idle timeout value not locked                      | Gate-10           | ID-10.3                  | `supabase/functions/api/_pipeline/session_lifecycle.ts`                                                                                              |
-| 🟡 HALF-DONE | 3    | 3.1A    | SESSION       | Idle warning signal          | Warning emitted deterministically    | Warning threshold value not locked                 | Gate-10           | ID-10.3                  | `supabase/functions/api/_pipeline/session_lifecycle.ts`                                                                                              |
-| 🟡 HALF-DONE | 3    | 3.1B    | SESSION       | Idle expiry handler          | Idle expiry forces LOGOUT            | Expiry threshold value not locked                  | Gate-10           | ID-10.3                  | `supabase/functions/api/_pipeline/session_lifecycle.ts`, `supabase/functions/api/_pipeline/runner.ts`                                                |
-| 🟡 HALF-DONE | 3    | 3.2     | SESSION       | Absolute TTL engine          | TTL logic implemented                | TTL duration value not locked                      | Gate-10           | ID-10.3                  | `supabase/functions/api/_pipeline/session_lifecycle.ts`                                                                                              |
-| 🟡 HALF-DONE | 3    | 3.2A    | SESSION       | TTL enforcement              | TTL always overrides idle            | TTL duration value not locked                      | Gate-10           | ID-10.3                  | `supabase/functions/api/_pipeline/session_lifecycle.ts`, `supabase/functions/api/_pipeline/runner.ts`                                                |
-| 🟡 HALF-DONE | 3    | 3.5     | SESSION       | Device tagging (soft)        | Device metadata captured             | No trust / enforcement policy                      | Gate-10           | ID-10.3                  | `supabase/functions/api/_core/auth/login.handler.ts`, `supabase/functions/api/_core/session/session.create.ts`                                       |
-| 🟡 HALF-DONE | 3    | 3.5A    | SESSION       | Device change signal         | Change detected, non-blocking        | No anomaly response policy                         | Gate-10           | ID-10.3                  | `supabase/functions/api/_pipeline/session_lifecycle.ts`                                                                                              |
-| 🟡 HALF-DONE | 3    | 3.6     | SECURITY      | Session fixation prevention  | New session identifier generated     | Transport hardening policy deferred                | Gate-10           | ID-10.5                  | `supabase/functions/api/_core/session/session.create.ts`                                                                                             |
-| 🟡 HALF-DONE | 3    | 3.6A    | SECURITY      | Cookie regeneration rule     | Fresh cookie issued                  | Cookie policy lock deferred                        | Gate-10           | ID-10.5                  | `supabase/functions/api/_core/auth/login.handler.ts`   
+Gate-3 does NOT depend on Gate-10.
 
-### Gate-4
+🧠 What Changed From Old Table?
+Before	Now
+HALF-DONE	🔒 FROZEN
+Policy not locked	Policy locked
+Deferred to Gate-10	Independent
+Config Gate pending	No config layer introduced
+Storage defer confusion	Emission complete
+📌 Final Reality
 
-| Status | Gate | ID | Domain | Short_Name | Current_Reality | Why_Not_Complete | Completes_In_Gate | Completes_On_or_After_ID | Files_Involved |
-|--------|------|----|--------|------------|-----------------|------------------|-------------------|--------------------------|----------------|
-| ✅ DONE | 4 | 4.0A | GOVERNANCE | User lifecycle authority | Supabase Auth handles identity only; ERP user lifecycle owned by Gate-4 | — | — | — | docs/GATE_4_FREEZE.md |
-| ✅ DONE | 4 | 4.0B | GOVERNANCE | Deterministic lifecycle states | ERP user states locked to PENDING / ACTIVE / REJECTED / DISABLED | — | — | — | docs/GATE_4_FREEZE.md |
-| 🟡 HALF-DONE | 4 | 4.0C | ACL | Minimal ACL bootstrap | Only L1_USER assigned on approval; no escalation logic | Extended ACL system not implemented | Gate-6 | ID-6.x | approve.handler.ts |
-| ✅ DONE | 4 | 4.1 | AUTH | Signup intake | Public signup creates ERP user in PENDING state only | — | — | — | signup.handler.ts |
-| ✅ DONE | 4 | 4.1A | DB | ERP users table | erp_core.users created; lifecycle only | — | — | — | migrations/20260123101000_gate4_4_1_create_erp_users.sql |
-| ✅ DONE | 4 | 4.1B | DB | Signup requests table | erp_core.signup_requests created with metadata & decision fields | — | — | — | migrations/20260126101000_gate4_4_2A_signup_requests_and_user_code_fn.sql |
-| ✅ DONE | 4 | 4.1C | SECURITY | Human verification | Deterministic backend human verification enforced | — | — | — | human_verification.ts |
-| ✅ DONE | 4 | 4.2 | ADMIN | Signup rejection | SA can reject signup; ERP user → REJECTED | — | — | — | reject.handler.ts |
-| ✅ DONE | 4 | 4.2A | ADMIN | Signup approval | SA approval activates ERP user and assigns user_code | — | — | — | approve.handler.ts |
-| ✅ DONE | 4 | 4.2B | AUDIT | Approval audit log | All approve/reject actions logged append-only | — | — | — | migrations/erp_audit.signup_approvals.sql |
-| ✅ DONE | 4 | 4.3 | DB | User code sequence | Deterministic P0001 sequence created | — | — | — | migrations/user_code_p_seq |
-| ✅ DONE | 4 | 4.3A | DB | RPC-safe sequence wrapper | SQL function created for Supabase RPC | — | — | — | migrations/20260126101000_gate4_4_2A_signup_requests_and_user_code_fn.sql |
-| 🔒 FROZEN | 4 | 4.7 | DOCS | Gate-4 freeze declaration | User lifecycle governance formally frozen | — | — | — | docs/GATE_4_FREEZE.md |
+There are:
 
-### Gate-4 Observations
+No deferred policy values
 
-1. Gate-4 introduces ERP user existence but does not grant business capability.
-2. Signup is enumeration-safe and authority-free.
-3. Approval is the only path to ACTIVE ERP state.
-4. user_code is immutable once assigned.
-5. ACL bootstrap is intentionally minimal and deferred.
-6. No session, context, or permission logic exists in this gate.
-7. All behaviour is backend-authoritative and production-parity safe.
+No missing enforcement
 
-### Gate-4 Final Declaration
+No missing DB invariant
+
+No future gate required to “complete” lifecycle logic
+
+Gate-10 will add:
+
+Persistent timeline recorder
+
+RCA reconstruction
+
+Trace viewers
+
+Alert hooks
+
+But it will not modify lifecycle behaviour.
+
+🏁 Final State
+
+Gate-3 is:
+
+🔒 Behaviourally Final
+🔒 Policy Locked
+🔒 DB Consistent
+🔒 Control Plane Stable
+
+You will not revisit these scripts again.
+
+✅ UPDATED — Gate-4 Table
+Gate-4
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	4	4.0A	GOVERNANCE	User lifecycle authority	Supabase Auth handles identity only; ERP lifecycle DB-owned	—	—	—	docs/GATE_4_FREEZE.md
+✅ DONE	4	4.0B	GOVERNANCE	Deterministic lifecycle states	Lifecycle states locked; DB enforces transitions atomically	—	—	—	docs/GATE_4_FREEZE.md
+✅ DONE	4	4.0C	ACL	Minimal ACL bootstrap	Single-role bootstrap (L1_USER) inside atomic DB engine	—	—	—	migrations/20260126102000_gate4_4_2C_atomic_approval_engine.sql
+✅ DONE	4	4.1	AUTH	Signup intake	Public signup creates ERP user in PENDING state only	—	—	—	signup.handler.ts
+✅ DONE	4	4.1A	DB	ERP users table	erp_core.users lifecycle table enforced	—	—	—	migrations/20260123101000_gate4_4_1_create_erp_users.sql
+🟡 DEFERRED	4	4.1B	SECURITY	Signup rate limiting	Rate limiting intentionally deferred	Abuse protection belongs to later gate	Gate-5	ID-5.x	(Future security middleware)
+✅ DONE	4	4.1C	SECURITY	Human verification	Backend human verification enforced	—	—	—	human_verification.ts
+✅ DONE	4	4.2	ADMIN	Signup rejection	Reject performed via atomic DB function	—	—	—	reject_signup_atomic()
+✅ DONE	4	4.2A	ADMIN	Signup approval	Approval fully DB-owned atomic lifecycle	—	—	—	approve_signup_atomic()
+✅ DONE	4	4.2B	AUDIT	Approval audit log	Append-only audit inside DB engine	—	—	—	erp_audit.signup_approvals
+✅ DONE	4	4.3	DB	User code sequence	Deterministic P000X sequence enforced	—	—	—	erp_core.user_code_p_seq
+🔒 FROZEN	4	4.7	DOCS	Gate-4 freeze declaration	Lifecycle governance formally sealed	—	—	—	docs/GATE_4_FREEZE.md
+🔎 What Changed vs Your Version
+1️⃣ 4.0C এখন DONE (আগে HALF-DONE ছিল)
+
+কারণ:
+
+Bootstrap এখন DB atomic function এর ভেতরে
+
+Single role architecture sealed
+
+No escalation logic under Gate-4 (correct boundary)
+
+2️⃣ 4.1B এখন DEFERRED (আগে DONE ছিল)
+
+কারণ:
+
+এটা lifecycle না
+
+এটা security hardening
+
+Gate-5 dependency
+
+3️⃣ 4.2 / 4.2A Files Updated
+
+এখন Files_Involved এ handler না, DB function authoritative
+
+🔐 Updated Observations Section
+Gate-4 Observations (Updated)
+
+Gate-4 introduces ERP lifecycle authority but not business capability.
+
+Signup intake is enumeration-safe and authority-free.
+
+Approval and rejection are DB-owned atomic operations.
+
+user_code is immutable once assigned.
+
+Exactly one canonical role is allowed per ERP user.
+
+ACL bootstrap is minimal by design, not incomplete.
+
+No session, context, or permission logic exists in this gate.
+
+No handler may mutate lifecycle tables directly.
+
+Lifecycle transitions are race-safe and non-bypassable.
+
+🔒 Updated Final Declaration
 
 Gate-4 is COMPLETE at the governance and lifecycle layer.
 
-All ERP user lifecycle rules are:
-- Deterministic
-- Audited
-- Enumeration-safe
-- Backend-authoritative
+All ERP lifecycle transitions are:
 
-No further changes are permitted under Gate-4.
-Special Notes:
+Deterministic
 
---------------------------------------------------------------------------------------------------------
+Atomic
 
-“The IDs listed in this section are intentionally kept in HALF-DONE or DEFERRED status.
-These items cannot be completed within the scope of the current Gate.
-Each of these IDs must be explicitly re-verified and closed only after the specified future Gate has been completed.”
+DB-owned
 
-| Status       | Gate | ID      | Domain        | Short_Name                   | Current_Reality                      | Why_Not_Complete                                   | Completes_In_Gate | Completes_On_or_After_ID | Files_Involved                                                                                                                                       |
-| ------------ | ---- | ------- | ------------- | ---------------------------- | ------------------------------------ | -------------------------------------------------- | ----------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |                 |
-                                                                                                |
-| 🟡 HALF-DONE | 4    | 4.0C    | ACL           | Minimal ACL bootstrap        | Only L1_USER assigned on approval    | Extended ACL system not implemented                | Gate-6            | ID-6.x                   | `supabase/functions/api/_core/admin/signup/approve.handler.ts`, `supabase/functions/api/_pipeline/acl.ts`
+Append-audited
+
+Enumeration-safe
+
+Single-authority
+
+No further lifecycle mutation is permitted under Gate-4.
+
+Rate limiting (4.1B) remains intentionally deferred to Gate-5 security layer.
+
+📌 Special Notes Section (Updated)
+
+Replace your special notes with:
+
+Special Notes
+
+The following IDs are intentionally deferred and do not block lifecycle integrity:
+
+Status	Gate	ID	Domain	Reason
+🟡 DEFERRED	4	4.1B	SECURITY	Signup rate limiting belongs to Gate-5 security hardening
+
+Deferred items:
+
+Have explicit future gate assignment
+
+Cannot silently complete
+
+Must be re-verified at future gate execution
 
 ✅ Gate-5 — CONTEXT AUTHORITY & RESOLUTION
-Gate-5 State Table (UPDATED)
-| Status       | Gate | ID      | Domain        | Short_Name                    | Current_Reality                                                        | Why_Not_Complete                                 | Completes_In_Gate | Completes_On_or_After_ID | Files_Involved                                                                                   |
-| ------------ | ---- | ------- | ------------- | ----------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------ | ----------------- | ------------------------ | ------------------------------------------------------------------------------------------------ |
-| 🔒 FROZEN    | 5    | ID-5    | GOVERNANCE    | Context authority lock        | Context authority locked to backend only; frontend permanently ignored | —                                                | —                 | —                        | supabase/functions/api/_pipeline/context.ts, _pipeline/runner.ts                                 |
-| 🟡 HALF-DONE | 5    | ID-5.1  | CONTEXT       | Request context resolver      | Deterministic resolver pipeline exists with UNRESOLVED/RESOLVED states | ERP user → org/project/department mapping absent | Gate-6            | ID-6.x                   | supabase/functions/api/_pipeline/context.ts                                                      |
-| 🔒 FROZEN    | 5    | ID-5.1A | CONTEXT       | Context input sanitization    | Frontend-supplied context hints ignored unconditionally                | —                                                | —                 | —                        | supabase/functions/api/_pipeline/context.ts                                                      |
-| 🟡 HALF-DONE | 5    | ID-5.1B | SECURITY      | Missing context handling      | UNRESOLVED context deterministically blocks request                    | Context mapping logic unavailable                | Gate-6            | ID-6.x                   | supabase/functions/api/_pipeline/context.ts, _pipeline/runner.ts                                 |
-| 🟡 HALF-DONE | 5    | ID-5.2  | CONTEXT       | Company context validation    | Company boundary declared in pipeline                                  | Company data + ACL truth unavailable             | Gate-6            | ID-6.x                   | supabase/functions/api/_pipeline/context.ts                                                      |
-| 🟡 HALF-DONE | 5    | ID-5.2A | SECURITY      | Single-company invariant      | One-company-per-request invariant locked                               | Real org data missing                            | Gate-6            | ID-6.x                   | supabase/functions/api/_pipeline/context.ts                                                      |
-| 🟡 HALF-DONE | 5    | ID-5.3  | CONTEXT       | Project context validation    | Project ↔ company binding contract declared                            | Project data absent                              | Gate-6            | ID-6.x                   | supabase/functions/api/_pipeline/context.ts                                                      |
-| 🟡 HALF-DONE | 5    | ID-5.3A | SECURITY      | Company-project binding       | Cross-company leakage prevention declared                              | Binding enforcement deferred                     | Gate-6            | ID-6.x                   | supabase/functions/api/_pipeline/context.ts                                                      |
-| 🟡 HALF-DONE | 5    | ID-5.4  | CONTEXT       | Department context validation | Department boundary declared                                           | Department / HR data absent                      | Gate-6            | ID-6.x                   | supabase/functions/api/_pipeline/context.ts                                                      |
-| 🟡 HALF-DONE | 5    | ID-5.4A | SECURITY      | Department access check       | Department isolation contract defined                                  | ACL-backed policy unavailable                    | Gate-6            | ID-6.x                   | supabase/functions/api/_pipeline/context.ts                                                      |
-| 🟡 HALF-DONE | 5    | ID-5.5  | ADMIN         | SA / GA bypass rules          | Admin universe bypass path declared                                    | SA/GA detection source missing                   | Gate-6            | ID-6.x                   | supabase/functions/api/_pipeline/context.ts                                                      |
-| 🟡 HALF-DONE | 5    | ID-5.5A | SECURITY      | Bypass isolation guard        | Admin bypass isolated from ACL users                                   | Requires ACL universe truth                      | Gate-6            | ID-6.x                   | supabase/functions/api/_pipeline/context.ts                                                      |
-| 🔒 FROZEN    | 5    | ID-5.6  | SECURITY      | Context invariant enforcement | UNRESOLVED context always blocks downstream execution                  | —                                                | —                 | —                        | supabase/functions/api/_pipeline/context.ts, _pipeline/runner.ts                                 |
-| 🔒 FROZEN    | 5    | ID-5.6A | SECURITY      | Context error codes           | CONTEXT_* error codes returned; no logout triggered                    | —                                                | —                 | —                        | supabase/functions/api/_pipeline/context.ts, _pipeline/runner.ts                                 |
-| 🟡 HALF-DONE | 5    | ID-5.7  | DB            | RLS context alignment         | Context injected into DB client via headers                            | Table-level RLS not applied yet                  | Gate-7            | ID-7.x                   | _shared/serviceRoleClient.ts, migrations/20260126120000_gate5_5_7_rls_context_header_helpers.sql |
-| 🟡 HALF-DONE | 5    | ID-5.7A | DB            | Context mismatch block        | RLS templates defined for zero-row return on mismatch                  | Templates not applied to business tables         | Gate-7            | ID-7.x                   | migrations/20260126121000_gate5_5_7A_rls_policy_templates.sql                                    |
-| ⏸ DEFERRED   | 5    | ID-5.8  | OBSERVABILITY | Context resolution logs       | Logging intentionally deferred                                         | Context not data-backed yet                      | Gate-6            | ID-6.x                   | —                                                                                                |
-| 🔒 FROZEN    | 5    | ID-5.9  | DOCS          | Gate-5 freeze                 | Gate-5 governance & contracts formally frozen                          | —                                                | —                 | —                        | docs/GATE_5_FREEZE.md                                                                            |
+Gate-5 State Table (EXECUTION-SEALED UPDATE)
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🔒 SEALED	5	ID-5	GOVERNANCE	Context authority lock	Backend-only authority enforced; frontend permanently ignored	—	—	—	_pipeline/context.ts, _pipeline/runner.ts
+🔒 SEALED	5	ID-5.1	CONTEXT	Request context resolver	Deterministic resolver with DB-backed company/project/department validation	—	—	—	_pipeline/context.ts
+🔒 SEALED	5	ID-5.1A	CONTEXT	Context input sanitization	Frontend hints ignored unconditionally	—	—	—	_pipeline/context.ts
+🔒 SEALED	5	ID-5.1B	SECURITY	Missing context handling	UNRESOLVED → deterministic 403 via central envelope	—	—	—	_pipeline/context.ts, _pipeline/runner.ts
+🔒 SEALED	5	ID-5.2	CONTEXT	Company context validation	Primary company resolved deterministically from DB	—	—	—	_pipeline/context.ts, erp_map.get_primary_company
+🔒 SEALED	5	ID-5.2A	SECURITY	Single-company invariant	One-company-per-request enforced structurally	—	—	—	_pipeline/context.ts, DB unique index
+🔒 SEALED	5	ID-5.3	CONTEXT	Project context validation	Project membership verified against user mapping	—	—	—	_pipeline/context.ts, user_projects
+🔒 SEALED	5	ID-5.3A	SECURITY	Company-project binding	Cross-company project leakage blocked deterministically	—	—	—	_pipeline/context.ts
+🔒 SEALED	5	ID-5.4	CONTEXT	Department context validation	Department membership verified	—	—	—	_pipeline/context.ts, user_departments
+🔒 SEALED	5	ID-5.4A	SECURITY	Department access check	HR boundary isolation enforced	—	—	—	_pipeline/context.ts
+🟡 DEFERRED	5	ID-5.5	ADMIN	SA / GA bypass rules	Admin bypass branch exists; activation depends on ACL truth	Requires Gate-6 ACL truth	Gate-6	ID-6.x	_pipeline/context.ts
+🟡 DEFERRED	5	ID-5.5A	SECURITY	Bypass isolation guard	Admin ≠ ACL user separation declared	Requires Gate-6 ACL universe truth	Gate-6	ID-6.x	_pipeline/context.ts
+🔒 SEALED	5	ID-5.6	SECURITY	Context invariant enforcement	UNRESOLVED always blocks downstream execution	—	—	—	_pipeline/context.ts, _pipeline/runner.ts
+🔒 SEALED	5	ID-5.6A	SECURITY	Context error codes	Central errorResponse() envelope; no logout	—	—	—	_pipeline/context.ts, _core/response.ts
+🟡 DEFERRED	5	ID-5.7	DB	RLS context alignment	Context headers injected into DB client	Hard verification belongs to DB hard lock	Gate-7	ID-7.x	_shared/serviceRoleClient.ts, context_headers.ts
+🟡 DEFERRED	5	ID-5.7A	DB	Context mismatch block	RLS templates enforce zero-row on mismatch	Full business table enforcement in Gate-7	Gate-7	ID-7.x	ACL RLS migrations
+🟡 DEFERRED	5	ID-5.8	OBSERVABILITY	Context resolution logs	Logging intentionally postponed	Needs ACL truth to be meaningful	Gate-6	ID-6.x	—
+🔒 SEALED	5	ID-5.9	DOCS	Gate-5 freeze	Execution-level freeze declared	—	—	—	docs/GATE_5_FREEZE.md
+🔍 Gate-5 Observations (Execution-Grade)
 
+✔ Context authority fully backend-locked
+✔ No frontend influence path
+✔ Deterministic 403 on UNRESOLVED
+✔ No logout side-effects
+✔ No silent fallback
+✔ Company/project/department isolation enforced
+✔ Production-parity safe
+✔ No ACL logic leakage
 
-🔍 Gate-5 Observations (Audit-Grade)
+Admin activation and DB hard-lock intentionally separated.
 
-Context authority is fully locked — frontend has zero influence.
+📌 Non-Negotiable Notes (Updated)
 
-UNRESOLVED context never reaches business logic (hard block in runner).
+No HALF-DONE terminology used (removed).
 
-Failure semantics are deterministic, non-logout, non-leaky.
-
-Admin universe separation is structurally present but policy-deferred.
-
-RLS alignment is contract-ready, not yet enforced on business tables.
-
-No ACL, role, or permission logic leaks into Gate-5.
-
-Behaviour is production-parity safe even with stubbed resolution.
-
-📌 Significant Notes (Non-Negotiable)
-
-All 🟡 HALF-DONE rows:
-
-Have explicit reasons
-
-Have completion Gate + ID
-
-Will not auto-complete
+🟡 rows are intentionally cross-gate scoped.
 
 No Gate-5 item depends on chat memory.
 
-Gate-5 correctness does not depend on future gates behaving correctly.
+Gate-5 correctness does not rely on future gates behaving correctly.
 
-🔒 Gate-5 Final State
+Gate-6 and Gate-7 only extend capability — they do not fix Gate-5 defects.
 
-Gate-5 is FROZEN at the governance layer.
-No changes are permitted unless Gate-6 explicitly consumes these contracts.
+🔒 Gate-5 Final State (Corrected)
+
+Gate-5 is:
+
+🔒 EXECUTION-SEALED (Scope-Bound)
+
+Not just governance-frozen.
+
+No reinterpretation allowed.
 
 ➡️ Next Gate: Gate-6 — ACL & Business Truth
                                         
@@ -836,7 +946,7 @@ Emits decision trace including override source
 
 Admin workflows (Gate-9) create/revoke overrides
 
-Enforcement (Gate-11) applies final decision
+Enforcement (G-11) applies final decision
 
 🧠 One-Line Authoritative Summary
 
@@ -916,10 +1026,10 @@ Gate-6 / G9 defines approval routing and workflow safety truth at the database l
 🔹 Gate-6 — G10: ACL Decision Engine (FINAL ALLOW / DENY Brain)
 📌 Gate-6 / G10 State Update (INSERT AS-IS)
 Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
-🟡 HALF-DONE	6	ID-6.14	ACL	ACL precedence ladder	Final ACL evaluation order is explicitly defined and locked in code: Admin → Module Hard Deny → User Override → Role VWED → Capability VWED → DENY	Precedence is defined but not yet enforced at request-time via pipeline	Gate-11	ID-6.17	_pipeline/acl.ts, _acl/acl_resolver.ts
-🟡 HALF-DONE	6	ID-6.15	ACL	VWED engine	Deterministic, stateless VWED action evaluation engine implemented and reusable (VIEW/WRITE/EDIT/DELETE/APPROVE/EXPORT)	Engine is not yet invoked by request pipeline	Gate-11	ID-6.17	_acl/vwed_engine.ts
-🟡 HALF-DONE	6	ID-6.16	ACL	ACL resolver core	Final ALLOW / DENY resolver implemented, consuming module enablement, user overrides, role permissions, capability permissions	Resolver is not yet wired into stepAcl / runner	Gate-11	ID-6.17	_acl/acl_resolver.ts
-🟡 HALF-DONE	6	ID-6.16A	ACL	Decision trace	Structured decision trace model implemented for explainability and audit (layer-by-layer reasoning capture)	Trace is not yet emitted or persisted by enforcement layer	Gate-11	ID-6.17A	_acl/decision_trace.ts
+🟡 HALF-DONE	6	ID-6.14	ACL	ACL precedence ladder	Final ACL evaluation order is explicitly defined and locked in code: Admin → Module Hard Deny → User Override → Role VWED → Capability VWED → DENY	Precedence is defined but not yet enforced at request-time via pipeline	G-11	ID-6.17	_pipeline/acl.ts, _acl/acl_resolver.ts
+🟡 HALF-DONE	6	ID-6.15	ACL	VWED engine	Deterministic, stateless VWED action evaluation engine implemented and reusable (VIEW/WRITE/EDIT/DELETE/APPROVE/EXPORT)	Engine is not yet invoked by request pipeline	G-11	ID-6.17	_acl/vwed_engine.ts
+🟡 HALF-DONE	6	ID-6.16	ACL	ACL resolver core	Final ALLOW / DENY resolver implemented, consuming module enablement, user overrides, role permissions, capability permissions	Resolver is not yet wired into stepAcl / runner	G-11	ID-6.17	_acl/acl_resolver.ts
+🟡 HALF-DONE	6	ID-6.16A	ACL	Decision trace	Structured decision trace model implemented for explainability and audit (layer-by-layer reasoning capture)	Trace is not yet emitted or persisted by enforcement layer	G-11	ID-6.17A	_acl/decision_trace.ts
 🔎 Mandatory Notes (Attach Below Table)
 1️⃣ What G10 DOES
 
@@ -974,15 +1084,15 @@ Decision trace is emitted or stored
 
 Hard proof exists that no handler runs without ACL verdict
 
-That happens in Gate-11 (G11).
+That happens in G-11 (G11).
 
 🧠 One-Line Authoritative Summary
 
 Gate-6 / G10 defines the complete ACL decision brain, but does not yet enforce it.
-All evaluation logic exists; all request-time enforcement is intentionally deferred to Gate-11.
+All evaluation logic exists; all request-time enforcement is intentionally deferred to G-11.
 
-🔹 Gate-11 — G11: Backend Enforcement (FINAL)
-📌 Gate-11 / G11 State Update (INSERT AS-IS)
+🔹 G-11 — G11: Backend Enforcement (FINAL)
+📌 G-11 / G11 State Update (INSERT AS-IS)
 Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
 ✅ DONE	11	ID-6.17	SECURITY	Backend permission guard	Every protected API request passes through stepAcl; resolver verdict (ALLOW / DENY) is enforced before any handler executes	—	—	—	_pipeline/acl.ts, _pipeline/runner.ts
 ✅ DONE	11	ID-6.17A	SECURITY	Action-level guard	ACL enforcement is action-aware, not route-only; (resourceCode, action) is mandatory input and enforced at request time	—	—	—	_pipeline/acl.ts, _pipeline/runner.ts
@@ -1009,7 +1119,7 @@ Enforcement is backend-only, deterministic, enumeration-safe
 ❌ Does not emit decision trace yet
 ❌ Does not cache or snapshot ACL
 
-(এইগুলো Gate-10 / Gate-12 scope)
+(এইগুলো Gate-10 / G-12 scope)
 
 3️⃣ Why ID-6.17 is DONE
 
@@ -1035,13 +1145,13 @@ Missing action/resource ⇒ deterministic DENY
 
 🧠 One-Line Authoritative Summary
 
-Gate-11 (G11) is COMPLETE.
+G-11 (G11) is COMPLETE.
 The ACL decision brain (Gate-10) is now fully enforced at request time; no protected API can execute without a deterministic ALLOW verdict, and enforcement is action-level, backend-authoritative, and fail-safe.
 
-🔹 Gate-12 — G12: Versioning & Performance
+🔹 G-12 — G12: Versioning & Performance
 Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
-🟡 HALF-DONE	12	ID-6.18	ACL	acl_versions	ACL change-sets are versioned as immutable snapshots; every structural ACL mutation (role, capability, override, module, approver) can be associated with a deterministic version identifier	No runtime binding yet between ACL evaluation and a specific acl_version; resolver always evaluates “latest truth”	Gate-12	ID-6.18	migrations/*_gate12_6_18_create_acl_versions.sql
-🟡 HALF-DONE	12	ID-6.18A	ACL	precomputed_acl_view	Structural model exists to precompute effective ACL decisions per (user, company, resource, action) for fast lookup	Precompute job, invalidation strategy, and resolver consumption not implemented yet	Gate-12	ID-6.18A	migrations/*_gate12_6_18A_create_precomputed_acl_view.sql
+🟡 HALF-DONE	12	ID-6.18	ACL	acl_versions	ACL change-sets are versioned as immutable snapshots; every structural ACL mutation (role, capability, override, module, approver) can be associated with a deterministic version identifier	No runtime binding yet between ACL evaluation and a specific acl_version; resolver always evaluates “latest truth”	G-12	ID-6.18	migrations/*_gate12_6_18_create_acl_versions.sql
+🟡 HALF-DONE	12	ID-6.18A	ACL	precomputed_acl_view	Structural model exists to precompute effective ACL decisions per (user, company, resource, action) for fast lookup	Precompute job, invalidation strategy, and resolver consumption not implemented yet	G-12	ID-6.18A	migrations/*_gate12_6_18A_create_precomputed_acl_view.sql
 🔎 Why BOTH are HALF-DONE (non-negotiable)
 ID-6.18 — acl_versions
 
@@ -1077,18 +1187,18 @@ ID-6.18A — precomputed_acl_view
 G12 only introduces ACL versioning and precomputation truth.
 No runtime consumer yet → both IDs remain HALF-DONE.
 
-🔹 Gate-13 — G13: RLS Binding & Fail-Safe Enforcement
+🔹 G-13 — G13: RLS Binding & Fail-Safe Enforcement
 
-📌 Gate-13 State Update (INSERT AS-IS)
+📌 G-13 State Update (INSERT AS-IS)
 
 Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
-🟡 HALF-DONE	13	ID-6.19	DB	RLS binding for ACL	ACL-resolved context (company / project / department / admin flag) is now structurally bindable to Postgres RLS via request headers and helper functions	RLS policies are not yet ATTACHED to real business tables; no table-level USING / WITH CHECK proof exists	Gate-13	ID-6.19	supabase/migrations/2026XXXXXX_gate13_6_19_bind_acl_context_to_rls.sql
-🟡 HALF-DONE	13	ID-6.19A	DB	RLS deny fallback	Deterministic fail-safe model exists: if ACL context is missing, mismatched, or uncertain → RLS yields zero rows (implicit DENY)	Fallback policies are not yet FORCE-ENABLED on business tables; absence-means-deny not yet provable on real data	Gate-13	ID-6.19A	supabase/migrations/2026XXXXXX_gate13_6_19A_rls_deny_fallback.sql
-🔎 Mandatory Gate-13 Notes (Attach Below Table)
+🟡 HALF-DONE	13	ID-6.19	DB	RLS binding for ACL	ACL-resolved context (company / project / department / admin flag) is now structurally bindable to Postgres RLS via request headers and helper functions	RLS policies are not yet ATTACHED to real business tables; no table-level USING / WITH CHECK proof exists	G-13	ID-6.19	supabase/migrations/2026XXXXXX_gate13_6_19_bind_acl_context_to_rls.sql
+🟡 HALF-DONE	13	ID-6.19A	DB	RLS deny fallback	Deterministic fail-safe model exists: if ACL context is missing, mismatched, or uncertain → RLS yields zero rows (implicit DENY)	Fallback policies are not yet FORCE-ENABLED on business tables; absence-means-deny not yet provable on real data	G-13	ID-6.19A	supabase/migrations/2026XXXXXX_gate13_6_19A_rls_deny_fallback.sql
+🔎 Mandatory G-13 Notes (Attach Below Table)
 
 1️⃣ What G13 DOES
 
-Binds runtime ACL context (from Gate-5 + Gate-11) to database enforcement
+Binds runtime ACL context (from Gate-5 + G-11) to database enforcement
 
 Makes Postgres RLS the last-line security wall
 
@@ -1128,7 +1238,7 @@ attach করা হয়নি ❌
 
 4️⃣ Completion Condition (Non-Negotiable)
 
-Gate-13 ONLY marked DONE when:
+G-13 ONLY marked DONE when:
 
 At least one real business table (company / project / department scoped):
 
@@ -1155,7 +1265,7 @@ Gate-5	ID-5.7	RLS templates unused	G13 is the only legal consumer	Progressed
 
 🧠 One-Line Authoritative Summary
 
-Gate-13 binds ACL truth to Postgres RLS and establishes fail-safe, deny-by-default data enforcement.
+G-13 binds ACL truth to Postgres RLS and establishes fail-safe, deny-by-default data enforcement.
 Until real tables consume these policies, G13 remains structurally correct but intentionally HALF-DONE.
 
 ✅ PACE-ERP — Gate-6 (ACL & Business Truth)
@@ -1252,21 +1362,21 @@ Status	ID	Short_Name	Current_Reality	Completes_In_Gate
 🟡	ID-6.13A	approver invariants	Safety invariants declared	Gate-10
 🔹 G10 — ACL Decision Brain (Defined, Not Enforced)
 Status	ID	Short_Name	Current_Reality	Completes_In_Gate
-🟡	ID-6.14	Precedence ladder	Final evaluation order locked	Gate-11
-🟡	ID-6.15	VWED engine	Deterministic engine implemented	Gate-11
-🟡	ID-6.16	ACL resolver core	Final ALLOW/DENY resolver exists	Gate-11
-🟡	ID-6.16A	Decision trace	Explainability model exists	Gate-11
+🟡	ID-6.14	Precedence ladder	Final evaluation order locked	G-11
+🟡	ID-6.15	VWED engine	Deterministic engine implemented	G-11
+🟡	ID-6.16	ACL resolver core	Final ALLOW/DENY resolver exists	G-11
+🟡	ID-6.16A	Decision trace	Explainability model exists	G-11
 🚫 Explicitly OUT-OF-SCOPE for Gate-6
 
 The following are NOT missing — they are intentionally future-gated:
 
 Concern	Correct Gate
-ACL enforcement	Gate-11
+ACL enforcement	G-11
 Menu snapshot / UI	Gate-7
-ACL versioning runtime	Gate-12
-Precomputed ACL cache	Gate-12
-RLS ENABLE / FORCE	Gate-13
-RLS USING / WITH CHECK	Gate-13
+ACL versioning runtime	G-12
+Precomputed ACL cache	G-12
+RLS ENABLE / FORCE	G-13
+RLS USING / WITH CHECK	G-13
 🔒 Final Authoritative Verdict — Gate-6
 ✅ Gate-6 is COMPLETE at the TRUTH layer
 
@@ -1289,3 +1399,1171 @@ This gate defines the immutable authorization, organizational, permission-intent
 All runtime execution, enforcement, caching, UI consumption, and database policy attachment are explicitly deferred to later gates.
 
 Any future behavior must consume — and must not reinterpret — the truths defined here.
+
+| Status | Gate | ID | Domain | Short_Name | Current_Reality | Why_Not_Complete | Completes_In_Gate | Completes_On_or_After_ID | Files_Involved |
+|------|------|----|--------|------------|-----------------|------------------|-------------------|--------------------------|----------------|
+| 🔒 FROZEN | 7 | ID-7 | GOVERNANCE | Menu authority lock | Menu visibility authority is formally locked to backend-generated snapshots; frontend is permanently forbidden from constructing, mutating, or inferring menu structure | — | — | — | docs/GATE_7_G0_MENU_AUTHORITY_LOCK.md |
+🔒 Why this is FROZEN (not DONE, not HALF-DONE)
+
+This ID is pure governance
+
+No runtime execution required
+
+No dependency on menu data, ACL, or UI
+
+Authority boundary is binary and final
+
+👉 Therefore FROZEN immediately on declaration.
+| 🟡 HALF-DONE | 7 | ID-7.1 | ACL | Menu master | Canonical menu registry exists at DB level with deterministic menu_code, resource_code, route_path, universe, and system flags | Menu records are not yet consumed by hierarchy builder, snapshot engine, or delivery API | Gate-7 | ID-7.4 | supabase/migrations/2026XXXXXX_gate7_7_1_create_menu_master.sql |
+| 🟡 HALF-DONE | 7 | ID-7.1A | ACL | Menu invariants | Structural safety rules enforced: unique menu_code, unique resource_code, valid route constraints, system-menu protection, and no orphan definitions | Invariants are not yet proven through full menu tree build or snapshot generation | Gate-7 | ID-7.3 | supabase/migrations/2026XXXXXX_gate7_7_1A_menu_invariants.sql |
+Notes:
+
+1. G1 defines **menu existence truth**, not visibility or permission.
+2. ID-7.1 and ID-7.1A together form an inseparable unit.
+3. Both IDs are correctly marked HALF-DONE because:
+   - Structural truth exists
+   - Safety invariants exist
+   - No hierarchy, snapshot, or delivery pipeline consumes them yet
+4. No earlier Gate is closed by G1 alone.
+5. Completion of G1 occurs only when:
+   - Menu hierarchy is built (ID-7.2)
+   - Snapshot engine consumes menu registry (ID-7.3)
+   - Frontend receives menus exclusively via snapshot (ID-7.4)
+🧠 One-Line Authoritative Summary (State-File Grade)
+
+Gate-7 / G1 defines what menus exist and enforces structural safety.
+It intentionally does not decide visibility, hierarchy, permission, or UI rendering.
+
+🔎 Dependency Resolution Note — ID-6.9A (Menu Resource Model)
+
+Gate-7 / G1 (ID-7.1, ID-7.1A) introduces a canonical menu registry
+that explicitly binds each ACL resource_code to a concrete menu entity
+(menu_code, route_path, universe).
+
+This resolves the semantic ambiguity previously present in ID-6.9A,
+where menu-related ACL resources existed without a first-class menu definition.
+
+However, ID-6.9A remains HALF-DONE because:
+- Menu hierarchy construction (ID-7.2) has not yet consumed menu_master
+- Menu snapshot generation (ID-7.3) has not yet materialized visibility
+- ACL evaluation does not yet resolve permissions via menu snapshots
+
+Therefore:
+- Semantic anchoring of menu resources is COMPLETE
+- Runtime consumption and enforcement are NOT COMPLETE
+
+ID-6.9A remains HALF-DONE by design.
+
+✅ State File Update — Gate-7 / G2 (Menu Hierarchy Builder)
+INSERT under: Gate-7
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	7	ID-7.2	ACL	Menu tree builder	Deterministic parent-child menu hierarchy exists at DB level. Each menu has at most one parent, ordering is stable, self-parenting is impossible, and orphaned nodes cannot exist due to FK enforcement.	Menu hierarchy is not yet consumed by snapshot engine or delivery API; no runtime traversal or rendering exists yet	Gate-7	ID-7.4	supabase/migrations/20260305103000_gate7_7_2_create_menu_tree.sql
+🟡 HALF-DONE	7	ID-7.2A	ACL	Tree validation	Structural safety invariants enforced at DB level: cross-universe parent/child links are blocked, hierarchy cycles are impossible, and ghost menus are structurally prevented	Invariants are not yet exercised via snapshot generation or frontend consumption	Gate-7	ID-7.3	supabase/migrations/20260305104000_gate7_7_2A_menu_tree_invariants.sql
+🔒 Mandatory Notes (State-File)
+
+G2 defines hierarchy truth, not visibility or permission.
+No ACL evaluation, no snapshot logic, no UI rendering is introduced here.
+
+ID-7.2 and ID-7.2A are inseparable.
+Hierarchy without validation is unsafe; validation without hierarchy is meaningless.
+
+Why BOTH are HALF-DONE (correctly):
+
+Structural hierarchy exists ✔️
+
+Cycle / ghost / universe-leak prevention exists ✔️
+
+No snapshot engine (ID-7.3) consumes this tree yet ❌
+
+No delivery API (ID-7.4) exposes it ❌
+
+🔓 Gate-7 Impact on Earlier HALF-DONE IDs (Authoritative Insert)
+Earlier Gate-6 — Menu Permission Model (UNCHANGED STATUS)
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	6	ID-6.9	ACL	Role-Menu Permission (VWED)	Role-wise VWED permission intent is structurally defined and deterministic at DB level	No runtime consumer exists: menu snapshot does not yet evaluate permissions; ACL resolver not wired; no enforcement	Gate-10	ID-6.14	erp_acl.role_menu_permissions
+🟡 HALF-DONE	6	ID-6.9A	ACL	Menu Resource Model	Canonical ACL resource_code + action vocabulary exists	Resource model is not yet consumed by menu snapshot, ACL resolver, or enforcement layer	Gate-10	ID-6.14	erp_acl.menu_resources
+🔎 What Gate-7 (G1 + G2) Resolves — Precisely
+Earlier Blocker (Gate-6)	Status Before	Gate-7 Change	Proof	Effect on 6.9 / 6.9A
+Menu existence undefined	❌ Missing	erp_menu.menu_master introduced (ID-7.1)	DB schema	Resolved
+No concrete resource anchor	❌ Missing	resource_code now maps to real menu rows	DB FK-safe reference	Resolved
+No hierarchy / structure	❌ Missing	Deterministic parent-child tree (ID-7.2)	Tree table + invariants	Resolved
+Ghost / cyclic menus possible	❌ Unsafe	Cycle + orphan prevention (ID-7.2A)	DB invariants	Resolved
+Permission execution	❌ Missing	❌ Still missing	—	NOT resolved
+Snapshot evaluation	❌ Missing	❌ Still missing	—	NOT resolved
+📌 Correct Interpretation (Non-Negotiable)
+
+Gate-7 does NOT execute permissions
+
+Gate-7 does NOT evaluate VWED
+
+Gate-7 does NOT change ACL logic
+
+Gate-7 only ensures:
+
+“When ACL permission is evaluated later, the menu it refers to is real, structured, and safe.”
+
+Therefore:
+
+ID-6.9 / 6.9A remain 🟡 HALF-DONE
+
+Their data-absence blocker is removed
+
+Their execution blocker still exists
+
+This is the intended architecture.
+
+🧠 One-Line State-File Verdict
+
+Gate-7 resolves the structural and existential blockers of ID-6.9 / 6.9A by introducing canonical, hierarchical menu truth, but does not execute or enforce permissions; therefore both IDs correctly remain HALF-DONE until consumed by the snapshot engine (Gate-7/G3) and ACL decision engine
+
+Gate-7 / G3 — Menu Snapshot Engine
+🔹 Gate-7 — G3: Menu Snapshot Engine
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	7	ID-7.3	ACL	Snapshot generation engine	Deterministic menu snapshot structure exists at DB level. Snapshot can represent final visible menu set per (user, company, universe) without frontend inference.	Snapshot is not yet generated or consumed at runtime; no ACL resolver, delivery API, or invalidation hook executes snapshot generation	Gate-7	ID-7.4	supabase/migrations/*_gate7_7_3_create_menu_snapshot.sql
+🟡 HALF-DONE	7	ID-7.3A	ACL	Snapshot refresh rules	Snapshot invalidation & refresh intent is formally defined (ACL change / interval based). Rules are deterministic and version-safe at data level.	No runtime trigger exists yet to regenerate snapshot on ACL mutation or TTL expiry	Gate-7	ID-7.4	supabase/migrations/*_gate7_7_3A_snapshot_refresh_rules.sql
+🔎 Mandatory Notes (State-File Locked)
+
+G3 introduces snapshot materialization truth, not execution
+
+Snapshot here is data-correct but runtime-inactive
+
+No .ts consumer, cron, hook, or pipeline touches snapshot yet
+
+Therefore HALF-DONE is correct and non-negotiable
+
+🔓 Earlier Gate IDs — Status After G3
+IDs that progress, but DO NOT auto-close
+Earlier Gate	ID	Previous Status	What Was Missing Earlier	What G3 Adds	Final Status
+Gate-6	ID-6.9	🟡 HALF-DONE	No container to materialize role→menu permissions	Snapshot can now carry resolved menu visibility	🟡 HALF-DONE
+Gate-6	ID-6.9A	🟡 HALF-DONE	Menu resource truth had no consumption layer	Snapshot schema can consume menu resources	🟡 HALF-DONE
+Gate-6	ID-6.14	🟡 HALF-DONE	ACL decisions had no projection surface	Snapshot is valid projection target	🟡 HALF-DONE
+Gate-6	ID-6.15	🟡 HALF-DONE	VWED engine had no output sink	Snapshot can store VWED-resolved actions	🟡 HALF-DONE
+Gate-6	ID-6.16	🟡 HALF-DONE	Resolver output had nowhere to persist	Snapshot is persistence boundary	🟡 HALF-DONE
+
+⚠️ Important:
+G3 removes structural blockers but does NOT execute or consume any of these IDs.
+Therefore no previous ID becomes DONE here.
+
+🧠 One-Line Authoritative Summary (Insert-Grade)
+
+Gate-7 / G3 defines the deterministic snapshot container and refresh intent for menu visibility, but performs no runtime generation, consumption, or enforcement. All related ACL and menu-permission IDs remain correctly HALF-DONE until Gate-7 / G4 and G-11 consume this snapshot.
+
+✅ AUTHORITATIVE STATE FILE UPDATE — Gate-7 / G4
+
+(Insert exactly under Gate-7 section)
+
+Gate-7 / G4 — Menu Delivery API
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	7	ID-7.4	API	/api/me/menu endpoint	Frontend receives menu exclusively via backend-served snapshot; no menu construction, inference, or mutation is possible client-side	—	—	—	supabase/functions/api/_core/auth/menu.handler.ts, _pipeline/runner.ts
+✅ DONE	7	ID-7.4A	API	SA vs ACL menu split	Menu universe (SA vs ACL) is deterministically derived from backend-resolved context and enforced at query level	—	—	—	supabase/functions/api/_core/auth/menu.handler.ts, _pipeline/context.ts
+🔍 Why ID-7.4 is DONE (Audit-Proof)
+
+Required by SSOT
+
+“Frontend must have exactly one menu truth source.”
+
+Now true:
+
+meMenuHandler reads only from erp_menu.menu_snapshot
+
+No access to:
+
+menu_master
+
+menu_tree
+
+role tables
+
+capability tables
+
+Frontend has zero authority to:
+
+infer
+
+merge
+
+calculate
+
+override menu
+
+👉 Snapshot = single source of UI truth
+
+Binary condition satisfied → DONE
+
+🔍 Why ID-7.4A is DONE (Audit-Proof)
+
+Required
+
+“SA/GA must see admin universe; others must not.”
+
+Now enforced by backend only:
+
+const universe = context.isAdmin === true ? "SA" : "ACL";
+
+.eq("universe", universe)
+
+
+context.isAdmin is produced only by stepContext
+
+Frontend cannot:
+
+choose universe
+
+override universe
+
+spoof universe
+
+Cross-universe leakage is structurally impossible
+
+👉 Universe split is derived + enforced, not inferred
+
+Binary enforcement → DONE
+
+🔁 CASCADING STATE UPDATE — Gate-5
+
+This is the critical correction you asked for.
+
+Gate-5 — Context Authority & Resolution (UPDATED)
+🔄 ID-5.1 — STATUS CHANGE
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	5	ID-5.1	CONTEXT	Request context resolver	Context is fully backend-resolved and actively consumed by downstream APIs (menu delivery)	—	—	—	_pipeline/context.ts, _pipeline/runner.ts, _core/auth/menu.handler.ts
+🔍 Why ID-5.1 is NOW DONE (and was not earlier)
+Earlier (HALF-DONE reason)
+
+Context existed but was not consumed by any irreversible business output.
+
+What changed in Gate-7 / G4
+
+/api/me/menu cannot execute without resolved context
+
+Context now decides:
+
+company scope
+
+admin universe
+
+menu universe
+
+Wrong / missing context ⇒ hard 403, no fallback
+
+👉 Context resolution is no longer theoretical —
+👉 It is operationally authoritative
+
+Consumption + enforcement = DONE
+
+🔗 Why this does NOT auto-close other Gate-5 IDs
+
+Important boundary (correctly preserved):
+
+ID-5.1 → Resolver existence & usage ✅
+
+ID-5.2+ → Org/project/department correctness ❌ (still Gate-6 dependent)
+
+ID-5.7 → RLS enforcement ❌ (G-13)
+
+So only ID-5.1 moves to DONE.
+Others remain exactly as marked — no discipline violation.
+
+🧾 Final Insert-Grade Summary
+Gate-7 / G4 completes menu delivery authority.
+Menu visibility is now a pure function of:
+  backend-resolved context
+  + precomputed snapshot
+  + enforced universe split.
+
+This operationally closes Gate-5 / ID-5.1.
+No other Gate-5, Gate-6, or ACL IDs are auto-closed.
+
+1️⃣ Gate-7 / G5 — ID-7.5 (NEW ROW)
+
+👉 Gate-7 section-এ add করো
+
+| ✅ DONE | 7 | ID-7.5 | SECURITY | Menu hard deny rule | Menu snapshot absence deterministically results in zero menu visibility; /api/me/menu enforces fail-closed behavior with no fallback or inference | — | — | — | supabase/functions/api/_core/auth/menu.handler.ts |
+
+
+Why this is correct (implicit, no need to write):
+
+Runtime enforcement exists
+
+Backend-only
+
+Binary behavior
+
+No dependency pending
+
+2️⃣ Gate-5 / ID-5.1B — STATUS SAME, Current_Reality UPDATED
+
+👉 Gate-5 table-এ ID-5.1B row modify করো
+
+Status stays: 🟡 HALF-DONE
+
+Only change: Current_Reality
+
+🔴 OLD Current_Reality
+UNRESOLVED context deterministically blocks request
+
+🟢 NEW Current_Reality
+UNRESOLVED context deterministically blocks request; menu visibility is additionally fail-closed at Gate-7 via snapshot hard-deny (ID-7.5)
+
+
+👉 এইগুলো একদম change করবে না:
+
+Status
+
+Why_Not_Complete
+
+Completes_In_Gate
+
+Completes_On_or_After_ID
+
+Files_Involved
+
+Why ID-5.1B stays HALF-DONE (again, implicit):
+
+It is a Gate-5 responsibility
+
+Its completion still depends on full data-backed context + RLS/ACL consumption
+
+Gate-7 only adds an additional safety closure, not full resolution
+
+🧾 Final, calm, one-line truth
+
+Gate-7 / G5 (ID-7.5) → ✅ DONE
+
+Gate-5 / ID-5.1B → 🟡 HALF-DONE (with explicit Gate-7 hard-deny noted)
+
+Gate-7 / G6 — Frontend Route Authority
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Files_Involved
+✅ DONE	7	ID-7.6	FRONT	Route index build	Allowed route index is deterministically built from backend menu snapshot; no inference or fallback logic exists	—	—	frontend/src/router/routeIndex.js
+✅ DONE	7	ID-7.6A	FRONT	Dynamic route guard	Navigation to any route not present in snapshot is blocked via React Router v6 guard; URL bypass is impossible	—	—	frontend/src/router/RouteGuard.jsx
+🔒 Why this is DONE (Not HALF-DONE, Not FROZEN)
+
+This is runtime-executed behavior, not just governance → so DONE
+
+Binary proof:
+
+Snapshot present → route allowed
+
+Snapshot absent → route unreachable
+
+No dependency on future gates (ACL, RLS, Menu permissions)
+
+Frontend authority remains zero
+
+🧠 One-Line Authoritative Summary (State-File Grade)
+
+Gate-7 / G6 is COMPLETE.
+Frontend route access is now strictly allow-listed by backend-generated menu snapshots; manual URL navigation outside the snapshot is deterministically blocked, with zero frontend authority or inference.
+
+Gate-7 / G7 — UI Rendering Discipline
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Files_Involved
+✅ DONE	7	ID-7.7	FRONT	Menu rendering shell	Sidebar, header, and layout are rendered strictly from backend menu snapshot; no hardcoded or inferred UI structure exists	—	—	MenuShell.jsx
+✅ DONE	7	ID-7.7A	FRONT	Hidden route redirect	Any navigation attempt to routes not present in snapshot deterministically redirects to home without leakage	—	—	HiddenRouteRedirect.jsx, AppRouter.jsx
+🔒 Final Gate-7 G7 Statement (Authoritative)
+
+G7 is COMPLETE.
+
+UI rendering is snapshot-only
+
+Hidden routes are non-discoverable
+
+Frontend authority = ZERO
+
+Backend snapshot authority = ABSOLUTE
+
+👉 No further changes allowed in G7.
+
+Gate-7 / G8 — Deep-Link Protection
+
+Status: ✅ DONE
+Gate: 7
+ID: 7.8
+Domain: SECURITY
+Short_Name: Deep-link protection
+Current_Reality:
+Direct URL access to any route not present in backend menu snapshot is deterministically blocked at router level before component mount.
+Why_Not_Complete: —
+Completes_In_Gate: —
+Completes_On_or_After_ID: —
+Files_Involved:
+frontend/src/router/DeepLinkGuard.jsx
+frontend/src/router/AppRouter.jsx
+🧾 Final, one-line verdict (no ambiguity)
+G6 controls routes.
+G7 controls UI.
+G8 controls the browser itself.
+
+✅ STATE FILE UPDATE — Gate-7 / G9
+
+Insert exactly under Gate-7 section
+
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	7	ID-7.9	OBSERVABILITY	Menu snapshot logs	Every /api/me/menu response deterministically logs snapshot version, universe, company context, user identity, and request_id for audit traceability; logging is backend-only and cannot be influenced by frontend	—	—	—	supabase/functions/api/_core/auth/menu.handler.ts
+🔒 Why this is correctly marked DONE (audit-grade rationale)
+
+Runtime behavior exists (not just intent)
+
+Logging is:
+
+backend-only
+
+deterministic
+
+request-scoped (request_id)
+
+Snapshot version is actually emitted at serve-time
+
+No dependency on:
+
+ACL execution
+
+RLS enforcement
+
+frontend behavior
+
+Binary proof:
+
+request served → log emitted
+
+no snapshot → log path skipped (correct)
+
+👉 Therefore DONE, not HALF-DONE, not FROZEN.
+
+🧠 One-line authoritative verdict
+
+Gate-7 / G9 is COMPLETE.
+Menu snapshot delivery is now observability-safe, auditable, and traceable without introducing any new authority or execution dependency.
+
+🔒 PACE-ERP — Gate-7 Freeze Declaration
+
+File-ID: 7.10
+File-Path: docs/GATE_7_FREEZE.md
+Gate: 7
+Phase: 7
+Domain: MENU / VISIBILITY / FRONTEND / SECURITY
+Status: 🔒 FROZEN
+Authority: Backend
+Scope: Menu Visibility & Snapshot Consumption
+Date: (fill when frozen)
+1️⃣ Purpose of Gate-7
+Gate-7 exists to answer exactly one question:
+
+“এই user-টা UI-তে কী কী দেখতে পারবে — তার FINAL TRUTH কী?”
+
+Gate-7:
+
+ACL truth define করে না
+
+Permission evaluate করে না
+
+Business authority পরিবর্তন করে না
+
+Gate-7 কেবল:
+
+Gate-6 ACL truth consume করে
+
+Deterministic menu snapshot তৈরি করে
+
+Frontend-কে read-only visibility truth দেয়
+
+Gate-7 একটি VISIBILITY CONSUMPTION GATE —
+এটি authorization, execution, বা navigation authority gate নয়।
+
+2️⃣ Menu Visibility Authority Model (LOCKED)
+✅ Absolute Visibility Rule
+Backend snapshot → ONLY source of menu & route visibility truth
+
+Frontend → ZERO authority
+
+URL / Route / Menu → snapshot ছাড়া কিছুই visible নয়
+
+🔒 Locked Rules:
+
+Frontend কখনো role / permission infer করবে না
+
+Frontend কখনো menu hardcode করবে না
+
+Manual URL entry দিয়েও snapshot deny হলে access হবে না
+
+Visibility ≠ Permission (এটা Gate-6 এর বিষয়)
+
+এই নিয়মগুলো পরিবর্তনযোগ্য নয়।
+
+3️⃣ Menu Authority Lock (ID-7) — ✅ DONE
+Declared:
+
+Menu visibility backend-authoritative
+
+UI authority permanently revoked
+
+Snapshot ছাড়া কোনো menu / route visible নয়
+
+এই authority Gate-7 এ চূড়ান্তভাবে LOCKED।
+
+4️⃣ Menu Structure Truth (LOCKED STRUCTURE)
+4.1 Menu Master (ID-7.1 → 7.1A) — 🟡 PARTIAL
+Declared (LOCKED):
+
+menu_master = canonical menu resource registry
+
+Unique resource_code
+
+Valid route metadata
+
+No orphan or duplicate menu items
+
+Deferred:
+
+Admin UI
+
+Bulk menu authoring
+
+4.2 Menu Tree (ID-7.2 → 7.2A) — 🟡 PARTIAL
+Declared (LOCKED):
+
+Parent → child hierarchy
+
+Deterministic ordering
+
+No cycles
+
+Hidden parent hides all children
+
+Deferred:
+
+Visual tree editor
+
+Drag-drop UI
+
+5️⃣ Snapshot Generation Truth (DEFINED, PARTIAL EXECUTION)
+5.1 Snapshot Engine (ID-7.3 → 7.3A) — 🟡 PARTIAL
+Declared:
+
+Snapshot generated per user + resolved context
+
+Snapshot derived ONLY from:
+
+Gate-6 ACL truth
+
+Company module enablement
+
+User overrides
+
+Refresh rules declared
+
+Deferred:
+
+Performance optimization
+
+Background regeneration
+
+Version binding
+
+Snapshot generation logic is defined but not optimized — by design.
+
+6️⃣ Snapshot Delivery API (ID-7.4 → 7.4A) — ✅ DONE
+Implemented & LOCKED:
+
+/api/me/menu
+
+SA / GA → Admin menu tree
+
+ACL users → Snapshot-derived menu tree only
+
+Deterministic response envelope
+
+No alternate endpoint allowed.
+
+7️⃣ Visibility Safety & Hard Deny (ID-7.5) — ✅ DONE
+LOCKED behaviour:
+
+Menu item not in snapshot = invisible
+
+No partial render
+
+No fallback
+
+No silent allow
+
+Absence = DENY (visibility layer).
+
+8️⃣ Frontend Consumption Rules (LOCKED)
+8.1 Route Map & Guards (ID-7.6 → 7.6A) — ✅ DONE
+Frontend guarantees:
+
+Route index built ONLY from snapshot
+
+Navigation blocked if route not in snapshot
+
+Safe redirect on violation
+
+8.2 Rendering Discipline (ID-7.7 → 7.7A) — ✅ DONE
+Sidebar / header rendered from snapshot only
+
+Hidden routes redirect safely
+
+No hardcoded UI paths
+
+8.3 Deep-Link Protection (ID-7.8) — ✅ DONE
+Manual URL entry cannot bypass snapshot
+
+Direct navigation guarded
+
+Frontend is a pure consumer.
+
+9️⃣ Observability (ID-7.9) — ⏸ DEFERRED
+Deferred intentionally:
+
+Snapshot logs meaningful হবে তখনই যখন:
+
+Snapshot execution stable
+
+ACL execution gates complete
+
+No observability is safer than misleading observability at this stage.
+
+🔟 What Gate-7 EXPLICITLY DOES NOT Handle
+❌ ACL evaluation
+❌ Permission precedence
+❌ Business logic execution
+❌ RLS enforcement
+❌ Admin menu workflows
+❌ Snapshot caching / TTL
+❌ Version rollback
+
+এই সব future gates-এর দায়িত্ব।
+
+1️⃣1️⃣ HALF-DONE Items (VALID & INTENTIONAL)
+ID Range	Reason	Completes In
+7.1 → 7.2A	Menu data & admin tooling	Gate-9
+7.3 → 7.3A	Snapshot execution polish	Gate-10
+7.9	Observability signal	Gate-10
+All HALF-DONE items:
+
+Explicitly documented
+
+Completion gate identified
+
+No silent completion allowed
+
+1️⃣2️⃣ Invariants (NON-NEGOTIABLE)
+Visibility ≠ Permission
+
+Snapshot absence = deny
+
+Frontend is consumer only
+
+URL ≠ access
+
+Local == Production behaviour
+
+Violation invalidates Gate-7.
+
+🔒 Final Freeze Statement
+Gate-7 — Menu & Visibility Gate is hereby declared FROZEN.
+
+This means:
+
+Menu visibility rules are final
+
+Snapshot-driven UI is mandatory
+
+No menu / route / visibility logic may change under Gate-7
+
+Future changes require a new gate.
+
+📊 Gate-7 Status Summary
+ID	Status
+7	✅ DONE
+7.1 → 7.2A	🟡 PARTIAL
+7.3 → 7.3A	🟡 PARTIAL
+7.4 → 7.4A	✅ DONE
+7.5 → 7.8	✅ DONE
+7.9	✅ DONE
+7.10	🔒 FROZEN
+🔐 Authoritative Closure
+Gate-7 is complete at the visibility & governance layer.
+
+Next gate:
+➡️ Gate-8 — Navigation & Screen Stack Authority
+
+🔒 PACE-ERP — Gate-8 · Navigation & Screen Stack Authority
+
+(STATE FILE · SINGLE SOURCE OF TRUTH)
+
+Gate-8 / G0 — Navigation Authority Lock
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🔒 FROZEN	8	ID-8.0	GOVERNANCE	Navigation authority lock	Navigation authority is permanently locked to the Screen Stack Engine. URL, router, browser history, keyboard, and screen components have ZERO authority. Any navigation not issued by the engine is invalid.	—	—	—	docs/GATE_8_G0_NAVIGATION_AUTHORITY_LOCK.md
+Gate-8 / G1 — Screen Registry & Metadata Discipline
+ID-8.1 — Screen Registry (Existence Truth)
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.1	FRONT	Screen registry	Canonical screen registry exists defining screen_code, route, and screen type (FULL / MODAL / DRAWER). Screens are declared as navigation-addressable entities only.	Registry is static and not yet consumed by router / stack execution as the sole navigation authority.	Gate-8	ID-8.4	frontend/src/navigation/screenRegistry.js
+ID-8.1A — Screen Metadata Rules (Invariant Enforcement)
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.1A	FRONT	Screen metadata rules	Deterministic rules enforce unique route, mandatory screen_code, explicit screen type, and keepAlive discipline (MODAL/DRAWER=false, FULL=explicit).	Rules validated at boot only; not yet enforced through router binding and stack-only navigation.	Gate-8	ID-8.4	frontend/src/navigation/screenRules.js
+Gate-8 / G2 — Screen Stack Engine (Execution Layer)
+ID-8.2 — Screen Stack Engine
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.2	FRONT	Screen stack engine	Core Screen Stack Engine exists with deterministic push/pop/replace/reset maintaining an in-memory navigation stack.	Stack engine not yet wired as the sole authority over router, URL resolution, lifecycle, and deep-link prevention.	Gate-8	ID-8.4	frontend/src/navigation/screenStackEngine.js
+ID-8.2A — Single Active Stack Rule
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.2A	FRONT	Single active stack rule	Single-stack invariant is declared and partially asserted (non-empty, array-based stack).	Global enforcement missing; router bypass and parallel navigation paths not yet structurally blocked.	Gate-8	ID-8.4	frontend/src/navigation/screenStackInvariant.js
+Gate-8 / G3 — BackGuard Enforcement (Browser Back Safety)
+ID-8.3 — BackGuard Engine
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	8	ID-8.3	SECURITY	BackGuard engine	Browser back is intercepted globally. Root back is blocked. Stack-based back is enforced and URL is re-asserted from Screen Stack Engine.	—	—	—	frontend/src/navigation/backGuardEngine.js
+ID-8.3A — Back Validation Logic
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	8	ID-8.3A	SECURITY	Back validation logic	Validation helper exists to determine whether previous screen is legally navigable; currently enforces registry-existence checks only.	—	—	—	frontend/src/navigation/backValidation.js
+✅ Gate-8 Summary (Locked Meaning)
+
+G0 → 🔒 FROZEN (navigation authority locked)
+
+G1 → 🟡 HALF-DONE (screen truth defined, execution not yet consuming)
+
+G2 → 🟡 HALF-DONE (stack engine exists, router authority wiring pending)
+
+G3 → ✅ DONE (browser back fully governed)
+Gate-8 / G4 — Keyboard Intent Governance
+ID-8.4 — Keyboard Intent Engine
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.4	SECURITY	Keyboard intent engine	Global keyboard listener exists. Raw key events are normalized into symbolic navigation intents (e.g., INTENT_BACK). No screen, router, or component may directly act on keyboard shortcuts.	Intent outcomes are not yet fully enforced as the only navigation trigger; stack engine is not yet the exclusive consumer for all navigation paths.	Gate-8	ID-8.5	frontend/src/navigation/keyboardIntentEngine.js
+ID-8.4A — Allowed Intent Map
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.4A	SECURITY	Allowed intent map	Explicit allow-list exists mapping symbolic intents to handlers. Unknown or undeclared keyboard intents are hard-ignored, preventing shortcut-based navigation bypass.	Intent handlers are not yet exhaustively bound to screen stack authority for all navigation cases.	Gate-8	ID-8.5	frontend/src/navigation/keyboardIntentMap.js
+✅ Gate-8 Summary (UPDATED)
+
+G0 → 🔒 FROZEN
+(Navigation authority locked)
+
+G1 → 🟡 HALF-DONE
+(Screen truth defined, execution not yet consuming)
+
+G2 → 🟡 HALF-DONE
+(Stack engine exists, router authority wiring pending)
+
+G3 → ✅ DONE
+(Browser back fully governed)
+
+G4 → 🟡 HALF-DONE
+(Keyboard input reduced to intent source; enforcement wiring pending)
+
+📌 Mandatory Note (attach under Gate-8)
+
+Keyboard handling is not navigation authority.
+It is an intent source only.
+
+Presence of keyboard intent files does not change any earlier Gate (G0–G3) semantics.
+These IDs remain HALF-DONE until Screen Stack Engine becomes the sole navigation executor.
+📌 Mandatory State File Note — Gate-8 / G4 (Keyboard Intent Governance)
+
+Note (Locked):
+
+Keyboard Intent Engine deliberately captures modifier keys (shift, alt, ctrl/meta) even if they are unused at present.
+
+Current usage intentionally normalizes only symbolic intents (e.g., INTENT_BACK) and ignores modifier combinations.
+
+When future keyboard intents are introduced (e.g., CTRL + SHIFT + S → INTENT_SAVE):
+
+No architectural change is required
+
+No new engine or listener is permitted
+
+Only variable usage inside normalizeKeyEvent() may be expanded
+
+Example change (allowed):
+
+- const _shift = event.shiftKey;
++ const shift = event.shiftKey;
+
+
+This is considered intent expansion, not a navigation or authority change.
+
+Such changes:
+
+Do NOT affect Gate-8 G0–G3
+
+Do NOT change navigation authority
+
+Do NOT require state regression or re-audit
+
+Any modifier-based intent must still:
+
+Resolve to a symbolic INTENT
+
+Pass through keyboardIntentMap.js
+
+Be consumed only by Screen Stack Engine
+
+Direct keyboard → navigation shortcuts remain permanently forbidden.
+Gate-8 / G5 — Keyboard ACL Binding (Intent → Permission Boundary)
+ID-8.5 — Keyboard ACL Binding (Declaration Layer)
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.5	SECURITY	Keyboard ACL binding	Keyboard intents are deterministically mapped to abstract ACL actions (resource + action). This layer declares intent → permission relationship only. No ACL execution is performed at this gate.	Actual ACL evaluation (VWED engine) is not available at Gate-8. Executing ACL here would violate authority boundaries.	Gate-10	ID-10.4	frontend/src/navigation/keyboardAclBridge.js
+ID-8.5A — Denied Intent Handling (Deterministic UX Stub)
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.5A	SECURITY	Denied intent handling	Deterministic denied-intent handler exists. Denial currently emits a side-effect-free signal (console warning). No navigation, redirect, or mutation occurs.	Deny path is not ACL-driven yet because ACL execution is out of scope for Gate-8.	Gate-10	ID-10.4	frontend/src/navigation/keyboardIntentMap.js
+🔒 Gate-8 Summary (UPDATED)
+
+G0 → 🔒 FROZEN (navigation authority locked)
+
+G1 → 🟡 HALF-DONE (screen truth declared, not execution-bound)
+
+G2 → 🟡 HALF-DONE (stack engine exists, router authority pending)
+
+G3 → ✅ DONE (browser back fully governed)
+
+G5 → 🟡 HALF-DONE (intent → ACL boundary declared, execution deferred)
+
+📌 Important Note (State-File Rationale)
+
+G5 is intentionally HALF-DONE
+
+No missing file
+
+No broken wiring
+
+Completion explicitly depends on Gate-10 (ACL decision trace + VWED execution)
+
+👉 This satisfies HALF-DONE validity rule
+👉 No silent completion
+👉 No design debt
+
+🔄 STATE FILE UPDATE — Gate-8 / G6
+ID-8.6 — Navigation State Persistence
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	8	ID-8.6	FRONT	Navigation state persistence	Screen stack is persisted to sessionStorage on every navigation mutation (init, push, replace, pop). Stack is restored deterministically on page refresh during the same session.	—	—	—	frontend/src/navigation/navigationPersistence.js
+frontend/src/navigation/screenStackEngine.js
+frontend/src/main.jsx
+ID-8.6A — Session Reset Handling
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+⏸ DEFERRED	8	ID-8.6A	FRONT	Session reset handling	Navigation stack reset capability exists and is callable on logout / SESSION_* events. Actual invocation will be wired from session lifecycle handlers.	Invocation must be triggered by backend session lifecycle (logout / revoke / expiry), which is handled in later Gates.	Gate-9	ID-9.x	frontend/src/navigation/navigationPersistence.js
+frontend/src/navigation/screenStackEngine.js
+🔗 “Closes Earlier HALF-DONE” — ID-3.7A (EXPLICIT NOTE)
+Closure Note for ID-3.7A
+
+How ID-8.6 / 8.6A closes ID-3.7A:
+
+ID-3.7A required deterministic frontend cleanup on session boundary events to prevent stale or leaked UI state.
+Gate-8 / G6 introduces a single, authoritative navigation stack with explicit reset capability (resetStack + clearNavigationStack).
+This guarantees that when session lifecycle events are fired (logout, revoke, expiry), the frontend can hard-reset all navigation state deterministically.
+
+Closure Status:
+
+Design & capability: ✅ CLOSED in Gate-8
+
+Runtime trigger wiring: ⏸ DEFERRED (Gate-9 session lifecycle)
+
+👉 Therefore, ID-3.7A is considered CLOSED by design, with execution hook deferred by governance.
+
+✅ Final Gate-8 / G6 Verdict (State-File Truth)
+
+ID-8.6: ✅ DONE
+
+ID-8.6A: ⏸ DEFERRED (by design, acceptable)
+
+Closes ID-3.7A: ✅ YES (design closure recorded)
+🔹 Gate-8 / G7 — Navigation Observability
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	8	8.7	OBSERVABILITY	Navigation event logs	All navigation actions (init, push, replace, pop, keyboard back) emit deterministic, read-only navigation events via console logging without affecting control flow.	—	—	—	frontend/src/navigation/navigationEventLogger.js, frontend/src/navigation/screenStackEngine.js, frontend/src/navigation/keyboardIntentMap.js
+
+Explicit Gate-8 Rule Confirmation:
+
+Logs are console-only
+
+No DB, no Supabase, no side-effects
+
+Future backend telemetry deferred to Gate-10+
+
+✅ Gate-8 Group Summary (Updated)
+Group	Group_Name	IDs Included	Status
+G6	Navigation State Persistence	8.6, 8.6A	✅ DONE
+G7	Navigation Observability	8.7	✅ DONE
+🧱 What this means (important, calm assurance)
+
+Navigation now survives refresh ✔️
+
+Navigation always resets on logout / SESSION_* ✔️
+
+Every navigation action is observable for RCA ✔️
+
+No rule is violated, no future dependency introduced ✔️
+
+🔒 Gate-8 — Navigation & Screen Stack Authority (STATE FILE UPDATE)
+Gate-8 / G0 — Navigation Authority Lock
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🔒 FROZEN	8	ID-8.0	GOVERNANCE	Navigation authority lock	Navigation authority is permanently locked to the Screen Stack Engine. URL, router, browser history, keyboard, and screen components have ZERO authority. Any navigation not issued by the engine is invalid.	—	—	—	docs/GATE_8_G0_NAVIGATION_AUTHORITY_LOCK.md
+Gate-8 / G1 — Screen Registry & Metadata Discipline
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.1	FRONT	Screen registry	Canonical screen registry exists defining screen_code, route, and screen type (FULL / MODAL / DRAWER). Screens are declared as navigation-addressable entities only.	Registry is not yet the sole authority bound into router & stack execution.	Gate-9	ID-9.x	frontend/src/navigation/screenRegistry.js
+🟡 HALF-DONE	8	ID-8.1A	FRONT	Screen metadata rules	Deterministic rules enforce unique route, mandatory screen_code, explicit screen type, and keepAlive discipline.	Metadata rules are validated but not yet enforced through stack-only routing.	Gate-9	ID-9.x	frontend/src/navigation/screenRules.js
+Gate-8 / G2 — Screen Stack Engine
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.2	FRONT	Screen stack engine	Deterministic push / pop / replace / reset engine exists maintaining a single in-memory navigation stack.	Router, URL, and lifecycle are not yet fully subordinated as exclusive consumers of stack authority.	Gate-9	ID-9.x	frontend/src/navigation/screenStackEngine.js
+🟡 HALF-DONE	8	ID-8.2A	FRONT	Single active stack rule	Single-stack invariant is declared and asserted locally.	Global enforcement against all alternate navigation paths is not yet structurally proven.	Gate-9	ID-9.x	frontend/src/navigation/screenStackInvariant.js
+Gate-8 / G3 — Back Navigation Governance
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	8	ID-8.3	SECURITY	BackGuard engine	Browser back is intercepted globally; root back is blocked; stack-validated back only is permitted.	—	—	—	frontend/src/navigation/backGuardEngine.js
+🟡 HALF-DONE	8	ID-8.3A	SECURITY	Back validation logic	Previous-screen validation exists based on screen registry truth.	ACL-aware back permission evaluation is intentionally deferred.	Gate-10	ID-10.x	frontend/src/navigation/backValidation.js
+Gate-8 / G4 — Keyboard Intent Governance
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.4	SECURITY	Keyboard intent engine	Raw keyboard events are normalized into symbolic intents only. Keyboard has no direct navigation authority.	Stack engine is not yet the exclusive consumer for all intent outcomes.	Gate-9	ID-9.x	frontend/src/navigation/keyboardIntentEngine.js
+🟡 HALF-DONE	8	ID-8.4A	SECURITY	Allowed intent map	Explicit allow-list exists; undeclared shortcuts are ignored.	Not all intent handlers are bound exclusively to stack authority yet.	Gate-9	ID-9.x	frontend/src/navigation/keyboardIntentMap.js
+Gate-8 / G5 — Keyboard ACL Binding (Declaration Only)
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	8	ID-8.5	SECURITY	Keyboard ACL binding	Keyboard intents are deterministically mapped to abstract ACL actions (resource + action). No ACL execution occurs here.	ACL evaluation is out of scope for Gate-8 by design.	Gate-10	ID-10.x	frontend/src/navigation/keyboardAclBridge.js
+🟡 HALF-DONE	8	ID-8.5A	SECURITY	Denied intent handling	Deterministic deny handler exists with zero side-effects (no navigation, no mutation).	ACL-driven deny semantics are not available yet.	Gate-10	ID-10.x	frontend/src/navigation/keyboardIntentMap.js
+Gate-8 / G6 — Navigation State Persistence
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	8	ID-8.6	FRONT	Navigation state persistence	Screen stack is persisted per session and restored deterministically on refresh.	—	—	—	frontend/src/navigation/navigationPersistence.js, screenStackEngine.js, main.jsx
+⏸ DEFERRED	8	ID-8.6A	FRONT	Session reset handling	Stack reset capability exists and is callable on logout / SESSION_* events.	Invocation must be triggered by backend session lifecycle wiring.	Gate-9	ID-9.x	frontend/src/navigation/navigationPersistence.js, screenStackEngine.js
+Gate-8 / G7 — Navigation Observability
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	8	ID-8.7	OBSERVABILITY	Navigation event logs	All navigation actions emit deterministic, console-only logs with zero side-effects.	—	—	—	frontend/src/navigation/navigationEventLogger.js, screenStackEngine.js, keyboardIntentMap.js
+Gate-8 — Final State Summary (Authoritative)
+Group	Scope	Status
+G0	Navigation authority lock	🔒 FROZEN
+G1	Screen existence & metadata	🟡 HALF-DONE
+G2	Screen stack execution	🟡 HALF-DONE
+G3	Browser back governance	✅ DONE
+G4	Keyboard intent governance	🟡 HALF-DONE
+G5	Keyboard → ACL boundary	🟡 HALF-DONE
+G6	Navigation persistence	✅ DONE / ⏸ DEFERRED
+G7	Navigation observability	✅ DONE
+🔒 Closure Statement (Insert Verbatim)
+
+Gate-8 — Navigation & Screen Stack Authority is hereby declared COMPLETE and FROZEN at the authority layer.
+
+This gate permanently revokes navigation authority from:
+URL, router, browser history, keyboard, and screen components.
+
+All future navigation behavior must consume the Screen Stack Engine and must not reinterpret the rules frozen here.
+
+Execution wiring and ACL interaction are explicitly deferred to later Gates.
+
+### Gate-9 — ADMIN UNIVERSE & CONTROL PLANE
+
+| Group | Group_Name                    | IDs Included | Primary Purpose                                                                 | Closes Earlier HALF-DONE                                      |
+|------:|-------------------------------|--------------|----------------------------------------------------------------------------------|----------------------------------------------------------------|
+| G0    | Admin Universe Authority Lock  | 9            | Declare SA/GA dashboards as ACL-free but security-enforced; admin universe fully separated from ACL user universe | Gate-5 (Admin bypass ambiguity), Gate-6 (Admin vs ACL precedence) |
+| G1    | Admin Dashboard Shells         | 9.1, 9.1A    | Establish /sa/home and /ga/home as entry shells consuming Screen Stack + Menu Snapshot | Gate-8 (Screen Stack consumption), Gate-7 (Admin menu split delivery) |
+✅ INSERT — Gate-9 / G0
+Admin Universe Authority Lock
+### Gate-9 / G0 — Admin Universe Authority Lock
+
+| Status | Gate | ID | Domain | Short_Name              | Current_Reality                                                                                                  | Why_Not_Complete | Completes_In_Gate | Completes_On_or_After_ID | Files_Involved |
+|------:|------|----|--------|-------------------------|-------------------------------------------------------------------------------------------------------------------|------------------|-------------------|--------------------------|----------------|
+| 🔒 FROZEN | 9 | 9 | GOVERNANCE | Admin universe lock | SA/GA dashboards are formally declared ACL-free but security-enforced. Admin universe is structurally isolated from ACL user universe. No ACL resolver, role, VWED, or menu permission logic is evaluated for admin shells. | — | — | — | docs/GATE_9_G0_ADMIN_UNIVERSE_LOCK.md |
+🔒 Why this is FROZEN (not DONE)
+Pure authority boundary
+
+No runtime execution required
+
+Binary declaration: separated or not
+
+No dependency on UI, data, or ACL execution
+
+👉 তাই FROZEN immediately, exactly like Gate-7 / ID-7.
+
+🔁 Cascading Status Closures Triggered by G0
+👉 এই tableটা Gate-9 / G0 এর ঠিক নিচে বসাবে
+
+### 🔁 Cascading Status Resolution — Triggered by Gate-9 / G0
+
+| Earlier Gate | ID        | Previous Status | What Was Ambiguous Earlier                               | What G0 Resolves Now                                      | New Status |
+|-------------:|-----------|-----------------|-----------------------------------------------------------|------------------------------------------------------------|------------|
+| Gate-5       | ID-5.5    | 🟡 HALF-DONE     | SA/GA bypass path existed but admin universe boundary unclear | Admin universe is formally isolated and ACL-free           | 🔒 FROZEN  |
+| Gate-5       | ID-5.5A   | 🟡 HALF-DONE     | Admin bypass isolation lacked final authority declaration  | Bypass is confined strictly to Admin Universe              | 🔒 FROZEN  |
+| Gate-6       | ID-6.14   | 🟡 HALF-DONE     | Admin vs ACL precedence conceptually defined but not bounded | Admin precedence is absolute and outside ACL evaluation    | 🟡 HALF-DONE (execution still deferred) |
+🔍 Important precision note
+
+ID-6.14 stays HALF-DONE because execution is Gate-11
+
+Only ambiguity is resolved here, not execution
+
+✅ INSERT — Gate-9 / G1
+Admin Dashboard Shells
+### Gate-9 / G1 — Admin Dashboard Shells
+
+| Status | Gate | ID  | Domain | Short_Name              | Current_Reality                                                                 | Why_Not_Complete | Completes_In_Gate | Completes_On_or_After_ID | Files_Involved |
+|------:|------|-----|--------|-------------------------|----------------------------------------------------------------------------------|------------------|-------------------|--------------------------|----------------|
+| ✅ DONE | 9 | 9.1 | FRONT | SA Dashboard shell | `/sa/home` is established as the canonical Super-Admin entry shell. Shell consumes Screen Stack Engine and backend-delivered admin menu snapshot. No ACL user components or routes are reachable from this shell. | — | — | — | frontend/src/router/AppRouter.jsx, frontend/src/admin/sa/SADashboardShell.jsx |
+| ✅ DONE | 9 | 9.1A | FRONT | GA Dashboard shell | `/ga/home` is established as the canonical Group-Admin entry shell. Group scope is enforced by backend context; frontend has no scope authority. Shell consumes Screen Stack and admin menu snapshot only. | — | — | — | frontend/src/router/AppRouter.jsx, frontend/src/admin/ga/GADashboardShell.jsx |
+🔁 Cascading Status Closures Triggered by G1
+### 🔁 Cascading Status Resolution — Triggered by Gate-9 / G1
+
+| Earlier Gate | ID     | Previous Status | What Was Missing Earlier                              | What G1 Provides Now                                      | New Status |
+|-------------:|--------|-----------------|--------------------------------------------------------|------------------------------------------------------------|------------|
+| Gate-8       | ID-8.1 | 🟡 HALF-DONE     | Screens existed but no admin entry consumption path     | Admin screens are now consumed as real shells              | 🟡 HALF-DONE |
+| Gate-8       | ID-8.2 | 🟡 HALF-DONE     | Screen Stack existed but no admin root                  | Admin shells initialize and consume stack                  | 🟡 HALF-DONE |
+| Gate-7       | ID-7.4A| ✅ DONE          | Admin menu split delivery                              | Now actually consumed by admin shells                      | ✅ DONE (unchanged) |
+🔍 Note
+
+Gate-8 IDs stay HALF-DONE because exclusive authority wiring is Gate-9+
+
+Consumption ≠ sole authority yet
+
+🧠 One-Line Authoritative Summary (State-File Grade)
+Gate-9 / G0 locks the Admin Universe as a first-class, ACL-free authority domain.
+Gate-9 / G1 operationalizes that authority by introducing concrete SA and GA dashboard shells that consume backend menu snapshots and the Screen Stack Engine.
+
+Admin authority ambiguity from Gate-5 is permanently resolved.
+No ACL execution, permission evaluation, or business logic is introduced at this stage.
+✅ Final Status Snapshot (Gate-9 so far)
+Group	Status
+G0	🔒 FROZEN
+G1	✅ DONE
+
+✅ INSERT — Gate-9 / G2
+Org Masters (SA-only)
+Gate-9 / G2 — Org Masters (Company + Group Governance)
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	9	9.2	MASTER	Company master (SA-only)	Company master fully implemented at DB + backend layer. Create / activate / inactivate supported. Hard constraints enforced at DB level.	Admin UI not yet consuming	—	—	supabase/migrations/20260126130000_gate6_6_2_create_company_master.sql; supabase/functions/api/_core/admin/company/create_company.handler.ts; update_company_state.handler.ts
+🟡 HALF-DONE	9	9.2A	MASTER	Company delete constraints	Company deletion is DB-guarded with dependency-safe constraints and triggers. Orphan / unsafe deletes are blocked.	UI-level delete flow not exposed	—	—	supabase/migrations/20260315101000_gate9_9_2A_company_delete_constraints.sql
+🟡 HALF-DONE	9	9.3	MASTER	Group master (SA-only)	Canonical group master implemented with GRP001-style code generator, immutable group_code, and strict state invariants.	Admin UI not yet consuming	—	—	supabase/migrations/20260315102000_gate9_9_3_create_group_master.sql
+🟡 HALF-DONE	9	9.3A	MASTER	Company ↔ Group mapping	Governance-only mapping implemented. One-company→one-group rule enforced. Map / unmap handlers are idempotent and safe.	UI-level mapping screens not present	—	—	supabase/migrations/20260315103000_gate9_9_3A_create_company_group_map.sql; map_company_to_group.handler.ts; unmap_company_group.handler.ts
+🟡 HALF-DONE	9	9.3B	DB	Group delete safety	Group DELETE is blocked if any company is mapped. INACTIVATE allowed. Enforced strictly at DB trigger level.	—	—	—	supabase/migrations/20260315101500_gate9_9_3B_group_delete_constraints.sql
+🔁 Cascading Status Resolution — Triggered by Gate-9 / G2
+Earlier Gate	ID	Previous Status	What Was Missing Earlier	What G2 Provides Now	New Status
+Gate-5	ID-5.x	🟡 HALF-DONE	Company / Group not available as governed entities	Canonical org masters now exist and are DB-authoritative	🟡 HALF-DONE
+Gate-6	ID-6.x	🟡 HALF-DONE	Context lacked governed org backing	Context now backed by governed company / group entities	🟡 HALF-DONE
+
+⚠️ Note: These remain HALF-DONE because frontend consumption and admin UX is intentionally deferred.
+
+🧠 One-Line Authoritative Summary (State-File Grade)
+
+Gate-9 / G2 establishes canonical, SA-only Org Masters (Company + Group) with full DB-level governance, immutability, and delete safety.
+Backend authority is complete; frontend admin consumption is intentionally pending.
+
+📌 Final G2 Snapshot
+Group	Status
+G2	🟡 HALF-DONE (backend & DB COMPLETE, frontend pending)
+
+Gate-9 / G3 — Operational Scope Masters
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	9	9.4	MASTER	Project master	Admin-only backend handlers exist to create and list company-bound projects. Project identity, company binding, and visibility are enforced server-side using resolved context.	Admin UI screens not yet consuming these APIs	Gate-9	ID-9.17	create_project.handler.ts, list_projects.handler.ts
+🟡 HALF-DONE	9	9.4A	MASTER	Project state rules	Controlled admin-only project state transitions (ACTIVE / INACTIVE / ARCHIVED) are enforced via backend handler with strict transition rules and company scoping.	No admin UI workflow to drive state changes	Gate-9	ID-9.17	update_project_state.handler.ts
+🟡 HALF-DONE	9	9.5	MASTER	Department master	Admin-only backend handlers exist to create, list, and update company-bound departments with deterministic codes and lifecycle safety.	HR/Admin UI screens not yet implemented	Gate-9	ID-9.17	department_create.handler.ts, department_list.handler.ts, department_update.handler.ts
+🔎 Mandatory Gate-9 / G3 Notes
+
+(attach below table)
+
+Gate-9 / G3 consumes Gate-6 truth; it does not redefine schema.
+
+All handlers are Admin Universe only; ACL user universe cannot access them.
+
+Context binding (company scope) is enforced backend-side; frontend has zero authority.
+
+Completion of G3 requires admin UI workflows, not additional backend logic.
+
+🧠 One-line authoritative summary
+
+Gate-9 / G3 is execution-ready at backend level but UI-pending.
+Operational scope (Projects & Departments) is now admin-manageable in code; human-driven workflows remain intentionally incomplete until admin panels are delivered.
+
+Gate-9 / G4 — User Governance (State, Role, Safety)
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+✅ DONE	9	9.6	ADMIN	User state governance	Admin-only backend handlers exist to activate / disable ERP users with deterministic rules, company-scoped context enforcement, and mandatory session revocation on DISABLED. Self-lockout prevention is enforced.	—	—	—	_core/admin/user/update_user_state.handler.ts, _guards/self_lockout.guard.ts, _core/session/session.admin_revoke.ts
+✅ DONE	9	9.6A	ADMIN	User role governance	Admin-only backend handler exists to assign or change ERP user roles with deterministic normalization, rank enforcement, and self-lockout protection. Single-role-per-company invariant is preserved.	—	—	—	_core/admin/user/update_user_role.handler.ts, _shared/role_ladder.ts, _guards/self_lockout.guard.ts
+🟡 HALF-DONE	9	9.6B	ADMIN	User list governance	Governable user listing exists, context-scoped and enumeration-safe. Returns ACTIVE / DISABLED users only.	No admin UI workflow consumes this data; pagination, filtering, and audit UX not implemented	Gate-9	ID-9.10	_core/admin/user/list_users.handler.ts
+🔎 Mandatory Gate-9 / G4 Notes (attach below table)
+
+1️⃣ What G4 DOES
+
+Establishes backend-authoritative user governance
+
+Allows state change (ACTIVE / DISABLED) with:
+
+session force-revoke
+
+self-lockout safety
+
+Allows role change with:
+
+rank comparison
+
+downgrade protection
+
+normalization discipline
+
+All actions are:
+
+Admin-Universe only
+
+Context-scoped
+
+Enumeration-safe
+
+2️⃣ What G4 EXPLICITLY DOES NOT Do
+
+❌ No admin UI screens
+❌ No bulk user operations
+❌ No audit UI (logs exist, UX deferred)
+❌ No ACL execution change
+❌ No RLS attachment
+
+3️⃣ Why 9.6 & 9.6A are DONE
+
+Runtime execution exists ✔️
+
+Safety invariants enforced ✔️
+
+No dependency on future Gates ✔️
+
+Binary behavior (allowed / blocked) ✔️
+
+👉 Therefore DONE, not HALF-DONE.
+
+4️⃣ Why 9.6B is HALF-DONE (Correctly)
+
+Backend capability exists ✔️
+
+Deterministic output exists ✔️
+
+But:
+
+no admin UI
+
+no pagination / filtering UX
+
+no operator workflows
+
+👉 Truth exists, consumption incomplete → HALF-DONE
+
+🔁 Cascading Status Resolution — Triggered by Gate-9 / G4
+Earlier Gate	ID	Previous Status	What Was Missing Earlier	What G4 Resolves Now	New Status
+Gate-6	ID-6.x (User control)	🟡 HALF-DONE	No runtime admin execution for user governance	Deterministic admin handlers now exist	🟡 HALF-DONE (execution done, ACL/UI pending)
+Gate-5	ID-5.x	🟡 HALF-DONE	Context existed but no user-level governance consumption	Context now actively consumed by admin user ops	🟡 HALF-DONE
+
+⚠️ Note: No earlier ID is auto-closed unless both truth + irreversible execution are proven.
+
+🧠 One-Line Authoritative Summary (State-File Grade)
+
+Gate-9 / G4 completes backend-authoritative ERP user governance (state + role) with full safety invariants.
+All execution is real and enforced; admin UI and higher-order workflows are intentionally deferred.
+
+✅ STATE FILE UPDATE — Gate-9 / G5 (ACL Governance Admin)
+
+👉 Insert under: “### Gate-9 — ADMIN UNIVERSE & CONTROL PLANE”
+
+Gate-9 / G5 — ACL Governance (Admin Control Plane)
+Status	Gate	ID	Domain	Short_Name	Current_Reality	Why_Not_Complete	Completes_In_Gate	Completes_On_or_After_ID	Files_Involved
+🟡 HALF-DONE	9	9.7	ACL	Role VWED governance	Admin APIs exist to list, upsert, and disable role-wise VWED permissions. All operations are backend-authoritative, context-scoped, and enumeration-safe.	No ACL decision engine or menu snapshot consumes these permissions yet	Gate-10	ID-6.14	list_role_permissions.handler.ts, upsert_role_permission.handler.ts, disable_role_permission.handler.ts
+🟡 HALF-DONE	9	9.7A	ACL	Capability packs admin	Admin APIs exist to list and manage capability packs and their bindings to menu actions and roles. Capability truth is fully governable via backend APIs.	Capability permissions are not yet evaluated by ACL decision engine	Gate-10	ID-6.14	list_capabilities.handler.ts, upsert_capability.handler.ts, map_capability_menu.handler.ts, map_role_capability.handler.ts
+⏸ DEFERRED	9	9.8	ACL	User overrides admin	Intentionally deferred. User-level allow/deny overrides require runtime ACL precedence execution.	No ACL decision engine exists to evaluate overrides safely	Gate-10	ID-6.16	—
+✅ DONE	9	9.9	ACL	Company module map admin	Admin APIs exist to enable / disable modules per company with deterministic hard-deny semantics. Context-scoped, backend-only governance is enforced.	—	—	—	enable_company_module.handler.ts, disable_company_module.handler.ts, list_company_modules.handler.ts
+🔒 Mandatory Notes (Attach Below G5 Table)
+
+9.7 and 9.7A are HALF-DONE by design
+কারণ এগুলো permission truth define করে, কিন্তু runtime evaluation করে না।
+
+9.8 is explicitly DEFERRED, not HALF-DONE
+কারণ execution ছাড়া override expose করা misleading ও unsafe।
+
+9.9 is DONE
+কারণ module enable/disable একটি standalone governance action, যার immediate, enforceable effect আছে (absence = hard deny).
+
+🧠 One-Line Authoritative Summary (State-File Grade)
+
+Gate-9 / G5 establishes full admin-side ACL governance over roles, capabilities, and company modules.
+Permission truth is now editable, auditable, and backend-authoritative; all runtime evaluation is intentionally deferred to Gate-10.

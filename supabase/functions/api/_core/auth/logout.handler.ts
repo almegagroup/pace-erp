@@ -1,7 +1,7 @@
 /*
  * File-ID: 2.4B-AUTH-LOGOUT-IDEMPOTENT
  * File-Path: supabase/functions/api/_core/auth/logout.handler.ts
- * Gate: 2
+ * gate_id: 2
  * Phase: 2
  * Domain: AUTH
  * Purpose: Logout API – idempotent, deterministic, cookie invalidation
@@ -12,6 +12,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertRlsEnabled } from "../../_shared/rls_assert.ts";
 import type { SessionResolution } from "../../_pipeline/session.ts";
 import { log } from "../../_lib/logger.ts"; 
+import { recordSessionTimeline } from "../session/session_timeline.ts";
 
 interface LogoutContext {
   session: SessionResolution;
@@ -27,13 +28,12 @@ function buildExpiredCookie(requestUrl: string): string {
     "erp_session=",
     "Path=/",
     "HttpOnly",
-    "SameSite=Strict",
+    "SameSite=Lax",
     "Max-Age=0",
     "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
   ];
 
   if (isHttps) parts.push("Secure");
-  if (url.hostname) parts.push(`Domain=${url.hostname}`);
 
   return parts.join("; ");
 }
@@ -54,23 +54,38 @@ export async function logoutHandler(ctx: LogoutContext): Promise<Response> {
   log({
     level: "SECURITY",
     request_id: requestId,
-    gate: "2.7",
+    gate_id: "2.7",
     event: "AUTH_LOGOUT",
   });
 
   // Try server-side revoke ONLY if there is an active session.
   // Failure here must NOT change the response.
   if (session.status === "ACTIVE") {
-    try {
-      assertRlsEnabled();
-      await serviceRoleClient
-        .from("erp_core.sessions")
-        .update({ state: "REVOKED" })
-        .eq("id", session.sessionId);
-    } catch {
-      // Intentionally swallowed — idempotency guarantee
-    }
+  try {
+    assertRlsEnabled();
+    await serviceRoleClient
+      .from("erp_core.sessions")
+      .update({
+        status: "REVOKED",
+        revoked_at: new Date().toISOString(),
+        revoked_reason: "USER_LOGOUT",
+        revoked_by: session.authUserId,
+      })
+      .eq("session_id", session.sessionId)
+      .eq("status", "ACTIVE");
+  } catch {
+    // Intentionally swallowed — idempotency guarantee
   }
+
+  recordSessionTimeline({
+    requestId: requestId,
+    sessionId: session.sessionId,
+    userId: session.authUserId,
+    event: "LOGOUT",
+  });
+}
+  
+  
 
   // Deterministic logout response (same for all cases)
   return new Response(

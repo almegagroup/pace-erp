@@ -4,31 +4,69 @@
  * Gate: 1
  * Phase: 1
  * Domain: SECURITY
- * Purpose: CSRF guard via Origin + Referer validation
+ * Purpose: Strict ENV-based CSRF enforcement
  * Authority: Backend
  */
 
+import { recordSecurityEvent } from "../_security/security_events.ts";
+
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-export async function stepCsrf(req: Request, _requestId: string): Promise<void> {
-  // GET / HEAD / OPTIONS → allow
+/* --------------------------------------------------
+ * ENV allowlist (same as CORS)
+ * -------------------------------------------------- */
+
+const allowedEnv =
+  typeof Deno !== "undefined"
+    ? Deno.env.get("ALLOWED_ORIGINS")
+    : process.env.ALLOWED_ORIGINS;
+
+if (!allowedEnv) {
+  throw new Error("CSRF_ENV_NOT_CONFIGURED");
+}
+
+const ALLOWED_ORIGINS = allowedEnv
+  .split(",")
+  .map(o => o.trim())
+  .filter(Boolean);
+
+  // 🔒 ENV safety assertion
+if (ALLOWED_ORIGINS.length === 0) {
+  throw new Error("CSRF_ENV_NOT_CONFIGURED");
+}
+
+export function stepCsrf(
+  req: Request,
+  _requestId: string
+): void {
+  // Safe methods bypass
   if (SAFE_METHODS.has(req.method)) return;
 
   const origin = req.headers.get("Origin");
   const referer = req.headers.get("Referer");
 
-  // POST / PUT / DELETE কিন্তু Origin + Referer দুটোই নেই
+  // Both missing → reject
   if (!origin && !referer) {
-    throw new Error("CSRF_BLOCKED_NO_ORIGIN_REFERER");
-  }
+  recordSecurityEvent(req, _requestId, "CSRF_BLOCKED_NO_ORIGIN_REFERER", "CSRF");
+  throw new Error("CSRF_BLOCKED_NO_ORIGIN_REFERER");
+}
 
-  // দুটো থাকলে domain match করতে হবে
-  if (origin && referer) {
-    const o = new URL(origin);
-    const r = new URL(referer);
+  // Strict Origin validation
+  if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+  recordSecurityEvent(req, _requestId, "CSRF_INVALID_ORIGIN", "CSRF");
+  throw new Error("CSRF_INVALID_ORIGIN");
+}
 
-    if (o.origin !== r.origin) {
-      throw new Error("CSRF_ORIGIN_REFERER_MISMATCH");
+  // Strict Referer validation
+  if (referer) {
+    try {
+      const r = new URL(referer);
+      if (!ALLOWED_ORIGINS.includes(r.origin)) {
+        recordSecurityEvent(req, _requestId, "CSRF_INVALID_REFERER", "CSRF");
+throw new Error("CSRF_INVALID_REFERER");
+      }
+    } catch {
+      throw new Error("CSRF_MALFORMED_REFERER");
     }
   }
 }

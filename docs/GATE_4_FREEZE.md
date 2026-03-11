@@ -1,252 +1,343 @@
-# 🔒 PACE-ERP — Gate-4 Freeze Declaration
+🔒 PACE-ERP — Gate-4 Freeze Declaration
 
-**File-ID:** 4.7  
-**File-Path:** docs/GATE_4_FREEZE.md  
-**Gate:** 4  
-**Phase:** 4  
-**Domain:** USER LIFECYCLE / AUTH / ADMIN / AUDIT  
-**Status:** 🔒 FROZEN  
-**Authority:** Backend  
-**Scope:** ERP User Lifecycle Governance  
-**Date:** (fill when frozen)
+File-ID: 4.7
+File-Path: docs/GATE_4_FREEZE.md
+Gate: 4
+Phase: 4
+Domain: USER LIFECYCLE / AUTH / ADMIN / AUDIT
+Status: 🔒 HARD FROZEN
+Authority: Backend (DB-owned lifecycle engine)
+Scope: ERP User Lifecycle Governance
+Date: (fill at freeze commit)
 
----
+1️⃣ Purpose of Gate-4
 
-## 1️⃣ Purpose of Gate-4
+Gate-4 governs the transition:
 
-Gate-4 exists to transition ERP users from:
+“Auth identity exists” → “ERP lifecycle is governed”
 
-> **“identity exists” → “ERP access is governed”**
+Gate-4 defines:
 
-This gate defines **who may exist as an ERP user**, **under whose approval**, and **with what minimal system footprint**.
+Who may exist as an ERP user
 
-Gate-4 is a **governance + lifecycle gate**.
+Under whose authority activation occurs
 
-It explicitly does **NOT** define:
-- permissions
-- context
-- business access
-- session semantics
+What deterministic system footprint is created
 
----
+Gate-4 is a Lifecycle Governance Gate.
 
-## 2️⃣ Lifecycle Authority (LOCKED)
+It explicitly does NOT define:
 
-### ✅ Authority Split
-- **Supabase Auth** → identity + credentials only
-- **Gate-4** → ERP user existence & lifecycle
+Password handling
 
-No other gate may:
-- activate ERP users
-- reject ERP users
-- assign ERP `user_code`
+Session semantics
 
----
+Business permissions
 
-## 3️⃣ Lifecycle States (LOCKED)
+Context resolution
 
-Gate-4 recognises **exactly**:
+UI behaviour
 
-- `PENDING`
-- `ACTIVE`
-- `REJECTED`
-- `DISABLED` *(future gate only)*
+2️⃣ Lifecycle Authority (LOCKED)
+Authority Separation
+Layer	Authority
+Supabase Auth	Identity + Credentials
+Gate-4	ERP lifecycle state
 
-No additional states are allowed under Gate-4.
+Only Gate-4 may:
 
----
+Activate ERP users
 
-## 4️⃣ What Gate-4 IMPLEMENTS
+Reject ERP users
 
-### 4.1 Signup Intake — ✅ DONE (ID-4.1 → 4.1C)
+Assign deterministic user_code
 
-- Public `/api/signup`
-- Mandatory backend human-verification
-- Supabase Auth identity **must already exist**
-- Creates ERP user in `PENDING`
-- Captures metadata for SA review
-- Always returns **generic success** (enumeration-safe)
+Bootstrap minimal ACL
 
-❗ **Atomicity Note (Intentional)**  
-`erp_core.users` and `erp_core.signup_requests` are inserted separately.
+No other gate may mutate lifecycle state.
 
-- This is **not a bug**
-- This is a **deliberate Gate-4 design choice**
-- Atomic transactions are deferred to later lifecycle gates
+3️⃣ Lifecycle States (LOCKED)
 
----
+Gate-4 recognises exactly:
 
-### 4.2 Signup Metadata Capture — ✅ DONE
+PENDING
 
-Captured **only for SA decision context**:
-- name
-- parent company
-- designation hint
-- phone number
+ACTIVE
 
-Rules:
-- Metadata has **no authority**
-- Metadata does **not affect login**
-- Metadata does **not grant access**
+REJECTED
 
----
+DISABLED (reserved for future gate only)
 
-### 4.3 SA Approval Workflow — ✅ DONE (ID-4.2A)
+No additional states are permitted.
 
-- Only **SA** may approve
-- Approval results in:
-  - ERP user → `ACTIVE`
-  - Deterministic `P0001`-style `user_code`
-  - Minimal ACL bootstrap (`L1_USER` only)
+State transitions are strictly:
 
-Mechanics:
-- `erp_core.user_code_p_seq`
-- RPC-safe SQL function `erp_meta.next_user_code_p_seq()`
+PENDING → ACTIVE
+PENDING → REJECTED
+ACTIVE → DISABLED (future gate only)
 
-❌ No FIRST_LOGIN_REQUIRED concept exists.
+Reverse transitions are not allowed under Gate-4.
 
----
+4️⃣ Implementation Summary
+4.1 Signup Intake — ✅ SEALED
 
-### 4.4 Rejection Workflow — ✅ DONE (ID-4.2)
+Public endpoint /api/signup
 
-- signup request → `REJECTED`
-- ERP user → `REJECTED`
-- No `user_code`
-- No ACL assignment
-- Rejection is **final under Gate-4**
+Backend human verification mandatory
 
----
+Supabase Auth identity must already exist
 
-### 4.5 Deterministic `user_code` Generation — ✅ DONE
+Creates ERP user in PENDING
 
-- Format: `P0001`, `P0002`, …
-- Generated **only at approval**
-- Backed by DB sequence
-- Immutable once assigned
-- Used as ERP login identifier
+Creates signup request in PENDING
 
----
+Always returns generic success (enumeration-safe)
 
-### 4.6 Minimal ACL Bootstrap — 🟡 PARTIAL (BY DESIGN)
+⚠ Atomicity Note (Design Boundary)
 
-- On approval:
-  - Exactly one role: `L1_USER`
-- No escalation
-- No overrides
+Signup intake intentionally performs:
+
+Insert → erp_core.users
+
+Insert → erp_core.signup_requests
+
+These are not wrapped in a DB transaction.
+
+This is deliberate:
+
+Intake is not lifecycle mutation
+
+Atomic lifecycle enforcement begins exclusively inside DB-owned approval and rejection functions.
+
+4.1B Signup Rate Limiting — 🟡 DEFERRED
+
+Purpose:
+Abuse containment via public signup throttling.
+
+Status:
+Deferred to Gate-5 (Context & Security hardening).
 
 Reason:
-- Full ACL logic belongs to **future ACL gates**
-- Gate-4 only asserts **existence**, not authority
+Rate limiting is operational security, not lifecycle governance.
 
----
+Non-blocking:
+Absence of rate limiting does not compromise lifecycle integrity.
 
-### 4.7 Audit & Observability — ✅ DONE
+4.2 Approval Workflow — ✅ HARD SEALED (Atomic)
 
-- Every approve / reject:
-  - Append-only insert into `erp_audit.signup_approvals`
-- Structured logs emitted
-- Request-ID linked
-- No mutation, no deletion
+Approval is performed exclusively via:
 
----
+erp_meta.approve_signup_atomic(UUID, UUID)
+Guarantees:
 
-## 5️⃣ What Gate-4 EXPLICITLY DOES NOT Handle
+Row lock (FOR UPDATE)
 
-❌ Password handling  
-❌ Session creation  
-❌ Login success semantics  
-❌ Context / company binding  
-❌ Role escalation  
-❌ Permission evaluation  
-❌ Menu visibility  
-❌ UI logic  
+State validation
 
-These belong to **later gates**.
+Deterministic sequence generation
 
----
+Single lifecycle transition
 
-## 6️⃣ HALF-DONE Items (VALID & INTENTIONAL)
+Single-role bootstrap
 
-| Area | Reason |
-|----|----|
-| Extended ACL bootstrap | Gate-6 dependency |
-| Role escalation | ACL governance gate pending |
-| Context binding | Gate-5 responsibility |
-| DISABLED lifecycle | Future admin lifecycle gate |
+Append-only audit log
 
-All HALF-DONE items:
-- Have boundaries defined
-- Have completion gate identified
-- Will **not silently complete**
+Fully atomic execution
 
----
+Result:
+Table	Before	After
+signup_requests	PENDING	APPROVED
+users	PENDING	ACTIVE
+user_code	NULL	P000X
+user_roles	none	L1_USER
 
-## 7️⃣ DB Migration Policy (LOCKED)
+No handler-level mutation exists.
 
-Gate-4 introduces **only lifecycle-essential DB objects**:
+4.3 Rejection Workflow — ✅ HARD SEALED (Atomic)
 
-Allowed:
-- `erp_core.users`
-- `erp_core.signup_requests`
-- `erp_audit.signup_approvals`
-- `erp_core.user_code_p_seq`
-- `erp_meta.next_user_code_p_seq()`
+Performed exclusively via:
 
-Not allowed:
-- ACL schema expansion
-- Context schema
-- Business tables
+erp_meta.reject_signup_atomic(UUID, UUID)
+Guarantees:
 
----
+Row lock
 
-## 8️⃣ RPC Policy (LOCKED)
+State validation
 
-- No RPC-driven lifecycle decisions
-- RPC used **only** as deterministic DB primitive
-- Behaviour authority remains in backend handlers
+Lifecycle transition atomic
 
----
+Append-only audit
 
-## 9️⃣ Invariants (NON-NEGOTIABLE)
+No ACL bootstrap
 
-- Supabase Auth = credential SSOT
-- ERP never handles passwords
-- Enumeration safety everywhere
-- Backend is sole authority
-- Local == Production behaviour
+Result:
+Table	Before	After
+signup_requests	PENDING	REJECTED
+users	PENDING	REJECTED
 
----
+Rejection is final under Gate-4.
 
-## 🔒 Final Freeze Statement
+4.4 Deterministic user_code — ✅ SEALED
 
-> **Gate-4 is hereby declared FROZEN.**
+Format: P0001, P0002, …
+
+Generated only inside atomic approval function
+
+Backed by erp_core.user_code_p_seq
+
+Immutable
+
+Unique
+
+Assigned once
+
+4.5 Minimal ACL Bootstrap — ✅ SEALED (Single-Role Architecture)
+
+On approval:
+
+Exactly one role is assigned
+
+L1_USER
+
+Rank = 10
+
+Insert is idempotent (ON CONFLICT DO NOTHING)
+
+Multi-role architecture is explicitly disallowed.
+
+Role changes (promotion/demotion) belong to future ACL governance gate.
+
+4.6 Audit & Observability — ✅ SEALED
+
+Every approval/rejection:
+
+Insert into erp_audit.signup_approvals
+
+Append-only
+
+No update
+
+No delete
+
+Structured logging emitted
+
+Audit integrity is DB-enforced.
+
+5️⃣ What Gate-4 Explicitly Does NOT Handle
+
+❌ Password validation
+❌ Session creation
+❌ Context resolution
+❌ Permission evaluation
+❌ Menu rendering
+❌ Role escalation
+❌ Business table mutation
+
+These are delegated to:
+
+➡ Gate-5 (Context)
+➡ Gate-6 (ACL runtime materialisation)
+➡ Gate-7+ (Business domain logic)
+
+6️⃣ DB Object Scope (LOCKED)
+
+Gate-4 may define:
+
+erp_core.users
+
+erp_core.signup_requests
+
+erp_core.user_code_p_seq
+
+erp_meta.approve_signup_atomic()
+
+erp_meta.reject_signup_atomic()
+
+erp_audit.signup_approvals
+
+Gate-4 may NOT introduce:
+
+Context tables
+
+Business tables
+
+ACL expansion schemas
+
+Permission packs
+
+7️⃣ RPC & Mutation Policy (UPDATED)
+
+Lifecycle mutation authority resides exclusively inside DB-owned atomic functions.
+
+No backend handler, present or future, may directly mutate:
+- erp_core.users
+- erp_core.signup_requests
+- erp_acl.user_roles (for lifecycle bootstrap)
+
+Handlers:
+
+May call RPC
+
+Must not mutate lifecycle tables directly
+
+No dual mutation path is allowed.
+
+8️⃣ Invariants (Non-Negotiable)
+
+Supabase Auth = Credential SSOT
+
+ERP never handles passwords
+
+Enumeration safety everywhere
+
+Single lifecycle authority (DB)
+
+Single role per user
+
+Local == Production behaviour
+
+No partial state transitions
+
+🔒 Final Freeze Statement
+
+Gate-4 is hereby declared HARD FROZEN.
 
 This means:
-- User lifecycle behaviour is final
-- Signup / approval / rejection contracts are locked
-- No changes permitted under Gate-4
 
----
+Lifecycle mutation logic is final
 
-## 📊 Gate-4 Status Summary
+Approval & rejection are DB-owned
 
-| ID | Status |
-|---|---|
-| 4 | 🟢 COMPLETE |
-| 4.0A | ✅ DONE |
-| 4.0B | ✅ DONE |
-| 4.0C | 🟡 PARTIAL (by design) |
-| 4.1 → 4.1C | ✅ DONE |
-| 4.2 → 4.2B | ✅ DONE |
-| **4.7** | **🔒 FROZEN** |
+Atomic guarantees are DB-enforced and non-bypassable.
 
----
+No handler-level mutation permitted
 
-## 🔐 Authoritative Closure
+No new lifecycle states allowed
 
-Gate-4 is **complete at the governance layer**.
+No ACL expansion under Gate-4
 
-Next gate:
-➡️ **Gate-5 — Context Resolution**
+Any modification requires a new Gate.
 
-No ambiguity remains.
+📊 Gate-4 Final Status
+ID      Status
+4.0A    🟢 SEALED
+4.0B    🟢 SEALED
+4.0C    🟢 SEALED
+4.1     🟢 SEALED
+4.1A    🟢 SEALED
+4.1B    🟡 DEFERRED (Gate-5)
+4.1C    🟢 SEALED
+4.2     🟢 SEALED
+4.2A    🟢 SEALED
+4.2B    🟢 SEALED
+4.3     🟢 SEALED
+4.7     🔒 HARD FROZEN
+🔐 Authoritative Closure
+
+Gate-4 lifecycle governance is complete.
+
+All user activation semantics are deterministic, atomic, and sealed.
+
+Next execution layer:
+
+➡ Gate-5 — Context Resolution & Login Pipeline

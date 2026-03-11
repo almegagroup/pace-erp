@@ -46,42 +46,42 @@ This file is a **lossless, gate‑wise consolidated view** of the latest *effect
 
 ---
 
-## Gate‑0 — FOUNDATION & GOVERNANCE
+## Gate-0 — FOUNDATION & GOVERNANCE
 
-| Gate | ID      | Domain        | Short_Name                  | Effective_Status | Effective_Note                                          |
-| ---- | ------- | ------------- | --------------------------- | ---------------- | ------------------------------------------------------- |
-| 0    | ID‑0    | GOVERNANCE    | Legacy backup + clean slate | 🔒 FROZEN        | Legacy experiments archived; no reuse permitted         |
-| 0    | ID‑0.01 | GOVERNANCE    | SSOT freeze confirmation    | 🔒 FROZEN        | SSOT declared final and immutable                       |
-| 0    | ID‑0.02 | GOVERNANCE    | Fundamental checklist pass  | 🔒 FROZEN        | Backend‑only authority + frontend zero authority locked |
-| 0    | ID‑0.1  | INFRA         | Monorepo structure          | 🔒 FROZEN        | Single repo structure stabilized                        |
-| 0    | ID‑0.1A | DEVOPS        | CODEOWNERS                  | 🔒 FROZEN        | Code ownership enforced                                 |
-| 0    | ID‑0.1B | DEVOPS        | Branch rules                | 🔒 FROZEN        | Main branch protection enforced                         |
-| 0    | ID‑0.1C | DEVOPS        | CI basic pipeline           | 🔒 FROZEN        | Basic CI skeleton exists                                |
-| 0    | ID‑0.1D | DEVOPS        | CI advanced checks          | ⏸ DEFERRED       | Deferred to Gate‑12 by design                           |
-| 0    | ID‑0.2  | FRONT         | Frontend bootstrap          | 🔒 FROZEN        | Frontend initialized, no authority                      |
-| 0    | ID‑0.2A | FRONT         | No backend SDK rule         | 🔒 FROZEN        | Supabase client forbidden in frontend                   |
-| 0    | ID‑0.2B | FRONT         | Frontend env discipline     | 🔒 FROZEN        | No secrets in frontend                                  |
-| 0    | ID‑0.2C | FRONT         | Vercel env discipline       | 🔒 FROZEN        | Env‑driven domain assumptions                           |
-| 0    | ID‑0.2D | FRONT         | Frontend deploy neutrality  | 🔒 FROZEN        | No browser‑only hacks                                   |
-| 0    | ID‑0.2E | FRONT         | Domain‑bound frontend rule  | 🔒 FROZEN        | Fixed origin enforced                                   |
-| 0    | ID‑0.3  | BACKEND       | Supabase project creation   | 🔒 FROZEN        | Single Supabase backend                                 |
-| 0    | ID‑0.3A | BACKEND       | Region lock                 | 🔒 FROZEN        | Region permanently fixed                                |
-| 0    | ID‑0.3B | BACKEND       | Edge Functions enabled      | 🔒 FROZEN        | Edge Functions active                                   |
-| 0    | ID‑0.3C | BACKEND       | Single backend entry        | 🔒 FROZEN        | api/index.ts is sole entry                              |
-| 0    | ID‑0.4  | BACKEND       | Local emulator parity       | 🔒 FROZEN        | Local == prod parity                                    |
-| 0    | ID‑0.4A | BACKEND       | One codepath rule           | 🔒 FROZEN        | No dev/prod split logic                                 |
-| 0    | ID‑0.5  | SECURITY      | Secret manager setup        | 🔒 FROZEN        | Service role secrets secured                            |
-| 0    | ID‑0.5A | SECURITY      | Service role usage policy   | ✅ DONE           | Backend‑only service role usage proven                  |
-| 0    | ID‑0.6  | DB            | Postgres schema namespace   | 🔒 FROZEN        | Base schemas created                                    |
-| 0    | ID‑0.6A | DB            | RLS philosophy definition   | 🔒 FROZEN        | Default‑deny RLS model defined                          |
-| 0    | ID‑0.6B | DB            | Enable RLS globally         | 🟡 HALF‑DONE     | Table‑level RLS deferred to Gate‑13                     |
-| 0    | ID‑0.6C | DB            | Default deny policies       | 🔒 FROZEN        | All CRUD denied by default                              |
-| 0    | ID‑0.6D | DB            | Service role bypass         | 🔒 FROZEN        | Backend bypass rule locked                              |
-| 0    | ID‑0.6E | DB            | Anon & auth lockdown        | 🔒 FROZEN        | anon/auth roles fully locked                            |
-| 0    | ID‑0.7A | OBSERVABILITY | Health endpoint             | 🔒 FROZEN        | Stateless /health endpoint                              |
-| 0    | ID‑0.8  | STANDARDS     | File ID tagging standard    | 🔒 FROZEN        | Mandatory ID header standard                            |
-| 0    | ID‑0.8A | STANDARDS     | Header enforcement rule     | 🔒 FROZEN        | Headerless file invalid                                 |
-| 0    | ID‑0.9  | DOCS          | Gate‑0 freeze declaration   | 🔒 FROZEN        | Gate‑0 frozen                                           |
+| Gate | ID | Domain | Short_Name | Effective_Status | Effective_Note |
+|----|----|-------|------------|-----------------|----------------|
+| 0 | ID-0 | GOVERNANCE | Legacy backup + clean slate | 🔒 FROZEN | Legacy experiments archived |
+| 0 | ID-0.01 | GOVERNANCE | SSOT freeze confirmation | 🔒 FROZEN | SSOT immutable |
+| 0 | ID-0.02 | GOVERNANCE | Fundamental checklist | 🔒 FROZEN | Backend authority locked |
+| 0 | ID-0.1 | INFRA | Monorepo structure | 🔒 FROZEN | Single repo |
+| 0 | ID-0.1A | DEVOPS | CODEOWNERS | 🔒 FROZEN | Ownership enforced |
+| 0 | ID-0.1B | DEVOPS | Branch rules | 🔒 FROZEN | Main protected |
+| 0 | ID-0.1C | DEVOPS | CI basic pipeline | 🔒 FROZEN | CI skeleton |
+| 0 | ID-0.1D | DEVOPS | CI advanced checks | ⏸ DEFERRED | Gate-12 |
+| 0 | ID-0.2 | FRONT | Frontend bootstrap | 🔒 FROZEN | Zero authority |
+| 0 | ID-0.2A | FRONT | No backend SDK | 🔒 FROZEN | Supabase SDK forbidden |
+| 0 | ID-0.2B | FRONT | Env discipline | 🔒 FROZEN | No secrets |
+| 0 | ID-0.2C | FRONT | Vercel env discipline | 🔒 FROZEN | Env-driven |
+| 0 | ID-0.2D | FRONT | Deploy neutrality | 🔒 FROZEN | No hacks |
+| 0 | ID-0.2E | FRONT | Domain bound rule | 🔒 FROZEN | Fixed origin |
+| 0 | ID-0.3 | BACKEND | Supabase project | 🔒 FROZEN | Single backend |
+| 0 | ID-0.3A | BACKEND | Region lock | 🔒 FROZEN | Permanent |
+| 0 | ID-0.3B | BACKEND | Edge Functions | 🔒 FROZEN | Enabled |
+| 0 | ID-0.3C | BACKEND | Single entry | 🔒 FROZEN | api/index.ts |
+| 0 | ID-0.4 | BACKEND | Emulator parity | 🔒 FROZEN | Local == prod |
+| 0 | ID-0.4A | BACKEND | One codepath | 🔒 FROZEN | No split |
+| 0 | ID-0.5 | SECURITY | Secret manager | 🔒 FROZEN | Keys secured |
+| 0 | ID-0.5A | SECURITY | Service role usage | ✅ DONE | Backend-only proven |
+| 0 | ID-0.6 | DB | Schema namespace | 🔒 FROZEN | Base schemas |
+| 0 | ID-0.6A | DB | RLS philosophy | 🔒 FROZEN | Default deny |
+| 0 | ID-0.6B | DB | Enable RLS | 🟡 HALF-DONE | Gate-13 |
+| 0 | ID-0.6C | DB | Default deny policies | 🔒 FROZEN | CRUD denied |
+| 0 | ID-0.6D | DB | Service role bypass | 🔒 FROZEN | Locked |
+| 0 | ID-0.6E | DB | anon/auth lockdown | 🔒 FROZEN | Fully blocked |
+| 0 | ID-0.7A | OBS | Health endpoint | 🔒 FROZEN | /health |
+| 0 | ID-0.8 | STD | File ID standard | 🔒 FROZEN | Mandatory |
+| 0 | ID-0.8A | STD | Header enforcement | 🔒 FROZEN | Headerless invalid |
+| 0 | ID-0.9 | DOCS | Gate-0 freeze | 🔒 FROZEN | Closed |                                         |
 
 ---
 
@@ -218,47 +218,72 @@ This file is a **lossless, gate‑wise consolidated view** of the latest *effect
 
 ---
 
-## Gate‑6 — ACL & BUSINESS TRUTH
+## Gate-6 — ACL & BUSINESS TRUTH
 
-| Gate | ID       | Domain     | Short_Name             | Effective_Status | Effective_Note          |
-| ---- | -------- | ---------- | ---------------------- | ---------------- | ----------------------- |
-| 6    | ID‑6     | GOVERNANCE | ACL authority lock     | 🔒 FROZEN        | ACL SSOT locked         |
-| 6    | ID‑6.1   | ACL        | Role ladder            | 🔒 FROZEN        | Canonical hierarchy     |
-| 6    | ID‑6.1A  | ACL        | Role normalization     | 🔒 FROZEN        | Deterministic codes     |
-| 6    | ID‑6.2   | MASTER     | Company master         | ✅ DONE           | Canonical companies     |
-| 6    | ID‑6.2A  | MASTER     | Company state rules    | ✅ DONE           | GST + lifecycle         |
-| 6    | ID‑6.3   | MASTER     | Project master         | 🟡 HALF‑DONE     | Structural only         |
-| 6    | ID‑6.3A  | MASTER     | Project state rules    | 🟡 HALF‑DONE     | No workflows            |
-| 6    | ID‑6.4   | MASTER     | Department master      | 🟡 HALF‑DONE     | Structural only         |
-| 6    | ID‑6.4A  | MASTER     | Department state rules | 🟡 HALF‑DONE     | HR workflows pending    |
-| 6    | ID‑6.5   | MAP        | User‑Company map       | 🟡 HALF‑DONE     | Context wiring pending  |
-| 6    | ID‑6.5A  | MAP        | Primary company rule   | 🟡 HALF‑DONE     | HR consumption pending  |
-| 6    | ID‑6.6   | MAP        | User‑Project map       | 🟡 HALF‑DONE     | ACL consumption pending |
-| 6    | ID‑6.6A  | MAP        | Project subset rule    | 🟡 HALF‑DONE     | Enforcement pending     |
-| 6    | ID‑6.7   | MAP        | User‑Department map    | 🟡 HALF‑DONE     | HR wiring pending       |
-| 6    | ID‑6.7A  | MAP        | Department scope rule  | 🟡 HALF‑DONE     | ACL wiring pending      |
-| 6    | ID‑6.9   | ACL        | role_menu_permission   | 🟡 HALF‑DONE     | No resolver yet         |
-| 6    | ID‑6.9A  | ACL        | Menu resource model    | 🟡 HALF‑DONE     | No seeding/UI           |
-| 6    | ID‑6.10  | ACL        | Capability packs       | 🟡 HALF‑DONE     | Resolver pending        |
-| 6    | ID‑6.10A | ACL        | Capability precedence  | 🟡 HALF‑DONE     | Execution pending       |
-| 6    | ID‑6.11  | ACL        | company_module_map     | 🟡 HALF‑DONE     | No enforcement          |
-| 6    | ID‑6.11A | ACL        | module hard deny       | 🟡 HALF‑DONE     | Resolver pending        |
-| 6    | ID‑6.12  | ACL        | user_overrides         | 🟡 HALF‑DONE     | Precedence pending      |
-| 6    | ID‑6.12A | ACL        | override audit         | 🟡 HALF‑DONE     | UI/emit pending         |
-| 6    | ID‑6.13  | ACL        | approver_map           | 🟡 HALF‑DONE     | No workflow             |
-| 6    | ID‑6.13A | ACL        | approver invariants    | 🟡 HALF‑DONE     | Not exercised           |
-| 6    | ID‑6.14  | ACL        | Precedence ladder      | 🟡 HALF‑DONE     | Enforced in Gate‑11     |
-| 6    | ID‑6.15  | ACL        | VWED engine            | 🟡 HALF‑DONE     | Wired in Gate‑11        |
-| 6    | ID‑6.16  | ACL        | ACL resolver core      | 🟡 HALF‑DONE     | Enforced in Gate‑11     |
-| 6    | ID‑6.16A | ACL        | Decision trace         | 🟡 HALF‑DONE     | Emission pending        |
+| Gate | ID | Domain | Short_Name | Effective_Status | Effective_Note |
+|----|----|------|-----------|-----------------|----------------|
+| 6 | ID-6 | GOVERNANCE | ACL authority lock | 🔒 FROZEN | ACL SSOT |
+| 6 | ID-6.1 | ACL | Role ladder | 🔒 FROZEN | Canonical |
+| 6 | ID-6.1A | ACL | Role normalization | 🔒 FROZEN | Deterministic |
+| 6 | ID-6.2 | MASTER | Company master | ✅ DONE | Canonical |
+| 6 | ID-6.2A | MASTER | Company state | ✅ DONE | GST lifecycle |
+| 6 | ID-6.3 | MASTER | Project master | 🟡 HALF-DONE | Structural |
+| 6 | ID-6.3A | MASTER | Project state | 🟡 HALF-DONE | No workflow |
+| 6 | ID-6.4 | MASTER | Department master | 🟡 HALF-DONE | Structural |
+| 6 | ID-6.4A | MASTER | Dept state | 🟡 HALF-DONE | HR pending |
+| 6 | ID-6.5 | MAP | User-Company map | 🟡 HALF-DONE | Context wiring |
+| 6 | ID-6.5A | MAP | Primary company | 🟡 HALF-DONE | HR consume |
+| 6 | ID-6.6 | MAP | User-Project map | 🟡 HALF-DONE | ACL consume |
+| 6 | ID-6.6A | MAP | Project subset | 🟡 HALF-DONE | Enforcement |
+| 6 | ID-6.7 | MAP | User-Department map | 🟡 HALF-DONE | HR wiring |
+| 6 | ID-6.7A | MAP | Dept scope | 🟡 HALF-DONE | ACL wiring |
+| 6 | ID-6.9 | ACL | role_menu_permission | 🟡 HALF-DONE | Resolver pending |
+| 6 | ID-6.9A | ACL | Menu resource model | 🟡 HALF-DONE | No seeding |
+| 6 | ID-6.10 | ACL | Capability packs | 🟡 HALF-DONE | Execution later |
+| 6 | ID-6.10A | ACL | Capability precedence | 🟡 HALF-DONE | Execution later |
+| 6 | ID-6.11 | ACL | company_module_map | 🟡 HALF-DONE | Enforcement later |
+| 6 | ID-6.11A | ACL | Module hard deny | 🟡 HALF-DONE | Resolver later |
+| 6 | ID-6.12 | ACL | user_overrides | 🟡 HALF-DONE | Precedence later |
+| 6 | ID-6.12A | ACL | override audit | 🟡 HALF-DONE | UI pending |
+| 6 | ID-6.13 | ACL | approver_map | 🟡 HALF-DONE | Workflow later |
+| 6 | ID-6.13A | ACL | approver invariants | 🟡 HALF-DONE | Not exercised |
+| 6 | ID-6.14 | ACL | Precedence ladder | 🟡 HALF-DONE | Gate-11 |
+| 6 | ID-6.15 | ACL | VWED engine | 🟡 HALF-DONE | Gate-11 |
+| 6 | ID-6.16 | ACL | ACL resolver | 🟡 HALF-DONE | Gate-11 |
+| 6 | ID-6.16A | ACL | Decision trace | 🟡 HALF-DONE | Emit later |
 
 ---
 
-## Final Verdict (Gate‑0 → Gate‑6)
+## Gate-7 — MENU, VISIBILITY & SNAPSHOT CONSUMPTION
 
-* **No ID skipped**
-* **All effective resolutions reflected**
-* **Gate‑6 complete at TRUTH layer**
-* **Execution, enforcement, caching, UI intentionally deferred**
+| Gate | ID | Domain | Short_Name | Effective_Status | Effective_Note |
+|----|----|--------|-----------|-----------------|----------------|
+| 7 | ID-7 | GOVERNANCE | Menu authority lock | 🔒 FROZEN | Backend-only visibility truth |
+| 7 | ID-7.1 | ACL | Menu master | 🟡 HALF-DONE | Structure locked, admin UI later |
+| 7 | ID-7.1A | ACL | Menu invariants | 🟡 HALF-DONE | No orphan / duplicate |
+| 7 | ID-7.2 | ACL | Menu tree builder | 🟡 HALF-DONE | Hierarchy declared |
+| 7 | ID-7.2A | ACL | Tree validation | 🟡 HALF-DONE | No cycles |
+| 7 | ID-7.3 | ACL | Snapshot engine | 🟡 HALF-DONE | Generation defined |
+| 7 | ID-7.3A | ACL | Snapshot refresh rules | 🟡 HALF-DONE | Trigger rules only |
+| 7 | ID-7.4 | API | /api/me/menu | ✅ DONE | Snapshot delivery |
+| 7 | ID-7.4A | API | SA vs ACL menu split | ✅ DONE | Admin vs user tree |
+| 7 | ID-7.5 | SECURITY | Menu hard deny | ✅ DONE | Not-in-snapshot = invisible |
+| 7 | ID-7.6 | FRONT | Route index build | ✅ DONE | Snapshot-driven routes |
+| 7 | ID-7.6A | FRONT | Dynamic route guard | ✅ DONE | URL bypass blocked |
+| 7 | ID-7.7 | FRONT | Menu render shell | ✅ DONE | Snapshot-only render |
+| 7 | ID-7.7A | FRONT | Hidden route redirect | ✅ DONE | Safe redirect |
+| 7 | ID-7.8 | SECURITY | Deep-link protection | ✅ DONE | Manual URL blocked |
+| 7 | ID-7.9 | OBSERVABILITY | Menu snapshot logs | ✅ DONE  | Gate-10 |
+| 7 | ID-7.10 | DOCS | Gate-7 freeze | 🔒 FROZEN | Visibility rules immutable |
 
-> This file is correct, exhaustive, and audit‑safe **as a derived view**.
+---
+
+## Final Verdict (Gate-0 → Gate-7)
+
+- No ID skipped  
+- No authority contradiction  
+- Gate-6 defines permission truth  
+- Gate-7 consumes truth for visibility only  
+- Execution, enforcement, optimisation deferred by design  
+
+This file is **correct, exhaustive, and audit-safe** as a **derived view only**.

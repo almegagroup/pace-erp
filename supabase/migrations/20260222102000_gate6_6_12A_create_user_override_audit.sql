@@ -11,16 +11,22 @@
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS acl.user_override_audit (
-  audit_id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  audit_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 
-  override_id     uuid NOT NULL,
+  override_id uuid NOT NULL
+    REFERENCES acl.user_overrides(override_id)
+    ON DELETE CASCADE,
 
-  action          text NOT NULL CHECK (action IN ('CREATE', 'REVOKE')),
+  action text NOT NULL
+    CHECK (action IN ('CREATE', 'REVOKE')),
 
-  performed_by    uuid NOT NULL,
-  performed_at    timestamptz NOT NULL DEFAULT now(),
+  performed_by uuid NOT NULL
+    REFERENCES auth.users(id)
+    ON DELETE RESTRICT,
 
-  snapshot        jsonb NOT NULL
+  performed_at timestamptz NOT NULL DEFAULT now(),
+
+  snapshot jsonb NOT NULL
 );
 
 COMMENT ON TABLE acl.user_override_audit IS

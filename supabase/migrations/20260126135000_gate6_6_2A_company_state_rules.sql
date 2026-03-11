@@ -25,7 +25,7 @@ BEGIN;
 -- ------------------------------------------------------------
 
 ALTER TABLE erp_master.companies
-  ADD CONSTRAINT companies_status_check
+  ADD CONSTRAINT chk_company_status_valid
   CHECK (status IN ('ACTIVE', 'INACTIVE'));
 
 -- ------------------------------------------------------------

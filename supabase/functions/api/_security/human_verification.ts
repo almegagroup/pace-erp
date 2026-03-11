@@ -8,7 +8,10 @@
  * Authority: Backend
  */
 
-const SECRET = Deno.env.get("HUMAN_VERIFICATION_SECRET") ?? "DEV_ONLY_SECRET";
+const SECRET =
+  (typeof Deno !== "undefined"
+    ? Deno.env.get("HUMAN_VERIFICATION_SECRET")
+    : process.env.HUMAN_VERIFICATION_SECRET) ?? "DEV_ONLY_SECRET";
 const TTL_MS = 3 * 60 * 1000; // 3 minutes
 
 type VerificationResult = {

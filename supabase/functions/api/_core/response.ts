@@ -57,10 +57,11 @@ function normalizeCode(code: string): string {
 
   // All auth-related failures collapse here
   if (
-    code.startsWith("AUTH_") ||
-    code.startsWith("RATE_LIMIT_") ||
-    code === "INVALID_CREDENTIALS"
-  ) {
+  code.startsWith("AUTH_") ||
+  code.startsWith("RATE_LIMIT_") ||
+  code.startsWith("AUTH_RATE_LIMIT_") ||
+  code === "INVALID_CREDENTIALS"
+) {
     return "AUTH_INVALID_CREDENTIALS";
   }
 
@@ -84,11 +85,17 @@ function normalizeMessage(publicCode: string): string {
  */
 export function errorResponse(
   code: string,
-  _message: string,          // ignored intentionally (no leakage)
+  _message: string,
   requestId: string,
-  _action: Action = "NONE",  // action is derived, not trusted
-  status = 403
+  _action: Action = "NONE",
+  status = 403,
+  meta?: {
+    gateId?: string;
+    routeKey?: string;
+    decisionTrace?: string;
+  }
 ): Response {
+
   const publicCode = normalizeCode(code);
 
   const action: Action =
@@ -102,7 +109,15 @@ export function errorResponse(
       code: publicCode,
       message,
       action,
+
+      /* =====================================================
+       * Observability metadata (Gate-10)
+       * ===================================================== */
+
       request_id: requestId,
+      gate_id: meta?.gateId ?? null,
+      route_key: meta?.routeKey ?? null,
+      decision_trace: meta?.decisionTrace ?? null,
     }),
     {
       status,

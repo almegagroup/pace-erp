@@ -8,18 +8,40 @@
  * Authority: Backend
  */
 
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient } from "@supabase/supabase-js";
 import { assertServiceRole } from "../../_shared/serviceRoleClient.ts";
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+/* --------------------------------------------------
+ * ENV RESOLUTION (Deno + Node compatible)
+ * -------------------------------------------------- */
+
+const SUPABASE_URL =
+  typeof Deno !== "undefined"
+    ? Deno.env.get("SUPABASE_URL")
+    : process.env.SUPABASE_URL;
+
+const SERVICE_ROLE_KEY =
+  typeof Deno !== "undefined"
+    ? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
+    : process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+/* --------------------------------------------------
+ * ENV SAFETY ASSERTION
+ * -------------------------------------------------- */
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
   throw new Error("AUTH_CONFIG_MISSING");
 }
 
-// Gate-1 contract enforcement
+/* --------------------------------------------------
+ * Gate-1 contract enforcement
+ * -------------------------------------------------- */
+
 assertServiceRole();
+
+/* --------------------------------------------------
+ * Supabase Auth Client
+ * -------------------------------------------------- */
 
 export const authClient = createClient(
   SUPABASE_URL,

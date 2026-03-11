@@ -1,4 +1,4 @@
-🔒 PACE-ERP — Gate-6 Freeze Declaration
+🔒 PACE-ERP — Gate-6 Freeze Declaration (FINAL)
 
 File-ID: 6.2
 File-Path: docs/GATE_6_FREEZE.md
@@ -8,11 +8,11 @@ Domain: ACL / MASTER DATA / GOVERNANCE / SECURITY
 Status: 🔒 FROZEN
 Authority: Backend
 Scope: ACL & Business Truth (Single Source of Authorization Truth)
-Date: (fill when frozen)
+Date: (fill current freeze date)
 
 1️⃣ Purpose of Gate-6
 
-Gate-6 exists to answer exactly one question:
+Gate-6 answers one immutable question:
 
 “এই system-এ কে, কোথায়, কী করতে পারে — তার FINAL TRUTH কী?”
 
@@ -22,204 +22,187 @@ Authorization truth DEFINE করে
 
 Business & ACL structure LOCK করে
 
-Future execution gates-এর জন্য immutable foundation দেয়
+Deterministic resolution model establish করে
 
-Gate-6 একটি TRUTH DEFINITION GATE —
-এটি execution, rendering, optimization gate নয়।
+Enforcement contract declare করে
+
+Future gates-এর জন্য immutable foundation দেয়
+
+Gate-6 is a TRUTH + RESOLUTION + ENFORCEMENT GATE
+এটি UI, rendering বা optimization gate নয়।
 
 2️⃣ ACL Authority Model (LOCKED)
-✅ Absolute Authorization Rule
+Absolute Authorization Rule
 
 Frontend → ZERO authority
+Backend ACL Engine → ONLY source of permission truth
+Database (RLS) → Enforcement layer
 
-Backend ACL engine → ONLY source of permission truth
-
-Database (RLS) → enforcement layer, decision maker নয়
-
-🔒 Locked Rule
+🔒 Locked Rules
 
 কোনো permission frontend থেকে infer করা যাবে না
 
 কোনো UI decision authoritative নয়
 
-Permission truth = backend ACL only
+Permission truth = backend ACL resolver only
 
-এই rule পরিবর্তনযোগ্য নয়।
+RLS = enforcement, not interpretation
 
-3️⃣ Role System — Canonical Hierarchy (LOCKED)
+এই model পরিবর্তনযোগ্য নয়।
+
+3️⃣ Role System — Canonical Hierarchy (SEALED)
 3.1 Role Ladder (ID-6.1, 6.1A)
 
-Canonical role set with numeric ranks
+Canonical role set
 
-Deterministic comparison helpers
+Numeric deterministic rank
 
-Inheritance is implicit via rank
+Normalized identity
 
-🔒 Invariants:
+No runtime role mutation
 
-Higher rank ⊇ lower rank (unless explicitly denied later)
+🔒 Invariants
 
-Role normalization deterministic
+Higher rank ⊇ lower rank (unless explicit DENY)
 
-No dynamic / runtime role creation
+Deterministic comparison only
 
-4️⃣ Business Master Truth (LOCKED)
+No dynamic role creation
 
-Gate-6 declares what business entities exist and how they are allowed to relate.
+Status: 🔒 SEALED
 
+4️⃣ Business Master Truth (SEALED)
 4.1 Company Master (ID-6.2 → 6.2A)
 
-Canonical company identity
+Canonical org root
 
-Deterministic company_code
+Deterministic company identity
 
-GST-aware lifecycle
+ACTIVE lifecycle enforced
 
-ACTIVE / INACTIVE invariants enforced
+RLS FORCE enabled
 
-Company = legal & operational root truth
+Status: 🔒 SEALED
 
-4.2 Project Master (ID-6.3 → 6.3A) — 🟡 PARTIAL
+4.2 Project Master (ID-6.3 → 6.3A)
 
-Declared (LOCKED):
+SAP Global Model:
 
-Project belongs to exactly one company
+Project is global entity
 
-Project lifecycle defined
+Not company-bound
 
-Safe deletion constraints declared
+Company ↔ Project via mapping layer
 
-Deferred:
+Lifecycle bounded
 
-Runtime enforcement via ACL & RLS
+Isolation via mapping + centralized RLS
 
-UI / admin workflows
+Status: 🔒 SEALED (Post SAP Upgrade)
 
-4.3 Department Master (ID-6.4 → 6.4A) — 🟡 PARTIAL
+4.3 Department Master (ID-6.4 → 6.4A)
 
-Declared (LOCKED):
+Company-bound HR scope
 
-Department bound to a single company
+Deterministic lifecycle
 
-HR scope isolation rule
+Isolation via RLS
 
-Deferred:
+Status: 🔒 SEALED
 
-HR module usage
+5️⃣ User ↔ Organization Truth (SEALED)
+5.1 User ↔ Company (6.6 → 6.6A)
 
-RLS enforcement
+Deterministic primary company
 
-5️⃣ User ↔ Organization Truth (LOCKED)
-5.1 User ↔ Company (ID-6.6 → 6.6A)
+Multiple work companies allowed
 
-Declared:
+Unique primary rule enforced
 
-Parent Company (HR truth)
+Status: 🔒 SEALED
 
-Work Company (operational scope)
+5.2 User ↔ Project (6.7 → 6.7A)
 
-Deterministic primary / HR company rule
+UserProject ⊆ CompanyProject
 
-🔒 Invariants:
-
-HR modules → Parent Company
-
-Business modules → Work Company
-
-Violation = hard DENY (later gate)
-
-5.2 User ↔ Project (ID-6.7 → 6.7A)
-
-Declared:
-
-User project access ⊆ company projects
+Mapping-based validation
 
 Cross-company leakage forbidden
 
-5.3 User ↔ Department (ID-6.8 → 6.8A)
+Status: 🔒 SEALED
 
-Declared:
+5.3 User ↔ Department (6.8 → 6.8B)
+
+Single HR department identity
 
 Department ∈ user’s company
 
-HR isolation invariant locked
+Unique HR binding
 
-6️⃣ ACL Permission Truth (LOCKED STRUCTURE)
-6.1 Role-Menu Permissions (ID-6.9 → 6.9A) — 🟡 PARTIAL
+Status: 🔒 SEALED
 
-Declared:
+6️⃣ ACL Permission Structure (SEALED)
+6.1 Role Menu Permissions (6.9 → 6.9A)
 
-Resource-action (VWED…) model
+Canonical resource registry
 
-Canonical resource codes
+Action vocabulary
 
-Menu permission truth storage
+Default DENY base
 
-Deferred:
+Data-driven menu hierarchy
 
-Snapshot generation
+Status: 🔒 SEALED (Structural Layer)
 
-UI rendering
+6.2 Capability Packs (6.10 → 6.10A)
 
-6.2 Capability Packs (ID-6.10 → 6.10A) — 🟡 PARTIAL
+Permission bundling model
 
-Declared:
+Conflict precedence metadata
 
-Permission grouping via capability packs
+No execution embedded
 
-Precedence rules between role & pack
+Status: 🔒 SEALED (Structural Layer)
 
-Deferred:
+6.3 Company Module Map (6.11 → 6.11A)
 
-Runtime resolution
+Company-level module enablement
 
-Admin UI
+Hard-deny declaration
 
-6.3 Company Module Map (ID-6.11 → 6.11A) — 🟡 PARTIAL
+No runtime leakage
 
-Declared:
+Status: 🔒 SEALED
 
-Module enablement per company
+6.4 User Overrides (6.12 → 6.12A)
 
-Hard-deny rule if module disabled
+Explicit ALLOW / DENY exception
 
-Deferred:
+Append-only audit
 
-Runtime enforcement
+Company-scoped
 
-6.4 User Overrides (ID-6.12 → 6.12A) — 🟡 PARTIAL
+Status: 🔒 SEALED
 
-Declared:
+7️⃣ Approval Routing Structure (SEALED)
+7.1 Approver Map (6.13 → 6.13A)
 
-Explicit ALLOW / DENY per user
+Ordered stage model
 
-Override audit requirement
+Role OR explicit user (XOR)
 
-Deferred:
+No duplicate stage
 
-Runtime precedence execution
+Deterministic routing surface
 
-7️⃣ Approval Truth (LOCKED STRUCTURE)
-7.1 Approver Map (ID-6.13 → 6.13A) — 🟡 PARTIAL
+Workflow execution intentionally deferred.
 
-Declared:
+Status: 🔒 SEALED (Structural Layer)
 
-Targeted approvers
+8️⃣ ACL Decision Brain (SEALED)
+8.1 Precedence Ladder (6.14)
 
-Max 3 approvers
-
-No circular / empty chains
-
-Deferred:
-
-Workflow execution
-
-UI flows
-
-8️⃣ ACL Decision Brain (DEFINED, NOT EXECUTED)
-8.1 Precedence Ladder (ID-6.14)
-
-Declared final order:
+Final order (IMMUTABLE):
 
 Hard Deny
 
@@ -227,118 +210,126 @@ User DENY
 
 User ALLOW
 
-Role / Capability / Company / Dept
+Role / Capability / Module
 
 Default DENY
 
-This ladder is FINAL & IMMUTABLE.
+Status: 🔒 SEALED
 
-8.2 VWED Engine & Resolver (ID-6.15 → 6.16A) — 🟡 PARTIAL
+8.2 VWED Engine & Resolver (6.15 → 6.16A)
 
-Implemented:
+Stateless evaluator
 
-Deterministic evaluation logic
+Deterministic decision
 
-Decision trace structure
+Default DENY
 
-Deferred:
+Structured decision trace
 
-Runtime wiring
+No silent allow
 
-Snapshot binding
+Status: 🔒 SEALED
 
-9️⃣ Versioning & Performance Foundations
-9.1 ACL Versions (ID-6.18) — 🟡 PARTIAL
-9.2 Precomputed ACL View (ID-6.18A) — 🟡 PARTIAL
+9️⃣ Versioning & Snapshot (SEALED)
+9.1 ACL Versions (6.18)
 
-Declared:
+Single active version per company
 
-Versioned ACL change sets
+Version uniqueness enforced
 
-Precompute-ready schema
+Deterministic evaluation base
 
-Deferred:
+Status: 🔒 SEALED
 
-Population
+9.2 Precomputed ACL View (6.18A)
 
-Rollback UI
+Version-bound snapshot
 
-TTL cache
+User-scoped
 
-🔟 DB / RLS Binding Declaration
-10.1 RLS Alignment (ID-6.19 → 6.19A) — 🟡 PARTIAL
+Deterministic identity
 
-Declared:
+RLS FORCE
 
-ACL verdict → RLS binding contract
+Status: 🔒 SEALED
 
-Zero-row deny fallback
+🔟 DB / RLS Binding (SEALED)
+10.1 RLS Enforcement (6.19 → 6.19A)
 
-Deferred:
+ENABLE + FORCE RLS everywhere
 
-ENABLE / FORCE RLS
+Company isolation
 
-USING / WITH CHECK policies
-(Belongs to DB hard-lock gate)
+Lifecycle enforcement
 
-1️⃣1️⃣ What Gate-6 EXPLICITLY DOES NOT Handle
+Default deny fallback
+
+Status: 🔒 SEALED
+
+1️⃣1️⃣ What Gate-6 Explicitly Does NOT Handle
 
 ❌ Menu rendering
-❌ ACL snapshot generation
-❌ UI routing
+❌ UI navigation
+❌ Snapshot UI exposure
+❌ Approval workflow execution
 ❌ Performance caching
-❌ Version rollback execution
-❌ Table-level RLS policies
-❌ Workflow execution
+❌ Observability dashboard
+❌ Audit visualization
 
-These belong to future gates by design.
-
-1️⃣2️⃣ HALF-DONE Items (VALID & INTENTIONAL)
-ID Range	Reason	Completes In
-6.3–6.4A	Business data exists, enforcement later	Gate-7
-6.9–6.16A	ACL truth defined, execution later	Gate-10
-6.18–6.18A	Versioning structure only	Gate-12
-6.19–6.19A	RLS binding declared	Gate-13
-
-All HALF-DONE items:
-
-Explicitly documented
-
-Correctly gated
-
-No silent dependency
+These belong to future gates.
 
 🔒 Final Freeze Statement
 
-Gate-6 — ACL & Business Truth Gate is hereby declared FROZEN.
+Gate-6 — ACL, Business Structure, Resolver & Enforcement Layer is hereby declared FROZEN.
 
 This means:
 
-ACL truth is final
+Authorization truth is final
 
-Role hierarchy is immutable
+Role hierarchy immutable
 
-Business & org structure is locked
+Business model locked
 
-Precedence rules cannot change
+Scope mapping immutable
 
-Future gates may CONSUME but must not REINTERPRET
+Precedence order immutable
 
-Any future conflict:
+Enforcement contract immutable
+
+RLS contract immutable
+
+Future gates may CONSUME
+But must not REINTERPRET
+
+Any conflict:
 
 👉 Gate-6 SSOT wins.
 
 📊 Gate-6 Status Summary
-ID	Status
-6	✅ DONE
-6.1 → 6.2A	✅ DONE
-6.3 → 6.8A	🟡 PARTIAL
-6.9 → 6.16A	🟡 PARTIAL
-6.18 → 6.19A	🟡 PARTIAL
-6.2	🔒 FROZEN
+Layer	Status
+Layer-1	🔒 SEALED
+Layer-2	🔒 SEALED
+Layer-3	🔒 SEALED
+Layer-4	🔒 SEALED
+Layer-5	🔒 SEALED
+Layer-6	🔒 SEALED
+Freeze (6.2)	🔒 FROZEN
 🔐 Authoritative Closure
 
-Gate-6 is complete at the truth & governance layer.
+Gate-6 is complete at:
 
-Next gate:
+Truth Layer
+
+Structural Layer
+
+Scope Layer
+
+Permission Layer
+
+Decision Brain
+
+Enforcement Layer
+
+Next Gate:
+
 ➡️ Gate-7 — Menu, Visibility & Snapshot Consumption

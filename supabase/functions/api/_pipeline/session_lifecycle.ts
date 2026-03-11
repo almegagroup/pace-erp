@@ -4,144 +4,101 @@
  * Gate: 3
  * Phase: 3
  * Domain: SESSION
- * Purpose: Idle + Absolute TTL lifecycle enforcement (no extension)
+ * Purpose: Deterministic lifecycle enforcement
  * Authority: Backend
  */
 
 import type { SessionResolution } from "./session.ts";
 import { log } from "../_lib/logger.ts";
+import { recordSessionTimeline } from "../_core/session/session_timeline.ts";
 
-/**
- * STEP 8.2 — Device change detector (soft)
- * Signal only, no enforcement
- */
-function isDeviceChanged(ctx: any): boolean {
-  if (!ctx?.device_id) return false;
-  if (!ctx?.previous_device_id) return false;
-
-  return ctx.device_id !== ctx.previous_device_id;
-}
-
-/**
- * All possible lifecycle outcomes after Gate-3 evaluation.
- */
 export type SessionLifecycleResult =
   | SessionResolution
+  | { status: "ABSOLUTE_WARNING"; action: "NONE" }
   | { status: "IDLE_WARNING"; action: "NONE" }
   | { status: "IDLE_EXPIRED"; action: "LOGOUT" }
   | { status: "TTL_EXPIRED"; action: "LOGOUT" };
 
-/**
- * ID-3.1 + 3.1A + 3.1B + 3.2 + 3.2A
- *
- * Unified session lifecycle engine.
- *
- * RULES:
- * - Gate-2 decides whether session EXISTS
- * - Gate-3 decides whether session MAY CONTINUE
- *
- * GUARANTEES:
- * - No DB mutation
- * - No TTL extension ever
- * - No idle logic affects TTL
- * - Absolute TTL always wins
- */
 export function enforceIdleLifecycle(
   session: SessionResolution,
   now: Date
 ): SessionLifecycleResult {
-  // --------------------------------------------------
-  // Gate-2 non-active outcomes pass through untouched
-  // --------------------------------------------------
+
+  // Only ACTIVE sessions are eligible for lifecycle enforcement
   if (session.status !== "ACTIVE") {
     return session;
   }
 
-  const ctx = session as any;
+  const nowMs = now.getTime();
+  const expiresAtMs = new Date(session.expires_at).getTime();
+  const createdAtMs = new Date(session.created_at).getTime();
+  const lastSeenMs = new Date(session.last_seen_at).getTime();
 
-  // --------------------------------------------------
-  // ID-3.2 + 3.2A — Absolute TTL (age-based, NO extension)
-  // --------------------------------------------------
-  const createdAt = ctx.created_at; // future DB column
-  if (createdAt) {
-    const bornAt = new Date(createdAt).getTime();
-    const ageMs = now.getTime() - bornAt;
+  // =====================================================
+  // 1️⃣ Absolute TTL Enforcement (DB authoritative)
+  // =====================================================
 
-    /**
-     * SYMBOLIC TTL
-     * Real value will be locked in config / later ID
-     */
-    const ABSOLUTE_TTL_MS = 12 * 60 * 60 * 1000;
-
-    if (ageMs >= ABSOLUTE_TTL_MS) {
-        log({
-    level: "OBSERVABILITY",
-    event: "SESSION_TTL_EXPIRED",
-    meta: {
-      age_ms: ageMs,
-    },
-  });
-      return { status: "TTL_EXPIRED", action: "LOGOUT" };
-    }
+  if (nowMs >= expiresAtMs) {
+    log({
+      level: "OBSERVABILITY",
+      event: "SESSION_TTL_EXPIRED",
+    });
+    return { status: "TTL_EXPIRED", action: "LOGOUT" };
   }
 
-  // --------------------------------------------------
-  // ID-3.1 + 3.1A + 3.1B — Idle handling (activity-based)
-  // --------------------------------------------------
-  const lastActivity = ctx.last_activity_at; // future DB column
-  if (!lastActivity) {
-    return session;
+  // Absolute warning at 10h elapsed (12h TTL model)
+  const ABSOLUTE_WARNING_MS = 10 * 60 * 60 * 1000; // 10h
+
+  if (nowMs - createdAtMs >= ABSOLUTE_WARNING_MS) {
+    log({
+      level: "OBSERVABILITY",
+      event: "SESSION_ABSOLUTE_WARNING",
+    });
+    return { status: "ABSOLUTE_WARNING", action: "NONE" };
   }
 
-  const last = new Date(lastActivity).getTime();
-  const idleMs = now.getTime() - last;
+  // =====================================================
+  // 2️⃣ Idle Enforcement
+  // =====================================================
 
-  /**
-   * SYMBOLIC thresholds
-   * Real values will be locked later
-   */
-  const IDLE_WARNING_MS = 10 * 60 * 1000; // 10 min
-const IDLE_EXPIRE_MS  = 30 * 60 * 1000; // 30 min
+  const idleMs = nowMs - lastSeenMs;
 
+  const IDLE_WARNING_MS = 10 * 60 * 1000;  // 10 minutes
+  const IDLE_EXPIRE_MS  = 30 * 60 * 1000;  // 30 minutes
 
   if (idleMs >= IDLE_EXPIRE_MS) {
-     log({
-    level: "OBSERVABILITY",
-    event: "SESSION_IDLE_EXPIRED",
-    meta: {
-      idle_ms: idleMs,
-    },
-  });
+    log({
+  level: "OBSERVABILITY",
+  event: "SESSION_IDLE_EXPIRED",
+});
+
+recordSessionTimeline({
+  requestId: "SYSTEM_IDLE",
+  sessionId: session.sessionId,
+  userId: session.authUserId,
+  event: "IDLE",
+});
     return { status: "IDLE_EXPIRED", action: "LOGOUT" };
   }
 
- if (idleMs >= IDLE_WARNING_MS) {
-      log({
-    level: "OBSERVABILITY",
-    event: "SESSION_IDLE_WARNING",
-    meta: {
-      idle_ms: idleMs,
-    },
-  });
+  if (idleMs >= IDLE_WARNING_MS) {
+    log({
+  level: "OBSERVABILITY",
+  event: "SESSION_IDLE_WARNING",
+});
+
+recordSessionTimeline({
+  requestId: "SYSTEM_IDLE",
+  sessionId: session.sessionId,
+  userId: session.authUserId,
+  event: "IDLE",
+});
     return { status: "IDLE_WARNING", action: "NONE" };
   }
 
-  // --------------------------------------------------
-  // ID-3.5A — Device change signal (soft, non-blocking)
-  // --------------------------------------------------
-  if (isDeviceChanged(ctx)) {
-    log({
-    level: "OBSERVABILITY",
-    event: "SESSION_DEVICE_CHANGED",
-    meta: {
-      device_id: ctx.device_id,
-      previous_device_id: ctx.previous_device_id,
-    },
-  });
-    // Signal only — NO logout, NO deny
-    // Future hook: audit / alert / notification
-    // Example: DEVICE_CHANGED event
-  }
+  // =====================================================
+  // 3️⃣ Session remains ACTIVE
+  // =====================================================
 
   return session;
 }

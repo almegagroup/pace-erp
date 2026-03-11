@@ -1,11 +1,11 @@
-🔒 PACE-ERP — Gate-5 Freeze Declaration
+🔒 PACE-ERP — Gate-5 Freeze Declaration (UPDATED)
 
 File-ID: 5.9
 File-Path: docs/GATE_5_FREEZE.md
 Gate: 5
 Phase: 5
 Domain: CONTEXT / GOVERNANCE / SECURITY / DB
-Status: 🔒 FROZEN
+Status: 🔒 EXECUTION-SEALED
 Authority: Backend
 Scope: Context Authority & Resolution Governance
 Date: (fill when frozen)
@@ -16,7 +16,7 @@ Gate-5 exists to answer exactly one question:
 
 “এই request-এর জন্য কোন business context প্রযোজ্য?”
 
-Gate-5 নিশ্চিত করে যে:
+Gate-5 ensures:
 
 Context কখনোই frontend দ্বারা নির্ধারিত হবে না
 
@@ -24,222 +24,218 @@ Backend ছাড়া কেউ context claim করতে পারবে না
 
 Context failure হলে behaviour deterministic থাকবে
 
-Gate-5 একটি authority + safety gate।
+এক request = এক isolated business scope
 
-এটি explicitly করে না:
+Gate-5 is an authority + isolation gate.
 
-ACL policy define
+It does NOT:
 
-Role escalation
+Define ACL permissions
 
-Business permission evaluation
+Perform role escalation
 
-Actual company / project / department data creation
+Decide business authorization
+
+Create companies/projects/departments
+
+Evaluate menu visibility
 
 2️⃣ Context Authority Model (LOCKED)
-✅ Absolute Authority Rule
+Absolute Authority Rule
 
 Frontend → ZERO authority
-
 Backend → Single source of context truth
+Database → Enforcement layer, not decision origin
 
-Database → Enforcement layer, decision maker নয়
-
-🔒 Locked Rule
+Locked Behaviour
 
 Frontend-supplied context hints permanently ignored
 
-Context resolve হয় backend pipeline-এর ভিতরে
+Context resolution happens strictly inside backend pipeline
 
-কোনো request context ছাড়া proceed করতে পারে না
+UNRESOLVED context blocks execution deterministically
 
-এই rule পরিবর্তনযোগ্য নয়।
+No implicit fallback allowed
+
+This model is immutable.
 
 3️⃣ Context Resolution Contract (LOCKED)
 
-Gate-5 context-কে represent করে exactly:
+Gate-5 represents context as exactly:
 
 UNRESOLVED
 
 RESOLVED
 
-আর কোনো implicit fallback নেই।
+No third state.
+No implicit fallback.
+No partial execution.
 
-Invariant:
+Invariants
 
-UNRESOLVED context = no business logic execution
+UNRESOLVED → no business logic execution
 
-RESOLVED context = single, isolated context per request
+RESOLVED → exactly one company context
 
-4️⃣ What Gate-5 IMPLEMENTS
-4.1 Context Authority Lock — ✅ DONE (ID-5)
+Project / Department optional but validated
 
-Backend-only context origin declared
+Context failure ≠ session failure
 
-Frontend context permanently disqualified
+Deterministic 403 only
 
-Authority invariant enforced
+4️⃣ What Gate-5 IMPLEMENTS (Execution-Verified)
+4.1 Context Authority Lock — 🔒 SEALED (ID-5)
 
-4.2 Context Resolver Pipeline — 🟡 PARTIAL (ID-5.1 → 5.1B)
+Backend-only context origin
+
+Frontend permanently disqualified
+
+Deterministic authority enforcement
+
+4.2 Context Resolver Pipeline — 🔒 SEALED (ID-5.1 → 5.1B)
 
 Implemented:
-
-Resolver skeleton
 
 Deterministic resolution stages
 
-Explicit UNRESOLVED representation
+Primary company binding
 
-Missing-context handling contract
+Role binding
 
-Deferred:
+Optional project validation
 
-Actual ERP user → company / project / dept mapping
-(ACL truth not available yet)
+Optional department validation
 
-4.3 Org / Scope Boundary Declaration — 🟡 PARTIAL (ID-5.2 → 5.4A)
+Explicit UNRESOLVED state
 
-Declared (LOCKED):
+Deterministic 403 via central error envelope
 
-Company boundary
+No silent fallback.
+No execution ambiguity.
 
-Single-company invariant
+4.3 Org / Scope Boundary Enforcement — 🔒 SEALED (ID-5.2 → 5.4A)
 
-Project ↔ company binding
+Execution verified:
 
-Department boundary & access rule
+Single company invariant
 
-Deferred:
+Cross-company project leakage blocked
 
-Real org / project / department data
+Department scope isolation
 
-ACL-driven policy truth
+Deterministic failure on mismatch
 
-4.4 Admin Universe Separation — 🟡 PARTIAL (ID-5.5 → 5.5A)
+4.4 Admin Universe Separation — 🟡 DEFERRED TO GATE-6 (ID-5.5 → 5.5A)
 
-Implemented:
+Current State:
 
-SA / GA bypass path declared
+Admin bypass branch exists
 
-Isolation invariant enforced (admin ≠ ACL user)
+Detection depends on ACL truth
 
-Deferred:
+No accidental privilege escalation possible
 
-Actual SA / GA detection source (ACL gate)
+Execution safety intact.
+Full activation deferred to Gate-6.
 
-4.5 Context Failure Semantics — ✅ DONE (ID-5.6 → 5.6A)
+4.5 Context Failure Semantics — 🔒 SEALED (ID-5.6 → 5.6A)
 
-LOCKED behaviour:
+LOCKED Behaviour:
 
-Context failure returns CONTEXT_* error codes
+UNRESOLVED → 403
 
-No logout on context failure
+Central errorResponse() envelope
 
-No silent fallback
+No logout
 
 No leakage
 
-This behaviour is final and immutable.
+No structural drift
 
-4.6 DB / RLS Alignment — 🟡 PARTIAL (ID-5.7 → 5.7A)
+Immutable.
+
+4.6 DB / RLS Alignment Path — 🟡 HARD ENFORCEMENT IN GATE-7 (ID-5.7 → 5.7A)
 
 Implemented:
 
-Context-aware service-role DB client
+Context headers injected into service-role DB client
 
-Header-based RLS alignment path
+RLS alignment wiring path
 
-Structural safety for zero-row return
+Structural deny when context missing
 
-Deferred:
+Full verification & runtime RLS assertion → Gate-7.
 
-Actual table-level RLS policies
-(belongs to DB hard-lock gate)
+4.7 Observability — 🟡 DEFERRED TO GATE-6 (ID-5.8)
 
-4.7 Observability — ⏸ DEFERRED (ID-5.8)
-
-Reason:
-
-Context truth not yet meaningful
-
-Logging now would create noise, not signal
-
-Will be implemented when:
-
-Context resolution becomes data-backed (Gate-6)
+Context logs deferred intentionally until ACL truth becomes meaningful.
 
 5️⃣ What Gate-5 EXPLICITLY DOES NOT Handle
 
-❌ ACL policy
-❌ Role hierarchy
-❌ Company / project creation
-❌ Department models
-❌ Business permission checks
-❌ Menu visibility
-❌ UI behaviour
-❌ Table-level RLS rules
+❌ ACL permission logic
+❌ Role hierarchy evaluation
+❌ Business authorization decisions
+❌ Menu rendering
+❌ Table-level RLS verification
+❌ Admin privilege materialization
 
-These belong to future gates.
+Those belong to later gates.
 
-6️⃣ HALF-DONE Items (VALID & INTENTIONAL)
+6️⃣ Deferred Items (Intentionally Scoped)
 ID Range	Reason	Completes In
-5.1	Context mapping needs ACL truth	Gate-6
-5.2–5.4A	Org / project / dept data absent	Gate-6
-5.5–5.5A	Admin detection via ACL	Gate-6
-5.7–5.7A	Table-level RLS enforcement	Gate-7
+5.5–5.5A	Admin detection via ACL truth	Gate-6
+5.7–5.7A	DB-level RLS hard verification	Gate-7
 5.8	Context observability	Gate-6
 
-All HALF-DONE items:
+These are not execution gaps.
+They are cross-gate responsibilities.
 
-Reason documented
-
-Completion gate identified
-
-Will not silently complete
-
-7️⃣ Invariants (NON-NEGOTIABLE)
+7️⃣ Non-Negotiable Invariants
 
 Frontend = zero context authority
 
-Backend = single context authority
+Backend = single authority
 
-One request = one context
+One request = one company context
 
 No cross-scope mixing
 
 Context failure ≠ session failure
 
-Local == Production behaviour
+Local and production behaviour identical
 
-🔒 Final Freeze Statement
+No silent fallback anywhere
 
-Gate-5 — Context Authority Gate is hereby declared FROZEN.
+🔒 Final Seal Statement
 
-This means:
+Gate-5 — Context Authority Gate — is hereby declared:
 
-Context authority model is final
+🔒 EXECUTION-SEALED
 
-Failure semantics are locked
+Meaning:
 
-Resolution contract is immutable
+Context authority is deterministic
+
+Failure semantics are immutable
+
+Resolver pipeline is execution-stable
+
+No ambiguity remains
 
 No reinterpretation permitted
 
-📊 Gate-5 Status Summary
+📊 Final Gate-5 Status
 ID	Status
-5	✅ DONE
-5.1	🟡 PARTIAL
-5.1A	✅ DONE
-5.1B	🟡 PARTIAL
-5.2 → 5.4A	🟡 PARTIAL
-5.5 → 5.5A	🟡 PARTIAL
-5.6 → 5.6A	✅ DONE
-5.7 → 5.7A	🟡 PARTIAL
-5.8	⏸ DEFERRED
+5	🔒 SEALED
+5.1–5.4A	🔒 SEALED
+5.5–5.5A	🟡 Gate-6
+5.6–5.6A	🔒 SEALED
+5.7–5.7A	🟡 Gate-7
+5.8	🟡 Gate-6
 5.9	🔒 FROZEN
 🔐 Authoritative Closure
 
-Gate-5 is complete at the governance layer.
+Gate-5 is complete at the execution level within its declared scope.
 
-Next gate:
-➡️ Gate-6 — ACL & Business Truth
+Next Gate:
+➡️ Gate-6 — ACL & Business Truth Layer

@@ -13,11 +13,32 @@
  * - If ACL cannot decide deterministically → DENY
  */
 
+
 import { resolveAcl } from "../_acl/acl_resolver.ts";
+import { log } from "../_lib/logger.ts";
 import type {
   VwedAction,
   VwedPermissionRow,
 } from "../_acl/vwed_engine.ts";
+import { getServiceRoleClientWithContext } from "../_shared/serviceRoleClient.ts";
+import type { SupabaseClient } from "@supabase/supabase-js"
+import { recordSecurityEvent } from "../_security/security_events.ts";
+
+async function getActiveAclVersionId(
+  db: SupabaseClient
+): Promise<string> {
+  const { data, error } = await db
+    .from("acl.acl_versions")
+    .select("acl_version_id")
+    .eq("is_active", true)
+    .single();
+
+  if (error || !data?.acl_version_id) {
+    throw new Error("ACL_ACTIVE_VERSION_NOT_FOUND");
+  }
+
+  return data.acl_version_id;
+}
 
 export type AclDecision =
   | { decision: "ALLOW" }
@@ -35,7 +56,7 @@ export type AclDecision =
  * - Runs BEFORE handler execution
  * - Runner MUST enforce DENY responses
  */
-export function stepAcl(
+export async function stepAcl(
   _req: Request,
   _requestId: string,
   ctx?: {
@@ -58,7 +79,7 @@ export function stepAcl(
       action?: VwedAction;
     };
   }
-): AclDecision {
+): Promise<AclDecision> {
   /* --------------------------------------------------
    * 1️⃣ Public route short-circuit
    * -------------------------------------------------- */
@@ -105,33 +126,104 @@ export function stepAcl(
   }
 
   /* --------------------------------------------------
-   * 4️⃣ Gate-10 / ID-6.14: Execute ACL resolver (G11)
-   *
-   * IMPORTANT:
-   * - rolePermissions / capabilityPermissions DO NOT
-   *   originate at runtime yet (state-file compliant)
-   * - Empty arrays = “no permission truth”
-   * -------------------------------------------------- */
-  const result = resolveAcl({
-    authUserId,
-    roleCode,
-    companyId,
-    resourceCode,
-    action,
-    moduleEnabled,
-    userOverrides,
+ * 4️⃣ Phase-B2: Snapshot Consumption
+ * -------------------------------------------------- */
 
-    rolePermissions: [] as VwedPermissionRow[],
-    capabilityPermissions: [] as VwedPermissionRow[],
+const db = getServiceRoleClientWithContext({
+  status: "RESOLVED",
+  source: "BACKEND",
+  companyId,
+  roleCode: roleCode ?? "",
+});
+
+const activeAclVersionId = await getActiveAclVersionId(db);
+
+const { data, error } = await db
+  .from("acl.precomputed_acl_view")
+  .select(`
+    resource_code,
+    action_code,
+    decision,
+    decision_reason
+  `)
+  .eq("acl_version_id", activeAclVersionId)
+  .eq("auth_user_id", authUserId)
+  .eq("company_id", companyId)
+  .eq("resource_code", resourceCode)
+  .eq("action_code", action);
+
+if (error) {
+  return {
+    decision: "DENY",
+    reason: "ACL_SNAPSHOT_QUERY_FAILED",
+    action: "NONE",
+  };
+}
+
+const snapshotPermissions: VwedPermissionRow[] = [];
+
+for (const row of data ?? []) {
+  if (row.decision !== "ALLOW") continue;
+
+  snapshotPermissions.push({
+    resource_code: row.resource_code,
+    can_view: row.action_code === "VIEW",
+    can_write: row.action_code === "WRITE",
+    can_edit: row.action_code === "EDIT",
+    can_delete: row.action_code === "DELETE",
+    can_approve: row.action_code === "APPROVE",
+    can_export: row.action_code === "EXPORT",
   });
+}
+
+const result = resolveAcl({
+  authUserId,
+  roleCode,
+  companyId,
+  resourceCode,
+  action,
+  moduleEnabled,
+  userOverrides,
+  rolePermissions: snapshotPermissions,
+  capabilityPermissions: snapshotPermissions,
+});
+
+  log({
+  level: "OBSERVABILITY",
+  request_id: _requestId,
+  gate_id: "10.4",
+  route_key: `${resourceCode}:${action}`,
+  event: "ACL_DECISION_TRACE",
+  decision: result.decision,
+  actor: authUserId,
+  meta: {
+    company_id: companyId,
+    resource_code: resourceCode,
+    action,
+    trace: result.trace,
+  },
+});
 
   if (result.decision === "ALLOW") {
     return { decision: "ALLOW" };
   }
 
-  return {
-    decision: "DENY",
-    reason: result.reason,
-    action: "NONE",
-  };
+recordSecurityEvent(
+  _req,
+  _requestId,
+  "ACL_DENY",
+  "ACL",
+  `${resourceCode}:${action}`,
+  {
+    user_id: authUserId,
+    company_id: companyId,
+    reason: result.reason
+  }
+);
+
+return {
+  decision: "DENY",
+  reason: result.reason,
+  action: "NONE",
+};
 }

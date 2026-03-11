@@ -1,7 +1,7 @@
 /*
  * File-ID: ID-6.2A
  * File-Path: supabase/functions/api/_core/admin/company/update_company_state.handler.ts
- * Gate: 6
+ * gate_id: 6
  * Phase: 6
  * Domain: MASTER
  * Purpose: Change company state (ACTIVE / INACTIVE) in a controlled, SA-only manner
@@ -18,7 +18,7 @@ import type { ContextResolution } from "../../../_pipeline/context.ts";
 import {
   okResponse,
   errorResponse,
-} from "../../response.ts";
+} from "../../../_core/response.ts";
 
 import { log } from "../../../_lib/logger.ts";
 import { generateRequestId } from "../../../_lib/request_id.ts";
@@ -50,7 +50,7 @@ export async function handler(
       log({
         level: "SECURITY",
         request_id: requestId,
-        gate: "6.2A",
+        gate_id: "6.2A",
         event: "COMPANY_STATE_INVALID_INPUT",
         meta: body,
       });
@@ -111,7 +111,7 @@ export async function handler(
       log({
         level: "ERROR",
         request_id: requestId,
-        gate: "6.2A",
+        gate_id: "6.2A",
         event: "COMPANY_STATE_UPDATE_FAILED",
         meta: { error: updateError.message },
       });
@@ -129,7 +129,7 @@ export async function handler(
     log({
       level: "SECURITY",
       request_id: requestId,
-      gate: "6.2A",
+      gate_id: "6.2A",
       event: "COMPANY_STATE_CHANGED",
       meta: {
         company_id: body.company_id,
@@ -148,7 +148,7 @@ export async function handler(
     log({
       level: "ERROR",
       request_id: requestId,
-      gate: "6.2A",
+      gate_id: "6.2A",
       event: "COMPANY_STATE_HANDLER_EXCEPTION",
       meta: { error: String(err) },
     });

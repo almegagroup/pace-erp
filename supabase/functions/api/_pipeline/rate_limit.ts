@@ -16,6 +16,8 @@
 /* ---------------------------
  * CONFIG
  * --------------------------- */
+import { recordSecurityEvent } from "../_security/security_events.ts";
+import type { SecurityEvent } from "../_security/security_events.ts";
 
 const WINDOW_MS = 60_000; // 1 minute
 
@@ -61,11 +63,13 @@ async function extractIdentifier(req: Request): Promise<string | null> {
 }
 
 function hitBucket(
+  req: Request,
+  requestId: string,
   bucket: Map<string, Bucket>,
   key: string,
   max: number,
-  errorCode: string
-) {
+  errorCode: SecurityEvent
+){
   const now = Date.now();
   const cur = bucket.get(key);
 
@@ -77,8 +81,17 @@ function hitBucket(
   cur.count += 1;
 
   if (cur.count > max) {
-    throw new Error(errorCode);
-  }
+  recordSecurityEvent(
+  req,
+  requestId,
+  errorCode,
+  "RATE_LIMIT",
+  undefined,
+  { key }
+);
+
+  throw new Error(errorCode);
+}
 
   bucket.set(key, cur);
 }
@@ -93,26 +106,39 @@ export async function stepRateLimit(
 ): Promise<void> {
   const url = new URL(req.url);
 
-  /**
-   * Gate-2 rule:
-   * Rate limit applies ONLY to auth endpoints
-   */
-  if (!url.pathname.startsWith("/api/login")) {
+  const isLogin = url.pathname.startsWith("/api/login");
+  const isSignup = url.pathname.startsWith("/api/signup");
+
+  if (!isLogin && !isSignup) {
     return;
   }
 
-  /* ---- ID-2.5A: IP throttle ---- */
+  /* ---- IP throttle ---- */
   const ip = getClientIp(req);
-  hitBucket(ipBucket, ip, IP_MAX_REQ, "AUTH_RATE_LIMIT_IP");
+hitBucket(req, _requestId, ipBucket, ip, IP_MAX_REQ, "AUTH_RATE_LIMIT_IP");
 
-  /* ---- ID-2.5B: Identifier throttle ---- */
+  /* ---- Identifier throttle ---- */
   const identifier = await extractIdentifier(req);
-  if (!identifier) return;
+
+  if (!identifier) {
+    // For signup cases without identifier field
+    hitBucket(
+  req,
+  _requestId,
+  identifierBucket,
+  "unknown",
+  IDENTIFIER_MAX_REQ,
+  "AUTH_RATE_LIMIT_ACCOUNT"
+);
+    return;
+  }
 
   hitBucket(
-    identifierBucket,
-    identifier,
-    IDENTIFIER_MAX_REQ,
-    "AUTH_RATE_LIMIT_ACCOUNT"
-  );
+  req,
+  _requestId,
+  identifierBucket,
+  identifier,
+  IDENTIFIER_MAX_REQ,
+  "AUTH_RATE_LIMIT_ACCOUNT"
+);
 }

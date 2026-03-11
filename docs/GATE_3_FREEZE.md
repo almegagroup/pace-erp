@@ -1,186 +1,278 @@
-# 🔒 PACE-ERP — Gate-3 Freeze Declaration
+🔒 PACE-ERP — Gate-3 Freeze Declaration (Final)
 
-**Gate:** 3  
-**Domain:** SESSION / SECURITY / OBSERVABILITY  
-**Status:** 🔒 FROZEN  
-**Authority:** Backend  
-**Scope:** Session Lifecycle Governance  
-**Date:** (fill when you freeze)
+Gate: 3
+Domain: SESSION / SECURITY
+Status: 🔒 FROZEN · COMPLETE · DETERMINISTIC
+Authority: Backend Control Plane
+Scope: Session Lifecycle Governance
+Date: 2026-02-23
 
----
+1️⃣ Purpose of Gate-3
 
-## 1️⃣ Purpose of Gate-3
+Gate-3 governs session continuity over time.
 
-Gate-3 exists to transition ERP sessions from:
+It transitions ERP sessions from:
 
-> **“session exists” → “session is governed over time”**
+“Session is structurally valid”
+to
+“Session remains valid under deterministic time constraints.”
 
-This gate defines **how long a session may live**, **when it must die**, and **how logout is enforced**, without introducing storage, policy values, or UI concerns.
+Gate-3 is a behavioural enforcement layer only.
 
-Gate-3 is a **behaviour + contract gate**, not a storage or configuration gate.
+It does not:
 
----
+Create schema
 
-## 2️⃣ What Gate-3 DEFINITIVELY Establishes (Locked)
+Define configuration systems
 
-### ✅ Session Lifecycle Authority
-- Session existence is decided in **Gate-2**
-- Session continuation is governed in **Gate-3**
-- No other layer may override this responsibility
+Introduce policy engines
 
-### ✅ Deterministic Session States
-Gate-3 recognises and enforces:
-- `ACTIVE`
-- `IDLE_WARNING`
-- `IDLE_EXPIRED`
-- `TTL_EXPIRED`
-- `REVOKED`
-- `SESSION_FORCE_LOGOUT`
+Introduce observability storage layers
 
-### ✅ Enforcement Guarantees
-- Absolute TTL always overrides idle logic
-- Idle logic never extends TTL
-- Any `SESSION_*` outcome **forces LOGOUT**
-- Logout is deterministic and immediate
+Gate-3 enforces time-based validity only.
 
----
+2️⃣ Architectural Authority Separation (Locked)
+✔ Gate-2
 
-## 3️⃣ What Gate-3 IMPLEMENTS
+Creates and validates ERP sessions.
 
-### 3.1 Idle Lifecycle (Logic Locked)
-- Detect inactivity
-- Emit warning signal
-- Force logout on idle expiry  
-*(Policy values intentionally deferred)*
+✔ Gate-3
 
-### 3.2 Absolute TTL (Logic Locked)
-- Age-based session expiry
-- No extension allowed under any circumstance  
-*(TTL value intentionally deferred)*
+Governs time-based validity of ACTIVE sessions.
 
-### 3.3 Single Active Session (DONE)
-- New login revokes all existing ERP sessions
-- Exactly one ACTIVE session per user
+❗ No other layer may override lifecycle decisions.
 
-### 3.4 Admin Force Revoke (DONE)
-- SA may revoke all sessions of a user
-- Next request forces logout
+Lifecycle authority is exclusive to Gate-3.
 
-### 3.5 Device Signals (Soft, Non-Blocking)
-- Device change detection
-- Signal only, no enforcement
+3️⃣ Deterministic Lifecycle Outcomes (Locked)
 
-### 3.6 Session Fixation Prevention
-- Session identifier rotation on login
-- Fresh cookie issuance on every auth
+Gate-3 produces the following outcomes:
 
-### 3.7 Deterministic Logout Enforcement (DONE)
-- Any `SESSION_*` state results in forced logout
-- Centralised enforcement in pipeline runner
+ACTIVE
 
-### 3.8 Observability (DONE)
-- Structured session timeline logs
-- Request-ID linked
-- No behaviour change
-- RCA / audit ready
+ABSOLUTE_WARNING
 
----
+IDLE_WARNING
 
-## 4️⃣ What Gate-3 EXPLICITLY DOES NOT Handle
+IDLE_EXPIRED
 
-The following are **intentionally out of scope** and MUST NOT be added under Gate-3:
+TTL_EXPIRED
 
-- ❌ DB schema creation or migration
-- ❌ Session table evolution
-- ❌ Policy value locking (TTL duration, idle time)
-- ❌ Device trust enforcement
-- ❌ Project / tenant context
-- ❌ Role or permission logic
-- ❌ RPC-based session decisions
+REVOKED
 
-All of the above belong to **future gates**.
+All terminal states result in forced logout.
 
----
+No frontend influence exists over lifecycle decisions.
 
-## 5️⃣ HALF-DONE Items (Intentional & Valid)
+4️⃣ Behavioural Guarantees (Locked)
+4.1 Absolute TTL
 
-The following are marked **HALF-DONE by design**:
+TTL stored in DB (expires_at)
 
-| Area | Reason |
-|----|----|
-| Idle timeout values | Policy not locked yet |
-| TTL duration | Config / policy gate pending |
-| Device trust enforcement | Security trust gate pending |
-| Session DB fields | Storage gate pending |
+TTL duration: 12 hours
 
-Each HALF-DONE item:
-- Has logic implemented
-- Has completion gate identified
-- Will **not silently complete**
+Absolute warning: 10 hours
 
-This is **not a failure state**.
+TTL cannot be extended
 
----
+TTL check runs before idle logic
 
-## 6️⃣ DB Migration Policy (Locked)
+TTL overrides idle logic
 
-> **Gate-3 introduces ZERO database migrations.**
+TTL is DB-authoritative and backend-enforced.
 
-This is intentional.
+4.2 Idle Enforcement
 
-- Gate-3 assumes **logical presence** of session attributes
-- Physical storage decisions belong to storage-focused gates
-- Behaviour and storage are deliberately decoupled
+Idle warning: 10 minutes
 
----
+Idle expiration: 30 minutes
 
-## 7️⃣ RPC Policy (Locked)
+Idle reset occurs only if lifecycle result is ACTIVE
 
-- No RPC is used in Gate-3
-- All session decisions occur in backend handlers
-- DB remains a data store, not a behaviour authority
+Idle reset updates last_seen_at
 
-RPC may be introduced in **future non-security domains only**.
+Idle reset never modifies TTL
 
----
+Lifecycle logic remains pure.
+DB mutation occurs only in pipeline runner.
 
-## 8️⃣ Final Freeze Statement
+4.3 Single Active Session
 
-> **Gate-3 is hereby declared FROZEN.**
+New login revokes all ACTIVE sessions
 
-This means:
-- All behaviour is final
-- All contracts are locked
-- No further changes are permitted under Gate-3
-- Any new requirement must be implemented in a new Gate with a new ID
+Exactly one ACTIVE session per user
 
----
+Enforced by DB partial unique index
 
-## 9️⃣ Gate-3 Status Summary
+No trusted device exception
 
-| ID | Status |
-|---|---|
-| 3.1 → 3.1B | 🟡 HALF-DONE |
-| 3.2 → 3.2A | 🟡 HALF-DONE |
-| 3.3 → 3.3A | ✅ DONE |
-| 3.4 → 3.4A | ✅ DONE |
-| 3.5 → 3.5A | 🟡 HALF-DONE |
-| 3.6 → 3.6A | 🟡 HALF-DONE |
-| 3.7 → 3.7A | ✅ DONE |
-| 3.8 | ✅ DONE |
-| **3.9** | **🔒 FROZEN** |
+Invariant is DB-guaranteed.
 
----
+4.4 Deterministic Logout Enforcement
 
-## 10️⃣ Authoritative Closure
+The following always force logout:
 
-Gate-3 is **complete at the layer level**.
+TTL_EXPIRED
 
-Future work will proceed only through:
-- New Gate
-- Explicit ID
-- State-file entry
+IDLE_EXPIRED
+
+REVOKED
+
+Any non-ACTIVE state
+
+Logout guarantees:
+
+Cookie invalidated
+
+LOGOUT action returned
+
+DB errors never block logout
+
+5️⃣ Lifecycle Purity Rule (Locked)
+
+session_lifecycle.ts performs no DB mutation
+
+Lifecycle logic is side-effect free
+
+DB updates occur only in pipeline runner
+
+Separation of evaluation and mutation is permanent
+
+This separation may not be violated.
+
+6️⃣ Observability Scope (Clarified)
+
+Gate-3 requires:
+
+Structured lifecycle event emission
+
+request_id linkage
+
+Deterministic event naming
+
+Gate-3 does NOT require:
+
+Persistent timeline storage
+
+RCA dashboards
+
+Log retention systems
+
+Visualization layers
+
+Those belong to Gate-10.
+
+Dependency direction:
+
+Gate-10 consumes Gate-3 signals.
+Gate-3 does not depend on Gate-10.
+
+7️⃣ Explicitly Out of Scope
+
+Gate-3 does NOT include:
+
+Role resolution
+
+ACL enforcement
+
+Context binding
+
+Session schema evolution
+
+Configurable policy framework
+
+Device trust scoring
+
+RPC lifecycle engines
+
+Alert infrastructure
+
+Trace viewers
+
+These belong to higher gates.
+
+8️⃣ Policy Lock (Final)
+
+The following values are permanently frozen:
+
+Policy	Value
+TTL Duration	12 hours
+Absolute Warning	10 hours
+Idle Warning	10 minutes
+Idle Expiry	30 minutes
+
+Any change requires:
+
+New Gate ID
+
+Explicit architectural declaration
+
+9️⃣ DB Interaction Policy
+
+Gate-3 introduces:
+
+No new tables
+
+No new migrations
+
+No new columns
+
+It relies on:
+
+expires_at
+
+last_seen_at
+
+status
+
+DB is storage authority.
+Gate-3 is behavioural authority.
+
+🔟 RPC & External Control Policy
+
+No RPC is used for lifecycle enforcement
+
+No external system influences lifecycle decisions
+
+Lifecycle enforcement is fully backend deterministic
+
+This rule is locked.
+
+1️⃣1️⃣ Seal Guarantee
+
+From this point forward:
+
+Lifecycle behaviour is final
+
+TTL logic is final
+
+Idle logic is final
+
+Single-session invariant is final
+
+Logout enforcement is final
+
+No behavioural modification permitted
+
+Any change requires a new Gate ID.
+
+1️⃣2️⃣ Status Summary
+Component	Status
+Absolute TTL	✅ DONE
+Idle Enforcement	✅ DONE
+Single Session Enforcement	✅ DONE
+Deterministic Logout	✅ DONE
+Lifecycle Purity	✅ DONE
+Observability Emission	✅ DONE
+Behaviour Freeze	🔒 LOCKED
+🔒 Final Declaration
+
+Gate-3 is hereby declared:
+
+🔒 FROZEN · COMPLETE · DB-CONSISTENT · DETERMINISTIC
 
 No ambiguity remains.
+No dependency remains.
+No behavioural evolution is permitted inside this Gate.
 
----
+Future changes require a new architectural version.

@@ -11,10 +11,19 @@
 import { serviceRoleClient } from "../_shared/serviceRoleClient.ts";
 import { assertRlsEnabled } from "../_shared/rls_assert.ts";
 import { log } from "../_lib/logger.ts";
+import { recordSessionTimeline } from "../_core/session/session_timeline.ts";
+import { recordSecurityEvent } from "../_security/security_events.ts";
 
 export type SessionResolution =
   | { status: "ABSENT"; action: "LOGOUT" }
-  | { status: "ACTIVE"; sessionId: string; authUserId: string }
+  | {
+      status: "ACTIVE";
+      sessionId: string;
+      authUserId: string;
+      created_at: string;
+      last_seen_at: string;
+      expires_at: string;
+    }
   | { status: "REVOKED"; action: "LOGOUT" }
   | { status: "EXPIRED"; action: "LOGOUT" };
 
@@ -35,69 +44,73 @@ export async function stepSession(
   req: Request,
   _requestId: string
 ): Promise<SessionResolution> {
-  // ---- Cookie read (aligned with login) ----
   const sessionId = readCookie(req, "erp_session");
 
   if (!sessionId) {
     log({
-    level: "OBSERVABILITY",
-    request_id: _requestId,
-    event: "SESSION_ABSENT",
-  });
-    return { status: "ABSENT", action: "LOGOUT" };
+      level: "OBSERVABILITY",
+      request_id: _requestId,
+      event: "SESSION_ABSENT",
+    });
+    recordSecurityEvent(req, _requestId, "SESSION_COOKIE_MISSING", "SESSION");
+
+    return { status: "ABSENT", action: "LOGOUT" }; 
   }
 
-  // ---- DB-backed session validation ----
   assertRlsEnabled();
 
   const { data, error } = await serviceRoleClient
     .from("erp_core.sessions")
-    .select("auth_user_id, state")
-    .eq("id", sessionId)
+    .select("session_id, auth_user_id, status, created_at, last_seen_at, expires_at")
+    .eq("session_id", sessionId)
     .single();
 
   if (error || !data) {
     log({
-  level: "OBSERVABILITY",
-  request_id: _requestId,
-  event: "SESSION_REVOKED",
-  meta: {
-    session_id: sessionId,
-  },
-});
+      level: "OBSERVABILITY",
+      request_id: _requestId,
+      event: "SESSION_REVOKED",
+      meta: { session_id: sessionId },
+    });
+    recordSecurityEvent(req, _requestId, "SESSION_REVOKED", "SESSION");
+
     return { status: "REVOKED", action: "LOGOUT" };
   }
 
-  if (data.state !== "ACTIVE") {
-     log({
-  level: "OBSERVABILITY",
-  request_id: _requestId,
-  event: "SESSION_EXPIRED",
-  meta: {
-    session_id: sessionId,
-    state: data.state,
-  },
-});
+  if (data.status === "REVOKED") {
+    recordSecurityEvent(req, _requestId, "SESSION_REVOKED","SESSION");
+    return { status: "REVOKED", action: "LOGOUT" };
+  }
+
+  if (
+    data.status === "EXPIRED" ||
+    data.status === "DEAD" ||
+    data.status === "IDLE" ||
+    data.status === "CREATED"
+  ) {
     return { status: "EXPIRED", action: "LOGOUT" };
   }
 
-  /**
-   * ID-2.2C invariant:
-   * session.auth_user_id is now authoritative identity
-   * must be used by downstream auth / context steps
-   */
-log({
+  log({
   level: "OBSERVABILITY",
   request_id: _requestId,
   event: "SESSION_ACTIVE",
-  meta: {
-    session_id: sessionId,
-  },
+  meta: { session_id: sessionId },
 });
 
-return {
-  status: "ACTIVE",
-  sessionId,
-  authUserId: data.auth_user_id,
-};
+recordSessionTimeline({
+  requestId: _requestId,
+  sessionId: sessionId,
+  userId: data.auth_user_id,
+  event: "ACTIVE",
+});
+
+  return {
+    status: "ACTIVE",
+    sessionId,
+    authUserId: data.auth_user_id,
+    created_at: data.created_at,
+    last_seen_at: data.last_seen_at,
+    expires_at: data.expires_at,
+  };
 }

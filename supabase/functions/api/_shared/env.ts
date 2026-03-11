@@ -27,12 +27,22 @@ export function requireEnv(key: string): string {
  * Canonical environment map.
  * Add new keys ONLY here.
  */
-export const ENV = Object.freeze({
+export const ENV = {
   // Supabase
-  SUPABASE_URL: requireEnv("SUPABASE_URL"),
-  SUPABASE_SERVICE_ROLE_KEY: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  get SUPABASE_URL(): string {
+    return requireEnv("SUPABASE_URL");
+  },
+
+  get SUPABASE_SERVICE_ROLE_KEY(): string {
+    return requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+  },
 
   // Applyflow
-  APPLYFLOW_BASE_URL: requireEnv("APPLYFLOW_BASE_URL"),
-  APPLYFLOW_API_KEY: requireEnv("APPLYFLOW_API_KEY"),
-});
+  get APPLYFLOW_BASE_URL(): string {
+    return requireEnv("APPLYFLOW_BASE_URL");
+  },
+
+  get APPLYFLOW_API_KEY(): string {
+    return requireEnv("APPLYFLOW_API_KEY");
+  },
+} as const;

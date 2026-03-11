@@ -8,7 +8,6 @@
  * Authority: Backend
  */
 
-
 import { stepHeaders } from "./step_headers.ts";
 import { stepCors } from "./cors.ts";
 import { stepCsrf } from "./csrf.ts";
@@ -18,16 +17,12 @@ import { enforceIdleLifecycle } from "./session_lifecycle.ts";
 import { stepContext } from "./context.ts";
 import { stepAcl } from "./acl.ts";
 
-import { loginHandler } from "../_core/auth/login.handler.ts";
-import { logoutHandler } from "../_core/auth/logout.handler.ts";
-import { meHandler } from "../_core/auth/me.handler.ts";
-import { signupHandler } from "../_core/auth/signup/signup.handler.ts";
-
-import { listPendingSignupHandler } from "../_core/admin/signup/list_pending.handler.ts";
-import { approveSignupHandler } from "../_core/admin/signup/approve.handler.ts";
-import { rejectSignupHandler } from "../_core/admin/signup/reject.handler.ts";
-import { createCompanyHandler } from "../_core/admin/company/create_company.handler.ts";
+import { serviceRoleClient } from "../_shared/serviceRoleClient.ts";
+import { dispatchProtectedRoute } from "./protected_routes.dispatch.ts";
+import { dispatchPublicRoute } from "./public_routes.dispatch.ts";
 import { errorResponse } from "../_core/response.ts";
+
+import { log } from "../_lib/logger.ts";
 
 import type { SessionResolution } from "./session.ts";
 import type { ContextResolution } from "./context.ts";
@@ -55,17 +50,51 @@ export async function runPipeline(
   req: Request,
   requestId: string
 ): Promise<Response> {
+
   // --------------------------------------------------
   // Pre-flight steps (always)
   // --------------------------------------------------
+
+  log({
+    level: "OBSERVABILITY",
+    request_id: requestId,
+    gate_id: "10.5",
+    event: "PIPELINE_STAGE",
+    meta: { stage: "HEADERS" },
+  });
   await stepHeaders(req, requestId);
+
+  log({
+    level: "OBSERVABILITY",
+    request_id: requestId,
+    gate_id: "10.5",
+    event: "PIPELINE_STAGE",
+    meta: { stage: "CORS" },
+  });
   await stepCors(req, requestId);
+
+  log({
+    level: "OBSERVABILITY",
+    request_id: requestId,
+    gate_id: "10.5",
+    event: "PIPELINE_STAGE",
+    meta: { stage: "CSRF" },
+  });
   await stepCsrf(req, requestId);
+
+  log({
+    level: "OBSERVABILITY",
+    request_id: requestId,
+    gate_id: "10.5",
+    event: "PIPELINE_STAGE",
+    meta: { stage: "RATE_LIMIT" },
+  });
   await stepRateLimit(req, requestId);
 
   // --------------------------------------------------
   // Route detection
   // --------------------------------------------------
+
   const url = new URL(req.url);
   const routeKey = `${req.method}:${url.pathname}`;
 
@@ -77,31 +106,55 @@ export async function runPipeline(
   ]);
 
   let sessionResult: SessionResolution | null = null;
-  let contextResult: ContextResolution | null = null;
+  let contextResult: ContextResolution;
 
   // --------------------------------------------------
-  // PROTECTED ROUTES (Session + Context + ACL)
+  // PROTECTED ROUTES
   // --------------------------------------------------
+
   if (!PUBLIC_ROUTES.has(routeKey)) {
+
     // Gate-2: Session
+    log({
+      level: "OBSERVABILITY",
+      request_id: requestId,
+      gate_id: "10.5",
+      route_key: routeKey,
+      event: "PIPELINE_STAGE",
+      meta: { stage: "SESSION" },
+    });
+
     sessionResult = await stepSession(req, requestId);
 
-    // If session indicates logout → logout response
     const gate2Logout = enforceSessionLogout(
       "action" in sessionResult ? sessionResult : null,
       requestId
     );
+
     if (gate2Logout) return gate2Logout;
 
+    // --------------------------------------------------
     // Gate-3: Lifecycle
+    // --------------------------------------------------
+
+    log({
+      level: "OBSERVABILITY",
+      request_id: requestId,
+      gate_id: "10.5",
+      route_key: routeKey,
+      event: "PIPELINE_STAGE",
+      meta: { stage: "SESSION_LIFECYCLE" },
+    });
+
     const idleResult = enforceIdleLifecycle(sessionResult, new Date());
+
     const gate3Logout = enforceSessionLogout(
       "action" in idleResult ? idleResult : null,
       requestId
     );
+
     if (gate3Logout) return gate3Logout;
 
-    // Only ACTIVE sessions continue
     if (sessionResult.status !== "ACTIVE") {
       return new Response(
         JSON.stringify({
@@ -112,117 +165,137 @@ export async function runPipeline(
       );
     }
 
+    /**
+     * Reset idle timer only when ACTIVE
+     */
+
+    if (
+      "status" in idleResult &&
+      idleResult.status === "ACTIVE"
+    ) {
+      await serviceRoleClient
+        .from("erp_core.sessions")
+        .update({
+          last_seen_at: new Date().toISOString(),
+        })
+        .eq("session_id", sessionResult.sessionId);
+    }
+
+    // --------------------------------------------------
     // Gate-5: Context
+    // --------------------------------------------------
+
+    log({
+      level: "OBSERVABILITY",
+      request_id: requestId,
+      gate_id: "10.5",
+      route_key: routeKey,
+      event: "PIPELINE_STAGE",
+      meta: { stage: "CONTEXT" },
+    });
+
     contextResult = await stepContext(req, {
       authUserId: sessionResult.authUserId,
-      roleCode: (sessionResult as { roleCode?: string }).roleCode,
     });
 
     if (contextResult.status === "UNRESOLVED") {
-      return new Response(
-        JSON.stringify({
-          status: "blocked",
-          code: "CONTEXT_UNRESOLVED",
-          request_id: requestId,
-        }),
-        { status: 403 }
+      return errorResponse(
+        "CONTEXT_UNRESOLVED",
+        "Context resolution failed",
+        requestId,
+        "NONE",
+        403,
+        {
+          gateId: "5",
+          routeKey,
+          decisionTrace: "CONTEXT_RESOLUTION_FAILED"
+        }
       );
     }
 
+    // --------------------------------------------------
     // Gate-6: ACL
-    const acl = stepAcl(req, requestId, {
-      context: { state: contextResult.status },
-      route: { isPublic: false },
+    // --------------------------------------------------
+
+    log({
+      level: "OBSERVABILITY",
+      request_id: requestId,
+      gate_id: "10.5",
+      route_key: routeKey,
+      event: "PIPELINE_STAGE",
+      meta: { stage: "ACL" },
+    });
+
+    const acl = await stepAcl(req, requestId, {
+      context: {
+        state: contextResult.status,
+        authUserId: sessionResult.authUserId,
+        roleCode: contextResult.roleCode,
+        companyId: contextResult.companyId,
+        moduleEnabled: true, // temporarily, until wired properly
+      },
+      route: {
+        isPublic: false,
+        resourceCode: routeKey, // temporarily, proper resource mapping
+      action: "VIEW", // temporary placeholder
+      },
     });
 
     if (acl.decision === "DENY") {
-  return errorResponse(
-    acl.reason,
-    "ACL denied request",
-    requestId,
-    acl.action ?? "NONE",
-    403
-  );
-}
-
-    // --------------------------------------------------
-    // PROTECTED HANDLER RESOLUTION
-    // --------------------------------------------------
-    switch (routeKey) {
-      case "GET:/api/admin/signup-requests":
-  return await listPendingSignupHandler(req, {
-    context: contextResult,
-    request_id: requestId,
-  });
-
-      case "POST:/api/admin/signup-requests/approve":
-  return await approveSignupHandler(req, {
-    context: contextResult,
-    request_id: requestId,
-    auth_user_id: sessionResult.authUserId,
-  });
-
-      case "POST:/api/admin/signup-requests/reject":
-  return await rejectSignupHandler(req, {
-    context: contextResult,
-    request_id: requestId,
-    auth_user_id: sessionResult.authUserId,
-  });
-
-      case "POST:/api/admin/company":
-        return await createCompanyHandler(req, {
-  context: contextResult,
-  request_id: requestId,
-});
-
-      default:
-        return new Response(
-          JSON.stringify({
-            status: "blocked",
-            reason: "no_handler_matched",
-            request_id: requestId,
-          }),
-          { status: 403 }
-        );
+      return errorResponse(
+        acl.reason,
+        "ACL denied request",
+        requestId,
+        acl.action ?? "NONE",
+        403,
+        {
+          gateId: "6",
+          routeKey,
+          decisionTrace: acl.reason
+        }
+      );
     }
+
+    // --------------------------------------------------
+    // Protected handler dispatch
+    // --------------------------------------------------
+
+    log({
+      level: "OBSERVABILITY",
+      request_id: requestId,
+      gate_id: "10.5",
+      route_key: routeKey,
+      event: "PIPELINE_STAGE",
+      meta: { stage: "HANDLER_PROTECTED" },
+    });
+
+    return await dispatchProtectedRoute(
+      routeKey,
+      req,
+      requestId,
+      sessionResult as Extract<SessionResolution, { status: "ACTIVE" }>,
+      contextResult as Extract<ContextResolution, { status: "RESOLVED" }>
+    );
   }
 
   // --------------------------------------------------
   // PUBLIC ROUTES
   // --------------------------------------------------
-  switch (routeKey) {
-    case "POST:/api/login":
-      return await loginHandler({
-        body: await req.json(),
-        requestId,
-        requestUrl: req.url,
-      });
 
-    case "POST:/api/logout":
-    return await logoutHandler({
-      session: sessionResult ?? { status: "ABSENT", action: "LOGOUT" },
-      requestId,
-      requestUrl: req.url,
-    });
-
-    case "GET:/api/me":
-  return meHandler({
-    session: sessionResult ?? { status: "ABSENT", action: "LOGOUT" },
-    requestId,
+  log({
+    level: "OBSERVABILITY",
+    request_id: requestId,
+    gate_id: "10.5",
+    route_key: routeKey,
+    event: "PIPELINE_STAGE",
+    meta: { stage: "HANDLER_PUBLIC" },
   });
 
-    case "POST:/api/signup":
-      return await signupHandler(req);
+  return await dispatchPublicRoute(
+    routeKey,
+    req,
+    requestId,
+    sessionResult
+  );
 
-    default:
-      return new Response(
-        JSON.stringify({
-          status: "blocked",
-          reason: "no_handler_matched",
-          request_id: requestId,
-        }),
-        { status: 403 }
-      );
-  }
 }
-

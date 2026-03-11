@@ -4,77 +4,68 @@
  * Gate: 2
  * Phase: 2
  * Domain: SESSION
- * Purpose: Create ERP session with single-active-session enforcement
- *          + soft device tagging
+ * Purpose: Create ERP session with deterministic TTL + single-session enforcement
  * Authority: Backend
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertRlsEnabled } from "../../_shared/rls_assert.ts";
 
-/**
- * STEP 8.1 — Device tagging (soft)
- * Signal-only metadata, no enforcement
- */
-type DeviceInfo = {
-  device_id: string;
-  device_summary: string;
-};
-
-/**
- * STEP 6.1 — 3.3A (Global revoke on login)
- *
- * Behaviour:
- * - Revoke ALL existing ERP sessions of this user
- * - Create exactly ONE new ACTIVE session
- * - Optionally attach device signal (3.5)
- */
 export async function createSession(
   authUserId: string,
-  device?: DeviceInfo
+  device?: {
+    device_id: string;
+    device_summary: string;
+  }
 ): Promise<string> {
   assertRlsEnabled();
 
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const expiresIso = new Date(now + 12 * 60 * 60 * 1000).toISOString(); // 12h TTL
+
   // ------------------------------------------------
-  // 3.3A — Revoke all existing ACTIVE ERP sessions
+  // Revoke all existing ACTIVE sessions (single-session policy)
   // ------------------------------------------------
   const { error: revokeError } = await serviceRoleClient
     .from("erp_core.sessions")
     .update({
-      state: "REVOKED",
-      revoked_at: new Date().toISOString(),
+      status: "REVOKED",
+      revoked_at: nowIso,
+      revoked_reason: "NEW_LOGIN",
+      revoked_by: authUserId,
     })
     .eq("auth_user_id", authUserId)
-    .eq("state", "ACTIVE");
+    .eq("status", "ACTIVE");
 
   if (revokeError) {
     throw new Error("SESSION_REVOKE_FAILED");
   }
 
   // ------------------------------------------------
-  // Create new ACTIVE session
+  // Generate fresh session ID (fixation prevention)
   // ------------------------------------------------
-  // STEP 9.1 — Session fixation prevention
-// Always generate a brand-new session identifier on login
-const sessionId = crypto.randomUUID();
+  const sessionId = crypto.randomUUID();
 
-if (!sessionId) {
-  // Defensive guard: session reuse must NEVER happen
-  throw new Error("SESSION_ID_GENERATION_FAILED");
-}
+  if (!sessionId) {
+    throw new Error("SESSION_ID_GENERATION_FAILED");
+  }
 
+  // ------------------------------------------------
+  // Insert new ACTIVE session
+  // ------------------------------------------------
   const { error: insertError } = await serviceRoleClient
     .from("erp_core.sessions")
     .insert({
-      id: sessionId,
-      auth_user_id: authUserId,
-      state: "ACTIVE",
-      created_at: new Date().toISOString(),
-
-      // STEP 8.1 — Soft device tagging (nullable)
-      device_id: device?.device_id ?? null,
-      device_summary: device?.device_summary ?? null,
-    });
+  session_id: sessionId,
+  auth_user_id: authUserId,
+  status: "ACTIVE",
+  created_at: nowIso,
+  last_seen_at: nowIso,
+  expires_at: expiresIso,
+  device_id: device?.device_id ?? null,
+  device_summary: device?.device_summary ?? null,
+});
 
   if (insertError) {
     throw new Error("SESSION_CREATE_FAILED");
