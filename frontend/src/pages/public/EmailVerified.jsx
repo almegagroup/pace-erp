@@ -65,10 +65,15 @@ async function handleContinue(){
 
 try{
 
+// Get Supabase session token
+const { data } = await supabase.auth.getSession();
+const token = data.session?.access_token;
+
 const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/signup`,{
 method:"POST",
 headers:{
-"Content-Type":"application/json"
+"Content-Type":"application/json",
+"Authorization": `Bearer ${token}`
 },
 body: JSON.stringify({})
 });
