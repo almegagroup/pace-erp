@@ -1,0 +1,695 @@
+=== PROJECT TREE ===
+
+.env
+.env.example
+.env.local
+.github
+  CODEOWNERS
+  workflows
+    ci-basic.yml
+.gitignore
+.vscode
+  settings.json
+docs
+  ACL_SSOT.md
+  Base Docs
+    Audit_Progress_Log.md
+    AUDIT_REGISTER_G9.md
+    Canonical_Truth_Map.md
+    DB_RLS_PHILOSOPHY.md
+    Execution_Map.md
+    FILE_HEADER_STANDARD.md
+    Gap_Register.md
+    Gate 6 & 7 update.md
+    HEADER_ENFORCEMENT_RULE.md
+    Identity_Binding_Map.md
+    PACE_ERP_CONSTITUTION_SSOT.md
+    pace_erp_roles_responsibilities_charter.md
+    pace_erp_ui_ssot.md
+    SSOT.md
+    UI_Docs.md
+  GATE 10 — FULL ERP OBSERVABILITY AUTHORITY LOCK.md
+  GATE_0_FREEZE.md
+  GATE_1_FREEZE.md
+  GATE_2_AUTH_BOUNDARY.md
+  GATE_2_FREEZE.md
+  GATE_3_FREEZE.md
+  GATE_4_FREEZE.md
+  GATE_4_ID_4_USER_LIFECYCLE.md
+  GATE_5_FREEZE.md
+  GATE_6_FREEZE.md
+  GATE_6_G0_ACL_AUTHORITY_LOCK.md
+  GATE_6_G1_ROLE_SYSTEM.md
+  GATE_7_5_BLUEPRINT.md
+  GATE_7_FREEZE.md
+  GATE_7_MENU_AUTHORITY.md
+  GATE_8_FREEZE.md
+  GATE_8_G0_NAVIGATION_AUTHORITY_LOCK.md
+  GATE_8_G1_SCREEN_REGISTRY.md
+  GATE_9_FREEZE.md
+  GATE_9_G0_ADMIN_UNIVERSE_AUTHORITY_LOCK.md
+  PACE_ERP_STATE.md
+  PACE_ERP_STATUS_CONSOLIDATED.md
+  PACE_ERP_SYSTEM_MAP.md
+  PACE_ERP_XRAY.md
+  Phase1to4_audit.md
+ERP_FULL_DEPENDENCY_GRAPH.txt
+ERP_REPO_TREE.txt
+frontend
+  .env
+  .env.example
+  .gitignore
+  eslint.config.js
+  frontend_src_tree.txt
+  index.html
+  package-lock.json
+  package.json
+  public
+    vite.svg
+  README.md
+  src
+    admin
+      adminEntryGuard.js
+      ga
+        GADashboardShell.jsx
+      sa
+        SADashboardShell.jsx
+    App.css
+    App.jsx
+    assets
+      react.svg
+    context
+      MenuContext.js
+      MenuProvider.jsx
+      useMenu.js
+    index.css
+    layout
+      HiddenRouteRedirect.jsx
+      MenuShell.jsx
+    main.jsx
+    navigation
+      backGuardEngine.js
+      backValidation.js
+      keyboardAclBridge.js
+      keyboardIntentEngine.js
+      keyboardIntentMap.js
+      navigationEventLogger.js
+      navigationPersistence.js
+      screenRegistry.js
+      screenRules.js
+      screens
+        adminScreens.js
+        coreScreens.js
+        projects
+          hrModule
+            hrScreens.js
+          operationModule
+            operationScreens.js
+          projectScreens.js
+        reportingScreens.js
+        settingsScreens.js
+        workflowScreens.js
+      screenStackEngine.js
+      screenStackInvariant.js
+      screenTypes.js
+    router
+      AppRouter.jsx
+      DeepLinkGuard.jsx
+      RouteGuard.jsx
+      routeIndex.js
+  tailwind.config.js
+  vite.config.js
+package-lock.json
+package.json
+README.md
+repo-analyze.js
+src
+  server.ts
+supabase
+  .branches
+    _current_branch
+  .gitignore
+  .temp
+    cli-latest
+    gotrue-version
+    pooler-url
+    postgres-version
+    project-ref
+    rest-version
+    storage-migration
+    storage-version
+  config.toml
+  functions
+    .env
+    api
+      .gitkeep
+      index.ts
+      _acl
+        acl_resolver.ts
+        decision_trace.ts
+        vwed_engine.ts
+      _core
+        admin
+          acl
+            activate_acl_version.handler.ts
+            assign_capability_to_role.handler.ts
+            disable_company_module.handler.ts
+            disable_role_permission.handler.ts
+            enable_company_module.handler.ts
+            list_acl_versions.handler.ts
+            list_capabilities.handler.ts
+            list_company_modules.handler.ts
+            list_role_capabilities.handler.ts
+            list_role_permissions.handler.ts
+            list_user_overrides.handler.ts
+            revoke_user_override.handler.ts
+            rollback_acl_version.handler.ts
+            unassign_capability_from_role.handler.ts
+            upsert_capability.handler.ts
+            upsert_role_permission.handler.ts
+            upsert_user_override.handler.ts
+          approval
+            delete_approver_rule.handler.ts
+            list_approver_rules.handler.ts
+            upsert_approver_rule.handler.ts
+          audit
+            list_audit_logs.handler.ts
+          company
+            create_company.handler.ts
+            update_company_state.handler.ts
+          department
+            create_department.handler.ts
+          diagnostics
+            control_panel.handler.ts
+            system_health.handler.ts
+          group
+            create_group.handler.ts
+            map_company_to_group.handler.ts
+            unmap_company_group.handler.ts
+            update_group_state.handler.ts
+          project
+            create_project.handler.ts
+            list_projects.handler.ts
+            update_project_state.handler.ts
+          session
+            list_sessions.handler.ts
+            revoke_session.handler.ts
+          signup
+            approve.handler.ts
+            list_pending.handler.ts
+            reject.handler.ts
+          user
+            list_users.handler.ts
+            update_user_role.handler.ts
+            update_user_state.handler.ts
+            _guards
+              self_lockout.guard.ts
+        audit
+          log_admin_action.ts
+        auth
+          accountState.ts
+          authClient.ts
+          authDelegate.ts
+          credentialGuards.ts
+          identifierResolver.ts
+          login.handler.ts
+          logout.handler.ts
+          me.handler.ts
+          menu.handler.ts
+          signup
+            signup.handler.ts
+        error_codes.ts
+        health.ts
+        me
+        response.ts
+        session
+          session.admin_revoke.ts
+          session.cookie.ts
+          session.create.ts
+          session.types.ts
+          session_timeline.ts
+        system
+          version.ts
+        workflow
+          process_decision.handler.ts
+          routing.engine.ts
+      _lib
+        logger.ts
+        request_id.ts
+      _pipeline
+        acl.ts
+        context.ts
+        cors.ts
+        csrf.ts
+        protected_routes.dispatch.ts
+        public_routes.dispatch.ts
+        rate_limit.ts
+        runner.ts
+        session.ts
+        session_lifecycle.ts
+        step_headers.ts
+      _routes
+        acl.routes.ts
+        admin.routes.ts
+        menu.routes.ts
+        workflow.routes.ts
+      _security
+        csp.ts
+        human_verification.ts
+        security_events.ts
+        security_headers.ts
+      _shared
+        applyflow_client.ts
+        context_headers.ts
+        env.ts
+        gst_profile.service.ts
+        gst_resolver.ts
+        index.ts
+        rls_assert.ts
+        role_ladder.ts
+        serviceRoleClient.ts
+  migrations
+    .gitkeep
+    20260122101000_gate0_0_6_create_erp_schemas.sql
+    20260122102000_gate0_0_6B_enable_rls_globally.sql
+    20260122103000_gate0_0_6C_default_deny_policies.sql
+    20260122104000_gate0_0_6D_service_role_bypass.sql
+    20260122105000_gate0_0_6E_anon_authenticated_lockdown.sql
+    20260123101000_gate4_4_1_create_erp_users.sql
+    20260123102000_gate4_4_1D_create_signup_requests.sql
+    20260123103000_gate4_4_2A_user_code_p_sequence.sql
+    20260123104000_gate4_4_2B_create_signup_approval_audit.sql
+    20260126101000_gate4_4_2A_signup_requests_and_user_code_fn.sql
+    20260126102000_gate4_4_2C_atomic_approval_engine.sql
+    20260126120000_gate5_5_7_rls_context_header_helpers.sql
+    20260126121000_gate5_5_7A_rls_policy_templates.sql
+    20260126130000_gate6_6_2_create_company_master.sql
+    20260126131000_gate6_6_2A_company_code_generator.sql
+    20260126134000_gate6_6_3_1_create_gst_cache.sql
+    20260126135000_gate6_6_2A_company_state_rules.sql
+    20260126136000_gate6_6_3_create_project_master.sql
+    20260126137000_gate6_6_3A_project_state_and_code.sql
+    20260126138000_gate6_6_4_create_department_master.sql
+    202602012639000_gate6_6_4A_department_state_and_code.sql
+    20260211101000_gate6_6_5_create_company_project_map.sql
+    20260211102000_gate6_6_5A_company_project_invariants.sql
+    20260211103000_gate6_6_6_create_user_company_map.sql
+    20260211104000_gate6_6_6A_primary_company_rule.sql
+    20260211105000_gate6_6_7_create_user_project_map.sql
+    20260211106000_gate6_6_7A_user_project_subset_rule.sql
+    20260211107000_gate6_6_8_create_user_department_map.sql
+    20260211108000_gate6_6_8A_department_scope_rule.sql
+    20260220101000_gate6_6_9A_create_menu_master.sql
+    20260220102000_gate6_6_9A_create_menu_tree.sql
+    20260220103000_gate6_6_9A_create_menu_actions.sql
+    20260220104000_gate6_6_9_create_role_menu_permissions.sql
+    20260220105000_gate6_6_10_create_capabilities.sql
+    20260220106000_gate6_6_10_create_capability_menu_actions.sql
+    20260220107000_gate6_6_10_create_role_capabilities.sql
+    20260220108000_gate6_6_10A_create_capability_precedence_rules.sql
+    20260221102000_gate6_6_11_create_company_modules.sql
+    20260221103000_gate6_6_11A_create_module_hard_deny_rules.sql
+    20260222101000_gate6_6_12_create_user_overrides.sql
+    20260222102000_gate6_6_12A_create_user_override_audit.sql
+    20260222103000_gate6_6_13_create_approver_map.sql
+    20260222104000_gate6_6_13A_create_approver_invariants.sql
+    20260222105000_gate3_3_1_create_erp_sessions.sql
+    20260222133000_gate2_3_enterprise_session_seal.sql
+    20260224101000_gate6_6_6_create_user_roles.sql
+    20260224102000_gate6_6_6A_create_user_company_roles.sql
+    20260301101000_gate6_6_18_create_acl_versions.sql
+    20260301102000_gate6_6_18A_create_precomputed_acl_view.sql
+    20260302101000_gate6_6_19_bind_acl_to_rls.sql
+    20260302102000_gate6_6_19A_rls_deny_fallback.sql
+    20260302103000_gate6_6_19B_force_rls_completion.sql
+    20260305101000_gate7_7_1_create_menu_master.sql
+    20260305102000_gate7_7_1A_menu_invariants.sql
+    20260305103000_gate7_7_2_create_menu_tree.sql
+    20260305104000_gate7_7_2A_menu_tree_invariants.sql
+    20260306101000_gate7_7_3_create_menu_snapshot.sql
+    20260306102000_gate7_7_3A_menu_snapshot_refresh_rules.sql
+    20260306103000_gate7_7_3B_menu_snapshot_builder.sql
+    20260307120000_gate_9_14_admin_action_audit.sql
+    20260315100500_gate9_9_2_company_master_assertions.sql
+    20260315101000_gate9_9_2A_company_delete_constraints.sql
+    20260315102000_gate9_9_3_create_group_master.sql
+    20260315103000_gate9_9_3A_create_company_group_map.sql
+    20260315104000_gate9_9_3B_group_delete_constraints.sql
+    20260316101000_gate6_6_19B_full_business_rls_activation.sql
+    20260317120000_gate6_6_19_FINAL_relational_rls.sql
+    20260317130000_gate6_6_19F_authenticated_privilege_formalization.sql
+    20260318101000_gate6_6_18B_generate_acl_snapshot_engine.sql
+    20260320102000_gate6_6_19C_phaseA_A2_strict_isolation_attach.sql
+    20260320103000_gate6_6_19H_phaseA_A3_default_deny_completion.sql
+    20260320104000_gate6_6_19I_phaseA_A4_privilege_hardening.sql
+    20260401000000_gate4_lifecycle_seal_patch.sql
+    20260402101000_gate6_6_3B_sap_project_decoupling.sql
+    20260402102000_gate6_6_8B_user_single_department_rule.sql
+    20260405101000_gate7_5_1_create_module_registry.sql
+    20260405102000_gate7_5_2_module_invariants_lock.sql
+    20260405103000_gate7_5_3_module_project_integrity.sql
+    20260405104000_gate7_5_4_approver_map_strengthening.sql
+    20260405105000_gate7_5_5_approver_uniqueness_and_bounds.sql
+    20260405106000_gate7_5_6_director_invariant_rule.sql
+    20260405120000_gate7_5_engine_foundation.sql
+    20260405130000_gate7_5_13_workflow_state_machine.sql
+    20260405140000_gate7_5_19_workflow_audit.sql
+    20260405150000_gate7_5_15_override_transaction.sql
+    20260406110000_gate7_5_20_workflow_indexes.sql
+tests
+  acl
+    test_acl_trace_admin.ts
+    test_acl_trace_allow.ts
+    test_acl_trace_deny.ts
+
+
+=== FILE ANALYSIS ===
+
+
+FILE: \frontend\eslint.config.js
+
+FILE: \frontend\src\admin\adminEntryGuard.js
+  [11] import { getActiveScreen } from "../navigation/screenStackEngine.js";
+
+FILE: \frontend\src\admin\ga\GADashboardShell.jsx
+  [12] import MenuShell from "../../layout/MenuShell.jsx";
+  [13] import { replaceStack } from "../../navigation/screenStackEngine.js";
+  [33] <MenuShell
+
+FILE: \frontend\src\admin\sa\SADashboardShell.jsx
+  [12] import MenuShell from "../../layout/MenuShell.jsx";
+  [13] import { replaceStack } from "../../navigation/screenStackEngine.js";
+  [35] <MenuShell
+
+FILE: \frontend\src\App.jsx
+  [11] import AppRouter from "./router/AppRouter.jsx";
+  [12] import { MenuProvider } from "./context/MenuProvider.jsx";
+  [16] <MenuProvider>
+  [17] <AppRouter />
+  [18] </MenuProvider>
+
+FILE: \frontend\src\context\MenuContext.js
+
+FILE: \frontend\src\context\MenuProvider.jsx
+  [3] * File-Path: frontend/src/context/MenuProvider.jsx
+  [15] export function MenuProvider({ children }) {
+  [21] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+  [21] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+
+FILE: \frontend\src\context\useMenu.js
+
+FILE: \frontend\src\layout\HiddenRouteRedirect.jsx
+
+FILE: \frontend\src\layout\MenuShell.jsx
+  [3] * File-Path: frontend/src/layout/MenuShell.jsx
+  [13] export default function MenuShell({ children }) {
+
+FILE: \frontend\src\main.jsx
+  [20] import { initNavigation } from "./navigation/screenStackEngine.js";
+
+FILE: \frontend\src\navigation\backGuardEngine.js
+  [11] import { popScreen, getStackSnapshot, getActiveScreen } from "./screenStackEngine.js";
+
+FILE: \frontend\src\navigation\backValidation.js
+
+FILE: \frontend\src\navigation\keyboardAclBridge.js
+
+FILE: \frontend\src\navigation\keyboardIntentEngine.js
+
+FILE: \frontend\src\navigation\keyboardIntentMap.js
+  [11] import { popScreen } from "./screenStackEngine.js";
+
+FILE: \frontend\src\navigation\navigationEventLogger.js
+
+FILE: \frontend\src\navigation\navigationPersistence.js
+  [15] } from "./screenStackEngine.js";
+
+FILE: \frontend\src\navigation\screenRegistry.js
+
+FILE: \frontend\src\navigation\screenRules.js
+
+FILE: \frontend\src\navigation\screens\adminScreens.js
+
+FILE: \frontend\src\navigation\screens\coreScreens.js
+
+FILE: \frontend\src\navigation\screens\projects\hrModule\hrScreens.js
+
+FILE: \frontend\src\navigation\screens\projects\operationModule\operationScreens.js
+
+FILE: \frontend\src\navigation\screens\projects\projectScreens.js
+
+FILE: \frontend\src\navigation\screens\reportingScreens.js
+
+FILE: \frontend\src\navigation\screens\settingsScreens.js
+
+FILE: \frontend\src\navigation\screens\workflowScreens.js
+
+FILE: \frontend\src\navigation\screenStackEngine.js
+  [3] * File-Path: frontend/src/navigation/screenStackEngine.js
+
+FILE: \frontend\src\navigation\screenStackInvariant.js
+  [11] import { getStackSnapshot } from "./screenStackEngine.js";
+
+FILE: \frontend\src\navigation\screenTypes.js
+
+FILE: \frontend\src\router\AppRouter.jsx
+  [3] * File-Path: frontend/src/router/AppRouter.jsx
+  [12] import RouteGuard from "./RouteGuard.jsx";
+  [13] import DeepLinkGuard from "./DeepLinkGuard.jsx";
+  [14] import MenuShell from "../layout/MenuShell.jsx";
+  [21] export default function AppRouter() {
+  [35] <Route element={<DeepLinkGuard />}>
+  [39] <MenuShell>
+  [40] <RouteGuard>
+  [42] </RouteGuard>
+  [43] </MenuShell>
+
+FILE: \frontend\src\router\DeepLinkGuard.jsx
+  [3] * File-Path: frontend/src/router/DeepLinkGuard.jsx
+  [14] export default function DeepLinkGuard() {
+
+FILE: \frontend\src\router\RouteGuard.jsx
+  [3] * File-Path: frontend/src/router/RouteGuard.jsx
+  [14] export default function RouteGuard({ children }) {
+
+FILE: \frontend\src\router\routeIndex.js
+
+FILE: \frontend\tailwind.config.js
+
+FILE: \frontend\vite.config.js
+
+FILE: \repo-analyze.js
+  [10] "MenuProvider",
+  [11] "AppRouter",
+  [12] "RouteGuard",
+  [13] "DeepLinkGuard",
+  [14] "MenuShell",
+  [15] "screenStackEngine",
+  [16] "fetch(",
+  [17] "/api/me/menu"
+
+FILE: \src\server.ts
+
+FILE: \supabase\functions\api\index.ts
+
+FILE: \supabase\functions\api\_acl\acl_resolver.ts
+
+FILE: \supabase\functions\api\_acl\decision_trace.ts
+
+FILE: \supabase\functions\api\_acl\vwed_engine.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\activate_acl_version.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\assign_capability_to_role.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\disable_company_module.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\disable_role_permission.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\enable_company_module.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\list_acl_versions.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\list_capabilities.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\list_company_modules.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\list_role_capabilities.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\list_role_permissions.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\list_user_overrides.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\revoke_user_override.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\rollback_acl_version.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\unassign_capability_from_role.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\upsert_capability.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\upsert_role_permission.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\acl\upsert_user_override.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\approval\delete_approver_rule.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\approval\list_approver_rules.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\approval\upsert_approver_rule.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\audit\list_audit_logs.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\company\create_company.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\company\update_company_state.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\department\create_department.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\diagnostics\control_panel.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\diagnostics\system_health.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\group\create_group.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\group\map_company_to_group.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\group\unmap_company_group.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\group\update_group_state.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\project\create_project.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\project\list_projects.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\project\update_project_state.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\session\list_sessions.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\session\revoke_session.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\signup\approve.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\signup\list_pending.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\signup\reject.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\user\list_users.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\user\update_user_role.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\user\update_user_state.handler.ts
+
+FILE: \supabase\functions\api\_core\admin\user\_guards\self_lockout.guard.ts
+
+FILE: \supabase\functions\api\_core\audit\log_admin_action.ts
+
+FILE: \supabase\functions\api\_core\auth\accountState.ts
+
+FILE: \supabase\functions\api\_core\auth\authClient.ts
+
+FILE: \supabase\functions\api\_core\auth\authDelegate.ts
+
+FILE: \supabase\functions\api\_core\auth\credentialGuards.ts
+
+FILE: \supabase\functions\api\_core\auth\identifierResolver.ts
+
+FILE: \supabase\functions\api\_core\auth\login.handler.ts
+
+FILE: \supabase\functions\api\_core\auth\logout.handler.ts
+
+FILE: \supabase\functions\api\_core\auth\me.handler.ts
+
+FILE: \supabase\functions\api\_core\auth\menu.handler.ts
+
+FILE: \supabase\functions\api\_core\auth\signup\signup.handler.ts
+
+FILE: \supabase\functions\api\_core\error_codes.ts
+
+FILE: \supabase\functions\api\_core\health.ts
+
+FILE: \supabase\functions\api\_core\response.ts
+
+FILE: \supabase\functions\api\_core\session\session.admin_revoke.ts
+
+FILE: \supabase\functions\api\_core\session\session.cookie.ts
+
+FILE: \supabase\functions\api\_core\session\session.create.ts
+
+FILE: \supabase\functions\api\_core\session\session.types.ts
+
+FILE: \supabase\functions\api\_core\session\session_timeline.ts
+
+FILE: \supabase\functions\api\_core\system\version.ts
+
+FILE: \supabase\functions\api\_core\workflow\process_decision.handler.ts
+
+FILE: \supabase\functions\api\_core\workflow\routing.engine.ts
+
+FILE: \supabase\functions\api\_lib\logger.ts
+
+FILE: \supabase\functions\api\_lib\request_id.ts
+
+FILE: \supabase\functions\api\_pipeline\acl.ts
+
+FILE: \supabase\functions\api\_pipeline\context.ts
+
+FILE: \supabase\functions\api\_pipeline\cors.ts
+
+FILE: \supabase\functions\api\_pipeline\csrf.ts
+
+FILE: \supabase\functions\api\_pipeline\protected_routes.dispatch.ts
+
+FILE: \supabase\functions\api\_pipeline\public_routes.dispatch.ts
+
+FILE: \supabase\functions\api\_pipeline\rate_limit.ts
+
+FILE: \supabase\functions\api\_pipeline\runner.ts
+
+FILE: \supabase\functions\api\_pipeline\session.ts
+
+FILE: \supabase\functions\api\_pipeline\session_lifecycle.ts
+
+FILE: \supabase\functions\api\_pipeline\step_headers.ts
+
+FILE: \supabase\functions\api\_routes\acl.routes.ts
+
+FILE: \supabase\functions\api\_routes\admin.routes.ts
+
+FILE: \supabase\functions\api\_routes\menu.routes.ts
+  [27] case "GET:/api/me/menu":
+
+FILE: \supabase\functions\api\_routes\workflow.routes.ts
+
+FILE: \supabase\functions\api\_security\csp.ts
+
+FILE: \supabase\functions\api\_security\human_verification.ts
+
+FILE: \supabase\functions\api\_security\security_events.ts
+
+FILE: \supabase\functions\api\_security\security_headers.ts
+
+FILE: \supabase\functions\api\_shared\applyflow_client.ts
+  [50] const res = await fetch(url, {
+
+FILE: \supabase\functions\api\_shared\context_headers.ts
+
+FILE: \supabase\functions\api\_shared\env.ts
+
+FILE: \supabase\functions\api\_shared\gst_profile.service.ts
+
+FILE: \supabase\functions\api\_shared\gst_resolver.ts
+
+FILE: \supabase\functions\api\_shared\index.ts
+
+FILE: \supabase\functions\api\_shared\rls_assert.ts
+
+FILE: \supabase\functions\api\_shared\role_ladder.ts
+
+FILE: \supabase\functions\api\_shared\serviceRoleClient.ts
+
+FILE: \tests\acl\test_acl_trace_admin.ts
+
+FILE: \tests\acl\test_acl_trace_allow.ts
+
+FILE: \tests\acl\test_acl_trace_deny.ts

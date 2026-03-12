@@ -18,6 +18,42 @@ export function MenuProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+
+  /*
+  ============================================================
+  TEMP_UI_BOOT_PATCH
+  Step: 2
+  File: MenuProvider.jsx
+  Reason:
+  During UI bootstrap landing page loads before authentication.
+  Menu API (/api/me/menu) requires valid session.
+
+  Temporary rule:
+  Skip menu fetch on landing page.
+
+  Remove after login flow is implemented.
+  ============================================================
+  */
+
+ const pathname = globalThis.location.pathname;
+
+const PUBLIC_ROUTES = new Set([
+  "/",
+  "/login",
+  "/signup",
+  "/forgot-password"
+]);
+
+if (PUBLIC_ROUTES.has(pathname)) {
+
+  // React safe async state update
+  setTimeout(() => {
+    setLoading(false);
+  }, 0);
+
+  return;
+}
+
   fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
   credentials: "include",
 })

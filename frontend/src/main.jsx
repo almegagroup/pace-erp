@@ -26,7 +26,50 @@ const API_BASE = import.meta.env.VITE_API_BASE;
 validateScreenRegistry();
 enableBackGuard();
 enableKeyboardIntentEngine();
-initNavigation("DASHBOARD_HOME");
+/*
+============================================================
+TEMP_UI_BOOT_PATCH
+Step: 3
+File: main.jsx
+
+Reason:
+During UI bootstrap we must allow Landing ("/") to render
+before screenStackEngine forces DASHBOARD_HOME.
+
+When path === "/"
+navigation stack must not auto-push dashboard.
+
+Reference:
+TEMP_UI_BOOT_LOG.md
+============================================================
+*/
+
+const pathname = globalThis.location.pathname;
+
+/*
+============================================================
+NAVIGATION ACTIVATION RULE
+
+Navigation engine must NOT run on public routes.
+Public routes render outside the screenStackEngine.
+
+Only authenticated universe may activate navigation stack.
+============================================================
+*/
+
+const PUBLIC_ROUTES = new Set([
+  "/login",
+  "/signup",
+  "/forgot-password",
+  "/email-verified",
+  "/signup-submitted",
+  "/reset-password"
+]);
+
+if (!PUBLIC_ROUTES.has(pathname)) {
+  initNavigation("DASHBOARD_HOME");
+}
+
 restoreNavigationStack();
 
 createRoot(document.getElementById("root")).render(

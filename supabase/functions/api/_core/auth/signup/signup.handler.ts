@@ -8,11 +8,7 @@
  * Authority: Backend
  */
 
-import {
-  serviceRoleClient,
-  getServiceRoleClientWithContext,
-} from "../../../_shared/serviceRoleClient.ts";
-import { stepContext } from "../../../_pipeline/context.ts";
+import { serviceRoleClient } from "../../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../../response.ts";
 import { log } from "../../../_lib/logger.ts";
 import { verifyHumanRequest } from "../../../_security/human_verification.ts";
@@ -20,36 +16,86 @@ import { verifyHumanRequest } from "../../../_security/human_verification.ts";
 /**
  * Signup Request Handler
  *
- * This handler:
- * - Assumes Supabase Auth identity already exists
- * - Creates ERP user in PENDING state (existence only)
- * - Is enumeration-safe
+ * SECURITY MODEL
+ *
+ * Supabase Auth → Identity
+ * ERP DB        → Business User Lifecycle
+ *
+ * Flow:
+ *
+ * Verified Supabase user
+ *        │
+ *        ▼
+ * POST /api/signup
+ *        │
+ *        ▼
+ * Human Verification
+ *        │
+ *        ▼
+ * ERP user → PENDING
+ *        │
+ *        ▼
+ * signup_requests
+ *        │
+ *        ▼
+ * SA approval
+ *
+ * Security guarantees:
+ *
+ * - Enumeration safe
+ * - Idempotent
+ * - Human verified
+ * - Email verified
  * - Never grants access
  */
+
 export async function signupHandler(req: Request) {
-    const ctx = await stepContext(req, (req as any).request_id);
-  const db =
-    ctx.status === "RESOLVED"
-      ? getServiceRoleClientWithContext(ctx)
-      : serviceRoleClient;
+
+  const requestId = (req as any).request_id;
+
+  // --------------------------------------------------
+  // DB client (service role)
+  // --------------------------------------------------
+
+  const db = serviceRoleClient;
+
+  // --------------------------------------------------
+  // 1. Human verification (bot protection)
+  // --------------------------------------------------
 
   const human = await verifyHumanRequest(req);
+
   if (!human.ok) {
-    // Silent failure: pretend success, do nothing
-    return okResponse(null, (req as any).request_id);
+    return okResponse(null, requestId);
   }
+
+  // --------------------------------------------------
+  // 2. Resolve authenticated Supabase user
+  // --------------------------------------------------
 
   const authUserId = (req as any).auth_user_id;
 
   if (!authUserId) {
-    // Generic success to avoid enumeration
-    return okResponse(null, (req as any).request_id);
+    return okResponse(null, requestId);
   }
 
   // --------------------------------------------------
-  // 1A. Parse optional signup metadata (NON-AUTHORITATIVE)
+  // 3. Verify Supabase email confirmation
   // --------------------------------------------------
+
+  const { data } = await db.auth.admin.getUserById(authUserId);
+const authUser = data?.user;
+
+  if (!authUser?.email_confirmed_at) {
+  return okResponse(null, requestId);
+}
+
+  // --------------------------------------------------
+  // 4. Parse optional signup metadata (NON-AUTHORITATIVE)
+  // --------------------------------------------------
+
   const body = await req.json().catch(() => ({}));
+
   const {
     name,
     parent_company,
@@ -58,50 +104,89 @@ export async function signupHandler(req: Request) {
   } = body ?? {};
 
   // --------------------------------------------------
-  // 2. Check if ERP user already exists
+  // 5. Check if ERP user already exists
   // --------------------------------------------------
-    const { data: existingUser } = await db
+
+  const { data: existingUser } = await db
     .from("erp_core.users")
     .select("id")
     .eq("auth_user_id", authUserId)
     .maybeSingle();
 
   if (existingUser) {
-    // Idempotent, enumeration-safe
-    return okResponse(null, (req as any).request_id);
+    return okResponse(null, requestId);
   }
 
   // --------------------------------------------------
-  // 3. Create ERP user in PENDING state
+  // 6. Create ERP user (PENDING state)
   // --------------------------------------------------
-   await db.from("erp_core.users").insert({
-    auth_user_id: authUserId,
-    state: "PENDING",
-    created_by: "SYSTEM",
-  });
+
+  const { error: userInsertError } = await db
+    .from("erp_core.users")
+    .insert({
+      auth_user_id: authUserId,
+      state: "PENDING",
+      created_by: "SYSTEM",
+    });
+
+  if (userInsertError) {
+
+    log({
+      level: "ERROR",
+      event: "ERP_SIGNUP_USER_INSERT_FAILED",
+      meta: {
+        auth_user_id: authUserId,
+        error: userInsertError.message,
+      },
+    });
+
+    return okResponse(null, requestId);
+  }
 
   // --------------------------------------------------
-  // 3A. Capture signup metadata for SA review
+  // 7. Capture signup metadata for SA review
   // --------------------------------------------------
-   await db.from("erp_core.signup_requests").insert({
-    auth_user_id: authUserId,
-    name: String(name ?? "").trim() || "UNKNOWN",
-    parent_company_name: String(parent_company ?? "").trim() || "UNKNOWN",
-    designation_hint: designation_hint ?? null,
-    phone_number: phone ?? null,
-  });
+
+  const { error: signupInsertError } = await db
+    .from("erp_core.signup_requests")
+    .insert({
+      auth_user_id: authUserId,
+      name: String(name ?? "").trim() || "UNKNOWN",
+      parent_company_name:
+        String(parent_company ?? "").trim() || "UNKNOWN",
+      designation_hint: designation_hint ?? null,
+      phone_number: phone ?? null,
+    });
+
+  if (signupInsertError) {
+
+    log({
+      level: "ERROR",
+      event: "ERP_SIGNUP_REQUEST_INSERT_FAILED",
+      meta: {
+        auth_user_id: authUserId,
+        error: signupInsertError.message,
+      },
+    });
+
+  }
 
   // --------------------------------------------------
-  // 4. Observability (non-blocking)
+  // 8. Observability event
   // --------------------------------------------------
-   log({
+
+  log({
     level: "OBSERVABILITY",
     event: "ERP_SIGNUP_REQUEST_RECEIVED",
-    meta: { auth_user_id: authUserId },
+    meta: {
+      auth_user_id: authUserId,
+    },
   });
 
   // --------------------------------------------------
-  // 5. Always return generic success
+  // 9. Always return generic success
   // --------------------------------------------------
-   return okResponse(null, (req as any).request_id);
+
+  return okResponse(null, requestId);
+
 }

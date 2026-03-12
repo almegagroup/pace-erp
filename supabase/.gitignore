@@ -1,8 +1,8 @@
-# Supabase
+# Supabase CLI runtime
 .branches
 .temp
 
-# dotenvx
-.env.keys
-.env.local
-.env.*.local
+# Local env
+.env
+.env.*
+!.env.example

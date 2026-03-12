@@ -9,6 +9,11 @@
  */
 
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import LandingPage from "../pages/public/LandingPage.jsx";
+import LoginScreen from "../pages/public/LoginScreen.jsx";
+import SignupScreen from "../pages/public/SignupPage.jsx";
+import EmailVerified from "../pages/public/EmailVerified.jsx";
+import SignupSubmittedPage from "../pages/public/SignupSubmittedPage.jsx";
 import RouteGuard from "./RouteGuard.jsx";
 import DeepLinkGuard from "./DeepLinkGuard.jsx";
 import MenuShell from "../layout/MenuShell.jsx";
@@ -21,8 +26,23 @@ import GADashboardShell from "../admin/ga/GADashboardShell.jsx";
 export default function AppRouter() {
   return (
     <BrowserRouter>
-      <HiddenRouteRedirect>
-        <Routes>
+
+  {/* 
+  ============================================================
+  TEMP_UI_BOOT_PATCH
+  Step: 4
+  File: AppRouter.jsx
+  Reason:
+  HiddenRouteRedirect depends on useMenu() which requires
+  authenticated session. During landing bootstrap no session
+  exists → page becomes blank.
+
+  Temporarily disabled until login flow is implemented.
+  Reference: TEMP_UI_BOOT_LOG.md
+  ============================================================
+  */}
+
+  <Routes>
           {/* ============================== */}
           {/* 🔒 ADMIN UNIVERSE ENTRY POINTS */}
           {/* ============================== */}
@@ -45,9 +65,28 @@ export default function AppRouter() {
             />
           </Route>
 
-          <Route path="/" element={<div>Home</div>} />
-        </Routes>
-      </HiddenRouteRedirect>
+          <Route
+            path="/"
+            element={<LandingPage />}
+          />
+
+          <Route
+            path="/login"
+            element={<LoginScreen />}
+          />
+          <Route path="/signup" element={<SignupScreen />} />
+
+        <Route path="/email-verified" element={<EmailVerified />} />
+
+        <Route path="/signup-submitted" element={<SignupSubmittedPage />} />
+
+       </Routes>
+  
+
+{/* TEMP_UI_BOOT_PATCH — HiddenRouteRedirect disabled
+    Closing tag preserved for future restoration
+*/}
+{/* </HiddenRouteRedirect> */}
     </BrowserRouter>
   );
 }

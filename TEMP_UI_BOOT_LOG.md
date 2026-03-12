@@ -1,0 +1,918 @@
+# PACE ERP — UI BOOT LOG
+
+Purpose:
+This document records every temporary UI change made during ERP UI bootstrapping.
+It ensures that no architectural invariant is broken and that all changes can be reversed later.
+
+This file is the SINGLE SOURCE OF TRUTH for UI bootstrap actions.
+
+---
+
+# 1. SYSTEM BASELINE (START STATE)
+
+Date: 2026-03-12
+
+The UI bootstrap starts from a CLEAN Gate-7 router configuration.
+
+Files restored to canonical state:
+
+frontend/src/App.jsx
+frontend/src/router/AppRouter.jsx
+
+No temporary UI code exists.
+
+Current state of these files:
+
+App.jsx
+
+MenuProvider
+  └ AppRouter
+
+AppRouter.jsx
+
+BrowserRouter
+  └ HiddenRouteRedirect
+        └ Routes
+            ├ /sa/home
+            ├ /ga/home
+            ├ /dashboard
+            └ /
+
+All ACL guards are active.
+
+---
+
+# 2. ERP UI FINAL TARGET FLOW
+
+The final ERP UI must follow this strict entry flow.
+
+Landing (/)
+    ↓
+Login (/login)
+    ↓
+POST /api/login
+    ↓
+Session Cookie
+    ↓
+GET /api/me
+    ↓
+Role Resolution
+
+SA → /sa/home
+GA → /ga/home
+USER → /dashboard
+
+After role resolution:
+
+MenuProvider activates
+Menu Snapshot loads
+MenuShell renders
+
+No menu or ACL logic should activate before login.
+
+---
+
+# 3. CURRENT UI PROBLEM
+
+The current router structure loads HiddenRouteRedirect immediately.
+
+HiddenRouteRedirect internally calls:
+
+useMenu()
+
+MenuProvider then tries to fetch:
+
+/api/me/menu
+
+But during UI bootstrap:
+
+User is NOT logged in
+Session does NOT exist
+Menu snapshot is NOT available
+
+Therefore:
+
+useMenu() returns null
+HiddenRouteRedirect crashes
+
+Console error:
+
+Cannot destructure property 'allowedRoutes' of useMenu() as it is null.
+
+---
+
+# 4. BOOTSTRAP STRATEGY
+
+We must temporarily bypass Menu-dependent logic until login exists.
+
+During bootstrap we allow:
+
+Landing
+Login
+Auth
+
+But we keep the architecture intact.
+
+We DO NOT delete:
+
+MenuProvider
+RouteGuard
+DeepLinkGuard
+MenuShell
+
+We only delay when they activate.
+
+---
+
+# 5. TEMPORARY BOOT RULES
+
+During UI boot:
+
+Rule 1
+HiddenRouteRedirect must NOT run before login.
+
+Rule 2
+MenuProvider must remain in App.jsx.
+
+Rule 3
+Router must allow public routes.
+
+Allowed public routes:
+
+/
+ /login
+
+Rule 4
+MenuProvider must only be used after login.
+
+---
+
+# 6. BOOT PHASES
+
+Phase 1
+Landing Page
+
+Phase 2
+Login Screen
+
+Phase 3
+Login API integration
+
+Phase 4
+Session verification
+
+Phase 5
+Menu snapshot loading
+
+Phase 6
+Dashboard shell activation
+
+---
+
+# 7. PHASE 1 — LANDING PAGE
+
+Action:
+
+Add landing page content to:
+
+Route "/"
+
+Replace:
+
+<div>Home</div>
+
+With landing UI.
+
+Reason:
+
+ERP entry must start with Landing → Login.
+
+---
+
+# 8. PHASE 2 — LOGIN SCREEN
+
+Add route:
+
+/login
+
+Purpose:
+
+Collect user credentials.
+
+No MenuProvider dependency.
+
+---
+
+# 9. PHASE 3 — LOGIN API
+
+POST /api/login
+
+Response:
+
+session cookie
+
+---
+
+# 10. PHASE 4 — USER RESOLUTION
+
+GET /api/me
+
+Response contains:
+
+user role
+
+Redirect logic:
+
+SA → /sa/home
+GA → /ga/home
+USER → /dashboard
+
+---
+
+# 11. PHASE 5 — MENU ACTIVATION
+
+Only after dashboard entry:
+
+MenuProvider fetches:
+
+/api/me/menu
+
+Menu snapshot loads.
+
+---
+
+# 12. RESTORE PLAN
+
+After login flow works:
+
+HiddenRouteRedirect will be restored.
+
+Router returns to canonical Gate-7 structure.
+
+Temporary landing logic remains.
+
+---
+
+# 13. IMPORTANT ARCHITECTURE INVARIANTS
+
+Never remove:
+
+MenuProvider
+RouteGuard
+DeepLinkGuard
+MenuShell
+
+Never call:
+
+useMenu()
+
+before login.
+
+Never bypass ACL inside dashboard.
+
+---
+
+# 14. CURRENT EXECUTION STEP
+
+STEP-0 COMPLETE
+
+System baseline confirmed.
+
+Next action:
+
+PHASE 1 — Landing UI implementation.
+
+# 15. PHASE 1 — LANDING IMPLEMENTATION
+
+Status:
+Completed
+
+File modified:
+
+frontend/src/router/AppRouter.jsx
+
+Change:
+
+Landing route UI implemented.
+
+Route:
+
+"/"
+
+Before:
+
+<div>Home</div>
+
+After:
+
+Landing UI with Tailwind layout.
+
+Purpose:
+
+Provide ERP public entry screen before authentication.
+
+Result:
+
+Landing page renders without dependency on ACL or Menu system.
+
+URL:
+
+http://localhost:5173/
+
+Console:
+
+NAV_EVENT → DASHBOARD_HOME
+
+# 16. ISSUE DISCOVERED — MENU SNAPSHOT FETCH BEFORE LOGIN
+
+During landing load MenuProvider executed automatically.
+
+MenuProvider attempted to call:
+
+GET /api/me/menu
+
+Backend response:
+
+401 Unauthorized
+
+Reason:
+
+User session does not exist during landing page.
+
+Menu snapshot endpoint requires authenticated session.
+
+Effect:
+
+Console log noise and potential guard crash risk.
+
+Root cause:
+
+MenuProvider activates before authentication phase.
+
+# 17. TEMPORARY PATCH — MENU FETCH GUARD
+
+File modified:
+
+frontend/src/context/MenuProvider.jsx
+
+Patch Type:
+
+Temporary bootstrap guard.
+
+Implementation:
+
+if (pathname === "/") skip menu snapshot fetch.
+
+Code added:
+
+const pathname = globalThis.location.pathname;
+
+if (pathname === "/") {
+    setTimeout(() => setLoading(false), 0);
+    return;
+}
+
+Purpose:
+
+Prevent menu API call during landing phase.
+
+Reason:
+
+Menu snapshot requires authenticated session.
+
+Status:
+
+Active
+
+# 18. REACT EFFECT WARNING FIX
+
+Issue:
+
+React warning detected:
+
+Calling setState synchronously inside effect.
+
+Resolution:
+
+Moved setLoading(false) to async microtask.
+
+Implementation:
+
+setTimeout(() => setLoading(false), 0)
+
+Reason:
+
+Avoid synchronous state update inside effect body.
+
+Status:
+
+Resolved
+
+# 19. CURRENT SYSTEM STATE
+
+Landing page:
+
+Working
+
+MenuProvider:
+
+Guarded during landing
+
+Menu API call:
+
+Disabled before login
+
+ACL guards:
+
+Not modified
+
+Router structure:
+
+Unchanged
+
+Architecture integrity:
+
+Maintained
+
+# 20. NEXT EXECUTION STEP
+
+Next phase:
+
+PHASE 2 — LOGIN SCREEN
+
+Tasks:
+
+1. Add route /login
+2. Create LoginScreen.jsx
+3. Collect credentials
+4. POST /api/login
+5. Handle session cookie
+6. Redirect to role resolution
+
+STEP-3 — Navigation Bootstrap Guard
+
+File:
+frontend/src/main.jsx
+
+Change:
+Navigation engine must not auto-push DASHBOARD_HOME during landing.
+
+Patch:
+
+const pathname = globalThis.location.pathname;
+
+if (pathname !== "/") {
+  initNavigation("DASHBOARD_HOME");
+}
+
+Reason:
+screenStackEngine was overriding landing route.
+
+STEP-3 — Navigation Bootstrap Guard
+
+File:
+frontend/src/main.jsx
+
+Change:
+Prevent screenStackEngine from forcing dashboard during landing.
+
+Patch:
+
+const pathname = globalThis.location.pathname;
+
+if (pathname !== "/") {
+  initNavigation("DASHBOARD_HOME");
+}
+
+restoreNavigationStack();
+
+Reason:
+Navigation engine was overriding router landing route.
+Landing must render before dashboard navigation begins.
+
+STEP-4 — HiddenRouteRedirect Disabled
+
+File:
+frontend/src/router/AppRouter.jsx
+
+Change:
+HiddenRouteRedirect temporarily disabled during UI bootstrap.
+
+Reason:
+HiddenRouteRedirect depends on menu snapshot which requires
+authenticated session.
+
+Without login it caused blank landing page.
+
+STEP-5 — Landing Page Visible
+
+Result:
+
+Landing page successfully renders at route "/".
+
+UI Output:
+
+PACE ERP
+Process Automation & Control Environment
+
+Console:
+
+No errors.
+
+System Status:
+
+Router operational
+Navigation engine guarded
+Menu system inactive before login
+ACL architecture intact
+
+STEP-5B — Tailwind PostCSS Plugin
+
+File created:
+frontend/postcss.config.js
+
+Content:
+
+export default {
+  plugins: {
+    "@tailwindcss/postcss": {},
+  },
+};
+
+Reason:
+Tailwind v4 requires PostCSS plugin to process @import "tailwindcss".
+
+# 21. LANDING UI ENHANCEMENT — BOOT LOADER IMPLEMENTATION
+
+Status:
+Completed
+
+File modified:
+
+frontend/src/pages/public/LandingPage.jsx
+
+Purpose:
+
+Introduce a temporary ERP boot loader screen before rendering the
+public landing content.
+
+This simulates application initialization and provides a smoother
+visual entry into the ERP interface.
+
+Implementation details:
+
+A temporary boot state is introduced using React state:
+
+const [booting, setBooting] = useState(true);
+
+A timer delays the landing page render:
+
+setTimeout(() => {
+  setBooting(false);
+}, 1800);
+
+During the boot phase the screen renders only the boot asset.
+
+Boot screen content:
+
+Asset:
+src/assets/sp.png
+
+Displayed as centered loader graphic.
+
+Boot screen layout:
+
+Full screen overlay
+Centered loader image
+Neutral background (#F5F6F8)
+
+After the timer completes:
+
+Boot screen disappears
+Landing UI becomes visible.
+
+Landing UI content:
+
+PACE ERP logo
+Tagline:
+
+Process Automation & Control Environment
+
+Primary actions:
+
+Login → /login
+Sign Up → /signup
+
+Footer:
+
+© Almega Group
+
+---
+
+# 22. BOOT SCREEN ARCHITECTURE NOTES
+
+Boot loader intentionally does NOT interact with:
+
+MenuProvider
+RouteGuard
+DeepLinkGuard
+MenuShell
+
+Reason:
+
+These systems require authenticated session context and must not
+execute before login.
+
+The boot screen exists purely at the visual layer.
+
+---
+
+# 23. CURRENT UI BOOT STATE
+
+Landing page:
+
+Operational
+
+Boot loader:
+
+Operational
+
+Menu snapshot fetch:
+
+Guarded during landing phase
+
+Navigation stack:
+
+Guarded against forced dashboard push
+
+HiddenRouteRedirect:
+
+Temporarily disabled
+
+ERP UI entry flow now operates as:
+
+Landing (/)
+↓
+Login (/login)
+↓
+POST /api/login
+↓
+Session cookie
+↓
+GET /api/me
+↓
+Role resolution
+↓
+Dashboard shell
+
+---
+
+# 24. NEXT EXECUTION STEP
+
+Next phase:
+
+PHASE 2 — LOGIN SCREEN IMPLEMENTATION
+
+Files to create:
+
+frontend/src/pages/public/LoginScreen.jsx
+
+Tasks:
+
+1. Create login form UI
+2. Capture user credentials
+3. POST /api/login
+4. Handle session cookie
+5. Redirect to role resolution
+
+25. PHASE 2 — LOGIN SCREEN IMPLEMENTATION
+
+Status:
+Completed
+
+File created:
+
+frontend/src/pages/public/LoginScreen.jsx
+
+Purpose:
+
+Provide authentication entry interface for ERP users.
+
+This screen collects user credentials and sends them to the
+backend authentication endpoint.
+
+26. LOGIN SCREEN UI STRUCTURE
+
+Login screen includes:
+
+Fields:
+
+Email or Employee ID
+Password
+
+Controls:
+
+Show / Hide Password
+Login Button
+Forgot Password Link
+Create Account Link
+
+UX behaviour:
+
+Pressing Enter triggers login submission
+
+During login request:
+
+login button disabled
+
+input fields disabled
+
+optional loading indicator shown
+
+Error handling:
+
+Invalid employee ID or password
+
+Backend error messages are not exposed directly to the UI.
+
+27. PUBLIC ROUTES DECLARATION
+
+ERP UI now explicitly defines public routes.
+
+Public routes:
+
+/
+ /login
+ /signup
+ /forgot-password
+ /reset-password
+
+These routes operate outside the authenticated universe.
+
+Rules:
+
+MenuProvider must not fetch menu snapshot
+Navigation engine must not initialize dashboard
+ACL guards must remain inactive
+28. MENU PROVIDER GUARD UPDATE
+
+File modified:
+
+frontend/src/context/MenuProvider.jsx
+
+Purpose:
+
+Prevent menu snapshot fetch before authentication.
+
+Implementation:
+
+const PUBLIC_ROUTES = new Set([
+  "/",
+  "/login",
+  "/signup",
+  "/forgot-password",
+  "/reset-password"
+]);
+
+if (PUBLIC_ROUTES.has(pathname)) {
+  setTimeout(() => setLoading(false), 0);
+  return;
+}
+
+Effect:
+
+/api/me/menu
+
+will only be called after login session exists.
+
+29. NAVIGATION ENGINE GUARD UPDATE
+
+File modified:
+
+frontend/src/main.jsx
+
+Purpose:
+
+Prevent screenStackEngine from pushing dashboard while
+user is still inside the public authentication flow.
+
+Implementation:
+
+const PUBLIC_ROUTES = new Set([
+  "/",
+  "/login",
+  "/signup",
+  "/forgot-password",
+  "/reset-password"
+]);
+
+if (!PUBLIC_ROUTES.has(pathname)) {
+  initNavigation("DASHBOARD_HOME");
+}
+
+restoreNavigationStack();
+
+Effect:
+
+Navigation engine activates only after authenticated
+routes are entered.
+
+30. LOGIN SUCCESS FLOW
+
+The ERP authentication pipeline now follows this sequence:
+
+Landing (/)
+↓
+Login (/login)
+↓
+POST /api/login
+↓
+Session Cookie issued
+↓
+GET /api/me
+↓
+User Role Resolution
+
+Role redirects:
+
+SA → /sa/home
+GA → /ga/home
+USER → /dashboard
+
+After role resolution:
+
+MenuProvider activates
+↓
+GET /api/me/menu
+↓
+Menu snapshot loads
+↓
+MenuShell renders
+31. ARCHITECTURE SAFETY CONFIRMATION
+
+The following ERP architectural invariants remain intact:
+
+Never removed:
+
+MenuProvider
+RouteGuard
+DeepLinkGuard
+MenuShell
+
+Never executed before authentication:
+
+useMenu()
+Menu snapshot fetch
+ACL route enforcement
+32. CURRENT UI SYSTEM STATE
+
+Landing Page:
+
+Operational
+Boot loader active
+
+Login Screen:
+
+Operational
+Credential form active
+
+Menu System:
+
+Disabled before login
+
+Navigation Engine:
+
+Guarded during public routes
+
+HiddenRouteRedirect:
+
+Temporarily disabled
+Will be restored after login pipeline stabilizes
+33. NEXT EXECUTION STEP
+
+Next phase:
+
+PHASE 3 — LOGIN API INTEGRATION
+
+Tasks:
+
+1. Connect LoginScreen.jsx to POST /api/login
+2. Handle response cookies
+3. Call /api/me after login
+4. Resolve user role
+5. Redirect to correct dashboard
+34. FUTURE PHASES
+
+Remaining UI activation phases:
+
+PHASE 4 — Session Verification
+PHASE 5 — Menu Snapshot Activation
+PHASE 6 — Dashboard Shell Activation
+
+These phases will progressively re-enable:
+
+HiddenRouteRedirect
+RouteGuard
+DeepLinkGuard
+MenuShell
+
