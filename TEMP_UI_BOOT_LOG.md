@@ -915,4 +915,359 @@ HiddenRouteRedirect
 RouteGuard
 DeepLinkGuard
 MenuShell
+35. PHASE 3 EXTENSION — SIGNUP FLOW IMPLEMENTATION
+
+Status:
+Partially implemented
+
+Files created:
+
+frontend/src/pages/public/SignupPage.jsx
+frontend/src/pages/public/EmailVerified.jsx
+frontend/src/pages/public/SignupSubmittedPage.jsx
+
+Purpose:
+
+Provide ERP public user onboarding flow integrated with Supabase
+identity verification and ERP signup approval pipeline.
+
+Signup flow architecture:
+
+Signup Form (/signup)
+        ↓
+Supabase Auth signup
+        ↓
+Verification Email Sent
+        ↓
+User clicks magic verification link
+        ↓
+EmailVerified.jsx
+        ↓
+POST /api/signup
+        ↓
+ERP DB user creation
+        ↓
+SignupSubmittedPage.jsx
+36. SIGNUP PAGE IMPLEMENTATION
+
+Status:
+Completed
+
+File:
+
+frontend/src/pages/public/SignupPage.jsx
+
+Responsibilities:
+
+Collect user onboarding information.
+
+Fields captured:
+
+Full Name
+Parent Company
+Designation (optional)
+Phone Number
+Email
+Password
+
+Primary action:
+
+supabase.auth.signUp()
+
+Implementation:
+
+supabase.auth.signUp({
+  email,
+  password,
+  options:{
+    emailRedirectTo: `${window.location.origin}/email-verified`
+  }
+})
+
+Effect:
+
+Supabase Auth creates user identity and sends
+verification email.
+
+37. EMAIL VERIFICATION HANDLER
+
+Status:
+Implemented
+
+File:
+
+frontend/src/pages/public/EmailVerified.jsx
+
+Purpose:
+
+Confirm whether Supabase email verification succeeded
+and trigger ERP signup request.
+
+Process:
+
+Supabase session resolved
+        ↓
+Check user.email_confirmed_at
+        ↓
+If verified
+        ↓
+POST /api/signup
+        ↓
+Redirect to signup confirmation page
+
+API call:
+
+POST /api/signup
+Authorization: Bearer <Supabase JWT>
+
+JWT obtained from:
+
+supabase.auth.getSession()
+
+Reason:
+
+Backend requires authenticated Supabase identity to resolve:
+
+req.auth_user_id
+38. SIGNUP CONFIRMATION PAGE
+
+Status:
+Implemented
+
+File:
+
+frontend/src/pages/public/SignupSubmittedPage.jsx
+
+Purpose:
+
+Confirm ERP signup request submission.
+
+Message shown:
+
+Signup Request Submitted
+
+Your ERP account request has been submitted successfully.
+An administrator will review and approve your account.
+
+User action available:
+
+Back to Home
+
+Route redirect:
+
+navigate("/")
+39. PUBLIC ROUTES UPDATE
+
+Public routes expanded to include signup lifecycle pages.
+
+Current public routes:
+
+/
+ /login
+ /signup
+ /email-verified
+ /signup-submitted
+ /forgot-password
+ /reset-password
+
+Reason:
+
+Signup flow must remain outside authenticated
+ERP universe until approval.
+
+40. MENU PROVIDER GUARD UPDATE (EXTENDED)
+
+File modified:
+
+frontend/src/context/MenuProvider.jsx
+
+Update:
+
+Public route guard expanded to include signup lifecycle routes.
+
+PUBLIC_ROUTES set now includes:
+
+/
+ /login
+ /signup
+ /email-verified
+ /signup-submitted
+ /forgot-password
+ /reset-password
+
+Effect:
+
+MenuProvider will NOT attempt to fetch:
+
+GET /api/me/menu
+
+before authentication.
+
+41. NAVIGATION ENGINE GUARD UPDATE (EXTENDED)
+
+File modified:
+
+frontend/src/main.jsx
+
+Navigation engine now ignores all public authentication routes.
+
+PUBLIC_ROUTES now includes:
+
+/
+ /login
+ /signup
+ /email-verified
+ /signup-submitted
+ /forgot-password
+ /reset-password
+
+Implementation:
+
+if (!PUBLIC_ROUTES.has(pathname)) {
+  initNavigation("DASHBOARD_HOME");
+}
+
+Effect:
+
+Navigation stack activates only when user enters
+authenticated ERP routes.
+
+42. CURRENT SIGNUP PIPELINE STATE
+
+System components status:
+
+Supabase Auth:
+
+Working
+User identity created successfully
+
+Email verification:
+
+Working
+Verification email delivered
+
+EmailVerified page:
+
+Working
+Verification status resolved
+
+Signup API call:
+
+Configured
+Authorization header implemented
+
+ERP database insert:
+
+Not yet confirmed
+Testing pending
+43. TESTING STATUS
+
+Signup pipeline testing could not be completed due to
+Supabase email rate-limit restriction.
+
+Observed error:
+
+email rate limit exceeded
+
+Cause:
+
+Multiple verification email requests triggered
+within a short time window.
+
+Supabase temporary limit reached.
+
+Effect:
+
+New signup verification emails are temporarily blocked.
+
+44. TESTING PLAN (PENDING)
+
+Signup pipeline testing will resume after
+Supabase email rate-limit window resets.
+
+Testing checklist:
+
+Perform fresh signup
+
+Receive verification email
+
+Click verification link
+
+Load EmailVerified.jsx
+
+Trigger POST /api/signup
+
+Verify database insertion:
+
+Tables:
+
+erp_core.users
+erp_core.signup_requests
+
+Expected result:
+
+erp_core.users.state = PENDING
+signup_requests row created
+45. CURRENT SYSTEM STATE (UPDATED)
+
+Landing page:
+
+Operational
+
+Boot loader:
+
+Operational
+
+Login screen:
+
+Operational
+
+Signup screen:
+
+Operational
+
+Email verification handler:
+
+Implemented
+
+Signup confirmation screen:
+
+Implemented
+
+Menu system:
+
+Disabled during public routes
+
+Navigation engine:
+
+Guarded
+
+HiddenRouteRedirect:
+
+Still temporarily disabled
+
+ERP architecture integrity:
+
+Maintained
+
+Signup pipeline:
+
+Implementation complete
+Testing pending
+
+46. NEXT EXECUTION STEP
+
+Next phase:
+
+PHASE 3B — SIGNUP PIPELINE TEST
+
+Tasks:
+
+1. Wait for Supabase email rate-limit reset
+2. Perform full signup cycle test
+3. Confirm ERP DB insert
+4. Verify pending user state
+5. Validate admin approval path
+
+
 

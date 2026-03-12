@@ -41,7 +41,10 @@ const PUBLIC_ROUTES = new Set([
   "/",
   "/login",
   "/signup",
-  "/forgot-password"
+  "/forgot-password",
+  "/email-verified",
+  "/signup-submitted",
+  "/reset-password"
 ]);
 
 if (PUBLIC_ROUTES.has(pathname)) {

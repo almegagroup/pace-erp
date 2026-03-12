@@ -58,6 +58,7 @@ Only authenticated universe may activate navigation stack.
 */
 
 const PUBLIC_ROUTES = new Set([
+  "/",
   "/login",
   "/signup",
   "/forgot-password",
