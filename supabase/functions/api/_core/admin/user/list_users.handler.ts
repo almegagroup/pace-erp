@@ -48,7 +48,7 @@ export async function listUsersHandler(
   // Fetch governable users
   // --------------------------------------------------
   const { data } = await db
-    .from("erp_core.users")
+    .schema("erp_core").from("users")
     .select(
       "auth_user_id, user_code, state, created_at"
     )

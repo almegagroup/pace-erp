@@ -43,7 +43,7 @@ export async function assertSelfLockoutSafe(
     targetNextState === "DISABLED"
   ) {
     const { count } = await serviceRoleClient
-      .from("erp_acl.user_roles")
+      .schema("erp_acl").from("user_roles")
       .select("*", { count: "exact", head: true })
       .eq("role_code", "SA");
 

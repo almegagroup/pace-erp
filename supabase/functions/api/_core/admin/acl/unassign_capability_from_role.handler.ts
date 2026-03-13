@@ -65,7 +65,7 @@ export async function unassignCapabilityFromRoleHandler(
 
     /* 3️⃣ Unassign capability */
     const { error } = await db
-      .from("acl.role_capabilities")
+      .schema("acl").from("role_capabilities")
       .delete()
       .eq("role_code", body.role_code)
       .eq("capability_code", body.capability_code);

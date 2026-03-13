@@ -35,7 +35,7 @@ export async function listAuditLogsHandler(
   const db = getServiceRoleClientWithContext(ctx.context);
 
   const { data, error } = await db
-    .from("erp_audit.admin_action_audit")
+    .schema("erp_audit").from("admin_action_audit")
     .select(`
       audit_id,
       request_id,

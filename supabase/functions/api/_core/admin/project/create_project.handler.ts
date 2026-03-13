@@ -69,7 +69,7 @@ import { okResponse, errorResponse } from "../../../_core/response.ts";
 
   // 4️⃣ Create global project
   const { data, error } = await db
-  .from("erp_master.projects")
+  .schema("erp_master").from("projects")
   .insert({
   project_name: projectName,
   status: "ACTIVE",
@@ -87,7 +87,7 @@ import { okResponse, errorResponse } from "../../../_core/response.ts";
 
   // 5️⃣ Map project → company
   const { error: mapError } = await db
-  .from("erp_map.company_projects")
+  .schema("erp_map").from("company_projects")
   .insert({
   company_id: ctx.context.companyId,
   project_id: data.id,

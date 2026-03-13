@@ -54,7 +54,7 @@ export async function revokeUserOverrideHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { error } = await db
-      .from("acl.user_overrides")
+      .schema("acl").from("user_overrides")
       .update({
         revoked_at: new Date().toISOString(),
         revoked_by: ctx.context.authUserId,

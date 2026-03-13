@@ -62,7 +62,7 @@ export async function listProjectsHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data, error } = await db
-      .from("erp_map.company_projects")
+      .schema("erp_map").from("company_projects")
       .select(`
         erp_master.projects (
           id,

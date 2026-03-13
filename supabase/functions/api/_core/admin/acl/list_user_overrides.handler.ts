@@ -39,7 +39,7 @@ export async function listUserOverridesHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data, error } = await db
-      .from("acl.user_overrides")
+      .schema("acl").from("user_overrides")
       .select(
         `
         override_id,

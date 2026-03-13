@@ -76,7 +76,7 @@ export async function updateProjectStateHandler(
 
     // 4️⃣ Verify project belongs to this company
     const { data: mapping, error: mapError } = await db
-      .from("erp_map.company_projects")
+      .schema("erp_map").from("company_projects")
       .select("project_id")
       .eq("project_id", projectId)
       .eq("company_id", ctx.context.companyId)
@@ -92,7 +92,7 @@ export async function updateProjectStateHandler(
 
     // 5️⃣ Load current project state
     const { data: project, error: fetchError } = await db
-      .from("erp_master.projects")
+      .schema("erp_master").from("projects")
       .select("status")
       .eq("id", projectId)
       .maybeSingle();
@@ -119,7 +119,7 @@ export async function updateProjectStateHandler(
 
     // 7️⃣ Update state
     const { error: updateError } = await db
-      .from("erp_master.projects")
+      .schema("erp_master").from("projects")
       .update({ status: nextState })
       .eq("id", projectId);
 

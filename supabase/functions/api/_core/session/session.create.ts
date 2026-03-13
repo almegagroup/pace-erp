@@ -28,7 +28,7 @@ export async function createSession(
   // Revoke all existing ACTIVE sessions (single-session policy)
   // ------------------------------------------------
   const { error: revokeError } = await serviceRoleClient
-    .from("erp_core.sessions")
+    .schema("erp_core").from("sessions")
     .update({
       status: "REVOKED",
       revoked_at: nowIso,
@@ -55,7 +55,7 @@ export async function createSession(
   // Insert new ACTIVE session
   // ------------------------------------------------
   const { error: insertError } = await serviceRoleClient
-    .from("erp_core.sessions")
+    .schema("erp_core").from("sessions")
     .insert({
   session_id: sessionId,
   auth_user_id: authUserId,

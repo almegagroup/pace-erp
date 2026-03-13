@@ -64,7 +64,7 @@ export async function logoutHandler(ctx: LogoutContext): Promise<Response> {
   try {
     assertRlsEnabled();
     await serviceRoleClient
-      .from("erp_core.sessions")
+      .schema("erp_core").from("sessions")
       .update({
         status: "REVOKED",
         revoked_at: new Date().toISOString(),

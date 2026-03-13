@@ -81,7 +81,7 @@ export async function upsertCapabilityHandler(
      * 3️⃣ Check existing capability
      * -------------------------------------------------- */
     const { data: existing, error: fetchError } = await db
-      .from("acl.capabilities")
+      .schema("acl").from("capabilities")
       .select("capability_code, is_system")
       .eq("capability_code", body.capability_code)
       .maybeSingle();
@@ -106,7 +106,7 @@ export async function upsertCapabilityHandler(
      * 4️⃣ Upsert capability pack
      * -------------------------------------------------- */
     const { error } = await db
-      .from("acl.capabilities")
+      .schema("acl").from("capabilities")
       .upsert({
         capability_code: body.capability_code,
         capability_name: body.capability_name,

@@ -115,7 +115,7 @@ if (!hasAnyPermission) {
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { error } = await db
-      .from("acl.role_menu_permissions")
+      .schema("acl").from("role_menu_permissions")
       .upsert(payload, {
         onConflict: "role_code,resource_code",
       });

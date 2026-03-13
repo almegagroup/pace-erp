@@ -81,7 +81,7 @@ export async function disableRolePermissionHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data: existing } = await db
-  .from("acl.role_menu_permissions")
+  .schema("acl").from("role_menu_permissions")
   .select("role_code")
   .eq("role_code", body.role_code)
   .eq("resource_code", body.resource_code)
@@ -96,7 +96,7 @@ if (!existing) {
 }
 
 const { error } = await db
-  .from("acl.role_menu_permissions")
+  .schema("acl").from("role_menu_permissions")
   .update({
     can_view: false,
     can_write: false,

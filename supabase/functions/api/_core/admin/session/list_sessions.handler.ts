@@ -36,7 +36,7 @@ export async function listSessionsHandler(
   const db = getServiceRoleClientWithContext(ctx.context);
 
   const { data, error } = await db
-    .from("erp_core.sessions")
+    .schema("erp_core").from("sessions")
     .select(`
       session_id,
       auth_user_id,

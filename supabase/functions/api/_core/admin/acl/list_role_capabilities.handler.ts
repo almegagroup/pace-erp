@@ -62,7 +62,7 @@ export async function listRoleCapabilitiesHandler(
 
     /* 3️⃣ Fetch assigned capabilities */
     const { data, error } = await db
-      .from("acl.role_capabilities")
+      .schema("acl").from("role_capabilities")
       .select(`
         capability_code,
         acl.capabilities (

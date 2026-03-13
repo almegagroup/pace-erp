@@ -19,7 +19,7 @@ export async function getGstProfile(gstNumber: string) {
 
   // 1) Cache lookup
   const { data: cached } = await db
-    .from("erp_cache.gst_profiles")
+    .schema("erp_cache").from("gst_profiles")
     .select("*")
     .eq("gst_number", gst)
     .single();
@@ -42,7 +42,7 @@ export async function getGstProfile(gstNumber: string) {
     updated_at: new Date().toISOString(),
   };
 
-  await db.from("erp_cache.gst_profiles").insert(payload);
+  await db.schema("erp_cache").from("gst_profiles").insert(payload);
 
   return { source: "APPLYFLOW", profile: payload };
 }

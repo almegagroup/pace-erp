@@ -78,7 +78,7 @@ export async function createCompanyHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
 const { data, error } = await db
-  .from("erp_master.companies")
+  .schema("erp_master").from("companies")
   .insert({
     company_name: companyName,
     gst_number: gst,

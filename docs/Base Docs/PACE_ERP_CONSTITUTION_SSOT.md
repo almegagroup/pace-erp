@@ -412,6 +412,116 @@
 
   Drops zero existing rules
 
+  Amendment — SECTION 16 (Database Access Law)
+
+Status: FINAL
+Authority: Architecture Law
+Scope: All Backend DB Access (Gate-0 → ∞)
+
+SECTION 16 — DATABASE SCHEMA ACCESS LAW
+16.1 Non-Public Schema Rule
+
+PACE-ERP database tables exist under multiple schemas:
+
+erp_core
+erp_master
+erp_map
+erp_menu
+erp_acl
+erp_audit
+erp_cache
+acl
+
+No ERP table exists under public.
+
+Therefore public schema must never be assumed by backend code.
+
+16.2 Mandatory Query Pattern
+
+All Supabase queries MUST explicitly declare schema.
+
+Allowed pattern:
+
+db.schema("erp_core").from("users")
+
+Forbidden pattern:
+
+db.schema("erp_core").from("users")
+
+Reason:
+
+Supabase client may default to:
+
+public.<table>
+
+Which leads to errors like:
+
+Could not find the table 'public.erp_core.users'
+16.3 Absolute Rule
+
+Every database call must follow:
+
+db.schema("<schema>").from("<table>")
+
+Examples:
+
+Correct
+db.schema("erp_core").from("users")
+db.schema("erp_master").from("companies")
+db.schema("erp_map").from("user_projects")
+db.schema("erp_menu").from("menu_master")
+db.schema("erp_audit").from("workflow_events")
+db.schema("erp_cache").from("gst_profiles")
+Incorrect
+db.schema("erp_core").from("users")
+db.schema("erp_master").from("companies")
+db.schema("erp_map").from("user_projects")
+16.4 Enforcement Requirement
+
+Any backend file violating this rule is considered:
+
+STRUCTURAL VIOLATION
+
+Such files:
+
+Must not be merged
+Must not pass review
+Must not reach production
+16.5 Review Checklist Addition
+
+Code review must verify:
+
+No usage of db.from("schema.table")
+
+Instead verify:
+
+db.schema("schema").from("table")
+16.6 Migration Compatibility Guarantee
+
+Using explicit schema ensures:
+
+schema cache correctness
+PostgREST compatibility
+future migration safety
+multi-schema isolation
+16.7 Developer Responsibility
+
+All future database code must follow schema-first access.
+
+No exceptions allowed.
+
+Amendment Summary
+
+New binding law added:
+
+SECTION 16 — DATABASE SCHEMA ACCESS LAW
+
+This ensures:
+
+No future schema resolution bugs
+No PostgREST schema cache errors
+No public schema assumptions
+
   This is now:
   🔒 Architectural + Governance Constitution
   Forensic Audit Base Layer

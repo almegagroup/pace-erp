@@ -64,7 +64,7 @@ export async function createDepartmentHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data, error } = await db
-      .from("erp_master.departments")
+      .schema("erp_master").from("departments")
       .insert({
         department_name: departmentName,
         company_id: ctx.context.companyId,

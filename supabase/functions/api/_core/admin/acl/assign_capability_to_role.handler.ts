@@ -66,7 +66,7 @@ export async function assignCapabilityToRoleHandler(
 
     /* 3️⃣ Validate capability exists */
     const { data: capability } = await db
-      .from("acl.capabilities")
+      .schema("acl").from("capabilities")
       .select("capability_code")
       .eq("capability_code", body.capability_code)
       .maybeSingle();
@@ -81,7 +81,7 @@ export async function assignCapabilityToRoleHandler(
 
     /* 4️⃣ Assign capability to role (idempotent) */
     const { error } = await db
-      .from("acl.role_capabilities")
+      .schema("acl").from("role_capabilities")
       .upsert({
         role_code: body.role_code,
         capability_code: body.capability_code,

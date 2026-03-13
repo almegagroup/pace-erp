@@ -41,7 +41,7 @@ export async function systemHealthHandler(
    * -------------------------------------- */
 
   const { error: dbError } = await db
-    .from("erp_core.sessions")
+    .schema("erp_core").from("sessions")
     .select("session_id")
     .limit(1);
 
@@ -52,7 +52,7 @@ export async function systemHealthHandler(
    * -------------------------------------- */
 
   const { error: aclError } = await db
-    .from("acl.precomputed_acl_view")
+    .schema("acl").from("precomputed_acl_view")
     .select("snapshot_id")
     .limit(1);
 
@@ -63,7 +63,7 @@ export async function systemHealthHandler(
    * -------------------------------------- */
 
   const { error: menuError } = await db
-    .from("erp_menu.menu_snapshot")
+    .schema("erp_menu").from("menu_snapshot")
     .select("menu_code")
     .limit(1);
 

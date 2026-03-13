@@ -18,7 +18,7 @@ export async function getAccountState(authUserId: string): Promise<AccountState 
   assertRlsEnabled();
 
   const { data, error } = await serviceRoleClient
-    .from("erp_core.users")
+    .schema("erp_core").from("users")
     .select("state")
     .eq("auth_user_id", authUserId)
     .single();

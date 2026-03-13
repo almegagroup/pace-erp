@@ -85,7 +85,7 @@ export async function disableCompanyModuleHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { error } = await db
-      .from("acl.company_module_map")
+      .schema("acl").from("company_module_map")
       .upsert(
         {
           company_id: companyId,

@@ -60,7 +60,7 @@ export async function stepSession(
   assertRlsEnabled();
 
   const { data, error } = await serviceRoleClient
-    .from("erp_core.sessions")
+    .schema("erp_core").from("sessions")
     .select("session_id, auth_user_id, status, created_at, last_seen_at, expires_at")
     .eq("session_id", sessionId)
     .single();

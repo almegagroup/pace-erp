@@ -33,7 +33,7 @@ export async function logAdminAction(
   const db = getServiceRoleClientWithContext(ctx.context);
 
   await db
-    .from("erp_audit.admin_action_audit")
+    .schema("erp_audit").from("admin_action_audit")
     .insert({
       request_id: ctx.request_id,
       admin_user_id: ctx.auth_user_id,

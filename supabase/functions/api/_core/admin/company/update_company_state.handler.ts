@@ -76,7 +76,7 @@ export async function handler(
      * 3️⃣ Fetch current company
      * -------------------------------------------------- */
     const { data: company, error: fetchError } = await db
-      .from("erp_master.companies")
+      .schema("erp_master").from("companies")
       .select("id, status")
       .eq("id", body.company_id)
       .single();
@@ -103,7 +103,7 @@ export async function handler(
      * 5️⃣ Update state
      * -------------------------------------------------- */
     const { error: updateError } = await db
-      .from("erp_master.companies")
+      .schema("erp_master").from("companies")
       .update({ status: body.next_status })
       .eq("id", body.company_id);
 

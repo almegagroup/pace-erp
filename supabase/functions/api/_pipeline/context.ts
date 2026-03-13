@@ -80,7 +80,7 @@ async function resolveContextFromDb(
   }
   /* ---- User role (ID-6.6 role binding) ---- */
 const { data: roleRow } = await db
-  .from("erp_map.user_company_roles")
+  .schema("erp_map").from("user_company_roles")
   .select("role_code")
   .eq("auth_user_id", authUserId)
   .eq("company_id", companyId)
@@ -103,7 +103,7 @@ const roleCode = roleRow.role_code;
 
   if (projectHeader) {
     const { data } = await db
-      .from("erp_map.user_projects")
+      .schema("erp_map").from("user_projects")
       .select("project_id")
       .eq("auth_user_id", authUserId)
       .eq("project_id", projectHeader)
@@ -126,7 +126,7 @@ const roleCode = roleRow.role_code;
 
   if (deptHeader) {
     const { data } = await db
-      .from("erp_map.user_departments")
+      .schema("erp_map").from("user_departments")
       .select("department_id")
       .eq("auth_user_id", authUserId)
       .eq("department_id", deptHeader)

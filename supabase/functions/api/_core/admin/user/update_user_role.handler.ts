@@ -64,7 +64,7 @@ export async function updateUserRoleHandler(
   // Fetch current role of target (for self-lockout guard)
   // --------------------------------------------------
   const { data: currentRoleRow } = await db
-    .from("erp_acl.user_roles")
+    .schema("erp_acl").from("user_roles")
     .select("role_code")
     .eq("auth_user_id", target_auth_user_id)
     .single();
@@ -84,7 +84,7 @@ export async function updateUserRoleHandler(
   // Apply role update (single-role model)
   // --------------------------------------------------
   await db
-    .from("erp_acl.user_roles")
+    .schema("erp_acl").from("user_roles")
     .update({
       role_code: normalizedRole,
       role_rank: nextRank,

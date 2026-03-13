@@ -28,7 +28,7 @@ async function getActiveAclVersionId(
   db: SupabaseClient
 ): Promise<string> {
   const { data, error } = await db
-    .from("acl.acl_versions")
+    .schema("acl").from("acl_versions")
     .select("acl_version_id")
     .eq("is_active", true)
     .single();
@@ -139,7 +139,7 @@ const db = getServiceRoleClientWithContext({
 const activeAclVersionId = await getActiveAclVersionId(db);
 
 const { data, error } = await db
-  .from("acl.precomputed_acl_view")
+  .schema("acl").from("precomputed_acl_view")
   .select(`
     resource_code,
     action_code,

@@ -56,7 +56,7 @@ export async function meMenuHandler(
   const db = getServiceRoleClientWithContext(context);
 
   const { data, error } = await db
-    .from("erp_menu.menu_snapshot")
+    .schema("erp_menu").from("menu_snapshot")
     .select(`
   menu_code,
   title,
@@ -148,7 +148,7 @@ export async function createMenuHandler(
   const db = getServiceRoleClientWithContext(ctx.context);
 
   const { error } = await db
-    .from("erp_menu.menu_master")
+    .schema("erp_menu").from("menu_master")
     .insert({
       menu_code: body.menu_code,
       resource_code: body.resource_code,
@@ -183,7 +183,7 @@ export async function updateMenuHandler(
   const db = getServiceRoleClientWithContext(ctx.context);
 
   const { error } = await db
-    .from("erp_menu.menu_master")
+    .schema("erp_menu").from("menu_master")
     .update({
       title: body.title,
       route_path: body.route_path ?? null,
@@ -216,7 +216,7 @@ export async function updateMenuTreeHandler(
   const db = getServiceRoleClientWithContext(ctx.context);
 
   const { error } = await db
-    .from("erp_menu.menu_tree")
+    .schema("erp_menu").from("menu_tree")
     .update({
       parent_menu_id: body.parent_menu_id,
       display_order: body.display_order ?? 0
@@ -246,7 +246,7 @@ export async function updateMenuStateHandler(
   const db = getServiceRoleClientWithContext(ctx.context);
 
   const { error } = await db
-    .from("erp_menu.menu_master")
+    .schema("erp_menu").from("menu_master")
     .update({
       is_active: body.is_active,
       updated_at: new Date().toISOString(),
@@ -305,7 +305,7 @@ export async function previewUserHandler(
  * -------------------------------------------------- */
 
 const { data: roleRow } = await db
-  .from("erp_map.user_company_roles")
+  .schema("erp_map").from("user_company_roles")
   .select("role_code")
   .eq("auth_user_id", targetUserId)
   .eq("company_id", companyId)
@@ -351,7 +351,7 @@ await db.rpc(
    * -------------------------------------------------- */
 
   const { data, error } = await db
-    .from("erp_menu.menu_snapshot")
+    .schema("erp_menu").from("menu_snapshot")
     .select(`
       menu_code,
       title,

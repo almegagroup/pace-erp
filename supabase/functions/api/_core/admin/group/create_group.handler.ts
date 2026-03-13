@@ -58,7 +58,7 @@ export async function createGroupHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data, error } = await db
-      .from("erp_master.groups")
+      .schema("erp_master").from("groups")
       .insert({
         name,
         state: "ACTIVE",

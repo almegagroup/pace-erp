@@ -30,7 +30,7 @@ export async function adminForceRevokeSessions(
   assertRlsEnabled();
 
   const { error } = await serviceRoleClient
-    .from("erp_core.sessions")
+    .schema("erp_core").from("sessions")
     .update({
       status: "REVOKED",               // ✅ FIXED
       revoked_at: new Date().toISOString(),

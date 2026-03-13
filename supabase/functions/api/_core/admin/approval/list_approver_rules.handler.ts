@@ -41,7 +41,7 @@ export async function listApproverRulesHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data, error } = await db
-      .from("acl.approver_map")
+      .schema("acl").from("approver_map")
       .select(`
         approver_id,
         company_id,

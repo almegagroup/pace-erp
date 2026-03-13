@@ -51,7 +51,7 @@ export async function listPendingSignupHandler(
   // Fetch pending signup requests
   // --------------------------------------------------
   const { data } = await db
-    .from("erp_core.signup_requests")
+    .schema("erp_core").from("signup_requests")
     .select(
       "auth_user_id, name, parent_company_name, designation_hint, phone_number, submitted_at"
     )

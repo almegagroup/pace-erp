@@ -55,7 +55,7 @@ export async function resolveIdentifier(
   assertRlsEnabled();
 
   const { data, error } = await serviceRoleClient
-    .from("erp_core.users")
+    .schema("erp_core").from("users")
     .select("auth_user_id")
     .eq("user_code", identifier)
     .single();

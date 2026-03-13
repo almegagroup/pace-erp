@@ -58,7 +58,7 @@ export async function mapCompanyToGroupHandler(
 
     // 3️⃣ Ensure company exists
     const { data: company } = await db
-      .from("erp_master.companies")
+      .schema("erp_master").from("companies")
       .select("id")
       .eq("id", body.company_id)
       .maybeSingle();
@@ -73,7 +73,7 @@ export async function mapCompanyToGroupHandler(
 
     // 4️⃣ Ensure group exists
     const { data: group } = await db
-      .from("erp_master.groups")
+      .schema("erp_master").from("groups")
       .select("id")
       .eq("id", body.group_id)
       .maybeSingle();
@@ -90,7 +90,7 @@ export async function mapCompanyToGroupHandler(
 // Rule: one company → one group
 
 const { data: existing } = await db
-  .from("erp_map.company_group")
+  .schema("erp_map").from("company_group")
   .select("id, group_id")
   .eq("company_id", body.company_id)
   .maybeSingle();
@@ -110,13 +110,13 @@ if (existing && existing.group_id === body.group_id) {
 // Mapped to a different group → replace mapping
 if (existing) {
   await db
-    .from("erp_map.company_group")
+    .schema("erp_map").from("company_group")
     .delete()
     .eq("company_id", body.company_id);
 }
 
 const { error: insertError } = await db
-  .from("erp_map.company_group")
+  .schema("erp_map").from("company_group")
   .insert({
     company_id: body.company_id,
     group_id: body.group_id,

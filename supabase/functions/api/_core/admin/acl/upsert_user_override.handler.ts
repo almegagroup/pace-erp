@@ -97,7 +97,7 @@ export async function upsertUserOverrideHandler(
     };
 
     const { error } = await db
-      .from("acl.user_overrides")
+      .schema("acl").from("user_overrides")
       .upsert(payload, {
         onConflict: "user_id,company_id,resource_code,action_code",
       });

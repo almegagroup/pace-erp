@@ -174,7 +174,7 @@ export async function runPipeline(
       idleResult.status === "ACTIVE"
     ) {
       await serviceRoleClient
-        .from("erp_core.sessions")
+        .schema("erp_core").from("sessions")
         .update({
           last_seen_at: new Date().toISOString(),
         })

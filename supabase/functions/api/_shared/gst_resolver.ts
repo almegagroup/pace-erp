@@ -38,7 +38,7 @@ export async function resolveGstProfile(
    * 1️⃣ Try cache first
    * ----------------------------------------- */
   const { data: cached, error: cacheError } = await db
-    .from("erp_cache.gst_profiles")
+    .schema("erp_cache").from("gst_profiles")
     .select("*")
     .eq("gst_number", gst)
     .maybeSingle();
@@ -71,7 +71,7 @@ export async function resolveGstProfile(
    * 3️⃣ Store in cache (idempotent)
    * ----------------------------------------- */
   const { error: insertError } = await db
-    .from("erp_cache.gst_profiles")
+    .schema("erp_cache").from("gst_profiles")
     .insert(profile);
 
   if (insertError) {

@@ -118,7 +118,7 @@ export async function upsertApproverRuleHandler(
     };
 
     const { error } = await db
-      .from("acl.approver_map")
+      .schema("acl").from("approver_map")
       .upsert(payload, {
         onConflict: "company_id,module_code,approval_stage"
       });

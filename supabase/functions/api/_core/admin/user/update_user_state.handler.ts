@@ -58,7 +58,7 @@ export async function updateUserStateHandler(
   // Fetch target current role (for self-lockout guard)
   // --------------------------------------------------
   const { data: roleRow } = await db
-    .from("erp_acl.user_roles")
+    .schema("erp_acl").from("user_roles")
     .select("role_code")
     .eq("auth_user_id", target_auth_user_id)
     .single();
@@ -78,7 +78,7 @@ export async function updateUserStateHandler(
   // Apply state change (idempotent)
   // --------------------------------------------------
   await db
-    .from("erp_core.users")
+    .schema("erp_core").from("users")
     .update({ state: next_state })
     .eq("auth_user_id", target_auth_user_id);
 

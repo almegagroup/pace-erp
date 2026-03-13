@@ -46,7 +46,7 @@ export async function listCapabilitiesHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data, error } = await db
-      .from("acl.capabilities")
+      .schema("acl").from("capabilities")
       .select(
         `
         capability_code,

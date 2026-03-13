@@ -70,7 +70,7 @@ const companyId = ctx.context.companyId;
     /* -------------------------------------------------- */
 
     await db
-      .from("acl.acl_versions")
+      .schema("acl").from("acl_versions")
       .update({ is_active: false })
       .eq("company_id", companyId)
       .eq("is_active", true);
@@ -80,7 +80,7 @@ const companyId = ctx.context.companyId;
     /* -------------------------------------------------- */
 
     const { error: activateError } = await db
-      .from("acl.acl_versions")
+      .schema("acl").from("acl_versions")
       .update({ is_active: true })
       .eq("acl_version_id", body.acl_version_id)
       .eq("company_id", companyId);

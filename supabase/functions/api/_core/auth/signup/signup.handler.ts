@@ -130,7 +130,7 @@ log({
   // --------------------------------------------------
 
   const { data: existingUser } = await db
-    .from("erp_core.users")
+    .schema("erp_core").from("users")
     .select("id")
     .eq("auth_user_id", authUserId)
     .maybeSingle();
@@ -155,7 +155,7 @@ log({
   
   const { error: userInsertError } = await db
   
-    .from("erp_core.users")
+    .schema("erp_core").from("users")
     .insert({
       auth_user_id: authUserId,
       state: "PENDING",
@@ -181,7 +181,7 @@ log({
   // --------------------------------------------------
 
   const { error: signupInsertError } = await db
-    .from("erp_core.signup_requests")
+    .schema("erp_core").from("signup_requests")
     .insert({
       auth_user_id: authUserId,
       name: String(name ?? "").trim() || "UNKNOWN",

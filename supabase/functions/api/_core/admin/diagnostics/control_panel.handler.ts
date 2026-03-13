@@ -41,7 +41,7 @@ export async function controlPanelHandler(
    * ----------------------------- */
 
   const { error: dbError } = await db
-    .from("erp_core.sessions")
+    .schema("erp_core").from("sessions")
     .select("session_id")
     .limit(1);
 
@@ -52,7 +52,7 @@ export async function controlPanelHandler(
    * ----------------------------- */
 
   const { count: userCount } = await db
-    .from("erp_map.user_company_roles")
+    .schema("erp_map").from("user_company_roles")
     .select("*", { count: "exact", head: true });
 
   /* -----------------------------
@@ -60,7 +60,7 @@ export async function controlPanelHandler(
    * ----------------------------- */
 
   const { data: sessions } = await db
-    .from("erp_core.sessions")
+    .schema("erp_core").from("sessions")
     .select(`
       session_id,
       auth_user_id,
@@ -77,7 +77,7 @@ export async function controlPanelHandler(
    * ----------------------------- */
 
   const { data: audit } = await db
-    .from("erp_audit.admin_action_audit")
+    .schema("erp_audit").from("admin_action_audit")
     .select(`
       audit_id,
       action_code,

@@ -51,7 +51,7 @@ export async function deleteApproverRuleHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { error } = await db
-      .from("acl.approver_map")
+      .schema("acl").from("approver_map")
       .delete()
       .eq("approver_id", approver_id);
 

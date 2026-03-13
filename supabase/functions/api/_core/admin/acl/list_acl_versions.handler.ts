@@ -51,7 +51,7 @@ export async function listAclVersionsHandler(
 const companyId = ctx.context.companyId;
 
     const { data, error } = await db
-      .from("acl.acl_versions")
+      .schema("acl").from("acl_versions")
       .select(`
         acl_version_id,
         version_number,

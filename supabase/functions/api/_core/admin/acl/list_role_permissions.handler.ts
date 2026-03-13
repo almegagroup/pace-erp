@@ -80,7 +80,7 @@ export async function listRolePermissionsHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data, error } = await db
-      .from("acl.role_menu_permissions")
+      .schema("acl").from("role_menu_permissions")
       .select(
         `
           resource_code,

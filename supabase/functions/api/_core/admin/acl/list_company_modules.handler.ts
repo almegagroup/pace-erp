@@ -89,7 +89,7 @@ export async function listCompanyModulesHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data, error } = await db
-      .from("acl.company_module_map")
+      .schema("acl").from("company_module_map")
       .select("module_code, enabled, created_at")
       .eq("company_id", companyId)
       .order("module_code", { ascending: true });

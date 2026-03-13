@@ -50,7 +50,7 @@ export async function unmapCompanyFromGroupHandler(
 
     // 3️⃣ Check existing mapping
     const { data: existing } = await db
-      .from("erp_map.company_group")
+      .schema("erp_map").from("company_group")
       .select("id")
       .eq("company_id", company_id)
       .maybeSingle();
@@ -65,7 +65,7 @@ export async function unmapCompanyFromGroupHandler(
 
     // 4️⃣ Delete mapping
     const { error } = await db
-      .from("erp_map.company_group")
+      .schema("erp_map").from("company_group")
       .delete()
       .eq("company_id", company_id);
 

@@ -61,7 +61,7 @@ export async function processDecisionHandler(
     // =========================================================
 
     const { data: workflow, error: wfError } = await serviceRoleClient
-      .from("acl.workflow_requests")
+      .schema("acl").from("workflow_requests")
       .select("*")
       .eq("request_id", request_id)
       .single();
@@ -104,7 +104,7 @@ const {
   data: approvers,
   error: approverError,
 } = (await serviceRoleClient
-  .from("acl.approver_map")
+  .schema("acl").from("approver_map")
   .select("*")
   .eq("company_id", workflow.company_id)
   .eq("module_code", workflow.module_code)) as {
@@ -144,7 +144,7 @@ if (!matchingApprover) {
 // =========================================================
 
 const { data: aclCheck, error: aclError } = await serviceRoleClient
-  .from("acl.precomputed_acl_view")
+  .schema("acl").from("precomputed_acl_view")
   .select("auth_user_id")
   .eq("auth_user_id", ctx.auth_user_id)
   .eq("company_id", workflow.company_id)
@@ -173,7 +173,7 @@ if (!aclCheck) {
 
 const { data: existingDecision, error: decisionCheckError } =
   await serviceRoleClient
-    .from("acl.workflow_decisions")
+    .schema("acl").from("workflow_decisions")
     .select("*")
     .eq("request_id", workflow.request_id)
     .eq("stage_number", matchingApprover.approval_stage)
@@ -205,7 +205,7 @@ const {
   data: allDecisions,
   error: allDecisionError,
 } = (await serviceRoleClient
-  .from("acl.workflow_decisions")
+  .schema("acl").from("workflow_decisions")
   .select("stage_number, decision")
   .eq("request_id", workflow.request_id)) as {
   data: DecisionRow[] | null;
@@ -256,7 +256,7 @@ if (workflow.approval_type === "SEQUENTIAL") {
   if (lowerDecisions.length > 0) {
     // Mark lower stage decisions as overridden
     const { error: overrideError } = await serviceRoleClient
-      .from("acl.workflow_decisions")
+      .schema("acl").from("workflow_decisions")
       .update({
         overridden_by: ctx.auth_user_id,
       })
@@ -274,7 +274,7 @@ if (workflow.approval_type === "SEQUENTIAL") {
 
     // Audit OVERRIDE event
     await serviceRoleClient
-      .from("erp_audit.workflow_events")
+      .schema("erp_audit").from("workflow_events")
       .insert({
         request_id: workflow.request_id,
         company_id: workflow.company_id,
@@ -321,7 +321,7 @@ const {
   data: updatedDecisions,
   error: updatedDecisionError,
 } = (await serviceRoleClient
-  .from("acl.workflow_decisions")
+  .schema("acl").from("workflow_decisions")
   .select("stage_number, decision")
   .eq("request_id", workflow.request_id)) as {
   data: DecisionRow[] | null;
@@ -359,7 +359,7 @@ const routingResult = _evaluateRouting({
 
 if (routingResult.newState) {
   const { error: updateError } = await serviceRoleClient
-    .from("acl.workflow_requests")
+    .schema("acl").from("workflow_requests")
     .update({
       current_state: routingResult.newState,
     })
@@ -380,7 +380,7 @@ if (routingResult.newState) {
 
 // Log DECISION event
 await serviceRoleClient
-  .from("erp_audit.workflow_events")
+  .schema("erp_audit").from("workflow_events")
   .insert({
     request_id: workflow.request_id,
     company_id: workflow.company_id,
@@ -396,7 +396,7 @@ await serviceRoleClient
 // Log STATE_CHANGE event (only if state changed)
 if (routingResult.newState) {
   await serviceRoleClient
-    .from("erp_audit.workflow_events")
+    .schema("erp_audit").from("workflow_events")
     .insert({
       request_id: workflow.request_id,
       company_id: workflow.company_id,

@@ -62,7 +62,7 @@ export async function updateGroupStateHandler(
 
     // 3️⃣ Fetch current group
     const { data: group, error: fetchError } = await db
-      .from("erp_master.groups")
+      .schema("erp_master").from("groups")
       .select("id, state")
       .eq("id", body.group_id)
       .single();
@@ -89,7 +89,7 @@ export async function updateGroupStateHandler(
 
     // 5️⃣ Update state
     const { error: updateError } = await db
-      .from("erp_master.groups")
+      .schema("erp_master").from("groups")
       .update({ state: body.next_status })
       .eq("id", body.group_id);
 

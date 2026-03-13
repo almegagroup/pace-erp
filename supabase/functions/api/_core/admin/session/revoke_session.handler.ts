@@ -48,7 +48,7 @@ export async function revokeSessionHandler(
   const db = getServiceRoleClientWithContext(ctx.context);
 
   const { error } = await db
-    .from("erp_core.sessions")
+    .schema("erp_core").from("sessions")
     .update({
       status: "REVOKED",
       revoked_at: new Date().toISOString(),
