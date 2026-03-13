@@ -19,42 +19,6 @@ const navigate = useNavigate();
 const [status,setStatus] = useState("checking");
 const [error,setError] = useState(null);
 const [loading,setLoading] = useState(false);
-const [captchaToken,setCaptchaToken] = useState(null);
-
-useEffect(() => {
-
-  function renderCaptcha() {
-
-    if (!globalThis.turnstile) {
-      setTimeout(renderCaptcha, 200);
-      return;
-    }
-
-    const container = document.getElementById("verify-turnstile");
-
-    if (!container) return;
-
-    if (container.childElementCount > 0) return;
-
-    globalThis.turnstile.render(container, {
-
-      sitekey: import.meta.env.VITE_TURNSTILE_SITE_KEY,
-
-      callback: (token) => {
-        setCaptchaToken(token);
-      },
-
-      "expired-callback": () => {
-        setCaptchaToken(null);
-      }
-
-    });
-
-  }
-
-  renderCaptcha();
-
-}, []);
 
 useEffect(()=>{
 
@@ -100,10 +64,6 @@ checkVerification();
 
 async function handleContinue(){
     if(loading) return;
-    if(!captchaToken){
-setError("Captcha verification required");
-return;
-}
 
 setLoading(true);
 
@@ -116,8 +76,7 @@ const token = data.session?.access_token;
 const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/signup`,{
 method:"POST",
 headers:{
-"Authorization": `Bearer ${token}`,
-"x-human-token": captchaToken
+"Authorization": `Bearer ${token}`
 }
 });
 
@@ -125,7 +84,6 @@ if(!res.ok){
 throw new Error("Signup API failed");
 }
 
-setCaptchaToken(null);
 navigate("/signup-submitted");
 
 }catch(err){
@@ -170,15 +128,8 @@ Email Verified Successfully
 Your email has been verified. Continue to submit your ERP signup request.
 </p>
 
-<div className="mb-4 flex justify-center">
-
-<div id="verify-turnstile"></div>
-
-</div>
-
 <button
 onClick={handleContinue}
-
 disabled={loading}
 className="px-6 py-3 bg-[#1E3A8A] text-white rounded-lg hover:opacity-90 disabled:opacity-60"
 >
