@@ -107,9 +107,9 @@ export async function stepRateLimit(
   const url = new URL(req.url);
 
   const isLogin = url.pathname.startsWith("/api/login");
-  const isSignup = url.pathname.startsWith("/api/signup");
+  //const isSignup = url.pathname.startsWith("/api/signup");
 
-  if (!isLogin && !isSignup) {
+  if (!isLogin /*&& !isSignup*/) {
     return;
   }
 

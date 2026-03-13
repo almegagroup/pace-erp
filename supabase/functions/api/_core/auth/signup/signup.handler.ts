@@ -74,12 +74,23 @@ export async function signupHandler(req: Request) {
   // --------------------------------------------------
 
   const authHeader = req.headers.get("authorization");
+  log({
+  level: "OBSERVABILITY",
+  event: "SIGNUP_STEP_1_HEADER",
+  meta: { authHeader }
+});
 
 const token = authHeader?.replace("Bearer ", "");
 
 const { data: userData } = await db.auth.getUser(token);
 
 const authUserId = userData?.user?.id;
+log({
+  level: "OBSERVABILITY",
+  event: "SIGNUP_STEP_2_TOKEN",
+  meta: { authUserId }
+});
+
 
 if (!authUserId) {
   return okResponse(null, requestId);
@@ -91,6 +102,11 @@ if (!authUserId) {
 
   const { data } = await db.auth.admin.getUserById(authUserId);
 const authUser = data?.user;
+log({
+  level: "OBSERVABILITY",
+  event: "SIGNUP_STEP_3_EMAIL",
+  meta: { emailConfirmed: authUser?.email_confirmed_at }
+});
 
   if (!authUser?.email_confirmed_at) {
   return okResponse(null, requestId);
@@ -118,6 +134,11 @@ const authUser = data?.user;
     .select("id")
     .eq("auth_user_id", authUserId)
     .maybeSingle();
+    log({
+  level: "OBSERVABILITY",
+  event: "SIGNUP_STEP_4_EXISTING",
+  meta: { existingUser }
+});
 
   if (existingUser) {
     return okResponse(null, requestId);
@@ -126,8 +147,14 @@ const authUser = data?.user;
   // --------------------------------------------------
   // 6. Create ERP user (PENDING state)
   // --------------------------------------------------
-
+log({
+  level: "OBSERVABILITY",
+  event: "SIGNUP_STEP_5_INSERT_ATTEMPT",
+  meta: { authUserId }
+});
+  
   const { error: userInsertError } = await db
+  
     .from("erp_core.users")
     .insert({
       auth_user_id: authUserId,
