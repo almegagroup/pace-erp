@@ -63,17 +63,22 @@ export async function signupHandler(req: Request) {
   // 1. Human verification (bot protection)
   // --------------------------------------------------
 
+ const humanToken = req.headers.get("x-human-token");
+
+if (humanToken) {
+
   const human = await verifyHumanRequest(req);
 
-if (!human.ok) {
-  log({
-    level: "SECURITY",
-    event: "HUMAN_VERIFICATION_FAILED"
-  });
+  if (!human.ok) {
+    log({
+      level: "SECURITY",
+      event: "HUMAN_VERIFICATION_FAILED"
+    });
 
-  return okResponse(null, requestId);
+    return okResponse(null, requestId);
+  }
+
 }
-
   // --------------------------------------------------
   // 2. Resolve authenticated Supabase user
   // --------------------------------------------------
