@@ -73,11 +73,17 @@ export async function signupHandler(req: Request) {
   // 2. Resolve authenticated Supabase user
   // --------------------------------------------------
 
-  const authUserId = (req as any).auth_user_id;
+  const authHeader = req.headers.get("authorization");
 
-  if (!authUserId) {
-    return okResponse(null, requestId);
-  }
+const token = authHeader?.replace("Bearer ", "");
+
+const { data: userData } = await db.auth.getUser(token);
+
+const authUserId = userData?.user?.id;
+
+if (!authUserId) {
+  return okResponse(null, requestId);
+}
 
   // --------------------------------------------------
   // 3. Verify Supabase email confirmation
