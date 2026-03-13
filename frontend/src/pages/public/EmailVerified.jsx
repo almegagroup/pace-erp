@@ -23,13 +23,36 @@ const [captchaToken,setCaptchaToken] = useState(null);
 
 useEffect(() => {
 
-  globalThis.onTurnstileSuccess = (token) => {
-    setCaptchaToken(token);
-  };
+  function renderCaptcha() {
 
-  globalThis.onTurnstileExpired = () => {
-    setCaptchaToken(null);
-  };
+    if (!globalThis.turnstile) {
+      setTimeout(renderCaptcha, 200);
+      return;
+    }
+
+    const container = document.getElementById("verify-turnstile");
+
+    if (!container) return;
+
+    if (container.childElementCount > 0) return;
+
+    globalThis.turnstile.render(container, {
+
+      sitekey: import.meta.env.VITE_TURNSTILE_SITE_KEY,
+
+      callback: (token) => {
+        setCaptchaToken(token);
+      },
+
+      "expired-callback": () => {
+        setCaptchaToken(null);
+      }
+
+    });
+
+  }
+
+  renderCaptcha();
 
 }, []);
 
@@ -149,12 +172,7 @@ Your email has been verified. Continue to submit your ERP signup request.
 
 <div className="mb-4 flex justify-center">
 
-<div
-className="cf-turnstile"
-data-sitekey={import.meta.env.VITE_TURNSTILE_SITE_KEY}
-data-callback="onTurnstileSuccess"
-data-expired-callback="onTurnstileExpired"
-></div>
+<div id="verify-turnstile"></div>
 
 </div>
 

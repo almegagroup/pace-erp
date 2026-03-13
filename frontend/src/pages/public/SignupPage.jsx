@@ -32,12 +32,43 @@ const [captchaToken,setCaptchaToken] = useState(null);
 
 useEffect(() => {
 
-  globalThis.onTurnstileSuccess = (token) => {
-    setCaptchaToken(token);
-  };
+  let cancelled = false;
 
-  globalThis.onTurnstileExpired = () => {
-    setCaptchaToken(null);
+  function renderCaptcha() {
+
+    if (cancelled) return;
+
+    if (!globalThis.turnstile) {
+      setTimeout(renderCaptcha, 200);
+      return;
+    }
+
+    const container = document.getElementById("signup-turnstile");
+
+    if (!container) return;
+
+    if (container.childElementCount > 0) return;
+
+    globalThis.turnstile.render(container, {
+
+      sitekey: import.meta.env.VITE_TURNSTILE_SITE_KEY,
+
+      callback: (token) => {
+        setCaptchaToken(token);
+      },
+
+      "expired-callback": () => {
+        setCaptchaToken(null);
+      }
+
+    });
+
+  }
+
+  renderCaptcha();
+
+  return () => {
+    cancelled = true;
   };
 
 }, []);
@@ -254,15 +285,10 @@ className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 fo
 {/* CAPTCHA */}
 
 <div className="mb-4 flex justify-center">
-
-<div
-className="cf-turnstile"
-data-sitekey={import.meta.env.VITE_TURNSTILE_SITE_KEY}
-data-callback="onTurnstileSuccess"
-data-expired-callback="onTurnstileExpired"
-></div>
-
+  <div id="signup-turnstile"></div>
 </div>
+
+
 
 {/* Error */}
 
