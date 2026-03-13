@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient.js";
 
@@ -28,6 +28,19 @@ const [password,setPassword] = useState("");
 const [loading,setLoading] = useState(false);
 const [error,setError] = useState(null);
 const [success,setSuccess] = useState(false);
+const [captchaToken,setCaptchaToken] = useState(null);
+
+useEffect(() => {
+
+  globalThis.onTurnstileSuccess = (token) => {
+    setCaptchaToken(token);
+  };
+
+  globalThis.onTurnstileExpired = () => {
+    setCaptchaToken(null);
+  };
+
+}, []);
 
 async function handleSignup(e){
 
@@ -44,6 +57,11 @@ return;
 
 if(!email || !password){
 setError("Email and password are required");
+return;
+}
+
+if(!captchaToken){
+setError("Please complete captcha");
 return;
 }
 
@@ -75,6 +93,7 @@ if(error){
 throw new Error(error.message);
 }
 
+setCaptchaToken(null);
 setSuccess(true);
 
 }catch(err){
@@ -230,6 +249,18 @@ value={password}
 onChange={(e)=>setPassword(e.target.value)}
 className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
 />
+
+</div>
+{/* CAPTCHA */}
+
+<div className="mb-4 flex justify-center">
+
+<div
+className="cf-turnstile"
+data-sitekey={import.meta.env.VITE_TURNSTILE_SITE_KEY}
+data-callback="onTurnstileSuccess"
+data-expired-callback="onTurnstileExpired"
+></div>
 
 </div>
 

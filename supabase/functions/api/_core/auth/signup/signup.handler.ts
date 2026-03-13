@@ -11,7 +11,7 @@
 import { serviceRoleClient } from "../../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../../response.ts";
 import { log } from "../../../_lib/logger.ts";
-//import { verifyHumanRequest } from "../../../_security/human_verification.ts";
+import { verifyHumanRequest } from "../../../_security/human_verification.ts";
 
 /**
  * Signup Request Handler
@@ -63,11 +63,16 @@ export async function signupHandler(req: Request) {
   // 1. Human verification (bot protection)
   // --------------------------------------------------
 
-  //const human = await verifyHumanRequest(req);
+  const human = await verifyHumanRequest(req);
 
-  //if (!human.ok) {
-    //return okResponse(null, requestId);
-  //}
+if (!human.ok) {
+  log({
+    level: "SECURITY",
+    event: "HUMAN_VERIFICATION_FAILED"
+  });
+
+  return okResponse(null, requestId);
+}
 
   // --------------------------------------------------
   // 2. Resolve authenticated Supabase user

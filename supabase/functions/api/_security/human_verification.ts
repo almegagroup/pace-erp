@@ -10,9 +10,9 @@
 
 const SECRET =
   (typeof Deno !== "undefined"
-    ? Deno.env.get("HUMAN_VERIFICATION_SECRET")
-    : process.env.HUMAN_VERIFICATION_SECRET) ?? "DEV_ONLY_SECRET";
-const TTL_MS = 3 * 60 * 1000; // 3 minutes
+    ? Deno.env.get("TURNSTILE_SECRET_KEY")
+    : process.env.TURNSTILE_SECRET_KEY);
+
 
 type VerificationResult = {
   ok: boolean;
@@ -21,68 +21,41 @@ type VerificationResult = {
 export async function verifyHumanRequest(
   req: Request
 ): Promise<VerificationResult> {
+
   try {
+    if (!SECRET) {
+  return { ok: false };
+}
+
     const token = req.headers.get("x-human-token");
+
     if (!token) return { ok: false };
 
-    const parts = token.split(".");
-    if (parts.length !== 3) return { ok: false };
+    const body = new URLSearchParams();
 
-    const [payloadB64, signatureHex, issuedAtStr] = parts;
-    const issuedAt = Number(issuedAtStr);
+    body.append("secret", SECRET ?? "");
+    body.append("response", token);
 
-    if (!issuedAt || Date.now() - issuedAt > TTL_MS) {
-      return { ok: false };
-    }
+    const res = await fetch(
+      "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+      {
+        method: "POST",
+        body
+      }
+    );
 
-    const fingerprint = buildFingerprint(req);
-    const data = `${payloadB64}.${issuedAt}.${fingerprint}`;
+    const data = await res.json();
 
-    const expectedSig = await hmacSha256Hex(SECRET, data);
-
-    if (!timingSafeEqual(signatureHex, expectedSig)) {
+    if (!data.success) {
       return { ok: false };
     }
 
     return { ok: true };
+
   } catch {
-    return { ok: false }; // silent fail
+
+    return { ok: false };
+
   }
 }
 
-function buildFingerprint(req: Request): string {
-  const ua = req.headers.get("user-agent") ?? "";
-  const accept = req.headers.get("accept") ?? "";
-  return `${ua}|${accept}`;
-}
-
-async function hmacSha256Hex(secret: string, data: string): Promise<string> {
-  const enc = new TextEncoder();
-
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-
-  const sig = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    enc.encode(data)
-  );
-
-  return [...new Uint8Array(sig)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let out = 0;
-  for (let i = 0; i < a.length; i++) {
-    out |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return out === 0;
-}
