@@ -37,6 +37,11 @@ if(loading) return;
 
 setError(null);
 
+if(!name || !company){
+setError("Name and Company are required");
+return;
+}
+
 if(!email || !password){
 setError("Email and password are required");
 return;
@@ -52,7 +57,16 @@ email,
 password,
 
 options:{
-emailRedirectTo: `${window.location.origin}/email-verified`
+
+data:{
+name: name,
+parent_company: company,
+designation_hint: designation,
+phone: phone
+},
+
+emailRedirectTo: `${globalThis.location.origin}/email-verified`
+
 }
 
 });

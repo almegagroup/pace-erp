@@ -78,7 +78,7 @@ export async function listRoleCapabilitiesHandler(
       log({
         level: "ERROR",
         request_id: requestId,
-        gate: "9.7A",
+        gate_id: "9.7A",
         event: "LIST_ROLE_CAPABILITIES_DB_ERROR",
         meta: { error: error.message },
       });

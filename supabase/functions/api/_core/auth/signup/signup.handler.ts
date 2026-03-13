@@ -116,14 +116,12 @@ log({
   // 4. Parse optional signup metadata (NON-AUTHORITATIVE)
   // --------------------------------------------------
 
-  const body = await req.json().catch(() => ({}));
+  const metadata = authUser?.user_metadata ?? {};
 
-  const {
-    name,
-    parent_company,
-    designation_hint,
-    phone,
-  } = body ?? {};
+const name = metadata.name;
+const parent_company = metadata.parent_company;
+const designation_hint = metadata.designation_hint;
+const phone = metadata.phone;
 
   // --------------------------------------------------
   // 5. Check if ERP user already exists

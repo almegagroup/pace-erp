@@ -18,6 +18,7 @@ const navigate = useNavigate();
 
 const [status,setStatus] = useState("checking");
 const [error,setError] = useState(null);
+const [loading,setLoading] = useState(false);
 
 useEffect(()=>{
 
@@ -62,6 +63,9 @@ checkVerification();
 
 
 async function handleContinue(){
+    if(loading) return;
+
+setLoading(true);
 
 try{
 
@@ -72,10 +76,8 @@ const token = data.session?.access_token;
 const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/signup`,{
 method:"POST",
 headers:{
-"Content-Type":"application/json",
 "Authorization": `Bearer ${token}`
-},
-body: JSON.stringify({})
+}
 });
 
 if(!res.ok){
@@ -88,8 +90,11 @@ navigate("/signup-submitted");
 
 setError("Signup request failed");
 
-}
+}finally{
 
+setLoading(false);
+
+}
 }
 
 
@@ -125,9 +130,12 @@ Your email has been verified. Continue to submit your ERP signup request.
 
 <button
 onClick={handleContinue}
-className="px-6 py-3 bg-[#1E3A8A] text-white rounded-lg hover:opacity-90"
+disabled={loading}
+className="px-6 py-3 bg-[#1E3A8A] text-white rounded-lg hover:opacity-90 disabled:opacity-60"
 >
-Continue
+
+{loading ? "Submitting..." : "Continue"}
+
 </button>
 
 </div>

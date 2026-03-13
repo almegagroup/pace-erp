@@ -63,7 +63,7 @@ export async function enableCompanyModuleHandler(
       log({
         level: "SECURITY",
         request_id: requestId,
-        gate: "9.9",
+        gate_id: "9.9",
         event: "ENABLE_COMPANY_MODULE_INVALID_INPUT",
         meta: body,
       });
@@ -98,7 +98,7 @@ export async function enableCompanyModuleHandler(
       log({
         level: "ERROR",
         request_id: requestId,
-        gate: "9.9",
+        gate_id: "9.9",
         event: "ENABLE_COMPANY_MODULE_DB_ERROR",
         meta: { error: error.message },
       });
@@ -116,7 +116,7 @@ export async function enableCompanyModuleHandler(
     log({
       level: "SECURITY",
       request_id: requestId,
-      gate: "9.9",
+      gate_id: "9.9",
       event: "COMPANY_MODULE_ENABLED",
       meta: { company_id: companyId, module_code: moduleCode },
     });
@@ -133,7 +133,7 @@ export async function enableCompanyModuleHandler(
     log({
       level: "ERROR",
       request_id: requestId,
-      gate: "9.9",
+      gate_id: "9.9",
       event: "ENABLE_COMPANY_MODULE_EXCEPTION",
       meta: { error: String(err) },
     });
