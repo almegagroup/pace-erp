@@ -10,6 +10,7 @@
 .gitignore
 .vscode
   settings.json
+analysis.txt
 docs
   ACL_SSOT.md
   Base Docs
@@ -64,6 +65,7 @@ frontend
   index.html
   package-lock.json
   package.json
+  postcss.config.js
   public
     vite.svg
   README.md
@@ -77,7 +79,9 @@ frontend
     App.css
     App.jsx
     assets
+      pace-bgr.png
       react.svg
+      sp.png
     context
       MenuContext.js
       MenuProvider.jsx
@@ -86,6 +90,8 @@ frontend
     layout
       HiddenRouteRedirect.jsx
       MenuShell.jsx
+    lib
+      supabaseClient.js
     main.jsx
     navigation
       backGuardEngine.js
@@ -112,6 +118,13 @@ frontend
       screenStackEngine.js
       screenStackInvariant.js
       screenTypes.js
+    pages
+      public
+        EmailVerified.jsx
+        LandingPage.jsx
+        LoginScreen.jsx
+        SignupPage.jsx
+        SignupSubmittedPage.jsx
     router
       AppRouter.jsx
       DeepLinkGuard.jsx
@@ -356,6 +369,8 @@ supabase
     20260405140000_gate7_5_19_workflow_audit.sql
     20260405150000_gate7_5_15_override_transaction.sql
     20260406110000_gate7_5_20_workflow_indexes.sql
+    20260407101000_gate4_4_1A_users_auth_identity_uniqueness.sql
+TEMP_UI_BOOT_LOG.md
 tests
   acl
     test_acl_trace_admin.ts
@@ -367,6 +382,8 @@ tests
 
 
 FILE: \frontend\eslint.config.js
+
+FILE: \frontend\postcss.config.js
 
 FILE: \frontend\src\admin\adminEntryGuard.js
   [11] import { getActiveScreen } from "../navigation/screenStackEngine.js";
@@ -393,8 +410,10 @@ FILE: \frontend\src\context\MenuContext.js
 FILE: \frontend\src\context\MenuProvider.jsx
   [3] * File-Path: frontend/src/context/MenuProvider.jsx
   [15] export function MenuProvider({ children }) {
-  [21] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
-  [21] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+  [26] File: MenuProvider.jsx
+  [29] Menu API (/api/me/menu) requires valid session.
+  [60] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+  [60] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
 
 FILE: \frontend\src\context\useMenu.js
 
@@ -404,8 +423,12 @@ FILE: \frontend\src\layout\MenuShell.jsx
   [3] * File-Path: frontend/src/layout/MenuShell.jsx
   [13] export default function MenuShell({ children }) {
 
+FILE: \frontend\src\lib\supabaseClient.js
+
 FILE: \frontend\src\main.jsx
   [20] import { initNavigation } from "./navigation/screenStackEngine.js";
+  [37] before screenStackEngine forces DASHBOARD_HOME.
+  [54] Public routes render outside the screenStackEngine.
 
 FILE: \frontend\src\navigation\backGuardEngine.js
   [11] import { popScreen, getStackSnapshot, getActiveScreen } from "./screenStackEngine.js";
@@ -452,17 +475,31 @@ FILE: \frontend\src\navigation\screenStackInvariant.js
 
 FILE: \frontend\src\navigation\screenTypes.js
 
+FILE: \frontend\src\pages\public\EmailVerified.jsx
+  [76] const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/signup`,{
+
+FILE: \frontend\src\pages\public\LandingPage.jsx
+
+FILE: \frontend\src\pages\public\LoginScreen.jsx
+  [64] const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/login`,{
+  [93] const me = await fetch(`${import.meta.env.VITE_API_BASE}/api/me`,{
+
+FILE: \frontend\src\pages\public\SignupPage.jsx
+
+FILE: \frontend\src\pages\public\SignupSubmittedPage.jsx
+
 FILE: \frontend\src\router\AppRouter.jsx
   [3] * File-Path: frontend/src/router/AppRouter.jsx
-  [12] import RouteGuard from "./RouteGuard.jsx";
-  [13] import DeepLinkGuard from "./DeepLinkGuard.jsx";
-  [14] import MenuShell from "../layout/MenuShell.jsx";
-  [21] export default function AppRouter() {
-  [35] <Route element={<DeepLinkGuard />}>
-  [39] <MenuShell>
-  [40] <RouteGuard>
-  [42] </RouteGuard>
-  [43] </MenuShell>
+  [17] import RouteGuard from "./RouteGuard.jsx";
+  [18] import DeepLinkGuard from "./DeepLinkGuard.jsx";
+  [19] import MenuShell from "../layout/MenuShell.jsx";
+  [26] export default function AppRouter() {
+  [34] File: AppRouter.jsx
+  [55] <Route element={<DeepLinkGuard />}>
+  [59] <MenuShell>
+  [60] <RouteGuard>
+  [62] </RouteGuard>
+  [63] </MenuShell>
 
 FILE: \frontend\src\router\DeepLinkGuard.jsx
   [3] * File-Path: frontend/src/router/DeepLinkGuard.jsx
@@ -664,6 +701,7 @@ FILE: \supabase\functions\api\_routes\workflow.routes.ts
 FILE: \supabase\functions\api\_security\csp.ts
 
 FILE: \supabase\functions\api\_security\human_verification.ts
+  [39] const res = await fetch(
 
 FILE: \supabase\functions\api\_security\security_events.ts
 

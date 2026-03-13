@@ -14,6 +14,8 @@ import LoginScreen from "../pages/public/LoginScreen.jsx";
 import SignupScreen from "../pages/public/SignupPage.jsx";
 import EmailVerified from "../pages/public/EmailVerified.jsx";
 import SignupSubmittedPage from "../pages/public/SignupSubmittedPage.jsx";
+import ForgotPassword from "../pages/public/ForgotPassword.jsx";
+import ResetPassword from "../pages/public/ResetPassword.jsx";
 import RouteGuard from "./RouteGuard.jsx";
 import DeepLinkGuard from "./DeepLinkGuard.jsx";
 import MenuShell from "../layout/MenuShell.jsx";
@@ -79,6 +81,8 @@ export default function AppRouter() {
         <Route path="/email-verified" element={<EmailVerified />} />
 
         <Route path="/signup-submitted" element={<SignupSubmittedPage />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
 
        </Routes>
   

@@ -281,9 +281,8 @@ AUTH LINKS
 
 {/*
 NOTE:
-Forgot Password page not implemented yet.
-Future route: /forgot-password
-Will connect to password reset flow.
+* Forgot Password flow implemented
+* Signup flow implemented
 */}
 
 <Link to="/forgot-password" className="hover:underline">

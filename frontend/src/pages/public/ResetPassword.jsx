@@ -1,0 +1,177 @@
+/*
+ * File-ID: UI-7
+ * File-Path: frontend/src/pages/public/ResetPassword.jsx
+ * Gate: UI
+ * Phase: Public
+ * Domain: FRONT
+ * Purpose: ERP reset password screen
+ * Authority: Frontend
+ *
+ * NOTE:
+ * * Triggered from Supabase email recovery link
+ * * Uses Supabase Auth updateUser
+ * * No ERP backend/API required
+ */
+
+import { useState, useEffect } from "react";
+import { useNavigate, Link } from "react-router-dom";
+import logo from "../../assets/pace-bgr.png";
+import { supabase } from "../../lib/supabaseClient.js";
+
+export default function ResetPassword(){
+
+const navigate = useNavigate();
+
+const [password,setPassword] = useState("");
+const [confirm,setConfirm] = useState("");
+
+const [loading,setLoading] = useState(false);
+const [error,setError] = useState(null);
+const [success,setSuccess] = useState(false);
+
+/* restore recovery session */
+
+useEffect(()=>{
+
+supabase.auth.getSession();
+
+},[]);
+
+async function handleReset(e){
+
+if(e) e.preventDefault();
+if(loading) return;
+
+if(!password || !confirm){
+setError("Please enter password");
+return;
+}
+
+if(password !== confirm){
+setError("Passwords do not match");
+return;
+}
+
+if(password.length < 6){
+setError("Password must be at least 6 characters");
+return;
+}
+
+setError(null);
+setLoading(true);
+
+try{
+
+const { error } = await supabase.auth.updateUser({
+password: password
+});
+
+if(error) throw error;
+
+setSuccess(true);
+
+setTimeout(()=>{
+
+navigate("/login");
+
+},2000);
+
+}catch{
+
+setError("Unable to reset password");
+
+}finally{
+
+setLoading(false);
+
+}
+
+}
+
+return(
+
+<div className="min-h-screen flex items-center justify-center bg-[#F5F6F8]">
+
+<div className="w-[360px] bg-white rounded-xl shadow-md p-8">
+
+<div className="flex flex-col items-center">
+
+<img src={logo} className="w-[180px] mb-4"/>
+
+<p className="text-gray-600 text-center mb-6">
+Reset your password
+</p>
+
+</div>
+
+<form onSubmit={handleReset}>
+
+<div className="mb-4">
+
+<input
+type="password"
+placeholder="New password"
+value={password}
+onChange={(e)=>setPassword(e.target.value)}
+disabled={loading}
+className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+/>
+
+</div>
+
+<div className="mb-4">
+
+<input
+type="password"
+placeholder="Confirm password"
+value={confirm}
+onChange={(e)=>setConfirm(e.target.value)}
+disabled={loading}
+className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+/>
+
+</div>
+
+{error && (
+<div className="text-red-600 text-sm mb-4 text-center">
+{error}
+</div>
+)}
+
+{success && (
+<div className="text-green-600 text-sm mb-4 text-center">
+Password reset successful. Redirecting to login...
+</div>
+)}
+
+<button
+type="submit"
+disabled={loading || success}
+className="w-full py-3 bg-[#1E3A8A] text-white rounded-lg hover:opacity-90 transition disabled:opacity-60"
+>
+
+{loading ? "Resetting..." : "Reset Password"}
+
+</button>
+
+</form>
+
+<div className="flex justify-between mt-5 text-sm text-gray-600">
+
+<Link to="/login">Back to Login</Link>
+
+<Link to="/signup">Create Account</Link>
+
+</div>
+
+<div className="text-center text-xs text-gray-400 mt-6">
+© Almega Group
+</div>
+
+</div>
+
+</div>
+
+);
+
+}
