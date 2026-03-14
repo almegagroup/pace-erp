@@ -143,16 +143,19 @@ return(
 
 <div className="min-h-screen flex items-center justify-center bg-[#F5F6F8]">
 
-<div className="w-[380px] bg-white rounded-xl shadow-md p-8">
+<div className="w-[380px] bg-white rounded-xl shadow-md p-6 h-[620px] flex flex-col">
 
 {/* Logo */}
 
-<div className="flex flex-col items-center">
+<div className="flex flex-col items-center shrink-0">
 
+<div className="w-[360px] mb-1">
 <img
 src={logo}
-className="w-[180px] mb-4"
+className="w-full h-auto"
+loading="eager"
 />
+</div>
 
 <p className="text-gray-600 text-center mb-6">
 Create your ERP account
@@ -197,6 +200,7 @@ Back to Landing Page
 
 ) : (
 
+<div className="flex-1 overflow-y-auto mt-2">
 <form onSubmit={handleSignup}>
 
 {/* Name */}
@@ -329,6 +333,7 @@ Cancel
 </button>
 
 </form>
+</div>
 
 )}
 

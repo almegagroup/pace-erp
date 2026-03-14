@@ -1673,4 +1673,722 @@ Auth
 System is ready to proceed to the login pipeline integration phase.
 
 
+58. PASSWORD RECOVERY FLOW IMPLEMENTATION
 
+Status:
+Completed
+
+Files created:
+
+frontend/src/pages/public/ForgotPassword.jsx
+frontend/src/pages/public/ResetPassword.jsx
+
+Purpose:
+
+Provide secure password recovery capability for ERP users using Supabase Auth recovery flow.
+
+The recovery mechanism allows a user to reset their password without interacting with ERP database structures.
+
+Important architectural rule:
+
+Password recovery operates entirely at the Supabase Identity Layer.
+
+ERP database is not involved.
+
+59. FORGOT PASSWORD SCREEN
+
+File:
+
+frontend/src/pages/public/ForgotPassword.jsx
+
+Purpose:
+
+Allow users to request a password reset link via their registered email address.
+
+User interaction:
+
+User enters email
+↓
+Click "Send Reset Link"
+↓
+supabase.auth.resetPasswordForEmail()
+↓
+Supabase sends recovery email
+
+Implementation:
+
+supabase.auth.resetPasswordForEmail(email,{
+  redirectTo: `${window.location.origin}/reset-password`
+})
+
+Security rule enforced:
+
+Email enumeration protection.
+
+The UI never reveals whether the email exists in the system.
+
+Displayed message:
+
+If an account exists for this email, a reset link has been sent.
+
+Effect:
+
+Prevents attackers from discovering valid ERP user emails.
+
+60. PASSWORD RESET SCREEN
+
+File:
+
+frontend/src/pages/public/ResetPassword.jsx
+
+Purpose:
+
+Allow users to update their password using a Supabase recovery token delivered via email.
+
+Recovery flow:
+
+User receives reset email
+↓
+Clicks recovery link
+↓
+Redirected to /reset-password
+↓
+User enters new password
+↓
+supabase.auth.updateUser()
+↓
+Password updated
+
+Implementation:
+
+supabase.auth.updateUser({
+  password: newPassword
+})
+
+User experience safeguards:
+
+Password confirmation validation
+
+Minimum password length check
+
+Submit button disabled during request
+
+Submit button disabled after success
+
+Automatic redirect to login after reset completion.
+
+61. PUBLIC ROUTES UPDATE (PASSWORD RECOVERY)
+
+Router updated to support recovery flow.
+
+New public routes:
+
+/forgot-password
+/reset-password
+
+Router location:
+
+frontend/src/router/AppRouter.jsx
+
+Updated public route list:
+
+/
+ /login
+ /signup
+ /email-verified
+ /signup-submitted
+ /forgot-password
+ /reset-password
+
+Reason:
+
+Password recovery must operate outside authenticated ERP universe.
+
+MenuProvider must remain inactive during recovery flow.
+
+62. MENU PROVIDER AND NAVIGATION GUARD UPDATE
+
+Files affected:
+
+frontend/src/context/MenuProvider.jsx
+frontend/src/main.jsx
+
+Public routes extended to include recovery routes.
+
+PUBLIC_ROUTES set now includes:
+
+/
+ /login
+ /signup
+ /email-verified
+ /signup-submitted
+ /forgot-password
+ /reset-password
+
+Effect:
+
+MenuProvider will NOT attempt to call:
+
+GET /api/me/menu
+
+when user is inside password recovery flow.
+
+Navigation engine also remains inactive during recovery screens.
+
+Implementation:
+
+if (!PUBLIC_ROUTES.has(pathname)) {
+  initNavigation("DASHBOARD_HOME");
+}
+
+Result:
+
+Password recovery pages render safely without triggering authenticated navigation or menu systems.
+
+63. PASSWORD RECOVERY ARCHITECTURE CONFIRMATION
+
+The following architectural rules remain intact:
+
+Supabase Auth handles identity recovery.
+
+ERP backend is not involved in password reset operations.
+
+ERP database tables remain untouched.
+
+ACL system remains inactive during recovery flow.
+
+MenuProvider is guarded.
+
+Navigation engine is guarded.
+
+HiddenRouteRedirect remains disabled until login pipeline is activated.
+
+64. CURRENT SYSTEM STATE (UPDATED)
+
+ERP public authentication layer now supports:
+
+Landing page
+
+Login screen
+
+Signup onboarding
+
+Email verification
+
+Captcha protection
+
+Signup request submission
+
+Forgot password recovery
+
+Password reset
+
+Menu snapshot system remains inactive during public authentication flows.
+
+ERP architecture invariants remain preserved.
+
+NEXT EXECUTION STEP
+
+Next phase:
+
+PHASE 3C — LOGIN API INTEGRATION
+
+Tasks:
+
+Connect LoginScreen.jsx → POST /api/login
+
+Receive session cookie
+
+Call /api/me
+
+Resolve user role
+
+Redirect user
+
+SA → /sa/home
+GA → /ga/home
+USER → /dashboard
+
+Reactivate HiddenRouteRedirect
+
+Activate MenuProvider after authentication
+
+65. PHASE 3C — LOGIN PIPELINE IMPLEMENTATION
+
+Status:
+Completed
+
+Purpose:
+
+Integrate the ERP login screen with the backend authentication
+pipeline and activate the authenticated ERP universe routing.
+
+Files modified:
+
+frontend/src/pages/public/LoginScreen.jsx
+frontend/src/router/AppRouter.jsx
+
+File created:
+
+frontend/src/admin/AdminResolver.jsx
+66. LOGIN API INTEGRATION
+
+LoginScreen.jsx now performs the full authentication pipeline.
+
+Login sequence:
+
+Landing (/)
+↓
+Login (/login)
+↓
+POST /api/login
+↓
+Session cookie issued
+↓
+GET /api/me
+↓
+GET /api/me/menu
+↓
+Universe resolution
+
+Redirect logic:
+
+Admin Universe → /admin
+ACL Users → /dashboard
+
+Important architecture rule:
+
+Frontend does not resolve role directly.
+
+Role resolution is delegated to menu snapshot logic.
+
+67. ADMIN ROUTING RESOLVER
+
+A new routing resolver was introduced to support clean
+enterprise ERP navigation architecture.
+
+File created:
+
+frontend/src/admin/AdminResolver.jsx
+
+Purpose:
+
+Resolve the correct admin dashboard based on the menu snapshot.
+
+Process:
+
+/admin
+↓
+GET /api/me/menu
+↓
+Inspect menu snapshot
+↓
+GA → /ga/home
+SA → /sa/home
+
+Implementation logic:
+
+const ga = menu.find(m => m.route_path === "/ga/home");
+const sa = menu.find(m => m.route_path === "/sa/home");
+
+Navigation result:
+
+GA user → /ga/home
+SA user → /sa/home
+
+Fallback:
+
+navigate("/dashboard")
+
+Error case:
+
+navigate("/login")
+68. ROUTER UPDATE
+
+Router updated to support AdminResolver entry point.
+
+File modified:
+
+frontend/src/router/AppRouter.jsx
+
+New route added:
+
+/admin → AdminResolver
+
+Router structure now:
+
+/admin
+/sa/home
+/ga/home
+/dashboard
+/login
+/signup
+/reset-password
+69. ERP LOGIN FLOW (FINAL)
+
+ERP authentication entry flow now operates as:
+
+Landing (/)
+↓
+Login (/login)
+↓
+POST /api/login
+↓
+Session cookie issued
+↓
+GET /api/me/menu
+↓
+Universe resolution
+
+Admin → /admin
+ACL → /dashboard
+
+/admin
+↓
+AdminResolver
+↓
+Menu snapshot
+
+GA → /ga/home
+SA → /sa/home
+70. ARCHITECTURE COMPLIANCE
+
+The login implementation maintains the following ERP
+architecture invariants:
+
+Frontend does not resolve role directly.
+
+Menu snapshot remains the Single Source of Truth
+for navigation authority.
+
+Admin routing is delegated to AdminResolver.
+
+MenuProvider remains inactive during public routes.
+
+ACL guards remain unchanged.
+
+ERP navigation architecture remains deterministic.
+
+71. CURRENT SYSTEM STATE (UPDATED)
+
+ERP UI public layer:
+
+Landing page → Operational
+Login screen → Operational
+Signup onboarding → Operational
+Email verification → Operational
+Captcha protection → Operational
+Password recovery → Operational
+
+ERP authentication pipeline:
+
+Login API → Integrated
+Session cookie → Working
+Menu snapshot → Working
+
+Admin routing:
+
+AdminResolver → Operational
+
+Navigation engine:
+
+Guarded during public routes
+
+HiddenRouteRedirect:
+
+Still temporarily disabled
+
+ERP architecture invariants:
+
+Preserved
+
+72. PWA ICON PACK IMPLEMENTATION
+
+Status:
+Completed
+
+Purpose:
+
+Enable proper Progressive Web App installation support for the ERP UI across:
+
+Android
+
+Desktop Chrome
+
+iOS Safari
+
+Edge
+
+PWA install prompt
+
+Previously the system used a single icon:
+
+/lm.png
+
+This approach caused problems because modern PWA manifests require multiple icon sizes.
+
+Implementation:
+
+A full production PWA icon pack was generated from the ERP logo.
+
+Icon set created:
+
+public/icon-192.png
+public/icon-512.png
+public/icon-maskable-512.png
+
+Purpose of each icon:
+
+icon-192.png
+Used for Android home screen and basic PWA install.
+
+icon-512.png
+Used for splash screens and high resolution install.
+
+icon-maskable-512.png
+Used for adaptive icons on Android.
+
+Maskable icons ensure that the logo remains visible when the OS applies circular or squircle cropping.
+
+73. PWA MANIFEST UPDATE
+
+File modified:
+
+vite.config.js
+
+The PWA manifest icon configuration was updated to reference the new icon set.
+
+Updated manifest configuration:
+
+icons: [
+  {
+    src: "/icon-192.png",
+    sizes: "192x192",
+    type: "image/png"
+  },
+  {
+    src: "/icon-512.png",
+    sizes: "512x512",
+    type: "image/png"
+  },
+  {
+    src: "/icon-maskable-512.png",
+    sizes: "512x512",
+    type: "image/png",
+    purpose: "maskable"
+  }
+]
+
+Effect:
+
+The ERP application can now be installed as a proper PWA application.
+
+Installation targets:
+
+Android home screen
+Desktop Chrome install
+Edge install
+Standalone window mode
+
+Display mode:
+
+display: "standalone"
+
+This allows ERP to run without browser chrome.
+
+74. PWA BASE ICON USAGE
+
+The ERP base logo file remains:
+
+/public/lm.png
+
+Usage:
+
+favicon in HTML
+
+<link rel="icon" type="image/png" href="/lm.png" />
+
+The favicon remains independent from the PWA icon pack.
+
+75. LOGOUT ARCHITECTURE PLAN
+
+Status:
+Design Finalized
+Implementation Pending
+
+Purpose:
+
+Ensure a deterministic and secure logout flow that also clears any cached UI data from the Progressive Web App environment.
+
+Important architectural rule:
+
+Logout must clear both:
+
+Backend session
+
+Browser PWA cache
+
+Because cached menu snapshots or API responses could otherwise remain available after logout.
+
+Logout pipeline design:
+
+User clicks Logout
+↓
+Frontend clears PWA cache
+↓
+POST /api/logout
+↓
+Backend invalidates session cookie
+↓
+Frontend redirects to Landing (/)
+
+Frontend responsibilities:
+
+Delete all service worker caches
+
+Optionally unregister service workers
+
+Call backend logout endpoint
+
+Example logout flow:
+
+caches.keys()
+↓
+caches.delete()
+↓
+fetch("/api/logout")
+↓
+redirect("/")
+
+Backend responsibilities:
+
+Invalidate session cookie and revoke session.
+
+Backend logout handler already exists:
+
+supabase/functions/api/_core/auth/logout.handler.ts
+
+The handler implements:
+
+Idempotent logout
+Session revoke
+Cookie invalidation
+
+Logout API behaviour:
+
+POST /api/logout
+
+Response:
+
+200 OK
+AUTH_LOGGED_OUT
+
+Even if the session is already invalid.
+
+76. CURRENT UI SYSTEM STATE (LATEST)
+
+Public UI layer:
+
+Landing page → Operational
+Boot loader → Operational
+Login screen → Operational
+Signup onboarding → Operational
+Email verification → Operational
+Captcha protection → Operational
+Password recovery → Operational
+
+ERP authentication pipeline:
+
+Login API → Operational
+Session cookie → Working
+Menu snapshot → Working
+
+Admin routing:
+
+AdminResolver → Operational
+
+PWA system:
+
+Icon pack → Implemented
+Manifest → Updated
+Install capability → Enabled
+
+Logout system:
+
+Backend handler → Implemented
+Frontend UI → Not yet implemented
+
+77. NEXT EXECUTION PHASE
+
+The ERP UI system is now approaching the final stabilization stage.
+
+Next tasks:
+
+FINAL UI POLISH
+
+Items:
+
+Implement Logout UI action
+
+Add logout cache purge logic
+
+Restore HiddenRouteRedirect
+
+Verify dashboard navigation stability
+
+Perform full login → dashboard → logout cycle test
+
+Validate PWA install behaviour
+
+Validate mobile layout
+
+78. PRE-PRODUCTION CHECKLIST
+
+Before moving the ERP system to live environment the following checks must be completed.
+
+Security checks:
+
+Session expiration validation
+CSRF protection verification
+Logout behaviour validation
+
+UI checks:
+
+Menu snapshot load timing
+Admin routing stability
+Deep link protection
+
+PWA checks:
+
+Install prompt works
+Standalone launch works
+Icons render correctly
+
+Performance checks:
+
+Cold load time
+Dashboard render time
+Menu snapshot fetch time
+
+79. FINAL TARGET
+
+After completing the UI polish phase the system will proceed to:
+
+STAGE → PRODUCTION DEPLOYMENT PLAN
+
+Deployment stack:
+
+Frontend → Vercel
+Backend → Render
+Database → Supabase
+
+This stage will finalize:
+
+ERP public entry flow
+Authentication system
+Admin universe routing
+ACL user universe routing
+
+The system will then be ready for:
+
+LIVE ERP OPERATION

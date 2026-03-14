@@ -18,15 +18,15 @@ export default function LandingPage() {
 
   const [booting, setBooting] = useState(true);
 
-  useEffect(() => {
+useEffect(()=>{
 
-    const timer = setTimeout(() => {
-      setBooting(false);
-    }, 1800);
+  const timer = setTimeout(()=>{
+    setBooting(false);
+  },1800);
 
-    return () => clearTimeout(timer);
+  return ()=>clearTimeout(timer);
 
-  }, []);
+},[]);
 
   return (
 
@@ -40,15 +40,18 @@ export default function LandingPage() {
 
 <div className="fixed inset-0 flex flex-col items-center justify-center bg-[#F5F6F8] z-50">
 
+<div className="w-[600px] mb-8">
 <img
 src={boot}
 alt="PACE ERP Boot"
-className="w-[220px] mb-8"
+className="w-full h-auto"
+loading="eager"
 />
+</div>
 
-<div className="w-[220px] h-[4px] bg-gray-200 rounded overflow-hidden">
+<div className="w-[420px] h-[4px] bg-gray-200 rounded overflow-hidden">
 
-<div className="h-full bg-[#1E3A8A] animate-loader"/>
+<div className="h-full bg-[#1E3A8A] w-0 animate-loader"/>
 
 </div>
 
@@ -62,15 +65,18 @@ className="w-[220px] mb-8"
 
       {!booting && (
 
-        <div className="min-h-screen flex flex-col items-center justify-center">
+        <div className="min-h-screen flex flex-col items-center pt-2">
 
-          <img
-            src={logo}
-            alt="PACE ERP"
-            className="w-[220px] mb-6"
-          />
+          <div className="w-[600px] mb-3">
+<img
+src={logo}
+alt="PACE ERP"
+className="w-full h-auto"
+loading="eager"
+/>
+</div>
 
-          <p className="text-[22px] text-gray-700 tracking-wide mb-10 text-center">
+          <p className="text-[22px] text-gray-700 tracking-wide mb-6 text-center">
             Process Automation & Control Environment
           </p>
 

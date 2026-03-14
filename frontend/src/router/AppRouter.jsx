@@ -16,6 +16,7 @@ import EmailVerified from "../pages/public/EmailVerified.jsx";
 import SignupSubmittedPage from "../pages/public/SignupSubmittedPage.jsx";
 import ForgotPassword from "../pages/public/ForgotPassword.jsx";
 import ResetPassword from "../pages/public/ResetPassword.jsx";
+import AdminResolver from "../admin/AdminResolver.jsx";
 import RouteGuard from "./RouteGuard.jsx";
 import DeepLinkGuard from "./DeepLinkGuard.jsx";
 import MenuShell from "../layout/MenuShell.jsx";
@@ -48,6 +49,7 @@ export default function AppRouter() {
           {/* ============================== */}
           {/* 🔒 ADMIN UNIVERSE ENTRY POINTS */}
           {/* ============================== */}
+          <Route path="/admin" element={<AdminResolver />} />
           <Route path="/sa/home" element={<SADashboardShell />} />
           <Route path="/ga/home" element={<GADashboardShell />} />
 

@@ -1,5 +1,4 @@
 /*
-
 * File-ID: UI-2
 * File-Path: frontend/src/pages/public/LoginScreen.jsx
 * Gate: UI
@@ -9,11 +8,11 @@
 * Authority: Frontend
 *
 * NOTE:
-* * Login API wired
-* * Role resolution wired
-* * Redirect logic complete
-* * Signup / Forgot Password pages NOT wired yet
-    */
+* Login API wired
+* Session verification via /api/me
+* Universe resolution via /api/me/menu
+* Redirect SSOT compliant
+*/
 
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
@@ -78,43 +77,62 @@ password
 
 });
 
-/* Parse response */
-
 const loginData = await res.json();
 
 if(!res.ok || !loginData?.ok){
-throw new Error("Invalid credentials");
+throw new Error("INVALID_LOGIN");
 }
 
 /* ===============================
-STEP 2 — RESOLVE USER
+STEP 2 — VERIFY SESSION
 ================================ */
 
-const me = await fetch(`${import.meta.env.VITE_API_BASE}/api/me`,{
+const meRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/me`,{
 credentials:"include"
 });
 
-const meData = await me.json();
+const meData = await meRes.json();
 
-if(!me.ok || !meData?.ok){
-throw new Error("Unable to resolve user");
+if(!meRes.ok || !meData?.ok){
+throw new Error("SESSION_RESOLVE_FAILED");
 }
 
 /* ===============================
-STEP 3 — ROLE REDIRECT
+STEP 3 — FETCH MENU SNAPSHOT
 ================================ */
 
-const role = meData?.data?.role ?? null;
+const menuRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`,{
+credentials:"include"
+});
 
-if(role==="SA"){
-navigate("/sa/home");
+const menuData = await menuRes.json();
+
+if(!menuRes.ok || !menuData?.ok){
+throw new Error("MENU_RESOLVE_FAILED");
 }
-else if(role==="GA"){
-navigate("/ga/home");
+
+/* ===============================
+STEP 4 — UNIVERSE RESOLUTION
+================================ */
+
+const universe = menuData?.data?.universe;
+
+/*
+Admin Universe
+SA + GA
+*/
+
+if(universe === "SA"){
+navigate("/admin");
+return;
 }
-else{
+
+/*
+ACL Universe
+All operational users
+*/
+
 navigate("/dashboard");
-}
 
 }catch(err){
 
@@ -158,10 +176,13 @@ return(
 
 <div className="flex flex-col items-center">
 
+<div className="w-[400px] mb-4">
 <img
 src={logo}
-className="w-[180px] mb-4"
+className="w-full h-auto"
+loading="eager"
 />
+</div>
 
 <p className="text-gray-600 text-center mb-6">
 Process Automation & Control Environment
@@ -279,22 +300,9 @@ AUTH LINKS
 
 <div className="flex justify-between mt-5 text-sm text-gray-600">
 
-{/*
-NOTE:
-* Forgot Password flow implemented
-* Signup flow implemented
-*/}
-
 <Link to="/forgot-password" className="hover:underline">
 Forgot Password?
 </Link>
-
-{/*
-NOTE:
-Signup page not implemented yet.
-Future route: /signup
-Will connect to signup.handler.ts
-*/}
 
 <Link to="/signup" className="hover:underline">
 Create Account

@@ -80,7 +80,13 @@ return(
 
 <div className="flex flex-col items-center">
 
-<img src={logo} className="w-[180px] mb-4"/>
+<div className="w-[360px] mb-4">
+<img
+src={logo}
+className="w-full h-auto"
+loading="eager"
+/>
+</div>
 
 <p className="text-gray-600 text-center mb-2">
 Forgot your password?
