@@ -14,7 +14,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Supabase CLI
-        run: npm install -g supabase
+        run: |
+          curl -sSfL https://supabase.com/install.sh | sh
 
       - name: Login Supabase
         run: supabase login --token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
