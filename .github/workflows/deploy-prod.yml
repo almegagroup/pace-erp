@@ -20,4 +20,6 @@ jobs:
         run: supabase login --token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
       - name: Run DB Migrations
-        run: supabase db push --db-url ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          cd supabase
+          supabase db push --db-url ${{ secrets.SUPABASE_DB_URL }}
