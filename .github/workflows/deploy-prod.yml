@@ -19,8 +19,5 @@ jobs:
       - name: Login Supabase
         run: supabase login --token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
-      - name: Link Supabase Project
-        run: supabase link --project-ref bsjpvkigpllichlknmah --password ${{ secrets.SUPABASE_DB_PASSWORD }}
-
       - name: Run DB Migrations
-        run: supabase db push
+        run: supabase db push --db-url ${{ secrets.SUPABASE_DB_URL }}
