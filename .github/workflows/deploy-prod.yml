@@ -13,9 +13,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Supabase CLI
-        run: |
-          curl -sSfL https://supabase.com/install.sh | sh
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
 
       - name: Login Supabase
         run: supabase login --token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
