@@ -2392,3 +2392,237 @@ ACL user universe routing
 The system will then be ready for:
 
 LIVE ERP OPERATION
+
+80. LANDING BOOT LOADER RENDER FIX
+
+Status:
+Completed
+
+File modified:
+
+frontend/src/pages/public/LandingPage.jsx
+
+Problem observed:
+
+Boot loader animation and loading bar were not visible during first render.
+
+Behaviour:
+
+Boot loader only appeared after manual page refresh.
+
+Root cause:
+
+Initial state of the boot loader was incorrectly initialized.
+
+Original implementation:
+
+const [booting, setBooting] = useState(false);
+
+useEffect(() => {
+  setBooting(true);
+
+  const timer = setTimeout(() => {
+    setBooting(false);
+  }, 1800);
+
+  return () => clearTimeout(timer);
+}, []);
+
+Issue:
+
+React warns against synchronous state updates inside useEffect.
+
+This caused the boot loader to render too late in the lifecycle.
+
+Solution:
+
+Initialize boot state correctly at component mount.
+
+Updated implementation:
+
+const [booting, setBooting] = useState(true);
+
+useEffect(() => {
+  const timer = setTimeout(() => {
+    setBooting(false);
+  }, 1800);
+
+  return () => clearTimeout(timer);
+}, []);
+
+Effect:
+
+Boot loader now appears immediately during initial render.
+
+Loading bar animation begins instantly.
+
+Landing content is revealed only after the boot timer completes.
+
+81. PNG IMAGE SIZE STABILITY FIX
+
+Status:
+Completed
+
+Files modified:
+
+LandingPage.jsx
+LoginScreen.jsx
+SignupScreen.jsx
+ForgotPassword.jsx
+ResetPassword.jsx
+
+Problem observed:
+
+PNG images appeared smaller during first load.
+
+Images resized correctly only after page refresh.
+
+Root cause:
+
+Fixed width Tailwind classes caused layout recalculation after image load.
+
+Example problematic code:
+
+<img src={logo} className="w-[360px]" />
+
+When the image loaded asynchronously the container resized.
+
+Solution:
+
+Wrap images in fixed containers and allow responsive scaling.
+
+Updated implementation:
+
+<div className="w-[360px]">
+  <img
+    src={logo}
+    className="w-full h-auto"
+    loading="eager"
+  />
+</div>
+
+Effect:
+
+Images now render at the correct size during the first load.
+
+No layout shift occurs.
+
+No refresh required.
+
+82. PWA DEVELOPMENT BUILD NOTICE
+
+During development the Vite dev server outputs the following message:
+
+PWA v1.2.0
+mode generateSW
+precache 2 entries
+dev-dist/sw.js
+dev-dist/workbox-xxxxx.js
+
+This is not an error.
+
+It indicates that the vite-plugin-pwa plugin generated a development service worker.
+
+Purpose:
+
+Enable Progressive Web App install capability.
+
+Files generated:
+
+dev-dist/sw.js
+dev-dist/workbox-*.js
+
+These files exist only for development preview.
+
+Production builds will generate the final service worker bundle.
+
+No action required.
+
+83. LANDING PAGE RENDER SEQUENCE (FINAL)
+
+The landing page now renders using the following deterministic sequence:
+
+Component mount
+↓
+booting = true
+↓
+Boot loader screen renders
+↓
+Loader animation runs for 1800ms
+↓
+booting = false
+↓
+Landing UI becomes visible
+
+UI Flow:
+
+Boot Loader
+↓
+Landing Page
+↓
+Login / Signup navigation
+
+This render order ensures:
+
+Smooth application entry
+
+Stable image rendering
+
+Predictable layout behavior
+
+84. CURRENT SYSTEM STATUS (UPDATED)
+
+ERP UI public layer:
+
+Landing page → Operational
+Boot loader → Operational
+Login screen → Operational
+Signup onboarding → Operational
+Captcha protection → Operational
+Email verification → Operational
+Password recovery → Operational
+
+UI rendering stability:
+
+Boot loader render timing → Fixed
+Image layout shift → Fixed
+
+ERP authentication pipeline:
+
+Login API → Operational
+Session cookie → Working
+Menu snapshot → Working
+
+Navigation system:
+
+Public route guards → Active
+Navigation engine → Guarded
+HiddenRouteRedirect → Still temporarily disabled
+
+PWA system:
+
+Icon pack → Implemented
+Manifest → Updated
+Service worker (dev) → Generated automatically
+
+ERP architecture invariants:
+
+Maintained.
+
+85. NEXT EXECUTION STEP
+
+Upcoming tasks:
+
+FINAL UI POLISH
+
+Remaining items:
+
+Implement Logout UI action
+Add PWA cache purge on logout
+Restore HiddenRouteRedirect
+Verify deep-link routing stability
+Perform full login → dashboard → logout cycle
+
+After completion the system will move to:
+
+PRODUCTION DEPLOYMENT PLAN
