@@ -39,7 +39,7 @@ useEffect(() => {
     if (cancelled) return;
 
     if (!globalThis.turnstile) {
-      setTimeout(renderCaptcha, 200);
+      setTimeout(renderCaptcha, 500);
       return;
     }
 
@@ -49,19 +49,22 @@ useEffect(() => {
 
     if (container.childElementCount > 0) return;
 
-    globalThis.turnstile.render(container, {
+/* NEW LINE */
+globalThis.turnstile.remove(container);
 
-      sitekey: import.meta.env.VITE_TURNSTILE_SITE_KEY,
+globalThis.turnstile.render(container, {
 
-      callback: (token) => {
-        setCaptchaToken(token);
-      },
+  sitekey: import.meta.env.VITE_TURNSTILE_SITE_KEY,
 
-      "expired-callback": () => {
-        setCaptchaToken(null);
-      }
+  callback: (token) => {
+    setCaptchaToken(token);
+  },
 
-    });
+  "expired-callback": () => {
+    setCaptchaToken(null);
+  }
+
+});
 
   }
 
