@@ -1,4 +1,4 @@
-name: Deploy Production
+name: Deploy Supabase DB
 
 on:
   push:
@@ -10,17 +10,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
+        with:
+          version: latest
 
-      - name: Login Supabase
-        run: supabase login --token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      # 🔑 LINK PROJECT
+      - name: Link Supabase project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase link --project-ref bsjpvkigpllichlknmah
 
-      - name: Link project
-        run: supabase link --project-ref bsjpvkigpllichlknmah
-
-      - name: Apply migrations
-        run: supabase migration up --linked
+      # 🧱 APPLY MIGRATIONS
+      - name: Apply DB migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase db push
