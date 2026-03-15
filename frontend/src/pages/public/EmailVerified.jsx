@@ -11,6 +11,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient.js";
+import logo from "../../assets/pace-bgr.png";
 
 export default function EmailVerified() {
 
@@ -26,6 +27,15 @@ async function checkVerification(){
 
 try{
 
+// Ensure session restored from verification URL
+const { data: sessionData } = await supabase.auth.getSession();
+
+if(!sessionData.session){
+setStatus("not_verified");
+return;
+}
+
+// Now resolve user
 const { data, error } = await supabase.auth.getUser();
 
 if(error){
@@ -103,6 +113,18 @@ return(
 <div className="min-h-screen flex items-center justify-center bg-[#F5F6F8]">
 
 <div className="w-[420px] bg-white rounded-xl shadow-md p-8 text-center">
+
+<div className="flex flex-col items-center">
+
+<div className="w-[360px] mb-4">
+<img
+src={logo}
+className="w-full h-auto"
+loading="eager"
+/>
+</div>
+
+</div>
 
 {status === "checking" && (
 
