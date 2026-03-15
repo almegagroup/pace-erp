@@ -33,13 +33,7 @@ const [success,setSuccess] = useState(false);
 
 useEffect(()=>{
 
-async function restoreSession(){
-
-await supabase.auth.getSessionFromUrl({ storeSession:true });
-
-}
-
-restoreSession();
+supabase.auth.getSession();
 
 },[]);
 

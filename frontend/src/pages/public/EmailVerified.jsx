@@ -28,13 +28,20 @@ async function checkVerification(){
 try{
 
 // Ensure session restored from verification URL
-// Restore session from Supabase verification URL
-await supabase.auth.getSessionFromUrl({ storeSession: true });
-
-// Now read session
 const { data: sessionData } = await supabase.auth.getSession();
 
-const session = sessionData.session;
+let session = sessionData.session;
+
+// Sometimes Supabase session takes a moment to restore from URL hash
+if(!session){
+
+// wait 500ms then retry
+await new Promise(resolve => setTimeout(resolve,500));
+
+const retry = await supabase.auth.getSession();
+session = retry.data.session;
+
+}
 
 if(!session){
 setStatus("not_verified");
