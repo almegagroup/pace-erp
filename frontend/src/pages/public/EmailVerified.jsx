@@ -26,6 +26,15 @@ async function checkVerification(){
 
 try{
 
+// Ensure session restored from verification URL
+const { data: sessionData } = await supabase.auth.getSession();
+
+if(!sessionData.session){
+setStatus("not_verified");
+return;
+}
+
+// Now resolve user
 const { data, error } = await supabase.auth.getUser();
 
 if(error){
