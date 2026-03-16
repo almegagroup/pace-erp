@@ -20,7 +20,7 @@ const allowedEnv =
     : process.env.ALLOWED_ORIGINS) || "";
 
 const ALLOWED_ORIGINS = allowedEnv
-  .split(",")
+  .split(/[\n,]/)
   .map(o => o.trim())
   .filter(Boolean);
 
@@ -97,8 +97,9 @@ export function handlePreflight(req: Request): Response | null {
   }
 
   if (!ALLOWED_ORIGINS.includes(origin)) {
-    return new Response("Forbidden", { status: 403 });
-  }
+  recordSecurityEvent(req, "SYSTEM", "CORS_BLOCKED_ORIGIN", "CORS");
+  return new Response("Forbidden", { status: 403 });
+}
 
   const headers = new Headers();
 
