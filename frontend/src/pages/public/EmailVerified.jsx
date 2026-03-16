@@ -27,19 +27,16 @@ async function checkVerification(){
 
 try{
 
-// Ensure session restored from verification URL
 const { data: sessionData } = await supabase.auth.getSession();
+let session = sessionData?.session;
 
-let session = sessionData.session;
+// Sometimes Supabase needs a moment to parse the URL hash
+if (!session) {
 
-// Sometimes Supabase session takes a moment to restore from URL hash
-if(!session){
+  await new Promise(resolve => setTimeout(resolve, 500));
 
-// wait 500ms then retry
-await new Promise(resolve => setTimeout(resolve,500));
-
-const retry = await supabase.auth.getSession();
-session = retry.data.session;
+  const retry = await supabase.auth.getSession();
+  session = retry?.data?.session;
 
 }
 
@@ -49,7 +46,7 @@ return;
 }
 
 // Now resolve user
-const { data, error } = await supabase.auth.getUser();
+const { data: userData, error } = await supabase.auth.getUser();
 
 if(error){
 setStatus("error");
@@ -57,7 +54,7 @@ setError(error.message);
 return;
 }
 
-const user = data?.user;
+const user = userData?.user;
 
 if(!user){
 setStatus("not_verified");
@@ -94,7 +91,7 @@ try{
 
 // Get Supabase session token
 const { data } = await supabase.auth.getSession();
-const token = data.session?.access_token;
+const token = data?.session?.access_token;
 
 if(!token){
 setError("Session expired. Please try again.");
