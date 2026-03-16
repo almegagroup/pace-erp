@@ -39,8 +39,11 @@ if (req.method === "GET" && path === "/health") {
 const preflight = handlePreflight(req);
 if (preflight) {
   return applyCSP(
-  applySecurityHeaders(preflight, requestId)
-);
+    applySecurityHeaders(
+      applyCORS(req, preflight),
+      requestId
+    )
+  );
 }
 
 // ---- ID-11: Public endpoint isolation ----
