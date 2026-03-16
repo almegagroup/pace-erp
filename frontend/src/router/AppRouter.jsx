@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import LandingPage from "../pages/public/LandingPage.jsx";
 import LoginScreen from "../pages/public/LoginScreen.jsx";
 import SignupScreen from "../pages/public/SignupPage.jsx";
@@ -85,6 +85,8 @@ export default function AppRouter() {
         <Route path="/signup-submitted" element={<SignupSubmittedPage />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
+        {/* Router safety guard */}
+<Route path="*" element={<Navigate to="/" replace />} />
 
        </Routes>
   

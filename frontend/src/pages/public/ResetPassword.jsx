@@ -33,7 +33,13 @@ const [success,setSuccess] = useState(false);
 
 useEffect(()=>{
 
-supabase.auth.getSession();
+async function restoreSession(){
+
+await supabase.auth.getSession();
+
+}
+
+restoreSession();
 
 },[]);
 
@@ -63,7 +69,7 @@ setLoading(true);
 try{
 
 const { error } = await supabase.auth.updateUser({
-password: password
+password
 });
 
 if(error) throw error;
@@ -76,9 +82,9 @@ navigate("/login");
 
 },2000);
 
-}catch{
+}catch(err){
 
-setError("Unable to reset password");
+setError(err?.message || "Unable to reset password");
 
 }finally{
 

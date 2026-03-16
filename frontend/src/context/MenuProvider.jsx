@@ -11,6 +11,7 @@
 import { useEffect, useState } from "react";
 import { MenuContext } from "./MenuContext.js";
 import { buildRouteIndex } from "../router/routeIndex.js";
+import { isPublicRoute } from "../router/publicRoutes.js";
 
 export function MenuProvider({ children }) {
   const [menu, setMenu] = useState([]);
@@ -37,17 +38,7 @@ export function MenuProvider({ children }) {
 
  const pathname = globalThis.location.pathname;
 
-const PUBLIC_ROUTES = new Set([
-  "/",
-  "/login",
-  "/signup",
-  "/forgot-password",
-  "/email-verified",
-  "/signup-submitted",
-  "/reset-password"
-]);
-
-if (PUBLIC_ROUTES.has(pathname)) {
+if (isPublicRoute(pathname)) {
 
   // React safe async state update
   setTimeout(() => {

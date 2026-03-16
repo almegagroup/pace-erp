@@ -9,6 +9,7 @@
  */
 
 import { useMenu } from "../context/useMenu.js";
+import { Link } from "react-router-dom";
 
 export default function MenuShell({ children }) {
   const { menu, loading } = useMenu();
@@ -23,7 +24,7 @@ export default function MenuShell({ children }) {
           {menu.map(item => (
             <li key={item.menu_code}>
               {item.route_path ? (
-                <a href={item.route_path}>{item.title}</a>
+                <Link to={item.route_path}>{item.title}</Link>
               ) : (
                 <span>{item.title}</span>
               )}

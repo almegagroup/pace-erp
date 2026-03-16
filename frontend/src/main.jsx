@@ -19,6 +19,7 @@ import { enableBackGuard } from "./navigation/backGuardEngine.js";
 import { enableKeyboardIntentEngine } from "./navigation/keyboardIntentEngine.js";
 import { initNavigation } from "./navigation/screenStackEngine.js";
 import { restoreNavigationStack } from "./navigation/navigationPersistence.js";
+import { isPublicRoute } from "./router/publicRoutes.js";
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
@@ -57,17 +58,7 @@ Only authenticated universe may activate navigation stack.
 ============================================================
 */
 
-const PUBLIC_ROUTES = new Set([
-  "/",
-  "/login",
-  "/signup",
-  "/forgot-password",
-  "/email-verified",
-  "/signup-submitted",
-  "/reset-password"
-]);
-
-if (!PUBLIC_ROUTES.has(pathname)) {
+if (!isPublicRoute(pathname)) {
   initNavigation("DASHBOARD_HOME");
 }
 
