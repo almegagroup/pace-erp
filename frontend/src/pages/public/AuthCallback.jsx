@@ -35,20 +35,44 @@ export default function AuthCallback() {
 
         const url = new URL(globalThis.location.href);
 
-        const code = url.searchParams.get("code");
-        const flow = url.searchParams.get("flow");
+const code = url.searchParams.get("code");
+const flow = url.searchParams.get("flow"); // ✅ ADD THIS
+const hash = globalThis.location.hash;
 
-        /* ==============================
-        STEP 1 — EXCHANGE SESSION (MANDATORY)
-        ============================== */
+/* ==============================
+STEP 1 — EXCHANGE / RESTORE SESSION
+============================== */
 
-        if(code){
+// 🔴 CASE 1: PKCE flow (?code=...)
+if(code){
   const { error: exchangeError } =
     await supabase.auth.exchangeCodeForSession(code);
 
   if(exchangeError){
     throw exchangeError;
   }
+}
+
+// 🔴 CASE 2: HASH FLOW (#access_token...)
+else if(hash && hash.includes("access_token")){
+  // Supabase auto-পার্স করে নেয় hash → session restore
+  const { data, error } = await supabase.auth.getSession();
+
+  if(error){
+    throw error;
+  }
+
+  if(!data?.session){
+    throw new Error("Session not restored from hash");
+  }
+}
+
+// 🔴 CASE 3: ERROR FROM SUPABASE
+else if(hash && hash.includes("error")){
+  const params = new URLSearchParams(hash.substring(1));
+  const errMsg = params.get("error_description") || "Auth error";
+
+  throw new Error(errMsg);
 }
 
 if(cancelled) return;
