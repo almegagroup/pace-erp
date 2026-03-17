@@ -25,55 +25,25 @@ useEffect(()=>{
 
 async function checkVerification(){
 
-try{
+  try{
 
-const { data: sessionData } = await supabase.auth.getSession();
-let session = sessionData?.session;
+    const { data } = await supabase.auth.getSession();
 
-// Sometimes Supabase needs a moment to parse the URL hash
-if (!session) {
+    const session = data?.session;
 
-  await new Promise(resolve => setTimeout(resolve, 500));
+    if(!session){
+      setStatus("not_verified");
+      return;
+    }
 
-  const retry = await supabase.auth.getSession();
-  session = retry?.data?.session;
+    setStatus("verified");
 
-}
+  }catch(err){
 
-if(!session){
-setStatus("not_verified");
-return;
-}
+    setStatus("error");
+    setError(err.message);
 
-// Now resolve user
-const { data: userData, error } = await supabase.auth.getUser();
-
-if(error){
-setStatus("error");
-setError(error.message);
-return;
-}
-
-const user = userData?.user;
-
-if(!user){
-setStatus("not_verified");
-return;
-}
-
-if(!user.email_confirmed_at){
-setStatus("not_verified");
-return;
-}
-
-setStatus("verified");
-
-}catch(err){
-
-setStatus("error");
-setError(err.message);
-
-}
+  }
 
 }
 

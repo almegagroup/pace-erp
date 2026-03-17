@@ -33,13 +33,19 @@ const [success,setSuccess] = useState(false);
 
 useEffect(()=>{
 
-async function restoreSession(){
+async function checkSession(){
 
-await supabase.auth.getSession();
+  const { data } = await supabase.auth.getSession();
+
+  const session = data?.session;
+
+  if(!session){
+    setError("Invalid or expired reset link");
+  }
 
 }
 
-restoreSession();
+checkSession();
 
 },[]);
 
@@ -47,6 +53,17 @@ async function handleReset(e){
 
 if(e) e.preventDefault();
 if(loading) return;
+
+/* ✅ ADD THIS BLOCK */
+const { data } = await supabase.auth.getSession();
+const session = data?.session;
+
+if(!session){
+setError("Session expired. Please request a new reset link.");
+return;
+}
+
+/* existing validations */
 
 if(!password || !confirm){
 setError("Please enter password");

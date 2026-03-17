@@ -117,7 +117,7 @@ designation_hint: designation,
 phone: phone
 },
 
-emailRedirectTo: `${globalThis.location.origin}/email-verified`
+emailRedirectTo: `${globalThis.location.origin}/auth/callback`
 
 }
 
