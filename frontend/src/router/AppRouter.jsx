@@ -12,6 +12,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import LandingPage from "../pages/public/LandingPage.jsx";
 import LoginScreen from "../pages/public/LoginScreen.jsx";
 import SignupScreen from "../pages/public/SignupPage.jsx";
+import AuthCallback from "../pages/public/AuthCallback.jsx";
 import EmailVerified from "../pages/public/EmailVerified.jsx";
 import SignupSubmittedPage from "../pages/public/SignupSubmittedPage.jsx";
 import ForgotPassword from "../pages/public/ForgotPassword.jsx";
@@ -79,6 +80,7 @@ export default function AppRouter() {
             element={<LoginScreen />}
           />
           <Route path="/signup" element={<SignupScreen />} />
+          <Route path="/auth/callback" element={<AuthCallback />} /> 
 
         <Route path="/email-verified" element={<EmailVerified />} />
 

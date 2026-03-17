@@ -53,7 +53,7 @@ setLoading(true);
 try{
 
 const { error } = await supabase.auth.resetPasswordForEmail(email,{
-redirectTo: `${globalThis.location.origin}/reset-password`
+redirectTo: `${globalThis.location.origin}/auth/callback?flow=recovery`
 });
 
 if(error) throw error;
