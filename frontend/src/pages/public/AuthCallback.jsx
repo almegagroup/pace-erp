@@ -55,15 +55,27 @@ if(code){
 
 // 🔴 CASE 2: HASH FLOW (#access_token...)
 else if(hash && hash.includes("access_token")){
-  // Supabase auto-পার্স করে নেয় hash → session restore
-  const { data, error } = await supabase.auth.getSession();
+
+  const params = new URLSearchParams(hash.substring(1));
+
+  const access_token = params.get("access_token");
+  const refresh_token = params.get("refresh_token");
+
+  if(!access_token || !refresh_token){
+    throw new Error("Invalid auth tokens in URL");
+  }
+
+  const { data, error } = await supabase.auth.setSession({
+    access_token,
+    refresh_token
+  });
 
   if(error){
     throw error;
   }
 
   if(!data?.session){
-    throw new Error("Session not restored from hash");
+    throw new Error("Session not established from tokens");
   }
 }
 
