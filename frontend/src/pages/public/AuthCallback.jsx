@@ -46,7 +46,7 @@ STEP 1 — EXCHANGE / RESTORE SESSION
 // 🔴 CASE 1: PKCE flow (?code=...)
 if(code){
   const { error: exchangeError } =
-    await supabase.auth.exchangeCodeForSession(code);
+    await supabase.auth.exchangeCodeForSession(window.location.href);
 
   if(exchangeError){
     throw exchangeError;
@@ -113,7 +113,9 @@ if(cancelled) return;
         }
 
         // default → email verify
+        setTimeout(() => {
         navigate("/email-verified",{ replace:true });
+        }, 200);
 
       }catch(err){
 
