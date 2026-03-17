@@ -134,6 +134,7 @@ frontend
       screenTypes.js
     pages
       public
+        AuthCallback.jsx
         EmailVerified.jsx
         ForgotPassword.jsx
         LandingPage.jsx
@@ -144,9 +145,11 @@ frontend
     router
       AppRouter.jsx
       DeepLinkGuard.jsx
+      publicRoutes.js
       RouteGuard.jsx
       routeIndex.js
   tailwind.config.js
+  vercel.json
   vite.config.js
 package-lock.json
 package.json
@@ -392,7 +395,6 @@ tests
     test_acl_trace_admin.ts
     test_acl_trace_allow.ts
     test_acl_trace_deny.ts
-vercel.json
 
 
 === FILE ANALYSIS ===
@@ -464,11 +466,11 @@ FILE: \frontend\src\context\MenuContext.js
 
 FILE: \frontend\src\context\MenuProvider.jsx
   [3] * File-Path: frontend/src/context/MenuProvider.jsx
-  [15] export function MenuProvider({ children }) {
-  [26] File: MenuProvider.jsx
-  [29] Menu API (/api/me/menu) requires valid session.
-  [60] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
-  [60] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+  [16] export function MenuProvider({ children }) {
+  [27] File: MenuProvider.jsx
+  [30] Menu API (/api/me/menu) requires valid session.
+  [51] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+  [51] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
 
 FILE: \frontend\src\context\useMenu.js
 
@@ -476,14 +478,14 @@ FILE: \frontend\src\layout\HiddenRouteRedirect.jsx
 
 FILE: \frontend\src\layout\MenuShell.jsx
   [3] * File-Path: frontend/src/layout/MenuShell.jsx
-  [13] export default function MenuShell({ children }) {
+  [14] export default function MenuShell({ children }) {
 
 FILE: \frontend\src\lib\supabaseClient.js
 
 FILE: \frontend\src\main.jsx
   [20] import { initNavigation } from "./navigation/screenStackEngine.js";
-  [37] before screenStackEngine forces DASHBOARD_HOME.
-  [54] Public routes render outside the screenStackEngine.
+  [38] before screenStackEngine forces DASHBOARD_HOME.
+  [55] Public routes render outside the screenStackEngine.
 
 FILE: \frontend\src\navigation\backGuardEngine.js
   [11] import { popScreen, getStackSnapshot, getActiveScreen } from "./screenStackEngine.js";
@@ -530,8 +532,10 @@ FILE: \frontend\src\navigation\screenStackInvariant.js
 
 FILE: \frontend\src\navigation\screenTypes.js
 
+FILE: \frontend\src\pages\public\AuthCallback.jsx
+
 FILE: \frontend\src\pages\public\EmailVerified.jsx
-  [105] const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/signup`,{
+  [72] const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/signup`,{
 
 FILE: \frontend\src\pages\public\ForgotPassword.jsx
 
@@ -552,20 +556,22 @@ FILE: \frontend\src\pages\public\SignupSubmittedPage.jsx
 
 FILE: \frontend\src\router\AppRouter.jsx
   [3] * File-Path: frontend/src/router/AppRouter.jsx
-  [20] import RouteGuard from "./RouteGuard.jsx";
-  [21] import DeepLinkGuard from "./DeepLinkGuard.jsx";
-  [22] import MenuShell from "../layout/MenuShell.jsx";
-  [29] export default function AppRouter() {
-  [37] File: AppRouter.jsx
-  [59] <Route element={<DeepLinkGuard />}>
-  [63] <MenuShell>
-  [64] <RouteGuard>
-  [66] </RouteGuard>
-  [67] </MenuShell>
+  [21] import RouteGuard from "./RouteGuard.jsx";
+  [22] import DeepLinkGuard from "./DeepLinkGuard.jsx";
+  [23] import MenuShell from "../layout/MenuShell.jsx";
+  [30] export default function AppRouter() {
+  [38] File: AppRouter.jsx
+  [60] <Route element={<DeepLinkGuard />}>
+  [64] <MenuShell>
+  [65] <RouteGuard>
+  [67] </RouteGuard>
+  [68] </MenuShell>
 
 FILE: \frontend\src\router\DeepLinkGuard.jsx
   [3] * File-Path: frontend/src/router/DeepLinkGuard.jsx
   [14] export default function DeepLinkGuard() {
+
+FILE: \frontend\src\router\publicRoutes.js
 
 FILE: \frontend\src\router\RouteGuard.jsx
   [3] * File-Path: frontend/src/router/RouteGuard.jsx
