@@ -103,6 +103,8 @@ setLoading(true);
 
 try{
 
+  const redirectUrl = import.meta.env.VITE_APP_URL;
+
 const { error } = await supabase.auth.signUp({
 
 email,
@@ -117,7 +119,7 @@ designation_hint: designation,
 phone: phone
 },
 
-emailRedirectTo: `${globalThis.location.origin}/auth/callback`
+emailRedirectTo: `${redirectUrl}/auth/callback`
 
 }
 
