@@ -42,18 +42,16 @@ export default function AuthCallback() {
         STEP 1 — EXCHANGE SESSION (MANDATORY)
         ============================== */
 
-        if(!code){
-          throw new Error("Invalid or expired auth link");
-        }
+        if(code){
+  const { error: exchangeError } =
+    await supabase.auth.exchangeCodeForSession(code);
 
-        const { error: exchangeError } =
-          await supabase.auth.exchangeCodeForSession(code);
+  if(exchangeError){
+    throw exchangeError;
+  }
+}
 
-        if(exchangeError){
-          throw exchangeError;
-        }
-
-        if(cancelled) return;
+if(cancelled) return;
 
         /* ==============================
         STEP 2 — VALIDATE SESSION (STRICT)
