@@ -24,12 +24,13 @@ export async function verifyPassword(
     password,
   });
 
-  if (error || !data.user) {
-    return { ok: false };
-  }
+  if (error || !data.session) {
+  return { ok: false };
+}
 
-  return {
-    ok: true,
-    user: data.user,
-  };
+return {
+  ok: true,
+  user: data.user,
+  session: data.session,
+};
 }
