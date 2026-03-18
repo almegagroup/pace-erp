@@ -9,6 +9,8 @@
  */
 
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { MenuProvider } from "../context/MenuProvider.jsx";
+
 import LandingPage from "../pages/public/LandingPage.jsx";
 import LoginScreen from "../pages/public/LoginScreen.jsx";
 import SignupScreen from "../pages/public/SignupPage.jsx";
@@ -17,11 +19,13 @@ import EmailVerified from "../pages/public/EmailVerified.jsx";
 import SignupSubmittedPage from "../pages/public/SignupSubmittedPage.jsx";
 import ForgotPassword from "../pages/public/ForgotPassword.jsx";
 import ResetPassword from "../pages/public/ResetPassword.jsx";
+
 import AdminResolver from "../admin/AdminResolver.jsx";
+
 import RouteGuard from "./RouteGuard.jsx";
 import DeepLinkGuard from "./DeepLinkGuard.jsx";
+
 import MenuShell from "../layout/MenuShell.jsx";
-import HiddenRouteRedirect from "../layout/HiddenRouteRedirect.jsx";
 
 // 🆕 Admin shells
 import SADashboardShell from "../admin/sa/SADashboardShell.jsx";
@@ -30,73 +34,75 @@ import GADashboardShell from "../admin/ga/GADashboardShell.jsx";
 export default function AppRouter() {
   return (
     <BrowserRouter>
+      <Routes>
 
-  {/* 
-  ============================================================
-  TEMP_UI_BOOT_PATCH
-  Step: 4
-  File: AppRouter.jsx
-  Reason:
-  HiddenRouteRedirect depends on useMenu() which requires
-  authenticated session. During landing bootstrap no session
-  exists → page becomes blank.
+        {/* ============================== */}
+        {/* 🌐 PUBLIC ROUTES (NO MENU) */}
+        {/* ============================== */}
 
-  Temporarily disabled until login flow is implemented.
-  Reference: TEMP_UI_BOOT_LOG.md
-  ============================================================
-  */}
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/login" element={<LoginScreen />} />
+        <Route path="/signup" element={<SignupScreen />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/email-verified" element={<EmailVerified />} />
+        <Route path="/signup-submitted" element={<SignupSubmittedPage />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
 
-  <Routes>
-          {/* ============================== */}
-          {/* 🔒 ADMIN UNIVERSE ENTRY POINTS */}
-          {/* ============================== */}
-          <Route path="/admin" element={<AdminResolver />} />
-          <Route path="/sa/home" element={<SADashboardShell />} />
-          <Route path="/ga/home" element={<GADashboardShell />} />
+        {/* ============================== */}
+        {/* 🔒 ADMIN ENTRY */}
+        {/* ============================== */}
 
-          {/* ============================== */}
-          {/* 🔐 ACL USER UNIVERSE */}
-          {/* ============================== */}
-          <Route element={<DeepLinkGuard />}>
-            <Route
-              path="/dashboard"
-              element={
+        <Route path="/admin" element={<AdminResolver />} />
+
+        {/* ============================== */}
+        {/* 🔒 ADMIN DASHBOARDS */}
+        {/* ============================== */}
+
+        <Route
+          path="/sa/home"
+          element={
+            <MenuProvider>
+              <SADashboardShell />
+            </MenuProvider>
+          }
+        />
+
+        <Route
+          path="/ga/home"
+          element={
+            <MenuProvider>
+              <GADashboardShell />
+            </MenuProvider>
+          }
+        />
+
+        {/* ============================== */}
+        {/* 🔐 ACL USER UNIVERSE */}
+        {/* ============================== */}
+
+        <Route element={<DeepLinkGuard />}>
+          <Route
+            path="/dashboard"
+            element={
+              <MenuProvider>
                 <MenuShell>
                   <RouteGuard>
                     <div>Dashboard</div>
                   </RouteGuard>
                 </MenuShell>
-              }
-            />
-          </Route>
-
-          <Route
-            path="/"
-            element={<LandingPage />}
+              </MenuProvider>
+            }
           />
+        </Route>
 
-          <Route
-            path="/login"
-            element={<LoginScreen />}
-          />
-          <Route path="/signup" element={<SignupScreen />} />
-          <Route path="/auth/callback" element={<AuthCallback />} /> 
+        {/* ============================== */}
+        {/* 🚧 FALLBACK */}
+        {/* ============================== */}
 
-        <Route path="/email-verified" element={<EmailVerified />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
 
-        <Route path="/signup-submitted" element={<SignupSubmittedPage />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
-        {/* Router safety guard */}
-<Route path="*" element={<Navigate to="/" replace />} />
-
-       </Routes>
-  
-
-{/* TEMP_UI_BOOT_PATCH — HiddenRouteRedirect disabled
-    Closing tag preserved for future restoration
-*/}
-{/* </HiddenRouteRedirect> */}
+      </Routes>
     </BrowserRouter>
   );
 }
