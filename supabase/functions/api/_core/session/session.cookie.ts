@@ -14,21 +14,38 @@ export function buildSessionCookie(
 ): string {
   const url = new URL(requestUrl);
   const isHttps = url.protocol === "https:";
+  const hostname = url.hostname;
+
+  const isLocalhost =
+    hostname.includes("localhost") ||
+    hostname.includes("127.0.0.1");
+
+  const parts = [
+    `erp_session=${sessionId}`,
+    "Path=/",
+    "HttpOnly",
+  ];
 
   /**
-   * Deterministic cookie attributes.
-   * No browser defaults relied upon.   
+   * PRODUCTION (cross-domain case)
    */
-  const parts = [
-  `erp_session=${sessionId}`,
-  "Path=/",
-  "HttpOnly",
-  "SameSite=Lax",
-];
+  if (!isLocalhost) {
+    parts.push("SameSite=None");
 
-if (isHttps) {
-  parts.push("Secure");
-}
+    if (isHttps) {
+      parts.push("Secure");
+    }
+
+    // Optional but recommended for your domain
+    parts.push("Domain=.almegagroup.in");
+  }
+
+  /**
+   * DEV (localhost)
+   */
+  else {
+    parts.push("SameSite=Lax");
+  }
 
   return parts.join("; ");
 }
