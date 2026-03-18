@@ -43,22 +43,24 @@ export async function resolveIdentifier(
   }
 
   /**
-   * ERP CODE PATH (e.g. P0001)
-   */
-  const ERP_CODE_REGEX = /^P\d{4,}$/;
+ * ERP CODE PATH (flexible: SA001, GA001, P0001, etc.)
+ */
+const ERP_CODE_REGEX = /^[A-Z]{1,10}\d+$/;
 
-  if (!ERP_CODE_REGEX.test(identifier)) {
-    return null;
-  }
+const normalized = identifier.toUpperCase();
 
-  // Governance contract (Gate-1)
-  assertRlsEnabled();
+if (!ERP_CODE_REGEX.test(normalized)) {
+  return null;
+}
 
-  const { data, error } = await serviceRoleClient
-    .schema("erp_core").from("users")
-    .select("auth_user_id")
-    .eq("user_code", identifier)
-    .single();
+// Governance contract (Gate-1)
+assertRlsEnabled();
+
+const { data, error } = await serviceRoleClient
+  .schema("erp_core").from("users")
+  .select("auth_user_id")
+  .eq("user_code", normalized)
+  .single();
 
   if (error || !data?.auth_user_id) {
     return null;

@@ -216,7 +216,7 @@ LOGIN FORM
 
 type="text"
 
-placeholder="Email or Employee ID"
+placeholder="Email or User ID (e.g. erp@company.com / P000X)"
 
 value={identifier}
 
