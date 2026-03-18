@@ -45,7 +45,7 @@ export async function resolveIdentifier(
   /**
  * ERP CODE PATH (flexible: SA001, GA001, P0001, etc.)
  */
-const ERP_CODE_REGEX = /^[A-Z]{1,3}\d+$/;
+const ERP_CODE_REGEX = /^[A-Z]{1,10}\d+$/;
 
 const normalized = identifier.toUpperCase();
 
