@@ -199,8 +199,19 @@ export async function stepContext(
 ): Promise<ContextResolution> {
   sanitizeContextInput();
 
-  const resolved = await resolveContextFromDb(req, session);
-  const withAdmin = applyAdminBypass(resolved, session);
+  // 🔥 1️⃣ ADMIN FIRST — HARD BYPASS (NO DB CALL)
+  if (isAdminUniverse(session)) {
+    return {
+      status: "RESOLVED",
+      source: "BACKEND",
+      companyId: "ADMIN_UNIVERSE",
+      roleCode: session.roleCode!,
+      isAdmin: true,
+    };
+  }
 
-  return enforceContextInvariants(withAdmin);
+  // 🔹 2️⃣ ONLY NON-ADMIN → DB CONTEXT
+  const resolved = await resolveContextFromDb(req, session);
+
+  return enforceContextInvariants(resolved);
 }

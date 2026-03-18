@@ -20,6 +20,7 @@ export type SessionResolution =
       status: "ACTIVE";
       sessionId: string;
       authUserId: string;
+      roleCode?: string; // 🔥 ADD THIS
       created_at: string;
       last_seen_at: string;
       expires_at: string;
@@ -105,10 +106,38 @@ recordSessionTimeline({
   event: "ACTIVE",
 });
 
+// 🔥 Gate-2 enrichment: resolve roleCode
+const { data: roleRow } = await serviceRoleClient
+  .schema("erp_map")
+  .from("user_company_roles")
+  .select("role_code")
+  .eq("auth_user_id", data.auth_user_id)
+  .limit(1)
+  .maybeSingle();
+
+let roleCode = roleRow?.role_code;
+
+// 🔥 ADMIN fallback (NO mapping case)
+if (!roleCode) {
+  const { data: user } = await serviceRoleClient
+    .schema("erp_core")
+    .from("users")
+    .select("user_code")
+    .eq("auth_user_id", data.auth_user_id)
+    .maybeSingle();
+
+  if (user?.user_code?.startsWith("SA")) {
+    roleCode = "SA";
+  } else if (user?.user_code?.startsWith("GA")) {
+    roleCode = "GA";
+  }
+}
+
   return {
     status: "ACTIVE",
     sessionId,
     authUserId: data.auth_user_id,
+    roleCode, // 🔥 ADD
     created_at: data.created_at,
     last_seen_at: data.last_seen_at,
     expires_at: data.expires_at,

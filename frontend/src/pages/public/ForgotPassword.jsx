@@ -55,7 +55,7 @@ try{
 const redirectUrl = import.meta.env.VITE_APP_URL;
 
 const { error } = await supabase.auth.resetPasswordForEmail(email,{
-redirectTo: `${redirectUrl}/auth/callback?flow=recovery`
+redirectTo: `${redirectUrl}/auth/callback`
 });
 
 if(error) throw error;

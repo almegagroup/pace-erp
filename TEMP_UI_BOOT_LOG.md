@@ -2626,3 +2626,204 @@ Perform full login → dashboard → logout cycle
 After completion the system will move to:
 
 PRODUCTION DEPLOYMENT PLAN
+
+🔵 ADD THIS AS NEW SECTION (CONTINUE NUMBERING)
+86. AUTH CALLBACK SESSION RESTORE FIX (CRITICAL)
+
+Status:
+Completed ✅
+
+Files modified:
+
+frontend/src/pages/public/AuthCallback.jsx
+frontend/src/lib/supabaseClient.js
+
+86.1 PROBLEM OBSERVED
+
+During signup email verification and auth callback flow the system failed to restore user session.
+
+Observed error:
+
+Authentication Failed
+Session not restored from hash
+
+Console observation:
+
+window.location.hash
+
+Returned valid Supabase tokens:
+
+access_token
+refresh_token
+
+This confirmed:
+
+Supabase authentication succeeded
+Redirect URL was correct
+Tokens were present in URL
+
+However:
+
+Frontend failed to convert tokens into an active session.
+
+86.2 ROOT CAUSE ANALYSIS
+
+Two critical issues identified:
+
+Issue 1 — Supabase client misconfiguration
+
+File:
+
+frontend/src/lib/supabaseClient.js
+
+Incorrect configuration:
+
+detectSessionInUrl: false
+
+Effect:
+
+Supabase SDK ignored URL hash tokens.
+Automatic session restoration did not occur.
+
+Issue 2 — Incorrect session exchange implementation
+
+File:
+
+frontend/src/pages/public/AuthCallback.jsx
+
+Incorrect implementation:
+
+exchangeCodeForSession(code)
+
+Problem:
+
+Supabase expects full URL for proper parsing of:
+
+code
+state
+redirect context
+
+Passing only code prevented session establishment.
+
+86.3 FIX IMPLEMENTED
+Fix 1 — Enable session detection
+
+File:
+
+frontend/src/lib/supabaseClient.js
+
+Updated configuration:
+
+detectSessionInUrl: true
+
+Effect:
+
+Supabase SDK now automatically detects:
+
+#access_token
+#refresh_token
+
+and restores session.
+
+Fix 2 — Correct session exchange
+
+File:
+
+frontend/src/pages/public/AuthCallback.jsx
+
+Updated implementation:
+
+await supabase.auth.exchangeCodeForSession(window.location.href);
+
+Effect:
+
+Full URL parsing ensures correct handling of:
+
+PKCE flow
+Hash token flow
+Signup verification flow
+Password recovery flow
+
+Fix 3 — Navigation timing stabilization
+
+Problem:
+
+MenuProvider and routing guards triggered before session stabilization.
+
+Solution:
+
+Introduce slight delay before navigation:
+
+setTimeout(() => {
+  navigate("/email-verified", { replace: true });
+}, 200);
+
+Effect:
+
+Prevents race condition between:
+
+Session creation
+MenuProvider activation
+RouteGuard execution
+
+86.4 ARCHITECTURE IMPACT
+
+This fix restores compliance with:
+
+Gate-2 — Auth Boundary
+Gate-5 — Session Layer
+Gate-8 — Navigation Authority
+
+Key guarantees restored:
+
+Supabase session always established before navigation
+Public auth flow remains isolated from ACL system
+MenuProvider activates only after valid session
+
+No architectural invariant was violated.
+
+86.5 SYSTEM BEHAVIOR AFTER FIX
+
+Auth flow now operates as:
+
+Signup / Recovery / Login
+↓
+Supabase redirect with tokens
+↓
+AuthCallback.jsx
+↓
+Session established
+↓
+supabase.auth.getSession() → valid
+↓
+Flow routing
+
+Recovery → /reset-password
+Default → /email-verified
+
+86.6 VALIDATION RESULT
+
+Tested using:
+
+Corporate email
+Gmail
+
+Result:
+
+Session restored successfully
+No authentication errors
+No race condition observed
+
+Console verification:
+
+await supabase.auth.getSession()
+
+Returned valid session object.
+
+86.7 FINAL STATUS
+
+Auth callback pipeline:
+
+Stable ✅
+Deterministic ✅
+Production-ready ✅
