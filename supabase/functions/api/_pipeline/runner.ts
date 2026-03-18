@@ -195,8 +195,9 @@ export async function runPipeline(
     });
 
     contextResult = await stepContext(req, {
-      authUserId: sessionResult.authUserId,
-    });
+  authUserId: sessionResult.authUserId,
+  roleCode: sessionResult.roleCode,
+});
 
     if (contextResult.status === "UNRESOLVED") {
       return errorResponse(
@@ -225,6 +226,11 @@ export async function runPipeline(
       event: "PIPELINE_STAGE",
       meta: { stage: "ACL" },
     });
+
+    // 🔥 ADD THIS
+if (contextResult.status !== "RESOLVED") {
+  throw new Error("CONTEXT_NOT_RESOLVED_AFTER_CHECK");
+}
 
     const acl = await stepAcl(req, requestId, {
       context: {

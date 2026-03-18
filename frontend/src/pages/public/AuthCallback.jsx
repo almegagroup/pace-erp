@@ -36,55 +36,55 @@ export default function AuthCallback() {
         const url = new URL(globalThis.location.href);
 
 const code = url.searchParams.get("code");
-const flow = url.searchParams.get("flow"); // ✅ ADD THIS
-const hash = globalThis.location.hash;
+const hash = globalThis.location.hash;  // 🔥 FIRST
+
+let flow = url.searchParams.get("flow");
+
+if(!flow && hash){
+  const params = new URLSearchParams(hash.substring(1));
+  flow = params.get("type") || null;
+}
 
 /* ==============================
 STEP 1 — EXCHANGE / RESTORE SESSION
 ============================== */
 
-// 🔴 CASE 1: PKCE flow (?code=...)
+// 🔴 CASE 1: PKCE flow
 if(code){
   const { error: exchangeError } =
     await supabase.auth.exchangeCodeForSession(window.location.href);
 
-  if(exchangeError){
-    throw exchangeError;
-  }
+  if(exchangeError) throw exchangeError;
 }
 
-// 🔴 CASE 2: HASH FLOW (#access_token...)
-else if(hash && hash.includes("access_token")){
+// 🔴 CASE 2: HASH FLOW
+else if(hash){
 
   const params = new URLSearchParams(hash.substring(1));
 
+  // ✅ ERROR FIRST
+  if(params.get("error")){
+    const errMsg = params.get("error_description") || "Auth error";
+    throw new Error(errMsg);
+  }
+
+  // ✅ TOKEN FLOW
   const access_token = params.get("access_token");
   const refresh_token = params.get("refresh_token");
 
-  if(!access_token || !refresh_token){
-    throw new Error("Invalid auth tokens in URL");
+  if(access_token && refresh_token){
+
+    const { data, error } = await supabase.auth.setSession({
+      access_token,
+      refresh_token
+    });
+
+    if(error) throw error;
+
+    if(!data?.session){
+      throw new Error("Session not established from tokens");
+    }
   }
-
-  const { data, error } = await supabase.auth.setSession({
-    access_token,
-    refresh_token
-  });
-
-  if(error){
-    throw error;
-  }
-
-  if(!data?.session){
-    throw new Error("Session not established from tokens");
-  }
-}
-
-// 🔴 CASE 3: ERROR FROM SUPABASE
-else if(hash && hash.includes("error")){
-  const params = new URLSearchParams(hash.substring(1));
-  const errMsg = params.get("error_description") || "Auth error";
-
-  throw new Error(errMsg);
 }
 
 if(cancelled) return;
@@ -107,15 +107,15 @@ if(cancelled) return;
         STEP 3 — FLOW ROUTING
         ============================== */
 
-        if(flow === "recovery"){
-          navigate("/reset-password",{ replace:true });
-          return;
-        }
-
-        // default → email verify
-        setTimeout(() => {
-        navigate("/email-verified",{ replace:true });
-        }, 200);
+       if(flow === "recovery"){
+  navigate("/reset-password",{ replace:true });
+}
+else if(flow === "signup"){
+  navigate("/email-verified",{ replace:true });
+}
+else{
+  navigate("/login",{ replace:true });
+}
 
       }catch(err){
 
