@@ -55,22 +55,28 @@ export async function meMenuHandler(
   // --------------------------------------------------
   const db = getServiceRoleClientWithContext(context);
 
-  const { data, error } = await db
-    .schema("erp_menu").from("menu_snapshot")
-    .select(`
-  menu_code,
-  title,
-  route_path,
-  menu_type,
-  parent_menu_code,
-  display_order,
-  snapshot_version
+  let query = db
+  .schema("erp_menu").from("menu_snapshot")
+  .select(`
+menu_code,
+title,
+route_path,
+menu_type,
+parent_menu_code,
+display_order,
+snapshot_version
 `)
-    .eq("user_id", auth_user_id)        // ✅ session truth (Gate-2)
-    .eq("company_id", context.companyId)
-    .eq("universe", universe)
-    .eq("is_visible", true)
-    .order("display_order", { ascending: true });
+  .eq("user_id", auth_user_id)
+  .eq("universe", universe)
+  .eq("is_visible", true);
+
+/* 🔥 FIX: Admin হলে company filter লাগবে না */
+if (!context.isAdmin) {
+  query = query.eq("company_id", context.companyId);
+}
+
+const { data, error } = await query
+  .order("display_order", { ascending: true });
 
   if (error) {
   return errorResponse(
