@@ -33,12 +33,12 @@ export default function AuthCallback() {
 
       try{
 
-        const url = new URL(globalThis.location.href);
+  const url = new URL(globalThis.location.href);
 
 const code = url.searchParams.get("code");
 const hash = globalThis.location.hash;  // 🔥 FIRST
 
-let flow = url.searchParams.get("flow");
+let flow = url.searchParams.get("type");   // ✅ FIXED
 
 if(!flow && hash){
   const params = new URLSearchParams(hash.substring(1));

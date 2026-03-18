@@ -2827,3 +2827,216 @@ Auth callback pipeline:
 Stable ✅
 Deterministic ✅
 Production-ready ✅
+
+🔴 87. SA SEEDING — AUTH FAILURE ISSUE (CRITICAL)
+
+Status:
+Unresolved ❌
+
+87.1 CONTEXT
+
+SA user seeding was introduced to enable:
+
+Admin Universe access (/sa/home)
+
+Seed executed via:
+
+SQL seed file (manual run in dev/prod)
+
+Duplicate prevention logic included
+
+87.2 OBSERVED ISSUE
+
+After seeding:
+
+Login → FAILED ❌
+
+Errors observed:
+
+401 Unauthorized
+403 Forbidden
+87.3 BEHAVIOUR
+Case 1 — Login attempt (SA user)
+POST /api/login → 401
+Case 2 — Session exists but blocked
+GET /api/me → 403
+87.4 ROOT PROBLEM AREA (SUSPECTED)
+
+The issue is not UI.
+
+Likely failure layers:
+
+Gate-2 → Auth identity mismatch
+Gate-3 → Context resolution missing
+Gate-6 → ACL denial (role not mapped)
+DB → SA user not aligned with Supabase auth_user_id
+87.5 POSSIBLE CAUSES
+🔴 Cause A — auth_user_id mismatch
+erp_core.users.auth_user_id ≠ supabase.auth.users.id
+
+👉 Result:
+
+Session valid but ERP cannot map user → 403
+🔴 Cause B — SA role not mapped in ACL
+role_code = SA
+but ACL tables missing entry
+
+👉 Result:
+
+Access denied → 403
+🔴 Cause C — company / context missing
+No parent_company / work_company
+
+👉 Result:
+
+Context resolver fails → 403
+🔴 Cause D — user state invalid
+state != ACTIVE
+
+👉 Result:
+
+Login blocked → 401
+87.6 CURRENT STATUS
+SA seeding → Executed ✔️
+Login → Failing ❌
+Root cause → Not yet confirmed ❌
+87.7 IMPACT
+Admin Universe inaccessible ❌
+ERP bootstrap blocked ❌
+🔴 88. PASSWORD RESET FLOW — CRITICAL FAILURE
+
+Status:
+Unresolved ❌
+
+88.1 CONTEXT
+
+Password recovery flow implemented using:
+
+Supabase Auth recovery system
+
+Flow:
+
+ForgotPassword → Email → AuthCallback → ResetPassword
+88.2 ISSUE 1 — DEV ENVIRONMENT FAILURE
+
+Observed:
+
+Site cannot be reached ❌
+🔴 Behaviour
+
+After clicking reset link:
+
+Browser → Cannot reach site
+🔴 Likely Cause
+Incorrect redirect URL
+
+Possible misconfig:
+
+redirectTo → localhost mismatch
+port mismatch (5173 vs other)
+Supabase redirect URL not whitelisted
+88.3 ISSUE 2 — PROD ENVIRONMENT MISROUTING
+
+Observed:
+
+Reset link → redirects to /email-verified ❌
+
+Expected:
+
+→ /reset-password ✔️
+88.4 ROOT CAUSE (HIGH CONFIDENCE)
+
+Problem in AuthCallback flow detection
+
+Current logic:
+
+flow = params.get("type")
+
+Supabase sends:
+
+type=recovery
+
+BUT:
+
+Flow not detected properly
+→ default route triggered
+→ /email-verified
+88.5 IMPACT
+User cannot reset password ❌
+Auth system incomplete ❌
+88.6 ADDITIONAL SIDE EFFECT
+
+While fixing reset flow:
+
+Multiple changes made in AuthCallback
+
+Result:
+
+Flow confusion increased
+Debug complexity increased
+88.7 CURRENT STATUS
+Environment	Status
+DEV	❌ Site unreachable
+PROD	❌ Wrong redirect
+Reset flow	❌ Broken
+🔴 89. SYSTEM STATE AFTER THESE ISSUES
+89.1 WORKING SYSTEMS
+Signup flow ✔️
+Email verification ✔️
+ERP DB user creation ✔️
+Menu guard ✔️
+Public routes ✔️
+89.2 BROKEN SYSTEMS
+SA login ❌
+Admin universe ❌
+Password reset ❌
+Auth callback routing ❌ (partially)
+89.3 RISK LEVEL
+🔴 HIGH
+
+Reason:
+
+Core authentication pipeline unstable
+Admin access blocked
+🔴 90. ARCHITECTURAL NOTE (VERY IMPORTANT)
+
+During debugging:
+
+AuthCallback logic modified multiple times
+
+👉 This caused:
+
+Flow ambiguity
+Mixed logic paths
+Unclear control boundaries
+90.1 RULE GOING FORWARD
+AuthCallback must remain:
+
+Deterministic
+Single-path
+Non-duplicated
+🔴 91. NEXT ACTION PLAN
+Move to new debugging session
+Scope of next session
+
+We will isolate and fix:
+
+1. SA login failure
+
+DB alignment
+
+auth_user_id mapping
+
+role + ACL
+
+2. Reset flow
+
+redirect URL
+
+flow detection
+
+Supabase config
+
+Strategy
+NO patching
+ONLY root-cause fixing
