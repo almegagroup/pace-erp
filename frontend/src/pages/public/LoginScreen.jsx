@@ -60,7 +60,7 @@ try{
 STEP 1 — LOGIN REQUEST
 ================================ */
 
-const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/login`,{
+const res = await fetch(`${import.meta.env.VITE_API_BASE}/login`, {
 
 method:"POST",
 
@@ -87,8 +87,8 @@ throw new Error("INVALID_LOGIN");
 STEP 2 — VERIFY SESSION
 ================================ */
 
-const meRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/me`,{
-credentials:"include"
+const meRes = await fetch(`${import.meta.env.VITE_API_BASE}/me`,{
+  credentials:"include"
 });
 
 const meData = await meRes.json();
@@ -101,8 +101,8 @@ throw new Error("SESSION_RESOLVE_FAILED");
 STEP 3 — FETCH MENU SNAPSHOT
 ================================ */
 
-const menuRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`,{
-credentials:"include"
+const menuRes = await fetch(`${import.meta.env.VITE_API_BASE}/me/menu`,{
+  credentials:"include"
 });
 
 const menuData = await menuRes.json();

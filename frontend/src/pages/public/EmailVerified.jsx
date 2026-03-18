@@ -69,7 +69,7 @@ setLoading(false);
 return;
 }
 
-const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/signup`,{
+const res = await fetch(`${import.meta.env.VITE_API_BASE}/signup`,{
 method:"POST",
 headers:{
 "Authorization": `Bearer ${token}`

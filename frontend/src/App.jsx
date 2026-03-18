@@ -9,14 +9,9 @@
  */
 
 import AppRouter from "./router/AppRouter.jsx";
-import { MenuProvider } from "./context/MenuProvider.jsx";
 
 function App() {
-  return (
-    <MenuProvider>
-      <AppRouter />
-    </MenuProvider>
-  );
+  return <AppRouter />;
 }
 
 export default App;

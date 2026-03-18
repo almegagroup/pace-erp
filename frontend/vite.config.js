@@ -77,5 +77,18 @@ export default defineConfig({
         ]
       }
     })
-  ]
+  ],
+
+
+  // 🔥 ADD THIS BLOCK
+  server: {
+    proxy: {
+      "/api": {
+        target: "https://pace-erp-api-dev.onrender.com",
+        changeOrigin: true,
+        secure: true
+      }
+    }
+  }
+
 });
