@@ -77,20 +77,20 @@ define(['./workbox-a39fd305'], (function (workbox) { 'use strict';
    * requests for URLs in the manifest.
    * See https://goo.gl/S9QRab
    */
-  workbox.precacheAndRoute([{
+  workbox.precacheAndRoute([
+  {
     "url": "registerSW.js",
     "revision": "3ca0b8505b4bec776b69afdba2768812"
-  }, {
-    "url": "index.html",
-    "revision": "0.l49vom07mvo"
-  }], {});
+  }
+]);
   workbox.cleanupOutdatedCaches();
-  workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("index.html"), {
-    allowlist: [/^\/$/]
-  }));
+  workbox.registerRoute(
+  ({ request }) => request.mode === "navigate",
+  new workbox.strategies.NetworkOnly()
+);
   workbox.registerRoute(({
     request
-  }) => request.destination === "style" || request.destination === "script" || request.destination === "image", new workbox.CacheFirst({
+  }) => request.destination === "style" || request.destination === "script" || request.destination === "image", new workbox.StaleWhileRevalidate({
     "cacheName": "ui-assets",
     plugins: [new workbox.ExpirationPlugin({
       maxEntries: 100,
