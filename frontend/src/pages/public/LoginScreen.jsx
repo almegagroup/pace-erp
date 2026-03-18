@@ -136,10 +136,20 @@ navigate("/dashboard");
 
 }catch(err){
 
-/* Generic error (do not expose backend message) */
+  let message = "Login failed";
+  const code = err?.message || "UNKNOWN";
 
-setError("Invalid identifier or password");
+  if(code === "INVALID_LOGIN"){
+    message = "Invalid identifier or password";
+  }
+  else if(code === "SESSION_RESOLVE_FAILED"){
+    message = "Session verification failed";
+  }
+  else if(code === "MENU_RESOLVE_FAILED"){
+    message = "Menu loading failed";
+  }
 
+  setError(`${message} (${code})`);
 }
 
 finally{
