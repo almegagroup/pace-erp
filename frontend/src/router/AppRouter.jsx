@@ -34,10 +34,16 @@ import GADashboardShell from "../admin/ga/GADashboardShell.jsx";
 export default function AppRouter() {
   return (
     <BrowserRouter>
+
+      {/* ============================================================
+          TEMP_UI_BOOT_PATCH
+          HiddenRouteRedirect disabled intentionally
+          ============================================================ */}
+
       <Routes>
 
         {/* ============================== */}
-        {/* 🌐 PUBLIC ROUTES (NO MENU) */}
+        {/* 🌐 PUBLIC ROUTES (NO CONTEXT) */}
         {/* ============================== */}
 
         <Route path="/" element={<LandingPage />} />
@@ -56,7 +62,7 @@ export default function AppRouter() {
         <Route path="/admin" element={<AdminResolver />} />
 
         {/* ============================== */}
-        {/* 🔒 ADMIN DASHBOARDS */}
+        {/* 🔒 ADMIN DASHBOARDS (WITH MENU) */}
         {/* ============================== */}
 
         <Route
@@ -81,20 +87,20 @@ export default function AppRouter() {
         {/* 🔐 ACL USER UNIVERSE */}
         {/* ============================== */}
 
-        <Route element={<DeepLinkGuard />}>
-          <Route
-            path="/dashboard"
-            element={
-              <MenuProvider>
+        <Route
+          path="/dashboard"
+          element={
+            <MenuProvider>
+              <DeepLinkGuard>
                 <MenuShell>
                   <RouteGuard>
                     <div>Dashboard</div>
                   </RouteGuard>
                 </MenuShell>
-              </MenuProvider>
-            }
-          />
-        </Route>
+              </DeepLinkGuard>
+            </MenuProvider>
+          }
+        />
 
         {/* ============================== */}
         {/* 🚧 FALLBACK */}
@@ -103,6 +109,9 @@ export default function AppRouter() {
         <Route path="*" element={<Navigate to="/" replace />} />
 
       </Routes>
+
+      {/* TEMP_UI_BOOT_PATCH — HiddenRouteRedirect disabled */}
+
     </BrowserRouter>
   );
 }
