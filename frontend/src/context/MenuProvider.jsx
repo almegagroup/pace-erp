@@ -48,7 +48,7 @@ if (isPublicRoute(pathname)) {
   return;
 }
 
-  fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+  fetch(`${import.meta.env.VITE_API_BASE}/me/menu`, {
   credentials: "include",
 })
     .then(async (res) => {
