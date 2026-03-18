@@ -115,7 +115,7 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
   if (resolved.kind === "email") {
     const result = await verifyPassword(resolved.email, password);
 
-   if (!result.ok || !result.user) {
+   if (!result.ok || !result.session) {
   log({
     level: "SECURITY",
     request_id: requestId,
@@ -160,26 +160,26 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
 
   // Step 2: Verify password against correct email
   const result = await verifyPassword(
-    userData.user.email,
-    password
+  userData.user.email,
+  password
+);
+
+if (!result.ok || !result.session) {
+  log({
+    level: "SECURITY",
+    request_id: requestId,
+    gate_id: "2.7",
+    event: "AUTH_LOGIN_FAILED",
+  });
+
+  return errorResponse(
+    GENERIC_CODE,
+    GENERIC_MESSAGE,
+    requestId,
+    "NONE",
+    403
   );
-
-  if (!result.ok) {
-    log({
-      level: "SECURITY",
-      request_id: requestId,
-      gate_id: "2.7",
-      event: "AUTH_LOGIN_FAILED",
-    });
-
-    return errorResponse(
-      GENERIC_CODE,
-      GENERIC_MESSAGE,
-      requestId,
-      "NONE",
-      403
-    );
-  }
+}
 
   authUserId = resolved.authUserId;
 }

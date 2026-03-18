@@ -29,16 +29,13 @@ export function buildSessionCookie(
   /**
    * PRODUCTION (cross-domain case)
    */
-  if (!isLocalhost) {
-    parts.push("SameSite=None");
+ if (!isLocalhost) {
+  parts.push("SameSite=None");
 
-    if (isHttps) {
-      parts.push("Secure");
-    }
-
-    // Optional but recommended for your domain
-    parts.push("Domain=.almegagroup.in");
+  if (isHttps) {
+    parts.push("Secure");
   }
+}
 
   /**
    * DEV (localhost)
