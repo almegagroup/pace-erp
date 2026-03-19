@@ -443,7 +443,7 @@ FILE: \frontend\src\admin\adminEntryGuard.js
 
 FILE: \frontend\src\admin\AdminResolver.jsx
   [16] const res = await fetch(
-  [17] `${import.meta.env.VITE_API_BASE}/api/me/menu`,
+  [17] `${import.meta.env.VITE_API_BASE}/api/api/me/menu`,
 
 FILE: \frontend\src\admin\ga\GADashboardShell.jsx
   [12] import MenuShell from "../../layout/MenuShell.jsx";
@@ -469,8 +469,8 @@ FILE: \frontend\src\context\MenuProvider.jsx
   [16] export function MenuProvider({ children }) {
   [27] File: MenuProvider.jsx
   [30] Menu API (/api/me/menu) requires valid session.
-  [51] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
-  [51] fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+  [51] fetch(`${import.meta.env.VITE_API_BASE}/api/api/me/menu`, {
+  [51] fetch(`${import.meta.env.VITE_API_BASE}/api/api/me/menu`, {
 
 FILE: \frontend\src\context\useMenu.js
 
@@ -535,7 +535,7 @@ FILE: \frontend\src\navigation\screenTypes.js
 FILE: \frontend\src\pages\public\AuthCallback.jsx
 
 FILE: \frontend\src\pages\public\EmailVerified.jsx
-  [72] const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/signup`,{
+  [72] const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/api/signup`,{
 
 FILE: \frontend\src\pages\public\ForgotPassword.jsx
 
@@ -543,10 +543,10 @@ FILE: \frontend\src\pages\public\LandingPage.jsx
 
 FILE: \frontend\src\pages\public\LoginScreen.jsx
   [13] * Universe resolution via /api/me/menu
-  [63] const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/login`,{
-  [90] const meRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/me`,{
-  [104] const menuRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`,{
-  [104] const menuRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`,{
+  [63] const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/api/login`,{
+  [90] const meRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/api/me`,{
+  [104] const menuRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/api/me/menu`,{
+  [104] const menuRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/api/me/menu`,{
 
 FILE: \frontend\src\pages\public\ResetPassword.jsx
 
