@@ -69,7 +69,7 @@ setLoading(false);
 return;
 }
 
-const res = await fetch(`${import.meta.env.VITE_API_BASE}/signup`,{
+const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/signup`,{
 method:"POST",
 headers:{
 "Authorization": `Bearer ${token}`
@@ -77,7 +77,8 @@ headers:{
 });
 
 if(!res.ok){
-throw new Error("Signup API failed");
+  const text = await res.text();
+  throw new Error(text || "Signup API failed");
 }
 
 navigate("/signup-submitted");

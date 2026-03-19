@@ -3040,3 +3040,340 @@ Supabase config
 Strategy
 NO patching
 ONLY root-cause fixing
+
+🔴 92. PRODUCTION DOMAIN ALIGNMENT — BACKEND CUSTOM DOMAIN ACTIVATION
+
+Status:
+Completed ✅
+
+92.1 CONTEXT
+
+Original production architecture used:
+
+Frontend:
+erp.almegagroup.in
+
+Backend:
+pace-erp.onrender.com
+
+This created a cross-domain deployment boundary between frontend and backend.
+
+Observed impact during production login debugging:
+
+Session cookie behavior was inconsistent
+Browser requests sometimes failed to carry expected auth continuity
+Session resolution errors were observed during login pipeline testing
+
+92.2 ACTION EXECUTED
+
+A dedicated backend custom domain was created in Render:
+
+api.almegagroup.in
+
+DNS request was submitted and completed through Rediff support.
+
+Render custom domain status:
+
+Verified ✅
+Certificate issued ✅
+
+Health check confirmed:
+
+https://api.almegagroup.in/health
+
+returned successful response.
+
+92.3 RESULT
+
+Production backend is now reachable through:
+
+api.almegagroup.in
+
+This removes the previous frontend → onrender.com production dependency for intended production routing.
+
+92.4 IMPORTANT NOTE
+
+This domain alignment removed the earlier infrastructure ambiguity around production cross-domain routing.
+
+However:
+
+login success is still NOT confirmed
+
+because another blocking issue remains:
+
+POST /login still returns 401
+
+Therefore:
+
+domain alignment is complete
+but authentication pipeline is still not operational
+
+---
+
+🔴 93. PWA / SERVICE WORKER STALE BUILD ISSUE
+
+Status:
+Unresolved ❌
+
+93.1 OBSERVED ISSUE
+
+Production UI repeatedly served stale frontend bundles after deployment.
+
+Observed behaviour:
+
+New deploy did NOT appear automatically
+Old API target remained active
+Old build persisted until manual browser cleanup
+
+93.2 CONFIRMED USER ACTION REQUIRED
+
+The new build became visible only after:
+
+Service Worker unregister
+Clear site data / storage clear
+Hard refresh / new clean browser context
+
+93.3 IMPACT
+
+This means current PWA update strategy is not stable.
+
+Current system behaviour:
+
+Deploy alone is not sufficient
+Browser may continue running stale frontend code
+Production debugging becomes misleading because old code remains active
+
+93.4 CURRENT STATUS
+
+This issue is NOT solved yet.
+
+Current workaround:
+
+Manual Service Worker unregister
+Manual cache / storage clear
+
+93.5 ARCHITECTURAL IMPLICATION
+
+Until this is fixed:
+
+production verification remains unreliable
+because UI behaviour may reflect an older deploy rather than the current codebase
+
+---
+
+🔴 94. LOGIN PIPELINE STATUS AFTER DOMAIN FIX
+
+Status:
+Still failing ❌
+
+94.1 OBSERVED BEHAVIOUR
+
+After production backend was moved to:
+
+api.almegagroup.in
+
+login requests correctly reached the new backend domain.
+
+Observed request pattern:
+
+POST https://api.almegagroup.in/login
+
+However response remained:
+
+401 Unauthorized
+
+94.2 IMPORTANT RESULT
+
+Because login itself fails:
+
+no ERP session is created
+no ERP cookie is issued
+subsequent session resolution cannot proceed
+
+Therefore:
+
+missing cookie is currently a consequence of login failure
+NOT the primary blocker at this stage
+
+94.3 CURRENT CONCLUSION
+
+The active blocker is now:
+
+credential / auth-layer failure
+
+not:
+
+domain routing
+not:
+certificate issuance
+not:
+initial production backend reachability
+
+94.4 ARCHITECTURAL INTERPRETATION
+
+Infrastructure problem:
+largely stabilized
+
+Authentication problem:
+still unresolved
+
+---
+
+🔴 95. PASSWORD RESET FLOW — CURRENT REAL STATUS
+
+Status:
+Unresolved ❌
+
+95.1 CONTEXT
+
+Forgot password flow was executed end-to-end:
+
+ForgotPassword
+↓
+email received
+↓
+link opened
+↓
+password reset attempted
+
+Supabase logs showed user modification activity.
+
+95.2 OBSERVED RESULT
+
+Despite recovery flow execution:
+
+login with the newly entered password still failed with 401
+
+95.3 CURRENT INTERPRETATION
+
+At this moment the recovery pipeline cannot be considered verified.
+
+Reason:
+
+a successful password reset has NOT yet been proven by successful login
+
+95.4 IMPORTANT CORRECTION
+
+Earlier assumption that recovery/auth callback flow was fully stable is no longer considered fully validated in the context of live login verification.
+
+Current rule:
+
+Password recovery remains OPEN / unresolved until:
+
+new password is accepted by login
+and
+POST /login succeeds
+
+95.5 POSSIBLE FAILURE AREA
+
+The unresolved layer may be one or more of:
+
+Supabase recovery session continuity
+AuthCallback flow routing ambiguity
+password update completion not being reliably validated by login
+ERP auth-layer gating after successful Supabase identity recovery
+
+Root cause not yet isolated.
+
+---
+
+🔴 96. AUTH CALLBACK STATUS — RECLASSIFIED
+
+Status:
+Partially validated ⚠️
+
+96.1 PREVIOUS STATE
+
+Auth callback had previously been treated as stabilized after fixes around:
+
+detectSessionInUrl
+full URL session exchange
+flow restoration
+
+96.2 CURRENT OBSERVATION
+
+Because password recovery still does not produce a confirmed successful login outcome:
+
+AuthCallback cannot yet be marked fully production-safe for all auth flows.
+
+96.3 UPDATED CLASSIFICATION
+
+Signup-related auth callback:
+likely working
+
+Password recovery-related auth callback:
+NOT yet fully confirmed
+
+96.4 RULE GOING FORWARD
+
+AuthCallback must continue to be treated as:
+
+single-path
+deterministic
+non-duplicated
+
+But its recovery branch must be revalidated from first principles in the next debugging session.
+
+---
+
+🔴 97. CURRENT MASTER ISSUE SUMMARY
+
+Status:
+Open ❌
+
+97.1 WORKING
+
+Frontend production domain active
+Backend custom domain active
+Render SSL issued
+Signup pipeline previously verified
+Public route isolation in place
+Menu guard active during public routes
+
+97.2 UNRESOLVED
+
+1. Service Worker stale build issue
+   - new deploy does not reliably replace old build
+   - manual unregister / clear storage required
+
+2. Login pipeline failure
+   - POST /login still returns 401
+   - cookie not created because login itself fails
+
+3. Password reset verification failure
+   - recovery flow executed
+   - successful password usability not yet proven by login
+
+4. Auth callback recovery branch not fully validated
+   - recovery should not be considered closed yet
+
+97.3 RISK LEVEL
+
+🔴 HIGH
+
+Reason:
+
+Production infrastructure is now reachable
+but core authentication remains blocked
+
+97.4 NEXT DEBUGGING SESSION SCOPE
+
+The next session must isolate issues in this exact order:
+
+A. Login 401 root cause
+   - Supabase identity verification outcome
+   - ERP auth gating
+   - user state / mapping / active-status alignment
+
+B. Password reset validity
+   - whether reset actually creates a usable credential
+   - whether recovery session reaches update stage correctly
+
+C. Service Worker lifecycle
+   - eliminate need for manual unregister / cache clear
+
+97.5 STRATEGY
+
+NO more broad patching
+NO assumption-based fixes
+ONLY single-layer isolation with direct validation after each step
