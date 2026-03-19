@@ -12,8 +12,8 @@ export function buildSessionCookie(
   sessionId: string,
   requestUrl: string
 ): string {
+
   const url = new URL(requestUrl);
-  const isHttps = url.protocol === "https:";
   const hostname = url.hostname;
 
   const isLocalhost =
@@ -26,21 +26,13 @@ export function buildSessionCookie(
     "HttpOnly",
   ];
 
-  /**
-   * PRODUCTION (cross-domain case)
-   */
- if (!isLocalhost) {
-  parts.push("SameSite=None");
-
-  if (isHttps) {
-    parts.push("Secure");
-  }
-}
-
-  /**
-   * DEV (localhost)
-   */
-  else {
+  if (!isLocalhost) {
+    // 🔥 PRODUCTION RULE
+    parts.push("SameSite=None");
+    parts.push("Secure"); // ALWAYS
+    parts.push("Domain=.almegagroup.in");
+  } else {
+    // 🧪 DEV RULE
     parts.push("SameSite=Lax");
   }
 

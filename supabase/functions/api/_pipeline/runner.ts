@@ -101,7 +101,6 @@ export async function runPipeline(
   const PUBLIC_ROUTES = new Set([
     "POST:/api/login",
     "POST:/api/signup",
-    "GET:/api/me",
     "POST:/api/logout",
   ]);
 

@@ -5,7 +5,6 @@
 
 import { loginHandler } from "../_core/auth/login.handler.ts";
 import { logoutHandler } from "../_core/auth/logout.handler.ts";
-import { meHandler } from "../_core/auth/me.handler.ts";
 import { signupHandler } from "../_core/auth/signup/signup.handler.ts";
 
 import type { SessionResolution } from "./session.ts";
@@ -25,13 +24,6 @@ export async function dispatchPublicRoute(
         requestId,
         requestUrl: req.url,
       });
-
-    case "GET:/api/me":
-      return meHandler({
-        session: sessionResult ?? { status: "ABSENT", action: "LOGOUT" },
-        requestId,
-      });
-
     case "POST:/api/logout":
       return await logoutHandler({
         session: sessionResult ?? { status: "ABSENT", action: "LOGOUT" },
