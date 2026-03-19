@@ -21,7 +21,7 @@ import { initNavigation } from "./navigation/screenStackEngine.js";
 import { restoreNavigationStack } from "./navigation/navigationPersistence.js";
 import { isPublicRoute } from "./router/publicRoutes.js";
 
-const API_BASE = import.meta.env.VITE_API_BASE;
+
 
 // Enforce screen metadata invariants at boot
 validateScreenRegistry();

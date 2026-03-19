@@ -79,60 +79,13 @@ password
 
 const loginData = await res.json();
 
+
 if(!res.ok || !loginData?.ok){
-throw new Error("INVALID_LOGIN");
+  throw new Error("INVALID_LOGIN");
 }
 
-/* ===============================
-STEP 2 — VERIFY SESSION
-================================ */
-
-const meRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/me`,{
-  credentials:"include"
-});
-
-const meData = await meRes.json();
-
-if(!meRes.ok || !meData?.ok){
-throw new Error("SESSION_RESOLVE_FAILED");
-}
-
-/* ===============================
-STEP 3 — FETCH MENU SNAPSHOT
-================================ */
-
-const menuRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`,{
-  credentials:"include"
-});
-
-const menuData = await menuRes.json();
-
-if(!menuRes.ok || !menuData?.ok){
-throw new Error("MENU_RESOLVE_FAILED");
-}
-
-/* ===============================
-STEP 4 — UNIVERSE RESOLUTION
-================================ */
-
-const universe = menuData?.data?.universe;
-
-/*
-Admin Universe
-SA + GA
-*/
-
-if(universe === "SA"){
-navigate("/admin");
-return;
-}
-
-/*
-ACL Universe
-All operational users
-*/
-
-navigate("/dashboard");
+// ✅ ONLY THIS
+navigate("/auth-resolve");
 
 }catch(err){
 
@@ -140,14 +93,9 @@ navigate("/dashboard");
   const code = err?.message || "UNKNOWN";
 
   if(code === "INVALID_LOGIN"){
-    message = "Invalid identifier or password";
+    message = "Invalid UserID or password";
   }
-  else if(code === "SESSION_RESOLVE_FAILED"){
-    message = "Session verification failed";
-  }
-  else if(code === "MENU_RESOLVE_FAILED"){
-    message = "Menu loading failed";
-  }
+ 
 
   setError(`${message} (${code})`);
 }

@@ -20,7 +20,7 @@ import SignupSubmittedPage from "../pages/public/SignupSubmittedPage.jsx";
 import ForgotPassword from "../pages/public/ForgotPassword.jsx";
 import ResetPassword from "../pages/public/ResetPassword.jsx";
 
-import AdminResolver from "../admin/AdminResolver.jsx";
+import AuthResolver from "../admin/AuthResolver.jsx";
 
 import RouteGuard from "./RouteGuard.jsx";
 import DeepLinkGuard from "./DeepLinkGuard.jsx";
@@ -59,7 +59,14 @@ export default function AppRouter() {
         {/* 🔒 ADMIN ENTRY */}
         {/* ============================== */}
 
-        <Route path="/admin" element={<AdminResolver />} />
+        <Route
+  path="/admin"
+  element={
+    <MenuProvider>
+      <AuthResolver />
+    </MenuProvider>
+  }
+/>
 
         {/* ============================== */}
         {/* 🔒 ADMIN DASHBOARDS (WITH MENU) */}

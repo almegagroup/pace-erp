@@ -1,7 +1,7 @@
 /*
  * Admin Route Dispatcher
  */
-
+import { meHandler } from "../_core/auth/me.handler.ts";
 import { listPendingSignupHandler } from "../_core/admin/signup/list_pending.handler.ts";
 import { approveSignupHandler } from "../_core/admin/signup/approve.handler.ts";
 import { rejectSignupHandler } from "../_core/admin/signup/reject.handler.ts";
@@ -45,6 +45,13 @@ export async function dispatchAdminRoutes(
 
   switch (routeKey) {
 
+    case "GET:/api/me":
+  response = await meHandler({
+    session,
+    requestId,
+  });
+  break;
+  
     case "GET:/api/admin/signup-requests":
       response = await listPendingSignupHandler(req, {
         context,
