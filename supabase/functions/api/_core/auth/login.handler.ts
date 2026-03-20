@@ -237,17 +237,21 @@ log({
   event: "AUTH_LOGIN_SUCCESS",
 });
 
-return new Response(
+const res = new Response(
   JSON.stringify({
     ok: true,
-    request_id: requestId,
+    request_id: requestId ?? null,
   }),
   {
     status: 200,
     headers: {
       "Set-Cookie": cookie,
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store"
     },
   }
 );
+
+return res;
 
 }

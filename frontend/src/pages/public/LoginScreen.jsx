@@ -85,7 +85,7 @@ if(!res.ok || !loginData?.ok){
 }
 
 // ✅ ONLY THIS
-navigate("/auth-resolve");
+navigate("/admin");
 
 }catch(err){
 

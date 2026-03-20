@@ -34,15 +34,15 @@ function enforceSessionLogout(
   result: { action?: string } | null,
   requestId: string
 ): Response | null {
-  if (result?.action === "LOGOUT") {
-    return new Response(
-      JSON.stringify({
-        status: "logout",
-        request_id: requestId,
-      }),
-      { status: 401 }
-    );
-  }
+ if (result?.action === "LOGOUT") {
+  return errorResponse(
+    "SESSION_LOGOUT",
+    "Session expired",
+    requestId,
+    "LOGOUT",
+    401
+  );
+}
   return null;
 }
 
@@ -154,15 +154,15 @@ export async function runPipeline(
 
     if (gate3Logout) return gate3Logout;
 
-    if (sessionResult.status !== "ACTIVE") {
-      return new Response(
-        JSON.stringify({
-          status: "logout",
-          request_id: requestId,
-        }),
-        { status: 401 }
-      );
-    }
+   if (sessionResult.status !== "ACTIVE") {
+  return errorResponse(
+    "SESSION_NOT_ACTIVE",
+    "Session invalid",
+    requestId,
+    "LOGOUT",
+    401
+  );
+}
 
     /**
      * Reset idle timer only when ACTIVE

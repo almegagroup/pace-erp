@@ -64,7 +64,15 @@ export function applyCORS(req: Request, res: Response): Response {
   if (!ALLOWED_ORIGINS.includes(origin)) {
   recordSecurityEvent(req, "SYSTEM", "CORS_BLOCKED_ORIGIN", "CORS");
 
-  return new Response("Forbidden", { status: 403 });
+  const headers = new Headers();
+headers.set("Access-Control-Allow-Origin", origin);
+headers.set("Vary", "Origin");
+headers.set("Access-Control-Allow-Credentials", "true");
+
+return new Response("Forbidden", {
+  status: 403,
+  headers
+});
 }
 
   headers.set("Access-Control-Allow-Origin", origin);
@@ -93,12 +101,26 @@ export function handlePreflight(req: Request): Response | null {
 
   // Non-browser → reject preflight
   if (!origin) {
-    return new Response("Forbidden", { status: 403 });
-  }
+  return new Response("Forbidden", {
+    status: 403,
+    headers: {
+      "Access-Control-Allow-Origin": "*"
+    }
+  });
+}
 
-  if (!ALLOWED_ORIGINS.includes(origin)) {
+if (!ALLOWED_ORIGINS.includes(origin)) {
   recordSecurityEvent(req, "SYSTEM", "CORS_BLOCKED_ORIGIN", "CORS");
-  return new Response("Forbidden", { status: 403 });
+
+  const headers = new Headers();
+  headers.set("Access-Control-Allow-Origin", origin);
+  headers.set("Vary", "Origin");
+  headers.set("Access-Control-Allow-Credentials", "true");
+
+  return new Response("Forbidden", {
+    status: 403,
+    headers
+  });
 }
 
   const headers = new Headers();

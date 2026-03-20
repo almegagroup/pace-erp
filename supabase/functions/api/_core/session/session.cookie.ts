@@ -27,11 +27,11 @@ export function buildSessionCookie(
   ];
 
   if (!isLocalhost) {
-    // 🔥 PRODUCTION RULE
-    parts.push("SameSite=None");
-    parts.push("Secure"); // ALWAYS
-    parts.push("Domain=.almegagroup.in");
-  } else {
+  parts.push("SameSite=None");
+  parts.push("Secure");
+  parts.push("Domain=almegagroup.in"); // 🔥 FIX
+  parts.push("Priority=High");         // optional but good
+} else {
     // 🧪 DEV RULE
     parts.push("SameSite=Lax");
   }
