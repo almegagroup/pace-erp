@@ -15,7 +15,10 @@
 import { recordSecurityEvent } from "../_security/security_events.ts";
 
 // 🔥 Deno-only (no process.env)
-const allowedEnv = Deno.env.get("ALLOWED_ORIGINS") || "";
+const allowedEnv =
+  (typeof Deno !== "undefined"
+    ? Deno.env.get("ALLOWED_ORIGINS")
+    : process.env.ALLOWED_ORIGINS) || "";
 
 // Normalize ENV → array
 const ALLOWED_ORIGINS = allowedEnv
