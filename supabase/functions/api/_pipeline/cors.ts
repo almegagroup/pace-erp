@@ -9,20 +9,36 @@
  */
 
 /* --------------------------------------------------
- * ENV-BASED ALLOWLIST
+ * ENV-BASED ALLOWLIST (DENO ONLY)
  * -------------------------------------------------- */
 
 import { recordSecurityEvent } from "../_security/security_events.ts";
 
-const allowedEnv =
-  (typeof Deno !== "undefined"
-    ? Deno.env.get("ALLOWED_ORIGINS")
-    : process.env.ALLOWED_ORIGINS) || "";
+// 🔥 Deno-only (no process.env)
+const allowedEnv = Deno.env.get("ALLOWED_ORIGINS") || "";
 
+// Normalize ENV → array
 const ALLOWED_ORIGINS = allowedEnv
   .split(/[\n,]/)
-  .map(o => o.trim())
+  .map(o => o.trim().toLowerCase().replace(/\/$/, "")) // trim + lowercase + remove trailing slash
   .filter(Boolean);
+
+/* --------------------------------------------------
+ * ORIGIN MATCH HELPER (STRICT BUT SAFE)
+ * -------------------------------------------------- */
+
+function isOriginAllowed(origin: string | null): boolean {
+  if (!origin) return true; // non-browser allowed
+
+  const normalizedOrigin = origin
+    .trim()
+    .toLowerCase()
+    .replace(/\/$/, "");
+
+  return ALLOWED_ORIGINS.some(allowed => {
+    return allowed === normalizedOrigin;
+  });
+}
 
 /* --------------------------------------------------
  * Pipeline placeholder (ordering only)
@@ -37,9 +53,6 @@ export function stepCors(
 
 /* --------------------------------------------------
  * Response-side CORS injector
- * - No wildcard allowed
- * - Strict ENV allowlist
- * - Allows non-browser requests (no Origin)
  * -------------------------------------------------- */
 
 export function applyCORS(req: Request, res: Response): Response {
@@ -50,6 +63,9 @@ export function applyCORS(req: Request, res: Response): Response {
   }
 
   const origin = req.headers.get("Origin");
+  console.log("---- CORS DEBUG (applyCORS) ----");
+console.log("Incoming Origin:", origin);
+console.log("Allowed Origins:", ALLOWED_ORIGINS);
   const headers = new Headers(res.headers);
 
   // Non-browser request (no Origin header)
@@ -60,21 +76,24 @@ export function applyCORS(req: Request, res: Response): Response {
     });
   }
 
-  // Strict allowlist check
-  if (!ALLOWED_ORIGINS.includes(origin)) {
-  recordSecurityEvent(req, "SYSTEM", "CORS_BLOCKED_ORIGIN", "CORS");
+  // 🔴 Strict allowlist check (FIXED)
+  console.log("Is Origin Allowed?:", isOriginAllowed(origin));
+  if (!isOriginAllowed(origin)) {
+    console.log("❌ CORS BLOCKED:", origin);
+    recordSecurityEvent(req, "SYSTEM", "CORS_BLOCKED_ORIGIN", "CORS");
 
-  const headers = new Headers();
-headers.set("Access-Control-Allow-Origin", origin);
-headers.set("Vary", "Origin");
-headers.set("Access-Control-Allow-Credentials", "true");
+    const blockHeaders = new Headers();
+    blockHeaders.set("Access-Control-Allow-Origin", origin);
+    blockHeaders.set("Vary", "Origin");
+    blockHeaders.set("Access-Control-Allow-Credentials", "true");
 
-return new Response("Forbidden", {
-  status: 403,
-  headers
-});
-}
+    return new Response("Forbidden", {
+      status: 403,
+      headers: blockHeaders
+    });
+  }
 
+  // ✅ Allowed
   headers.set("Access-Control-Allow-Origin", origin);
   headers.set("Vary", "Origin");
   headers.set("Access-Control-Allow-Credentials", "true");
@@ -84,7 +103,11 @@ return new Response("Forbidden", {
     "Content-Type, Authorization, X-Requested-With"
   );
 
+  console.log("✅ CORS PASSED:", origin);
+console.log("------------------------------");
+
   return new Response(res.body, {
+    
     status: res.status,
     headers,
   });
@@ -98,31 +121,37 @@ export function handlePreflight(req: Request): Response | null {
   if (req.method !== "OPTIONS") return null;
 
   const origin = req.headers.get("Origin");
+  console.log("---- PREFLIGHT DEBUG ----");
+console.log("Incoming Origin:", origin);
 
   // Non-browser → reject preflight
   if (!origin) {
-  return new Response("Forbidden", {
-    status: 403,
-    headers: {
-      "Access-Control-Allow-Origin": "*"
-    }
-  });
-}
+    return new Response("Forbidden", {
+      status: 403,
+      headers: {
+        "Access-Control-Allow-Origin": "*"
+      }
+    });
+  }
 
-if (!ALLOWED_ORIGINS.includes(origin)) {
-  recordSecurityEvent(req, "SYSTEM", "CORS_BLOCKED_ORIGIN", "CORS");
+  // 🔴 Strict allowlist check (FIXED)
+  console.log("Is Origin Allowed?:", isOriginAllowed(origin));
+  if (!isOriginAllowed(origin)) {
+    console.log("❌ CORS BLOCKED:", origin);
+    recordSecurityEvent(req, "SYSTEM", "CORS_BLOCKED_ORIGIN", "CORS");
 
-  const headers = new Headers();
-  headers.set("Access-Control-Allow-Origin", origin);
-  headers.set("Vary", "Origin");
-  headers.set("Access-Control-Allow-Credentials", "true");
+    const blockHeaders = new Headers();
+    blockHeaders.set("Access-Control-Allow-Origin", origin);
+    blockHeaders.set("Vary", "Origin");
+    blockHeaders.set("Access-Control-Allow-Credentials", "true");
 
-  return new Response("Forbidden", {
-    status: 403,
-    headers
-  });
-}
+    return new Response("Forbidden", {
+      status: 403,
+      headers: blockHeaders
+    });
+  }
 
+  // ✅ Allowed preflight
   const headers = new Headers();
 
   headers.set("Access-Control-Allow-Origin", origin);
@@ -134,6 +163,9 @@ if (!ALLOWED_ORIGINS.includes(origin)) {
     "Content-Type, Authorization, X-Requested-With"
   );
   headers.set("Access-Control-Max-Age", "86400");
+
+  console.log("✅ PREFLIGHT PASSED:", origin);
+console.log("------------------------------");
 
   return new Response(null, {
     status: 200,
