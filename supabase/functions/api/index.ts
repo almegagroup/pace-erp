@@ -62,7 +62,7 @@ try {
 
   return applyCSP(
     applySecurityHeaders(
-      applyCORS(req, res),
+      applyCORS(req, res),   // ✅ ONLY res
       requestId
     )
   );
@@ -84,16 +84,19 @@ try {
     const action =
       code.startsWith("SESSION_") ? "LOGOUT" : "NONE";
 
-    return applyCSP(
-      applySecurityHeaders(
-        errorResponse(
-          code,
-          "Request blocked by security policy",
-          requestId,
-          action
-        ),
-        requestId
+  return applyCSP(
+  applySecurityHeaders(
+    applyCORS(
+      req,
+      errorResponse(
+        code,
+        "Request blocked by security policy",
+        requestId,
+        action
       )
-    );
+    ),
+    requestId
+  )
+);
   }
 }
