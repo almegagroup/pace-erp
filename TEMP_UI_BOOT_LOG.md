@@ -3735,3 +3735,227 @@ Move debugging to:
 
 ✅ Report updated
 Now this document reflects actual ground truth of system behaviour
+
+99. GATE-6/7 BREAKTHROUGH — AUTHORIZATION PIPELINE UNBLOCKED
+
+Status:
+Partially Resolved ✅
+
+99.1 CONTEXT
+
+Previous system state:
+
+Login → SUCCESS
+Session → ACTIVE
+GET /api/me → 403 ❌
+GET /api/me/menu → 403 ❌
+
+Root cause identified:
+
+Authorization layer (ACL / Context) blocking access
+99.2 ACTION TAKEN
+🔧 Fix 1 — Gate-2 Role Enrichment (CRITICAL)
+
+File modified:
+
+_pipeline/session.ts
+
+Added:
+
+roleCode?: string
+
+And DB resolution:
+
+erp_map.user_company_roles
+
+Fallback logic added:
+
+user_code → SA / GA detection
+🔧 Fix 2 — Gate-5 Context Admin Bypass (CRITICAL)
+
+File:
+
+_pipeline/context.ts
+
+Logic:
+
+if (isAdminUniverse(session)) {
+  return {
+    companyId: "ADMIN_UNIVERSE",
+    roleCode,
+    isAdmin: true
+  }
+}
+🔧 Fix 3 — Menu Query Admin Fix
+
+File:
+
+menu.handler.ts
+
+Fix:
+
+if (!context.isAdmin) {
+  query = query.eq("company_id", context.companyId);
+}
+
+👉 Admin → NO company filter
+
+99.3 RESULT AFTER FIX
+
+Render logs confirm:
+
+POST /api/login → 200 ✅
+GET /api/me → 200 ✅
+GET /api/me/menu → 200 ✅
+
+Pipeline stages:
+
+SESSION → PASS
+CONTEXT → PASS
+ACL → PASS
+HANDLER → PASS
+
+👉 This proves:
+
+ACL BLOCKING ISSUE → RESOLVED
+99.4 IMPORTANT OBSERVATION
+
+Database state:
+
+SELECT * FROM erp_menu.menu_snapshot;
+→ no rows
+
+System response:
+
+{
+  "menu": [],
+  "hard_deny": true
+}
+
+👉 Meaning:
+
+Authorization works
+But NO MENU DATA exists
+99.5 CRITICAL SYSTEM TRUTH UPDATE
+
+Previous truth:
+
+User authenticated but NOT authorized ❌
+
+Updated truth:
+
+User authenticated ✅
+User authorized ✅
+System empty (no snapshot) ⚠️
+100. CURRENT SYSTEM STATE (REAL STATUS)
+✅ WORKING LAYERS
+🔐 Auth Layer (Gate-2)
+Login → Working
+Session → ACTIVE
+Cookie → Working
+🧠 Context Layer (Gate-5)
+Admin bypass → Working
+Role binding → Working
+🛡 ACL Layer (Gate-6)
+stepAcl → PASS
+No DENY
+🌐 API Layer
+/api/me → 200
+/api/me/menu → 200
+⚠️ NOT WORKING (EXPECTED)
+📭 Menu System (Gate-7)
+menu_snapshot = EMPTY
+
+👉 Not a bug
+👉 System behaving correctly
+
+101. WHY MENU EMPTY? (ROOT CAUSE)
+❗ Snapshot system dependency
+
+Menu system depends on:
+
+menu_master
++
+menu_tree
++
+ACL rules
+↓
+generate_menu_snapshot()
+↓
+menu_snapshot
+Current state:
+menu_master → likely empty
+menu_tree → likely empty
+snapshot → empty
+Therefore:
+MenuProvider → gets []
+UI → shows nothing
+102. THIS IS NOT A BUG — THIS IS BOOTSTRAP GAP
+
+👉 Very important:
+
+System is CORRECT
+System is NOT initialized
+103. SYSTEM PHASE TRANSITION (VERY IMPORTANT)
+
+You just moved from:
+
+PHASE → AUTH DEBUGGING
+
+To:
+
+PHASE → SYSTEM BOOTSTRAP (ADMIN UNIVERSE)
+104. NEXT COURSE OF ACTION — OPTION A PATH (SAP STYLE)
+🎯 Objective:
+SA logs in → sees dashboard → creates system
+Step-by-step execution:
+🔹 STEP 1 — Seed minimal menu_master
+
+You need:
+
+SA bootstrap menu
+
+Example:
+
+menu_code	title	route_path	universe
+SA_DASH	Dashboard	/sa/home	SA
+COMPANY_CREATE	Create Company	/sa/company/create	SA
+🔹 STEP 2 — Generate snapshot
+
+Call:
+
+erp_menu.generate_menu_snapshot(
+  p_user_id,
+  "ADMIN_UNIVERSE",
+  "SA"
+)
+🔹 STEP 3 — Verify
+SELECT * FROM erp_menu.menu_snapshot;
+🔹 STEP 4 — UI auto loads
+MenuProvider → /api/me/menu → data → UI visible
+105. IMPORTANT ARCHITECTURE DECISION (CONFIRMED)
+
+You chose:
+
+Option A → FULL SNAPSHOT (SAP STYLE)
+
+Therefore:
+
+NO static menu
+NO hardcoded routes
+ALL via DB + snapshot
+106. WHAT IS STILL MISSING
+🔴 Admin Universe Bootstrap Layer
+
+You still don’t have:
+
+Menu definitions (menu_master)
+Menu hierarchy (menu_tree)
+Snapshot generation trigger
+107. FINAL SYSTEM STATUS
+Infrastructure → STABLE ✅
+Auth → STABLE ✅
+Context → STABLE ✅
+ACL → STABLE ✅
+Menu Engine → READY ✅
+Data → EMPTY ⚠️

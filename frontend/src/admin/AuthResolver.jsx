@@ -40,8 +40,8 @@ export default function AuthResolver(){
 
         setMenuSnapshot(menu);
 
-        const ga = menu.find(m => m.screen_code === "GA_HOME");
-        const sa = menu.find(m => m.screen_code === "SA_HOME");
+        const ga = menu.find(m => m.menu_code === "GA_HOME");
+        const sa = menu.find(m => m.menu_code === "SA_HOME");
 
         if(ga){
           navigate("/ga/home",{replace:true});
