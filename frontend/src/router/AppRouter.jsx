@@ -24,15 +24,13 @@ import AuthResolver from "../admin/AuthResolver.jsx";
 
 import RouteGuard from "./RouteGuard.jsx";
 import DeepLinkGuard from "./DeepLinkGuard.jsx";
-
 import MenuShell from "../layout/MenuShell.jsx";
 
-// 🆕 Admin shells
+// Admin shells
 import SADashboardShell from "../admin/sa/SADashboardShell.jsx";
 import GADashboardShell from "../admin/ga/GADashboardShell.jsx";
 
-// 🆕 SA screens
-import SAHome from "../admin/sa/screens/SAHome.jsx";
+// SA screens
 import SACompanyCreate from "../admin/sa/screens/SACompanyCreate.jsx";
 import SAUsers from "../admin/sa/screens/SAUsers.jsx";
 import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
@@ -40,96 +38,52 @@ import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
 export default function AppRouter() {
   return (
     <BrowserRouter>
+      {/* ✅ SINGLE SOURCE OF CONTEXT */}
+      <MenuProvider>
 
-      {/* ============================================================
-          TEMP_UI_BOOT_PATCH
-          HiddenRouteRedirect disabled intentionally
-          ============================================================ */}
+        <Routes>
 
-      <Routes>
+          {/* ============================== */}
+          {/* 🌐 PUBLIC ROUTES */}
+          {/* ============================== */}
 
-        {/* ============================== */}
-        {/* 🌐 PUBLIC ROUTES (NO CONTEXT) */}
-        {/* ============================== */}
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/login" element={<LoginScreen />} />
+          <Route path="/signup" element={<SignupScreen />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="/email-verified" element={<EmailVerified />} />
+          <Route path="/signup-submitted" element={<SignupSubmittedPage />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
 
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/login" element={<LoginScreen />} />
-        <Route path="/signup" element={<SignupScreen />} />
-        <Route path="/auth/callback" element={<AuthCallback />} />
-        <Route path="/email-verified" element={<EmailVerified />} />
-        <Route path="/signup-submitted" element={<SignupSubmittedPage />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
+          {/* ============================== */}
+          {/* 🔒 ADMIN ENTRY */}
+          {/* ============================== */}
 
-        {/* ============================== */}
-        {/* 🔒 ADMIN ENTRY */}
-        {/* ============================== */}
+          <Route path="/admin" element={<AuthResolver />} />
 
-        <Route
-  path="/admin"
-  element={
-    <MenuProvider>
-      <AuthResolver />
-    </MenuProvider>
-  }
-/>
+          {/* ============================== */}
+          {/* 🔒 ADMIN DASHBOARD (ENTRY) */}
+          {/* ============================== */}
 
-        {/* ============================== */}
-        {/* 🔒 ADMIN DASHBOARDS (WITH MENU) */}
-        {/* ============================== */}
-        <Route
-          path="/sa/home"
-          element={
-            <MenuProvider>
-              <SADashboardShell />
-            </MenuProvider>
-          }
-        />
+          <Route path="/sa/home" element={<SADashboardShell />} />
+          <Route path="/ga/home" element={<GADashboardShell />} />
 
-        <Route
-          path="/sa/company/create"
-          element={
-            <MenuProvider>
-              <SACompanyCreate />
-            </MenuProvider>
-          }
-        />
+          {/* ============================== */}
+          {/* 🔒 ADMIN SCREENS */}
+          {/* ============================== */}
 
-        <Route
-          path="/sa/users"
-          element={
-            <MenuProvider>
-              <SAUsers />
-            </MenuProvider>
-          }
-        />
+          <Route path="/sa/company/create" element={<SACompanyCreate />} />
+          <Route path="/sa/users" element={<SAUsers />} />
+          <Route path="/sa/signup-requests" element={<SASignupRequests />} />
 
-        <Route
-          path="/sa/signup-requests"
-          element={
-            <MenuProvider>
-              <SASignupRequests />
-            </MenuProvider>
-          }
-        />
+          {/* ============================== */}
+          {/* 🔐 ACL USER UNIVERSE */}
+          {/* ============================== */}
 
-        <Route
-          path="/ga/home"
-          element={
-            <MenuProvider>
-              <GADashboardShell />
-            </MenuProvider>
-          }
-        />
-
-        {/* ============================== */}
-        {/* 🔐 ACL USER UNIVERSE */}
-        {/* ============================== */}
-
-        <Route
-          path="/dashboard"
-          element={
-            <MenuProvider>
+          <Route
+            path="/dashboard"
+            element={
               <DeepLinkGuard>
                 <MenuShell>
                   <RouteGuard>
@@ -137,20 +91,18 @@ export default function AppRouter() {
                   </RouteGuard>
                 </MenuShell>
               </DeepLinkGuard>
-            </MenuProvider>
-          }
-        />
+            }
+          />
 
-        {/* ============================== */}
-        {/* 🚧 FALLBACK */}
-        {/* ============================== */}
+          {/* ============================== */}
+          {/* 🚧 FALLBACK */}
+          {/* ============================== */}
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
 
-      </Routes>
+        </Routes>
 
-      {/* TEMP_UI_BOOT_PATCH — HiddenRouteRedirect disabled */}
-
+      </MenuProvider>
     </BrowserRouter>
   );
 }
