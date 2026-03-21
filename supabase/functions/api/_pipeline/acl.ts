@@ -71,6 +71,8 @@ export async function stepAcl(
       // ===== Gate-6 truth flags (no permission materialization yet) =====
       moduleEnabled?: boolean;
       userOverrides?: { effect: "ALLOW" | "DENY" } | null;
+      // 🔥 ADD THIS (CRITICAL)
+  isAdmin?: boolean;
     };
 
     route?: {
@@ -83,7 +85,7 @@ export async function stepAcl(
   /* --------------------------------------------------
  * 🔥 0️⃣ ADMIN BYPASS (SSOT FIX)
  * -------------------------------------------------- */
-if (ctx?.context && (ctx.context as any).isAdmin === true) {
+if (ctx?.context?.isAdmin === true) {
   return { decision: "ALLOW" };
 }
 
