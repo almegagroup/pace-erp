@@ -31,6 +31,12 @@ import MenuShell from "../layout/MenuShell.jsx";
 import SADashboardShell from "../admin/sa/SADashboardShell.jsx";
 import GADashboardShell from "../admin/ga/GADashboardShell.jsx";
 
+// 🆕 SA screens
+import SAHome from "../admin/sa/screens/SAHome.jsx";
+import SACompanyCreate from "../admin/sa/screens/SACompanyCreate.jsx";
+import SAUsers from "../admin/sa/screens/SAUsers.jsx";
+import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
+
 export default function AppRouter() {
   return (
     <BrowserRouter>
@@ -71,12 +77,38 @@ export default function AppRouter() {
         {/* ============================== */}
         {/* 🔒 ADMIN DASHBOARDS (WITH MENU) */}
         {/* ============================== */}
-
         <Route
           path="/sa/home"
           element={
             <MenuProvider>
               <SADashboardShell />
+            </MenuProvider>
+          }
+        />
+
+        <Route
+          path="/sa/company/create"
+          element={
+            <MenuProvider>
+              <SACompanyCreate />
+            </MenuProvider>
+          }
+        />
+
+        <Route
+          path="/sa/users"
+          element={
+            <MenuProvider>
+              <SAUsers />
+            </MenuProvider>
+          }
+        />
+
+        <Route
+          path="/sa/signup-requests"
+          element={
+            <MenuProvider>
+              <SASignupRequests />
             </MenuProvider>
           }
         />

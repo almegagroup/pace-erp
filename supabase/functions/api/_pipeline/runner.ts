@@ -237,7 +237,7 @@ if (contextResult.status !== "RESOLVED") {
   authUserId: sessionResult.authUserId,
   roleCode: contextResult.roleCode,
   companyId: contextResult.companyId,
-  moduleEnabled: true,
+  moduleEnabled: true, // temporarily, until wired properly
 
   // 🔥 CRITICAL FIX
   isAdmin: contextResult.isAdmin === true,
