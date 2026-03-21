@@ -62,7 +62,32 @@ export function assertServiceRole(): void {
  * -------------------------------------------------- */
 
 export function getServiceRoleClientWithContext(ctx: ContextResolution) {
-  const headers = buildRlsContextHeaders(ctx);
+  let headers: Record<string, string>;
+
+  // 🔥 1️⃣ HARD FAIL — UNRESOLVED CONTEXT
+  if (ctx.status !== "RESOLVED") {
+    console.error("❌ INVALID_CONTEXT_FOR_DB", ctx);
+    throw new Error("INVALID_CONTEXT_FOR_DB");
+  }
+
+  // 🔥 2️⃣ ADMIN SAFE PATH
+  if (ctx.isAdmin === true) {
+    console.log("🟣 ADMIN_CONTEXT_BYPASS_RLS", {
+      role: ctx.roleCode
+    });
+
+    headers = {
+      "x-is-admin": "true"
+    };
+  } else {
+    // 🔹 3️⃣ NON-ADMIN SAFETY CHECK
+    if (!ctx.companyId) {
+      console.error("❌ COMPANY_ID_MISSING_NON_ADMIN", ctx);
+      throw new Error("COMPANY_ID_REQUIRED");
+    }
+
+    headers = buildRlsContextHeaders(ctx);
+  }
 
   return createClient(
     SUPABASE_URL!,

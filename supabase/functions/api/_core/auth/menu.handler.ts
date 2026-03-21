@@ -51,7 +51,6 @@ if (context.status !== "RESOLVED") {
 // ✅ এখন new variable use করবো
 const resolvedContext = context;
 
-// 🔥 DEBUG
 console.log("DEBUG_CONTEXT", {
   isAdmin: resolvedContext.isAdmin,
   companyId: resolvedContext.companyId,
@@ -59,15 +58,21 @@ console.log("DEBUG_CONTEXT", {
   auth_user_id
 });
 
-  // --------------------------------------------------
-  // 2️⃣ Determine universe (ID-7.4A)
-  // --------------------------------------------------
-  const universe = resolvedContext.isAdmin === true ? "SA" : "ACL";
+console.log("🔵 SERVICE_ROLE_CONTEXT", {
+  isAdmin: resolvedContext.isAdmin,
+  companyId: resolvedContext.companyId,
+  roleCode: resolvedContext.roleCode
+});
+
+const universe = resolvedContext.isAdmin === true ? "SA" : "ACL";
 
   // --------------------------------------------------
   // 3️⃣ Snapshot is the ONLY data source
   // --------------------------------------------------
-  const db = getServiceRoleClientWithContext(resolvedContext);
+
+  
+
+const db = getServiceRoleClientWithContext(resolvedContext);
 
   let query = db
   .schema("erp_menu").from("menu_snapshot")
@@ -85,17 +90,52 @@ snapshot_version
   .eq("is_visible", true);
 
 /* 🔥 FIX: Admin হলে company filter লাগবে না */
-if (!resolvedContext.isAdmin) {
+if (resolvedContext.isAdmin !== true) {
+  if (!resolvedContext.companyId) {
+    console.error("❌ COMPANY_ID_MISSING", {
+      resolvedContext
+    });
+
+    return errorResponse(
+      "INVALID_CONTEXT",
+      "companyId missing for non-admin",
+      request_id,
+      "NONE",
+      500
+    );
+  }
+
   query = query.eq("company_id", resolvedContext.companyId);
 }
 
-const { data, error } = await query
-  .order("display_order", { ascending: true });
+console.log("🟡 MENU_QUERY_BUILD", {
+  auth_user_id,
+  universe,
+  isAdmin: resolvedContext.isAdmin,
+  companyId: resolvedContext.companyId
+});
 
-  if (error) {
+// 🔥 SAFE EXECUTION WRAP
+let data, error;
+
+try {
+  const result = await query.order("display_order", { ascending: true });
+  data = result.data;
+  error = result.error;
+
+  console.log("🟢 MENU_QUERY_RESULT", {
+    data_length: data?.length ?? 0,
+    error: error?.message ?? null
+  });
+
+} catch (e) {
+  console.error("🔥 QUERY_CRASH", {
+    error: e
+  });
+
   return errorResponse(
-    "MENU_SNAPSHOT_READ_FAILED",
-    error.message,
+    "QUERY_CRASH",
+    String(e),
     request_id,
     "NONE",
     500
