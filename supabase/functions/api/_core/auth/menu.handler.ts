@@ -449,7 +449,7 @@ if (roleCode === "SA" || roleCode === "GA") {
  * -------------------------------------------------- */
 
 await db.rpc(
-  "erp_menu.generate_menu_snapshot",
+  "generate_menu_snapshot",
   {
     p_user_id: targetUserId,
     p_company_id: companyId,
