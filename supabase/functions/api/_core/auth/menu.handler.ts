@@ -78,11 +78,11 @@ const db = getServiceRoleClientWithContext(resolvedContext);
 // 🔥 ENSURE SNAPSHOT EXISTS (CRITICAL FIX)
 // --------------------------------------------------
 const { error: snapshotError } = await db.rpc(
-  "erp_menu.generate_menu_snapshot",
+  "generate_menu_snapshot",
   {
-    p_user_id: auth_user_id,
     p_company_id: resolvedContext.companyId ?? null,
-    p_universe: universe
+    p_universe: universe,
+    p_user_id: auth_user_id
   }
 );
 
@@ -451,9 +451,9 @@ if (roleCode === "SA" || roleCode === "GA") {
 await db.rpc(
   "generate_menu_snapshot",
   {
-    p_user_id: targetUserId,
     p_company_id: companyId,
-    p_universe: universe
+    p_universe: universe,
+    p_user_id: targetUserId
   }
 );
 
