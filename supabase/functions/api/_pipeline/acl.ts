@@ -81,6 +81,13 @@ export async function stepAcl(
   }
 ): Promise<AclDecision> {
   /* --------------------------------------------------
+ * 🔥 0️⃣ ADMIN BYPASS (SSOT FIX)
+ * -------------------------------------------------- */
+if (ctx?.context && (ctx.context as any).isAdmin === true) {
+  return { decision: "ALLOW" };
+}
+
+  /* --------------------------------------------------
    * 1️⃣ Public route short-circuit
    * -------------------------------------------------- */
   if (ctx?.route?.isPublic === true) {

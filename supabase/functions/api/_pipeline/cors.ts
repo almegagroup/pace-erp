@@ -14,7 +14,7 @@
 
 import { recordSecurityEvent } from "../_security/security_events.ts";
 
-// 🔥 Deno-only (no process.env)
+
 const allowedEnv =
   (typeof Deno !== "undefined"
     ? Deno.env.get("ALLOWED_ORIGINS")
