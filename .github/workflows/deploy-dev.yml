@@ -13,9 +13,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ✅ FIXED
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
+        with:
+          version: latest   # 🔥 CRITICAL FIX
 
       - name: Login Supabase
         run: supabase login --token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
