@@ -3377,3 +3377,361 @@ C. Service Worker lifecycle
 NO more broad patching
 NO assumption-based fixes
 ONLY single-layer isolation with direct validation after each step
+
+🔴 98. LOGIN FAILURE — ROOT CAUSE INVESTIGATION (CORS, COOKIE, SESSION, ACL)
+
+Status:
+Partially resolved → Root cause isolated ⚠️
+
+98.1 CONTEXT
+
+Login pipeline debugging চলাকালীন multiple layers suspect করা হয়েছিল:
+
+CORS
+
+Cookie transmission
+
+SameSite policy
+
+Domain mismatch
+
+Session persistence
+
+ACL blocking
+
+Observed issue:
+
+GET /api/me → 403 Forbidden
+98.2 INITIAL HYPOTHESIS (REJECTED)
+Hypothesis A — Cookie not sent to backend
+
+Assumption:
+
+Browser → Backend request-এ cookie attach হচ্ছে না
+
+Hypothesis B — SameSite=Lax blocking cookie
+
+Assumption:
+
+erp.almegagroup.in → api.almegagroup.in cross-site call
+→ Lax cookie block করছে
+
+Hypothesis C — CORS misconfiguration
+
+Assumption:
+
+Origin allowlist mismatch
+→ request blocked
+
+98.3 VALIDATION STEPS PERFORMED
+Step 1 — Browser cookie inspection
+
+DevTools → Application → Cookies
+
+Observed:
+
+erp_session present ✅
+Domain = api.almegagroup.in
+SameSite = Lax
+HttpOnly = true
+
+Conclusion:
+
+Cookie successfully stored in browser
+
+Step 2 — Network request verification
+
+DevTools → Network → /api/me
+
+Observed:
+
+Request URL: https://api.almegagroup.in/api/me
+Status: 403 Forbidden
+
+Headers:
+
+Access-Control-Allow-Origin: https://erp.almegagroup.in
+Access-Control-Allow-Credentials: true
+
+Conclusion:
+
+CORS working correctly
+
+Step 3 — Backend session validation (DB)
+
+Query executed:
+
+SELECT status, created_at
+FROM erp_core.sessions
+WHERE session_id = 'XXXXX';
+
+Result:
+
+{
+  "status": "ACTIVE"
+}
+
+Conclusion:
+
+Session exists and is valid
+
+Step 4 — Cookie transmission confirmation
+
+Network → Request Cookies
+
+Observed:
+
+erp_session = dc483329-...
+
+Conclusion:
+
+Cookie is being sent to backend successfully
+
+98.4 ELIMINATION MATRIX
+Layer	Status	Conclusion
+Cookie storage	✅	Working
+Cookie transmission	✅	Working
+SameSite=Lax	✅	Not blocking
+CORS	✅	Correct
+Domain alignment	✅	Correct
+Session DB	✅	Active
+Login cookie issuance	✅	Working
+98.5 CRITICAL INSIGHT
+
+Because:
+
+Cookie exists
+
+Cookie sent
+
+Session ACTIVE
+
+Yet:
+
+/api/me → 403
+
+Therefore:
+
+👉 Request is NOT failing at auth layer
+👉 Request is being BLOCKED AFTER auth
+98.6 FINAL CONCLUSION (VERY IMPORTANT)
+❗ COOKIE / CORS / DOMAIN ISSUE — FULLY RESOLVED
+
+These are NOT blockers anymore:
+
+❌ Cookie issue
+
+❌ SameSite issue
+
+❌ CORS issue
+
+❌ Cross-domain issue
+
+98.7 ACTUAL BLOCKER IDENTIFIED
+🔴 ACL / CONTEXT / AUTHORIZATION LAYER
+
+Meaning:
+
+User is:
+
+Authenticated ✅
+But not Authorized ❌
+98.8 REAL SYSTEM STATE INTERPRETATION
+
+System is behaving like:
+
+Gate entry allowed
+But internal access denied
+
+98.9 ANALOGY (FOR CLARITY)
+
+Imagine:
+
+তুমি office gate দিয়ে ঢুকেছো ✅
+
+security তোমাকে চিনেছে ✅
+
+কিন্তু ভিতরের room-এ ঢুকতে দিচ্ছে না ❌
+
+👉 কারণ:
+
+Role / Permission / Context missing
+98.10 SAME-SITE (LAX) FINAL VERDICT
+Current setup:
+Frontend: erp.almegagroup.in
+Backend: api.almegagroup.in
+
+👉 Both are under:
+
+almegagroup.in (same site)
+
+Therefore:
+
+SameSite=Lax → ALLOWED ✅
+When Lax would fail (NOT current case):
+
+almegagroup.in → google.com
+
+iframe
+
+third-party embed
+
+👉 NONE apply here
+
+98.11 IMPORTANT ARCHITECTURAL CORRECTION
+
+Earlier assumption:
+
+Cookie not reaching backend
+
+Corrected understanding:
+
+Cookie is reaching backend perfectly
+98.12 CORS IMPLEMENTATION VALIDATION
+
+Current implementation:
+
+Strict allowlist
+
+Credentials enabled
+
+No wildcard
+
+Origin-specific response
+
+Observed behaviour:
+
+403 response WITH CORS headers
+
+Conclusion:
+
+CORS is NOT the source of failure
+98.13 DEPLOYMENT ISSUE (RESOLVED)
+
+Error observed during deployment:
+
+ReferenceError: Deno is not defined
+
+Cause:
+
+Node.js runtime does not support Deno.env
+
+Fix:
+
+const allowedEnv = process.env.ALLOWED_ORIGINS || "";
+
+Conclusion:
+
+Runtime environment mismatch fixed
+
+98.14 FINAL STATE AFTER ALL FIXES
+Component	Status
+Frontend domain	✅
+Backend domain	✅
+CORS	✅
+Cookie	✅
+Session	✅
+Auth	✅
+ACL	❌ BLOCKING
+98.15 WHAT HAS BEEN PROVEN
+✔ Proven Working
+
+Login API response
+
+Cookie issuance
+
+Cookie persistence
+
+Cookie transmission
+
+Session validation
+
+CORS allowlist
+
+Domain routing
+
+❌ Not Working
+
+ACL resolution
+
+Context resolution
+
+Role mapping
+
+ACL version binding
+
+98.16 SYSTEM RISK UPDATE
+
+Previous risk source:
+
+Infrastructure instability
+
+Updated risk source:
+
+Authorization logic failure
+98.17 NEXT DEBUGGING FOCUS (STRICT)
+
+Next session MUST isolate:
+
+A — ACL version existence
+SELECT *
+FROM erp_acl.acl_versions
+WHERE is_active = true;
+B — User mapping
+SELECT *
+FROM erp_core.users
+WHERE auth_user_id = '...';
+C — Role binding
+SELECT *
+FROM erp_acl.user_roles;
+D — Context resolution
+SELECT *
+FROM erp_core.user_company_map;
+98.18 STRATEGIC CORRECTION
+🚫 DO NOT DEBUG ANYMORE:
+
+CORS
+
+Cookie
+
+SameSite
+
+Domain
+
+✅ ONLY DEBUG:
+
+ACL
+
+Context
+
+Role
+
+Versioning
+
+98.19 FINAL SYSTEM TRUTH
+🔥 USER LOGIN IS SUCCESSFUL
+🔴 USER AUTHORIZATION IS FAILING
+98.20 IMPACT ON ERP
+
+Because ACL is blocking:
+
+Admin universe inaccessible ❌
+
+Dashboard unreachable ❌
+
+Menu snapshot unreliable ❌
+
+98.21 FINAL STATEMENT
+
+This marks a critical transition point:
+
+👉 Infrastructure layer is STABLE
+👉 Authorization layer is the ONLY blocker
+98.22 NEXT ACTION (MANDATORY)
+
+Move debugging to:
+
+🔴 Gate-6 / ACL / Context Layer ONLY
+
+✅ Report updated
+Now this document reflects actual ground truth of system behaviour

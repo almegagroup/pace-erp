@@ -122,14 +122,17 @@ if (!roleCode) {
   const { data: user } = await serviceRoleClient
     .schema("erp_core")
     .from("users")
-    .select("user_code")
+    .select("user_code, state")
     .eq("auth_user_id", data.auth_user_id)
-    .maybeSingle();
+    .limit(1)
+.maybeSingle();
 
-  if (user?.user_code?.startsWith("SA")) {
-    roleCode = "SA";
-  } else if (user?.user_code?.startsWith("GA")) {
-    roleCode = "GA";
+  if (user?.state === "ACTIVE") {
+    if (user?.user_code?.startsWith("SA")) {
+      roleCode = "SA";
+    } else if (user?.user_code?.startsWith("GA")) {
+      roleCode = "GA";
+    }
   }
 }
 
