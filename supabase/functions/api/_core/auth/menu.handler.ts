@@ -32,28 +32,42 @@ export async function meMenuHandler(
 ): Promise<Response> {
   const { context, auth_user_id, request_id } = ctx;
 
+  
+
   // --------------------------------------------------
   // 1️⃣ Hard invariant: context must be RESOLVED
   // --------------------------------------------------
-  if (context.status !== "RESOLVED") {
-    return errorResponse(
-      "CONTEXT_UNRESOLVED",
-      "Menu context unresolved",
-      request_id,
-      "NONE",
-      403
-    );
-  }
+  // 🔥 HARD NARROWING
+if (context.status !== "RESOLVED") {
+  return errorResponse(
+    "CONTEXT_UNRESOLVED",
+    "Menu context unresolved",
+    request_id,
+    "NONE",
+    403
+  );
+}
+
+// ✅ এখন new variable use করবো
+const resolvedContext = context;
+
+// 🔥 DEBUG
+console.log("DEBUG_CONTEXT", {
+  isAdmin: resolvedContext.isAdmin,
+  companyId: resolvedContext.companyId,
+  roleCode: resolvedContext.roleCode,
+  auth_user_id
+});
 
   // --------------------------------------------------
   // 2️⃣ Determine universe (ID-7.4A)
   // --------------------------------------------------
-  const universe = context.isAdmin === true ? "SA" : "ACL";
+  const universe = resolvedContext.isAdmin === true ? "SA" : "ACL";
 
   // --------------------------------------------------
   // 3️⃣ Snapshot is the ONLY data source
   // --------------------------------------------------
-  const db = getServiceRoleClientWithContext(context);
+  const db = getServiceRoleClientWithContext(resolvedContext);
 
   let query = db
   .schema("erp_menu").from("menu_snapshot")
@@ -71,8 +85,8 @@ snapshot_version
   .eq("is_visible", true);
 
 /* 🔥 FIX: Admin হলে company filter লাগবে না */
-if (!context.isAdmin) {
-  query = query.eq("company_id", context.companyId);
+if (!resolvedContext.isAdmin) {
+  query = query.eq("company_id", resolvedContext.companyId);
 }
 
 const { data, error } = await query
@@ -96,7 +110,7 @@ if (data && data.length > 0) {
   console.info("MENU_SNAPSHOT_SERVED", {
     request_id,
     auth_user_id,
-    company_id: context.companyId,
+    company_id: resolvedContext.companyId,
     universe,
     snapshot_version: data[0].snapshot_version ?? null,
     menu_count: data.length,

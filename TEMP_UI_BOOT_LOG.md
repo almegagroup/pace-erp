@@ -3959,3 +3959,307 @@ Context → STABLE ✅
 ACL → STABLE ✅
 Menu Engine → READY ✅
 Data → EMPTY ⚠️
+
+108. MENU 403 / 500 ERROR — FULL RESOLUTION TRACE (CRITICAL)
+
+Status:
+Resolved (Authorization Layer) ✅
+Pending (Menu Data Bootstrap) ⚠️
+
+108.1 INITIAL PROBLEM OBSERVED
+
+After frontend deployment (Dev + Prod), identical errors were observed:
+
+Frontend console:
+
+GET /api/me/menu → 500 (Internal Server Error)
+AuthResolver failed: MENU_FETCH_FAILED
+
+Earlier state also included:
+
+GET /api/me → 403 Forbidden
+
+System behaviour:
+
+Login screen visible
+Login success uncertain
+Dashboard never loads
+UI stuck at authentication boundary
+
+108.2 IMPORTANT OBSERVATION
+
+Both environments affected:
+
+Dev:
+https://dev.myerpdev.xyz
+
+Prod:
+https://erp.almegagroup.in
+
+👉 Same error in both
+
+Conclusion:
+
+❌ Not environment issue
+❌ Not deployment issue
+❌ Not frontend issue
+
+108.3 BACKEND LOG ANALYSIS
+
+From Render logs:
+
+Pipeline progression:
+
+HEADERS → PASS
+CORS → PASS
+CSRF → PASS
+RATE_LIMIT → PASS
+SESSION → PASS
+CONTEXT → PASS
+ACL → PASS
+HANDLER_PROTECTED → FAIL
+
+Error:
+
+MENU_FETCH_FAILED
+108.4 INFRASTRUCTURE VALIDATION (FULLY RESOLVED)
+
+The following were verified and eliminated as causes:
+
+Layer	Status
+Domain routing	✅
+SSL/TLS	✅
+Netlify config	✅
+Vercel config	✅
+CORS	✅
+Cookie storage	✅
+Cookie transmission	✅
+SameSite policy	✅
+Session DB	✅
+
+Conclusion:
+
+👉 Infrastructure layer is fully stable
+
+108.5 AUTHENTICATION STATUS
+
+Confirmed via logs:
+
+AUTH_LOGIN_SUCCESS ✅
+SESSION_ACTIVE ✅
+
+Meaning:
+
+User is authenticated successfully.
+
+108.6 ROOT CAUSE PHASE 1 (PREVIOUS STATE)
+
+Earlier system behaviour:
+
+Login → SUCCESS
+Session → ACTIVE
+GET /api/me → 403 ❌
+GET /api/me/menu → 403 ❌
+
+Interpretation:
+
+User authenticated but not authorized.
+
+108.7 FIX IMPLEMENTED (AUTHORIZATION LAYER)
+
+The following backend fixes were applied:
+
+Fix A — Role resolution
+
+Source:
+
+erp_map.user_company_roles
+
+Added roleCode into session layer.
+
+Fix B — Admin Universe context bypass
+if (isAdminUniverse(session)) {
+  return {
+    companyId: "ADMIN_UNIVERSE",
+    roleCode,
+    isAdmin: true
+  }
+}
+Fix C — Menu query correction
+if (!context.isAdmin) {
+  query = query.eq("company_id", context.companyId);
+}
+
+Admin users:
+
+→ No company filter applied
+
+108.8 RESULT AFTER FIX
+
+System behaviour changed to:
+
+POST /api/login → 200 ✅
+GET /api/me → 200 ✅
+GET /api/me/menu → 200 ✅
+
+Pipeline:
+
+SESSION → PASS
+CONTEXT → PASS
+ACL → PASS
+HANDLER → PASS
+
+👉 Authorization layer fully unblocked
+
+108.9 NEW PROBLEM STATE (CURRENT REALITY)
+
+Even after successful authorization:
+
+API response:
+
+{
+  "menu": [],
+  "hard_deny": true
+}
+108.10 CRITICAL DISCOVERY
+
+Database check:
+
+SELECT * FROM erp_menu.menu_snapshot;
+
+Result:
+
+→ No rows
+
+108.11 FINAL ROOT CAUSE (CONFIRMED)
+
+Menu system is empty
+
+Missing:
+
+menu_master
+menu_tree
+menu_snapshot
+
+Therefore:
+
+MenuProvider → empty response → UI cannot render routes
+108.12 ERROR EVOLUTION (VERY IMPORTANT)
+Stage	Error
+Stage 1	403 (Authorization failure)
+Stage 2	500 (MENU_FETCH_FAILED)
+Stage 3	200 + empty menu
+
+👉 This progression confirms:
+
+System is now correct but uninitialized
+
+108.13 ARCHITECTURAL TRUTH UPDATE
+
+Old assumption:
+
+Menu failure = bug ❌
+
+Correct reality:
+
+Menu failure = missing bootstrap data ⚠️
+
+108.14 SYSTEM PHASE TRANSITION
+
+System has officially moved to:
+
+👉 POST-AUTH BOOTSTRAP PHASE
+
+Meaning:
+
+Auth layer complete
+ACL layer complete
+Now:
+
+👉 System needs data initialization
+
+108.15 WHY UI STILL LOOKS BROKEN
+
+Frontend behaviour:
+
+MenuProvider calls:
+
+GET /api/me/menu
+
+Response:
+
+[]
+
+Therefore:
+
+No routes
+No navigation
+UI appears stuck
+
+108.16 THIS IS NOT A BUG
+
+System is behaving correctly.
+
+👉 No menu = No UI
+
+108.17 REQUIRED SYSTEM BOOTSTRAP
+
+To activate ERP UI:
+
+Step 1 — Seed menu_master
+
+Example:
+
+code	title	route
+SA_DASH	Dashboard	/sa/home
+Step 2 — Build menu_tree
+
+Define hierarchy
+
+Step 3 — Generate snapshot
+erp_menu.generate_menu_snapshot(...)
+Step 4 — Verify
+SELECT * FROM erp_menu.menu_snapshot;
+Step 5 — UI auto activates
+
+MenuProvider → receives data → UI renders
+
+108.18 FINAL SYSTEM STATE
+Layer	Status
+Infrastructure	✅
+Auth	✅
+Session	✅
+Context	✅
+ACL	✅
+API	✅
+Menu Engine	✅
+Menu Data	❌ EMPTY
+108.19 FINAL CONCLUSION
+No more frontend issue
+No more backend bug
+No more auth issue
+
+ONLY missing:
+
+System bootstrap data
+108.20 NEXT EXECUTION TARGET
+
+Move to:
+
+👉 Gate-9 / Admin Universe Bootstrapping
+
+🔥 FINAL NOTE (VERY IMPORTANT)
+
+This is a major milestone
+
+You have successfully completed:
+
+✔ Deployment
+✔ Auth
+✔ Session
+✔ ACL
+✔ Routing foundation
+
+Now:
+
+👉 You are entering real ERP initialization phase

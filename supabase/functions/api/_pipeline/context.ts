@@ -21,14 +21,14 @@ export type ContextResolution =
       errorCode: "CONTEXT_UNRESOLVED";
     }
   | {
-      status: "RESOLVED";
-      source: "BACKEND";
-      companyId: string;
-      projectId?: string;
-      departmentId?: string;
-      roleCode: string;  
-      isAdmin?: boolean;
-    };
+    status: "RESOLVED";
+    source: "BACKEND";
+    companyId?: string; // ✅ optional
+    projectId?: string;
+    departmentId?: string;
+    roleCode: string;  
+    isAdmin?: boolean;
+  }
 
 export type PipelineSession = {
   authUserId: string;
@@ -150,26 +150,10 @@ const roleCode = roleRow.role_code;
   projectId,
   departmentId,
   roleCode,
+  isAdmin: false, // explicit
 };
 }
 
-/* =========================================================
- * 4️⃣ Admin bypass (isolated)
- * ========================================================= */
-function applyAdminBypass(
-  ctx: ContextResolution,
-  session: PipelineSession
-): ContextResolution {
-  if (!isAdminUniverse(session)) return ctx;
-
-  return {
-    status: "RESOLVED",
-    source: "BACKEND",
-    companyId: "ADMIN_UNIVERSE",
-    roleCode: session.roleCode!,
-    isAdmin: true,
-  };
-}
 
 /* =========================================================
  * 5️⃣ Context invariants
@@ -179,13 +163,13 @@ function enforceContextInvariants(
 ): ContextResolution {
   if (ctx.status === "UNRESOLVED") return ctx;
 
-  if (!ctx.companyId) {
-    return {
-      status: "UNRESOLVED",
-      source: "BACKEND",
-      errorCode: "CONTEXT_UNRESOLVED",
-    };
-  }
+  if (!ctx.companyId && !ctx.isAdmin) {
+  return {
+    status: "UNRESOLVED",
+    source: "BACKEND",
+    errorCode: "CONTEXT_UNRESOLVED",
+  };
+}
 
   return ctx;
 }
@@ -200,15 +184,14 @@ export async function stepContext(
   sanitizeContextInput();
 
   // 🔥 1️⃣ ADMIN FIRST — HARD BYPASS (NO DB CALL)
-  if (isAdminUniverse(session)) {
-    return {
-      status: "RESOLVED",
-      source: "BACKEND",
-      companyId: "ADMIN_UNIVERSE",
-      roleCode: session.roleCode!,
-      isAdmin: true,
-    };
-  }
+ if (isAdminUniverse(session)) {
+  return {
+    status: "RESOLVED",
+    source: "BACKEND",
+    roleCode: session.roleCode!,
+    isAdmin: true,
+  };
+}
 
   // 🔹 2️⃣ ONLY NON-ADMIN → DB CONTEXT
   const resolved = await resolveContextFromDb(req, session);
