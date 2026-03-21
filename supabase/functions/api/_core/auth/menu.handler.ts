@@ -74,6 +74,37 @@ const universe = resolvedContext.isAdmin === true ? "SA" : "ACL";
 
 const db = getServiceRoleClientWithContext(resolvedContext);
 
+// --------------------------------------------------
+// 🔥 ENSURE SNAPSHOT EXISTS (CRITICAL FIX)
+// --------------------------------------------------
+const { error: snapshotError } = await db.rpc(
+  "erp_menu.generate_menu_snapshot",
+  {
+    p_user_id: auth_user_id,
+    p_company_id: resolvedContext.companyId ?? null,
+    p_universe: universe
+  }
+);
+
+if (snapshotError) {
+  console.error("🔥 SNAPSHOT_GENERATION_FAILED", {
+    error: snapshotError.message
+  });
+
+  return errorResponse(
+    "SNAPSHOT_GENERATION_FAILED",
+    snapshotError.message,
+    request_id,
+    "NONE",
+    500
+  );
+}
+
+console.log("🟢 SNAPSHOT_GENERATED", {
+  user: auth_user_id,
+  universe
+});
+
   let query = db
   .schema("erp_menu").from("menu_snapshot")
   .select(`
@@ -124,9 +155,22 @@ try {
   error = result.error;
 
   console.log("🟢 MENU_QUERY_RESULT", {
-    data_length: data?.length ?? 0,
-    error: error?.message ?? null
-  });
+  data_length: data?.length ?? 0,
+  error: error?.message ?? null
+});
+
+// --------------------------------------------------
+// ❗ HARD ERROR HANDLING (NEW)
+// --------------------------------------------------
+if (error) {
+  return errorResponse(
+    "MENU_READ_FAILED",
+    error.message,
+    request_id,
+    "NONE",
+    500
+  );
+}
 
 } catch (e) {
   console.error("🔥 QUERY_CRASH", {
@@ -162,6 +206,13 @@ if (data && data.length > 0) {
 // Snapshot absence ⇒ invisible (explicit fail-closed)
 // --------------------------------------------------
 if (!data || data.length === 0) {
+
+  console.warn("⚠️ SNAPSHOT_ABSENT", {
+    auth_user_id,
+    universe,
+    company_id: resolvedContext.companyId
+  });
+
   return okResponse(
     {
       universe,

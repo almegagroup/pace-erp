@@ -1,0 +1,28 @@
+name: Deploy Dev
+
+on:
+  push:
+    branches:
+      - dev   # 👈 dev branch
+
+jobs:
+  deploy-db:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Supabase CLI
+        run: npm install -g supabase
+
+      - name: Login Supabase
+        run: supabase login --token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Link Dev Supabase Project
+        run: supabase link --project-ref ytapuwiqicmvpanmzelb
+
+      - name: Run DB Migrations (Dev)
+        run: supabase db deploy
+
+        
