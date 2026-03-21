@@ -3,7 +3,7 @@ name: Deploy Dev
 on:
   push:
     branches:
-      - dev   # 👈 dev branch
+      - dev
 
 jobs:
   deploy-db:
@@ -13,8 +13,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ✅ FIXED
       - name: Install Supabase CLI
-        run: npm install -g supabase
+        uses: supabase/setup-cli@v1
 
       - name: Login Supabase
         run: supabase login --token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -24,5 +25,3 @@ jobs:
 
       - name: Run DB Migrations (Dev)
         run: supabase db deploy
-
-        
