@@ -232,13 +232,16 @@ if (contextResult.status !== "RESOLVED") {
 }
 
     const acl = await stepAcl(req, requestId, {
-      context: {
-        state: contextResult.status,
-        authUserId: sessionResult.authUserId,
-        roleCode: contextResult.roleCode,
-        companyId: contextResult.companyId,
-        moduleEnabled: true, // temporarily, until wired properly
-      },
+     context: {
+  state: contextResult.status,
+  authUserId: sessionResult.authUserId,
+  roleCode: contextResult.roleCode,
+  companyId: contextResult.companyId,
+  moduleEnabled: true,
+
+  // 🔥 CRITICAL FIX
+  isAdmin: contextResult.isAdmin === true,
+},
       route: {
         isPublic: false,
         resourceCode: routeKey, // temporarily, proper resource mapping
