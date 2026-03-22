@@ -16,6 +16,11 @@ export default function AuthBootstrap({ children }) {
     clearMenuSnapshot,
   } = useMenu();
 
+  // 🔥 ADD THIS HERE (IMPORTANT)
+  useEffect(() => {
+    hasBootedRef.current = false;
+  }, [location.pathname]);
+
   useEffect(() => {
     let alive = true;
 
@@ -29,7 +34,7 @@ export default function AuthBootstrap({ children }) {
       // 🟢 PUBLIC ROUTE
       if (isPublicRoute(pathname)) {
         console.log("🟢 Public route → skipping bootstrap");
-        clearMenuSnapshot();
+        //clearMenuSnapshot();
         return;
       }
 
@@ -40,11 +45,7 @@ export default function AuthBootstrap({ children }) {
       }
       hasBootedRef.current = true;
 
-      // 🔥 Menu already exists
-      if (menu && menu.length > 0) {
-        console.log("✅ Menu already present → skipping API");
-        return;
-      }
+      
 
       try {
         console.log("⏳ Starting menu loading...");
@@ -141,6 +142,7 @@ export default function AuthBootstrap({ children }) {
     return () => {
       alive = false;
     };
+    
   }, [
     location.pathname,
     menu,
