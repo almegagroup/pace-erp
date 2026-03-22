@@ -85,7 +85,7 @@ if(!res.ok || !loginData?.ok){
 }
 
 // ✅ UNIVERSAL ENTRY POINT
-navigate("/dashboard");
+navigate("/admin");
 
 }catch(err){
 
