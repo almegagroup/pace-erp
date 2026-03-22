@@ -77,14 +77,21 @@ const db = getServiceRoleClientWithContext(resolvedContext);
 // --------------------------------------------------
 // 🔥 ENSURE SNAPSHOT EXISTS (CRITICAL FIX)
 // --------------------------------------------------
-const { error: snapshotError } = await db.rpc(
-  "generate_menu_snapshot",
-  {
-    p_company_id: resolvedContext.companyId ?? null,
-    p_universe: universe,
-    p_user_id: auth_user_id
-  }
-);
+console.log("🟡 SNAPSHOT_CALL", {
+  user: auth_user_id,
+  company: resolvedContext.companyId,
+  universe
+});
+
+const { error: snapshotError } = await db
+  .schema("erp_menu")
+  .rpc("generate_menu_snapshot", {
+    p_user_id: auth_user_id,
+    p_company_id: resolvedContext.isAdmin
+      ? null
+      : resolvedContext.companyId,
+    p_universe: universe
+  });
 
 if (snapshotError) {
   console.error("🔥 SNAPSHOT_GENERATION_FAILED", {
@@ -396,11 +403,13 @@ export async function previewUserHandler(
    * 1️⃣ Resolve company of target user
    * -------------------------------------------------- */
 
-  const { data: companyId } = await db.rpc(
-    "erp_map.get_primary_company",
-    { p_auth_user_id: targetUserId }
-  );
+  const { data: companyIdRaw } = await db
+  .schema("erp_map")
+  .rpc("get_primary_company", {
+    p_auth_user_id: targetUserId
+  });
 
+const companyId = companyIdRaw as string | null;
   if (!companyId) {
     return errorResponse(
       "PREVIEW_USER_NOT_FOUND",
@@ -448,14 +457,29 @@ if (roleCode === "SA" || roleCode === "GA") {
  * 4️⃣ Generate menu snapshot
  * -------------------------------------------------- */
 
-await db.rpc(
-  "generate_menu_snapshot",
-  {
+console.log("🟡 PREVIEW_SNAPSHOT_CALL", {
+  targetUserId,
+  companyId,
+  universe
+});
+
+const { error: snapshotError } = await db
+  .schema("erp_menu")
+  .rpc("generate_menu_snapshot", {
+    p_user_id: targetUserId,
     p_company_id: companyId,
-    p_universe: universe,
-    p_user_id: targetUserId
-  }
-);
+    p_universe: universe
+  });
+
+if (snapshotError) {
+  return errorResponse(
+    "SNAPSHOT_GENERATION_FAILED",
+    snapshotError.message,
+    ctx.request_id,
+    "NONE",
+    500
+  );
+}
 
   /* --------------------------------------------------
    * 5️⃣ Read snapshot
