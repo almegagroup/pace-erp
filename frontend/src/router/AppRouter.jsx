@@ -34,6 +34,7 @@ import GADashboardShell from "../admin/ga/GADashboardShell.jsx";
 import SACompanyCreate from "../admin/sa/screens/SACompanyCreate.jsx";
 import SAUsers from "../admin/sa/screens/SAUsers.jsx";
 import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
+import SAHome from "../admin/sa/screens/SAHome.jsx"; 
 
 export default function AppRouter() {
   return (
@@ -65,17 +66,42 @@ export default function AppRouter() {
           {/* ============================== */}
           {/* 🔒 ADMIN DASHBOARD (ENTRY) */}
           {/* ============================== */}
+{/* ============================== */}
+{/* 🔒 SA UNIVERSE (PROTECTED) */}
+{/* ============================== */}
 
-          <Route path="/sa/home" element={<SADashboardShell />} />
-          <Route path="/ga/home" element={<GADashboardShell />} />
+<Route
+  path="/sa"
+  element={
+    <DeepLinkGuard>
+      <RouteGuard>
+        <SADashboardShell />
+      </RouteGuard>
+    </DeepLinkGuard>
+  }
+>
+  <Route path="home" element={<SAHome />} />
+  <Route path="company/create" element={<SACompanyCreate />} />
+  <Route path="users" element={<SAUsers />} />
+  <Route path="signup-requests" element={<SASignupRequests />} />
+</Route>
 
-          {/* ============================== */}
-          {/* 🔒 ADMIN SCREENS */}
-          {/* ============================== */}
+{/* ============================== */}
+{/* 🔒 GA UNIVERSE (PROTECTED) */}
+{/* ============================== */}
 
-          <Route path="/sa/company/create" element={<SACompanyCreate />} />
-          <Route path="/sa/users" element={<SAUsers />} />
-          <Route path="/sa/signup-requests" element={<SASignupRequests />} />
+<Route
+  path="/ga"
+  element={
+    <DeepLinkGuard>
+      <RouteGuard>
+        <GADashboardShell />
+      </RouteGuard>
+    </DeepLinkGuard>
+  }
+>
+  <Route path="home" element={<div>GA Home</div>} />
+</Route>
 
           {/* ============================== */}
           {/* 🔐 ACL USER UNIVERSE */}

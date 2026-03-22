@@ -20,19 +20,21 @@ export function MenuProvider({ children }) {
 
   const [menu, setMenu] = useState([]);
   const [allowedRoutes, setAllowedRoutes] = useState(new Set());
-  const loading = false;// ✅ direct
+  const [loading, setLoading] = useState(true);
 
   const setMenuSnapshot = (snapshot) => {
 
     if (!Array.isArray(snapshot)) {
-      console.error("Invalid menu snapshot:", snapshot);
-      setMenu([]);
-      setAllowedRoutes(new Set());
-      return;
-    }
+  console.error("Invalid menu snapshot:", snapshot);
+  setMenu([]);
+  setAllowedRoutes(new Set());
+  setLoading(false); // ✅ ADD THIS LINE
+  return;
+}
 
     setMenu(snapshot);
     setAllowedRoutes(buildRouteIndex(snapshot));
+    setLoading(false); 
   };
 
   return (

@@ -15,7 +15,13 @@ export default function DeepLinkGuard() {
   const { allowedRoutes, loading } = useMenu();
   const location = useLocation();
 
-  if (loading) return null;
+  if (loading) {
+    return null;
+  }
+
+  if (allowedRoutes.size === 0) {
+    return null;
+  }
 
   if (!allowedRoutes.has(location.pathname)) {
     return <Navigate to="/" replace />;

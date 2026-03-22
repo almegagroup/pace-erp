@@ -7,7 +7,7 @@
  * Purpose: Super Admin dashboard entry shell consuming Screen Stack and Menu Snapshot
  * Authority: Frontend
  */
-
+import { Outlet } from "react-router-dom";
 import { useEffect } from "react";
 import MenuShell from "../../layout/MenuShell.jsx";
 import { replaceStack } from "../../navigation/screenStackEngine.js";
@@ -31,11 +31,13 @@ export default function SADashboardShell() {
     ]);
   }, []);
 
- return (
+return (
   <MenuShell
     universe="ADMIN"
     headerTitle="Super Admin"
     rootScreenCode="SA_HOME"
-  />
+  >
+    <Outlet /> {/* 🔥 THIS IS MUST */}
+  </MenuShell>
 );
 }

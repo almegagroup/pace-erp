@@ -395,6 +395,11 @@ supabase
     20260405150000_gate7_5_15_override_transaction.sql
     20260406110000_gate7_5_20_workflow_indexes.sql
     20260407101000_gate4_4_1A_users_auth_identity_uniqueness.sql
+    20260410101000_gate0_0_6F_global_service_role_access.sql
+    20260410102000_gate7_7_3C_sa_global_menu_snapshot.sql
+    20260410103000_gate7_7_3D_sa_global_snapshot_builder_fix.sql
+    20260410104000_gate7_7_3E_fix_parent_menu_join.sql
+    20260410105000_gate7_7_3F_menu_snapshot_title_and_function_fix.sql
 TEMP_UI_BOOT_LOG.md
 tests
   acl

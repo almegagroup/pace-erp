@@ -40,20 +40,25 @@ export default function AuthResolver(){
 
         setMenuSnapshot(menu);
 
-        const ga = menu.find(m => m.menu_code === "GA_HOME");
-        const sa = menu.find(m => m.menu_code === "SA_HOME");
+// ⬇️ navigation delay (critical fix)
+setTimeout(() => {
 
-        if(ga){
-          navigate("/ga/home",{replace:true});
-          return;
-        }
+  const ga = menu.find(m => m.menu_code === "GA_HOME");
+  const sa = menu.find(m => m.menu_code === "SA_HOME");
 
-        if(sa){
-          navigate("/sa/home",{replace:true});
-          return;
-        }
+  if(ga){
+    navigate("/ga/home",{replace:true});
+    return;
+  }
 
-        navigate("/dashboard",{replace:true});
+  if(sa){
+    navigate("/sa/home",{replace:true});
+    return;
+  }
+
+  navigate("/dashboard",{replace:true});
+
+}, 0);
 
       }catch(_err){
         console.error("AuthResolver failed:", _err); // ✅ added

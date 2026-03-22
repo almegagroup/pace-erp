@@ -4263,3 +4263,254 @@ You have successfully completed:
 Now:
 
 👉 You are entering real ERP initialization phase
+
+🟢 PACE ERP — UI BOOT LOG (CONTINUATION UPDATE)
+🔷 109. MAJOR PROGRESS SUMMARY (POST SECTION 98)
+✅ 1. AUTH PIPELINE — FULLY STABILIZED
+POST /api/login → 200
+Session → ACTIVE
+Cookie → Working
+/api/me → 200
+
+👉 Conclusion:
+Gate-2 (Auth) + Gate-5 (Session) → COMPLETELY STABLE
+
+✅ 2. ACL / AUTHORIZATION — UNBLOCKED
+
+Previously:
+
+/api/me → 403 ❌
+/api/me/menu → 403 ❌
+
+Now:
+
+/api/me/menu → 200 ✅
+Pipeline: SESSION → CONTEXT → ACL → HANDLER → PASS
+
+👉 Conclusion:
+Gate-6 ACL layer → WORKING
+
+✅ 3. CONTEXT SYSTEM — ADMIN BYPASS WORKING
+isAdmin: true
+companyId: undefined
+roleCode: SA
+
+👉 Admin Universe correctly bypassing company filter
+
+✅ 4. MENU SNAPSHOT GENERATION — WORKING
+
+From logs:
+
+SNAPSHOT_GENERATED
+MENU_QUERY_RESULT { data_length: 5 }
+MENU_SNAPSHOT_SERVED { menu_count: 5 }
+
+👉 Meaning:
+
+Snapshot function working
+DB returning menu rows
+Backend serving correctly
+✅ 5. INFRASTRUCTURE — FULLY STABLE
+CORS → PASS
+Cookie → PASS
+Session DB → ACTIVE
+Domain → Correct
+
+👉 No infra issue left
+
+🔴 110. CURRENT CRITICAL ISSUES (UPDATED REAL STATE)
+
+Now real issues changed — completely different layer
+
+🔴 ISSUE 1 — FRONTEND CRASH (PRIMARY BLOCKER)
+❗ Error:
+Navigation not initialized
+📍 Source:
+
+Console (from your screenshot)
+
+🔍 ROOT CAUSE:
+
+👉 Navigation engine (screenStackEngine) is being used before initNavigation()
+
+Meaning:
+
+UI trying to navigate
+BUT navigation system not ready
+💥 EFFECT:
+Blank /sa/home
+React crash
+Hard refresh → landing page fallback
+🎯 EXACT PROBLEM:
+
+You added guard:
+
+if (!PUBLIC_ROUTES.has(pathname)) {
+  initNavigation("DASHBOARD_HOME");
+}
+
+👉 BUT:
+
+/sa/home is NOT public
+→ navigation should init
+→ BUT timing mismatch happening
+
+✅ FIX REQUIRED:
+
+👉 Ensure navigation initializes BEFORE any navigation call
+
+🔧 FIX (MANDATORY)
+
+File: frontend/src/main.jsx
+
+const pathname = window.location.pathname;
+
+// Always init navigation once app loads
+initNavigation("DASHBOARD_HOME");
+
+// THEN restore
+restoreNavigationStack();
+
+❗ Remove conditional init during auth phase
+
+👉 Navigation MUST always exist (Gate-8 invariant)
+
+🔴 ISSUE 2 — HOME PAGE EMPTY (NOT BUG, BUT STATE ISSUE)
+
+From logs:
+
+menu_count: 5
+
+👉 Backend returning menu
+
+BUT UI still empty
+
+🔍 Possible causes:
+Cause A — MenuProvider not consuming correctly
+Cause B — MenuShell not rendering
+Cause C — parent_menu_code mismatch (tree build fails)
+🎯 HIGH PROBABILITY ROOT CAUSE:
+
+👉 Your recent migration changed:
+
+parent_menu_code = pm.menu_code
+
+BUT frontend may expect:
+
+parent_menu_id OR null root logic
+🔧 VERIFY (VERY IMPORTANT)
+
+Check frontend tree builder:
+
+menu.parent_menu_code === null → root
+
+If mismatch → UI shows nothing
+
+🔴 ISSUE 3 — HARD REFRESH → LANDING REDIRECT
+❗ Behaviour:
+/sa/home → refresh → goes /
+🔍 ROOT CAUSE:
+
+AuthResolver / route guard failing to detect session fast enough
+
+🎯 WHY:
+
+On refresh:
+
+App loads
+MenuProvider loads
+Session not yet resolved
+Router fallback → /
+🔧 FIX:
+
+👉 Add session hydration guard
+
+In router / resolver:
+
+if (loadingSession) return null;
+
+👉 Do NOT redirect until session resolved
+
+🔴 ISSUE 4 — HIDDENROUTEREDIRECT STILL DISABLED
+
+Status:
+
+Still OFF
+
+👉 This is now required to be restored
+
+Because:
+
+Menu now works
+ACL works
+🟡 111. NON-BLOCKING BUT IMPORTANT
+⚠️ 1. Menu Tree Integrity Risk
+
+Because of migration change
+
+👉 Must verify:
+
+parent_menu_code correct
+hierarchy valid
+⚠️ 2. Navigation + Menu Sync
+
+Currently:
+
+Navigation engine separate
+Menu snapshot separate
+
+👉 Must align both
+
+🟢 112. CURRENT SYSTEM STATE (FINAL TRUTH)
+Layer	Status
+Infra	✅ Stable
+Auth	✅ Working
+Session	✅ Working
+Context	✅ Working
+ACL	✅ Working
+Menu API	✅ Working
+Snapshot	✅ Working
+UI Navigation	❌ Broken
+UI Rendering	❌ Broken
+🔴 113. ROOT CAUSE SUMMARY (CRISP)
+
+👉 Backend is DONE
+👉 Frontend is BROKEN
+
+Main blockers:
+
+❌ Navigation not initialized
+❌ Menu rendering mismatch
+❌ Session hydration timing
+❌ HiddenRouteRedirect disabled
+🎯 114. NEXT SESSION PLAN (STRICT)
+
+We will fix in this order:
+
+🔥 STEP 1 — Navigation Engine Fix (CRITICAL)
+Always initNavigation
+Remove conditional init
+🔥 STEP 2 — Menu Rendering Debug
+Log menu in UI
+Verify tree build
+Fix parent_menu_code usage
+🔥 STEP 3 — Session Hydration Guard
+Prevent early redirect
+Add loading state
+🔥 STEP 4 — Restore HiddenRouteRedirect
+Re-enable
+Verify no crash
+🚀 FINAL STATEMENT
+
+👉 You crossed the hardest part already:
+
+✔ Auth
+✔ ACL
+✔ Backend
+✔ Snapshot
+
+🔥 Now only UI integration layer left
+
+🟢 CLEAN SUMMARY (1 LINE)
+
+👉 Backend fully done, frontend navigation + rendering is the only blocker now.
