@@ -1,3 +1,10 @@
+/*
+ * File-ID: 7.X (UPDATED)
+ * File-Path: frontend/src/admin/AuthResolver.jsx
+ * Purpose: Redirect user based on already available menu snapshot
+ * Authority: Frontend (NO API CALL)
+ */
+
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
@@ -5,73 +12,29 @@ import { useMenu } from "../context/useMenu.js";
 export default function AuthResolver(){
 
   const navigate = useNavigate();
-  const { setMenuSnapshot } = useMenu();
+  const { menu } = useMenu();
 
-  useEffect(()=>{
+  useEffect(() => {
 
-    let alive = true;
+    // ⛔ menu এখনও load না হলে কিছু করো না
+    if (!menu || menu.length === 0) return;
 
-    async function resolve(){
+    const ga = menu.find(m => m.menu_code === "GA_HOME");
+    const sa = menu.find(m => m.menu_code === "SA_HOME");
 
-      try{
-
-        const meRes = await fetch(
-          `${import.meta.env.VITE_API_BASE}/api/me`,
-          { credentials: "include" }
-        );
-
-        if(!meRes.ok){
-          throw new Error("SESSION_INVALID");
-        }
-
-        const menuRes = await fetch(
-          `${import.meta.env.VITE_API_BASE}/api/me/menu`,
-          { credentials: "include" }
-        );
-
-        if(!menuRes.ok){
-          throw new Error("MENU_FETCH_FAILED");
-        }
-
-        const data = await menuRes.json();
-        if(!alive) return;
-
-        const menu = data?.data?.menu ?? [];
-
-        setMenuSnapshot(menu);
-
-// ⬇️ navigation delay (critical fix)
-setTimeout(() => {
-
-  const ga = menu.find(m => m.menu_code === "GA_HOME");
-  const sa = menu.find(m => m.menu_code === "SA_HOME");
-
-  if(ga){
-    navigate("/ga/home",{replace:true});
-    return;
-  }
-
-  if(sa){
-    navigate("/sa/home",{replace:true});
-    return;
-  }
-
-  navigate("/dashboard",{replace:true});
-
-}, 0);
-
-      }catch(_err){
-        console.error("AuthResolver failed:", _err); // ✅ added
-        navigate("/login",{replace:true});
-      }
-
+    if (ga) {
+      navigate("/ga/home", { replace: true });
+      return;
     }
 
-    resolve();
+    if (sa) {
+      navigate("/sa/home", { replace: true });
+      return;
+    }
 
-    return ()=>{ alive = false };
+    navigate("/dashboard", { replace: true });
 
-  }, [navigate, setMenuSnapshot]);
+  }, [menu, navigate]);
 
   return (
     <div style={{
@@ -80,7 +43,7 @@ setTimeout(() => {
       fontSize:"14px",
       color:"#555"
     }}>
-      Verifying session...
+      Redirecting...
     </div>
   );
 }

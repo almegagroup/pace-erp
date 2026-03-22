@@ -10,6 +10,7 @@
 
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { MenuProvider } from "../context/MenuProvider.jsx";
+import AuthBootstrap from "../auth/AuthBootstrap.jsx";
 
 import LandingPage from "../pages/public/LandingPage.jsx";
 import LoginScreen from "../pages/public/LoginScreen.jsx";
@@ -20,7 +21,6 @@ import SignupSubmittedPage from "../pages/public/SignupSubmittedPage.jsx";
 import ForgotPassword from "../pages/public/ForgotPassword.jsx";
 import ResetPassword from "../pages/public/ResetPassword.jsx";
 
-import AuthResolver from "../admin/AuthResolver.jsx";
 
 import RouteGuard from "./RouteGuard.jsx";
 import DeepLinkGuard from "./DeepLinkGuard.jsx";
@@ -41,6 +41,8 @@ export default function AppRouter() {
     <BrowserRouter>
       {/* ✅ SINGLE SOURCE OF CONTEXT */}
       <MenuProvider>
+  {/* 🔥 GLOBAL AUTH BOOT */}
+  <AuthBootstrap>
 
         <Routes>
 
@@ -61,7 +63,7 @@ export default function AppRouter() {
           {/* 🔒 ADMIN ENTRY */}
           {/* ============================== */}
 
-          <Route path="/admin" element={<AuthResolver />} />
+          
 
           {/* ============================== */}
           {/* 🔒 ADMIN DASHBOARD (ENTRY) */}
@@ -127,6 +129,7 @@ export default function AppRouter() {
           <Route path="*" element={<Navigate to="/" replace />} />
 
         </Routes>
+         </AuthBootstrap>
 
       </MenuProvider>
     </BrowserRouter>

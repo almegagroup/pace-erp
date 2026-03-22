@@ -84,8 +84,8 @@ if(!res.ok || !loginData?.ok){
   throw new Error("INVALID_LOGIN");
 }
 
-// ✅ ONLY THIS
-navigate("/admin");
+// ✅ UNIVERSAL ENTRY POINT
+navigate("/dashboard");
 
 }catch(err){
 
