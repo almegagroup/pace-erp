@@ -24,89 +24,97 @@ export default function AuthBootstrap({ children }) {
   const navigate = useNavigate();
 
   const {
+    menu, // 🔥 IMPORTANT
     startMenuLoading,
     setMenuSnapshot,
     clearMenuSnapshot,
   } = useMenu();
 
   useEffect(() => {
-  let alive = true;
+    let alive = true;
 
-  async function boot() {
-    const pathname = location.pathname;
+    async function boot() {
+      const pathname = location.pathname;
 
-    if (isPublicRoute(pathname)) {
-      clearMenuSnapshot();
-      return;
-    }
-
-    try {
-      startMenuLoading();
-
-      const meRes = await fetch(
-        `${import.meta.env.VITE_API_BASE}/api/me`,
-        { credentials: "include" }
-      );
-
-      if (!meRes.ok) {
-        throw new Error("SESSION_INVALID");
+      // 🟢 PUBLIC ROUTE
+      if (isPublicRoute(pathname)) {
+        clearMenuSnapshot();
+        return;
       }
 
-      const menuRes = await fetch(
-        `${import.meta.env.VITE_API_BASE}/api/me/menu`,
-        { credentials: "include" }
-      );
-
-      if (!menuRes.ok) {
-        throw new Error("MENU_FETCH_FAILED");
+      // 🔥 STOP LOOP
+      if (menu.length > 0) {
+        return;
       }
 
-      const data = await menuRes.json();
-if (!alive) return;
+      try {
+        startMenuLoading();
 
-const menu = data?.data?.menu ?? [];
+        const meRes = await fetch(
+          `${import.meta.env.VITE_API_BASE}/api/me`,
+          { credentials: "include" }
+        );
 
-setMenuSnapshot(menu);
+        if (!meRes.ok) {
+          throw new Error("SESSION_INVALID");
+        }
 
-// 🔥 redirect only from neutral entry
-if (location.pathname === "/app") {
+        const menuRes = await fetch(
+          `${import.meta.env.VITE_API_BASE}/api/me/menu`,
+          { credentials: "include" }
+        );
 
-  const sa = menu.find(m => m.menu_code === "SA_HOME");
-  const ga = menu.find(m => m.menu_code === "GA_HOME");
+        if (!menuRes.ok) {
+          throw new Error("MENU_FETCH_FAILED");
+        }
 
-  if (sa) {
-    navigate("/sa/home", { replace: true });
-    return;
-  }
+        const data = await menuRes.json();
+        if (!alive) return;
 
-  if (ga) {
-    navigate("/ga/home", { replace: true });
-    return;
-  }
+        const menuData = data?.data?.menu ?? [];
 
-  navigate("/dashboard", { replace: true });
-}
-      
-    } catch (err) {
-      console.error("AuthBootstrap failed:", err);
+        setMenuSnapshot(menuData);
 
-      clearMenuSnapshot();
-      navigate("/login", { replace: true });
+        // 🔥 REDIRECT ONLY ON /app
+        if (pathname === "/app") {
+
+          const sa = menuData.find(m => m.menu_code === "SA_HOME");
+          const ga = menuData.find(m => m.menu_code === "GA_HOME");
+
+          if (sa) {
+            navigate("/sa/home", { replace: true });
+            return;
+          }
+
+          if (ga) {
+            navigate("/ga/home", { replace: true });
+            return;
+          }
+
+          navigate("/dashboard", { replace: true });
+        }
+
+      } catch (err) {
+        console.error("AuthBootstrap failed:", err);
+
+        clearMenuSnapshot();
+        navigate("/login", { replace: true });
+      }
     }
-  }
 
-  boot();
+    boot();
 
-  return () => {
-    alive = false;
-  };
-}, [
-  location.pathname,
-  navigate,
-  startMenuLoading,
-  setMenuSnapshot,
-  clearMenuSnapshot,
-]); 
+    return () => {
+      alive = false;
+    };
+  }, [
+    location.pathname,
+    menu, // 🔥 MUST
+    navigate,
+    startMenuLoading,
+    setMenuSnapshot,
+    clearMenuSnapshot,
+  ]);
 
   return children;
 }
