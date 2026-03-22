@@ -59,10 +59,8 @@ export default function AppRouter() {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
 
-          {/* ============================== */}
-          {/* 🔒 ADMIN ENTRY */}
-          {/* ============================== */}
-
+         {/* 🔥 NEUTRAL ENTRY (AUTH BOOT TARGET) */}
+<Route path="/app" element={<div>Loading...</div>} />
           
 
           {/* ============================== */}

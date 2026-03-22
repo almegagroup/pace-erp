@@ -62,11 +62,31 @@ export default function AuthBootstrap({ children }) {
       }
 
       const data = await menuRes.json();
-      if (!alive) return;
+if (!alive) return;
 
-      const menu = data?.data?.menu ?? [];
+const menu = data?.data?.menu ?? [];
 
-      setMenuSnapshot(menu);
+setMenuSnapshot(menu);
+
+// 🔥 redirect only from neutral entry
+if (location.pathname === "/app") {
+
+  const sa = menu.find(m => m.menu_code === "SA_HOME");
+  const ga = menu.find(m => m.menu_code === "GA_HOME");
+
+  if (sa) {
+    navigate("/sa/home", { replace: true });
+    return;
+  }
+
+  if (ga) {
+    navigate("/ga/home", { replace: true });
+    return;
+  }
+
+  navigate("/dashboard", { replace: true });
+}
+      
     } catch (err) {
       console.error("AuthBootstrap failed:", err);
 

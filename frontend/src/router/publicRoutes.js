@@ -30,6 +30,7 @@ export const PUBLIC_ROUTES = new Set([
   "/reset-password",
   "/email-verified",
   "/signup-submitted",
+  "/app",
 ]);
 
 export function isPublicRoute(pathname) {
