@@ -12,7 +12,7 @@
  * ✅ Menu আসে AuthBootstrap / AuthResolver থেকে (single source of truth)
  */
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { MenuContext } from "./MenuContext.js";
 import { buildRouteIndex } from "../router/routeIndex.js";
 
@@ -21,20 +21,20 @@ export function MenuProvider({ children }) {
   const [allowedRoutes, setAllowedRoutes] = useState(new Set());
   const [loading, setLoading] = useState(true);
 
-  // 🔵 START LOADING (used before fetch)
-  const startMenuLoading = () => {
+  // 🔵 START LOADING (stable)
+  const startMenuLoading = useCallback(() => {
     setLoading(true);
-  };
+  }, []);
 
-  // 🔴 CLEAR (used on logout / public routes)
-  const clearMenuSnapshot = () => {
+  // 🔴 CLEAR (stable)
+  const clearMenuSnapshot = useCallback(() => {
     setMenu([]);
     setAllowedRoutes(new Set());
     setLoading(false);
-  };
+  }, []);
 
-  // 🟢 SET MENU (main function)
-  const setMenuSnapshot = (snapshot) => {
+  // 🟢 SET MENU (stable)
+  const setMenuSnapshot = useCallback((snapshot) => {
     if (!Array.isArray(snapshot)) {
       console.error("Invalid menu snapshot:", snapshot);
       setMenu([]);
@@ -46,7 +46,7 @@ export function MenuProvider({ children }) {
     setMenu(snapshot);
     setAllowedRoutes(buildRouteIndex(snapshot));
     setLoading(false);
-  };
+  }, []);
 
   return (
     <MenuContext.Provider

@@ -35,21 +35,22 @@ export function persistNavigationStack() {
 export function restoreNavigationStack() {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
+    if (!raw) return false;
 
     const snapshot = JSON.parse(raw);
-    if (!Array.isArray(snapshot) || snapshot.length === 0) return;
+    if (!Array.isArray(snapshot) || snapshot.length === 0) return false;
 
     const valid = snapshot.every((s) => {
       const reg = SCREEN_REGISTRY[s.screen_code];
       return reg && reg.route === s.route;
     });
 
-    if (!valid) return;
+    if (!valid) return false;
 
     replaceStack(snapshot);
+    return true;
   } catch {
-    // corrupted storage → ignore
+    return false;
   }
 }
 
