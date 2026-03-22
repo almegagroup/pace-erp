@@ -11,7 +11,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { MenuProvider } from "../context/MenuProvider.jsx";
 import AuthBootstrap from "../auth/AuthBootstrap.jsx";
-
+import AuthResolver from "../admin/AuthResolver.jsx";
 import LandingPage from "../pages/public/LandingPage.jsx";
 import LoginScreen from "../pages/public/LoginScreen.jsx";
 import SignupScreen from "../pages/public/SignupPage.jsx";
@@ -60,7 +60,7 @@ export default function AppRouter() {
           <Route path="/reset-password" element={<ResetPassword />} />
 
          {/* 🔥 NEUTRAL ENTRY (AUTH BOOT TARGET) */}
-<Route path="/app" element={<div>Loading...</div>} />
+<Route path="/app" element={<AuthResolver />} />
           
 
           {/* ============================== */}

@@ -1,20 +1,4 @@
-/*
- * File-ID: 2.9A
- * File-Path: frontend/src/auth/AuthBootstrap.jsx
- * Gate: 2 / Gate-7 Integration
- * Phase: GLOBAL AUTH BOOT
- * Domain: FRONT
- * Purpose: Global authentication + menu bootstrap at app load
- * Authority: Frontend (boot-level)
- *
- * DESIGN RULE:
- * ✅ Runs on every route (except public)
- * ✅ Fetches session + menu before guards activate
- * ❌ No UI responsibility
- * ❌ No route-level dependency
- */
-
-import { useEffect } from "react";
+import { useRef, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import { isPublicRoute } from "../router/publicRoutes.js";
@@ -23,8 +7,10 @@ export default function AuthBootstrap({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
 
+  const hasBootedRef = useRef(false);
+
   const {
-    menu, // 🔥 IMPORTANT
+    menu,
     startMenuLoading,
     setMenuSnapshot,
     clearMenuSnapshot,
@@ -36,68 +22,116 @@ export default function AuthBootstrap({ children }) {
     async function boot() {
       const pathname = location.pathname;
 
+      console.log("🚀 [BOOT START]");
+      console.log("📍 Path:", pathname);
+      console.log("📦 Menu (before):", menu);
+
       // 🟢 PUBLIC ROUTE
       if (isPublicRoute(pathname)) {
+        console.log("🟢 Public route → skipping bootstrap");
         clearMenuSnapshot();
         return;
       }
 
-      // 🔥 STOP LOOP
-      if (menu.length > 0) {
+      // 🔥 Prevent duplicate boot
+      if (hasBootedRef.current) {
+        console.log("⛔ Boot skipped (already ran)");
+        return;
+      }
+      hasBootedRef.current = true;
+
+      // 🔥 Menu already exists
+      if (menu && menu.length > 0) {
+        console.log("✅ Menu already present → skipping API");
         return;
       }
 
       try {
+        console.log("⏳ Starting menu loading...");
         startMenuLoading();
 
+        // =========================
+        // STEP 1: SESSION CHECK
+        // =========================
+        console.log("📡 Calling /api/me...");
         const meRes = await fetch(
           `${import.meta.env.VITE_API_BASE}/api/me`,
           { credentials: "include" }
         );
 
+        console.log("🧾 /api/me status:", meRes.status);
+
         if (!meRes.ok) {
+          console.log("❌ SESSION INVALID");
           throw new Error("SESSION_INVALID");
         }
 
+        // =========================
+        // STEP 2: MENU FETCH
+        // =========================
+        console.log("📡 Calling /api/me/menu...");
         const menuRes = await fetch(
           `${import.meta.env.VITE_API_BASE}/api/me/menu`,
           { credentials: "include" }
         );
 
+        console.log("🧾 /api/me/menu status:", menuRes.status);
+
         if (!menuRes.ok) {
+          console.log("❌ MENU FETCH FAILED");
           throw new Error("MENU_FETCH_FAILED");
         }
 
         const data = await menuRes.json();
         if (!alive) return;
 
+        console.log("📦 Raw menu response:", data);
+
         const menuData = data?.data?.menu ?? [];
 
-        setMenuSnapshot(menuData);
+        console.log("📊 Final menuData:", menuData);
+        console.log("📊 Menu length:", menuData.length);
 
-        // 🔥 REDIRECT ONLY ON /app
+        // =========================
+        // STEP 3: STORE SNAPSHOT
+        // =========================
+        setMenuSnapshot(menuData);
+        console.log("✅ Menu snapshot set");
+
+        // =========================
+        // STEP 4: ENTRY REDIRECT
+        // =========================
         if (pathname === "/app") {
+          console.log("🔀 Resolving /app redirect...");
 
           const sa = menuData.find(m => m.menu_code === "SA_HOME");
           const ga = menuData.find(m => m.menu_code === "GA_HOME");
 
+          console.log("SA:", sa);
+          console.log("GA:", ga);
+
           if (sa) {
+            console.log("➡️ Redirect → /sa/home");
             navigate("/sa/home", { replace: true });
             return;
           }
 
           if (ga) {
+            console.log("➡️ Redirect → /ga/home");
             navigate("/ga/home", { replace: true });
             return;
           }
 
+          console.log("➡️ Redirect → /dashboard");
           navigate("/dashboard", { replace: true });
         }
 
       } catch (err) {
-        console.error("AuthBootstrap failed:", err);
+        console.error("🔥 AuthBootstrap ERROR:", err);
 
         clearMenuSnapshot();
+
+        console.log("➡️ Redirect → /login");
         navigate("/login", { replace: true });
       }
     }
@@ -109,7 +143,7 @@ export default function AuthBootstrap({ children }) {
     };
   }, [
     location.pathname,
-    menu, // 🔥 MUST
+    menu,
     navigate,
     startMenuLoading,
     setMenuSnapshot,
