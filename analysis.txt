@@ -102,6 +102,8 @@ frontend
       pace-bgr.png
       react.svg
       sp.png
+    auth
+      AuthBootstrap.jsx
     context
       MenuContext.js
       MenuProvider.jsx
@@ -400,6 +402,7 @@ supabase
     20260410103000_gate7_7_3D_sa_global_snapshot_builder_fix.sql
     20260410104000_gate7_7_3E_fix_parent_menu_join.sql
     20260410105000_gate7_7_3F_menu_snapshot_title_and_function_fix.sql
+    20260410106000_gate6_6_18C_session_menu_snapshot.sql
 TEMP_UI_BOOT_LOG.md
 tests
   acl
@@ -419,9 +422,6 @@ FILE: \frontend\src\admin\adminEntryGuard.js
   [11] import { getActiveScreen } from "../navigation/screenStackEngine.js";
 
 FILE: \frontend\src\admin\AuthResolver.jsx
-  [18] const meRes = await fetch(
-  [27] const menuRes = await fetch(
-  [28] `${import.meta.env.VITE_API_BASE}/api/me/menu`,
 
 FILE: \frontend\src\admin\ga\GADashboardShell.jsx
   [12] import MenuShell from "../../layout/MenuShell.jsx";
@@ -432,6 +432,7 @@ FILE: \frontend\src\admin\sa\SADashboardShell.jsx
   [12] import MenuShell from "../../layout/MenuShell.jsx";
   [13] import { replaceStack } from "../../navigation/screenStackEngine.js";
   [35] <MenuShell
+  [41] </MenuShell>
 
 FILE: \frontend\src\admin\sa\screens\SACompanyCreate.jsx
 
@@ -444,6 +445,13 @@ FILE: \frontend\src\admin\sa\screens\SAUsers.jsx
 FILE: \frontend\src\App.jsx
   [11] import AppRouter from "./router/AppRouter.jsx";
   [14] return <AppRouter />;
+
+FILE: \frontend\src\auth\AuthBootstrap.jsx
+  [69] const meRes = await fetch(
+  [84] console.log("📡 Calling /api/me/menu...");
+  [85] const menuRes = await fetch(
+  [86] `${import.meta.env.VITE_API_BASE}/api/me/menu`,
+  [90] console.log("🧾 /api/me/menu status:", menuRes.status);
 
 FILE: \frontend\src\context\MenuContext.js
 
@@ -536,15 +544,23 @@ FILE: \frontend\src\router\AppRouter.jsx
   [25] import RouteGuard from "./RouteGuard.jsx";
   [26] import DeepLinkGuard from "./DeepLinkGuard.jsx";
   [27] import MenuShell from "../layout/MenuShell.jsx";
-  [38] export default function AppRouter() {
-  [42] <MenuProvider>
-  [87] <DeepLinkGuard>
-  [88] <MenuShell>
-  [89] <RouteGuard>
-  [91] </RouteGuard>
-  [92] </MenuShell>
-  [93] </DeepLinkGuard>
-  [105] </MenuProvider>
+  [39] export default function AppRouter() {
+  [43] <MenuProvider>
+  [76] <DeepLinkGuard>
+  [77] <RouteGuard>
+  [79] </RouteGuard>
+  [80] </DeepLinkGuard>
+  [96] <DeepLinkGuard>
+  [97] <RouteGuard>
+  [99] </RouteGuard>
+  [100] </DeepLinkGuard>
+  [113] <DeepLinkGuard>
+  [114] <MenuShell>
+  [115] <RouteGuard>
+  [117] </RouteGuard>
+  [118] </MenuShell>
+  [119] </DeepLinkGuard>
+  [132] </MenuProvider>
 
 FILE: \frontend\src\router\DeepLinkGuard.jsx
   [3] * File-Path: frontend/src/router/DeepLinkGuard.jsx

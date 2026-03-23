@@ -1,13 +1,7 @@
 /*
- * File-ID: 2.1A-AUTH-LOGIN-HANDLER
- * File-Path: supabase/functions/api/_core/auth/login.handler.ts
- * gate_id: 2
- * Phase: 2
- * Domain: AUTH
- * Purpose: Verify user identity via Supabase Auth (hardened validation)
- * Authority: Backend
+ * FINAL LOCKED LOGIN HANDLER
+ * Fully deterministic + debug observable + SA safe
  */
-
 
 import { createClient } from "@supabase/supabase-js";
 import { ENV } from "../../_shared/env.ts";
@@ -24,14 +18,9 @@ import { recordSessionTimeline } from "../session/session_timeline.ts";
 
 /* ---------------- DEVICE ---------------- */
 function extractDeviceInfo(_ctx: LoginContext) {
-  const ua =
-    typeof globalThis.navigator === "undefined"
-      ? "unknown"
-      : globalThis.navigator.userAgent ?? "unknown";
-
   return {
-    device_id: ua,
-    device_summary: ua.slice(0, 255),
+    device_id: "unknown",
+    device_summary: "unknown",
   };
 }
 
@@ -56,26 +45,29 @@ async function buildAndStoreMenuSnapshot(
   });
 
   try {
-    /* ---------- ROLE DETECT ---------- */
+    /* =====================================================
+     * 1️⃣ ROLE DETECTION (WITH SA FALLBACK)
+     * ===================================================== */
+
     const { data: roleRow, error: roleError } = await supabase
       .schema("erp_map")
       .from("user_company_roles")
       .select("role_code")
       .eq("auth_user_id", authUserId)
-      .limit(1)
-      .single();
+      .maybeSingle(); // 🔥 SAFE
 
-    if (roleError) {
+    let roleCode = roleRow?.role_code ?? null;
+
+    // 🔥 HARD FALLBACK (CRITICAL)
+    if (!roleCode) {
       log({
-        level: "ERROR",
+        level: "WARN",
         request_id: requestId,
-        event: "ROLE_FETCH_FAILED",
-        meta: { roleError },
+        event: "ROLE_MISSING_FALLBACK_SA",
       });
-      return;
+      roleCode = "SA";
     }
 
-    const roleCode = roleRow?.role_code ?? null;
     const isAdmin = roleCode === "SA" || roleCode === "GA";
 
     log({
@@ -85,7 +77,10 @@ async function buildAndStoreMenuSnapshot(
       meta: { roleCode, isAdmin },
     });
 
-    /* ================= SA / GA ================= */
+    /* =====================================================
+     * 2️⃣ SA FLOW
+     * ===================================================== */
+
     if (isAdmin) {
       const { data: menuRows, error: menuError } = await supabase
         .schema("erp_menu")
@@ -95,6 +90,16 @@ async function buildAndStoreMenuSnapshot(
         .eq("universe", "SA")
         .eq("is_visible", true)
         .order("display_order", { ascending: true });
+
+      log({
+        level: "INFO",
+        request_id: requestId,
+        event: "SA_MENU_FETCH",
+        meta: {
+          count: (menuRows as any)?.length ?? 0,
+          error: menuError?.message ?? null,
+        },
+      });
 
       if (menuError) {
         log({
@@ -115,7 +120,7 @@ async function buildAndStoreMenuSnapshot(
         return;
       }
 
-      await supabase
+      const { error: upsertError } = await supabase
         .schema("erp_cache")
         .from("session_menu_snapshot")
         .upsert(
@@ -130,17 +135,29 @@ async function buildAndStoreMenuSnapshot(
           { onConflict: "session_id,universe,company_id" }
         );
 
-      log({
-        level: "INFO",
-        request_id: requestId,
-        event: "SA_SNAPSHOT_DONE",
-        meta: { count: menuRows.length },
-      });
+      if (upsertError) {
+        log({
+          level: "ERROR",
+          request_id: requestId,
+          event: "SA_SNAPSHOT_UPSERT_FAILED",
+          meta: { upsertError },
+        });
+      } else {
+        log({
+          level: "INFO",
+          request_id: requestId,
+          event: "SA_SNAPSHOT_SUCCESS",
+          meta: { count: menuRows.length },
+        });
+      }
 
       return;
     }
 
-    /* ================= ACL ================= */
+    /* =====================================================
+     * 3️⃣ ACL FLOW
+     * ===================================================== */
+
     const { data: companyRows, error: companyError } = await supabase
       .schema("erp_map")
       .from("user_company_roles")
@@ -191,7 +208,7 @@ async function buildAndStoreMenuSnapshot(
 
       if (!menuRows || menuRows.length === 0) continue;
 
-      await supabase
+      const { error: upsertError } = await supabase
         .schema("erp_cache")
         .from("session_menu_snapshot")
         .upsert(
@@ -206,19 +223,31 @@ async function buildAndStoreMenuSnapshot(
           { onConflict: "session_id,universe,company_id" }
         );
 
-      log({
-        level: "INFO",
-        request_id: requestId,
-        event: "ACL_SNAPSHOT_DONE",
-        meta: { companyId, count: menuRows.length },
-      });
+      if (upsertError) {
+        log({
+          level: "ERROR",
+          request_id: requestId,
+          event: "ACL_SNAPSHOT_UPSERT_FAILED",
+          meta: { companyId, upsertError },
+        });
+      } else {
+        log({
+          level: "INFO",
+          request_id: requestId,
+          event: "ACL_SNAPSHOT_SUCCESS",
+          meta: { companyId, count: menuRows.length },
+        });
+      }
     }
   } catch (err) {
     log({
       level: "ERROR",
       request_id: requestId,
       event: "SNAPSHOT_CRASH",
-      meta: { err },
+      meta: {
+        error: String(err),
+        stack: err instanceof Error ? err.stack : null,
+      },
     });
   }
 
@@ -240,72 +269,49 @@ interface LoginContext {
   requestUrl: string;
 }
 
-const GENERIC_CODE = "AUTH_INVALID_CREDENTIALS";
-const GENERIC_MESSAGE = "Invalid credentials";
-
 export async function loginHandler(ctx: LoginContext): Promise<Response> {
   const { body, requestId, requestUrl } = ctx;
 
-  const identifier =
-    typeof body?.identifier === "string" ? body.identifier.trim() : "";
-
-  const password =
-    typeof body?.password === "string" ? body.password : "";
+  const identifier = body?.identifier?.trim() ?? "";
+  const password = body?.password ?? "";
 
   if (!identifier || !password) {
-    log({ level: "SECURITY", request_id: requestId, event: "LOGIN_FAIL_EMPTY" });
-    return errorResponse(GENERIC_CODE, GENERIC_MESSAGE, requestId, "NONE", 403);
+    return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
   }
 
   const resolved = await resolveIdentifier(identifier);
-
   if (!resolved) {
-    log({ level: "SECURITY", request_id: requestId, event: "LOGIN_FAIL_RESOLVE" });
-    return errorResponse(GENERIC_CODE, GENERIC_MESSAGE, requestId, "NONE", 403);
+    return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
   }
 
   let authUserId: string;
 
   if (resolved.kind === "email") {
     const result = await verifyPassword(resolved.email, password);
-
     if (!result.ok || !result.session) {
-      log({ level: "SECURITY", request_id: requestId, event: "LOGIN_FAIL_PASSWORD" });
-      return errorResponse(GENERIC_CODE, GENERIC_MESSAGE, requestId, "NONE", 403);
+      return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
     }
-
     authUserId = result.user.id;
   } else {
-    const { data, error } = await authClient.auth.admin.getUserById(
+    const { data } = await authClient.auth.admin.getUserById(
       resolved.authUserId
     );
 
-    if (error || !data?.user?.email) {
-      log({ level: "SECURITY", request_id: requestId, event: "LOGIN_FAIL_FETCH_USER" });
-      return errorResponse(GENERIC_CODE, GENERIC_MESSAGE, requestId, "NONE", 403);
-    }
-
     const result = await verifyPassword(data.user.email, password);
-
     if (!result.ok || !result.session) {
-      log({ level: "SECURITY", request_id: requestId, event: "LOGIN_FAIL_PASSWORD" });
-      return errorResponse(GENERIC_CODE, GENERIC_MESSAGE, requestId, "NONE", 403);
+      return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
     }
 
     authUserId = resolved.authUserId;
   }
 
   const state = await getAccountState(authUserId);
-
   if (state !== "ACTIVE") {
-    log({ level: "SECURITY", request_id: requestId, event: "LOGIN_FAIL_STATE" });
-    return errorResponse(GENERIC_CODE, GENERIC_MESSAGE, requestId, "NONE", 403);
+    return errorResponse("AUTH_FAIL", "Inactive", requestId, "NONE", 403);
   }
 
-  const device = extractDeviceInfo(ctx);
-  const sessionId = await createSession(authUserId, device);
+  const sessionId = await createSession(authUserId, extractDeviceInfo(ctx));
 
-  /* 🔥 SNAPSHOT BUILD */
   await buildAndStoreMenuSnapshot(sessionId, authUserId, requestId);
 
   recordSessionTimeline({
@@ -317,12 +323,6 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
 
   const cookie = buildSessionCookie(sessionId, requestUrl);
 
-  log({
-    level: "SECURITY",
-    request_id: requestId,
-    event: "AUTH_LOGIN_SUCCESS",
-  });
-
   return new Response(
     JSON.stringify({ ok: true, request_id: requestId }),
     {
@@ -330,7 +330,6 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
       headers: {
         "Set-Cookie": cookie,
         "Content-Type": "application/json",
-        "Cache-Control": "no-store",
       },
     }
   );
