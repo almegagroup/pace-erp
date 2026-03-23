@@ -76,61 +76,8 @@ const universe = resolvedContext.isAdmin === true ? "SA" : "ACL";
 const db = getServiceRoleClientWithContext(resolvedContext);
 
 // --------------------------------------------------
-// 🔥 ENSURE SNAPSHOT EXISTS (CRITICAL FIX)
-// --------------------------------------------------
-console.log("🟡 SNAPSHOT_CALL", {
-  user: auth_user_id,
-  company: resolvedContext.companyId,
-  universe
-});
-const tSnapshot0 = performance.now();
-const { error: snapshotError } = await db
-  .schema("erp_menu")
-  .rpc("generate_menu_snapshot", {
-    p_user_id: auth_user_id,
-    p_company_id: resolvedContext.isAdmin
-      ? null
-      : resolvedContext.companyId,
-    p_universe: universe
-  });
-  const snapshotMs = Math.round((performance.now() - tSnapshot0) * 100) / 100;
-
-console.log("MENU_STAGE_SNAPSHOT_END", {
-  request_id,
-  user: auth_user_id,
-  universe,
-  duration_ms: snapshotMs
-});
-
-if (snapshotError) {
-  console.error("🔥 SNAPSHOT_GENERATION_FAILED", {
-    error: snapshotError.message
-  });
-
-  const totalMs = Math.round((performance.now() - reqStart) * 100) / 100;
-
-  console.log("MENU_REQ_END", {
-    request_id,
-    path: "/api/me/menu",
-    total_ms: totalMs,
-    error: "SNAPSHOT_GENERATION_FAILED",
-    user: auth_user_id,
-    universe
-  });
-
-  return errorResponse(
-    "SNAPSHOT_GENERATION_FAILED",
-    snapshotError.message,
-    request_id,
-    "NONE",
-    500
-  );
-}
-
-console.log("🟢 SNAPSHOT_GENERATED", {
-  user: auth_user_id,
-  universe
-});
+// ✅ Snapshot MUST be precomputed (NO runtime generation)
+//
 
   let query = db
   .schema("erp_menu").from("menu_snapshot")
@@ -148,7 +95,7 @@ snapshot_version
   .eq("is_visible", true);
 
 /* 🔥 FIX: Admin হলে company filter লাগবে না */
-if (resolvedContext.isAdmin !== true) {
+if (!resolvedContext.isAdmin) {
   if (!resolvedContext.companyId) {
     console.error("❌ COMPANY_ID_MISSING", {
       resolvedContext
