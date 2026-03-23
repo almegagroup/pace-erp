@@ -127,6 +127,16 @@ export async function runPipeline(
 
 sessionResult = await stepSession(req, requestId);
 
+if (!sessionResult) {
+  return errorResponse(
+    "SESSION_RESOLUTION_FAILED",
+    "Session resolution failed",
+    requestId,
+    "NONE",
+    401
+  );
+}
+
 const sessionMs = Math.round((performance.now() - tSession0) * 100) / 100;
 
 console.log("PIPELINE_SESSION_END", {
@@ -306,13 +316,21 @@ console.log("PIPELINE_ACL_END", {
       meta: { stage: "HANDLER_PROTECTED" },
     });
 
-    return await dispatchProtectedRoute(
-      routeKey,
-      req,
-      requestId,
-      sessionResult as Extract<SessionResolution, { status: "ACTIVE" }>,
-      contextResult as Extract<ContextResolution, { status: "RESOLVED" }>
-    );
+    const activeSession = sessionResult as Extract<
+  SessionResolution,
+  { status: "ACTIVE" }
+>;
+
+return await dispatchProtectedRoute(
+  routeKey,
+  req,
+  requestId,
+  {
+    ...activeSession,
+    session_id: activeSession.sessionId as string
+  } as any,
+  contextResult as Extract<ContextResolution, { status: "RESOLVED" }>
+);
   }
 
   // --------------------------------------------------

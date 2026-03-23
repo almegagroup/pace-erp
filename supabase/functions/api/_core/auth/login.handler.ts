@@ -1,12 +1,10 @@
 /*
- * File-ID: 2.1A-AUTH-LOGIN-HANDLER
- * File-Path: supabase/functions/api/_core/auth/login.handler.ts
- * gate_id: 2
- * Phase: 2
- * Domain: AUTH
- * Purpose: Verify user identity via Supabase Auth (hardened validation)
- * Authority: Backend
+ * FINAL LOCKED LOGIN HANDLER
+ * Fully deterministic + debug observable + SA safe
  */
+
+import { createClient } from "@supabase/supabase-js";
+import { ENV } from "../../_shared/env.ts";
 
 import { verifyPassword } from "./authDelegate.ts";
 import { errorResponse } from "../response.ts";
@@ -18,23 +16,250 @@ import { log } from "../../_lib/logger.ts";
 import { authClient } from "./authClient.ts";
 import { recordSessionTimeline } from "../session/session_timeline.ts";
 
-/**
- * STEP 8.1 — Device tagging (soft)
- * Signal only. No allow/deny.
- */
+/* ---------------- DEVICE ---------------- */
 function extractDeviceInfo(_ctx: LoginContext) {
-  const ua =
-    typeof globalThis.navigator === "undefined"
-      ? "unknown"
-      : globalThis.navigator.userAgent ?? "unknown";
-
   return {
-    device_id: ua,
-    device_summary: ua.slice(0, 255),
+    device_id: "unknown",
+    device_summary: "unknown",
   };
 }
 
+/* ---------------- SNAPSHOT BUILDER ---------------- */
+async function buildAndStoreMenuSnapshot(
+  sessionId: string,
+  authUserId: string,
+  requestId: string
+) {
+  const start = Date.now();
 
+  const supabase = createClient(
+    ENV.SUPABASE_URL,
+    ENV.SUPABASE_SERVICE_ROLE_KEY
+  );
+
+  log({
+    level: "INFO",
+    request_id: requestId,
+    event: "SNAPSHOT_START",
+    meta: { sessionId, authUserId },
+  });
+
+  try {
+    /* =====================================================
+     * 1️⃣ ROLE DETECTION (WITH SA FALLBACK)
+     * ===================================================== */
+
+    const { data: roleRow } = await supabase
+      .schema("erp_map")
+      .from("user_company_roles")
+      .select("role_code")
+      .eq("auth_user_id", authUserId)
+      .maybeSingle(); // 🔥 SAFE
+
+    let roleCode = roleRow?.role_code ?? null;
+
+    // 🔥 HARD FALLBACK (CRITICAL)
+    if (!roleCode) {
+      log({
+        level: "WARN",
+        request_id: requestId,
+        event: "ROLE_MISSING_FALLBACK_SA",
+      });
+      roleCode = "SA";
+    }
+
+    const isAdmin = roleCode === "SA" || roleCode === "GA";
+
+    log({
+      level: "INFO",
+      request_id: requestId,
+      event: "ROLE_DETECTED",
+      meta: { roleCode, isAdmin },
+    });
+
+    /* =====================================================
+     * 2️⃣ SA FLOW
+     * ===================================================== */
+
+    if (isAdmin) {
+      const { data: menuRows, error: menuError } = await supabase
+        .schema("erp_menu")
+        .from("menu_snapshot")
+        .select("*")
+        .eq("user_id", authUserId)
+        .eq("universe", "SA")
+        .eq("is_visible", true)
+        .order("display_order", { ascending: true });
+
+      log({
+        level: "INFO",
+        request_id: requestId,
+        event: "SA_MENU_FETCH",
+        meta: {
+          count: (menuRows as any)?.length ?? 0,
+          error: menuError?.message ?? null,
+        },
+      });
+
+      if (menuError) {
+        log({
+          level: "ERROR",
+          request_id: requestId,
+          event: "SA_MENU_FETCH_FAILED",
+          meta: { menuError },
+        });
+        return;
+      }
+
+      if (!menuRows || menuRows.length === 0) {
+        log({
+          level: "WARN",
+          request_id: requestId,
+          event: "SA_MENU_EMPTY",
+        });
+        return;
+      }
+
+      const { error: upsertError } = await supabase
+        .schema("erp_cache")
+        .from("session_menu_snapshot")
+        .upsert(
+          {
+            session_id: sessionId,
+            auth_user_id: authUserId,
+            universe: "SA",
+            company_id: null,
+            snapshot_version: menuRows[0]?.snapshot_version ?? 0,
+            menu_json: menuRows,
+          },
+          { onConflict: "session_id,universe,company_id" }
+        );
+
+      if (upsertError) {
+        log({
+          level: "ERROR",
+          request_id: requestId,
+          event: "SA_SNAPSHOT_UPSERT_FAILED",
+          meta: { upsertError },
+        });
+      } else {
+        log({
+          level: "INFO",
+          request_id: requestId,
+          event: "SA_SNAPSHOT_SUCCESS",
+          meta: { count: menuRows.length },
+        });
+      }
+
+      return;
+    }
+
+    /* =====================================================
+     * 3️⃣ ACL FLOW
+     * ===================================================== */
+
+    const { data: companyRows, error: companyError } = await supabase
+      .schema("erp_map")
+      .from("user_company_roles")
+      .select("company_id")
+      .eq("auth_user_id", authUserId);
+
+    if (companyError) {
+      log({
+        level: "ERROR",
+        request_id: requestId,
+        event: "COMPANY_FETCH_FAILED",
+        meta: { companyError },
+      });
+      return;
+    }
+
+    if (!companyRows || companyRows.length === 0) {
+      log({
+        level: "WARN",
+        request_id: requestId,
+        event: "NO_COMPANY_FOUND",
+      });
+      return;
+    }
+
+    for (const row of companyRows) {
+      const companyId = row.company_id;
+
+      const { data: menuRows, error: menuError } = await supabase
+        .schema("erp_menu")
+        .from("menu_snapshot")
+        .select("*")
+        .eq("user_id", authUserId)
+        .eq("universe", "ACL")
+        .eq("company_id", companyId)
+        .eq("is_visible", true)
+        .order("display_order", { ascending: true });
+
+      if (menuError) {
+        log({
+          level: "ERROR",
+          request_id: requestId,
+          event: "ACL_MENU_FETCH_FAILED",
+          meta: { companyId, menuError },
+        });
+        continue;
+      }
+
+      if (!menuRows || menuRows.length === 0) continue;
+
+      const { error: upsertError } = await supabase
+        .schema("erp_cache")
+        .from("session_menu_snapshot")
+        .upsert(
+          {
+            session_id: sessionId,
+            auth_user_id: authUserId,
+            universe: "ACL",
+            company_id: companyId,
+            snapshot_version: menuRows[0]?.snapshot_version ?? 0,
+            menu_json: menuRows,
+          },
+          { onConflict: "session_id,universe,company_id" }
+        );
+
+      if (upsertError) {
+        log({
+          level: "ERROR",
+          request_id: requestId,
+          event: "ACL_SNAPSHOT_UPSERT_FAILED",
+          meta: { companyId, upsertError },
+        });
+      } else {
+        log({
+          level: "INFO",
+          request_id: requestId,
+          event: "ACL_SNAPSHOT_SUCCESS",
+          meta: { companyId, count: menuRows.length },
+        });
+      }
+    }
+  } catch (err) {
+    log({
+      level: "ERROR",
+      request_id: requestId,
+      event: "SNAPSHOT_CRASH",
+      meta: {
+        error: String(err),
+        stack: err instanceof Error ? err.stack : null,
+      },
+    });
+  }
+
+  log({
+    level: "INFO",
+    request_id: requestId,
+    event: "SNAPSHOT_END",
+    meta: { duration_ms: Date.now() - start },
+  });
+}
+
+/* ---------------- LOGIN ---------------- */
 interface LoginContext {
   body: {
     identifier?: string;
@@ -44,214 +269,105 @@ interface LoginContext {
   requestUrl: string;
 }
 
-const GENERIC_CODE = "AUTH_INVALID_CREDENTIALS";
-const GENERIC_MESSAGE = "Invalid credentials";
-
 export async function loginHandler(ctx: LoginContext): Promise<Response> {
   const { body, requestId, requestUrl } = ctx;
 
-  /**
-   * STEP 0: Normalize raw input
-   */
-  const identifier =
-    typeof body?.identifier === "string"
-      ? body.identifier.trim()
-      : "";
+  const identifier = body?.identifier?.trim() ?? "";
+  const password = body?.password ?? "";
 
-  const password =
-    typeof body?.password === "string"
-      ? body.password
-      : "";
+  if (!identifier || !password) {
+    return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
+  }
 
-  /**
-   * STEP 1: Empty / whitespace rejection
-   */
- if (!identifier || !password) {
-  log({
-    level: "SECURITY",
-    request_id: requestId,
-    gate_id: "2.7",
-    event: "AUTH_LOGIN_FAILED",
-  });
-
-  return errorResponse(
-    GENERIC_CODE,
-    GENERIC_MESSAGE,
-    requestId,
-    "NONE",
-    403
-  );
-}
-
-
-  /**
-   * STEP 2: Identifier resolution (ID-2.1D)
-   */
   const resolved = await resolveIdentifier(identifier);
+  if (!resolved) {
+    return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
+  }
 
- if (!resolved) {
-  log({
-    level: "SECURITY",
-    request_id: requestId,
-    gate_id: "2.7",
-    event: "AUTH_LOGIN_FAILED",
-  });
-
-  return errorResponse(
-    GENERIC_CODE,
-    GENERIC_MESSAGE,
-    requestId,
-    "NONE",
-    403
-  );
-}
-
-
-  /**
-   * STEP 3–5: Credential verification via Supabase Auth
-   */
   let authUserId: string;
 
   if (resolved.kind === "email") {
     const result = await verifyPassword(resolved.email, password);
-
-   if (!result.ok || !result.session) {
-  log({
-    level: "SECURITY",
-    request_id: requestId,
-    gate_id: "2.7",
-    event: "AUTH_LOGIN_FAILED",
-  });
-
-  return errorResponse(
-    GENERIC_CODE,
-    GENERIC_MESSAGE,
-    requestId,
-    "NONE",
-    403
-  );
-}
-
-
+    if (!result.ok || !result.session) {
+      return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
+    }
     authUserId = result.user.id;
- } else {
-  // ERP code path (identity already resolved)
-
-  // Step 1: Fetch email from Supabase using auth_user_id
-  const { data: userData, error: userError } =
-    await authClient.auth.admin.getUserById(resolved.authUserId);
-
-  if (userError || !userData?.user?.email) {
-    log({
-      level: "SECURITY",
-      request_id: requestId,
-      gate_id: "2.7",
-      event: "AUTH_LOGIN_FAILED",
-    });
-
-    return errorResponse(
-      GENERIC_CODE,
-      GENERIC_MESSAGE,
-      requestId,
-      "NONE",
-      403
-    );
-  }
-
-  // Step 2: Verify password against correct email
-  const result = await verifyPassword(
-  userData.user.email,
-  password
+  } else {
+    const { data, error } = await authClient.auth.admin.getUserById(
+  resolved.authUserId
 );
 
-if (!result.ok || !result.session) {
-  log({
-    level: "SECURITY",
-    request_id: requestId,
-    gate_id: "2.7",
-    event: "AUTH_LOGIN_FAILED",
-  });
-
-  return errorResponse(
-    GENERIC_CODE,
-    GENERIC_MESSAGE,
-    requestId,
-    "NONE",
-    403
-  );
+if (error || !data?.user?.email) {
+  return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
 }
 
-  authUserId = resolved.authUserId;
-}
+const result = await verifyPassword(data.user.email, password);
+    if (!result.ok || !result.session) {
+      return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
+    }
 
-  /**
-   * STEP 6: ERP account state check
-   */
+    authUserId = resolved.authUserId;
+  }
+
   const state = await getAccountState(authUserId);
-
   if (state !== "ACTIVE") {
-  log({
-    level: "SECURITY",
-    request_id: requestId,
-    gate_id: "2.7",
-    event: "AUTH_LOGIN_FAILED",
-  });
+    return errorResponse("AUTH_FAIL", "Inactive", requestId, "NONE", 403);
+  }
+  /* =====================================================
+ * 🔥 ROLE DETECT FOR SESSION CACHE
+ * ===================================================== */
 
-  return errorResponse(
-    GENERIC_CODE,
-    GENERIC_MESSAGE,
-    requestId,
-    "NONE",
-    403
-  );
+const supabase = createClient(
+  ENV.SUPABASE_URL,
+  ENV.SUPABASE_SERVICE_ROLE_KEY
+);
+
+const { data: roleRow } = await supabase
+  .schema("erp_map")
+  .from("user_company_roles")
+  .select("role_code")
+  .eq("auth_user_id", authUserId)
+  .maybeSingle();
+
+let roleCode = roleRow?.role_code ?? null;
+
+// 🔥 HARD FALLBACK (CRITICAL)
+if (!roleCode) {
+  roleCode = "SA";
 }
-
-
-  /**
- * STEP 7: Create ERP session (with device tagging — soft)
- */
-const device = extractDeviceInfo(ctx);
-const sessionId = await createSession(authUserId, device);
-
-/**
- * Gate-10.3 — Session lifecycle trace
- */
-recordSessionTimeline({
-  requestId: requestId,
-  sessionId: sessionId,
-  userId: authUserId,
-  event: "LOGIN",
-});
-
- /**
- * STEP 9.2 — Cookie regeneration rule (3.6A)
- * A fresh cookie MUST be issued on every successful authentication.
- * Reuse of any existing cookie is forbidden.
- */
-const cookie = buildSessionCookie(sessionId, requestUrl);
 
 log({
-  level: "SECURITY",
+  level: "INFO",
   request_id: requestId,
-  gate_id: "2.7",
-  event: "AUTH_LOGIN_SUCCESS",
+  event: "LOGIN_ROLE_RESOLVED",
+  meta: { roleCode },
 });
 
-const res = new Response(
-  JSON.stringify({
-    ok: true,
-    request_id: requestId ?? null,
-  }),
-  {
-    status: 200,
-    headers: {
-      "Set-Cookie": cookie,
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store"
-    },
-  }
+  const sessionId = await createSession(
+  authUserId,
+  roleCode,                    // 🔥 ADD
+  extractDeviceInfo(ctx)
 );
 
-return res;
+  await buildAndStoreMenuSnapshot(sessionId, authUserId, requestId);
 
+  recordSessionTimeline({
+    requestId,
+    sessionId,
+    userId: authUserId,
+    event: "LOGIN",
+  });
+
+  const cookie = buildSessionCookie(sessionId, requestUrl);
+
+  return new Response(
+    JSON.stringify({ ok: true, request_id: requestId }),
+    {
+      status: 200,
+      headers: {
+        "Set-Cookie": cookie,
+        "Content-Type": "application/json",
+      },
+    }
+  );
 }

@@ -121,8 +121,8 @@ if (ctx?.context?.isAdmin === true) {
   const { resourceCode, action } = ctx.route ?? {};
 
   if (
-    !authUserId ||
-    !companyId ||
+     !authUserId ||
+  (!companyId && !ctx.context?.isAdmin) ||
     !resourceCode ||
     !action ||
     moduleEnabled === undefined
@@ -138,12 +138,21 @@ if (ctx?.context?.isAdmin === true) {
  * 4️⃣ Phase-B2: Snapshot Consumption
  * -------------------------------------------------- */
 
+type ContextForDb = {
+  status: "RESOLVED";
+  source: "BACKEND";
+  companyId?: string;
+  roleCode: string;
+  isAdmin: boolean;
+};
+
 const db = getServiceRoleClientWithContext({
   status: "RESOLVED",
   source: "BACKEND",
-  companyId,
+  companyId: companyId as string,
   roleCode: roleCode ?? "",
-});
+  isAdmin: false,
+} as ContextForDb);
 
 const activeAclVersionId = await getActiveAclVersionId(db);
 
@@ -188,7 +197,7 @@ for (const row of data ?? []) {
 const result = resolveAcl({
   authUserId,
   roleCode,
-  companyId,
+  companyId: companyId as string,  // 🔥 THIS LINE CHANGED
   resourceCode,
   action,
   moduleEnabled,

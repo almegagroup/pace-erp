@@ -13,6 +13,7 @@ import { assertRlsEnabled } from "../../_shared/rls_assert.ts";
 
 export async function createSession(
   authUserId: string,
+  roleCode: string, 
   device?: {
     device_id: string;
     device_summary: string;
@@ -59,6 +60,7 @@ export async function createSession(
     .insert({
   session_id: sessionId,
   auth_user_id: authUserId,
+  role_code: roleCode,
   status: "ACTIVE",
   created_at: nowIso,
   last_seen_at: nowIso,

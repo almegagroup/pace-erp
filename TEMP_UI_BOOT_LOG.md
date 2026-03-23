@@ -4948,3 +4948,224 @@ If you want next step:
 👉 I can rewrite your entire screenStackEngine (production-grade, SAP-style, Gate-8 compliant)
 
 That will permanently eliminate these issues.
+
+🟢 131. SESSION SNAPSHOT SHIFT — EXECUTION LOG
+
+Status:
+Executed ✅
+
+131.1 CHANGE IMPLEMENTED
+
+We shifted from:
+
+❌ Runtime DB-heavy resolution
+→ per request user + role + context fetch
+
+To:
+
+✅ Session enriched model (snapshot-like)
+
+131.2 WHAT WAS DONE
+🔹 A. SESSION ENRICHMENT
+
+File:
+
+_pipeline/session.ts
+
+Added fields:
+
+roleCode
+admin detection (SA/GA)
+
+Source:
+
+erp_map.user_company_roles
+🔹 B. CONTEXT BYPASS FOR ADMIN
+
+File:
+
+_pipeline/context.ts
+
+Logic added:
+
+if (isAdminUniverse(session)) {
+  return {
+    companyId: "ADMIN_UNIVERSE",
+    roleCode,
+    isAdmin: true
+  }
+}
+🔹 C. MENU QUERY CHANGE
+
+File:
+
+menu.handler.ts
+
+Change:
+
+if (!context.isAdmin) {
+  query = query.eq("company_id", context.companyId);
+}
+
+👉 Admin → no company filter
+
+131.3 INTENDED GOAL
+remove repeated DB joins
+reduce per-request computation
+move towards snapshot-style resolution
+131.4 RESULT OBSERVED
+BEFORE
+/api/me → 403
+/api/me/menu → 403
+AFTER
+/api/me → 200
+/api/me/menu → 200
+
+Pipeline:
+
+SESSION → PASS
+CONTEXT → PASS
+ACL → PASS
+
+👉 Authorization UNBLOCKED
+
+131.5 PERFORMANCE RESULT
+BEFORE
+~1200–1400 ms
+AFTER
+~850–900 ms
+
+👉 Improvement:
+
+~400–500 ms reduction
+131.6 IMPORTANT OBSERVATION
+
+Despite session enrichment:
+
+SESSION stage still ~800 ms
+
+👉 meaning:
+
+❗ DB dependency NOT eliminated
+❗ snapshot model NOT fully achieved
+
+🔴 132. CURRENT REALITY — PARTIAL SNAPSHOT ONLY
+
+Status:
+Incomplete ⚠️
+
+132.1 WHAT WE EXPECTED
+Session = precomputed snapshot
+→ no heavy DB
+→ fast resolution
+132.2 WHAT WE ACTUALLY HAVE
+Session = partially enriched
+BUT still:
+
+→ DB lookup
+→ role fetch
+→ context logic
+132.3 CONCLUSION
+
+👉 This is:
+
+NOT full snapshot
+
+👉 This is:
+
+Hybrid (DB + partial cache)
+🔴 133. MENU SNAPSHOT STATUS
+
+Status:
+Working ✅
+
+133.1 WHAT IS WORKING
+generate_menu_snapshot → working
+menu_snapshot → populated
+/api/me/menu → 200
+133.2 PERFORMANCE
+MENU QUERY → ~300 ms
+133.3 ISSUE
+
+❌ No DB index
+→ full scan
+
+🔴 134. FRONTEND BEHAVIOR (MENU)
+
+Status:
+Inefficient ⚠️
+
+134.1 OBSERVED
+Menu fetch → twice
+
+Flow:
+
+Login
+→ fetch menu
+→ redirect
+→ fetch again
+134.2 RESULT
++300ms overhead
+unnecessary API call
+🔴 135. CURRENT PERFORMANCE BREAKDOWN
+REQUEST: /api/me/menu
+SESSION → ~800 ms ❌
+MENU QUERY → ~300 ms ❌
+TOTAL → ~1100 ms
+KEY FACT
+
+👉 70% time spent in SESSION
+
+🔴 136. CURRENT ISSUES (REAL)
+ISSUE 1 — SESSION STILL HEAVY
+still DB dependent
+not snapshot
+~800 ms cost
+ISSUE 2 — MENU QUERY SLOW
+no index
+~300 ms
+ISSUE 3 — DOUBLE FETCH
+frontend inefficiency
+ISSUE 4 — NO TRUE SNAPSHOT
+session not precomputed
+recomputation still happening
+🟢 137. WHAT ACTUALLY IMPROVED
+
+✔ Authorization unblocked
+✔ System functional
+✔ Errors removed
+✔ Latency reduced (~30–40%)
+
+🔴 138. WHAT DID NOT IMPROVE
+
+❌ Not near real-time
+❌ Not ERP-grade performance
+❌ Session still bottleneck
+❌ Snapshot model incomplete
+
+🟢 139. CURRENT SYSTEM STATE
+Layer	Status
+Auth	✅
+Session	⚠️ Slow
+Context	✅
+ACL	✅
+Menu	⚠️ Slow
+UI	⚠️
+🔴 140. FINAL LOG CONCLUSION
+
+👉 We did:
+
+DB → partial session enrichment
+
+👉 We got:
+
+System working + 30–40% faster
+
+👉 But:
+
+True snapshot architecture NOT achieved
+🔥 141. CURRENT TRUTH (1 LINE)
+
+👉 System is:
+
+Working BUT not optimized

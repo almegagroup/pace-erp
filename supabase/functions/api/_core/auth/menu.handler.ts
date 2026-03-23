@@ -17,8 +17,9 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
  * ========================================================= */
 
 interface MenuHandlerCtx {
-  context: ContextResolution;   // Gate-5 resolved context (NO authUserId here by design)
-  auth_user_id: string;         // Gate-2 session truth (explicit, mandatory)
+  context: ContextResolution;
+  auth_user_id: string;
+  session_id: string;  
   request_id: string;
 }
 
@@ -30,121 +31,95 @@ export async function meMenuHandler(
   _req: Request,
   ctx: MenuHandlerCtx
 ): Promise<Response> {
-  const { context, auth_user_id, request_id } = ctx;
-  const reqStart = performance.now();
 
-  
-
-  // --------------------------------------------------
-  // 1️⃣ Hard invariant: context must be RESOLVED
-  // --------------------------------------------------
-  // 🔥 HARD NARROWING
-if (context.status !== "RESOLVED") {
+  const { context, auth_user_id, session_id, request_id } = ctx;
+  if (!session_id) {
   return errorResponse(
-    "CONTEXT_UNRESOLVED",
-    "Menu context unresolved",
+    "SESSION_ID_MISSING",
+    "Session ID not provided",
     request_id,
     "NONE",
-    403
+    500
   );
 }
-
-// ✅ এখন new variable use করবো
-const resolvedContext = context;
-
-console.log("DEBUG_CONTEXT", {
-  isAdmin: resolvedContext.isAdmin,
-  companyId: resolvedContext.companyId,
-  roleCode: resolvedContext.roleCode,
-  auth_user_id
-});
-
-console.log("🔵 SERVICE_ROLE_CONTEXT", {
-  isAdmin: resolvedContext.isAdmin,
-  companyId: resolvedContext.companyId,
-  roleCode: resolvedContext.roleCode
-});
-
-const universe = resolvedContext.isAdmin === true ? "SA" : "ACL";
+  const reqStart = performance.now();
 
   // --------------------------------------------------
-  // 3️⃣ Snapshot is the ONLY data source
+  // 1️⃣ Context validation
   // --------------------------------------------------
-
-  
-
-const db = getServiceRoleClientWithContext(resolvedContext);
-
-// --------------------------------------------------
-// ✅ Snapshot MUST be precomputed (NO runtime generation)
-//
-
-  let query = db
-  .schema("erp_menu").from("menu_snapshot")
-  .select(`
-menu_code,
-title,
-route_path,
-menu_type,
-parent_menu_code,
-display_order,
-snapshot_version
-`)
-  .eq("user_id", auth_user_id)
-  .eq("universe", universe)
-  .eq("is_visible", true);
-
-/* 🔥 FIX: Admin হলে company filter লাগবে না */
-if (!resolvedContext.isAdmin) {
-  if (!resolvedContext.companyId) {
-    console.error("❌ COMPANY_ID_MISSING", {
-      resolvedContext
-    });
-
+  if (context.status !== "RESOLVED") {
     return errorResponse(
-      "INVALID_CONTEXT",
-      "companyId missing for non-admin",
+      "CONTEXT_UNRESOLVED",
+      "Menu context unresolved",
       request_id,
       "NONE",
-      500
+      403
     );
   }
 
-  query = query.eq("company_id", resolvedContext.companyId);
-}
+  const resolvedContext = context;
 
-console.log("🟡 MENU_QUERY_BUILD", {
+  
+
+  const universe = resolvedContext.isAdmin === true ? "SA" : "ACL";
+
+  console.log("MENU_CONTEXT", {
+  request_id,
+  session_id,
   auth_user_id,
   universe,
-  isAdmin: resolvedContext.isAdmin,
-  companyId: resolvedContext.companyId
+  company_id: resolvedContext.companyId ?? null
 });
 
-// 🔥 SAFE EXECUTION WRAP
-let data, error;
+  const db = getServiceRoleClientWithContext(resolvedContext);
 
-try {
-  const tBuild0 = performance.now();
-  const result = await query.order("display_order", { ascending: true });
-  const buildMs = Math.round((performance.now() - tBuild0) * 100) / 100;
-  data = result.data;
-  error = result.error;
+  // --------------------------------------------------
+  // 🔥 SESSION SNAPSHOT FETCH
+  // --------------------------------------------------
 
-  console.log("MENU_STAGE_BUILD_END", {
-  request_id,
-  user: auth_user_id,
-  universe,
-  duration_ms: buildMs,
-  data_length: data?.length ?? 0,
-  error: error?.message ?? null
-});
+  let data: unknown[] = [];
 
-// --------------------------------------------------
-// ❗ HARD ERROR HANDLING (NEW)
-// --------------------------------------------------
-if (error) {
+  try {
+    const t0 = performance.now();
+
+    let query = db
+      .schema("erp_cache")
+      .from("session_menu_snapshot")
+      .select("menu_json, snapshot_version, company_id")
+      .eq("session_id", session_id)
+      .eq("universe", universe);
+
+    // ACL → company বাধ্যতামূলক
+    if (!resolvedContext.isAdmin) {
+      if (!resolvedContext.companyId) {
+        return errorResponse(
+          "INVALID_CONTEXT",
+          "companyId missing for non-admin",
+          request_id,
+          "NONE",
+          500
+        );
+      }
+
+     
+
+      query = query.eq("company_id", resolvedContext.companyId);
+    }
+
+    const { data: row, error } = await query.maybeSingle();
+
+    const duration =
+      Math.round((performance.now() - t0) * 100) / 100;
+
+    console.log("SNAPSHOT_FETCH", {
+      request_id,
+      session_id,
+      duration_ms: duration
+    });
+
+  if (error) {
   return errorResponse(
-    "MENU_READ_FAILED",
+    "SESSION_SNAPSHOT_READ_FAILED",
     error.message,
     request_id,
     "NONE",
@@ -152,96 +127,106 @@ if (error) {
   );
 }
 
-} catch (e) {
-  console.error("🔥 QUERY_CRASH", {
-    error: e
-  });
-
+if (!row) {
   return errorResponse(
-    "QUERY_CRASH",
-    String(e),
+    "SESSION_SNAPSHOT_MISSING",
+    "Snapshot not found",
     request_id,
     "NONE",
     500
   );
 }
 
-/* --------------------------------------------------
- * 7️⃣.9️⃣ G9 — Snapshot Observability
- * Purpose: Log snapshot version + context for audit traceability
- * -------------------------------------------------- */
-if (data && data.length > 0) {
-  console.info("MENU_SNAPSHOT_SERVED", {
-    request_id,
-    auth_user_id,
-    company_id: resolvedContext.companyId,
-    universe,
-    snapshot_version: data[0].snapshot_version ?? null,
-    menu_count: data.length,
-  });
-}
+    data = Array.isArray(row.menu_json) ? row.menu_json : [];
 
-// --------------------------------------------------
-// 3️⃣.5️⃣ G5 — Visibility Hard-Deny
-// Snapshot absence ⇒ invisible (explicit fail-closed)
-// --------------------------------------------------
-if (!data || data.length === 0) {
-
-  console.warn("⚠️ SNAPSHOT_ABSENT", {
-    auth_user_id,
-    universe,
-    company_id: resolvedContext.companyId
-  });
-const totalMs = Math.round((performance.now() - reqStart) * 100) / 100;
-
-console.log("MENU_REQ_END", {
+    console.log("SNAPSHOT_USED", {
   request_id,
-  path: "/api/me/menu",
-  total_ms: totalMs,
-  user: auth_user_id,
-  universe,
-  case: "SNAPSHOT_ABSENT"
+  count: data.length,
+  version: row.snapshot_version
 });
-  
-  
+
+  } catch (e) {
+    console.error("SNAPSHOT_CRASH", e);
+
+    return errorResponse(
+      "SNAPSHOT_CRASH",
+      String(e),
+      request_id,
+      "NONE",
+      500
+    );
+  }
+
+  // --------------------------------------------------
+  // Observability
+  // --------------------------------------------------
+  if (data.length > 0) {
+    console.info("MENU_SNAPSHOT_SERVED", {
+      request_id,
+      auth_user_id,
+      company_id: resolvedContext.companyId ?? null,
+      universe,
+      menu_count: data.length,
+    });
+  }
+
+  // --------------------------------------------------
+  // Hard deny (no snapshot)
+  // --------------------------------------------------
+  if (data.length === 0) {
+
+    console.warn("SNAPSHOT_ABSENT", {
+      auth_user_id,
+      universe,
+      company_id: resolvedContext.companyId ?? null
+    });
+
+    const totalMs =
+      Math.round((performance.now() - reqStart) * 100) / 100;
+
+    console.log("MENU_REQ_END", {
+      request_id,
+      total_ms: totalMs,
+      universe,
+      case: "SNAPSHOT_ABSENT"
+    });
+
+    return okResponse(
+      {
+        universe,
+        menu: [],
+        meta: {
+          hard_deny: true,
+          reason: "SNAPSHOT_ABSENT"
+        }
+      },
+      request_id
+    );
+  }
+
+  // --------------------------------------------------
+  // Final response
+  // --------------------------------------------------
+  const totalMs =
+    Math.round((performance.now() - reqStart) * 100) / 100;
+
+  console.log("MENU_REQ_END", {
+    request_id,
+    total_ms: totalMs,
+    universe
+  });
+
   return okResponse(
     {
       universe,
-      menu: [],
-      meta: {
-        hard_deny: true,
-        reason: "SNAPSHOT_ABSENT"
-      }
+      menu: data,
     },
     request_id
   );
 }
 
-// --------------------------------------------------
-// 4️⃣ Return snapshot verbatim (NO mutation, NO inference)
-// --------------------------------------------------
-const totalMs = Math.round((performance.now() - reqStart) * 100) / 100;
-
-console.log("MENU_REQ_END", {
-  request_id,
-  path: "/api/me/menu",
-  total_ms: totalMs,
-  user: auth_user_id,
-  universe
-});
-
-return okResponse(
-  {
-    universe,
-    menu: data,
-  },
-  request_id
-);
-
-}
-
 /* =========================================================
- * Gate-9 — Menu Admin Handlers (ID-9.12)
+ * 🔽 EVERYTHING BELOW IS UNCHANGED (NO TOUCH)
  * ========================================================= */
 
 interface MenuAdminCtx {
@@ -249,6 +234,12 @@ interface MenuAdminCtx {
   auth_user_id: string;
   request_id: string;
 }
+
+/* =========================================================
+ * Gate-9 — Menu Admin Handlers (ID-9.12)
+ * ========================================================= */
+
+
 
 export async function createMenuHandler(
   req: Request,
