@@ -4722,3 +4722,229 @@ System = FUNCTIONAL
 Only UI integration polishing left
 🚀 FINAL 1-LINE SUMMARY
 You have successfully completed ERP core engine — now only frontend stabilization & performance optimization remains.
+
+🟢 123. POST-NAVIGATION FIX TEST RESULT (LATEST SESSION)
+
+Status:
+Partially Successful ⚠️
+
+After applying navigation initialization fix:
+
+initNavigation("DASHBOARD_HOME");
+restoreNavigationStack();
+
+Observed behavior:
+
+Login → SUCCESS ✅
+Menu → Loaded (menu_count: 5) ✅
+Redirect → /sa/home ✅
+Admin pages accessible (Create Company, Users, etc.) ✅
+
+👉 Core system flow now operational
+
+🔴 124. NEW ISSUE — SCREEN STACK ENGINE ERROR (BACK NAVIGATION)
+
+Status:
+Open ❌
+
+124.1 OBSERVED BEHAVIOR
+
+From UI test:
+
+Normal navigation → Working ✅
+Clicking menu items → Working ✅
+Browser BACK button → Works but throws error ⚠️
+ESC key → Throws error and DOES NOT navigate ❌
+
+Console errors:
+
+[SCREEN_STACK_ENGINE] Navigation not initialized
+[SCREEN_STACK_ENGINE] Cannot pop root screen
+124.2 ROOT CAUSE ANALYSIS
+🔴 Cause A — Navigation used before stack ready
+
+Even though initNavigation() is called:
+
+👉 Some components (guards / event handlers) are triggering navigation BEFORE stack hydration completes
+
+🔴 Cause B — POP on empty stack
+
+Error:
+
+Cannot pop root screen
+
+👉 Meaning:
+
+Stack size = 1 (root)
+POP requested
+Engine crashes (no guard)
+🔴 Cause C — Keyboard event not guarded
+
+ESC → triggers:
+
+INTENT_BACK → POP_SCREEN
+
+👉 But no check exists:
+
+if (stack.length > 1)
+124.3 ARCHITECTURAL INTERPRETATION
+
+👉 This is NOT routing issue
+👉 This is NOT auth issue
+
+👉 This is:
+
+Gate-8 Navigation Engine Safety Violation
+🔥 125. REQUIRED FIX — SCREEN STACK ENGINE HARDENING
+
+Status:
+Mandatory Fix Required 🚨
+
+✅ FIX 1 — Safe POP guard
+
+File:
+
+frontend/src/navigation/screenStackEngine.js
+
+Add:
+
+if (stack.length <= 1) {
+  console.warn("⚠️ Cannot pop root screen");
+  return;
+}
+✅ FIX 2 — Navigation readiness check
+
+Before ANY navigation call:
+
+if (!navigationInitialized) {
+  console.warn("⚠️ Navigation not ready");
+  return;
+}
+✅ FIX 3 — ESC key handler fix
+
+File: navigation event handler
+
+if (action === "POP_SCREEN") {
+  if (stack.length > 1) {
+    popScreen();
+  } else {
+    console.warn("⚠️ Root screen — ignoring ESC");
+  }
+}
+✅ FIX 4 — Browser back sync (IMPORTANT)
+
+👉 Browser back works, but stack না
+
+👉 Need sync:
+
+window.onpopstate = () => {
+  syncStackWithURL();
+};
+🔴 126. RELATED ISSUE — adminEntryGuard PREMATURE EXECUTION
+
+Status:
+Partially Fixed ⚠️
+
+From earlier patch:
+
+if (!current) {
+  console.warn("⚠️ Screen stack not ready → skip guard");
+  return;
+}
+
+👉 This fix is correct and necessary
+
+🧠 Explanation (Your Confusion Answer)
+
+You asked:
+
+👉 “Gate open howar age guard dhore felchilo — eta bujhte parchina”
+
+✅ Real meaning:
+
+👉 Flow ta:
+
+App start
+↓
+Guard runs ❌
+↓
+Navigation stack NOT ready ❌
+↓
+Guard blocks ❌
+
+👉 After fix:
+
+App start
+↓
+Navigation initializes ✅
+↓
+Guard runs ✅
+
+👉 So:
+
+👉 “Guard ta agei check korto — system ready howar age”
+
+🟡 127. NON-BLOCKING ISSUE — DOUBLE BOOT / MULTIPLE LOGS
+
+Status:
+Low Priority ⚠️
+
+Observed:
+
+BOOT START repeated
+menu fetch repeated
+
+Cause:
+
+React Strict Mode (dev)
+double render
+
+👉 Not critical
+
+🟡 128. PERFORMANCE NOTE (RECONFIRMED)
+
+Menu snapshot:
+
+~300 ms
+
+👉 DB index still required:
+
+create index idx_menu_snapshot_user_universe
+on erp_menu.menu_snapshot (user_id, universe);
+🟢 129. CURRENT SYSTEM STATE (FINAL UPDATED)
+Layer	Status
+Infra	✅ Stable
+Auth	✅ Done
+Session	✅ Done
+Context	✅ Done
+ACL	✅ Done
+Menu API	✅ Done
+Snapshot	✅ Done
+Navigation Init	✅ Fixed
+Screen Stack Safety	❌ Needs fix
+UI Rendering	✅ Working
+🔥 130. FINAL ROOT CAUSE SUMMARY (LATEST)
+
+👉 System এখন 95% complete
+
+Remaining blockers:
+
+❌ Screen stack unsafe operations
+❌ ESC navigation crash
+❌ Root pop protection missing
+🚀 131. NEXT EXECUTION PLAN (STRICT)
+🥇 STEP 1 — Fix screenStackEngine (MANDATORY)
+add pop guard
+add init guard
+🥈 STEP 2 — Fix ESC handler
+🥉 STEP 3 — Sync browser back with stack
+🏅 STEP 4 — Re-test navigation
+🧠 FINAL 1-LINE TRUTH
+
+👉 ERP system fully working — only navigation engine safety hardening left.
+
+If you want next step:
+
+👉 I can rewrite your entire screenStackEngine (production-grade, SAP-style, Gate-8 compliant)
+
+That will permanently eliminate these issues.
