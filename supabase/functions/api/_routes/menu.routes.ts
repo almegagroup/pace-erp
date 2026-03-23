@@ -26,10 +26,11 @@ export async function dispatchMenuRoutes(
 
   case "GET:/api/me/menu":
     return await meMenuHandler(req, {
-      context,
-      auth_user_id: session.authUserId,
-      request_id: requestId,
-    });
+  context,
+  auth_user_id: session.authUserId,
+  session_id: session.sessionId,   // 🔥 CRITICAL FIX
+  request_id: requestId,
+});
 
   /* =========================================
    * ID-9.12 — Menu Admin Panel
