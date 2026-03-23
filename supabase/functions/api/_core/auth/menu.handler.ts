@@ -33,6 +33,15 @@ export async function meMenuHandler(
 ): Promise<Response> {
 
   const { context, auth_user_id, session_id, request_id } = ctx;
+  if (!session_id) {
+  return errorResponse(
+    "SESSION_ID_MISSING",
+    "Session ID not provided",
+    request_id,
+    "NONE",
+    500
+  );
+}
   const reqStart = performance.now();
 
   // --------------------------------------------------
@@ -68,7 +77,7 @@ export async function meMenuHandler(
   // 🔥 SESSION SNAPSHOT FETCH
   // --------------------------------------------------
 
-  let data: any[] = [];
+  let data: unknown[] = [];
 
   try {
     const t0 = performance.now();
@@ -128,7 +137,7 @@ if (!row) {
   );
 }
 
-    data = row.menu_json ?? [];
+    data = Array.isArray(row.menu_json) ? row.menu_json : [];
 
     console.log("SNAPSHOT_USED", {
   request_id,
@@ -155,7 +164,7 @@ if (!row) {
     console.info("MENU_SNAPSHOT_SERVED", {
       request_id,
       auth_user_id,
-      company_id: resolvedContext.companyId,
+      company_id: resolvedContext.companyId ?? null,
       universe,
       menu_count: data.length,
     });
@@ -169,7 +178,7 @@ if (!row) {
     console.warn("SNAPSHOT_ABSENT", {
       auth_user_id,
       universe,
-      company_id: resolvedContext.companyId
+      company_id: resolvedContext.companyId ?? null
     });
 
     const totalMs =

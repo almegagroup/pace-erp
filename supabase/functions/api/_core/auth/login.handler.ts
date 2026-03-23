@@ -49,7 +49,7 @@ async function buildAndStoreMenuSnapshot(
      * 1️⃣ ROLE DETECTION (WITH SA FALLBACK)
      * ===================================================== */
 
-    const { data: roleRow, error: roleError } = await supabase
+    const { data: roleRow } = await supabase
       .schema("erp_map")
       .from("user_company_roles")
       .select("role_code")
@@ -293,11 +293,15 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
     }
     authUserId = result.user.id;
   } else {
-    const { data } = await authClient.auth.admin.getUserById(
-      resolved.authUserId
-    );
+    const { data, error } = await authClient.auth.admin.getUserById(
+  resolved.authUserId
+);
 
-    const result = await verifyPassword(data.user.email, password);
+if (error || !data?.user?.email) {
+  return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
+}
+
+const result = await verifyPassword(data.user.email, password);
     if (!result.ok || !result.session) {
       return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
     }
@@ -309,8 +313,41 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
   if (state !== "ACTIVE") {
     return errorResponse("AUTH_FAIL", "Inactive", requestId, "NONE", 403);
   }
+  /* =====================================================
+ * 🔥 ROLE DETECT FOR SESSION CACHE
+ * ===================================================== */
 
-  const sessionId = await createSession(authUserId, extractDeviceInfo(ctx));
+const supabase = createClient(
+  ENV.SUPABASE_URL,
+  ENV.SUPABASE_SERVICE_ROLE_KEY
+);
+
+const { data: roleRow } = await supabase
+  .schema("erp_map")
+  .from("user_company_roles")
+  .select("role_code")
+  .eq("auth_user_id", authUserId)
+  .maybeSingle();
+
+let roleCode = roleRow?.role_code ?? null;
+
+// 🔥 HARD FALLBACK (CRITICAL)
+if (!roleCode) {
+  roleCode = "SA";
+}
+
+log({
+  level: "INFO",
+  request_id: requestId,
+  event: "LOGIN_ROLE_RESOLVED",
+  meta: { roleCode },
+});
+
+  const sessionId = await createSession(
+  authUserId,
+  roleCode,                    // 🔥 ADD
+  extractDeviceInfo(ctx)
+);
 
   await buildAndStoreMenuSnapshot(sessionId, authUserId, requestId);
 

@@ -27,12 +27,12 @@ export type ContextResolution =
     projectId?: string;
     departmentId?: string;
     roleCode: string;  
-    isAdmin?: boolean;
+    isAdmin: boolean;
   }
 
 export type PipelineSession = {
   authUserId: string;
-  roleCode?: string;
+  roleCode: string;   // 🔥 REQUIRED (session থেকে আসছে)
 };
 
 /* =========================================================
@@ -48,7 +48,6 @@ function sanitizeContextInput(): void {
 function isAdminUniverse(
   session: PipelineSession
 ): boolean {
-  if (!session.roleCode) return false;
   return (
     isSuperAdmin(session.roleCode) ||
     isGlobalAdmin(session.roleCode)
@@ -66,10 +65,22 @@ async function resolveContextFromDb(
   const db = serviceRoleClient;
 
   /* ---- Primary company (ID-6.6 / 6.6A) ---- */
-  const { data: companyId } = await db.rpc(
-    "erp_map.get_primary_company",
-    { p_auth_user_id: authUserId }
-  );
+ type GetPrimaryCompanyRPC = {
+  p_auth_user_id: string;
+};
+
+const { data: companyId, error: rpcError } = await db.rpc(
+  "erp_map.get_primary_company",
+  { p_auth_user_id: authUserId } as GetPrimaryCompanyRPC
+) as { data: string | null; error: any };
+
+if (rpcError) {
+  return {
+    status: "UNRESOLVED",
+    source: "BACKEND",
+    errorCode: "CONTEXT_UNRESOLVED",
+  };
+}
 
   if (!companyId) {
     return {
@@ -78,25 +89,6 @@ async function resolveContextFromDb(
       errorCode: "CONTEXT_UNRESOLVED",
     };
   }
-  /* ---- User role (ID-6.6 role binding) ---- */
-const { data: roleRow } = await db
-  .schema("erp_map").from("user_company_roles")
-  .select("role_code")
-  .eq("auth_user_id", authUserId)
-  .eq("company_id", companyId)
-  .maybeSingle();
-
-if (!roleRow?.role_code) {
-  return {
-    status: "UNRESOLVED",
-    source: "BACKEND",
-    errorCode: "CONTEXT_UNRESOLVED",
-  };
-}
-
-const roleCode = roleRow.role_code;
-
-
   /* ---- Optional project (ID-6.7 / 6.7A) ---- */
   let projectId: string | undefined;
   const projectHeader = req.headers.get("x-project-id");
@@ -149,8 +141,8 @@ const roleCode = roleRow.role_code;
   companyId,
   projectId,
   departmentId,
-  roleCode,
-  isAdmin: false, // explicit
+  roleCode: session.roleCode,   // 🔥 FROM SESSION
+  isAdmin: false,
 };
 }
 
@@ -188,8 +180,9 @@ export async function stepContext(
   return {
     status: "RESOLVED",
     source: "BACKEND",
-    roleCode: session.roleCode!,
+    roleCode: session.roleCode,
     isAdmin: true,
+    companyId: undefined,   // 🔥 explicit
   };
 }
 
