@@ -22,6 +22,8 @@ export default function AuthResolver(){
 
 // 🔥 prevent unnecessary redirect if already on correct page
 const current = location.pathname;
+ // 🔥 ONLY run if coming from /app
+  if (current !== "/app") return;
 
     const ga = menu.find(m => m.menu_code === "GA_HOME");
     const sa = menu.find(m => m.menu_code === "SA_HOME");

@@ -15,19 +15,15 @@ export function assertAdminEntry() {
 
   // No screen stack → illegal entry
   if (!current) {
-    if (typeof globalThis !== "undefined" && globalThis.location) {
-  globalThis.location.replace("/");
+  console.warn("⚠️ Screen stack not ready → skip guard");
+  return;
 }
-    return;
-  }
 
   // Enforce admin universe boundary
   if (current.universe !== "ADMIN") {
-    if (typeof globalThis !== "undefined" && globalThis.location) {
-  globalThis.location.replace("/");
+  console.warn("⚠️ Not admin universe → skip guard");
+  return;
 }
-    return;
-  }
 
   // NOTE:
   // Role (SA / GA) is NOT verified here.

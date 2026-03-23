@@ -37,6 +37,7 @@ useEffect(() => {
 
       // 🟢 PUBLIC ROUTE
       if (isPublicRoute(pathname)) {
+        hasBootedRef.current = false;
         console.log("🟢 Public route → skipping bootstrap");
         //clearMenuSnapshot();
         return;
