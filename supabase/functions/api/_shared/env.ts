@@ -14,7 +14,10 @@
  */
 
 export function requireEnv(key: string): string {
-  const value = Deno.env.get(key);
+  const value =
+    typeof Deno !== "undefined"
+      ? Deno.env.get(key)
+      : process.env[key];
 
   if (!value || value.trim() === "") {
     throw new Error(`ENV_MISSING: ${key}`);
