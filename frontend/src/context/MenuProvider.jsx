@@ -9,31 +9,44 @@
  *
  * FINAL RULE:
  * ❌ NO API CALL HERE
- * ✅ Menu আসে AuthResolver থেকে (single source of truth)
+ * ✅ Menu আসে AuthBootstrap / AuthResolver থেকে (single source of truth)
  */
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { MenuContext } from "./MenuContext.js";
 import { buildRouteIndex } from "../router/routeIndex.js";
 
 export function MenuProvider({ children }) {
-
   const [menu, setMenu] = useState([]);
   const [allowedRoutes, setAllowedRoutes] = useState(new Set());
-  const loading = false;// ✅ direct
+  const [loading, setLoading] = useState(true);
 
-  const setMenuSnapshot = (snapshot) => {
+  // 🔵 START LOADING (stable)
+  const startMenuLoading = useCallback(() => {
+    setLoading(true);
+  }, []);
 
+  // 🔴 CLEAR (stable)
+  const clearMenuSnapshot = useCallback(() => {
+    setMenu([]);
+    setAllowedRoutes(new Set());
+    setLoading(false);
+  }, []);
+
+  // 🟢 SET MENU (stable)
+  const setMenuSnapshot = useCallback((snapshot) => {
     if (!Array.isArray(snapshot)) {
       console.error("Invalid menu snapshot:", snapshot);
       setMenu([]);
       setAllowedRoutes(new Set());
+      setLoading(false);
       return;
     }
 
     setMenu(snapshot);
     setAllowedRoutes(buildRouteIndex(snapshot));
-  };
+    setLoading(false);
+  }, []);
 
   return (
     <MenuContext.Provider
@@ -41,7 +54,9 @@ export function MenuProvider({ children }) {
         menu,
         allowedRoutes,
         loading,
-        setMenuSnapshot
+        startMenuLoading,
+        clearMenuSnapshot,
+        setMenuSnapshot,
       }}
     >
       {children}

@@ -123,7 +123,17 @@ export async function runPipeline(
       meta: { stage: "SESSION" },
     });
 
-    sessionResult = await stepSession(req, requestId);
+    const tSession0 = performance.now();
+
+sessionResult = await stepSession(req, requestId);
+
+const sessionMs = Math.round((performance.now() - tSession0) * 100) / 100;
+
+console.log("PIPELINE_SESSION_END", {
+  request_id: requestId,
+  route: routeKey,
+  duration_ms: sessionMs
+});
 
     const gate2Logout = enforceSessionLogout(
       "action" in sessionResult ? sessionResult : null,
@@ -193,9 +203,19 @@ export async function runPipeline(
       meta: { stage: "CONTEXT" },
     });
 
-    contextResult = await stepContext(req, {
+    const tContext0 = performance.now();
+
+contextResult = await stepContext(req, {
   authUserId: sessionResult.authUserId,
   roleCode: sessionResult.roleCode,
+});
+
+const contextMs = Math.round((performance.now() - tContext0) * 100) / 100;
+
+console.log("PIPELINE_CONTEXT_END", {
+  request_id: requestId,
+  route: routeKey,
+  duration_ms: contextMs
 });
 
     if (contextResult.status === "UNRESOLVED") {
@@ -231,6 +251,7 @@ if (contextResult.status !== "RESOLVED") {
   throw new Error("CONTEXT_NOT_RESOLVED_AFTER_CHECK");
 }
 
+const tAcl0 = performance.now();
     const acl = await stepAcl(req, requestId, {
      context: {
   state: contextResult.status,
@@ -248,6 +269,14 @@ if (contextResult.status !== "RESOLVED") {
       action: "VIEW", // temporary placeholder
       },
     });
+    const aclMs = Math.round((performance.now() - tAcl0) * 100) / 100;
+
+console.log("PIPELINE_ACL_END", {
+  request_id: requestId,
+  route: routeKey,
+  duration_ms: aclMs,
+  decision: acl.decision
+});
 
     if (acl.decision === "DENY") {
       return errorResponse(

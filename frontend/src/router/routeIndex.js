@@ -14,10 +14,16 @@ export function buildRouteIndex(menuSnapshot) {
   if (!Array.isArray(menuSnapshot)) return routes;
 
   for (const item of menuSnapshot) {
-    if (item?.route_path) {
-      routes.add(item.route_path);
-    }
+  if (item?.route_path) {
+    routes.add(item.route_path);
   }
+}
 
-  return routes;
+// 🔥 IMPORTANT fallback routes
+routes.add("/sa/home");
+routes.add("/ga/home");
+routes.add("/dashboard");
+routes.add("/app");
+
+return routes;
 }

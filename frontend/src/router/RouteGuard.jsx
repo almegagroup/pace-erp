@@ -15,7 +15,13 @@ export default function RouteGuard({ children }) {
   const location = useLocation();
   const { allowedRoutes, loading } = useMenu();
 
-  if (loading) return null; // no optimistic render
+  if (loading) {
+    return null;
+  }
+
+  if (allowedRoutes.size === 0) {
+    return null;
+  }
 
   if (!allowedRoutes.has(location.pathname)) {
     return <Navigate to="/" replace />;

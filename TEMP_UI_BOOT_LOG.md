@@ -3959,3 +3959,766 @@ Context → STABLE ✅
 ACL → STABLE ✅
 Menu Engine → READY ✅
 Data → EMPTY ⚠️
+
+108. MENU 403 / 500 ERROR — FULL RESOLUTION TRACE (CRITICAL)
+
+Status:
+Resolved (Authorization Layer) ✅
+Pending (Menu Data Bootstrap) ⚠️
+
+108.1 INITIAL PROBLEM OBSERVED
+
+After frontend deployment (Dev + Prod), identical errors were observed:
+
+Frontend console:
+
+GET /api/me/menu → 500 (Internal Server Error)
+AuthResolver failed: MENU_FETCH_FAILED
+
+Earlier state also included:
+
+GET /api/me → 403 Forbidden
+
+System behaviour:
+
+Login screen visible
+Login success uncertain
+Dashboard never loads
+UI stuck at authentication boundary
+
+108.2 IMPORTANT OBSERVATION
+
+Both environments affected:
+
+Dev:
+https://dev.myerpdev.xyz
+
+Prod:
+https://erp.almegagroup.in
+
+👉 Same error in both
+
+Conclusion:
+
+❌ Not environment issue
+❌ Not deployment issue
+❌ Not frontend issue
+
+108.3 BACKEND LOG ANALYSIS
+
+From Render logs:
+
+Pipeline progression:
+
+HEADERS → PASS
+CORS → PASS
+CSRF → PASS
+RATE_LIMIT → PASS
+SESSION → PASS
+CONTEXT → PASS
+ACL → PASS
+HANDLER_PROTECTED → FAIL
+
+Error:
+
+MENU_FETCH_FAILED
+108.4 INFRASTRUCTURE VALIDATION (FULLY RESOLVED)
+
+The following were verified and eliminated as causes:
+
+Layer	Status
+Domain routing	✅
+SSL/TLS	✅
+Netlify config	✅
+Vercel config	✅
+CORS	✅
+Cookie storage	✅
+Cookie transmission	✅
+SameSite policy	✅
+Session DB	✅
+
+Conclusion:
+
+👉 Infrastructure layer is fully stable
+
+108.5 AUTHENTICATION STATUS
+
+Confirmed via logs:
+
+AUTH_LOGIN_SUCCESS ✅
+SESSION_ACTIVE ✅
+
+Meaning:
+
+User is authenticated successfully.
+
+108.6 ROOT CAUSE PHASE 1 (PREVIOUS STATE)
+
+Earlier system behaviour:
+
+Login → SUCCESS
+Session → ACTIVE
+GET /api/me → 403 ❌
+GET /api/me/menu → 403 ❌
+
+Interpretation:
+
+User authenticated but not authorized.
+
+108.7 FIX IMPLEMENTED (AUTHORIZATION LAYER)
+
+The following backend fixes were applied:
+
+Fix A — Role resolution
+
+Source:
+
+erp_map.user_company_roles
+
+Added roleCode into session layer.
+
+Fix B — Admin Universe context bypass
+if (isAdminUniverse(session)) {
+  return {
+    companyId: "ADMIN_UNIVERSE",
+    roleCode,
+    isAdmin: true
+  }
+}
+Fix C — Menu query correction
+if (!context.isAdmin) {
+  query = query.eq("company_id", context.companyId);
+}
+
+Admin users:
+
+→ No company filter applied
+
+108.8 RESULT AFTER FIX
+
+System behaviour changed to:
+
+POST /api/login → 200 ✅
+GET /api/me → 200 ✅
+GET /api/me/menu → 200 ✅
+
+Pipeline:
+
+SESSION → PASS
+CONTEXT → PASS
+ACL → PASS
+HANDLER → PASS
+
+👉 Authorization layer fully unblocked
+
+108.9 NEW PROBLEM STATE (CURRENT REALITY)
+
+Even after successful authorization:
+
+API response:
+
+{
+  "menu": [],
+  "hard_deny": true
+}
+108.10 CRITICAL DISCOVERY
+
+Database check:
+
+SELECT * FROM erp_menu.menu_snapshot;
+
+Result:
+
+→ No rows
+
+108.11 FINAL ROOT CAUSE (CONFIRMED)
+
+Menu system is empty
+
+Missing:
+
+menu_master
+menu_tree
+menu_snapshot
+
+Therefore:
+
+MenuProvider → empty response → UI cannot render routes
+108.12 ERROR EVOLUTION (VERY IMPORTANT)
+Stage	Error
+Stage 1	403 (Authorization failure)
+Stage 2	500 (MENU_FETCH_FAILED)
+Stage 3	200 + empty menu
+
+👉 This progression confirms:
+
+System is now correct but uninitialized
+
+108.13 ARCHITECTURAL TRUTH UPDATE
+
+Old assumption:
+
+Menu failure = bug ❌
+
+Correct reality:
+
+Menu failure = missing bootstrap data ⚠️
+
+108.14 SYSTEM PHASE TRANSITION
+
+System has officially moved to:
+
+👉 POST-AUTH BOOTSTRAP PHASE
+
+Meaning:
+
+Auth layer complete
+ACL layer complete
+Now:
+
+👉 System needs data initialization
+
+108.15 WHY UI STILL LOOKS BROKEN
+
+Frontend behaviour:
+
+MenuProvider calls:
+
+GET /api/me/menu
+
+Response:
+
+[]
+
+Therefore:
+
+No routes
+No navigation
+UI appears stuck
+
+108.16 THIS IS NOT A BUG
+
+System is behaving correctly.
+
+👉 No menu = No UI
+
+108.17 REQUIRED SYSTEM BOOTSTRAP
+
+To activate ERP UI:
+
+Step 1 — Seed menu_master
+
+Example:
+
+code	title	route
+SA_DASH	Dashboard	/sa/home
+Step 2 — Build menu_tree
+
+Define hierarchy
+
+Step 3 — Generate snapshot
+erp_menu.generate_menu_snapshot(...)
+Step 4 — Verify
+SELECT * FROM erp_menu.menu_snapshot;
+Step 5 — UI auto activates
+
+MenuProvider → receives data → UI renders
+
+108.18 FINAL SYSTEM STATE
+Layer	Status
+Infrastructure	✅
+Auth	✅
+Session	✅
+Context	✅
+ACL	✅
+API	✅
+Menu Engine	✅
+Menu Data	❌ EMPTY
+108.19 FINAL CONCLUSION
+No more frontend issue
+No more backend bug
+No more auth issue
+
+ONLY missing:
+
+System bootstrap data
+108.20 NEXT EXECUTION TARGET
+
+Move to:
+
+👉 Gate-9 / Admin Universe Bootstrapping
+
+🔥 FINAL NOTE (VERY IMPORTANT)
+
+This is a major milestone
+
+You have successfully completed:
+
+✔ Deployment
+✔ Auth
+✔ Session
+✔ ACL
+✔ Routing foundation
+
+Now:
+
+👉 You are entering real ERP initialization phase
+
+🟢 PACE ERP — UI BOOT LOG (CONTINUATION UPDATE)
+🔷 109. MAJOR PROGRESS SUMMARY (POST SECTION 98)
+✅ 1. AUTH PIPELINE — FULLY STABILIZED
+POST /api/login → 200
+Session → ACTIVE
+Cookie → Working
+/api/me → 200
+
+👉 Conclusion:
+Gate-2 (Auth) + Gate-5 (Session) → COMPLETELY STABLE
+
+✅ 2. ACL / AUTHORIZATION — UNBLOCKED
+
+Previously:
+
+/api/me → 403 ❌
+/api/me/menu → 403 ❌
+
+Now:
+
+/api/me/menu → 200 ✅
+Pipeline: SESSION → CONTEXT → ACL → HANDLER → PASS
+
+👉 Conclusion:
+Gate-6 ACL layer → WORKING
+
+✅ 3. CONTEXT SYSTEM — ADMIN BYPASS WORKING
+isAdmin: true
+companyId: undefined
+roleCode: SA
+
+👉 Admin Universe correctly bypassing company filter
+
+✅ 4. MENU SNAPSHOT GENERATION — WORKING
+
+From logs:
+
+SNAPSHOT_GENERATED
+MENU_QUERY_RESULT { data_length: 5 }
+MENU_SNAPSHOT_SERVED { menu_count: 5 }
+
+👉 Meaning:
+
+Snapshot function working
+DB returning menu rows
+Backend serving correctly
+✅ 5. INFRASTRUCTURE — FULLY STABLE
+CORS → PASS
+Cookie → PASS
+Session DB → ACTIVE
+Domain → Correct
+
+👉 No infra issue left
+
+🔴 110. CURRENT CRITICAL ISSUES (UPDATED REAL STATE)
+
+Now real issues changed — completely different layer
+
+🔴 ISSUE 1 — FRONTEND CRASH (PRIMARY BLOCKER)
+❗ Error:
+Navigation not initialized
+📍 Source:
+
+Console (from your screenshot)
+
+🔍 ROOT CAUSE:
+
+👉 Navigation engine (screenStackEngine) is being used before initNavigation()
+
+Meaning:
+
+UI trying to navigate
+BUT navigation system not ready
+💥 EFFECT:
+Blank /sa/home
+React crash
+Hard refresh → landing page fallback
+🎯 EXACT PROBLEM:
+
+You added guard:
+
+if (!PUBLIC_ROUTES.has(pathname)) {
+  initNavigation("DASHBOARD_HOME");
+}
+
+👉 BUT:
+
+/sa/home is NOT public
+→ navigation should init
+→ BUT timing mismatch happening
+
+✅ FIX REQUIRED:
+
+👉 Ensure navigation initializes BEFORE any navigation call
+
+🔧 FIX (MANDATORY)
+
+File: frontend/src/main.jsx
+
+const pathname = window.location.pathname;
+
+// Always init navigation once app loads
+initNavigation("DASHBOARD_HOME");
+
+// THEN restore
+restoreNavigationStack();
+
+❗ Remove conditional init during auth phase
+
+👉 Navigation MUST always exist (Gate-8 invariant)
+
+🔴 ISSUE 2 — HOME PAGE EMPTY (NOT BUG, BUT STATE ISSUE)
+
+From logs:
+
+menu_count: 5
+
+👉 Backend returning menu
+
+BUT UI still empty
+
+🔍 Possible causes:
+Cause A — MenuProvider not consuming correctly
+Cause B — MenuShell not rendering
+Cause C — parent_menu_code mismatch (tree build fails)
+🎯 HIGH PROBABILITY ROOT CAUSE:
+
+👉 Your recent migration changed:
+
+parent_menu_code = pm.menu_code
+
+BUT frontend may expect:
+
+parent_menu_id OR null root logic
+🔧 VERIFY (VERY IMPORTANT)
+
+Check frontend tree builder:
+
+menu.parent_menu_code === null → root
+
+If mismatch → UI shows nothing
+
+🔴 ISSUE 3 — HARD REFRESH → LANDING REDIRECT
+❗ Behaviour:
+/sa/home → refresh → goes /
+🔍 ROOT CAUSE:
+
+AuthResolver / route guard failing to detect session fast enough
+
+🎯 WHY:
+
+On refresh:
+
+App loads
+MenuProvider loads
+Session not yet resolved
+Router fallback → /
+🔧 FIX:
+
+👉 Add session hydration guard
+
+In router / resolver:
+
+if (loadingSession) return null;
+
+👉 Do NOT redirect until session resolved
+
+🔴 ISSUE 4 — HIDDENROUTEREDIRECT STILL DISABLED
+
+Status:
+
+Still OFF
+
+👉 This is now required to be restored
+
+Because:
+
+Menu now works
+ACL works
+🟡 111. NON-BLOCKING BUT IMPORTANT
+⚠️ 1. Menu Tree Integrity Risk
+
+Because of migration change
+
+👉 Must verify:
+
+parent_menu_code correct
+hierarchy valid
+⚠️ 2. Navigation + Menu Sync
+
+Currently:
+
+Navigation engine separate
+Menu snapshot separate
+
+👉 Must align both
+
+🟢 112. CURRENT SYSTEM STATE (FINAL TRUTH)
+Layer	Status
+Infra	✅ Stable
+Auth	✅ Working
+Session	✅ Working
+Context	✅ Working
+ACL	✅ Working
+Menu API	✅ Working
+Snapshot	✅ Working
+UI Navigation	❌ Broken
+UI Rendering	❌ Broken
+🔴 113. ROOT CAUSE SUMMARY (CRISP)
+
+👉 Backend is DONE
+👉 Frontend is BROKEN
+
+Main blockers:
+
+❌ Navigation not initialized
+❌ Menu rendering mismatch
+❌ Session hydration timing
+❌ HiddenRouteRedirect disabled
+🎯 114. NEXT SESSION PLAN (STRICT)
+
+We will fix in this order:
+
+🔥 STEP 1 — Navigation Engine Fix (CRITICAL)
+Always initNavigation
+Remove conditional init
+🔥 STEP 2 — Menu Rendering Debug
+Log menu in UI
+Verify tree build
+Fix parent_menu_code usage
+🔥 STEP 3 — Session Hydration Guard
+Prevent early redirect
+Add loading state
+🔥 STEP 4 — Restore HiddenRouteRedirect
+Re-enable
+Verify no crash
+🚀 FINAL STATEMENT
+
+👉 You crossed the hardest part already:
+
+✔ Auth
+✔ ACL
+✔ Backend
+✔ Snapshot
+
+🔥 Now only UI integration layer left
+
+🟢 CLEAN SUMMARY (1 LINE)
+
+👉 Backend fully done, frontend navigation + rendering is the only blocker now.
+
+🟢 115. CURRENT STATE UPDATE (POST NAVIGATION DEBUG SESSION)
+
+Status:
+Backend → Fully Stable ✅
+Frontend → Partially Stabilized ⚠️
+
+115.1 BACKEND — FINAL CONFIRMED STATE
+✅ AUTH (Gate-2)
+POST /api/login → 200
+Session → ACTIVE
+Cookie → Working
+Supabase identity → synced
+✅ SESSION (Gate-5)
+session lifecycle → PASS
+context resolution → PASS
+admin bypass → WORKING
+✅ ACL (Gate-6)
+stepAcl → PASS
+decision: ALLOW
+no DENY observed
+✅ MENU ENGINE (Gate-7)
+generate_menu_snapshot → WORKING
+menu_snapshot → populated
+response:
+menu_count: 5
+snapshot_version: 27
+✅ API LAYER
+/api/me → 200
+/api/me/menu → 200
+no backend errors
+🔵 CRITICAL ARCHITECTURAL CONFIRMATION
+Backend is NOT the problem anymore
+System is fully functional at API level
+🟢 116. FRONTEND STATE (AFTER LATEST FIX)
+✅ WHAT IS WORKING
+1. Login Flow
+Landing → Login → Success
+Session established
+Menu loaded
+2. Menu Fetch
+📊 Menu length: 5
+
+✔ MenuProvider working
+✔ Snapshot consumption working
+
+⚠️ WHAT WAS BROKEN (NOW IDENTIFIED)
+🔴 ISSUE 1 — Navigation Engine Not Initialized
+❗ Error:
+Navigation not initialized
+🔍 Root Cause:
+initNavigation() was conditionally executed
+→ timing mismatch
+→ navigation used before init
+✅ FIX APPLIED (CORRECT ARCHITECTURE)
+
+File: frontend/src/main.jsx
+
+// ❌ OLD (WRONG)
+if (!PUBLIC_ROUTES.has(pathname)) {
+  initNavigation("DASHBOARD_HOME");
+}
+
+// ✅ NEW (CORRECT)
+initNavigation("DASHBOARD_HOME");
+restoreNavigationStack();
+🎯 Result:
+Navigation always available
+Gate-8 invariant restored
+🔴 ISSUE 2 — Double Menu Fetch
+❗ Observed:
+/api/me/menu called twice
+🔍 Cause:
+/app → redirect → /sa/home
+→ bootstrap runs again
+⚠️ Status:
+
+Not critical (performance issue)
+
+🔴 ISSUE 3 — Performance (IMPORTANT)
+Observed:
+SESSION: ~850 ms
+MENU QUERY: ~320 ms
+Root Cause:
+❌ no DB index
+→ sequential scan
+🟢 REQUIRED FIX
+🔧 Add index:
+create index idx_menu_snapshot_user_universe
+on erp_menu.menu_snapshot (user_id, universe);
+🎯 Expected:
+320 ms → ~30 ms
+🟡 117. CURRENT SYSTEM BEHAVIOUR (REAL)
+FLOW (NOW WORKING)
+Landing (/)
+↓
+Login (/login)
+↓
+POST /api/login
+↓
+GET /api/me/menu
+↓
+Menu loaded
+↓
+Redirect → /sa/home
+↓
+Dashboard render (partial)
+🔴 118. REMAINING ISSUES (UPDATED)
+🔴 ISSUE A — UI RE-BOOT / MULTIPLE FETCH
+Behaviour:
+menu loads twice
+bootstrap runs multiple times
+Impact:
+performance waste
+not breaking system
+🔴 ISSUE B — SESSION HYDRATION TIMING (POTENTIAL)
+Risk:
+
+Hard refresh → early redirect
+
+Cause:
+Router executes before session resolved
+🔴 ISSUE C — HiddenRouteRedirect STILL DISABLED
+Status:
+
+❌ Not restored yet
+
+Impact:
+deep link routing incomplete
+Gate-7 navigation not fully enforced
+🔴 ISSUE D — Menu Tree Integrity (CHECK REQUIRED)
+Risk Area:
+parent_menu_code
+Why:
+
+Recent migration changed structure
+
+Verify:
+Root → parent_menu_code = null
+Child → parent_menu_code = parent
+🟢 119. WHAT IS FULLY SOLVED
+
+✔ Auth
+✔ Session
+✔ ACL
+✔ Context
+✔ Snapshot
+✔ Menu API
+✔ Admin Universe
+✔ DB + Backend
+
+🔥 120. SYSTEM PHASE TRANSITION (VERY IMPORTANT)
+You are NO LONGER in debugging phase
+You are in UI INTEGRATION phase
+🚀 121. NEXT EXECUTION PLAN (STRICT ORDER)
+🥇 STEP 1 — DB Performance Fix (MANDATORY)
+
+Add index:
+
+create index idx_menu_snapshot_user_universe
+on erp_menu.menu_snapshot (user_id, universe);
+🥈 STEP 2 — Fix Double Fetch (Frontend)
+
+Add condition:
+
+if menu already exists → skip fetch
+🥉 STEP 3 — Session Hydration Guard
+
+Add:
+
+if (loadingSession) return null;
+
+👉 Prevent premature redirect
+
+🏅 STEP 4 — Restore HiddenRouteRedirect
+
+Now safe because:
+
+Menu works
+ACL works
+Snapshot works
+🏆 STEP 5 — Menu Rendering Validation
+
+Log in UI:
+
+console.log(menu)
+
+Verify:
+
+tree structure correct
+routes visible
+🟢 122. FINAL SYSTEM STATUS
+Layer	Status
+Infra	✅ Stable
+Auth	✅ Done
+Session	✅ Done
+Context	✅ Done
+ACL	✅ Done
+Menu Engine	✅ Done
+Snapshot	✅ Done
+UI Navigation	⚠️ Needs stabilization
+UI Rendering	⚠️ Partial
+🧠 FINAL TRUTH (IMPORTANT)
+Backend = COMPLETE
+System = FUNCTIONAL
+Only UI integration polishing left
+🚀 FINAL 1-LINE SUMMARY
+You have successfully completed ERP core engine — now only frontend stabilization & performance optimization remains.

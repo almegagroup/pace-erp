@@ -10,7 +10,8 @@
 
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { MenuProvider } from "../context/MenuProvider.jsx";
-
+import AuthBootstrap from "../auth/AuthBootstrap.jsx";
+import AuthResolver from "../admin/AuthResolver.jsx";
 import LandingPage from "../pages/public/LandingPage.jsx";
 import LoginScreen from "../pages/public/LoginScreen.jsx";
 import SignupScreen from "../pages/public/SignupPage.jsx";
@@ -20,7 +21,6 @@ import SignupSubmittedPage from "../pages/public/SignupSubmittedPage.jsx";
 import ForgotPassword from "../pages/public/ForgotPassword.jsx";
 import ResetPassword from "../pages/public/ResetPassword.jsx";
 
-import AuthResolver from "../admin/AuthResolver.jsx";
 
 import RouteGuard from "./RouteGuard.jsx";
 import DeepLinkGuard from "./DeepLinkGuard.jsx";
@@ -34,12 +34,15 @@ import GADashboardShell from "../admin/ga/GADashboardShell.jsx";
 import SACompanyCreate from "../admin/sa/screens/SACompanyCreate.jsx";
 import SAUsers from "../admin/sa/screens/SAUsers.jsx";
 import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
+import SAHome from "../admin/sa/screens/SAHome.jsx"; 
 
 export default function AppRouter() {
   return (
     <BrowserRouter>
       {/* ✅ SINGLE SOURCE OF CONTEXT */}
       <MenuProvider>
+  {/* 🔥 GLOBAL AUTH BOOT */}
+  <AuthBootstrap>
 
         <Routes>
 
@@ -56,26 +59,49 @@ export default function AppRouter() {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
 
-          {/* ============================== */}
-          {/* 🔒 ADMIN ENTRY */}
-          {/* ============================== */}
-
-          <Route path="/admin" element={<AuthResolver />} />
+         {/* 🔥 NEUTRAL ENTRY (AUTH BOOT TARGET) */}
+<Route path="/app" element={<AuthResolver />} />
+          
 
           {/* ============================== */}
           {/* 🔒 ADMIN DASHBOARD (ENTRY) */}
           {/* ============================== */}
+{/* ============================== */}
+{/* 🔒 SA UNIVERSE (PROTECTED) */}
+{/* ============================== */}
 
-          <Route path="/sa/home" element={<SADashboardShell />} />
-          <Route path="/ga/home" element={<GADashboardShell />} />
+<Route
+  path="/sa"
+  element={
+    <DeepLinkGuard>
+      <RouteGuard>
+        <SADashboardShell />
+      </RouteGuard>
+    </DeepLinkGuard>
+  }
+>
+  <Route path="home" element={<SAHome />} />
+  <Route path="company/create" element={<SACompanyCreate />} />
+  <Route path="users" element={<SAUsers />} />
+  <Route path="signup-requests" element={<SASignupRequests />} />
+</Route>
 
-          {/* ============================== */}
-          {/* 🔒 ADMIN SCREENS */}
-          {/* ============================== */}
+{/* ============================== */}
+{/* 🔒 GA UNIVERSE (PROTECTED) */}
+{/* ============================== */}
 
-          <Route path="/sa/company/create" element={<SACompanyCreate />} />
-          <Route path="/sa/users" element={<SAUsers />} />
-          <Route path="/sa/signup-requests" element={<SASignupRequests />} />
+<Route
+  path="/ga"
+  element={
+    <DeepLinkGuard>
+      <RouteGuard>
+        <GADashboardShell />
+      </RouteGuard>
+    </DeepLinkGuard>
+  }
+>
+  <Route path="home" element={<div>GA Home</div>} />
+</Route>
 
           {/* ============================== */}
           {/* 🔐 ACL USER UNIVERSE */}
@@ -101,6 +127,7 @@ export default function AppRouter() {
           <Route path="*" element={<Navigate to="/" replace />} />
 
         </Routes>
+         </AuthBootstrap>
 
       </MenuProvider>
     </BrowserRouter>

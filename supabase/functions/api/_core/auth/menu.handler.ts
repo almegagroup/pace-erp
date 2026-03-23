@@ -31,29 +31,53 @@ export async function meMenuHandler(
   ctx: MenuHandlerCtx
 ): Promise<Response> {
   const { context, auth_user_id, request_id } = ctx;
+  const reqStart = performance.now();
+
+  
 
   // --------------------------------------------------
   // 1️⃣ Hard invariant: context must be RESOLVED
   // --------------------------------------------------
-  if (context.status !== "RESOLVED") {
-    return errorResponse(
-      "CONTEXT_UNRESOLVED",
-      "Menu context unresolved",
-      request_id,
-      "NONE",
-      403
-    );
-  }
+  // 🔥 HARD NARROWING
+if (context.status !== "RESOLVED") {
+  return errorResponse(
+    "CONTEXT_UNRESOLVED",
+    "Menu context unresolved",
+    request_id,
+    "NONE",
+    403
+  );
+}
 
-  // --------------------------------------------------
-  // 2️⃣ Determine universe (ID-7.4A)
-  // --------------------------------------------------
-  const universe = context.isAdmin === true ? "SA" : "ACL";
+// ✅ এখন new variable use করবো
+const resolvedContext = context;
+
+console.log("DEBUG_CONTEXT", {
+  isAdmin: resolvedContext.isAdmin,
+  companyId: resolvedContext.companyId,
+  roleCode: resolvedContext.roleCode,
+  auth_user_id
+});
+
+console.log("🔵 SERVICE_ROLE_CONTEXT", {
+  isAdmin: resolvedContext.isAdmin,
+  companyId: resolvedContext.companyId,
+  roleCode: resolvedContext.roleCode
+});
+
+const universe = resolvedContext.isAdmin === true ? "SA" : "ACL";
 
   // --------------------------------------------------
   // 3️⃣ Snapshot is the ONLY data source
   // --------------------------------------------------
-  const db = getServiceRoleClientWithContext(context);
+
+  
+
+const db = getServiceRoleClientWithContext(resolvedContext);
+
+// --------------------------------------------------
+// ✅ Snapshot MUST be precomputed (NO runtime generation)
+//
 
   let query = db
   .schema("erp_menu").from("menu_snapshot")
@@ -71,17 +95,71 @@ snapshot_version
   .eq("is_visible", true);
 
 /* 🔥 FIX: Admin হলে company filter লাগবে না */
-if (!context.isAdmin) {
-  query = query.eq("company_id", context.companyId);
+if (!resolvedContext.isAdmin) {
+  if (!resolvedContext.companyId) {
+    console.error("❌ COMPANY_ID_MISSING", {
+      resolvedContext
+    });
+
+    return errorResponse(
+      "INVALID_CONTEXT",
+      "companyId missing for non-admin",
+      request_id,
+      "NONE",
+      500
+    );
+  }
+
+  query = query.eq("company_id", resolvedContext.companyId);
 }
 
-const { data, error } = await query
-  .order("display_order", { ascending: true });
+console.log("🟡 MENU_QUERY_BUILD", {
+  auth_user_id,
+  universe,
+  isAdmin: resolvedContext.isAdmin,
+  companyId: resolvedContext.companyId
+});
 
-  if (error) {
+// 🔥 SAFE EXECUTION WRAP
+let data, error;
+
+try {
+  const tBuild0 = performance.now();
+  const result = await query.order("display_order", { ascending: true });
+  const buildMs = Math.round((performance.now() - tBuild0) * 100) / 100;
+  data = result.data;
+  error = result.error;
+
+  console.log("MENU_STAGE_BUILD_END", {
+  request_id,
+  user: auth_user_id,
+  universe,
+  duration_ms: buildMs,
+  data_length: data?.length ?? 0,
+  error: error?.message ?? null
+});
+
+// --------------------------------------------------
+// ❗ HARD ERROR HANDLING (NEW)
+// --------------------------------------------------
+if (error) {
   return errorResponse(
-    "MENU_SNAPSHOT_READ_FAILED",
+    "MENU_READ_FAILED",
     error.message,
+    request_id,
+    "NONE",
+    500
+  );
+}
+
+} catch (e) {
+  console.error("🔥 QUERY_CRASH", {
+    error: e
+  });
+
+  return errorResponse(
+    "QUERY_CRASH",
+    String(e),
     request_id,
     "NONE",
     500
@@ -96,7 +174,7 @@ if (data && data.length > 0) {
   console.info("MENU_SNAPSHOT_SERVED", {
     request_id,
     auth_user_id,
-    company_id: context.companyId,
+    company_id: resolvedContext.companyId,
     universe,
     snapshot_version: data[0].snapshot_version ?? null,
     menu_count: data.length,
@@ -108,6 +186,24 @@ if (data && data.length > 0) {
 // Snapshot absence ⇒ invisible (explicit fail-closed)
 // --------------------------------------------------
 if (!data || data.length === 0) {
+
+  console.warn("⚠️ SNAPSHOT_ABSENT", {
+    auth_user_id,
+    universe,
+    company_id: resolvedContext.companyId
+  });
+const totalMs = Math.round((performance.now() - reqStart) * 100) / 100;
+
+console.log("MENU_REQ_END", {
+  request_id,
+  path: "/api/me/menu",
+  total_ms: totalMs,
+  user: auth_user_id,
+  universe,
+  case: "SNAPSHOT_ABSENT"
+});
+  
+  
   return okResponse(
     {
       universe,
@@ -124,6 +220,16 @@ if (!data || data.length === 0) {
 // --------------------------------------------------
 // 4️⃣ Return snapshot verbatim (NO mutation, NO inference)
 // --------------------------------------------------
+const totalMs = Math.round((performance.now() - reqStart) * 100) / 100;
+
+console.log("MENU_REQ_END", {
+  request_id,
+  path: "/api/me/menu",
+  total_ms: totalMs,
+  user: auth_user_id,
+  universe
+});
+
 return okResponse(
   {
     universe,
@@ -291,11 +397,13 @@ export async function previewUserHandler(
    * 1️⃣ Resolve company of target user
    * -------------------------------------------------- */
 
-  const { data: companyId } = await db.rpc(
-    "erp_map.get_primary_company",
-    { p_auth_user_id: targetUserId }
-  );
+  const { data: companyIdRaw } = await db
+  .schema("erp_map")
+  .rpc("get_primary_company", {
+    p_auth_user_id: targetUserId
+  });
 
+const companyId = companyIdRaw as string | null;
   if (!companyId) {
     return errorResponse(
       "PREVIEW_USER_NOT_FOUND",
@@ -343,14 +451,33 @@ if (roleCode === "SA" || roleCode === "GA") {
  * 4️⃣ Generate menu snapshot
  * -------------------------------------------------- */
 
-await db.rpc(
-  "erp_menu.generate_menu_snapshot",
-  {
+console.log("🟡 PREVIEW_SNAPSHOT_CALL", {
+  targetUserId,
+  companyId,
+  universe
+});
+
+const { error: snapshotError } = await db
+  .schema("erp_menu")
+  .rpc("generate_menu_snapshot", {
     p_user_id: targetUserId,
     p_company_id: companyId,
     p_universe: universe
-  }
-);
+  });
+
+
+  
+if (snapshotError) {
+  
+  
+  return errorResponse(
+    "SNAPSHOT_GENERATION_FAILED",
+    snapshotError.message,
+    ctx.request_id,
+    "NONE",
+    500
+  );
+}
 
   /* --------------------------------------------------
    * 5️⃣ Read snapshot
@@ -381,6 +508,7 @@ await db.rpc(
       500
     );
   }
+  
 
   return okResponse(
     {

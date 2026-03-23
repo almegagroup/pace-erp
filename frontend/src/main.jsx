@@ -58,11 +58,11 @@ Only authenticated universe may activate navigation stack.
 ============================================================
 */
 
-if (!isPublicRoute(pathname)) {
+const restored = restoreNavigationStack();
+
+if (!restored && !isPublicRoute(pathname)) {
   initNavigation("DASHBOARD_HOME");
 }
-
-restoreNavigationStack();
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
