@@ -31,6 +31,7 @@ interface MeContext {
  */
 export function meHandler(ctx: MeContext): Response {
   const { session, requestId } = ctx;
+  const reqStart = performance.now();
 
   /**
    * AUTHENTICATED
@@ -39,6 +40,14 @@ export function meHandler(ctx: MeContext): Response {
    * - Frontend MUST rely on absence of LOGOUT action
    */
   if (session.status === "ACTIVE") {
+    const totalMs = Math.round((performance.now() - reqStart) * 100) / 100;
+
+  console.log("ME_REQ_END", {
+    request_id: requestId,
+    path: "/api/me",
+    total_ms: totalMs,
+    status: "ACTIVE"
+  });
     return okResponse({}, requestId);
   }
 
@@ -48,6 +57,16 @@ export function meHandler(ctx: MeContext): Response {
    * - Deterministic collapse
    * - Frontend MUST logout
    */
+
+  const totalMs = Math.round((performance.now() - reqStart) * 100) / 100;
+
+console.log("ME_REQ_END", {
+  request_id: requestId,
+  path: "/api/me",
+  total_ms: totalMs,
+  status: "NOT_AUTHENTICATED"
+});
+
   return errorResponse(
     "AUTH_NOT_AUTHENTICATED",
     "Not authenticated",

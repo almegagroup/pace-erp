@@ -31,6 +31,7 @@ export async function meMenuHandler(
   ctx: MenuHandlerCtx
 ): Promise<Response> {
   const { context, auth_user_id, request_id } = ctx;
+  const reqStart = performance.now();
 
   
 
@@ -82,7 +83,7 @@ console.log("🟡 SNAPSHOT_CALL", {
   company: resolvedContext.companyId,
   universe
 });
-
+const tSnapshot0 = performance.now();
 const { error: snapshotError } = await db
   .schema("erp_menu")
   .rpc("generate_menu_snapshot", {
@@ -92,10 +93,29 @@ const { error: snapshotError } = await db
       : resolvedContext.companyId,
     p_universe: universe
   });
+  const snapshotMs = Math.round((performance.now() - tSnapshot0) * 100) / 100;
+
+console.log("MENU_STAGE_SNAPSHOT_END", {
+  request_id,
+  user: auth_user_id,
+  universe,
+  duration_ms: snapshotMs
+});
 
 if (snapshotError) {
   console.error("🔥 SNAPSHOT_GENERATION_FAILED", {
     error: snapshotError.message
+  });
+
+  const totalMs = Math.round((performance.now() - reqStart) * 100) / 100;
+
+  console.log("MENU_REQ_END", {
+    request_id,
+    path: "/api/me/menu",
+    total_ms: totalMs,
+    error: "SNAPSHOT_GENERATION_FAILED",
+    user: auth_user_id,
+    universe
   });
 
   return errorResponse(
@@ -157,11 +177,17 @@ console.log("🟡 MENU_QUERY_BUILD", {
 let data, error;
 
 try {
+  const tBuild0 = performance.now();
   const result = await query.order("display_order", { ascending: true });
+  const buildMs = Math.round((performance.now() - tBuild0) * 100) / 100;
   data = result.data;
   error = result.error;
 
-  console.log("🟢 MENU_QUERY_RESULT", {
+  console.log("MENU_STAGE_BUILD_END", {
+  request_id,
+  user: auth_user_id,
+  universe,
+  duration_ms: buildMs,
   data_length: data?.length ?? 0,
   error: error?.message ?? null
 });
@@ -219,7 +245,18 @@ if (!data || data.length === 0) {
     universe,
     company_id: resolvedContext.companyId
   });
+const totalMs = Math.round((performance.now() - reqStart) * 100) / 100;
 
+console.log("MENU_REQ_END", {
+  request_id,
+  path: "/api/me/menu",
+  total_ms: totalMs,
+  user: auth_user_id,
+  universe,
+  case: "SNAPSHOT_ABSENT"
+});
+  
+  
   return okResponse(
     {
       universe,
@@ -236,6 +273,16 @@ if (!data || data.length === 0) {
 // --------------------------------------------------
 // 4️⃣ Return snapshot verbatim (NO mutation, NO inference)
 // --------------------------------------------------
+const totalMs = Math.round((performance.now() - reqStart) * 100) / 100;
+
+console.log("MENU_REQ_END", {
+  request_id,
+  path: "/api/me/menu",
+  total_ms: totalMs,
+  user: auth_user_id,
+  universe
+});
+
 return okResponse(
   {
     universe,
@@ -471,7 +518,11 @@ const { error: snapshotError } = await db
     p_universe: universe
   });
 
+
+  
 if (snapshotError) {
+  
+  
   return errorResponse(
     "SNAPSHOT_GENERATION_FAILED",
     snapshotError.message,
@@ -510,6 +561,7 @@ if (snapshotError) {
       500
     );
   }
+  
 
   return okResponse(
     {
