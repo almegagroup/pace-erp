@@ -4514,3 +4514,211 @@ Verify no crash
 🟢 CLEAN SUMMARY (1 LINE)
 
 👉 Backend fully done, frontend navigation + rendering is the only blocker now.
+
+🟢 115. CURRENT STATE UPDATE (POST NAVIGATION DEBUG SESSION)
+
+Status:
+Backend → Fully Stable ✅
+Frontend → Partially Stabilized ⚠️
+
+115.1 BACKEND — FINAL CONFIRMED STATE
+✅ AUTH (Gate-2)
+POST /api/login → 200
+Session → ACTIVE
+Cookie → Working
+Supabase identity → synced
+✅ SESSION (Gate-5)
+session lifecycle → PASS
+context resolution → PASS
+admin bypass → WORKING
+✅ ACL (Gate-6)
+stepAcl → PASS
+decision: ALLOW
+no DENY observed
+✅ MENU ENGINE (Gate-7)
+generate_menu_snapshot → WORKING
+menu_snapshot → populated
+response:
+menu_count: 5
+snapshot_version: 27
+✅ API LAYER
+/api/me → 200
+/api/me/menu → 200
+no backend errors
+🔵 CRITICAL ARCHITECTURAL CONFIRMATION
+Backend is NOT the problem anymore
+System is fully functional at API level
+🟢 116. FRONTEND STATE (AFTER LATEST FIX)
+✅ WHAT IS WORKING
+1. Login Flow
+Landing → Login → Success
+Session established
+Menu loaded
+2. Menu Fetch
+📊 Menu length: 5
+
+✔ MenuProvider working
+✔ Snapshot consumption working
+
+⚠️ WHAT WAS BROKEN (NOW IDENTIFIED)
+🔴 ISSUE 1 — Navigation Engine Not Initialized
+❗ Error:
+Navigation not initialized
+🔍 Root Cause:
+initNavigation() was conditionally executed
+→ timing mismatch
+→ navigation used before init
+✅ FIX APPLIED (CORRECT ARCHITECTURE)
+
+File: frontend/src/main.jsx
+
+// ❌ OLD (WRONG)
+if (!PUBLIC_ROUTES.has(pathname)) {
+  initNavigation("DASHBOARD_HOME");
+}
+
+// ✅ NEW (CORRECT)
+initNavigation("DASHBOARD_HOME");
+restoreNavigationStack();
+🎯 Result:
+Navigation always available
+Gate-8 invariant restored
+🔴 ISSUE 2 — Double Menu Fetch
+❗ Observed:
+/api/me/menu called twice
+🔍 Cause:
+/app → redirect → /sa/home
+→ bootstrap runs again
+⚠️ Status:
+
+Not critical (performance issue)
+
+🔴 ISSUE 3 — Performance (IMPORTANT)
+Observed:
+SESSION: ~850 ms
+MENU QUERY: ~320 ms
+Root Cause:
+❌ no DB index
+→ sequential scan
+🟢 REQUIRED FIX
+🔧 Add index:
+create index idx_menu_snapshot_user_universe
+on erp_menu.menu_snapshot (user_id, universe);
+🎯 Expected:
+320 ms → ~30 ms
+🟡 117. CURRENT SYSTEM BEHAVIOUR (REAL)
+FLOW (NOW WORKING)
+Landing (/)
+↓
+Login (/login)
+↓
+POST /api/login
+↓
+GET /api/me/menu
+↓
+Menu loaded
+↓
+Redirect → /sa/home
+↓
+Dashboard render (partial)
+🔴 118. REMAINING ISSUES (UPDATED)
+🔴 ISSUE A — UI RE-BOOT / MULTIPLE FETCH
+Behaviour:
+menu loads twice
+bootstrap runs multiple times
+Impact:
+performance waste
+not breaking system
+🔴 ISSUE B — SESSION HYDRATION TIMING (POTENTIAL)
+Risk:
+
+Hard refresh → early redirect
+
+Cause:
+Router executes before session resolved
+🔴 ISSUE C — HiddenRouteRedirect STILL DISABLED
+Status:
+
+❌ Not restored yet
+
+Impact:
+deep link routing incomplete
+Gate-7 navigation not fully enforced
+🔴 ISSUE D — Menu Tree Integrity (CHECK REQUIRED)
+Risk Area:
+parent_menu_code
+Why:
+
+Recent migration changed structure
+
+Verify:
+Root → parent_menu_code = null
+Child → parent_menu_code = parent
+🟢 119. WHAT IS FULLY SOLVED
+
+✔ Auth
+✔ Session
+✔ ACL
+✔ Context
+✔ Snapshot
+✔ Menu API
+✔ Admin Universe
+✔ DB + Backend
+
+🔥 120. SYSTEM PHASE TRANSITION (VERY IMPORTANT)
+You are NO LONGER in debugging phase
+You are in UI INTEGRATION phase
+🚀 121. NEXT EXECUTION PLAN (STRICT ORDER)
+🥇 STEP 1 — DB Performance Fix (MANDATORY)
+
+Add index:
+
+create index idx_menu_snapshot_user_universe
+on erp_menu.menu_snapshot (user_id, universe);
+🥈 STEP 2 — Fix Double Fetch (Frontend)
+
+Add condition:
+
+if menu already exists → skip fetch
+🥉 STEP 3 — Session Hydration Guard
+
+Add:
+
+if (loadingSession) return null;
+
+👉 Prevent premature redirect
+
+🏅 STEP 4 — Restore HiddenRouteRedirect
+
+Now safe because:
+
+Menu works
+ACL works
+Snapshot works
+🏆 STEP 5 — Menu Rendering Validation
+
+Log in UI:
+
+console.log(menu)
+
+Verify:
+
+tree structure correct
+routes visible
+🟢 122. FINAL SYSTEM STATUS
+Layer	Status
+Infra	✅ Stable
+Auth	✅ Done
+Session	✅ Done
+Context	✅ Done
+ACL	✅ Done
+Menu Engine	✅ Done
+Snapshot	✅ Done
+UI Navigation	⚠️ Needs stabilization
+UI Rendering	⚠️ Partial
+🧠 FINAL TRUTH (IMPORTANT)
+Backend = COMPLETE
+System = FUNCTIONAL
+Only UI integration polishing left
+🚀 FINAL 1-LINE SUMMARY
+You have successfully completed ERP core engine — now only frontend stabilization & performance optimization remains.

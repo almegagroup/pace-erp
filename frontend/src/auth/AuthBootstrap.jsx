@@ -16,10 +16,14 @@ export default function AuthBootstrap({ children }) {
     clearMenuSnapshot,
   } = useMenu();
 
-  // 🔥 ADD THIS HERE (IMPORTANT)
-  useEffect(() => {
+  // ✅ ADD THIS BLOCK HERE (exactly here)
+useEffect(() => {
+  if (!menu || menu.length === 0) {
     hasBootedRef.current = false;
-  }, [location.pathname]);
+  }
+}, [menu]);
+
+ 
 
   useEffect(() => {
     let alive = true;
@@ -38,12 +42,18 @@ export default function AuthBootstrap({ children }) {
         return;
       }
 
-      // 🔥 Prevent duplicate boot
-      if (hasBootedRef.current) {
-        console.log("⛔ Boot skipped (already ran)");
-        return;
-      }
-      hasBootedRef.current = true;
+      // 🔥 Skip if menu already exists
+if (menu && menu.length > 0) {
+  console.log("⛔ Boot skipped (menu already loaded)");
+  return;
+}
+
+// 🔥 Prevent duplicate boot
+if (hasBootedRef.current) {
+  console.log("⛔ Boot skipped (already ran)");
+  return;
+}
+hasBootedRef.current = true;
 
       
 
@@ -142,14 +152,13 @@ export default function AuthBootstrap({ children }) {
     return () => {
       alive = false;
     };
-    
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     location.pathname,
-    menu,
     navigate,
-    startMenuLoading,
-    setMenuSnapshot,
-    clearMenuSnapshot,
+  startMenuLoading,
+  setMenuSnapshot,
+  clearMenuSnapshot,
   ]);
 
   return children;
