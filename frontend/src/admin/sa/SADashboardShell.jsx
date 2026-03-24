@@ -9,7 +9,6 @@
  */
 import { Outlet } from "react-router-dom";
 import { useEffect } from "react";
-import MenuShell from "../../layout/MenuShell.jsx";
 import { replaceStack } from "../../navigation/screenStackEngine.js";
 import { assertAdminEntry } from "../adminEntryGuard.js";
 
@@ -34,14 +33,10 @@ export default function SADashboardShell() {
 
   console.log("➡️ About to render MenuShell from SA Shell");
 
-  return (
-    <MenuShell
-      universe="ADMIN"
-      headerTitle="Super Admin"
-      rootScreenCode="SA_HOME"
-    >
-      {console.log("📦 SA Shell rendering Outlet")}
-      <Outlet />
-    </MenuShell>
-  );
+ return (
+  <>
+    {console.log("📦 SA Shell rendering Outlet")}
+    <Outlet />
+  </>
+);
 }

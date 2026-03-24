@@ -74,21 +74,25 @@ export default function AppRouter() {
 <Route
   path="/sa"
   element={
-    (console.log("🔥 /sa ROUTE HIT"),
     <DeepLinkGuard>
       <RouteGuard>
         <SADashboardShell />
       </RouteGuard>
-    </DeepLinkGuard>)
+    </DeepLinkGuard>
   }
 >
-  <Route
-  path="home"
-  element={(console.log("📍 /sa/home PAGE HIT"), <SAHome />)}
-/>
-  <Route path="company/create" element={<SACompanyCreate />} />
-  <Route path="users" element={<SAUsers />} />
-  <Route path="signup-requests" element={<SASignupRequests />} />
+  {/* 🔥 LAYOUT LAYER */}
+  <Route element={<MenuShell />}>
+
+    <Route
+      path="home"
+      element={(console.log("📍 /sa/home PAGE HIT"), <SAHome />)}
+    />
+    <Route path="company/create" element={<SACompanyCreate />} />
+    <Route path="users" element={<SAUsers />} />
+    <Route path="signup-requests" element={<SASignupRequests />} />
+
+  </Route>
 </Route>
 
 {/* ============================== */}

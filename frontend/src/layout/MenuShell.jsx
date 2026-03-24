@@ -11,7 +11,7 @@
 import { useMenu } from "../context/useMenu.js";
 import { Link } from "react-router-dom";
 
-export default function MenuShell({ children }) {
+export default function MenuShell(){
   console.log("🔥 MenuShell ACTIVE");
 
   const { menu, loading } = useMenu();
@@ -22,7 +22,7 @@ export default function MenuShell({ children }) {
   });
 
   if (loading) {
-    console.log("⏳ Menu এখনও load হচ্ছে...");
+    console.log("⏳ Loading...");
     return <div>Loading Menu...</div>;
   }
 
@@ -64,8 +64,8 @@ export default function MenuShell({ children }) {
       </aside>
 
       <main style={{ flex: 1 }}>
-        {children}
-      </main>
+  <Outlet />
+</main>
     </div>
   );
 }
