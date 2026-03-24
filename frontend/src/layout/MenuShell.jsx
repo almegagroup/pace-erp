@@ -12,15 +12,32 @@ import { useMenu } from "../context/useMenu.js";
 import { Link } from "react-router-dom";
 
 export default function MenuShell({ children }) {
+  console.log("🔥 MenuShell ACTIVE"); // ✅ ADD HERE
   const { menu, loading } = useMenu();
 
-  if (loading) return null; // no optimistic UI
+  if (loading) return null;
+
+  // 🔥 ADD THIS FUNCTION HERE
+  async function handleLogout() {
+    try {
+      await fetch(`${import.meta.env.VITE_API_BASE}/api/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch (e) {
+      console.error(e);
+    }
+
+    window.location.href = "/login";
+  }
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
       {/* Sidebar */}
-      <aside style={{ width: "220px", borderRight: "1px solid #ddd" }}>
-        <ul>
+      <aside style={{ width: "220px", borderRight: "1px solid #ddd", display: "flex", flexDirection: "column" }}>
+        
+        {/* 🔹 MENU LIST */}
+        <ul style={{ flex: 1 }}>
           {menu.map(item => (
             <li key={item.menu_code}>
               {item.route_path ? (
@@ -31,6 +48,14 @@ export default function MenuShell({ children }) {
             </li>
           ))}
         </ul>
+
+        {/* 🔥 LOGOUT BUTTON (ADD HERE — BOTTOM) */}
+        <div style={{ padding: "10px" }}>
+          <button onClick={handleLogout} style={{ width: "100%" }}>
+            Logout
+          </button>
+        </div>
+
       </aside>
 
       {/* Main content */}

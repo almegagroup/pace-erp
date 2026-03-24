@@ -22,22 +22,33 @@ interface LogoutContext {
 
 function buildExpiredCookie(requestUrl: string): string {
   const url = new URL(requestUrl);
-  const isHttps = url.protocol === "https:";
+  const hostname = url.hostname;
+
+  const isLocalhost =
+    hostname.includes("localhost") ||
+    hostname.includes("127.0.0.1");
 
   const parts = [
     "erp_session=",
     "Path=/",
     "HttpOnly",
-    "SameSite=Lax",
     "Max-Age=0",
     "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
   ];
 
-  if (isHttps) parts.push("Secure");
+  if (!isLocalhost) {
+    // 🔥 MUST MATCH LOGIN COOKIE EXACTLY
+    parts.push("SameSite=None");
+    parts.push("Secure");
+    parts.push("Domain=almegagroup.in"); // 🔥 CRITICAL
+    parts.push("Priority=High");
+  } else {
+    // 🧪 DEV
+    parts.push("SameSite=Lax");
+  }
 
   return parts.join("; ");
 }
-
 /**
  * /api/logout
  * RULES:

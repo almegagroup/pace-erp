@@ -8,6 +8,7 @@ import { dispatchAdminRoutes } from "../_routes/admin.routes.ts";
 import { dispatchAclRoutes } from "../_routes/acl.routes.ts";
 import { dispatchWorkflowRoutes } from "../_routes/workflow.routes.ts";
 import { dispatchMenuRoutes } from "../_routes/menu.routes.ts";
+import { logoutHandler } from "../_core/auth/logout.handler.ts";
 
 /**
  * Protected route dispatcher (non-public routes only).
@@ -56,6 +57,12 @@ const menu = await dispatchMenuRoutes(
 if (menu) return menu;
 
     switch (routeKey) {
+      case "POST:/api/logout":
+    return logoutHandler({
+      session: sessionResult,
+      requestId,
+      requestUrl: req.url,
+    });
     default:
       return new Response(
         JSON.stringify({

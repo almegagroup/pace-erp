@@ -74,9 +74,14 @@ hasBootedRef.current = true;
         console.log("🧾 /api/me status:", meRes.status);
 
         if (!meRes.ok) {
-          console.log("❌ SESSION INVALID");
-          throw new Error("SESSION_INVALID");
-        }
+  console.log("❌ SESSION INVALID");
+
+  // 🔥 ADD THIS (logout detection)
+  clearMenuSnapshot();
+  navigate("/login", { replace: true });
+
+  return; // ❗ MUST STOP FLOW
+}
 
         // =========================
         // STEP 2: MENU FETCH
