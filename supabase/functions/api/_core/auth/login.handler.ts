@@ -56,19 +56,47 @@ async function buildAndStoreMenuSnapshot(
       .eq("auth_user_id", authUserId)
       .maybeSingle(); // 🔥 SAFE
 
-    let roleCode = roleRow?.role_code ?? null;
+    // 🔹 Get user_code
+const { data: userRow, error: userError } = await supabase
+  .schema("erp_core")
+  .from("users")
+  .select("user_code")
+  .eq("auth_user_id", authUserId)
+  .single();
 
-    // 🔥 HARD FALLBACK (CRITICAL)
-    if (!roleCode) {
-      log({
-        level: "WARN",
-        request_id: requestId,
-        event: "ROLE_MISSING_FALLBACK_SA",
-      });
-      roleCode = "SA";
-    }
+if (userError || !userRow) {
+  log({
+    level: "ERROR",
+    request_id: requestId,
+    event: "USER_FETCH_FAILED_SNAPSHOT",
+    meta: { userError },
+  });
 
-    const isAdmin = roleCode === "SA" || roleCode === "GA";
+  return;
+}
+
+const userCode = userRow.user_code;
+
+let roleCode = roleRow?.role_code ?? null;
+
+// 🟢 Admin allow
+if (userCode.startsWith("SA")) {
+  roleCode = "SA";
+} else if (userCode.startsWith("GA")) {
+  roleCode = "GA";
+} else {
+  // 🔴 ACL strict
+  if (!roleCode) {
+    log({
+      level: "ERROR",
+      request_id: requestId,
+      event: "ROLE_MISSING_SNAPSHOT_DENY",
+    });
+    return;
+  }
+}
+
+const isAdmin = roleCode === "SA" || roleCode === "GA";
 
     log({
       level: "INFO",
@@ -329,18 +357,53 @@ const { data: roleRow } = await supabase
   .eq("auth_user_id", authUserId)
   .maybeSingle();
 
+// 🔹 Get user_code
+const { data: userRow, error: userError } = await supabase
+  .schema("erp_core")
+  .from("users")
+  .select("user_code")
+  .eq("auth_user_id", authUserId)
+  .single();
+
+if (userError || !userRow) {
+  log({
+    level: "ERROR",
+    request_id: requestId,
+    event: "USER_FETCH_FAILED",
+    meta: { userError },
+  });
+
+  return errorResponse("AUTH_FAIL", "Invalid user", requestId, "NONE", 403);
+}
+
+const userCode = userRow.user_code;
+
 let roleCode = roleRow?.role_code ?? null;
 
-// 🔥 HARD FALLBACK (CRITICAL)
-if (!roleCode) {
+// 🟢 Admin allow (code-based)
+if (userCode.startsWith("SA")) {
   roleCode = "SA";
+} else if (userCode.startsWith("GA")) {
+  roleCode = "GA";
+} else {
+  // 🔴 ACL strict
+  if (!roleCode) {
+  log({
+    level: "SECURITY",
+    request_id: requestId,
+    event: "LOGIN_ROLE_MISSING_DENY",
+    meta: { authUserId }
+  });
+
+  return errorResponse("AUTH_FAIL", "Role not assigned", requestId, "NONE", 403);
+}
 }
 
 log({
   level: "INFO",
   request_id: requestId,
   event: "LOGIN_ROLE_RESOLVED",
-  meta: { roleCode },
+  meta: { roleCode, userCode },
 });
 
   const sessionId = await createSession(

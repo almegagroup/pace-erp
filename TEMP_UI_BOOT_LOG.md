@@ -5169,3 +5169,246 @@ True snapshot architecture NOT achieved
 👉 System is:
 
 Working BUT not optimized
+
+🟢 142. PERFORMANCE & ARCHITECTURE EVOLUTION (LATEST UPDATE)
+142.1 BEFORE (OLD STATE — PRE SNAPSHOT)
+Session → DB heavy (~800–1000ms)
+Menu → Runtime build (~300–500ms)
+Total → ~1200–1500ms
+Characteristics:
+Multiple DB joins
+Role runtime resolve
+Context runtime resolve
+Menu dynamic build
+
+👉 Result:
+
+Slow + non-deterministic
+142.2 AFTER (CURRENT STATE — SNAPSHOT + FIXES)
+
+From your latest prod log:
+
+SNAPSHOT_FETCH → 139 ms
+TOTAL → 139.84 ms
+Pipeline:
+SESSION → CONTEXT → ACL → SNAPSHOT → RESPONSE
+Key Observations:
+ACL:
+0.02 ms → near zero cost
+Context:
+0.05 ms → negligible
+Menu:
+~140 ms → snapshot read
+🚀 FINAL PERFORMANCE SHIFT
+Layer	Before	Now
+Session	~800ms	(hidden/optimized)
+ACL	~100ms	~0ms
+Menu	~300–500ms	~140ms
+TOTAL	~1200ms+	~140ms
+🧠 NET RESULT
+~1200 ms → ~140 ms
+
+👉 ~85–90% improvement
+
+🟢 143. WHAT EXACTLY IMPROVED (CRITICAL BREAKDOWN)
+✅ 1. Snapshot-Based Menu (BIGGEST WIN)
+
+আগে:
+
+menu = runtime build
+
+এখন:
+
+menu = precomputed snapshot
+
+👉 Result:
+
+CPU ↓↓↓
+DB joins ↓↓↓
+deterministic output
+✅ 2. ACL Near-Zero Cost
+decision: ALLOW
+duration: 0.02 ms
+
+👉 Meaning:
+
+ACL is now lightweight gate, not computation engine
+✅ 3. Admin Universe Clean Bypass
+ADMIN_CONTEXT_BYPASS_RLS { role: 'SA' }
+
+👉 Meaning:
+
+No company dependency
+No RLS overhead
+clean admin isolation
+✅ 4. DB Round Trip Reduction
+
+আগে:
+
+4–6 queries
+
+এখন:
+
+1 query (snapshot)
+✅ 5. Deterministic Pipeline
+SESSION → CONTEXT → ACL → HANDLER
+
+👉 No randomness
+👉 No fallback ambiguity (except one — see below ⚠️)
+
+⚠️ 144. CURRENT REAL STATE (IMPORTANT TRUTH)
+
+তুমি এখন একটা VERY STRONG STATE এ আছো:
+
+Backend → COMPLETE
+Auth → COMPLETE
+ACL → COMPLETE
+Menu → COMPLETE
+Performance → GOOD
+
+👉 BUT:
+
+Session = still NOT true snapshot
+⚠️ 144.1 Hidden Issue
+
+তোমার log-এ এটা ছিল:
+
+ROLE_MISSING_FALLBACK_SA
+
+👉 This is VERY IMPORTANT
+
+🔴 145. ROLE FALLBACK — VVI (VERY VERY IMPORTANT)
+🔴 145.1 What is happening now
+Role missing → fallback → SA
+
+👉 Meaning:
+
+System is guessing role
+🔴 145.2 Why it is DANGEROUS
+❗ Case 1 — Future ACL User
+
+ধরো:
+
+User = L1_USER
+BUT role mapping missing
+→ fallback → SA
+
+👉 Result:
+
+L1 user becomes SUPER ADMIN ❌
+❗ Case 2 — Security Breach
+Any mapping failure
+→ user gets highest privilege
+
+👉 This is:
+
+CRITICAL SECURITY RISK 🚨
+❗ Case 3 — Silent Data Corruption
+Wrong role → wrong access
+→ wrong data operations
+🔴 145.3 ERP RULE (MANDATORY)
+NO ROLE = HARD DENY
+
+NOT:
+
+NO ROLE = SA ❌
+🔴 145.4 CORRECT DESIGN (YOU MUST DO THIS)
+Replace this:
+ROLE_MISSING → fallback SA ❌
+With this:
+ROLE_MISSING → THROW / DENY ✅
+🔧 Recommended Fix
+if (!roleCode) {
+  log({
+    level: "SECURITY",
+    event: "ROLE_MISSING_DENY",
+    user_id: authUserId
+  });
+
+  throw new Error("ROLE_NOT_ASSIGNED");
+}
+🧠 Exception (ONLY ALLOWED CASE)
+
+ONLY allow fallback if:
+
+system bootstrap (first user only)
+
+Otherwise:
+
+STRICT DENY
+🔴 145.5 Future Impact (VERY IMPORTANT)
+If you KEEP fallback:
+✔ System works now
+❌ Breaks when ACL users added
+❌ Security vulnerability
+❌ Audit failure
+If you REMOVE fallback:
+✔ System strict
+✔ No privilege escalation
+✔ Production safe
+✔ ERP compliant
+🟢 146. WHAT STILL CAN BE IMPROVED
+1️⃣ Menu Snapshot Index (HIGH IMPACT)
+create index idx_menu_snapshot_user_universe
+on erp_menu.menu_snapshot (user_id, universe);
+
+👉 140ms → ~40ms
+
+2️⃣ True Session Snapshot (NEXT LEVEL)
+
+Current:
+
+session → DB dependent
+
+Future:
+
+session → precomputed (no DB)
+
+👉 Target:
+
+140ms → 50ms
+3️⃣ Frontend Double Fetch Fix
+menu fetch twice
+
+👉 fix:
+
+if (menu exists) skip fetch
+4️⃣ Navigation + Menu Sync
+
+Align:
+
+screenStackEngine ↔ menu snapshot
+🟢 147. FINAL SYSTEM STATUS (UPDATED)
+Layer	Status
+Infra	✅
+Auth	✅
+Session	⚠️ Partial snapshot
+Context	✅
+ACL	✅
+Menu	✅
+Performance	✅ GOOD
+Security	⚠️ (ROLE FALLBACK)
+🧠 FINAL TRUTH (VERY CLEAR)
+System = Production capable
+BUT
+
+Security hole exists → ROLE FALLBACK
+❤️ SIMPLE BANGLA SUMMARY
+আগে system slow ছিল (1–1.5 sec)
+এখন snapshot use korar jonno ~140ms e chole asche
+
+ACL, context sob thik moto kaj korche
+
+kintu ekta dangerous jinis ache:
+
+👉 role na pele system SA dhore nicche
+
+eta future e huge problem korbe
+
+tai:
+
+👉 role na pele deny korte hobe (fallback na)
+🔥 FINAL LINE (IMPORTANT)
+Performance → ✔️ DONE
+Architecture → ✔️ CORRECT
+Security → ❗ FIX ROLE FALLBACK IMMEDIATELY

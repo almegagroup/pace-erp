@@ -106,11 +106,43 @@ recordSessionTimeline({
   event: "ACTIVE",
 });
 
- return {
+// 🔹 Step 1 — get user_code
+const { data: userRow } = await serviceRoleClient
+  .schema("erp_core")
+  .from("users")
+  .select("user_code")
+  .eq("auth_user_id", data.auth_user_id)
+  .single();
+
+const userCode = userRow?.user_code || "";
+
+let roleCode = data.role_code;
+
+// 🟢 Step 2 — Admin detection (SA / GA)
+if (userCode.startsWith("SA")) {
+  roleCode = "SA";
+} else if (userCode.startsWith("GA")) {
+  roleCode = "GA";
+} else {
+  // 🔴 Step 3 — ACL users must have role
+  if (!roleCode) {
+    log({
+      level: "SECURITY",
+      request_id: _requestId,
+      event: "ROLE_MISSING_DENY",
+      meta: { session_id: sessionId }
+    });
+
+    return { status: "REVOKED", action: "LOGOUT" };
+  }
+}
+
+// 🟢 Step 4 — return session
+return {
   status: "ACTIVE",
   sessionId,
   authUserId: data.auth_user_id,
-  roleCode: data.role_code ?? "SA",   // 🔥 FROM SESSION (NO QUERY)
+  roleCode,
   created_at: data.created_at,
   last_seen_at: data.last_seen_at,
   expires_at: data.expires_at,

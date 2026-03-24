@@ -13,13 +13,19 @@ import { assertRlsEnabled } from "../../_shared/rls_assert.ts";
 
 export async function createSession(
   authUserId: string,
-  roleCode: string, 
+  roleCode: string,
   device?: {
     device_id: string;
     device_summary: string;
   }
 ): Promise<string> {
   assertRlsEnabled();
+
+    // 🔴 ADD THIS BLOCK HERE
+  if (!roleCode || typeof roleCode !== "string") {
+    throw new Error("INVALID_ROLE_CODE");
+  }
+
 
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -40,8 +46,22 @@ export async function createSession(
     .eq("status", "ACTIVE");
 
   if (revokeError) {
-    throw new Error("SESSION_REVOKE_FAILED");
-  }
+  console.error("SESSION_REVOKE_FAILED", revokeError);
+
+  throw new Error("SESSION_REVOKE_FAILED");
+}
+
+// 🔥 ADD THIS BLOCK HERE — CLEAN OLD SNAPSHOT
+const { error: snapshotDeleteError } = await serviceRoleClient
+  .schema("erp_cache")
+  .from("session_menu_snapshot")
+  .delete()
+  .eq("auth_user_id", authUserId);
+
+if (snapshotDeleteError) {
+  console.error("SNAPSHOT_DELETE_FAILED", snapshotDeleteError);
+  throw new Error("SNAPSHOT_DELETE_FAILED");
+}
 
   // ------------------------------------------------
   // Generate fresh session ID (fixation prevention)
@@ -70,8 +90,10 @@ export async function createSession(
 });
 
   if (insertError) {
-    throw new Error("SESSION_CREATE_FAILED");
-  }
+  console.error("SESSION_CREATE_FAILED", insertError);
+
+  throw new Error("SESSION_CREATE_FAILED");
+}
 
   return sessionId;
 }
