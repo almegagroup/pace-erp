@@ -14,7 +14,7 @@ import { assertAdminEntry } from "../adminEntryGuard.js";
 
 export default function SADashboardShell() {
 
-  console.log("🔥 SA Dashboard Shell ACTIVE");
+ // console.log("🔥 SA Dashboard Shell ACTIVE");
 
   useEffect(() => {
     assertAdminEntry();
@@ -31,11 +31,11 @@ export default function SADashboardShell() {
     ]);
   }, []);
 
-  console.log("➡️ About to render MenuShell from SA Shell");
+  //console.log("➡️ About to render MenuShell from SA Shell");
 
  return (
   <>
-    {console.log("📦 SA Shell rendering Outlet")}
+    {/* {console.log("📦 SA Shell rendering Outlet")} */}
     <Outlet />
   </>
 );

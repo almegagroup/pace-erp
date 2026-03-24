@@ -37,7 +37,7 @@ import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx"; 
 
 export default function AppRouter() {
-  console.log("🧭 AppRouter RENDERED");
+  //console.log("🧭 AppRouter RENDERED");
   return (
     <BrowserRouter>
       {/* ✅ SINGLE SOURCE OF CONTEXT */}

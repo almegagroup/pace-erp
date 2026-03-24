@@ -11,7 +11,7 @@
 import AppRouter from "./router/AppRouter.jsx";
 
 function App() {
-  console.log("🚀 App.jsx RENDERED");
+ // console.log("🚀 App.jsx RENDERED");
   return <AppRouter />;
 }
 

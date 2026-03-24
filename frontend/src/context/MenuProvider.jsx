@@ -17,24 +17,21 @@ import { MenuContext } from "./MenuContext.js";
 import { buildRouteIndex } from "../router/routeIndex.js";
 
 export function MenuProvider({ children }) {
-  console.log("🏗️ MenuProvider MOUNTED");
+  //console.log("🏗️ MenuProvider MOUNTED");
   const [menu, setMenu] = useState([]);
   const [allowedRoutes, setAllowedRoutes] = useState(new Set());
   const [loading, setLoading] = useState(true);
-  console.log("📊 MenuProvider STATE:", {
-  loading,
-  menuLength: menu.length,
-});
+  
 
   // 🔵 START LOADING (stable)
   const startMenuLoading = useCallback(() => {
-    console.log("⏳ startMenuLoading CALLED");
+    //console.log("⏳ startMenuLoading CALLED");
     setLoading(true);
   }, []);
 
   // 🔴 CLEAR (stable)
   const clearMenuSnapshot = useCallback(() => {
-    console.log("🧹 clearMenuSnapshot CALLED");
+    //console.log("🧹 clearMenuSnapshot CALLED");
     setMenu([]);
     setAllowedRoutes(new Set());
     console.log("✅ loading → false (clear)");
@@ -43,8 +40,8 @@ export function MenuProvider({ children }) {
 
   // 🟢 SET MENU (stable)
   const setMenuSnapshot = useCallback((snapshot) => {
-    console.log("📥 setMenuSnapshot CALLED");
-  console.log("📦 snapshot:", snapshot);
+    //console.log("📥 setMenuSnapshot CALLED");
+  //console.log("📦 snapshot:", snapshot);
     if (!Array.isArray(snapshot)) {
       console.error("Invalid menu snapshot:", snapshot);
       setMenu([]);
@@ -52,13 +49,13 @@ export function MenuProvider({ children }) {
       setLoading(false);
       return;
     }
-    console.log("💾 Setting menu...");
+    //console.log("💾 Setting menu...");
   setMenu(snapshot);
 
   console.log("🧭 Building route index...");
   setAllowedRoutes(buildRouteIndex(snapshot));
 
-  console.log("✅ loading → false");
+  //console.log("✅ loading → false");
 
     setMenu(snapshot);
     setAllowedRoutes(buildRouteIndex(snapshot));
