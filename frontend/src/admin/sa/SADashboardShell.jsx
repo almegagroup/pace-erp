@@ -14,6 +14,8 @@ import { replaceStack } from "../../navigation/screenStackEngine.js";
 import { assertAdminEntry } from "../adminEntryGuard.js";
 
 export default function SADashboardShell() {
+
+  console.log("🔥 SA Dashboard Shell ACTIVE");
   // --- HARD ENTRY ASSERTION ---
   // Ensures this shell is entered only via valid admin path
   useEffect(() => {

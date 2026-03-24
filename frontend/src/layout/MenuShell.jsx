@@ -12,6 +12,7 @@ import { useMenu } from "../context/useMenu.js";
 import { Link } from "react-router-dom";
 
 export default function MenuShell({ children }) {
+  console.log("🔥 MenuShell ACTIVE"); // ✅ ADD HERE
   const { menu, loading } = useMenu();
 
   if (loading) return null;
