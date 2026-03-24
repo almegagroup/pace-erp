@@ -44,8 +44,8 @@ useEffect(() => {
       }
 
       // 🔥 Skip if menu already exists
-if (menu && menu.length > 0) {
-  console.log("⛔ Boot skipped (menu already loaded)");
+if (menu && menu.length > 0 && hasBootedRef.current) {
+  console.log("⛔ Boot skipped (already ran + menu exists)");
   return;
 }
 

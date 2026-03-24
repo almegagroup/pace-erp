@@ -16,13 +16,12 @@ import { assertAdminEntry } from "../adminEntryGuard.js";
 export default function SADashboardShell() {
 
   console.log("🔥 SA Dashboard Shell ACTIVE");
-  // --- HARD ENTRY ASSERTION ---
-  // Ensures this shell is entered only via valid admin path
-  useEffect(() => {
-  assertAdminEntry();
-}, []);
 
-   useEffect(() => {
+  useEffect(() => {
+    assertAdminEntry();
+  }, []);
+
+  useEffect(() => {
     replaceStack([
       {
         screen_code: "SA_HOME",
@@ -33,13 +32,16 @@ export default function SADashboardShell() {
     ]);
   }, []);
 
-return (
-  <MenuShell
-    universe="ADMIN"
-    headerTitle="Super Admin"
-    rootScreenCode="SA_HOME"
-  >
-    <Outlet /> {/* 🔥 THIS IS MUST */}
-  </MenuShell>
-);
+  console.log("➡️ About to render MenuShell from SA Shell");
+
+  return (
+    <MenuShell
+      universe="ADMIN"
+      headerTitle="Super Admin"
+      rootScreenCode="SA_HOME"
+    >
+      {console.log("📦 SA Shell rendering Outlet")}
+      <Outlet />
+    </MenuShell>
+  );
 }
