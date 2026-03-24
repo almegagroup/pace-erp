@@ -51,6 +51,18 @@ export async function createSession(
   throw new Error("SESSION_REVOKE_FAILED");
 }
 
+// 🔥 ADD THIS BLOCK HERE — CLEAN OLD SNAPSHOT
+const { error: snapshotDeleteError } = await serviceRoleClient
+  .schema("erp_cache")
+  .from("session_menu_snapshot")
+  .delete()
+  .eq("auth_user_id", authUserId);
+
+if (snapshotDeleteError) {
+  console.error("SNAPSHOT_DELETE_FAILED", snapshotDeleteError);
+  throw new Error("SNAPSHOT_DELETE_FAILED");
+}
+
   // ------------------------------------------------
   // Generate fresh session ID (fixation prevention)
   // ------------------------------------------------
