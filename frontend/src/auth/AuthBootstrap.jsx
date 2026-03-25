@@ -19,8 +19,8 @@ export default function AuthBootstrap({ children }) {
   // ✅ ADD THIS BLOCK HERE (exactly here)
 useEffect(() => {
   if (!menu || menu.length === 0) {
-    hasBootedRef.current = false;
-  }
+  hasBootedRef.current = false;
+}
 }, [menu]);
 
  
@@ -36,12 +36,14 @@ useEffect(() => {
       //console.log("📦 Menu (before):", menu);
 
       // 🟢 PUBLIC ROUTE
-      if (isPublicRoute(pathname)) {
-        hasBootedRef.current = false;
-        //console.log("🟢 Public route → skipping bootstrap");
-        //clearMenuSnapshot();
-        return;
-      }
+      // 🔥 PUBLIC ROUTES + AUTH CALLBACK SKIP
+if (
+  isPublicRoute(pathname) ||
+  pathname === "/auth/callback"
+) {
+  hasBootedRef.current = false;
+  return;
+}
 
       // 🔥 Skip if menu already exists
 if (menu && menu.length > 0 && hasBootedRef.current) {
