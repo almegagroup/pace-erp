@@ -8,6 +8,8 @@ import { logoutHandler } from "../_core/auth/logout.handler.ts";
 import { signupHandler } from "../_core/auth/signup/signup.handler.ts";
 
 import type { SessionResolution } from "./session.ts";
+import { errorResponse } from "../_core/response.ts";
+
 
 export async function dispatchPublicRoute(
   routeKey: string,
@@ -35,13 +37,18 @@ export async function dispatchPublicRoute(
       return await signupHandler(req);
 
     default:
-      return new Response(
-        JSON.stringify({
-          status: "blocked",
-          reason: "no_handler_matched",
-          request_id: requestId,
-        }),
-        { status: 403 }
-      );
+      return errorResponse(
+  "NO_HANDLER_MATCHED",
+  "Route not handled",
+  requestId,
+  "NONE",
+  403,
+  {
+    gateId: "PUBLIC_DISPATCH",
+    routeKey,
+    decisionTrace: "NO_HANDLER"
+  },
+  req
+);
   }
 }

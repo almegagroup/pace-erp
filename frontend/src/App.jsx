@@ -9,10 +9,14 @@
  */
 
 import AppRouter from "./router/AppRouter.jsx";
+import SessionOverlay from "./components/SessionOverlay.jsx";
 
 function App() {
- // console.log("🚀 App.jsx RENDERED");
-  return <AppRouter />;
+  return (
+    <>
+      <AppRouter />
+      <SessionOverlay />
+    </>
+  );
 }
-
 export default App;
