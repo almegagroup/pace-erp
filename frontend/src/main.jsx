@@ -12,6 +12,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App.jsx";
+import { showWarning } from "./store/sessionWarning.js";
 
 // 🔒 Gate-8 / G1 — Screen Registry Validation
 import { validateScreenRegistry } from "./navigation/screenRules.js";
@@ -57,6 +58,41 @@ Public routes render outside the screenStackEngine.
 Only authenticated universe may activate navigation stack.
 ============================================================
 */
+
+/* =========================================================
+ * UI SESSION INTERCEPTOR (GLOBAL FETCH OVERRIDE)
+ * ========================================================= */
+
+const __originalFetch = globalThis.fetch;
+
+globalThis.fetch = async (...args) => {
+  const res = await __originalFetch(...args);
+
+  let json;
+
+  try {
+    json = await res.clone().json();
+  } catch {
+    return res;
+  }
+
+  /* -------------------------------------------------------
+   * WARNING (UI ONLY)
+   * ------------------------------------------------------- */
+  if (json?.warning?.type === "IDLE_WARNING") {
+    showWarning("You are inactive. Click OK to continue.");
+  }
+
+  /* -------------------------------------------------------
+   * LOGOUT (BACKEND AUTHORITY)
+   * ------------------------------------------------------- */
+  if (json?.action === "LOGOUT") {
+    globalThis.location.href = "/login";
+    return res;
+  }
+
+  return res;
+};
 
 const restored = restoreNavigationStack();
 

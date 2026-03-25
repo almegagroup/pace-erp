@@ -9,6 +9,7 @@ import { dispatchAclRoutes } from "../_routes/acl.routes.ts";
 import { dispatchWorkflowRoutes } from "../_routes/workflow.routes.ts";
 import { dispatchMenuRoutes } from "../_routes/menu.routes.ts";
 import { logoutHandler } from "../_core/auth/logout.handler.ts";
+import { errorResponse } from "../_core/response.ts";
 
 /**
  * Protected route dispatcher (non-public routes only).
@@ -64,13 +65,18 @@ if (menu) return menu;
       requestUrl: req.url,
     });
     default:
-      return new Response(
-        JSON.stringify({
-          status: "blocked",
-          reason: "no_handler_matched",
-          request_id: requestId,
-        }),
-        { status: 403 }
-      );
+      return errorResponse(
+  "NO_HANDLER_MATCHED",
+  "Route not handled",
+  requestId,
+  "NONE",
+  403,
+  {
+    gateId: "DISPATCH",
+    routeKey,
+    decisionTrace: "NO_HANDLER"
+  },
+  req
+);
   }
 }

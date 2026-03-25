@@ -28,7 +28,7 @@ interface MenuHandlerCtx {
  * ========================================================= */
 
 export async function meMenuHandler(
-  _req: Request,
+  req: Request,
   ctx: MenuHandlerCtx
 ): Promise<Response> {
 
@@ -200,7 +200,8 @@ if (!row) {
           reason: "SNAPSHOT_ABSENT"
         }
       },
-      request_id
+      request_id,
+      req
     );
   }
 
@@ -221,7 +222,8 @@ if (!row) {
       universe,
       menu: data,
     },
-    request_id
+    request_id,
+    req
   );
 }
 
@@ -273,7 +275,7 @@ export async function createMenuHandler(
     );
   }
 
-  return okResponse({ created: true }, ctx.request_id);
+  return okResponse({ created: true }, ctx.request_id,req);
 }
 
 export async function updateMenuHandler(
@@ -306,7 +308,7 @@ export async function updateMenuHandler(
     );
   }
 
-  return okResponse({ updated: true }, ctx.request_id);
+  return okResponse({ updated: true }, ctx.request_id,req);
 }
 
 export async function updateMenuTreeHandler(
@@ -336,7 +338,7 @@ export async function updateMenuTreeHandler(
     );
   }
 
-  return okResponse({ updated: true }, ctx.request_id);
+  return okResponse({ updated: true }, ctx.request_id,req);
 }
 
 export async function updateMenuStateHandler(
@@ -367,7 +369,7 @@ export async function updateMenuStateHandler(
     );
   }
 
-  return okResponse({ updated: true }, ctx.request_id);
+  return okResponse({ updated: true }, ctx.request_id,req);
 }
 
 /* =========================================================
@@ -401,7 +403,9 @@ const companyId = companyIdRaw as string | null;
       "Target user has no company binding",
       ctx.request_id,
       "NONE",
-      404
+      404,
+       undefined,
+  req
     );
   }
 
@@ -507,7 +511,8 @@ if (snapshotError) {
       universe,
       menu: data
     },
-    ctx.request_id
+    ctx.request_id,
+    req
   );
 }
 

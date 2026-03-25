@@ -40,7 +40,7 @@ function enforceSessionLogout(
     "Session expired",
     requestId,
     "LOGOUT",
-    401
+    401,
   );
 }
   return null;
@@ -129,12 +129,14 @@ sessionResult = await stepSession(req, requestId);
 
 if (!sessionResult) {
   return errorResponse(
-    "SESSION_RESOLUTION_FAILED",
-    "Session resolution failed",
-    requestId,
-    "NONE",
-    401
-  );
+  "SESSION_RESOLUTION_FAILED",
+  "Session resolution failed",
+  requestId,
+  "NONE",
+  401,
+  undefined,
+  req
+);
 }
 
 const sessionMs = Math.round((performance.now() - tSession0) * 100) / 100;
@@ -165,40 +167,54 @@ console.log("PIPELINE_SESSION_END", {
       meta: { stage: "SESSION_LIFECYCLE" },
     });
 
-    const idleResult = enforceIdleLifecycle(sessionResult, new Date());
+    const lifecycleResult = enforceIdleLifecycle(sessionResult, new Date());
 
-    const gate3Logout = enforceSessionLogout(
-      "action" in idleResult ? idleResult : null,
-      requestId
-    );
+const gate3Logout = enforceSessionLogout(
+  "action" in lifecycleResult ? lifecycleResult : null,
+  requestId
+);
 
-    if (gate3Logout) return gate3Logout;
+if (gate3Logout) return gate3Logout;
 
-   if (sessionResult.status !== "ACTIVE") {
+// 🔥 FORCE ACTIVE narrowing (after logout filter)
+if (sessionResult.status !== "ACTIVE") {
   return errorResponse(
     "SESSION_NOT_ACTIVE",
     "Session invalid",
     requestId,
     "LOGOUT",
-    401
+    401,
+  undefined,
+  req
   );
 }
 
-    /**
-     * Reset idle timer only when ACTIVE
-     */
+// 🔥 SAFE ACTIVE SESSION
+const activeSession = sessionResult as Extract<
+  SessionResolution,
+  { status: "ACTIVE" }
+>;
 
-    if (
-      "status" in idleResult &&
-      idleResult.status === "ACTIVE"
-    ) {
-      await serviceRoleClient
-        .schema("erp_core").from("sessions")
-        .update({
-          last_seen_at: new Date().toISOString(),
-        })
-        .eq("session_id", sessionResult.sessionId);
-    }
+// 🔥 Store warning if exists
+// 🔥 Store warning if exists
+if (
+  "status" in lifecycleResult &&
+  (lifecycleResult.status === "ABSOLUTE_WARNING" ||
+   lifecycleResult.status === "IDLE_WARNING")
+) {
+  (req as unknown as { __session_warning?: unknown }).__session_warning =
+    lifecycleResult;
+}
+
+// 🔥 Always update last_seen (ACTIVE session)
+await serviceRoleClient
+  .schema("erp_core")
+  .from("sessions")
+  .update({
+    last_seen_at: new Date().toISOString(),
+  })
+  .eq("session_id", activeSession.sessionId);
+
 
     // --------------------------------------------------
     // Gate-5: Context
@@ -216,8 +232,8 @@ console.log("PIPELINE_SESSION_END", {
     const tContext0 = performance.now();
 
 contextResult = await stepContext(req, {
-  authUserId: sessionResult.authUserId,
-  roleCode: sessionResult.roleCode,
+  authUserId: activeSession.authUserId,
+  roleCode: activeSession.roleCode,
 });
 
 const contextMs = Math.round((performance.now() - tContext0) * 100) / 100;
@@ -239,7 +255,8 @@ console.log("PIPELINE_CONTEXT_END", {
           gateId: "5",
           routeKey,
           decisionTrace: "CONTEXT_RESOLUTION_FAILED"
-        }
+        },
+        req
       );
     }
 
@@ -265,7 +282,7 @@ const tAcl0 = performance.now();
     const acl = await stepAcl(req, requestId, {
      context: {
   state: contextResult.status,
-  authUserId: sessionResult.authUserId,
+  authUserId: activeSession.authUserId,
   roleCode: contextResult.roleCode,
   companyId: contextResult.companyId,
   moduleEnabled: true, // temporarily, until wired properly
@@ -299,7 +316,8 @@ console.log("PIPELINE_ACL_END", {
           gateId: "6",
           routeKey,
           decisionTrace: acl.reason
-        }
+        },
+        req
       );
     }
 
@@ -316,11 +334,7 @@ console.log("PIPELINE_ACL_END", {
       meta: { stage: "HANDLER_PROTECTED" },
     });
 
-    const activeSession = sessionResult as Extract<
-  SessionResolution,
-  { status: "ACTIVE" }
->;
-
+    // reuse existing activeSession (already defined above)
 return await dispatchProtectedRoute(
   routeKey,
   req,

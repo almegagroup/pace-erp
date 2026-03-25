@@ -19,12 +19,27 @@ const GENERIC_BLOCK_MESSAGE = "Request blocked by security policy";
 /**
  * Public success response
  */
-export function okResponse(data: unknown, requestId: string): Response {
+export function okResponse(
+  data: unknown,
+  requestId: string,
+  req?: Request
+): Response {
+
+  const warning =
+    (req as unknown as { __session_warning?: any }).__session_warning;
+
   return new Response(
     JSON.stringify({
       ok: true,
       data,
       request_id: requestId,
+
+      // 🔥 inject warning if exists
+      warning: warning
+        ? {
+            type: warning.status,
+          }
+        : null,
     }),
     { status: 200 }
   );
@@ -93,7 +108,8 @@ export function errorResponse(
     gateId?: string;
     routeKey?: string;
     decisionTrace?: string;
-  }
+  },
+  req?: Request
 ): Response {
 
   const publicCode = normalizeCode(code);
@@ -103,12 +119,22 @@ export function errorResponse(
 
   const message = normalizeMessage(publicCode);
 
-  return new Response(
-    JSON.stringify({
-      ok: false,
-      code: publicCode,
-      message,
-      action,
+  const warning =
+  req &&
+  (req as unknown as { __session_warning?: any }).__session_warning;
+
+return new Response(
+  JSON.stringify({
+    ok: false,
+    code: publicCode,
+    message,
+    action,
+
+    // 🔥 inject warning
+   warning:
+  warning && typeof warning.status === "string"
+    ? { type: warning.status }
+    : null,
 
       /* =====================================================
        * Observability metadata (Gate-10)
