@@ -10,6 +10,7 @@
 
 import { handleKeyboardIntent } from "./keyboardIntentMap.js";
 import { isBlockingLayerActive } from "../components/layer/blockingLayerStack.js";
+import { isPublicRoute } from "../router/publicRoutes.js";
 
 let keyboardEnabled = false;
 
@@ -31,6 +32,7 @@ function normalizeKeyEvent(event) {
   // No screen-level shortcuts allowed
   if (event.defaultPrevented) return null;
   if (isBlockingLayerActive()) return null;
+  if (isPublicRoute(globalThis.location.pathname)) return null;
 
   const key = event.key;
   const ctrl = event.ctrlKey || event.metaKey;
