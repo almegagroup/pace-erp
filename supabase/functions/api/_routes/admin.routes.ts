@@ -46,9 +46,10 @@ export async function dispatchAdminRoutes(
   switch (routeKey) {
 
     case "GET:/api/me":
-  response = await meHandler({
+  response = meHandler({
     session,
     requestId,
+    req,
   });
   break;
   

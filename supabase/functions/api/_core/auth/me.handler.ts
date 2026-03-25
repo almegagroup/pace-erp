@@ -14,8 +14,8 @@ import type { SessionResolution } from "../../_pipeline/session.ts";
 interface MeContext {
   session: SessionResolution;
   requestId: string;
+  req: Request;
 }
-
 /**
  * /api/me
  *
@@ -30,7 +30,7 @@ interface MeContext {
  * - No branching payload
  */
 export function meHandler(ctx: MeContext): Response {
-  const { session, requestId } = ctx;
+  const { session, requestId, req } = ctx;
   const reqStart = performance.now();
 
   /**
@@ -48,7 +48,7 @@ export function meHandler(ctx: MeContext): Response {
     total_ms: totalMs,
     status: "ACTIVE"
   });
-    return okResponse({}, requestId);
+    return okResponse({}, requestId, req);
   }
 
   /**
@@ -72,6 +72,8 @@ console.log("ME_REQ_END", {
     "Not authenticated",
     requestId,
     "LOGOUT",
-    401
+    401,
+  undefined,
+  req
   );
 }
