@@ -15,6 +15,7 @@ import App from "./App.jsx";
 import {
   hardLogout,
   recordBackendActivity,
+  showWarning,
 } from "./store/sessionWarning.js";
 
 // 🔒 Gate-8 / G1 — Screen Registry Validation
@@ -69,6 +70,27 @@ Only authenticated universe may activate navigation stack.
 const __originalFetch = globalThis.fetch;
 const API_BASE = import.meta.env.VITE_API_BASE;
 
+async function refreshSessionAfterWarning() {
+  const response = await __originalFetch(`${API_BASE}/api/me`, {
+    credentials: "include",
+  });
+
+  let json = null;
+
+  try {
+    json = await response.clone().json();
+  } catch {
+    json = null;
+  }
+
+  if (!response.ok || json?.action === "LOGOUT") {
+    hardLogout();
+    return;
+  }
+
+  recordBackendActivity();
+}
+
 globalThis.fetch = async (...args) => {
   const requestTarget = args[0];
   const url =
@@ -89,6 +111,17 @@ globalThis.fetch = async (...args) => {
     json = await res.clone().json();
   } catch {
     return res;
+  }
+
+  /* -------------------------------------------------------
+   * WARNING (BACKEND AUTHORITY)
+   * ------------------------------------------------------- */
+  if (json?.warning?.type === "IDLE_WARNING") {
+    showWarning("IDLE_WARNING", refreshSessionAfterWarning);
+  }
+
+  if (json?.warning?.type === "ABSOLUTE_WARNING") {
+    showWarning("ABSOLUTE_WARNING", refreshSessionAfterWarning);
   }
 
   /* -------------------------------------------------------
