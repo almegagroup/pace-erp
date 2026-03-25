@@ -80,29 +80,38 @@ export default function LandingPage() {
 
               <div className="rounded-[30px] border border-slate-200/80 bg-slate-50/85 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
                 <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">
-                  ERP Entry
+                  User Guide
                 </p>
                 <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
-                  Secure public access into the ERP workspace
+                  Choose the right entry path before you continue
                 </h2>
                 <p className="mt-4 text-sm leading-7 text-slate-600">
-                  Login, signup, verification, and recovery all begin from this
-                  public entry layer before the protected ERP universe is
-                  activated.
+                  Use the action below that matches your current need. This
+                  keeps login, onboarding, and password recovery easy to
+                  understand before you enter the ERP workspace.
                 </p>
 
                 <div className="mt-8 grid gap-3 sm:grid-cols-3">
                   <div className={featureCardClassName}>
-                    <p className={featureLabelClassName}>Access</p>
-                    <p className={featureTextClassName}>Login</p>
+                    <p className={featureLabelClassName}>Login</p>
+                    <p className={featureTextClassName}>
+                      Existing approved users should use the Login button to
+                      sign in.
+                    </p>
                   </div>
                   <div className={featureCardClassName}>
-                    <p className={featureLabelClassName}>Onboarding</p>
-                    <p className={featureTextClassName}>Signup</p>
+                    <p className={featureLabelClassName}>Sign Up</p>
+                    <p className={featureTextClassName}>
+                      New users should choose Sign Up to submit an ERP access
+                      request.
+                    </p>
                   </div>
                   <div className={featureCardClassName}>
-                    <p className={featureLabelClassName}>Recovery</p>
-                    <p className={featureTextClassName}>Reset Password</p>
+                    <p className={featureLabelClassName}>Password Help</p>
+                    <p className={featureTextClassName}>
+                      If you forgot your password, open Login first and then use
+                      Forgot Password.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -131,4 +140,4 @@ const featureLabelClassName =
   "text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500";
 
 const featureTextClassName =
-  "mt-2 text-sm font-medium text-slate-900";
+  "mt-2 text-sm leading-6 text-slate-700";
