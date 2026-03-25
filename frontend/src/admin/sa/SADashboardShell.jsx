@@ -9,7 +9,7 @@
  */
 import { Outlet } from "react-router-dom";
 import { useEffect } from "react";
-import { replaceStack } from "../../navigation/screenStackEngine.js";
+import { getActiveScreen, resetToScreen } from "../../navigation/screenStackEngine.js";
 import { assertAdminEntry } from "../adminEntryGuard.js";
 
 export default function SADashboardShell() {
@@ -21,14 +21,11 @@ export default function SADashboardShell() {
   }, []);
 
   useEffect(() => {
-    replaceStack([
-      {
-        screen_code: "SA_HOME",
-        route: "/sa/home",
-        type: "full",
-        keepAlive: true,
-      },
-    ]);
+    const active = getActiveScreen();
+
+    if (!active?.route?.startsWith("/sa")) {
+      resetToScreen("SA_HOME");
+    }
   }, []);
 
   //console.log("➡️ About to render MenuShell from SA Shell");

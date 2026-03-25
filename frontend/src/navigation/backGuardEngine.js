@@ -8,7 +8,15 @@
  * Authority: Frontend
  */
 
-import { popScreen, getStackSnapshot, getActiveScreen } from "./screenStackEngine.js";
+import {
+  getActiveScreen,
+  getPreviousScreen,
+  getStackSnapshot,
+  popScreen,
+} from "./screenStackEngine.js";
+import { isBackAllowed } from "./backValidation.js";
+import { isPublicRoute } from "../router/publicRoutes.js";
+import { confirmAndRequestLogout } from "../store/sessionWarning.js";
 
 let backGuardEnabled = false;
 
@@ -20,7 +28,12 @@ export function enableBackGuard() {
 }
 
 function onBrowserBack(event) {
+  if (isPublicRoute(globalThis.location.pathname)) {
+    return;
+  }
+
   const stack = getStackSnapshot();
+  const active = getActiveScreen();
 
   // No stack = illegal
   if (!Array.isArray(stack) || stack.length === 0) {
@@ -31,15 +44,23 @@ function onBrowserBack(event) {
   // Root screen cannot go back
   if (stack.length === 1) {
     event.preventDefault();
-    globalThis.history.pushState(null, "", globalThis.location.pathname);
+    void confirmAndRequestLogout();
     return;
   }
 
-  
-  // Delegate decision to stack engine
-popScreen();
+  const previous = getPreviousScreen();
+  if (!isBackAllowed(previous?.screen_code)) {
+    event.preventDefault();
+    if (active?.route) {
+      globalThis.history.pushState(null, "", active.route);
+    }
+    return;
+  }
 
-// Re-assert URL from engine, not browser
-const active = getActiveScreen();
-globalThis.history.pushState(null, "", active.route);
+  popScreen();
+
+  const nextActive = getActiveScreen();
+  if (nextActive?.route) {
+    globalThis.history.pushState(null, "", nextActive.route);
+  }
 }

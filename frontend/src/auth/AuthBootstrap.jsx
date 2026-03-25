@@ -2,6 +2,7 @@ import { useRef, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import { isPublicRoute } from "../router/publicRoutes.js";
+import { resetToScreen } from "../navigation/screenStackEngine.js";
 
 export default function AuthBootstrap({ children }) {
   const location = useLocation();
@@ -130,19 +131,17 @@ hasBootedRef.current = true;
           //console.log("GA:", ga);
 
           if (sa) {
-            //console.log("➡️ Redirect → /sa/home");
-            navigate("/sa/home", { replace: true });
+            resetToScreen("SA_HOME");
             return;
           }
 
           if (ga) {
-            //console.log("➡️ Redirect → /ga/home");
-            navigate("/ga/home", { replace: true });
+            resetToScreen("GA_HOME");
             return;
           }
 
           console.log("➡️ Redirect → /dashboard");
-          navigate("/dashboard", { replace: true });
+          resetToScreen("DASHBOARD_HOME");
         }
 
       } catch (err) {

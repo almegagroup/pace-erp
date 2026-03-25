@@ -8,9 +8,9 @@
  * Authority: Frontend
  */
 
+import { Outlet } from "react-router-dom";
 import { useEffect } from "react";
-import MenuShell from "../../layout/MenuShell.jsx";
-import { replaceStack } from "../../navigation/screenStackEngine.js";
+import { getActiveScreen, resetToScreen } from "../../navigation/screenStackEngine.js";
 import { assertAdminEntry } from "../adminEntryGuard.js";
 
 export default function GADashboardShell() {
@@ -19,21 +19,12 @@ export default function GADashboardShell() {
 }, []);
 
  useEffect(() => {
-    replaceStack([
-      {
-        screen_code: "GA_HOME",
-        route: "/ga/home",
-        type: "full",
-        keepAlive: true,
-      },
-    ]);
+    const active = getActiveScreen();
+
+    if (!active?.route?.startsWith("/ga")) {
+      resetToScreen("GA_HOME");
+    }
   }, []);
 
- return (
-  <MenuShell
-    universe="ADMIN"
-    headerTitle="Group Admin"
-    rootScreenCode="GA_HOME"
-  />
-);
+ return <Outlet />;
 }

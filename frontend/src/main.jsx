@@ -22,7 +22,10 @@ import {
 import { validateScreenRegistry } from "./navigation/screenRules.js";
 import { enableBackGuard } from "./navigation/backGuardEngine.js";
 import { enableKeyboardIntentEngine } from "./navigation/keyboardIntentEngine.js";
-import { initNavigation } from "./navigation/screenStackEngine.js";
+import {
+  getScreenForRoute,
+  initNavigation,
+} from "./navigation/screenStackEngine.js";
 import { restoreNavigationStack } from "./navigation/navigationPersistence.js";
 import { isPublicRoute } from "./router/publicRoutes.js";
 
@@ -142,7 +145,11 @@ globalThis.fetch = async (...args) => {
 const restored = restoreNavigationStack();
 
 if (!restored && !isPublicRoute(pathname)) {
-  initNavigation("DASHBOARD_HOME");
+  const initialScreen = getScreenForRoute(pathname);
+
+  if (initialScreen?.keepAlive) {
+    initNavigation(initialScreen.screen_code);
+  }
 }
 
 createRoot(document.getElementById("root")).render(

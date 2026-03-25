@@ -18,56 +18,106 @@ function assert(condition, message) {
   }
 }
 
-/**
- * Internal navigation stack.
- * Root screen is always present once initialized.
- */
 const screenStack = [];
+const stackListeners = new Set();
+
+const ROUTE_TO_SCREEN_CODE = new Map(
+  Object.values(SCREEN_REGISTRY).map((screen) => [screen.route, screen.screen_code])
+);
+
+function buildScreenEntry(screenCode) {
+  const screen = SCREEN_REGISTRY[screenCode];
+  assert(screen, `Unknown screen: ${screenCode}`);
+
+  return {
+    screen_code: screen.screen_code,
+    route: screen.route,
+    type: screen.type,
+    keepAlive: screen.keepAlive,
+    universe: screen.universe,
+  };
+}
+
+function emitStackChange(action) {
+  const snapshot = [...screenStack];
+  const active = snapshot[snapshot.length - 1] ?? null;
+
+  if (snapshot.length > 0) {
+    persistNavigationStack();
+  }
+
+  logNavigationEvent({
+    type: action,
+    active_screen: active?.screen_code ?? null,
+    route: active?.route ?? null,
+    depth: snapshot.length,
+  });
+
+  stackListeners.forEach((listener) => {
+    listener(snapshot, {
+      action,
+      activeScreen: active,
+    });
+  });
+}
+
+export function subscribeToStack(listener) {
+  stackListeners.add(listener);
+  listener([...screenStack], {
+    action: "SYNC",
+    activeScreen: getActiveScreen(),
+  });
+
+  return () => {
+    stackListeners.delete(listener);
+  };
+}
+
+export function hasActiveStack() {
+  return screenStack.length > 0;
+}
+
+export function getScreenCodeForRoute(route) {
+  return ROUTE_TO_SCREEN_CODE.get(route) ?? null;
+}
+
+export function getScreenForRoute(route) {
+  const screenCode = getScreenCodeForRoute(route);
+  return screenCode ? SCREEN_REGISTRY[screenCode] : null;
+}
 
 /**
  * Initialize navigation with a root screen.
  * Must be called exactly once at app bootstrap.
  */
 export function initNavigation(rootScreenCode) {
-  assert(
-    screenStack.length === 0,
-    "Navigation already initialized"
-  );
+  if (screenStack.length > 0) {
+    return getActiveScreen();
+  }
 
-  const screen = SCREEN_REGISTRY[rootScreenCode];
-  assert(screen, `Unknown root screen: ${rootScreenCode}`);
-
-screenStack.push({
-  screen_code: rootScreenCode,
-  route: screen.route,
-  type: screen.type,
-  keepAlive: screen.keepAlive,
-});
-
-persistNavigationStack();
-logNavigationEvent({
-  type: "PUSH",
-  screen: rootScreenCode,
-});
+  screenStack.push(buildScreenEntry(rootScreenCode));
+  emitStackChange("INIT");
+  return getActiveScreen();
 }
 
 /**
  * Push a new screen onto the stack.
  */
 export function pushScreen(screenCode) {
-  assert(screenStack.length > 0, "Navigation not initialized");
+  if (screenStack.length === 0) {
+    return resetToScreen(screenCode);
+  }
 
-  const screen = SCREEN_REGISTRY[screenCode];
-  assert(screen, `Unknown screen: ${screenCode}`);
+  const nextScreen = buildScreenEntry(screenCode);
+  const active = getActiveScreen();
 
-  screenStack.push({
-    screen_code: screenCode,
-    route: screen.route,
-    type: screen.type,
-    keepAlive: screen.keepAlive,
-  });
+  if (active?.screen_code === nextScreen.screen_code) {
+    return active;
+  }
 
-  persistNavigationStack();
+  screenStack.push(nextScreen);
+  emitStackChange("PUSH");
+  return nextScreen;
 }
 
 /**
@@ -75,24 +125,46 @@ export function pushScreen(screenCode) {
  * Root screen cannot be replaced.
  */
 export function replaceScreen(screenCode) {
-  assert(screenStack.length > 1, "Cannot replace root screen");
+  const nextScreen = buildScreenEntry(screenCode);
 
-  const screen = SCREEN_REGISTRY[screenCode];
-  assert(screen, `Unknown screen: ${screenCode}`);
+  if (screenStack.length === 0) {
+    screenStack.push(nextScreen);
+  } else {
+    screenStack[screenStack.length - 1] = nextScreen;
+  }
 
- screenStack.pop();
-screenStack.push({
-  screen_code: screenCode,
-  route: screen.route,
-  type: screen.type,
-  keepAlive: screen.keepAlive,
-});
+  emitStackChange("REPLACE");
+  return nextScreen;
+}
 
-persistNavigationStack();
-logNavigationEvent({
-  type: "REPLACE",
-  screen: screenCode,
-});
+export function resetToScreen(screenCode) {
+  const rootScreen = buildScreenEntry(screenCode);
+
+  screenStack.length = 0;
+  screenStack.push(rootScreen);
+
+  emitStackChange("RESET");
+  return rootScreen;
+}
+
+export function openScreen(screenCode, options = {}) {
+  const mode = options.mode ?? "push";
+
+  switch (mode) {
+    case "replace":
+      return replaceScreen(screenCode);
+    case "reset":
+      return resetToScreen(screenCode);
+    default:
+      return pushScreen(screenCode);
+  }
+}
+
+export function openRoute(route, options = {}) {
+  const screenCode = getScreenCodeForRoute(route);
+  assert(screenCode, `Unknown route: ${route}`);
+
+  return openScreen(screenCode, options);
 }
 
 /**
@@ -102,25 +174,30 @@ logNavigationEvent({
 export function popScreen() {
   assert(screenStack.length > 1, "Cannot pop root screen");
   screenStack.pop();
-persistNavigationStack();
-logNavigationEvent({
-  type: "POP",
-});
+  emitStackChange("POP");
+  return getActiveScreen();
 }
 
 /**
  * Return currently active screen.
  */
 export function getActiveScreen() {
-  assert(screenStack.length > 0, "Navigation not initialized");
-  return screenStack[screenStack.length - 1];
+  return screenStack[screenStack.length - 1] ?? null;
+}
+
+export function getPreviousScreen() {
+  if (screenStack.length < 2) return null;
+  return screenStack[screenStack.length - 2];
+}
+
+export function getStackDepth() {
+  return screenStack.length;
 }
 
 /**
  * Return immutable snapshot of stack.
  */
 export function getStackSnapshot() {
-  assert(screenStack.length > 0, "Navigation not initialized");
   return [...screenStack];
 }
 /**
@@ -141,7 +218,10 @@ export function replaceStack(newStack) {
   assert(valid, "Stack restore contains invalid screen");
 
   screenStack.length = 0;
-  newStack.forEach((screen) => screenStack.push(screen));
+  newStack.forEach((screen) => screenStack.push({
+    ...buildScreenEntry(screen.screen_code),
+  }));
+  emitStackChange("RESTORE");
 }
 
 /**
@@ -150,4 +230,17 @@ export function replaceStack(newStack) {
  */
 export function resetStack() {
   screenStack.length = 0;
+  logNavigationEvent({
+    type: "CLEAR",
+    active_screen: null,
+    route: null,
+    depth: 0,
+  });
+
+  stackListeners.forEach((listener) => {
+    listener([], {
+      action: "CLEAR",
+      activeScreen: null,
+    });
+  });
 }

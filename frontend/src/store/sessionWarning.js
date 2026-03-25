@@ -145,3 +145,29 @@ export function hardLogout() {
 
   globalThis.location.href = "/login";
 }
+
+export async function requestLogout() {
+  try {
+    await globalThis.fetch(`${import.meta.env.VITE_API_BASE}/api/logout`, {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch {
+    // Logout must still complete locally even if the network path fails.
+  }
+
+  hardLogout();
+}
+
+export async function confirmAndRequestLogout() {
+  const approved = globalThis.confirm(
+    "You are at the main dashboard. Do you want to logout now?"
+  );
+
+  if (!approved) {
+    return false;
+  }
+
+  await requestLogout();
+  return true;
+}

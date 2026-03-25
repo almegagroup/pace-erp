@@ -8,9 +8,10 @@
  * Authority: Frontend
  */
 
-import { popScreen } from "./screenStackEngine.js";
+import { getStackSnapshot, popScreen } from "./screenStackEngine.js";
 import { isKeyboardIntentAllowed } from "./keyboardAclBridge.js";
 import { logNavigationEvent } from "./navigationEventLogger.js";
+import { confirmAndRequestLogout } from "../store/sessionWarning.js";
 
 /**
  * SECURITY ALLOWLIST
@@ -43,6 +44,12 @@ export function handleKeyboardIntent(intent) {
    ======================= */
 
 function handleBack() {
+  const stack = getStackSnapshot();
+  if (stack.length <= 1) {
+    void confirmAndRequestLogout();
+    return;
+  }
+
   logNavigationEvent({
     source: "keyboard",
     intent: "INTENT_BACK",
