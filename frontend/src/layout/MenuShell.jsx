@@ -9,15 +9,23 @@
  */
 
 import { useMenu } from "../context/useMenu.js";
-import { Link } from "react-router-dom";
+import { Link, Outlet } from "react-router-dom";
 
-export default function MenuShell({ children }) {
-  console.log("🔥 MenuShell ACTIVE"); // ✅ ADD HERE
+export default function MenuShell(){
+  //console.log("🔥 MenuShell ACTIVE");
+
   const { menu, loading } = useMenu();
 
-  if (loading) return null;
+  console.log("📊 MenuShell state:", {
+    loading,
+    menuLength: menu?.length,
+  });
 
-  // 🔥 ADD THIS FUNCTION HERE
+  if (loading) {
+    console.log("⏳ Loading...");
+    return <div>Loading Menu...</div>;
+  }
+
   async function handleLogout() {
     try {
       await fetch(`${import.meta.env.VITE_API_BASE}/api/logout`, {
@@ -33,10 +41,8 @@ export default function MenuShell({ children }) {
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
-      {/* Sidebar */}
       <aside style={{ width: "220px", borderRight: "1px solid #ddd", display: "flex", flexDirection: "column" }}>
         
-        {/* 🔹 MENU LIST */}
         <ul style={{ flex: 1 }}>
           {menu.map(item => (
             <li key={item.menu_code}>
@@ -49,7 +55,6 @@ export default function MenuShell({ children }) {
           ))}
         </ul>
 
-        {/* 🔥 LOGOUT BUTTON (ADD HERE — BOTTOM) */}
         <div style={{ padding: "10px" }}>
           <button onClick={handleLogout} style={{ width: "100%" }}>
             Logout
@@ -58,10 +63,9 @@ export default function MenuShell({ children }) {
 
       </aside>
 
-      {/* Main content */}
       <main style={{ flex: 1 }}>
-        {children}
-      </main>
+  <Outlet />
+</main>
     </div>
   );
 }

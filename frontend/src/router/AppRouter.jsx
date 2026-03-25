@@ -37,6 +37,7 @@ import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx"; 
 
 export default function AppRouter() {
+  //console.log("🧭 AppRouter RENDERED");
   return (
     <BrowserRouter>
       {/* ✅ SINGLE SOURCE OF CONTEXT */}
@@ -80,10 +81,18 @@ export default function AppRouter() {
     </DeepLinkGuard>
   }
 >
-  <Route path="home" element={<SAHome />} />
-  <Route path="company/create" element={<SACompanyCreate />} />
-  <Route path="users" element={<SAUsers />} />
-  <Route path="signup-requests" element={<SASignupRequests />} />
+  {/* 🔥 LAYOUT LAYER */}
+  <Route element={<MenuShell />}>
+
+    <Route
+      path="home"
+      element={(console.log("📍 /sa/home PAGE HIT"), <SAHome />)}
+    />
+    <Route path="company/create" element={<SACompanyCreate />} />
+    <Route path="users" element={<SAUsers />} />
+    <Route path="signup-requests" element={<SASignupRequests />} />
+
+  </Route>
 </Route>
 
 {/* ============================== */}

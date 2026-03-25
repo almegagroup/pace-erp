@@ -31,27 +31,27 @@ useEffect(() => {
     async function boot() {
       const pathname = location.pathname;
 
-      console.log("🚀 [BOOT START]");
-      console.log("📍 Path:", pathname);
-      console.log("📦 Menu (before):", menu);
+      //console.log("🚀 [BOOT START]");
+      //console.log("📍 Path:", pathname);
+      //console.log("📦 Menu (before):", menu);
 
       // 🟢 PUBLIC ROUTE
       if (isPublicRoute(pathname)) {
         hasBootedRef.current = false;
-        console.log("🟢 Public route → skipping bootstrap");
+        //console.log("🟢 Public route → skipping bootstrap");
         //clearMenuSnapshot();
         return;
       }
 
       // 🔥 Skip if menu already exists
-if (menu && menu.length > 0) {
-  console.log("⛔ Boot skipped (menu already loaded)");
+if (menu && menu.length > 0 && hasBootedRef.current) {
+  //console.log("⛔ Boot skipped (already ran + menu exists)");
   return;
 }
 
 // 🔥 Prevent duplicate boot
 if (hasBootedRef.current) {
-  console.log("⛔ Boot skipped (already ran)");
+  //console.log("⛔ Boot skipped (already ran)");
   return;
 }
 hasBootedRef.current = true;
@@ -59,22 +59,22 @@ hasBootedRef.current = true;
       
 
       try {
-        console.log("⏳ Starting menu loading...");
+        //console.log("⏳ Starting menu loading...");
         startMenuLoading();
 
         // =========================
         // STEP 1: SESSION CHECK
         // =========================
-        console.log("📡 Calling /api/me...");
+        //console.log("📡 Calling /api/me...");
         const meRes = await fetch(
           `${import.meta.env.VITE_API_BASE}/api/me`,
           { credentials: "include" }
         );
 
-        console.log("🧾 /api/me status:", meRes.status);
+        //console.log("🧾 /api/me status:", meRes.status);
 
         if (!meRes.ok) {
-  console.log("❌ SESSION INVALID");
+  //console.log("❌ SESSION INVALID");
 
   // 🔥 ADD THIS (logout detection)
   clearMenuSnapshot();
@@ -86,13 +86,13 @@ hasBootedRef.current = true;
         // =========================
         // STEP 2: MENU FETCH
         // =========================
-        console.log("📡 Calling /api/me/menu...");
+        //console.log("📡 Calling /api/me/menu...");
         const menuRes = await fetch(
           `${import.meta.env.VITE_API_BASE}/api/me/menu`,
           { credentials: "include" }
         );
 
-        console.log("🧾 /api/me/menu status:", menuRes.status);
+        //console.log("🧾 /api/me/menu status:", menuRes.status);
 
         if (!menuRes.ok) {
           console.log("❌ MENU FETCH FAILED");
@@ -102,39 +102,39 @@ hasBootedRef.current = true;
         const data = await menuRes.json();
         if (!alive) return;
 
-        console.log("📦 Raw menu response:", data);
+        //console.log("📦 Raw menu response:", data);
 
         const menuData = data?.data?.menu ?? [];
 
-        console.log("📊 Final menuData:", menuData);
+        //console.log("📊 Final menuData:", menuData);
         console.log("📊 Menu length:", menuData.length);
 
         // =========================
         // STEP 3: STORE SNAPSHOT
         // =========================
         setMenuSnapshot(menuData);
-        console.log("✅ Menu snapshot set");
+        //console.log("✅ Menu snapshot set");
 
         // =========================
         // STEP 4: ENTRY REDIRECT
         // =========================
         if (pathname === "/app") {
-          console.log("🔀 Resolving /app redirect...");
+          //console.log("🔀 Resolving /app redirect...");
 
           const sa = menuData.find(m => m.menu_code === "SA_HOME");
           const ga = menuData.find(m => m.menu_code === "GA_HOME");
 
           console.log("SA:", sa);
-          console.log("GA:", ga);
+          //console.log("GA:", ga);
 
           if (sa) {
-            console.log("➡️ Redirect → /sa/home");
+            //console.log("➡️ Redirect → /sa/home");
             navigate("/sa/home", { replace: true });
             return;
           }
 
           if (ga) {
-            console.log("➡️ Redirect → /ga/home");
+            //console.log("➡️ Redirect → /ga/home");
             navigate("/ga/home", { replace: true });
             return;
           }
@@ -148,7 +148,7 @@ hasBootedRef.current = true;
 
         clearMenuSnapshot();
 
-        console.log("➡️ Redirect → /login");
+        //console.log("➡️ Redirect → /login");
         navigate("/login", { replace: true });
       }
     }

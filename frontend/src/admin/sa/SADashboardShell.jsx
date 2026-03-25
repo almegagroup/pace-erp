@@ -9,20 +9,18 @@
  */
 import { Outlet } from "react-router-dom";
 import { useEffect } from "react";
-import MenuShell from "../../layout/MenuShell.jsx";
 import { replaceStack } from "../../navigation/screenStackEngine.js";
 import { assertAdminEntry } from "../adminEntryGuard.js";
 
 export default function SADashboardShell() {
 
-  console.log("🔥 SA Dashboard Shell ACTIVE");
-  // --- HARD ENTRY ASSERTION ---
-  // Ensures this shell is entered only via valid admin path
-  useEffect(() => {
-  assertAdminEntry();
-}, []);
+ // console.log("🔥 SA Dashboard Shell ACTIVE");
 
-   useEffect(() => {
+  useEffect(() => {
+    assertAdminEntry();
+  }, []);
+
+  useEffect(() => {
     replaceStack([
       {
         screen_code: "SA_HOME",
@@ -33,13 +31,12 @@ export default function SADashboardShell() {
     ]);
   }, []);
 
-return (
-  <MenuShell
-    universe="ADMIN"
-    headerTitle="Super Admin"
-    rootScreenCode="SA_HOME"
-  >
-    <Outlet /> {/* 🔥 THIS IS MUST */}
-  </MenuShell>
+  //console.log("➡️ About to render MenuShell from SA Shell");
+
+ return (
+  <>
+    {/* {console.log("📦 SA Shell rendering Outlet")} */}
+    <Outlet />
+  </>
 );
 }
