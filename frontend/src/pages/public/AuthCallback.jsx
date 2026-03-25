@@ -107,15 +107,31 @@ if(cancelled) return;
         STEP 3 — FLOW ROUTING
         ============================== */
 
-       if(flow === "recovery"){
-  navigate("/reset-password",{ replace:true });
-}
-else if(flow === "signup"){
+       const urlStr = globalThis.location.href;
+
+/* ==============================
+PRIORITY 1 — SIGNUP (STRICT)
+============================== */
+if(flow === "signup"){
   navigate("/email-verified",{ replace:true });
+  return;
 }
-else{
-  navigate("/login",{ replace:true });
+
+/* ==============================
+PRIORITY 2 — RECOVERY (FLEXIBLE)
+============================== */
+if(
+  flow === "recovery" ||
+  urlStr.includes("recovery")
+){
+  navigate("/reset-password",{ replace:true });
+  return;
 }
+
+/* ==============================
+FALLBACK
+============================== */
+navigate("/login",{ replace:true });
 
       }catch(err){
 
