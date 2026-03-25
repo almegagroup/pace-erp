@@ -9,6 +9,7 @@
  */
 
 import { clearNavigationStack } from "../navigation/navigationPersistence.js";
+import { openLogoutConfirm } from "./logoutConfirm.js";
 
 const WARNING_MESSAGES = {
   IDLE_WARNING:
@@ -160,9 +161,7 @@ export async function requestLogout() {
 }
 
 export async function confirmAndRequestLogout() {
-  const approved = globalThis.confirm(
-    "You are at the main dashboard. Do you want to logout now?"
-  );
+  const approved = await openLogoutConfirm();
 
   if (!approved) {
     return false;

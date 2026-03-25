@@ -21,6 +21,11 @@ export function MenuProvider({ children }) {
   const [menu, setMenu] = useState([]);
   const [allowedRoutes, setAllowedRoutes] = useState(new Set());
   const [loading, setLoading] = useState(true);
+  const [shellProfile, setShellProfileState] = useState({
+    userCode: "",
+    roleCode: "",
+    tagline: "Process Automation & Control Environment",
+  });
   
 
   // 🔵 START LOADING (stable)
@@ -34,6 +39,11 @@ export function MenuProvider({ children }) {
     //console.log("🧹 clearMenuSnapshot CALLED");
     setMenu([]);
     setAllowedRoutes(new Set());
+    setShellProfileState({
+      userCode: "",
+      roleCode: "",
+      tagline: "Process Automation & Control Environment",
+    });
     console.log("✅ loading → false (clear)");
     setLoading(false);
   }, []);
@@ -62,15 +72,25 @@ export function MenuProvider({ children }) {
     setLoading(false);
   }, []);
 
+  const setShellProfile = useCallback((profile) => {
+    setShellProfileState({
+      userCode: profile?.userCode ?? "",
+      roleCode: profile?.roleCode ?? "",
+      tagline: profile?.tagline ?? "Process Automation & Control Environment",
+    });
+  }, []);
+
   return (
     <MenuContext.Provider
       value={{
         menu,
         allowedRoutes,
         loading,
+        shellProfile,
         startMenuLoading,
         clearMenuSnapshot,
         setMenuSnapshot,
+        setShellProfile,
       }}
     >
       {children}

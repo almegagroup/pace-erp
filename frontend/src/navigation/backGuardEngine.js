@@ -44,6 +44,9 @@ function onBrowserBack(event) {
   // Root screen cannot go back
   if (stack.length === 1) {
     event.preventDefault();
+    if (active?.route) {
+      globalThis.history.pushState(null, "", active.route);
+    }
     void confirmAndRequestLogout();
     return;
   }

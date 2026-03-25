@@ -14,6 +14,7 @@ export default function AuthBootstrap({ children }) {
     menu,
     startMenuLoading,
     setMenuSnapshot,
+    setShellProfile,
     clearMenuSnapshot,
   } = useMenu();
 
@@ -83,8 +84,28 @@ hasBootedRef.current = true;
   clearMenuSnapshot();
   navigate("/login", { replace: true });
 
-  return; // ❗ MUST STOP FLOW
+          return; // ❗ MUST STOP FLOW
 }
+
+        const profileRes = await fetch(
+          `${import.meta.env.VITE_API_BASE}/api/me/profile`,
+          { credentials: "include" }
+        );
+
+        if (!profileRes.ok) {
+          clearMenuSnapshot();
+          navigate("/login", { replace: true });
+          return;
+        }
+
+        const profileData = await profileRes.json();
+        if (!alive) return;
+
+        setShellProfile({
+          userCode: profileData?.data?.user_code ?? "",
+          roleCode: profileData?.data?.role_code ?? "",
+          tagline: "Process Automation & Control Environment",
+        });
 
         // =========================
         // STEP 2: MENU FETCH
@@ -165,6 +186,7 @@ hasBootedRef.current = true;
     navigate,
   startMenuLoading,
   setMenuSnapshot,
+  setShellProfile,
   clearMenuSnapshot,
   ]);
 

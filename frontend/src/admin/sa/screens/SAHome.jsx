@@ -6,26 +6,22 @@ export default function SAHome() {
     {
       label: "Companies",
       value: "24",
-      tag: "Landscape",
-      helper: "Multi-company operating units aligned under the central governance model.",
+      tag: "Live",
     },
     {
       label: "Users",
       value: "312",
-      tag: "Identity",
-      helper: "Provisioned workforce identities ready for lifecycle, access, and audit control.",
+      tag: "Active",
     },
     {
       label: "Pending Signups",
       value: "08",
       tag: "Queue",
-      helper: "Requests waiting for approval before onboarding into the secured ERP boundary.",
     },
     {
       label: "Snapshot Health",
       value: "99.2%",
       tag: "Runtime",
-      helper: "Menu and access snapshots are serving from the current administrative baseline.",
     },
   ];
 
@@ -50,35 +46,13 @@ export default function SAHome() {
     },
   ];
 
-  const feedRows = [
-    {
-      title: "North Cluster rollout is ready for activation",
-      detail: "Governance checks cleared. Waiting for final admin sign-off.",
-      status: "Ready",
-    },
-    {
-      title: "Quarter close user review window opened",
-      detail: "Privilege and assignment review cycle is now live across all companies.",
-      status: "Live",
-    },
-    {
-      title: "Signup queue remained within SLA today",
-      detail: "Approval latency held under the expected enterprise threshold.",
-      status: "Stable",
-    },
-  ];
-
   return (
     <EnterpriseDashboard
       eyebrow="Super Admin Command"
-      title="Enterprise governance, identity control, and rollout readiness in one operational cockpit."
-      subtitle="Monitor platform posture, move quickly on provisioning decisions, and keep the entire ERP landscape aligned with a single administrative standard."
+      title="Super Admin Dashboard"
+      subtitle="Use the shortcuts below to move into company setup, user control, and signup review."
       stats={stats}
       actions={actions}
-      focusTitle="Current Focus"
-      focusBody="Prioritize entity provisioning, user governance, and intake approvals. This dashboard is tuned for central admin work where speed matters, but traceability and policy discipline matter even more."
-      feedTitle="Control Plane Feed"
-      feedRows={feedRows}
     />
   );
 }

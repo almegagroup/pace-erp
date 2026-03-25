@@ -2,6 +2,7 @@
  * Admin Route Dispatcher
  */
 import { meHandler } from "../_core/auth/me.handler.ts";
+import { meProfileHandler } from "../_core/auth/me_profile.handler.ts";
 import { listPendingSignupHandler } from "../_core/admin/signup/list_pending.handler.ts";
 import { approveSignupHandler } from "../_core/admin/signup/approve.handler.ts";
 import { rejectSignupHandler } from "../_core/admin/signup/reject.handler.ts";
@@ -52,6 +53,14 @@ export async function dispatchAdminRoutes(
     req,
   });
   break;
+
+    case "GET:/api/me/profile":
+      response = await meProfileHandler({
+        session,
+        requestId,
+        req,
+      });
+      break;
   
     case "GET:/api/admin/signup-requests":
       response = await listPendingSignupHandler(req, {

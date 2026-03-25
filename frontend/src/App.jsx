@@ -10,12 +10,14 @@
 
 import AppRouter from "./router/AppRouter.jsx";
 import SessionOverlay from "./components/SessionOverlay.jsx";
+import LogoutConfirmOverlay from "./components/LogoutConfirmOverlay.jsx";
 
 function App() {
   return (
     <>
       <AppRouter />
       <SessionOverlay />
+      <LogoutConfirmOverlay />
     </>
   );
 }

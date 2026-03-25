@@ -12,7 +12,6 @@ import { useMenu } from "../context/useMenu.js";
 import { useMemo, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import {
-  getActiveScreen,
   getScreenForRoute,
   getStackDepth,
   openRoute,
@@ -29,8 +28,7 @@ export default function MenuShell(){
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
 
-  const { menu, loading } = useMenu();
-  const activeScreen = getActiveScreen();
+  const { menu, loading, shellProfile } = useMenu();
   const stackDepth = getStackDepth();
 
   const activeTitle = useMemo(() => {
@@ -121,7 +119,7 @@ export default function MenuShell(){
                     Pace ERP
                   </p>
                   <p style={{ margin: "4px 0 0", fontSize: "12px", color: "rgba(255,255,255,0.62)" }}>
-                    Enterprise Control
+                    {shellProfile?.userCode || "PACE ERP"}
                   </p>
                 </div>
               ) : null}
@@ -145,10 +143,10 @@ export default function MenuShell(){
           {!collapsed ? (
             <>
               <h2 style={{ margin: "16px 0 0", fontSize: "24px", fontWeight: 600, lineHeight: 1.2 }}>
-            Enterprise Workspace
+            {activeTitle}
               </h2>
               <p style={{ margin: "10px 0 0", fontSize: "13px", lineHeight: 1.6, color: "rgba(255,255,255,0.72)" }}>
-            Clean operational navigation with stack-driven screen control.
+            {shellProfile?.tagline || "Process Automation & Control Environment"}
               </p>
             </>
           ) : null}
@@ -219,13 +217,13 @@ export default function MenuShell(){
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "18px", flexWrap: "wrap" }}>
             <div>
               <p style={{ margin: 0, fontSize: "11px", letterSpacing: "0.22em", textTransform: "uppercase", color: "#64748b", fontWeight: 700 }}>
-                Active Workspace
+                {shellProfile?.roleCode || "Role"}
               </p>
               <h1 style={{ margin: "10px 0 0", fontSize: "20px", color: "#0f172a", fontWeight: 600 }}>
                 {activeTitle}
               </h1>
               <p style={{ margin: "6px 0 0", fontSize: "13px", color: "#64748b" }}>
-                {activeScreen?.route ?? location.pathname}
+                {shellProfile?.userCode || "User"}
               </p>
             </div>
 
