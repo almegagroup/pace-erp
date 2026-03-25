@@ -6,12 +6,11 @@
  */
 import { useLocation } from "react-router-dom";
 import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
+import { resetToScreen } from "../navigation/screenStackEngine.js";
 
 export default function AuthResolver(){
 
-  const navigate = useNavigate();
   const location = useLocation();
   const { menu } = useMenu();
 
@@ -29,24 +28,18 @@ const current = location.pathname;
     const sa = menu.find(m => m.menu_code === "SA_HOME");
 
     if (ga) {
-  if (current !== "/ga/home") {
-    navigate("/ga/home", { replace: true });
-  }
+  resetToScreen("GA_HOME");
   return;
 }
 
     if (sa) {
-  if (current !== "/sa/home") {
-    navigate("/sa/home", { replace: true });
-  }
+  resetToScreen("SA_HOME");
   return;
 }
 
-    if (current !== "/dashboard") {
-  navigate("/dashboard", { replace: true });
-}
+    resetToScreen("DASHBOARD_HOME");
 
-  }, [menu, navigate, location.pathname]);
+  }, [menu, location.pathname]);
 
   return (
     <div style={{

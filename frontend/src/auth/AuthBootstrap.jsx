@@ -2,6 +2,7 @@ import { useRef, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import { isPublicRoute } from "../router/publicRoutes.js";
+import { resetToScreen } from "../navigation/screenStackEngine.js";
 
 export default function AuthBootstrap({ children }) {
   const location = useLocation();
@@ -13,6 +14,7 @@ export default function AuthBootstrap({ children }) {
     menu,
     startMenuLoading,
     setMenuSnapshot,
+    setShellProfile,
     clearMenuSnapshot,
   } = useMenu();
 
@@ -82,8 +84,28 @@ hasBootedRef.current = true;
   clearMenuSnapshot();
   navigate("/login", { replace: true });
 
-  return; // ❗ MUST STOP FLOW
+          return; // ❗ MUST STOP FLOW
 }
+
+        const profileRes = await fetch(
+          `${import.meta.env.VITE_API_BASE}/api/me/profile`,
+          { credentials: "include" }
+        );
+
+        if (!profileRes.ok) {
+          clearMenuSnapshot();
+          navigate("/login", { replace: true });
+          return;
+        }
+
+        const profileData = await profileRes.json();
+        if (!alive) return;
+
+        setShellProfile({
+          userCode: profileData?.data?.user_code ?? "",
+          roleCode: profileData?.data?.role_code ?? "",
+          tagline: "Process Automation & Control Environment",
+        });
 
         // =========================
         // STEP 2: MENU FETCH
@@ -130,19 +152,17 @@ hasBootedRef.current = true;
           //console.log("GA:", ga);
 
           if (sa) {
-            //console.log("➡️ Redirect → /sa/home");
-            navigate("/sa/home", { replace: true });
+            resetToScreen("SA_HOME");
             return;
           }
 
           if (ga) {
-            //console.log("➡️ Redirect → /ga/home");
-            navigate("/ga/home", { replace: true });
+            resetToScreen("GA_HOME");
             return;
           }
 
           console.log("➡️ Redirect → /dashboard");
-          navigate("/dashboard", { replace: true });
+          resetToScreen("DASHBOARD_HOME");
         }
 
       } catch (err) {
@@ -166,6 +186,7 @@ hasBootedRef.current = true;
     navigate,
   startMenuLoading,
   setMenuSnapshot,
+  setShellProfile,
   clearMenuSnapshot,
   ]);
 

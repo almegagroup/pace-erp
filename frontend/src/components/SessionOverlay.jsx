@@ -8,25 +8,25 @@
  * Authority: Frontend (DISPLAY ONLY)
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   subscribe,
   unsubscribe,
   clearWarning,
 } from "../store/sessionWarning.js";
-
-/* =========================================================
- * Component
- * ========================================================= */
+import ModalBase from "./layer/ModalBase.jsx";
 
 export default function SessionOverlay() {
   const [visible, setVisible] = useState(false);
   const [message, setMessage] = useState("");
+  const [warningType, setWarningType] = useState(null);
+  const actionButtonRef = useRef(null);
 
   useEffect(() => {
     const listener = (state) => {
       setVisible(state.visible);
       setMessage(state.message);
+      setWarningType(state.type);
     };
 
     subscribe(listener);
@@ -36,54 +36,35 @@ export default function SessionOverlay() {
   if (!visible) return null;
 
   return (
-    <div style={overlayStyle}>
-      <div style={boxStyle}>
-        <p style={textStyle}>{message}</p>
-        <button style={buttonStyle} onClick={clearWarning}>
+    <ModalBase
+      visible={visible}
+      onEscape={() => void clearWarning("escape")}
+      initialFocusRef={actionButtonRef}
+      eyebrow={
+        warningType === "ABSOLUTE_WARNING" ? "Session Expiring" : "Idle Warning"
+      }
+      message={message}
+      actions={
+        <button
+          ref={actionButtonRef}
+          style={buttonStyle}
+          onClick={() => void clearWarning("ack")}
+        >
           OK
         </button>
-      </div>
-    </div>
+      }
+      width="min(420px, calc(100vw - 32px))"
+    />
   );
 }
 
-/* =========================================================
- * Styles (Hard block UI)
- * ========================================================= */
-
-const overlayStyle = {
-  position: "fixed",
-  top: 0,
-  left: 0,
-  width: "100vw",
-  height: "100vh",
-  background: "rgba(0,0,0,0.6)",
-  zIndex: 999999,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  pointerEvents: "all", // 🔥 HARD BLOCK
-};
-
-const boxStyle = {
-  background: "#ffffff",
-  padding: "24px",
-  borderRadius: "8px",
-  minWidth: "280px",
-  textAlign: "center",
-};
-
-const textStyle = {
-  marginBottom: "16px",
-  fontSize: "14px",
-  color: "#333",
-};
-
 const buttonStyle = {
-  padding: "8px 16px",
+  padding: "10px 18px",
   border: "none",
-  borderRadius: "4px",
+  borderRadius: "12px",
   background: "#2563eb",
   color: "#fff",
   cursor: "pointer",
+  fontSize: "14px",
+  fontWeight: 600,
 };

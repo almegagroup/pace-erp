@@ -11,557 +11,431 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient.js";
-
-import logo from "../../assets/pace-bgr.png";
+import PublicAuthShell from "./PublicAuthShell.jsx";
 
 export default function SignupScreen() {
+  const navigate = useNavigate();
 
-const navigate = useNavigate();
+  const [name, setName] = useState("");
+  const [company, setCompany] = useState("");
+  const [designation, setDesignation] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const passwordStrength = getPasswordStrength(password);
 
-const [name,setName] = useState("");
-const [company,setCompany] = useState("");
-const [designation,setDesignation] = useState("");
-const [phone,setPhone] = useState("");
-const [email,setEmail] = useState("");
-const [password,setPassword] = useState("");
-const [showPassword,setShowPassword] = useState(false);
-const passwordStrength = getPasswordStrength(password);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [success, setSuccess] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState(null);
 
-const [loading,setLoading] = useState(false);
-const [error,setError] = useState(null);
-const [fieldErrors, setFieldErrors] = useState({});
-const [success,setSuccess] = useState(false);
-const [captchaToken,setCaptchaToken] = useState(null);
+  const widgetIdRef = useRef(null);
 
-const widgetIdRef = useRef(null);
-// 🔥 VALIDATION HELPERS
+  function isValidEmail(value) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  }
 
-function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
+  function isValidPhone(value) {
+    return /^[0-9]{10}$/.test(value);
+  }
 
-function isValidPhone(phone) {
-  return /^[0-9]{10}$/.test(phone);
-}
+  function getPasswordStrength(value) {
+    let score = 0;
 
-function getPasswordStrength(password) {
-  let score = 0;
+    if (value.length >= 8) score++;
+    if (/[A-Z]/.test(value)) score++;
+    if (/[0-9]/.test(value)) score++;
+    if (/[^A-Za-z0-9]/.test(value)) score++;
 
-  if (password.length >= 8) score++;
-  if (/[A-Z]/.test(password)) score++;
-  if (/[0-9]/.test(password)) score++;
-  if (/[^A-Za-z0-9]/.test(password)) score++;
+    return score;
+  }
 
-  return score; // 0–4
-}
+  function isValidPassword(value) {
+    return (
+      value.length >= 8 &&
+      /[A-Z]/.test(value) &&
+      /[0-9]/.test(value) &&
+      /[^A-Za-z0-9]/.test(value)
+    );
+  }
 
-function isValidPassword(password) {
-  return (
-    password.length >= 8 &&
-    /[A-Z]/.test(password) &&
-    /[0-9]/.test(password) &&
-    /[^A-Za-z0-9]/.test(password)
-  );
-}
+  useEffect(() => {
+    let cancelled = false;
+    let retryCount = 0;
 
-useEffect(() => {
+    function renderCaptcha() {
+      if (cancelled) return;
 
-  let cancelled = false;
-  let retryCount = 0;
-
-  function renderCaptcha() {
-
-    if (cancelled) return;
-
-    if (!globalThis.turnstile) {
-      if (retryCount < 10) {
-        retryCount++;
-        setTimeout(renderCaptcha, 500);
+      if (!globalThis.turnstile) {
+        if (retryCount < 10) {
+          retryCount++;
+          setTimeout(renderCaptcha, 500);
+        }
+        return;
       }
+
+      const container = document.getElementById("signup-turnstile");
+      if (!container) return;
+
+      if (!container.hasChildNodes()) {
+        widgetIdRef.current = globalThis.turnstile.render(container, {
+          sitekey: import.meta.env.VITE_TURNSTILE_SITE_KEY,
+          callback: (token) => {
+            setCaptchaToken(token);
+          },
+          "expired-callback": () => {
+            setCaptchaToken(null);
+          },
+        });
+      }
+    }
+
+    renderCaptcha();
+
+    return () => {
+      cancelled = true;
+
+      if (widgetIdRef.current && globalThis.turnstile) {
+        globalThis.turnstile.remove(widgetIdRef.current);
+      }
+    };
+  }, []);
+
+  function validateFields() {
+    const errors = {};
+
+    if (!name) errors.name = "Name is required";
+    if (!company) errors.company = "Company is required";
+
+    if (!email) {
+      errors.email = "Email is required";
+    } else if (!isValidEmail(email)) {
+      errors.email = "Invalid email format";
+    }
+
+    if (!phone) {
+      errors.phone = "Phone is required";
+    } else if (!isValidPhone(phone)) {
+      errors.phone = "Phone must be 10 digits";
+    }
+
+    if (!password) {
+      errors.password = "Password is required";
+    } else if (!isValidPassword(password)) {
+      errors.password = "8+ chars, 1 Capital, 1 Number, 1 Special required";
+    }
+
+    return errors;
+  }
+
+  async function handleSignup(e) {
+    if (e) e.preventDefault();
+    if (loading) return;
+
+    const lastSignup = localStorage.getItem("signup_attempt");
+
+    if (lastSignup) {
+      const diff = Date.now() - Number(lastSignup);
+
+      if (diff < 10000) {
+        setError("Please wait before trying again");
+        return;
+      }
+    }
+
+    localStorage.setItem("signup_attempt", Date.now());
+    setError(null);
+
+    const errors = validateFields();
+    setFieldErrors(errors);
+
+    if (Object.keys(errors).length > 0) {
       return;
     }
 
-    const container = document.getElementById("signup-turnstile");
-    if (!container) return;
+    if (!name || !company) {
+      setError("Name and Company are required");
+      return;
+    }
 
-    if (!container.hasChildNodes()) {
-      widgetIdRef.current = globalThis.turnstile.render(container, {
-        sitekey: import.meta.env.VITE_TURNSTILE_SITE_KEY,
+    if (!email || !password || !phone) {
+      setError("Email, Phone and Password are required");
+      return;
+    }
 
-        callback: (token) => {
-          setCaptchaToken(token);
+    if (!isValidEmail(email)) {
+      setError("Invalid email format");
+      return;
+    }
+
+    if (!isValidPhone(phone)) {
+      setError("Phone must be 10 digits");
+      return;
+    }
+
+    if (!isValidPassword(password)) {
+      setError(
+        "Password must be 8+ chars with 1 Capital, 1 Number, 1 Special Character"
+      );
+      return;
+    }
+
+    if (!captchaToken) {
+      setError("Please complete captcha");
+      return;
+    }
+
+    if (captchaToken.length < 10) {
+      setError("Invalid captcha");
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const redirectUrl = import.meta.env.VITE_APP_URL;
+
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            name,
+            parent_company: company,
+            designation_hint: designation,
+            phone,
+          },
+          emailRedirectTo: `${redirectUrl}/auth/callback`,
         },
-
-        "expired-callback": () => {
-          setCaptchaToken(null);
-        }
       });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      setSuccess(true);
+      setCaptchaToken(null);
+
+      if (globalThis.turnstile && widgetIdRef.current) {
+        try {
+          globalThis.turnstile.remove(widgetIdRef.current);
+          widgetIdRef.current = null;
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    } catch (err) {
+      setError(err.message || "Signup failed");
+    } finally {
+      setLoading(false);
     }
   }
 
-  renderCaptcha();
+  return (
+    <PublicAuthShell
+      cardWidthClass="max-w-[520px]"
+      logoWidthClass="w-[380px]"
+      title={success ? "Verification Email Sent" : "Create your ERP account"}
+      subtitle={
+        success
+          ? "Please check your email and click the verification link to continue your ERP signup."
+          : "Create your ERP account with the details below. All onboarding logic remains unchanged."
+      }
+    >
+      {success ? (
+        <div className="space-y-4 text-center">
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-700">
+            Verification Email Sent
+          </div>
 
-  return () => {
-    cancelled = true;
+          <div className="flex flex-col items-center gap-3 text-sm">
+            <Link to="/login" className={linkClassName}>
+              Already verified? Go to Login
+            </Link>
 
-    if (widgetIdRef.current && globalThis.turnstile) {
-      globalThis.turnstile.remove(widgetIdRef.current);
-    }
-  };
+            <button
+              onClick={() => navigate("/")}
+              className="font-medium text-slate-600 transition hover:text-blue-700 hover:underline"
+            >
+              Back to Landing Page
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <form onSubmit={handleSignup} className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field
+                label="Full Name"
+                value={name}
+                onChange={setName}
+                placeholder="Full Name"
+                error={fieldErrors.name}
+              />
+              <Field
+                label="Parent Company"
+                value={company}
+                onChange={setCompany}
+                placeholder="Parent Company"
+                error={fieldErrors.company}
+              />
+            </div>
 
-}, []);
-function validateFields() {
-  const errors = {};
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field
+                label="Designation"
+                value={designation}
+                onChange={setDesignation}
+                placeholder="Designation (optional)"
+              />
+              <Field
+                label="Phone Number"
+                value={phone}
+                onChange={setPhone}
+                placeholder="Phone Number"
+                error={fieldErrors.phone}
+              />
+            </div>
 
-  if (!name) errors.name = "Name is required";
+            <Field
+              label="Email"
+              value={email}
+              onChange={setEmail}
+              placeholder="Email"
+              type="email"
+              error={fieldErrors.email}
+            />
 
-  if (!company) errors.company = "Company is required";
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-700">
+                Password
+              </label>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className={`${inputClassName} pr-20`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-medium text-slate-500 transition hover:text-slate-700"
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
 
-  if (!email) {
-    errors.email = "Email is required";
-  } else if (!isValidEmail(email)) {
-    errors.email = "Invalid email format";
-  }
+              {fieldErrors.password ? (
+                <p className="text-xs text-rose-600">{fieldErrors.password}</p>
+              ) : null}
 
-  if (!phone) {
-    errors.phone = "Phone is required";
-  } else if (!isValidPhone(phone)) {
-    errors.phone = "Phone must be 10 digits";
-  }
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3">
+                <div className="h-2 w-full rounded-full bg-slate-200">
+                  <div
+                    className={`h-2 rounded-full transition-all duration-300 ${
+                      passwordStrength <= 1
+                        ? "bg-red-500 w-1/4"
+                        : passwordStrength === 2
+                          ? "bg-yellow-500 w-2/4"
+                          : passwordStrength === 3
+                            ? "bg-blue-500 w-3/4"
+                            : "bg-green-500 w-full"
+                    }`}
+                  />
+                </div>
 
-  if (!password) {
-    errors.password = "Password is required";
-  } else if (!isValidPassword(password)) {
-    errors.password =
-      "8+ chars, 1 Capital, 1 Number, 1 Special required";
-  }
+                <p className="mt-2 text-xs text-slate-600">
+                  {passwordStrength <= 1
+                    ? "Weak password"
+                    : passwordStrength === 2
+                      ? "Medium strength"
+                      : passwordStrength === 3
+                        ? "Good password"
+                        : "Strong password"}
+                </p>
+              </div>
+            </div>
 
-  return errors;
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50/70 px-4 py-4">
+              <div className="flex justify-center">
+                <div id="signup-turnstile" />
+              </div>
+            </div>
+
+            {error ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm text-rose-700">
+                {error}
+              </div>
+            ) : null}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className={primaryButtonClassName}
+            >
+              {loading ? (
+                <span className="inline-flex items-center gap-2">
+                  <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                  Creating account...
+                </span>
+              ) : (
+                "Create Account"
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+          </form>
+
+          <div className="mt-6 text-center text-sm text-slate-600">
+            Already have an account?{" "}
+            <Link to="/login" className={linkClassName}>
+              Login
+            </Link>
+          </div>
+        </>
+      )}
+    </PublicAuthShell>
+  );
 }
 
-
-async function handleSignup(e){
-
-if(e) e.preventDefault();
-
-if(loading) return;
-
-// 🔥 RATE LIMIT START
-const lastSignup = localStorage.getItem("signup_attempt");
-
-if(lastSignup){
-  const diff = Date.now() - Number(lastSignup);
-
-  if(diff < 10000){
-    setError("Please wait before trying again");
-    return;
-  }
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  error,
+  type = "text",
+}) {
+  return (
+    <div className="space-y-2">
+      <label className="block text-sm font-medium text-slate-700">{label}</label>
+      <input
+        type={type}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${inputClassName} ${error ? "border-rose-400 focus:border-rose-500 focus:ring-rose-100" : ""}`}
+      />
+      {error ? <p className="text-xs text-rose-600">{error}</p> : null}
+    </div>
+  );
 }
 
-localStorage.setItem("signup_attempt", Date.now());
-// 🔥 RATE LIMIT END
+const inputClassName =
+  "w-full rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-600 focus:bg-white focus:ring-4 focus:ring-blue-100";
 
-setError(null);
+const primaryButtonClassName =
+  "w-full rounded-2xl bg-[#1E3A8A] px-4 py-3 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(30,58,138,0.22)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60";
 
-const errors = validateFields();
-setFieldErrors(errors);
-
-if (Object.keys(errors).length > 0) {
-  return;
-}
-
-// 🔥 BASIC REQUIRED CHECK
-if (!name || !company) {
-  setError("Name and Company are required");
-  return;
-}
-
-if (!email || !password || !phone) {
-  setError("Email, Phone and Password are required");
-  return;
-}
-
-// 🔥 EMAIL VALIDATION
-if (!isValidEmail(email)) {
-  setError("Invalid email format");
-  return;
-}
-
-// 🔥 PHONE VALIDATION (10 digit)
-if (!isValidPhone(phone)) {
-  setError("Phone must be 10 digits");
-  return;
-}
-
-// 🔥 PASSWORD VALIDATION
-if (!isValidPassword(password)) {
-  setError("Password must be 8+ chars with 1 Capital, 1 Number, 1 Special Character");
-  return;
-}
-
-
-if(!captchaToken){
-  setError("Please complete captcha");
-  return;
-}
-
-// 🔥 OPTIONAL STRONG CHECK (recommended)
-if(captchaToken.length < 10){
-  setError("Invalid captcha");
-  return;
-}
-
-setLoading(true);
-
-try{
-
-  const redirectUrl = import.meta.env.VITE_APP_URL;
-
-const { error } = await supabase.auth.signUp({
-
-email,
-password,
-
-options:{
-
-data:{
-name: name,
-parent_company: company,
-designation_hint: designation,
-phone: phone
-},
-
-emailRedirectTo: `${redirectUrl}/auth/callback`
-
-}
-
-});
-
-if(error){
-throw new Error(error.message);
-}
-
-setSuccess(true);
-
-// 🔥 optional cleanup (safer)
-setCaptchaToken(null);
-
-if (globalThis.turnstile && widgetIdRef.current) {
-  try {
-    globalThis.turnstile.remove(widgetIdRef.current);
-    widgetIdRef.current = null;
-  } catch(e) {
-  console.error(e);
-}
-}
-
-}catch(err){
-
-setError(err.message || "Signup failed");
-
-}finally{
-
-setLoading(false);
-
-}
-
-}
-
-return(
-
-<div className="min-h-screen flex items-center justify-center bg-[#F5F6F8]">
-
-<div className="w-[380px] bg-white rounded-xl shadow-md p-6 h-[620px] flex flex-col">
-
-{/* Logo */}
-
-<div className="flex flex-col items-center shrink-0">
-
-<div className="w-[360px] mb-1">
-<img
-src={logo}
-className="w-full h-auto"
-loading="eager"
-/>
-</div>
-
-<p className="text-gray-600 text-center mb-6">
-Create your ERP account
-</p>
-
-</div>
-
-{/* Success State */}
-
-{success ? (
-
-<div className="text-center">
-
-<div className="text-green-600 font-semibold mb-4">
-Verification Email Sent
-</div>
-
-<p className="text-sm text-gray-600 mb-6">
-Please check your email and click the verification link
-to continue your ERP signup.
-</p>
-
-<div className="flex flex-col gap-3">
-
-<Link
-to="/login"
-className="text-blue-600 hover:underline"
->
-Already verified? Go to Login
-</Link>
-
-<button
-onClick={()=>navigate("/")}
-className="text-gray-600 hover:underline"
->
-Back to Landing Page
-</button>
-
-</div>
-
-</div>
-
-) : (
-
-<div className="flex-1 overflow-y-auto mt-2">
-<form onSubmit={handleSignup}>
-
-{/* Name */}
-
-<div className="mb-3">
-
-<input
-type="text"
-placeholder="Full Name"
-value={name}
-onChange={(e)=>setName(e.target.value)}
-className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 ${
-  fieldErrors.name ? "border-red-500" : "focus:ring-blue-600"
-}`}
-/>
-{fieldErrors.name && (
-  <p className="text-red-600 text-xs mt-1">
-    {fieldErrors.name}
-  </p>
-)}
-</div>
-
-{/* Company */}
-
-<div className="mb-3">
-
-<input
-type="text"
-placeholder="Parent Company"
-value={company}
-onChange={(e)=>setCompany(e.target.value)}
-className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 ${
-  fieldErrors.company ? "border-red-500" : "focus:ring-blue-600"
-}`}
-/>
-
-{fieldErrors.company && (
-  <p className="text-red-600 text-xs mt-1">
-    {fieldErrors.company}
-  </p>
-)}
-
-</div>
-
-{/* Designation */}
-
-<div className="mb-3">
-
-<input
-type="text"
-placeholder="Designation (optional)"
-value={designation}
-onChange={(e)=>setDesignation(e.target.value)}
-className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
-/>
-
-</div>
-
-{/* Phone */}
-
-<div className="mb-3">
-
-<input
-type="text"
-placeholder="Phone Number"
-value={phone}
-onChange={(e)=>setPhone(e.target.value)}
-className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 ${
-  fieldErrors.phone ? "border-red-500" : "focus:ring-blue-600"
-}`}
-/>
-
-{fieldErrors.phone && (
-  <p className="text-red-600 text-xs mt-1">
-    {fieldErrors.phone}
-  </p>
-)}
-
-</div>
-
-{/* Email */}
-
-<div className="mb-3">
-
-<input
-type="email"
-placeholder="Email"
-value={email}
-onChange={(e)=>setEmail(e.target.value)}
-className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 ${
-  fieldErrors.email ? "border-red-500" : "focus:ring-blue-600"
-}`}
-/>
-
-{fieldErrors.email && (
-  <p className="text-red-600 text-xs mt-1">
-    {fieldErrors.email}
-  </p>
-)}
-
-</div>
-
-{/* Password */}
-
-<div className="mb-4">
-
-<input
-type="password"
-placeholder="Password"
-value={password}
-onChange={(e)=>setPassword(e.target.value)}
-className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 ${
-  fieldErrors.password ? "border-red-500" : "focus:ring-blue-600"
-}`}
-/>
-<button
-type="button"
-onClick={()=>setShowPassword(prev=>!prev)}
-className="absolute right-3 top-3 text-gray-500 text-sm"
->
-{showPassword ? "Hide" : "Show"}
-</button>
-
-{fieldErrors.password && (
-  <p className="text-red-600 text-xs mt-1">
-    {fieldErrors.password}
-  </p>
-)}
-
-{/* 🔥 Strength Bar */}
-
-<div className="mt-2">
-
-<div className="h-2 w-full bg-gray-200 rounded">
-
-<div
-className={`h-2 rounded transition-all duration-300 ${
-  passwordStrength <= 1
-    ? "bg-red-500 w-1/4"
-    : passwordStrength === 2
-    ? "bg-yellow-500 w-2/4"
-    : passwordStrength === 3
-    ? "bg-blue-500 w-3/4"
-    : "bg-green-500 w-full"
-}`}
-></div>
-
-</div>
-
-<p className="text-xs mt-1 text-gray-600">
-  {passwordStrength <= 1
-    ? "Weak password"
-    : passwordStrength === 2
-    ? "Medium strength"
-    : passwordStrength === 3
-    ? "Good password"
-    : "Strong password"}
-</p>
-
-</div>
-
-</div>
-{/* CAPTCHA */}
-
-<div className="mb-4 flex justify-center">
-  <div id="signup-turnstile"></div>
-</div>
-
-
-
-{/* Error */}
-
-{error && (
-
-<div className="text-red-600 text-sm mb-4 text-center">
-{error}
-</div>
-
-)}
-
-{/* Submit */}
-
-<button
-type="submit"
-disabled={loading}
-className="w-full py-3 bg-[#1E3A8A] text-white rounded-lg flex items-center justify-center gap-2 hover:opacity-90 transition disabled:opacity-60"
->
-
-{loading && (
-
-<div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-
-)}
-
-{loading ? "Creating account..." : "Create Account"}
-
-</button>
-
-{/* Cancel Button */}
-
-<button
-type="button"
-onClick={()=>navigate("/")}
-className="w-full mt-3 text-gray-600 hover:underline"
->
-Cancel
-</button>
-
-</form>
-</div>
-
-)}
-
-{/* Footer Links */}
-
-<div className="text-center text-sm text-gray-600 mt-5">
-
-Already have an account?{" "}
-
-<Link to="/login" className="text-blue-600 hover:underline">
-Login
-</Link>
-
-</div>
-
-<div className="text-center text-xs text-gray-400 mt-6">
-© Almega Group
-</div>
-
-</div>
-
-</div>
-
-);
-
-}
+const linkClassName =
+  "font-medium text-blue-700 transition hover:text-blue-800 hover:underline";

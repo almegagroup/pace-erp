@@ -30,6 +30,11 @@ import type { ContextResolution } from "./context.ts";
 /**
  * SESSION logout enforcement
  */
+function isPassiveSessionProbe(req: Request): boolean {
+  const url = new URL(req.url);
+  return url.searchParams.get("session_mode") === "passive";
+}
+
 function enforceSessionLogout(
   result: { action?: string } | null,
   requestId: string
@@ -195,25 +200,29 @@ const activeSession = sessionResult as Extract<
   { status: "ACTIVE" }
 >;
 
-// 🔥 Store warning if exists
-// 🔥 Store warning if exists
+// attach warning if present
 if (
+  lifecycleResult &&
   "status" in lifecycleResult &&
   (lifecycleResult.status === "ABSOLUTE_WARNING" ||
    lifecycleResult.status === "IDLE_WARNING")
 ) {
-  (req as unknown as { __session_warning?: unknown }).__session_warning =
-    lifecycleResult;
+  (activeSession as any).__session_warning = lifecycleResult;
 }
 
-// 🔥 Always update last_seen (ACTIVE session)
-await serviceRoleClient
-  .schema("erp_core")
-  .from("sessions")
-  .update({
-    last_seen_at: new Date().toISOString(),
-  })
-  .eq("session_id", activeSession.sessionId);
+// expose active session to response layer
+(req as any).session = activeSession;
+
+// Passive session probes must never extend the backend session clock.
+if (!isPassiveSessionProbe(req)) {
+  await serviceRoleClient
+    .schema("erp_core")
+    .from("sessions")
+    .update({
+      last_seen_at: new Date().toISOString(),
+    })
+    .eq("session_id", activeSession.sessionId);
+}
 
 
     // --------------------------------------------------
@@ -339,11 +348,8 @@ return await dispatchProtectedRoute(
   routeKey,
   req,
   requestId,
-  {
-    ...activeSession,
-    session_id: activeSession.sessionId as string
-  } as any,
-  contextResult as Extract<ContextResolution, { status: "RESOLVED" }>
+  activeSession,
+  contextResult
 );
   }
 

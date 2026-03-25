@@ -15,15 +15,14 @@ export function assertAdminEntry() {
 
   // No screen stack → illegal entry
   if (!current) {
-  console.warn("⚠️ Screen stack not ready → skip guard");
-  return;
-}
+    console.warn("⚠️ Screen stack not ready → admin entry deferred");
+    return;
+  }
 
   // Enforce admin universe boundary
   if (current.universe !== "ADMIN") {
-  console.warn("⚠️ Not admin universe → skip guard");
-  return;
-}
+    console.warn("⚠️ Admin shell mounted outside admin universe");
+  }
 
   // NOTE:
   // Role (SA / GA) is NOT verified here.

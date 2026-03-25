@@ -12,13 +12,20 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App.jsx";
-import { showWarning } from "./store/sessionWarning.js";
+import {
+  hardLogout,
+  recordBackendActivity,
+  showWarning,
+} from "./store/sessionWarning.js";
 
 // 🔒 Gate-8 / G1 — Screen Registry Validation
 import { validateScreenRegistry } from "./navigation/screenRules.js";
 import { enableBackGuard } from "./navigation/backGuardEngine.js";
 import { enableKeyboardIntentEngine } from "./navigation/keyboardIntentEngine.js";
-import { initNavigation } from "./navigation/screenStackEngine.js";
+import {
+  getScreenForRoute,
+  initNavigation,
+} from "./navigation/screenStackEngine.js";
 import { restoreNavigationStack } from "./navigation/navigationPersistence.js";
 import { isPublicRoute } from "./router/publicRoutes.js";
 
@@ -64,8 +71,41 @@ Only authenticated universe may activate navigation stack.
  * ========================================================= */
 
 const __originalFetch = globalThis.fetch;
+const API_BASE = import.meta.env.VITE_API_BASE;
+
+async function refreshSessionAfterWarning() {
+  const response = await __originalFetch(`${API_BASE}/api/me`, {
+    credentials: "include",
+  });
+
+  let json = null;
+
+  try {
+    json = await response.clone().json();
+  } catch {
+    json = null;
+  }
+
+  if (!response.ok || json?.action === "LOGOUT") {
+    hardLogout();
+    return;
+  }
+
+  recordBackendActivity();
+}
 
 globalThis.fetch = async (...args) => {
+  const requestTarget = args[0];
+  const url =
+    typeof requestTarget === "string"
+      ? requestTarget
+      : requestTarget instanceof Request
+        ? requestTarget.url
+        : "";
+  const isApiRequest = url.startsWith(`${API_BASE}/api/`);
+  const isPassiveProbe =
+    isApiRequest && url.includes("session_mode=passive");
+
   const res = await __originalFetch(...args);
 
   let json;
@@ -77,18 +117,26 @@ globalThis.fetch = async (...args) => {
   }
 
   /* -------------------------------------------------------
-   * WARNING (UI ONLY)
+   * WARNING (BACKEND AUTHORITY)
    * ------------------------------------------------------- */
   if (json?.warning?.type === "IDLE_WARNING") {
-    showWarning("You are inactive. Click OK to continue.");
+    showWarning("IDLE_WARNING", refreshSessionAfterWarning);
+  }
+
+  if (json?.warning?.type === "ABSOLUTE_WARNING") {
+    showWarning("ABSOLUTE_WARNING", refreshSessionAfterWarning);
   }
 
   /* -------------------------------------------------------
    * LOGOUT (BACKEND AUTHORITY)
    * ------------------------------------------------------- */
   if (json?.action === "LOGOUT") {
-    globalThis.location.href = "/login";
+    hardLogout();
     return res;
+  }
+
+  if (isApiRequest && !isPassiveProbe && res.ok) {
+    recordBackendActivity();
   }
 
   return res;
@@ -97,7 +145,11 @@ globalThis.fetch = async (...args) => {
 const restored = restoreNavigationStack();
 
 if (!restored && !isPublicRoute(pathname)) {
-  initNavigation("DASHBOARD_HOME");
+  const initialScreen = getScreenForRoute(pathname);
+
+  if (initialScreen?.keepAlive) {
+    initNavigation(initialScreen.screen_code);
+  }
 }
 
 createRoot(document.getElementById("root")).render(

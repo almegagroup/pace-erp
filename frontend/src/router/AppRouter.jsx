@@ -21,10 +21,11 @@ import SignupSubmittedPage from "../pages/public/SignupSubmittedPage.jsx";
 import ForgotPassword from "../pages/public/ForgotPassword.jsx";
 import ResetPassword from "../pages/public/ResetPassword.jsx";
 
-
-import RouteGuard from "./RouteGuard.jsx";
-import DeepLinkGuard from "./DeepLinkGuard.jsx";
 import MenuShell from "../layout/MenuShell.jsx";
+import SessionWatchdog from "../components/SessionWatchdog.jsx";
+import DashboardShell from "../layout/DashboardShell.jsx";
+import NavigationStackBridge from "../navigation/NavigationStackBridge.jsx";
+import ProtectedBranchShell from "./ProtectedBranchShell.jsx";
 
 // Admin shells
 import SADashboardShell from "../admin/sa/SADashboardShell.jsx";
@@ -35,6 +36,8 @@ import SACompanyCreate from "../admin/sa/screens/SACompanyCreate.jsx";
 import SAUsers from "../admin/sa/screens/SAUsers.jsx";
 import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx"; 
+import GAHome from "../admin/ga/screens/GAHome.jsx";
+import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
 
 export default function AppRouter() {
   //console.log("🧭 AppRouter RENDERED");
@@ -44,6 +47,8 @@ export default function AppRouter() {
       <MenuProvider>
   {/* 🔥 GLOBAL AUTH BOOT */}
   <AuthBootstrap>
+        <SessionWatchdog />
+        <NavigationStackBridge />
 
         <Routes>
 
@@ -67,50 +72,51 @@ export default function AppRouter() {
           {/* ============================== */}
           {/* 🔒 ADMIN DASHBOARD (ENTRY) */}
           {/* ============================== */}
-{/* ============================== */}
-{/* 🔒 SA UNIVERSE (PROTECTED) */}
-{/* ============================== */}
+          {/* ============================== */}
+          {/* 🔒 SA UNIVERSE (PROTECTED) */}
+          {/* ============================== */}
 
-<Route
-  path="/sa"
-  element={
-    <DeepLinkGuard>
-      <RouteGuard>
-        <SADashboardShell />
-      </RouteGuard>
-    </DeepLinkGuard>
-  }
->
-  {/* 🔥 LAYOUT LAYER */}
-  <Route element={<MenuShell />}>
+          <Route
+            path="/sa"
+            element={
+              <ProtectedBranchShell
+                rootScreenCode="SA_HOME"
+                routePrefix="/sa"
+              />
+            }
+          >
+            <Route element={<SADashboardShell />}>
+              <Route element={<MenuShell />}>
+                <Route
+                  path="home"
+                  element={(console.log("📍 /sa/home PAGE HIT"), <SAHome />)}
+                />
+                <Route path="company/create" element={<SACompanyCreate />} />
+                <Route path="users" element={<SAUsers />} />
+                <Route path="signup-requests" element={<SASignupRequests />} />
+              </Route>
+            </Route>
+          </Route>
 
-    <Route
-      path="home"
-      element={(console.log("📍 /sa/home PAGE HIT"), <SAHome />)}
-    />
-    <Route path="company/create" element={<SACompanyCreate />} />
-    <Route path="users" element={<SAUsers />} />
-    <Route path="signup-requests" element={<SASignupRequests />} />
+          {/* ============================== */}
+          {/* 🔒 GA UNIVERSE (PROTECTED) */}
+          {/* ============================== */}
 
-  </Route>
-</Route>
-
-{/* ============================== */}
-{/* 🔒 GA UNIVERSE (PROTECTED) */}
-{/* ============================== */}
-
-<Route
-  path="/ga"
-  element={
-    <DeepLinkGuard>
-      <RouteGuard>
-        <GADashboardShell />
-      </RouteGuard>
-    </DeepLinkGuard>
-  }
->
-  <Route path="home" element={<div>GA Home</div>} />
-</Route>
+          <Route
+            path="/ga"
+            element={
+              <ProtectedBranchShell
+                rootScreenCode="GA_HOME"
+                routePrefix="/ga"
+              />
+            }
+          >
+            <Route element={<GADashboardShell />}>
+              <Route element={<MenuShell />}>
+                <Route path="home" element={<GAHome />} />
+              </Route>
+            </Route>
+          </Route>
 
           {/* ============================== */}
           {/* 🔐 ACL USER UNIVERSE */}
@@ -119,15 +125,16 @@ export default function AppRouter() {
           <Route
             path="/dashboard"
             element={
-              <DeepLinkGuard>
-                <MenuShell>
-                  <RouteGuard>
-                    <div>Dashboard</div>
-                  </RouteGuard>
-                </MenuShell>
-              </DeepLinkGuard>
+              <ProtectedBranchShell
+                rootScreenCode="DASHBOARD_HOME"
+                routePrefix="/dashboard"
+              />
             }
-          />
+          >
+            <Route element={<DashboardShell />}>
+              <Route index element={<UserDashboardHome />} />
+            </Route>
+          </Route>
 
           {/* ============================== */}
           {/* 🚧 FALLBACK */}
