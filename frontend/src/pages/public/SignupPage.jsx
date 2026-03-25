@@ -24,6 +24,7 @@ const [designation,setDesignation] = useState("");
 const [phone,setPhone] = useState("");
 const [email,setEmail] = useState("");
 const [password,setPassword] = useState("");
+const [showPassword,setShowPassword] = useState(false);
 const passwordStrength = getPasswordStrength(password);
 
 const [loading,setLoading] = useState(false);
@@ -443,6 +444,13 @@ className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 $
   fieldErrors.password ? "border-red-500" : "focus:ring-blue-600"
 }`}
 />
+<button
+type="button"
+onClick={()=>setShowPassword(prev=>!prev)}
+className="absolute right-3 top-3 text-gray-500 text-sm"
+>
+{showPassword ? "Hide" : "Show"}
+</button>
 
 {fieldErrors.password && (
   <p className="text-red-600 text-xs mt-1">
