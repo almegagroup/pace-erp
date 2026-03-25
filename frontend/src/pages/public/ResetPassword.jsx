@@ -18,12 +18,37 @@ import { useNavigate, Link } from "react-router-dom";
 import logo from "../../assets/pace-bgr.png";
 import { supabase } from "../../lib/supabaseClient.js";
 
+function getPasswordStrength(password) {
+  let score = 0;
+
+  if (password.length >= 8) score++;
+  if (/[A-Z]/.test(password)) score++;
+  if (/[0-9]/.test(password)) score++;
+  if (/[^A-Za-z0-9]/.test(password)) score++;
+
+  return score;
+}
+
+function isValidPassword(password) {
+  return (
+    password.length >= 8 &&
+    /[A-Z]/.test(password) &&
+    /[0-9]/.test(password) &&
+    /[^A-Za-z0-9]/.test(password)
+  );
+}
+
+
+
 export default function ResetPassword(){
 
 const navigate = useNavigate();
 
 const [password,setPassword] = useState("");
 const [confirm,setConfirm] = useState("");
+const passwordStrength = getPasswordStrength(password);
+const [showPassword,setShowPassword] = useState(false);
+const [showConfirm,setShowConfirm] = useState(false);
 
 const [loading,setLoading] = useState(false);
 const [error,setError] = useState(null);
@@ -81,8 +106,8 @@ setError("Passwords do not match");
 return;
 }
 
-if(password.length < 6){
-setError("Password must be at least 6 characters");
+if(!isValidPassword(password)){
+setError("8+ chars, 1 Capital, 1 Number, 1 Special required");
 return;
 }
 
@@ -143,27 +168,87 @@ Reset your password
 
 <div className="mb-4">
 
+<div className="relative">
+
 <input
-type="password"
+type={showPassword ? "text" : "password"}
 placeholder="New password"
 value={password}
-onChange={(e)=>setPassword(e.target.value)}
+onChange={(e)=>{
+  setPassword(e.target.value);
+  setError(null);
+}}
 disabled={loading}
 className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
 />
+
+<button
+type="button"
+onClick={()=>setShowPassword(prev=>!prev)}
+className="absolute right-3 top-3 text-gray-500 text-sm"
+>
+{showPassword ? "Hide" : "Show"}
+</button>
+
+</div>
+<div className="mt-2">
+
+<div className="h-2 w-full bg-gray-200 rounded">
+
+<div
+className={`h-2 rounded transition-all duration-300 ${
+  passwordStrength <= 1
+    ? "bg-red-500 w-1/4"
+    : passwordStrength === 2
+    ? "bg-yellow-500 w-2/4"
+    : passwordStrength === 3
+    ? "bg-blue-500 w-3/4"
+    : "bg-green-500 w-full"
+}`}
+></div>
+
+</div>
+
+<p className="text-xs mt-1 text-gray-600">
+  {passwordStrength <= 1
+    ? "Weak password"
+    : passwordStrength === 2
+    ? "Medium strength"
+    : passwordStrength === 3
+    ? "Good password"
+    : "Strong password"}
+</p>
+
+</div>
+
 
 </div>
 
 <div className="mb-4">
 
+<div className="relative">
+
 <input
-type="password"
+type={showConfirm ? "text" : "password"}
 placeholder="Confirm password"
 value={confirm}
-onChange={(e)=>setConfirm(e.target.value)}
+onChange={(e)=>{
+  setConfirm(e.target.value);
+  setError(null);
+}}
 disabled={loading}
 className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
 />
+
+<button
+type="button"
+onClick={()=>setShowConfirm(prev=>!prev)}
+className="absolute right-3 top-3 text-gray-500 text-sm"
+>
+{showConfirm ? "Hide" : "Show"}
+</button>
+
+</div>
 
 </div>
 

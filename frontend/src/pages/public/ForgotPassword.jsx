@@ -23,6 +23,10 @@ import { Link } from "react-router-dom";
 import logo from "../../assets/pace-bgr.png";
 import { supabase } from "../../lib/supabaseClient.js";
 
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
 export default function ForgotPassword() {
 
 const [email,setEmail] = useState("");
@@ -40,13 +44,10 @@ setError("Please enter your email address");
 return;
 }
 
-const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-if(!emailRegex.test(email)){
-setError("Please enter a valid email address");
+if(!isValidEmail(email)){
+setError("Invalid email format");
 return;
 }
-
 setError(null);
 setLoading(true);
 
