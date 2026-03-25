@@ -25,6 +25,7 @@ import ResetPassword from "../pages/public/ResetPassword.jsx";
 import RouteGuard from "./RouteGuard.jsx";
 import DeepLinkGuard from "./DeepLinkGuard.jsx";
 import MenuShell from "../layout/MenuShell.jsx";
+import SessionWatchdog from "../components/SessionWatchdog.jsx";
 
 // Admin shells
 import SADashboardShell from "../admin/sa/SADashboardShell.jsx";
@@ -44,6 +45,7 @@ export default function AppRouter() {
       <MenuProvider>
   {/* 🔥 GLOBAL AUTH BOOT */}
   <AuthBootstrap>
+        <SessionWatchdog />
 
         <Routes>
 

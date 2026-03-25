@@ -4,58 +4,144 @@
  * Gate: UI
  * Phase: UI
  * Domain: FRONT
- * Purpose: Global warning state store for session overlay control
- * Authority: Frontend (NO SESSION AUTHORITY)
+ * Purpose: Session watchdog state for blocking warnings and forced logout
+ * Authority: Frontend (DISPLAY + CLIENT COORDINATION ONLY)
  */
+
+import { clearNavigationStack } from "../navigation/navigationPersistence.js";
+
+const WARNING_MESSAGES = {
+  IDLE_WARNING:
+    "You have been inactive. Press OK or Esc to continue your session.",
+  ABSOLUTE_WARNING:
+    "Your session is about to expire. Press OK or Esc to continue working.",
+};
 
 let state = {
   visible: false,
   message: "",
+  type: null,
+  frontendActivityAt: Date.now(),
+  backendActivityAt: Date.now(),
+  protectedRouteActive: false,
 };
 
 let listeners = [];
-/* =========================================================
- * INTERNAL FLAG (prevent duplicate warning)
- * ========================================================= */
+let dismissHandler = null;
 
-let isWarningActive = false;
-
-/* =========================================================
- * Subscribe
- * ========================================================= */
+function emit() {
+  listeners.forEach((listener) => listener({ ...state }));
+}
 
 export function subscribe(fn) {
   listeners.push(fn);
+  fn({ ...state });
 }
-
-/* =========================================================
- * Unsubscribe
- * ========================================================= */
 
 export function unsubscribe(fn) {
-  listeners = listeners.filter((l) => l !== fn);
+  listeners = listeners.filter((listener) => listener !== fn);
 }
 
-/* =========================================================
- * Show Warning (UI ONLY)
- * ========================================================= */
+export function setProtectedRouteActive(active) {
+  state = {
+    ...state,
+    protectedRouteActive: active,
+  };
 
-export function showWarning(message) {
-  if (isWarningActive) return;
+  if (!active) {
+    dismissHandler = null;
+    state = {
+      ...state,
+      visible: false,
+      message: "",
+      type: null,
+    };
+  }
 
-  isWarningActive = true;
-
-  state = { visible: true, message };
-  listeners.forEach((l) => l(state));
+  emit();
 }
 
-/* =========================================================
- * Clear Warning (UI ONLY)
- * ========================================================= */
+export function recordUserActivity() {
+  if (!state.protectedRouteActive || state.visible) return;
 
-export function clearWarning() {
-  isWarningActive = false;
+  state = {
+    ...state,
+    frontendActivityAt: Date.now(),
+  };
+  emit();
+}
 
-  state = { visible: false, message: "" };
-  listeners.forEach((l) => l(state));
+export function recordBackendActivity() {
+  if (!state.protectedRouteActive) return;
+
+  state = {
+    ...state,
+    backendActivityAt: Date.now(),
+  };
+  emit();
+}
+
+export function getSessionWatchdogSnapshot() {
+  return { ...state };
+}
+
+export function showWarning(type, onDismiss) {
+  if (state.visible && state.type === type) {
+    dismissHandler = typeof onDismiss === "function" ? onDismiss : dismissHandler;
+    return;
+  }
+
+  state = {
+    ...state,
+    visible: true,
+    type,
+    message: WARNING_MESSAGES[type] ?? WARNING_MESSAGES.IDLE_WARNING,
+  };
+  dismissHandler = typeof onDismiss === "function" ? onDismiss : null;
+  emit();
+}
+
+export async function clearWarning(reason = "dismiss") {
+  const handler = dismissHandler;
+
+  dismissHandler = null;
+  state = {
+    ...state,
+    visible: false,
+    message: "",
+    type: null,
+    frontendActivityAt: Date.now(),
+  };
+  emit();
+
+  if (handler) {
+    await handler(reason);
+  }
+}
+
+export function resetWarningState() {
+  dismissHandler = null;
+  state = {
+    ...state,
+    visible: false,
+    message: "",
+    type: null,
+  };
+  emit();
+}
+
+export function hardLogout() {
+  dismissHandler = null;
+  clearNavigationStack();
+
+  state = {
+    ...state,
+    visible: false,
+    message: "",
+    type: null,
+    protectedRouteActive: false,
+  };
+  emit();
+
+  globalThis.location.href = "/login";
 }

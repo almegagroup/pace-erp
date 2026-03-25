@@ -12,7 +12,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App.jsx";
-import { showWarning } from "./store/sessionWarning.js";
+import {
+  hardLogout,
+  recordBackendActivity,
+} from "./store/sessionWarning.js";
 
 // 🔒 Gate-8 / G1 — Screen Registry Validation
 import { validateScreenRegistry } from "./navigation/screenRules.js";
@@ -64,8 +67,20 @@ Only authenticated universe may activate navigation stack.
  * ========================================================= */
 
 const __originalFetch = globalThis.fetch;
+const API_BASE = import.meta.env.VITE_API_BASE;
 
 globalThis.fetch = async (...args) => {
+  const requestTarget = args[0];
+  const url =
+    typeof requestTarget === "string"
+      ? requestTarget
+      : requestTarget instanceof Request
+        ? requestTarget.url
+        : "";
+  const isApiRequest = url.startsWith(`${API_BASE}/api/`);
+  const isPassiveProbe =
+    isApiRequest && url.includes("session_mode=passive");
+
   const res = await __originalFetch(...args);
 
   let json;
@@ -77,18 +92,15 @@ globalThis.fetch = async (...args) => {
   }
 
   /* -------------------------------------------------------
-   * WARNING (UI ONLY)
-   * ------------------------------------------------------- */
-  if (json?.warning?.type === "IDLE_WARNING") {
-    showWarning("You are inactive. Click OK to continue.");
-  }
-
-  /* -------------------------------------------------------
    * LOGOUT (BACKEND AUTHORITY)
    * ------------------------------------------------------- */
   if (json?.action === "LOGOUT") {
-    globalThis.location.href = "/login";
+    hardLogout();
     return res;
+  }
+
+  if (isApiRequest && !isPassiveProbe && res.ok) {
+    recordBackendActivity();
   }
 
   return res;

@@ -30,6 +30,11 @@ import type { ContextResolution } from "./context.ts";
 /**
  * SESSION logout enforcement
  */
+function isPassiveSessionProbe(req: Request): boolean {
+  const url = new URL(req.url);
+  return url.searchParams.get("session_mode") === "passive";
+}
+
 function enforceSessionLogout(
   result: { action?: string } | null,
   requestId: string
@@ -208,14 +213,16 @@ if (
 // expose active session to response layer
 (req as any).session = activeSession;
 
-// update last_seen only after lifecycle evaluation
-await serviceRoleClient
-  .schema("erp_core")
-  .from("sessions")
-  .update({
-    last_seen_at: new Date().toISOString(),
-  })
-  .eq("session_id", activeSession.sessionId);
+// Passive session probes must never extend the backend session clock.
+if (!isPassiveSessionProbe(req)) {
+  await serviceRoleClient
+    .schema("erp_core")
+    .from("sessions")
+    .update({
+      last_seen_at: new Date().toISOString(),
+    })
+    .eq("session_id", activeSession.sessionId);
+}
 
 
     // --------------------------------------------------
