@@ -198,12 +198,12 @@ const activeSession = sessionResult as Extract<
 // 🔥 Store warning if exists
 // 🔥 Store warning if exists
 if (
+  lifecycleResult &&
   "status" in lifecycleResult &&
   (lifecycleResult.status === "ABSOLUTE_WARNING" ||
    lifecycleResult.status === "IDLE_WARNING")
 ) {
-  (req as unknown as { __session_warning?: unknown }).__session_warning =
-    lifecycleResult;
+  (activeSession as any).__session_warning = lifecycleResult;
 }
 
 // 🔥 Always update last_seen (ACTIVE session)
@@ -339,11 +339,8 @@ return await dispatchProtectedRoute(
   routeKey,
   req,
   requestId,
-  {
-    ...activeSession,
-    session_id: activeSession.sessionId as string
-  } as any,
-  contextResult as Extract<ContextResolution, { status: "RESOLVED" }>
+  activeSession,
+  contextResult
 );
   }
 

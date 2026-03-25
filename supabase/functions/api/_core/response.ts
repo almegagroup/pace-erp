@@ -25,8 +25,16 @@ export function okResponse(
   req?: Request
 ): Response {
 
-  const warning =
-    (req as unknown as { __session_warning?: any }).__session_warning;
+  const rawWarning =
+  (req as any)?.__session_warning ??
+  (req as any)?.session?.__session_warning;
+
+const warning =
+  rawWarning &&
+  typeof rawWarning === "object" &&
+  typeof rawWarning.status === "string"
+    ? rawWarning
+    : null;
 
   return new Response(
     JSON.stringify({
@@ -119,9 +127,16 @@ export function errorResponse(
 
   const message = normalizeMessage(publicCode);
 
-  const warning =
-  req &&
-  (req as unknown as { __session_warning?: any }).__session_warning;
+  const rawWarning =
+  (req as any)?.__session_warning ??
+  (req as any)?.session?.__session_warning;
+
+const warning =
+  rawWarning &&
+  typeof rawWarning === "object" &&
+  typeof rawWarning.status === "string"
+    ? rawWarning
+    : null;
 
 return new Response(
   JSON.stringify({
@@ -132,10 +147,9 @@ return new Response(
 
     // 🔥 inject warning
    warning:
-  warning && typeof warning.status === "string"
+  warning
     ? { type: warning.status }
     : null,
-
       /* =====================================================
        * Observability metadata (Gate-10)
        * ===================================================== */
