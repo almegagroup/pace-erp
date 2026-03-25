@@ -195,8 +195,7 @@ const activeSession = sessionResult as Extract<
   { status: "ACTIVE" }
 >;
 
-// 🔥 Store warning if exists
-// 🔥 Store warning if exists
+// attach warning if present
 if (
   lifecycleResult &&
   "status" in lifecycleResult &&
@@ -206,7 +205,10 @@ if (
   (activeSession as any).__session_warning = lifecycleResult;
 }
 
-// 🔥 Always update last_seen (ACTIVE session)
+// expose active session to response layer
+(req as any).session = activeSession;
+
+// update last_seen only after lifecycle evaluation
 await serviceRoleClient
   .schema("erp_core")
   .from("sessions")
