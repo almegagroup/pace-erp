@@ -39,9 +39,15 @@ async function checkSession(){
 
   const session = data?.session;
 
-  if(!session){
-    setError("Invalid or expired reset link");
-  }
+ if(!session){
+  // wait a bit before failing (race condition fix)
+  setTimeout(async () => {
+    const { data } = await supabase.auth.getSession();
+    if(!data?.session){
+      setError("Invalid or expired reset link");
+    }
+  }, 500);
+}
 
 }
 
