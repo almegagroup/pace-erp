@@ -16,178 +16,122 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient.js";
-import logo from "../../assets/pace-bgr.png";
+import PublicAuthShell from "./PublicAuthShell.jsx";
 
 export default function AuthCallback() {
-
   const navigate = useNavigate();
 
-  const [status,setStatus] = useState("processing");
-  const [error,setError] = useState(null);
+  const [status, setStatus] = useState("processing");
+  const [error, setError] = useState(null);
 
-  useEffect(()=>{
-
+  useEffect(() => {
     let cancelled = false;
 
-    async function run(){
+    async function run() {
+      try {
+        const url = new URL(globalThis.location.href);
+        const code = url.searchParams.get("code");
+        const hash = globalThis.location.hash;
 
-      try{
+        let flow = url.searchParams.get("type");
 
-  const url = new URL(globalThis.location.href);
+        if (!flow && hash) {
+          const params = new URLSearchParams(hash.substring(1));
+          flow = params.get("type") || null;
+        }
 
-const code = url.searchParams.get("code");
-const hash = globalThis.location.hash;  // 🔥 FIRST
+        if (code) {
+          const { error: exchangeError } =
+            await supabase.auth.exchangeCodeForSession(window.location.href);
 
-let flow = url.searchParams.get("type");   // ✅ FIXED
+          if (exchangeError) throw exchangeError;
+        } else if (hash) {
+          const params = new URLSearchParams(hash.substring(1));
 
-if(!flow && hash){
-  const params = new URLSearchParams(hash.substring(1));
-  flow = params.get("type") || null;
-}
+          if (params.get("error")) {
+            const errMsg = params.get("error_description") || "Auth error";
+            throw new Error(errMsg);
+          }
 
-/* ==============================
-STEP 1 — EXCHANGE / RESTORE SESSION
-============================== */
+          const access_token = params.get("access_token");
+          const refresh_token = params.get("refresh_token");
 
-// 🔴 CASE 1: PKCE flow
-if(code){
-  const { error: exchangeError } =
-    await supabase.auth.exchangeCodeForSession(window.location.href);
+          if (access_token && refresh_token) {
+            const { data, error } = await supabase.auth.setSession({
+              access_token,
+              refresh_token,
+            });
 
-  if(exchangeError) throw exchangeError;
-}
+            if (error) throw error;
 
-// 🔴 CASE 2: HASH FLOW
-else if(hash){
+            if (!data?.session) {
+              throw new Error("Session not established from tokens");
+            }
+          }
+        }
 
-  const params = new URLSearchParams(hash.substring(1));
-
-  // ✅ ERROR FIRST
-  if(params.get("error")){
-    const errMsg = params.get("error_description") || "Auth error";
-    throw new Error(errMsg);
-  }
-
-  // ✅ TOKEN FLOW
-  const access_token = params.get("access_token");
-  const refresh_token = params.get("refresh_token");
-
-  if(access_token && refresh_token){
-
-    const { data, error } = await supabase.auth.setSession({
-      access_token,
-      refresh_token
-    });
-
-    if(error) throw error;
-
-    if(!data?.session){
-      throw new Error("Session not established from tokens");
-    }
-  }
-}
-
-if(cancelled) return;
-
-        /* ==============================
-        STEP 2 — VALIDATE SESSION (STRICT)
-        ============================== */
+        if (cancelled) return;
 
         const { data } = await supabase.auth.getSession();
-
         const session = data?.session;
 
-        if(!session){
+        if (!session) {
           throw new Error("Session establishment failed");
         }
 
-        if(cancelled) return;
+        if (cancelled) return;
 
-        /* ==============================
-        STEP 3 — FLOW ROUTING
-        ============================== */
+        const urlStr = globalThis.location.href;
 
-       const urlStr = globalThis.location.href;
+        if (flow === "signup") {
+          navigate("/email-verified", { replace: true });
+          return;
+        }
 
-/* ==============================
-PRIORITY 1 — SIGNUP (STRICT)
-============================== */
-if(flow === "signup"){
-  navigate("/email-verified",{ replace:true });
-  return;
-}
+        if (flow === "recovery" || urlStr.includes("recovery")) {
+          navigate("/reset-password", { replace: true });
+          return;
+        }
 
-/* ==============================
-PRIORITY 2 — RECOVERY (FLEXIBLE)
-============================== */
-if(
-  flow === "recovery" ||
-  urlStr.includes("recovery")
-){
-  navigate("/reset-password",{ replace:true });
-  return;
-}
-
-/* ==============================
-FALLBACK
-============================== */
-navigate("/login",{ replace:true });
-
-      }catch(err){
-
-        if(cancelled) return;
+        navigate("/login", { replace: true });
+      } catch (err) {
+        if (cancelled) return;
 
         setStatus("error");
         setError(err?.message || "Authentication failed");
-
       }
-
     }
 
     run();
 
-    return ()=>{ cancelled = true };
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
 
-  },[navigate]);
-
-  return(
-
-    <div className="min-h-screen flex items-center justify-center bg-[#F5F6F8]">
-
-      <div className="w-[420px] bg-white rounded-xl shadow-md p-8 text-center">
-
-        <div className="flex flex-col items-center">
-          <div className="w-[360px] mb-4">
-            <img src={logo} className="w-full h-auto" />
+  return (
+    <PublicAuthShell
+      cardWidthClass="max-w-[460px]"
+      logoWidthClass="w-[380px]"
+      title={status === "error" ? "Authentication Failed" : "Securing your session"}
+      subtitle={
+        status === "error"
+          ? error
+          : "Please wait while we restore your verification or recovery session."
+      }
+    >
+      {status !== "error" ? (
+        <div className="flex justify-center">
+          <div className="inline-flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 text-sm text-slate-600">
+            <span className="h-4 w-4 rounded-full border-2 border-[#1E3A8A] border-t-transparent animate-spin" />
+            Please wait...
           </div>
         </div>
-
-        {status === "processing" && (
-          <>
-            <h2 className="text-[#1E3A8A] text-xl font-semibold mb-4">
-              Securing your session
-            </h2>
-            <p className="text-gray-600">
-              Please wait...
-            </p>
-          </>
-        )}
-
-        {status === "error" && (
-          <>
-            <h2 className="text-red-600 text-xl font-semibold mb-4">
-              Authentication Failed
-            </h2>
-            <p className="text-gray-600 break-words">
-              {error}
-            </p>
-          </>
-        )}
-
-      </div>
-
-    </div>
-
+      ) : (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-center text-sm text-rose-700 break-words">
+          {error}
+        </div>
+      )}
+    </PublicAuthShell>
   );
-
 }

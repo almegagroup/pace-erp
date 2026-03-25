@@ -5938,3 +5938,694 @@ Security hardening
 🚀 FINAL 1-LINE TRUTH
 
 PACE ERP core engine is now fully functional, stable, and production-capable — only advanced optimization (session snapshot) remains.
+
+175. SESSION WARNING / TTL UX GAP IDENTIFIED
+
+Status:
+Investigated and confirmed
+
+Date:
+2026-03-26
+
+Problem observed:
+
+Backend session lifecycle logic was already active,
+but frontend did not consistently surface idle warning
+or forced logout in real time.
+
+Observed behavior:
+
+Backend logs emitted:
+
+SESSION_IDLE_WARNING
+
+But UI showed no blocking warning.
+
+Root cause:
+
+Session lifecycle evaluation happened only during protected API requests.
+
+Therefore:
+
+No frontend timer existed
+No passive session probe existed
+No guaranteed UI reaction layer existed for backend warning payloads
+
+Architectural interpretation:
+
+Backend authority was correct.
+Frontend orchestration was incomplete.
+
+Consequence:
+
+10 minute idle warning could be missed.
+30 minute auto logout could not be treated as reliable.
+
+176. BACKEND PASSIVE SESSION PROBE ADDED
+
+Status:
+Completed
+
+File modified:
+
+supabase/functions/api/_pipeline/runner.ts
+
+Purpose:
+
+Allow frontend to check session lifecycle state
+without extending backend idle clock.
+
+Implementation:
+
+A passive probe detector was added:
+
+session_mode=passive
+
+Function introduced:
+
+isPassiveSessionProbe(req)
+
+Behavior:
+
+Protected route still executes:
+
+SESSION
+SESSION_LIFECYCLE
+CONTEXT
+ACL
+
+But:
+
+last_seen_at update is skipped for passive probes.
+
+Critical rule implemented:
+
+Passive session checks must never refresh backend activity.
+
+Why this was necessary:
+
+Without this separation,
+warning detection itself would keep the session alive.
+
+Architectural result:
+
+Backend remains the authority for idle / TTL decisions,
+while frontend gains a safe read-only probe path.
+
+177. FRONTEND SESSION WATCHDOG STATE LAYER IMPLEMENTED
+
+Status:
+Completed
+
+File modified:
+
+frontend/src/store/sessionWarning.js
+
+Purpose:
+
+Create a single frontend coordination layer for:
+
+idle warning display
+frontend activity tracking
+backend activity tracking
+forced logout
+logout confirmation coordination
+
+State introduced:
+
+visible
+message
+type
+frontendActivityAt
+backendActivityAt
+protectedRouteActive
+
+Capabilities added:
+
+subscribe / unsubscribe
+setProtectedRouteActive()
+recordUserActivity()
+recordBackendActivity()
+showWarning()
+clearWarning()
+resetWarningState()
+hardLogout()
+requestLogout()
+
+Hard logout behavior:
+
+clearNavigationStack()
+reset local warning state
+redirect to /login
+
+Important architectural rule:
+
+This store does NOT decide session validity.
+
+It only coordinates frontend display and local reaction
+to backend authority.
+
+178. BLOCKING SESSION WARNING OVERLAY IMPLEMENTED
+
+Status:
+Completed
+
+Files modified / created:
+
+frontend/src/components/SessionOverlay.jsx
+frontend/src/App.jsx
+
+Purpose:
+
+Ensure session warning behaves as a true blocking modal.
+
+Behavior implemented:
+
+Full-screen overlay
+Body scroll lock
+No background interaction
+OK button to continue
+Esc key to continue
+
+Warning types supported:
+
+IDLE_WARNING
+ABSOLUTE_WARNING
+
+UI rule enforced:
+
+While overlay is visible,
+user cannot continue normal work
+until warning is dismissed.
+
+Architecture note:
+
+Overlay is UI-only.
+It does not own lifecycle logic.
+
+179. SESSION WATCHDOG COMPONENT IMPLEMENTED
+
+Status:
+Completed
+
+File created:
+
+frontend/src/components/SessionWatchdog.jsx
+
+Purpose:
+
+Coordinate frontend inactivity and backend inactivity
+before showing warning or forcing logout.
+
+Protected-route behavior:
+
+Watchdog activates only on authenticated routes.
+Public routes and auth callback are excluded.
+
+Frontend activity sources tracked:
+
+mousedown
+mousemove
+keydown
+scroll
+touchstart
+pointerdown
+click
+visibilitychange
+
+Timers implemented:
+
+Idle warning threshold:
+10 minutes
+
+Idle logout threshold:
+30 minutes
+
+Passive backend probe cadence:
+
+Normal:
+60 seconds
+
+Fast recheck:
+5 seconds
+
+Decision rule:
+
+Idle warning is shown only when BOTH are inactive:
+
+frontend inactivity >= 10 minutes
+backend inactivity >= 10 minutes
+
+Logout rule:
+
+If backend reports LOGOUT
+or probe fails with invalid session response,
+frontend performs hard logout to /login.
+
+Dismiss behavior:
+
+Warning dismiss triggers active /api/me refresh,
+which restores both frontend and backend activity state.
+
+180. GLOBAL API WARNING / LOGOUT INTERCEPTOR RESTORED
+
+Status:
+Completed
+
+File modified:
+
+frontend/src/main.jsx
+
+Purpose:
+
+Centralize frontend reaction to backend session payloads.
+
+Reason:
+
+Passive watchdog alone was not sufficient.
+Any backend response carrying warning or logout
+must be able to drive UI behavior.
+
+Implementation:
+
+globalThis.fetch override now inspects JSON responses.
+
+Centralized reactions added:
+
+json.warning.type === "IDLE_WARNING"
+-> showWarning("IDLE_WARNING")
+
+json.warning.type === "ABSOLUTE_WARNING"
+-> showWarning("ABSOLUTE_WARNING")
+
+json.action === "LOGOUT"
+-> hardLogout()
+
+Additional behavior:
+
+Successful protected API responses
+record backend activity,
+except passive probe requests.
+
+Result:
+
+Idle warning no longer depends only on watchdog display path.
+Any backend warning payload can surface the blocking modal.
+
+181. PROTECTED ROUTE SESSION COORDINATION ACTIVATED
+
+Status:
+Completed
+
+File modified:
+
+frontend/src/router/AppRouter.jsx
+
+Purpose:
+
+Mount session watchdog once at application routing layer.
+
+Implementation:
+
+SessionWatchdog now renders inside:
+
+BrowserRouter
+MenuProvider
+AuthBootstrap
+
+Result:
+
+Idle / TTL coordination is available across all protected universes:
+
+/sa/*
+/ga/*
+/dashboard
+
+Architecture note:
+
+Public routes remain outside the watchdog authority scope.
+
+182. SCREEN STACK / ROUTER INTEGRATION REWORK
+
+Status:
+Completed
+
+Files modified / created:
+
+frontend/src/navigation/screenStackEngine.js
+frontend/src/navigation/NavigationStackBridge.jsx
+frontend/src/router/ProtectedBranchShell.jsx
+frontend/src/layout/DashboardShell.jsx
+frontend/src/router/AppRouter.jsx
+frontend/src/admin/sa/SADashboardShell.jsx
+frontend/src/admin/ga/GADashboardShell.jsx
+frontend/src/admin/sa/screens/SAHome.jsx
+
+Purpose:
+
+Restore Gate-8 style navigation authority
+using the screen stack as the operational source of truth
+for protected workspace navigation.
+
+Key additions to screenStackEngine:
+
+subscribeToStack()
+getScreenForRoute()
+resetToScreen()
+openScreen()
+openRoute()
+getPreviousScreen()
+getStackDepth()
+
+Router architecture updated:
+
+/sa/* -> ProtectedBranchShell -> SADashboardShell -> MenuShell -> Outlet
+/ga/* -> ProtectedBranchShell -> GADashboardShell -> MenuShell -> Outlet
+/dashboard -> ProtectedBranchShell -> DashboardShell -> MenuShell -> Outlet
+
+Purpose of new bridge / shell layers:
+
+NavigationStackBridge:
+router follows stack authority
+
+ProtectedBranchShell:
+invalid route falls back to branch root
+
+DashboardShell / admin shells:
+root screen initialization happens per universe,
+without forcing blind stack resets on every render
+
+Result:
+
+Protected navigation is now stack-driven,
+router follows stack state,
+and invalid protected entry paths recover deterministically.
+
+183. SAP-LIKE WORKSPACE SHELL IMPLEMENTED (WITHOUT TCODE)
+
+Status:
+Completed
+
+File modified:
+
+frontend/src/layout/MenuShell.jsx
+
+Purpose:
+
+Provide ERP-style dashboard shell behavior
+without introducing TCode at this stage.
+
+Behavior implemented:
+
+Collapsible sidebar
+Persistent left navigation
+Top workspace action bar
+Back button
+Main Dashboard button
+Dedicated Logout button
+
+Menu behavior:
+
+Sidebar items no longer rely on direct route links.
+
+Menu click now delegates to:
+
+openRoute(route_path)
+
+Back behavior:
+
+If stack depth > 1:
+pop current screen
+
+If stack depth <= 1:
+trigger logout confirmation flow
+
+Home behavior:
+
+Reset stack to current universe root:
+
+SA_HOME
+GA_HOME
+DASHBOARD_HOME
+
+Architectural note:
+
+TCode was intentionally deferred.
+Workspace shell was stabilized first.
+
+184. ROOT BACK / ESC LOGOUT CONFIRMATION MODAL IMPLEMENTED
+
+Status:
+Completed
+
+Files created / modified:
+
+frontend/src/store/logoutConfirm.js
+frontend/src/components/LogoutConfirmOverlay.jsx
+frontend/src/store/sessionWarning.js
+frontend/src/navigation/backGuardEngine.js
+frontend/src/navigation/keyboardIntentMap.js
+frontend/src/App.jsx
+
+Reason:
+
+Native browser confirm() did not match ERP modal behavior
+and did not align with the session warning UX.
+
+New behavior:
+
+At main dashboard root,
+Back / browser back / Esc no longer logs out immediately.
+
+Instead:
+
+custom blocking confirmation modal appears
+
+Message:
+
+"You are at the main dashboard. Do you want to logout now?"
+
+Actions:
+
+Yes -> logout
+No -> stay in workspace
+Esc -> dismiss modal
+
+Architecture result:
+
+Logout confirmation now follows the same modal interaction style
+as the session warning layer.
+
+185. ERP SHELL BRANDING AND PROFILE SURFACE ADDED
+
+Status:
+Completed
+
+Files modified / created:
+
+frontend/src/context/MenuProvider.jsx
+frontend/src/auth/AuthBootstrap.jsx
+frontend/src/layout/MenuShell.jsx
+supabase/functions/api/_core/auth/me_profile.handler.ts
+supabase/functions/api/_routes/admin.routes.ts
+
+Purpose:
+
+Expose ERP identity metadata in the shell
+without allowing direct frontend database access.
+
+Important architectural decision:
+
+Frontend must NOT query database tables directly.
+
+Instead:
+
+backend profile endpoint introduced:
+
+GET /api/me/profile
+
+Backend response now provides:
+
+user_code
+role_code
+
+Frontend shell profile state introduced:
+
+shellProfile = {
+  userCode,
+  roleCode,
+  tagline
+}
+
+Tagline standardized as:
+
+Process Automation & Control Environment
+
+UI result:
+
+Top-left branding now uses ERP logo:
+/icon-192.png
+
+Route-path text such as:
+/sa/home
+
+was removed from shell display.
+
+Replaced with:
+
+userCode in shell identity area
+roleCode in top bar label area
+
+This keeps ERP shell identity consistent for:
+
+SA users
+GA users
+ACL users
+
+while preserving backend authority for identity resolution.
+
+186. MAIN DASHBOARD CONTENT SIMPLIFIED
+
+Status:
+Completed
+
+Files modified / created:
+
+frontend/src/components/dashboard/EnterpriseDashboard.jsx
+frontend/src/admin/sa/screens/SAHome.jsx
+frontend/src/admin/ga/screens/GAHome.jsx
+frontend/src/pages/dashboard/UserDashboardHome.jsx
+frontend/src/router/AppRouter.jsx
+
+Reason:
+
+Initial dashboard styling was too heavy for current bootstrap stage.
+
+Requirement:
+
+Keep dashboard clean,
+operational,
+and less visually noisy.
+
+What changed:
+
+Hero area simplified
+Feed-heavy content removed
+Main workspace reduced to:
+
+compact header card
+small KPI cards
+quick workspace actions
+
+Role dashboards now exist for:
+
+SA
+GA
+ACL user
+
+SA home actions were connected to stack navigation:
+
+Create Company
+User Control
+Signup Requests
+
+Result:
+
+Main dashboard area now functions as a clean workspace entry,
+instead of a highly decorative landing surface.
+
+187. CURRENT IDLE / TTL BEHAVIOR AFTER IMPLEMENTATION
+
+Status:
+Operational (manual test path)
+
+Expected protected-route behavior:
+
+1. User enters protected dashboard route
+2. Frontend activity tracking starts
+3. Backend passive probes begin
+4. If frontend inactive AND backend inactive for 10 minutes:
+   blocking warning modal appears
+5. User can resume only via OK or Esc
+6. Dismiss triggers active session refresh
+7. If inactivity continues until 30 minutes:
+   hard logout to /login
+
+TTL behavior:
+
+If backend emits ABSOLUTE_WARNING:
+same blocking warning UI appears
+
+If backend emits LOGOUT:
+frontend clears local navigation state
+and redirects to /login
+
+188. CURRENT WORKSPACE NAVIGATION BEHAVIOR AFTER IMPLEMENTATION
+
+Status:
+Operational
+
+Protected ERP workspace behavior:
+
+Sidebar remains available across protected routes
+Main content area occupies full dashboard workspace
+Menu click pushes / resets stack through screen engine
+Back returns to previous workspace screen
+Main Dashboard resets to universe root
+Root Back / Esc opens logout confirmation modal
+
+Important note:
+
+TCode is intentionally not part of current scope.
+Shortcut-key expansion may be added later.
+
+189. ARCHITECTURE COMPLIANCE NOTES (LATEST)
+
+Status:
+Confirmed
+
+Preserved invariants:
+
+Backend remains authority for session lifecycle decisions
+Frontend does not directly query ERP database for shell identity
+Protected navigation uses screen stack coordination
+Session warning and logout are handled through explicit UI overlays
+
+Explicit non-goals of this phase:
+
+No TCode implementation
+No frontend direct DB access
+No bypass of backend lifecycle logic
+
+190. CURRENT SYSTEM STATE (LATEST UI SESSION)
+
+Public layer:
+
+Landing -> operational
+Login -> operational
+Signup -> operational
+Recovery -> operational
+
+Protected layer:
+
+Menu shell -> operational
+Stack navigation -> operational
+Idle warning -> implemented
+TTL warning -> implemented
+Auto logout -> implemented
+Logout confirmation modal -> implemented
+Shell branding/profile -> implemented
+Clean dashboards -> implemented
+
+Residual note:
+
+Automated frontend build verification could not be completed
+in the local environment because Node build execution returned:
+
+EPERM: operation not permitted, lstat 'C:\\Users\\cpalm'
+
+Therefore:
+
+Current status is based on repository integration
+and manual behavior validation,
+not on a successful local production build run.

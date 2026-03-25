@@ -1,4 +1,4 @@
-/*
+  /*
  * File-ID: 8.5
  * File-Path: frontend/src/navigation/keyboardAclBridge.js
  * Gate: 8
