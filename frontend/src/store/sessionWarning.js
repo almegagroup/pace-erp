@@ -148,7 +148,13 @@ export function hardLogout() {
   };
   emit();
 
-  globalThis.location.href = "/login";
+  try {
+    globalThis.history.replaceState(null, "", "/");
+  } catch {
+    // History replacement is best effort only.
+  }
+
+  globalThis.location.assign("/login");
 }
 
 export async function requestLogout() {

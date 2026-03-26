@@ -28,12 +28,14 @@ export function enableBackGuard() {
 }
 
 function onBrowserBack(event) {
-  if (isPublicRoute(globalThis.location.pathname)) {
+  const active = getActiveScreen();
+  const activeRoute = active?.route ?? null;
+
+  if (!activeRoute || isPublicRoute(activeRoute)) {
     return;
   }
 
   const stack = getStackSnapshot();
-  const active = getActiveScreen();
 
   // No stack = illegal
   if (!Array.isArray(stack) || stack.length === 0) {
@@ -44,8 +46,8 @@ function onBrowserBack(event) {
   // Root screen cannot go back
   if (stack.length === 1) {
     event.preventDefault();
-    if (active?.route) {
-      globalThis.history.pushState(null, "", active.route);
+    if (activeRoute) {
+      globalThis.history.pushState(null, "", activeRoute);
     }
     void confirmAndRequestLogout();
     return;
@@ -54,8 +56,8 @@ function onBrowserBack(event) {
   const previous = getPreviousScreen();
   if (!isBackAllowed(previous?.screen_code)) {
     event.preventDefault();
-    if (active?.route) {
-      globalThis.history.pushState(null, "", active.route);
+    if (activeRoute) {
+      globalThis.history.pushState(null, "", activeRoute);
     }
     return;
   }

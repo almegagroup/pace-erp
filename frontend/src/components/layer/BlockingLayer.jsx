@@ -50,6 +50,14 @@ export default function BlockingLayer({
     document.body.style.overflow = "hidden";
     const appShell = document.getElementById("app-shell");
     if (appShell) {
+      const activeElement = document.activeElement;
+      if (
+        activeElement instanceof HTMLElement &&
+        appShell.contains(activeElement)
+      ) {
+        activeElement.blur();
+      }
+
       appShell.setAttribute("inert", "");
       appShell.setAttribute("aria-hidden", "true");
     }
