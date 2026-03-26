@@ -97,7 +97,9 @@ const companyId = ctx.context.companyId;
     /* Generate deterministic ACL snapshot                */
     /* -------------------------------------------------- */
 
-    const { error: snapshotError } = await db.rpc(
+    const { error: snapshotError } = await db
+  .schema("acl")
+  .rpc(
   "generate_acl_snapshot",
   {
     p_acl_version_id: body.acl_version_id,

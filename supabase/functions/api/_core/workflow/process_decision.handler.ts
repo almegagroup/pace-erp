@@ -293,7 +293,9 @@ if (workflow.approval_type === "SEQUENTIAL") {
 // STEP 7: Insert Decision
 // =========================================================
 
-const { error: atomicError } = await serviceRoleClient.rpc(
+const { error: atomicError } = await serviceRoleClient
+  .schema("acl")
+  .rpc(
   "process_workflow_decision_atomic",
   {
     p_request_id: workflow.request_id,
