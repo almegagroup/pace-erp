@@ -9,7 +9,7 @@
  */
 
 import { useMenu } from "../context/useMenu.js";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import {
   getScreenForRoute,
@@ -22,6 +22,11 @@ import {
   confirmAndRequestLogout,
   requestLogout,
 } from "../store/sessionWarning.js";
+import {
+  subscribeWorkspaceShell,
+  toggleSidebarCollapsed,
+  unsubscribeWorkspaceShell,
+} from "../store/workspaceShell.js";
 
 export default function MenuShell(){
   //console.log("🔥 MenuShell ACTIVE");
@@ -50,6 +55,15 @@ export default function MenuShell(){
     loading,
     menuLength: menu?.length,
   });
+
+  useEffect(() => {
+    const listener = (snapshot) => {
+      setCollapsed(snapshot.sidebarCollapsed);
+    };
+
+    subscribeWorkspaceShell(listener);
+    return () => unsubscribeWorkspaceShell(listener);
+  }, []);
 
   if (loading) {
     console.log("⏳ Loading...");
@@ -126,7 +140,8 @@ export default function MenuShell(){
             </div>
             <button
               type="button"
-              onClick={() => setCollapsed((value) => !value)}
+              onClick={() => toggleSidebarCollapsed()}
+              title={collapsed ? "Show sidebar (Ctrl+Right Arrow)" : "Hide sidebar (Ctrl+Left Arrow)"}
               style={{
                 border: "1px solid rgba(255,255,255,0.16)",
                 background: "rgba(255,255,255,0.06)",
@@ -194,6 +209,7 @@ export default function MenuShell(){
         <div style={{ padding: "16px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
           <button
             onClick={handleLogout}
+            title="Logout (Ctrl+Shift+L)"
             style={{
               width: "100%",
               border: "none",
@@ -206,7 +222,7 @@ export default function MenuShell(){
               cursor: "pointer",
             }}
           >
-            {collapsed ? "Out" : "Logout"}
+            {collapsed ? "Out" : "Logout (Ctrl+Shift+L)"}
           </button>
         </div>
 

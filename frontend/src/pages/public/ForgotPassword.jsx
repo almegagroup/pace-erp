@@ -110,7 +110,7 @@ export default function ForgotPassword() {
         <Link to="/login" className={linkClassName}>
           Back to Login
         </Link>
-        <Link to="/signup" className={linkClassName}>
+        <Link to="/signup-instructions" className={linkClassName}>
           Create Account
         </Link>
       </div>

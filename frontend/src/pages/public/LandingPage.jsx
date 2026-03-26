@@ -72,7 +72,7 @@ export default function LandingPage() {
                     <button className={primaryButtonClassName}>Login</button>
                   </Link>
 
-                  <Link to="/signup">
+                  <Link to="/signup-instructions">
                     <button className={secondaryButtonClassName}>Sign Up</button>
                   </Link>
                 </div>

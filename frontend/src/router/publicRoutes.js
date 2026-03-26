@@ -25,6 +25,7 @@ This file acts as SSOT for all public route checks.
 export const PUBLIC_ROUTES = new Set([
   "/",
   "/login",
+  "/signup-instructions",
   "/signup",
   "/forgot-password",
   "/reset-password",

@@ -17,6 +17,18 @@ const INTENT_ACL_MAP = Object.freeze({
     resource: "NAVIGATION",
     action: "BACK",
   },
+  INTENT_SIDEBAR_HIDE: {
+    resource: "NAVIGATION",
+    action: "COLLAPSE_SIDEBAR",
+  },
+  INTENT_SIDEBAR_SHOW: {
+    resource: "NAVIGATION",
+    action: "EXPAND_SIDEBAR",
+  },
+  INTENT_LOGOUT_CONFIRM: {
+    resource: "SESSION",
+    action: "LOGOUT_CONFIRM",
+  },
   // Future examples:
   // INTENT_SAVE: { resource: "DOCUMENT", action: "WRITE" }
 });
