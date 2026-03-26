@@ -152,7 +152,7 @@ export default function LoginScreen() {
         <Link to="/forgot-password" className={linkClassName}>
           Forgot Password?
         </Link>
-        <Link to="/signup" className={linkClassName}>
+        <Link to="/signup-instructions" className={linkClassName}>
           Create Account
         </Link>
       </div>

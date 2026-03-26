@@ -118,7 +118,7 @@ export default function EmailVerified() {
 
         {status === "not_verified" ? (
           <button
-            onClick={() => navigate("/signup")}
+            onClick={() => navigate("/signup-instructions")}
             className={secondaryButtonClassName}
           >
             Back to Signup

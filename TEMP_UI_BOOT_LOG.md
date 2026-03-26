@@ -6629,3 +6629,513 @@ Therefore:
 Current status is based on repository integration
 and manual behavior validation,
 not on a successful local production build run.
+
+191. TOP-LAYER FOCUS LEAK ISSUE IDENTIFIED
+
+Status:
+Investigated and confirmed
+
+Date:
+2026-03-26
+
+Problem observed:
+
+When blocking overlays appeared,
+visual stacking was correct
+but keyboard focus could still leak
+to background UI elements.
+
+Observed behavior:
+
+Logout confirmation modal opened
+yet Tab navigation continued into
+underlying dashboard controls
+before eventually returning to modal buttons.
+
+Architectural interpretation:
+
+Top-layer visual dominance existed,
+but top-layer keyboard authority was incomplete.
+
+Required rule:
+
+Whenever a blocking modal / overlay / drawer is open,
+the top-most layer must own:
+
+focus
+Tab cycle
+Escape handling
+background interaction lock
+
+192. BLOCKING LAYER FOUNDATION IMPLEMENTED
+
+Status:
+Completed
+
+Files created:
+
+frontend/src/components/layer/blockingLayerStack.js
+frontend/src/components/layer/BlockingLayer.jsx
+
+Purpose:
+
+Create a reusable top-layer foundation
+for all current and future blocking UI surfaces.
+
+blockingLayerStack responsibilities:
+
+openBlockingLayer()
+closeBlockingLayer()
+isBlockingLayerActive()
+isTopBlockingLayer()
+
+BlockingLayer responsibilities:
+
+register top-layer instance
+capture previous focus
+move focus into active layer
+trap Tab / Shift+Tab inside layer
+handle Escape at top-most layer only
+restore focus on close
+lock body scroll
+
+Architecture result:
+
+Modal behavior is now enforced
+through a reusable foundation
+instead of one-off overlay logic.
+
+193. APP-SHELL INERT WIRING ADDED
+
+Status:
+Completed
+
+Files modified:
+
+frontend/src/App.jsx
+frontend/src/components/layer/BlockingLayer.jsx
+
+Purpose:
+
+Ensure background application tree becomes structurally inactive
+whenever a blocking top layer is open.
+
+Implementation:
+
+App router content wrapped in:
+
+<div id="app-shell">
+
+BlockingLayer behavior now:
+
+adds inert to #app-shell
+adds aria-hidden="true" to #app-shell
+removes both when last blocking layer closes
+
+Effect:
+
+Background UI is no longer only visually dimmed.
+It becomes non-interactive while modal / drawer is active.
+
+194. REUSABLE MODAL / DRAWER BASES CREATED
+
+Status:
+Completed
+
+Files created:
+
+frontend/src/components/layer/ModalBase.jsx
+frontend/src/components/layer/DrawerBase.jsx
+
+Purpose:
+
+Provide a common presentation layer
+for future ERP modals and drawers.
+
+ModalBase provides:
+
+standard centered overlay
+eyebrow / title / message slots
+actions region
+shared focus-trap behavior via BlockingLayer
+
+DrawerBase provides:
+
+side-mounted panel shell
+title / content / actions structure
+shared top-layer behavior via BlockingLayer
+
+Important note:
+
+DrawerBase is now ready for future use
+but was not yet mounted into a real feature screen
+during this session.
+
+195. EXISTING SESSION / LOGOUT MODALS MIGRATED TO MODALBASE
+
+Status:
+Completed
+
+Files modified:
+
+frontend/src/components/SessionOverlay.jsx
+frontend/src/components/LogoutConfirmOverlay.jsx
+
+Purpose:
+
+Move current overlays onto the shared modal foundation.
+
+Result:
+
+Session warning modal now uses ModalBase
+Logout confirmation modal now uses ModalBase
+
+Behavior now unified:
+
+auto focus
+Tab trap
+Esc handling
+focus restore
+background inert state
+
+Architecture result:
+
+Current overlays and future overlays
+now share the same top-layer semantics.
+
+196. KEYBOARD INTENT ENGINE TOP-LAYER AWARENESS ADDED
+
+Status:
+Completed
+
+File modified:
+
+frontend/src/navigation/keyboardIntentEngine.js
+
+Purpose:
+
+Prevent global keyboard intents
+from leaking through active blocking layers.
+
+Implementation:
+
+normalizeKeyEvent() now stops intent generation when:
+
+event.defaultPrevented
+blocking layer active
+
+Effect:
+
+If a blocking modal is open,
+background keyboard back / shortcut logic
+will not execute.
+
+197. PUBLIC AUTH PAGE POLISH PROGRAM STARTED
+
+Status:
+Completed
+
+Files modified / created:
+
+frontend/src/pages/public/PublicAuthShell.jsx
+frontend/src/pages/public/LandingPage.jsx
+frontend/src/pages/public/LoginScreen.jsx
+frontend/src/pages/public/SignupPage.jsx
+frontend/src/pages/public/ForgotPassword.jsx
+frontend/src/pages/public/ResetPassword.jsx
+frontend/src/pages/public/EmailVerified.jsx
+frontend/src/pages/public/SignupSubmittedPage.jsx
+frontend/src/pages/public/AuthCallback.jsx
+
+Objective:
+
+Professionally polish all public authentication screens
+without changing functional behavior.
+
+Strict constraints applied:
+
+same PNG assets retained
+same tagline retained where used
+same routes retained
+same handlers retained
+same Supabase / backend API calls retained
+same redirects retained
+
+Design approach:
+
+Introduce a shared polished public shell
+for consistency
+while preserving business logic 100%.
+
+198. PUBLICAUTHSHELL IMPLEMENTED
+
+Status:
+Completed
+
+File created:
+
+frontend/src/pages/public/PublicAuthShell.jsx
+
+Purpose:
+
+Provide a consistent polished shell
+for all public authentication screens.
+
+Features:
+
+shared glass-card layout
+consistent logo framing
+background atmosphere
+responsive width control
+optional title
+optional subtitle
+optional tagline
+footer support
+
+Impact:
+
+Public auth pages now share one professional visual language
+without duplicating layout markup across screens.
+
+199. LOGIN / SIGNUP / RECOVERY / CALLBACK PAGES REFRAMED
+
+Status:
+Completed
+
+Files modified:
+
+frontend/src/pages/public/LoginScreen.jsx
+frontend/src/pages/public/SignupPage.jsx
+frontend/src/pages/public/ForgotPassword.jsx
+frontend/src/pages/public/ResetPassword.jsx
+frontend/src/pages/public/EmailVerified.jsx
+frontend/src/pages/public/SignupSubmittedPage.jsx
+frontend/src/pages/public/AuthCallback.jsx
+
+What changed:
+
+Input fields visually strengthened
+messages moved into cleaner status cards
+spacing and responsive behavior improved
+logo presentation standardized
+button hierarchy clarified
+form shell made more enterprise-grade
+
+What explicitly did NOT change:
+
+POST /api/login wiring
+Supabase signup flow
+Supabase password recovery flow
+Supabase updateUser reset flow
+POST /api/signup verification continuation
+Auth callback session restoration logic
+
+Conclusion:
+
+Public auth UX was polished
+without changing application behavior contracts.
+
+200. LANDING PAGE VISUAL POLISH APPLIED
+
+Status:
+Completed
+
+File modified:
+
+frontend/src/pages/public/LandingPage.jsx
+
+Changes:
+
+background atmosphere improved
+main entry card strengthened
+logo block refined
+button presentation improved
+entry card made more polished and balanced
+
+Preserved behavior:
+
+boot loader still runs for 1800ms
+same logo asset retained
+same boot asset retained
+same tagline retained
+same Login / Sign Up routes retained
+
+201. PAGE-TARGET MISALIGNMENT DISCOVERED AND CORRECTED
+
+Status:
+Corrected
+
+Problem:
+
+User intended the instructional right-side panel
+to belong to Landing page.
+
+However during one intermediate edit,
+that instruction panel was mistakenly moved
+to Login page.
+
+Observed effect:
+
+Landing page lost intended instruction guidance
+Login page received an unintended two-column instruction layout
+
+Correction applied:
+
+Login page restored to clean centered auth form
+Landing page received the right-side instruction panel
+
+Architectural note:
+
+This was a presentation-target correction only.
+No route / API / auth flow behavior was changed.
+
+202. LANDING PAGE INSTRUCTION PANEL FINALIZED
+
+Status:
+Completed
+
+File modified:
+
+frontend/src/pages/public/LandingPage.jsx
+
+Final right-side panel purpose:
+
+Explain what each public entry path does.
+
+Instruction content now covers:
+
+Login
+Sign Up
+Password Help
+
+Guidance model:
+
+Login:
+for existing approved users
+
+Sign Up:
+for new users requesting ERP access
+
+Password Help:
+open Login first, then use Forgot Password
+
+Result:
+
+Landing page now acts as both
+public entry surface
+and lightweight user guidance layer.
+
+203. PUBLIC ESC KEY BUG IDENTIFIED
+
+Status:
+Investigated and confirmed
+
+Problem observed:
+
+Pressing Esc on public pages
+such as Landing or Login
+unexpectedly opened the protected logout confirmation modal.
+
+Browser back on public pages did NOT show this issue.
+
+Root cause:
+
+Global keyboard intent engine
+was still converting Esc into:
+
+INTENT_BACK
+
+even on public routes.
+
+Therefore:
+
+public pages incorrectly triggered
+protected logout confirmation behavior.
+
+Architectural interpretation:
+
+Keyboard intent scope was not properly restricted
+to protected universes.
+
+204. PUBLIC ROUTE ESC GUARD IMPLEMENTED
+
+Status:
+Completed
+
+File modified:
+
+frontend/src/navigation/keyboardIntentEngine.js
+
+Fix added:
+
+normalizeKeyEvent() now exits early when:
+
+isPublicRoute(globalThis.location.pathname)
+
+Effect:
+
+Landing / Login / Signup / Forgot Password / Reset Password / other public routes
+no longer trigger logout confirmation via Esc
+
+Protected route behavior remains:
+
+Esc still maps to stack back / logout confirmation
+within authenticated ERP workspace
+
+205. CURRENT TOP-LAYER / PUBLIC AUTH STATE
+
+Status:
+Stable after latest fixes
+
+Top-layer infrastructure:
+
+BlockingLayer -> active
+ModalBase -> active
+DrawerBase -> ready
+background inert wiring -> active
+
+Current protected modal behavior:
+
+Session warning -> trapped correctly
+Logout confirmation -> trapped correctly
+
+Current public route behavior:
+
+Esc does nothing destructive
+No protected logout modal should appear
+Public auth flows remain visually polished
+
+206. CURRENT SYSTEM STATE (END OF SESSION)
+
+Public layer:
+
+Landing -> polished
+Login -> polished
+Signup -> polished
+Forgot Password -> polished
+Reset Password -> polished
+Email Verified -> polished
+Signup Submitted -> polished
+Auth Callback -> polished
+
+Top-layer system:
+
+focus trap foundation -> implemented
+shared modal base -> implemented
+shared drawer base -> implemented
+background inert wiring -> implemented
+public Esc guard -> implemented
+
+Protected layer:
+
+Idle warning / TTL -> implemented
+Logout confirmation -> implemented
+stack navigation -> implemented
+shell branding -> implemented
+
+Residual note:
+
+Visual and source-level verification was completed,
+but no successful automated production build run
+was available in the local environment
+because of the previously observed EPERM build issue.

@@ -14,6 +14,7 @@ import AuthBootstrap from "../auth/AuthBootstrap.jsx";
 import AuthResolver from "../admin/AuthResolver.jsx";
 import LandingPage from "../pages/public/LandingPage.jsx";
 import LoginScreen from "../pages/public/LoginScreen.jsx";
+import SignupInstructions from "../pages/public/SignupInstructions.jsx";
 import SignupScreen from "../pages/public/SignupPage.jsx";
 import AuthCallback from "../pages/public/AuthCallback.jsx";
 import EmailVerified from "../pages/public/EmailVerified.jsx";
@@ -58,6 +59,7 @@ export default function AppRouter() {
 
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginScreen />} />
+          <Route path="/signup-instructions" element={<SignupInstructions />} />
           <Route path="/signup" element={<SignupScreen />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
           <Route path="/email-verified" element={<EmailVerified />} />
