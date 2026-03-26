@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { openActionConfirm } from "../../../store/actionConfirm.js";
 
 const ROLE_OPTIONS = Object.freeze([
   { code: "SA", label: "Super Admin", rank: 999 },
@@ -95,6 +96,10 @@ function getStateTone(state) {
 function shortId(value) {
   if (!value) return "N/A";
   return String(value).slice(0, 8);
+}
+
+function formatIdentityName(user) {
+  return user.name ?? "Unknown User";
 }
 
 function SummaryCard({ label, value, caption, tone = "sky" }) {
@@ -198,9 +203,13 @@ export default function SAUserRoles() {
       return;
     }
 
-    const approved = globalThis.confirm(
-      `Apply role ${ROLE_LABELS[nextRole] ?? nextRole} to ${user.user_code ?? shortId(user.auth_user_id)} now?`
-    );
+    const approved = await openActionConfirm({
+      eyebrow: "SA Role Governance",
+      title: "Apply ERP Role",
+      message: `Apply role ${ROLE_LABELS[nextRole] ?? nextRole} to ${user.user_code ?? shortId(user.auth_user_id)} ${formatIdentityName(user)} now?`,
+      confirmLabel: "Apply Role",
+      cancelLabel: "Cancel",
+    });
 
     if (!approved) {
       return;
@@ -285,9 +294,9 @@ export default function SAUserRoles() {
                 ERP User Role Assignment
               </h1>
               <p className="mt-3 text-sm leading-7 text-slate-500">
-                Review current role posture, assign the canonical ERP role
-                ladder, and update user authority from the Super Admin control
-                plane.
+                Review ERP identity details, confirm current role posture, and
+                assign the canonical role ladder with enough business context
+                to identify each user before applying authority changes.
               </p>
             </div>
 
@@ -442,7 +451,7 @@ export default function SAUserRoles() {
                 <thead>
                   <tr>
                     <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      User
+                      User Identity
                     </th>
                     <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                       Current Role
@@ -470,7 +479,16 @@ export default function SAUserRoles() {
                       >
                         <td className="rounded-none px-4 py-4 text-sm text-slate-700 first:rounded-l-2xl">
                           <div className="font-semibold text-slate-900">
-                            {user.user_code ?? "Uncoded User"}
+                            {user.user_code ?? "Uncoded User"}{" "}
+                            <span className="text-slate-600">
+                              {formatIdentityName(user)}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                            {user.parent_company_name ?? "Company Not Captured"}
+                          </div>
+                          <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                            {user.designation_hint ?? "Designation Not Captured"}
                           </div>
                           <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
                             Auth {shortId(user.auth_user_id)}

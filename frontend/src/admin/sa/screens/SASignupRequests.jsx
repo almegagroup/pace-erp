@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { openActionConfirm } from "../../../store/actionConfirm.js";
 
 async function readJsonSafe(response) {
   try {
@@ -143,11 +144,19 @@ export default function SASignupRequests() {
       return;
     }
 
-    const approved = globalThis.confirm(
-      decision === "APPROVE"
-        ? "Approve this ERP signup request now?"
-        : "Reject this ERP signup request now?"
-    );
+    const approved = await openActionConfirm({
+      eyebrow: "SA Onboarding Queue",
+      title:
+        decision === "APPROVE"
+          ? "Approve Signup Request"
+          : "Reject Signup Request",
+      message:
+        decision === "APPROVE"
+          ? "Approve this ERP signup request and move the user into the governed ERP lifecycle?"
+          : "Reject this ERP signup request and close the onboarding request?",
+      confirmLabel: decision === "APPROVE" ? "Approve" : "Reject",
+      cancelLabel: "Cancel",
+    });
 
     if (!approved) {
       return;

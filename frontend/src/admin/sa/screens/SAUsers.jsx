@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { openActionConfirm } from "../../../store/actionConfirm.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Users" },
@@ -57,6 +58,10 @@ function formatDateTime(value) {
 function shortId(value) {
   if (!value) return "N/A";
   return String(value).slice(0, 8);
+}
+
+function formatIdentityName(user) {
+  return user.name ?? "Unknown User";
 }
 
 function getStateTone(state) {
@@ -178,11 +183,19 @@ export default function SAUsers() {
       return;
     }
 
-    const approved = globalThis.confirm(
-      nextState === "DISABLED"
-        ? `Disable ERP access for ${user.user_code ?? shortId(user.auth_user_id)} now?`
-        : `Reactivate ERP access for ${user.user_code ?? shortId(user.auth_user_id)} now?`
-    );
+    const approved = await openActionConfirm({
+      eyebrow: "SA User Governance",
+      title:
+        nextState === "DISABLED"
+          ? "Disable ERP Access"
+          : "Reactivate ERP Access",
+      message:
+        nextState === "DISABLED"
+          ? `Disable ERP access for ${user.user_code ?? shortId(user.auth_user_id)} ${formatIdentityName(user)} now?`
+          : `Reactivate ERP access for ${user.user_code ?? shortId(user.auth_user_id)} ${formatIdentityName(user)} now?`,
+      confirmLabel: nextState === "DISABLED" ? "Disable" : "Reactivate",
+      cancelLabel: "Cancel",
+    });
 
     if (!approved) {
       return;
@@ -423,7 +436,16 @@ export default function SAUsers() {
                       >
                         <td className="rounded-none px-4 py-4 text-sm text-slate-700 first:rounded-l-2xl">
                           <div className="font-semibold text-slate-900">
-                            {user.user_code ?? "Uncoded User"}
+                            {user.user_code ?? "Uncoded User"}{" "}
+                            <span className="text-slate-600">
+                              {formatIdentityName(user)}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                            {user.parent_company_name ?? "Company Not Captured"}
+                          </div>
+                          <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                            {user.designation_hint ?? "Designation Not Captured"}
                           </div>
                           <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
                             Auth {shortId(user.auth_user_id)}
