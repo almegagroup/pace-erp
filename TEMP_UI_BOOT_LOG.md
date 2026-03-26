@@ -7769,6 +7769,43 @@ This is temporary reachability support only.
 Authoritative long-term access must still come from
 menu snapshot governance.
 
+226. PROTECTED WORKSPACE SHIFTED TOWARD KEYBOARD-FIRST ERP FLOW
+
+Status:
+Active
+
+Date:
+2026-03-26
+
+Scope:
+
+Protected routes only.
+Public routes remain outside this conversion.
+
+Change applied:
+
+The shared protected shell now emphasizes:
+
+keyboard zone cycling
+menu-first navigation
+action-strip focus flow
+content focus targeting
+visible shortcut guidance
+
+Shared dashboard surfaces were also refactored
+from card-heavy SaaS presentation
+toward a denser operator action layout.
+
+Important constraint:
+
+This is NOT a T-code or command-line model.
+
+The target is keyboard-first ERP operation
+through structured navigation,
+lists,
+tables,
+and action strips.
+
 225. SA ROLE ASSIGNMENT ROUTE FALLBACK EXPANDED
 
 Status:

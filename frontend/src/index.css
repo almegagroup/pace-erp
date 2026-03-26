@@ -40,6 +40,33 @@ body{
 font-family:'Sora',sans-serif;
 }
 
+body[data-workspace-mode="protected"] {
+  font-family: "Segoe UI", "Noto Sans", sans-serif;
+  background: #dfe7ec;
+  color: #0f172a;
+}
+
+body[data-workspace-mode="protected"] :is(
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  [tabindex]:not([tabindex="-1"])
+):focus-visible {
+  outline: 3px solid #0f766e;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 1px rgba(15, 118, 110, 0.18);
+}
+
+body[data-workspace-mode="protected"] ::selection {
+  background: rgba(14, 116, 144, 0.18);
+}
+
+body[data-workspace-mode="protected"] .font-mono {
+  font-family: Consolas, "Courier New", monospace;
+}
+
 @keyframes loader {
 0% { width:0%; }
 100% { width:100%; }

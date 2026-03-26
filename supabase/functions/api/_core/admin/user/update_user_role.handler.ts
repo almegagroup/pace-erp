@@ -16,6 +16,7 @@ import {
   getRoleRank,
 } from "../../../_shared/role_ladder.ts";
 import { assertSelfLockoutSafe } from "./_guards/self_lockout.guard.ts";
+import { log } from "../../../_lib/logger.ts";
 
 /**
  * Update User Role
@@ -42,7 +43,7 @@ export async function updateUserRoleHandler(
   // Context gate
   // --------------------------------------------------
   if (ctx.context.status !== "RESOLVED") {
-    return okResponse(null, ctx.request_id);
+    return okResponse({ applied: false }, ctx.request_id);
   }
 
   const body = await req.json().catch(() => ({}));
@@ -50,12 +51,12 @@ export async function updateUserRoleHandler(
 
   const normalizedRole = normalizeRoleCode(next_role);
   if (!target_auth_user_id || !normalizedRole) {
-    return okResponse(null, ctx.request_id);
+    return okResponse({ applied: false }, ctx.request_id);
   }
 
   const nextRank = getRoleRank(normalizedRole);
   if (nextRank === null) {
-    return okResponse(null, ctx.request_id);
+    return okResponse({ applied: false }, ctx.request_id);
   }
 
   const db = getServiceRoleClientWithContext(ctx.context);
@@ -72,18 +73,35 @@ export async function updateUserRoleHandler(
   // --------------------------------------------------
   // Self-lockout protection (ID-9.6A)
   // --------------------------------------------------
-  await assertSelfLockoutSafe({
-    _actorAuthUserId: ctx.auth_user_id,
-    actorRoleCode: ctx.roleCode,
-    _targetAuthUserId: target_auth_user_id,
-    targetCurrentRole: currentRoleRow?.role_code,
-    targetNextRole: normalizedRole,
-  });
+  try {
+    await assertSelfLockoutSafe({
+      _actorAuthUserId: ctx.auth_user_id,
+      actorRoleCode: ctx.roleCode,
+      _targetAuthUserId: target_auth_user_id,
+      targetCurrentRole: currentRoleRow?.role_code,
+      targetNextRole: normalizedRole,
+    });
+  } catch (error) {
+    log({
+      level: "ERROR",
+      gate_id: "9.6A",
+      request_id: ctx.request_id,
+      event: "USER_ROLE_GUARD_BLOCKED",
+      actor: ctx.auth_user_id,
+      meta: {
+        target_auth_user_id,
+        next_role: normalizedRole,
+        error_message: error instanceof Error ? error.message : String(error),
+      },
+    });
+
+    return okResponse({ applied: false }, ctx.request_id);
+  }
 
   // --------------------------------------------------
   // Apply role update (single-role model)
   // --------------------------------------------------
-  await db
+  const { error: roleWriteError } = await db
     .schema("erp_acl").from("user_roles")
     .upsert({
       auth_user_id: target_auth_user_id,
@@ -95,5 +113,29 @@ export async function updateUserRoleHandler(
       onConflict: "auth_user_id",
     });
 
-  return okResponse(null, ctx.request_id);
+  if (roleWriteError) {
+    log({
+      level: "ERROR",
+      gate_id: "9.6A",
+      request_id: ctx.request_id,
+      event: "USER_ROLE_WRITE_FAILED",
+      actor: ctx.auth_user_id,
+      meta: {
+        target_auth_user_id,
+        next_role: normalizedRole,
+        error_message: roleWriteError.message,
+      },
+    });
+
+    return okResponse({ applied: false }, ctx.request_id);
+  }
+
+  return okResponse(
+    {
+      applied: true,
+      next_role: normalizedRole,
+      role_rank: nextRank,
+    },
+    ctx.request_id
+  );
 }

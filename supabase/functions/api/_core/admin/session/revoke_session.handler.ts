@@ -10,6 +10,7 @@
 
 import { okResponse, errorResponse } from "../../response.ts";
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
+import { log } from "../../../_lib/logger.ts";
 
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 
@@ -47,16 +48,29 @@ export async function revokeSessionHandler(
 
   const db = getServiceRoleClientWithContext(ctx.context);
 
-  const { error } = await db
+  const { data: revokedRows, error } = await db
     .schema("erp_core").from("sessions")
     .update({
       status: "REVOKED",
       revoked_at: new Date().toISOString(),
       revoked_reason: "ADMIN_REVOKE"
     })
-    .eq("session_id", body.session_id);
+    .eq("session_id", body.session_id)
+    .select("session_id, status");
 
   if (error) {
+    log({
+      level: "ERROR",
+      gate_id: "9.15B",
+      request_id: ctx.request_id,
+      route_key: "POST:/api/admin/sessions/revoke",
+      event: "SESSION_REVOKE_FAILED",
+      meta: {
+        session_id: body.session_id,
+        error_message: error.message,
+      },
+    });
+
     return errorResponse(
       "SESSION_REVOKE_FAILED",
       error.message,
@@ -66,5 +80,13 @@ export async function revokeSessionHandler(
     );
   }
 
-  return okResponse({ revoked: true }, ctx.request_id);
+  const applied = Array.isArray(revokedRows) && revokedRows.length > 0;
+
+  return okResponse(
+    {
+      revoked: applied,
+      session_id: body.session_id,
+    },
+    ctx.request_id
+  );
 }

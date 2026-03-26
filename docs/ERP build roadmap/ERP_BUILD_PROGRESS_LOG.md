@@ -529,6 +529,142 @@ which keeps lifecycle control and authority mapping sequential and easier to rea
 Next step:
 Proceed sequentially into /sa/users/scope for user scope mapping governance
 
+## Entry 011
+
+Date:
+2026-03-26
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- shifted the protected workspace shell toward a keyboard-first ERP interaction model
+- extended the central keyboard intent system with workspace zone focus and shortcut help intents
+- rebuilt the shared protected shell to support menu-first navigation, action-strip focus, and content-zone cycling
+- refactored the shared dashboard surface into a denser operator action workspace
+- normalized the current SA operational screens away from decorative SaaS-style gradients toward a flatter ERP workspace background
+
+What changed in repo:
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/components/dashboard/EnterpriseDashboard.jsx
+- frontend/src/navigation/workspaceFocusBus.js
+- frontend/src/navigation/keyboardIntentEngine.js
+- frontend/src/navigation/keyboardIntentMap.js
+- frontend/src/navigation/keyboardAclBridge.js
+- frontend/src/index.css
+- frontend/src/admin/sa/screens/SAControlPanel.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SAAudit.jsx
+- frontend/src/admin/sa/screens/SASystemHealth.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+- TEMP_UI_BOOT_LOG.md
+
+What was verified:
+- protected workspace shell now exposes keyboard zone navigation via F6 and Shift+F6
+- protected dashboards now render in a denser operator-style action layout
+- public routes were not included in the keyboard-first shell conversion
+- frontend lint completed successfully
+- frontend build completed successfully
+
+Problems or blockers:
+- current operational screens are improved by shell-level and styling-level changes, but deeper per-screen keyboard workflows can still be strengthened later
+- admin menu governance for expanded SA route coverage is still in transitional fallback mode
+
+Decision or note:
+The ERP UI direction is now explicitly moving away from mouse-first SaaS interaction
+toward keyboard-first protected workspaces without introducing a command-line or T-code model.
+
+Next step:
+Continue scope mapping build-up under the new keyboard-first protected workspace pattern
+
+## Entry 012
+
+Date:
+2026-03-26
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- fixed the SA signup decision flow so frontend no longer treats backend no-op as a real approval or rejection
+- added backend decision outcome payload and failure observability for signup approve and reject routes
+- changed the signup queue screen to refresh and verify queue state after a decision instead of using optimistic removal only
+- fixed the SA control panel version rendering so backend system metadata objects no longer crash the React screen
+
+What changed in repo:
+- supabase/functions/api/_core/admin/signup/approve.handler.ts
+- supabase/functions/api/_core/admin/signup/reject.handler.ts
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SAControlPanel.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- control panel system version rendering is now object-safe
+- signup queue now re-reads backend state after approve or reject actions
+
+Problems or blockers:
+- if the DB-owned approval engine itself fails for a specific user, the new backend logs must be read to identify the exact SQL-side reason
+
+Decision or note:
+The previous signup UI could show false success because backend handlers preserved enumeration safety with generic ok responses.
+That mismatch is now removed for the SA governance surface.
+
+Next step:
+Retest signup approval, role visibility after approval, and control panel loading against live backend state
+
+## Entry 013
+
+Date:
+2026-03-26
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- audited the currently implemented SA mutation surfaces for false-success behavior
+- hardened user state change so backend returns explicit applied outcome
+- hardened role assignment so backend returns explicit applied outcome
+- hardened session revoke so backend returns explicit revoked outcome only when a row was actually affected
+- updated the affected frontend screens to refetch and verify backend state after each mutation instead of trusting optimistic local changes
+
+What changed in repo:
+- supabase/functions/api/_core/admin/user/update_user_state.handler.ts
+- supabase/functions/api/_core/admin/user/update_user_role.handler.ts
+- supabase/functions/api/_core/admin/session/revoke_session.handler.ts
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- current live SA mutation screens now use backend outcome verification
+- frontend lint completed successfully
+- frontend build completed successfully
+
+Problems or blockers:
+- placeholder screens that do not yet expose live mutation actions were outside this false-success audit scope
+
+Decision or note:
+Current wired SA actions should no longer show success merely because a generic ok envelope was returned.
+The UI now depends on verified backend state for completion.
+
+Next step:
+Retest the live SA mutation flows against real data before continuing deeper roadmap build-out
+
 ---
 
 # 6. Initial Program Entry

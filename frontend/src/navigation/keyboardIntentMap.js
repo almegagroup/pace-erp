@@ -14,6 +14,7 @@ import { logNavigationEvent } from "./navigationEventLogger.js";
 import { confirmAndRequestLogout } from "../store/sessionWarning.js";
 import { hideSidebar, showSidebar } from "../store/workspaceShell.js";
 import { lockWorkspace } from "../store/workspaceLock.js";
+import { dispatchWorkspaceFocusCommand } from "./workspaceFocusBus.js";
 
 /**
  * SECURITY ALLOWLIST
@@ -25,6 +26,9 @@ const INTENT_HANDLERS = Object.freeze({
   INTENT_SIDEBAR_SHOW: handleSidebarShow,
   INTENT_LOGOUT_CONFIRM: handleLogoutConfirm,
   INTENT_WORKSPACE_LOCK: handleWorkspaceLock,
+  INTENT_FOCUS_NEXT_ZONE: handleFocusNextZone,
+  INTENT_FOCUS_PREVIOUS_ZONE: handleFocusPreviousZone,
+  INTENT_TOGGLE_SHORTCUT_HELP: handleToggleShortcutHelp,
   // Future intents:
   // INTENT_SAVE: handleSave,
 });
@@ -98,6 +102,33 @@ function handleWorkspaceLock() {
     action: "LOCK_WORKSPACE",
   });
   lockWorkspace();
+}
+
+function handleFocusNextZone() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_FOCUS_NEXT_ZONE",
+    action: "FOCUS_NEXT_ZONE",
+  });
+  dispatchWorkspaceFocusCommand("FOCUS_NEXT_ZONE");
+}
+
+function handleFocusPreviousZone() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_FOCUS_PREVIOUS_ZONE",
+    action: "FOCUS_PREVIOUS_ZONE",
+  });
+  dispatchWorkspaceFocusCommand("FOCUS_PREVIOUS_ZONE");
+}
+
+function handleToggleShortcutHelp() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_TOGGLE_SHORTCUT_HELP",
+    action: "TOGGLE_SHORTCUT_HELP",
+  });
+  dispatchWorkspaceFocusCommand("TOGGLE_SHORTCUT_HELP");
 }
 
 function handleDeniedIntent(intent) {

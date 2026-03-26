@@ -227,23 +227,30 @@ export default function SAUserRoles() {
 
       const json = await readJsonSafe(response);
 
-      if (!response.ok || !json?.ok) {
+      if (!response.ok || !json?.ok || json?.data?.applied !== true) {
         throw new Error("USER_ROLE_UPDATE_FAILED");
       }
 
-      setUsers((current) =>
-        current.map((row) =>
-          row.auth_user_id === user.auth_user_id
-            ? {
-                ...row,
-                role_code: nextRole,
-                role_rank: ROLE_RANKS[nextRole] ?? null,
-              }
-            : row
+      const refreshedUsers = await fetchUsers();
+      const refreshedTarget = refreshedUsers.find(
+        (row) => row.auth_user_id === user.auth_user_id
+      );
+
+      setUsers(refreshedUsers);
+      setDraftRoles(
+        Object.fromEntries(
+          refreshedUsers.map((row) => [row.auth_user_id, row.role_code ?? ""])
         )
       );
+
+      if (
+        refreshedTarget?.role_code !== nextRole ||
+        refreshedTarget?.role_rank !== (ROLE_RANKS[nextRole] ?? null)
+      ) {
+        throw new Error("USER_ROLE_NOT_FINALIZED");
+      }
     } catch {
-      setError("Unable to update ERP user role right now.");
+      setError("User role change was not finalized by the backend.");
     } finally {
       setUpdatingUserId("");
     }
@@ -266,7 +273,7 @@ export default function SAUserRoles() {
   ).length;
 
   return (
-    <section className="min-h-full bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.09),_transparent_28%),linear-gradient(180deg,_#f8fbfd_0%,_#eef4f7_100%)] px-6 py-6 text-slate-900">
+    <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
       <div className="mx-auto max-w-7xl">
         <div className="rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.08)]">
           <div className="flex flex-wrap items-start justify-between gap-5">

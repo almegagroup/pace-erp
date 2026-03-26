@@ -39,6 +39,27 @@ function shortId(value) {
   return String(value).slice(0, 8);
 }
 
+function formatSystemVersion(value) {
+  if (!value) return "N/A";
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "object") {
+    const system = typeof value.system === "string" ? value.system : "PACE-ERP";
+    const version = typeof value.version === "string" ? value.version : "N/A";
+    const buildGate =
+      typeof value.build_gate === "string" ? value.build_gate : null;
+
+    return buildGate
+      ? `${system} ${version} (${buildGate})`
+      : `${system} ${version}`;
+  }
+
+  return String(value);
+}
+
 function MetricCard({ label, value, tone = "sky", caption }) {
   const toneClassMap = {
     sky: "bg-sky-50 text-sky-700",
@@ -270,7 +291,7 @@ export default function SAControlPanel() {
   ];
 
   return (
-    <section className="min-h-full bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.09),_transparent_28%),linear-gradient(180deg,_#f8fbfd_0%,_#eef4f7_100%)] px-6 py-6 text-slate-900">
+    <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
       <div className="mx-auto max-w-7xl">
         <div className="rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.08)]">
           <div className="flex flex-wrap items-start justify-between gap-5">
@@ -294,7 +315,7 @@ export default function SAControlPanel() {
                 {loading ? "Loading..." : health?.db_status === "DOWN" ? "Attention" : "Operational"}
               </p>
               <p className="mt-1 text-sm text-slate-600">
-                Version {controlPanel?.system ?? health?.system_version ?? "N/A"}
+                Version {formatSystemVersion(controlPanel?.system ?? health?.system_version)}
               </p>
             </div>
           </div>

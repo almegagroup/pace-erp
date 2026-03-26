@@ -67,7 +67,26 @@ export async function rejectSignupHandler(
 
   // Preserve enumeration safety
   if (error) {
-    return okResponse(null, requestId);
+    log({
+      level: "ERROR",
+      gate_id: "4.2B",
+      request_id: requestId,
+      event: "SIGNUP_REJECTION_FAILED",
+      actor: saAuthUserId,
+      meta: {
+        target_auth_user_id: auth_user_id,
+        error_message: error.message,
+        error_code: error.code ?? null,
+        error_details: error.details ?? null,
+      },
+    });
+
+    return okResponse(
+      {
+        applied: false,
+      },
+      requestId
+    );
   }
 
   // --------------------------------------------------
@@ -84,5 +103,10 @@ export async function rejectSignupHandler(
   // --------------------------------------------------
   // 5️⃣ Generic success
   // --------------------------------------------------
-  return okResponse(null, requestId);
+  return okResponse(
+    {
+      applied: true,
+    },
+    requestId
+  );
 }
