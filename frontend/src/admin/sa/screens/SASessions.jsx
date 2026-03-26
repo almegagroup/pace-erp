@@ -65,6 +65,22 @@ function shortId(value) {
   return String(value).slice(0, 8);
 }
 
+function formatSessionIdentity(session) {
+  if (session.user_code && session.name) {
+    return `${session.user_code} ${session.name}`;
+  }
+
+  if (session.user_code) {
+    return session.user_code;
+  }
+
+  if (session.name) {
+    return session.name;
+  }
+
+  return `Auth ${shortId(session.auth_user_id)}`;
+}
+
 function getStatusTone(status) {
   switch (status) {
     case "ACTIVE":
@@ -158,11 +174,11 @@ export default function SASessions() {
     }
   }
 
-  async function handleRevoke(sessionId) {
+  async function handleRevoke(sessionRow) {
     const approved = await openActionConfirm({
       eyebrow: "SA Session Governance",
       title: "Revoke ERP Session",
-      message: "Revoke this ERP session now?",
+      message: `Revoke the session for ${formatSessionIdentity(sessionRow)} now?`,
       confirmLabel: "Revoke",
       cancelLabel: "Cancel",
     });
@@ -171,7 +187,7 @@ export default function SASessions() {
       return;
     }
 
-    setRevokingSessionId(sessionId);
+    setRevokingSessionId(sessionRow.session_id);
     setError("");
 
     try {
@@ -183,7 +199,7 @@ export default function SASessions() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ session_id: sessionId }),
+          body: JSON.stringify({ session_id: sessionRow.session_id }),
         }
       );
 
@@ -195,7 +211,7 @@ export default function SASessions() {
 
       const refreshedSessions = await fetchSessions();
       const revokedSession = refreshedSessions.find(
-        (session) => session.session_id === sessionId
+        (session) => session.session_id === sessionRow.session_id
       );
 
       setSessions(refreshedSessions);
@@ -333,7 +349,7 @@ export default function SASessions() {
                       Session
                     </th>
                     <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Auth User
+                      ERP User
                     </th>
                     <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                       Status
@@ -374,10 +390,13 @@ export default function SASessions() {
                       <td className="px-4 py-3 text-sm text-slate-700">
                         <div>
                           <p className="font-medium text-slate-900">
-                            {shortId(session.auth_user_id)}
+                            {formatSessionIdentity(session)}
                           </p>
                           <p className="text-xs text-slate-500">
-                            {session.auth_user_id}
+                            {session.parent_company_name ?? "Company Not Captured"}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {session.designation_hint ?? `Auth ${shortId(session.auth_user_id)}`}
                           </p>
                         </div>
                       </td>
@@ -404,7 +423,7 @@ export default function SASessions() {
                         {session.status === "ACTIVE" ? (
                           <button
                             type="button"
-                            onClick={() => void handleRevoke(session.session_id)}
+                            onClick={() => void handleRevoke(session)}
                             disabled={revokingSessionId === session.session_id}
                             className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
                           >

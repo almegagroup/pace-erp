@@ -59,5 +59,42 @@ export async function listSessionsHandler(
     );
   }
 
-  return okResponse(data, ctx.request_id);
+  const authUserIds = (data ?? []).map((row) => row.auth_user_id);
+
+  const { data: userRows } = authUserIds.length === 0
+    ? { data: [] }
+    : await db
+      .schema("erp_core").from("users")
+      .select("auth_user_id, user_code, state")
+      .in("auth_user_id", authUserIds);
+
+  const { data: signupRows } = authUserIds.length === 0
+    ? { data: [] }
+    : await db
+      .schema("erp_core").from("signup_requests")
+      .select("auth_user_id, name, parent_company_name, designation_hint")
+      .in("auth_user_id", authUserIds);
+
+  const userMap = new Map(
+    (userRows ?? []).map((row) => [row.auth_user_id, row])
+  );
+  const signupMap = new Map(
+    (signupRows ?? []).map((row) => [row.auth_user_id, row])
+  );
+
+  const payload = (data ?? []).map((session) => {
+    const userRow = userMap.get(session.auth_user_id);
+    const signupRow = signupMap.get(session.auth_user_id);
+
+    return {
+      ...session,
+      user_code: userRow?.user_code ?? null,
+      user_state: userRow?.state ?? null,
+      name: signupRow?.name ?? null,
+      parent_company_name: signupRow?.parent_company_name ?? null,
+      designation_hint: signupRow?.designation_hint ?? null,
+    };
+  });
+
+  return okResponse(payload, ctx.request_id);
 }
