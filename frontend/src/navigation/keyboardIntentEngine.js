@@ -25,6 +25,7 @@ function onKeyDown(event) {
   const intent = normalizeKeyEvent(event);
   if (!intent) return;
 
+  event.preventDefault();
   handleKeyboardIntent(intent);
 }
 
@@ -33,16 +34,33 @@ function normalizeKeyEvent(event) {
   if (event.defaultPrevented) return null;
   if (isBlockingLayerActive()) return null;
   if (isPublicRoute(globalThis.location.pathname)) return null;
+  if (isEditableTarget(event.target)) return null;
 
   const key = event.key;
   const ctrl = event.ctrlKey || event.metaKey;
-  //const _shift = event.shiftKey;
+  const shift = event.shiftKey;
   //const _alt = event.altKey;
 
   // Only normalized, symbolic intents
   if (key === "Escape") return "INTENT_BACK";
 
   if (ctrl && key === "k") return "INTENT_GLOBAL_SEARCH";
+  if (ctrl && key === "ArrowLeft") return "INTENT_SIDEBAR_HIDE";
+  if (ctrl && key === "ArrowRight") return "INTENT_SIDEBAR_SHOW";
+  if (ctrl && shift && key.toLowerCase() === "l") return "INTENT_LOGOUT_CONFIRM";
 
   return null;
+}
+
+function isEditableTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+
+  const tagName = target.tagName;
+
+  return (
+    target.isContentEditable ||
+    tagName === "INPUT" ||
+    tagName === "TEXTAREA" ||
+    tagName === "SELECT"
+  );
 }

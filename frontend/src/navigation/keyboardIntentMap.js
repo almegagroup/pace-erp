@@ -12,6 +12,7 @@ import { getStackSnapshot, popScreen } from "./screenStackEngine.js";
 import { isKeyboardIntentAllowed } from "./keyboardAclBridge.js";
 import { logNavigationEvent } from "./navigationEventLogger.js";
 import { confirmAndRequestLogout } from "../store/sessionWarning.js";
+import { hideSidebar, showSidebar } from "../store/workspaceShell.js";
 
 /**
  * SECURITY ALLOWLIST
@@ -19,6 +20,9 @@ import { confirmAndRequestLogout } from "../store/sessionWarning.js";
  */
 const INTENT_HANDLERS = Object.freeze({
   INTENT_BACK: handleBack,
+  INTENT_SIDEBAR_HIDE: handleSidebarHide,
+  INTENT_SIDEBAR_SHOW: handleSidebarShow,
+  INTENT_LOGOUT_CONFIRM: handleLogoutConfirm,
   // Future intents:
   // INTENT_SAVE: handleSave,
 });
@@ -56,6 +60,33 @@ function handleBack() {
     action: "POP_SCREEN",
   });
   popScreen();
+}
+
+function handleSidebarHide() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_SIDEBAR_HIDE",
+    action: "COLLAPSE_SIDEBAR",
+  });
+  hideSidebar();
+}
+
+function handleSidebarShow() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_SIDEBAR_SHOW",
+    action: "EXPAND_SIDEBAR",
+  });
+  showSidebar();
+}
+
+function handleLogoutConfirm() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_LOGOUT_CONFIRM",
+    action: "OPEN_LOGOUT_CONFIRM",
+  });
+  void confirmAndRequestLogout();
 }
 
 function handleDeniedIntent(intent) {
