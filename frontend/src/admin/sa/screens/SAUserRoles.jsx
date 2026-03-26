@@ -1,21 +1,38 @@
 /*
- * File-ID: 9.6-FRONT
- * File-Path: frontend/src/admin/sa/screens/SAUsers.jsx
+ * File-ID: 9.6A-FRONT
+ * File-Path: frontend/src/admin/sa/screens/SAUserRoles.jsx
  * Gate: 9
  * Phase: 9
  * Domain: FRONT
- * Purpose: Super Admin user governance surface for ERP user inventory, role visibility, and state control
+ * Purpose: Super Admin role assignment surface for ERP user role governance
  * Authority: Frontend
  */
 
 import { useEffect, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 
-const FILTERS = Object.freeze([
-  { key: "ALL", label: "All Users" },
-  { key: "ACTIVE", label: "Active" },
-  { key: "DISABLED", label: "Disabled" },
+const ROLE_OPTIONS = Object.freeze([
+  { code: "SA", label: "Super Admin", rank: 999 },
+  { code: "GA", label: "Global Admin", rank: 888 },
+  { code: "DIRECTOR", label: "Director", rank: 100 },
+  { code: "L3_MANAGER", label: "L3 Manager", rank: 90 },
+  { code: "L2_AUDITOR", label: "L2 Auditor", rank: 80 },
+  { code: "L1_AUDITOR", label: "L1 Auditor", rank: 70 },
+  { code: "L2_MANAGER", label: "L2 Manager", rank: 60 },
+  { code: "L1_MANAGER", label: "L1 Manager", rank: 50 },
+  { code: "L4_USER", label: "L4 User", rank: 40 },
+  { code: "L3_USER", label: "L3 User", rank: 30 },
+  { code: "L2_USER", label: "L2 User", rank: 20 },
+  { code: "L1_USER", label: "L1 User", rank: 10 },
 ]);
+
+const ROLE_LABELS = Object.freeze(
+  Object.fromEntries(ROLE_OPTIONS.map((role) => [role.code, role.label]))
+);
+
+const ROLE_RANKS = Object.freeze(
+  Object.fromEntries(ROLE_OPTIONS.map((role) => [role.code, role.rank]))
+);
 
 async function readJsonSafe(response) {
   try {
@@ -33,41 +50,10 @@ async function fetchUsers() {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !Array.isArray(json.data)) {
-    throw new Error("USER_LIST_READ_FAILED");
+    throw new Error("USER_ROLE_LIST_READ_FAILED");
   }
 
   return json.data;
-}
-
-function formatDateTime(value) {
-  if (!value) return "N/A";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "N/A";
-
-  return date.toLocaleString("en-IN", {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function shortId(value) {
-  if (!value) return "N/A";
-  return String(value).slice(0, 8);
-}
-
-function getStateTone(state) {
-  switch (state) {
-    case "ACTIVE":
-      return "bg-emerald-50 text-emerald-700";
-    case "DISABLED":
-      return "bg-rose-50 text-rose-700";
-    default:
-      return "bg-slate-100 text-slate-700";
-  }
 }
 
 function getRoleTone(roleCode) {
@@ -93,6 +79,22 @@ function getRoleTone(roleCode) {
     default:
       return "bg-rose-50 text-rose-700";
   }
+}
+
+function getStateTone(state) {
+  switch (state) {
+    case "ACTIVE":
+      return "bg-emerald-50 text-emerald-700";
+    case "DISABLED":
+      return "bg-rose-50 text-rose-700";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
+}
+
+function shortId(value) {
+  if (!value) return "N/A";
+  return String(value).slice(0, 8);
 }
 
 function SummaryCard({ label, value, caption, tone = "sky" }) {
@@ -122,11 +124,12 @@ function SummaryCard({ label, value, caption, tone = "sky" }) {
   );
 }
 
-export default function SAUsers() {
+export default function SAUserRoles() {
   const [users, setUsers] = useState([]);
+  const [draftRoles, setDraftRoles] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [filter, setFilter] = useState("ALL");
+  const [roleFilter, setRoleFilter] = useState("ALL");
   const [updatingUserId, setUpdatingUserId] = useState("");
 
   useEffect(() => {
@@ -142,9 +145,14 @@ export default function SAUsers() {
         if (!alive) return;
 
         setUsers(data);
+        setDraftRoles(
+          Object.fromEntries(
+            data.map((user) => [user.auth_user_id, user.role_code ?? ""])
+          )
+        );
       } catch {
         if (!alive) return;
-        setError("Unable to load ERP users right now.");
+        setError("Unable to load ERP user roles right now.");
       } finally {
         if (alive) {
           setLoading(false);
@@ -166,22 +174,32 @@ export default function SAUsers() {
     try {
       const data = await fetchUsers();
       setUsers(data);
+      setDraftRoles(
+        Object.fromEntries(
+          data.map((user) => [user.auth_user_id, user.role_code ?? ""])
+        )
+      );
     } catch {
-      setError("Unable to refresh the ERP user list right now.");
+      setError("Unable to refresh ERP user roles right now.");
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleStateChange(user, nextState) {
-    if (!user?.auth_user_id || user.state === nextState) {
+  async function handleApplyRole(user) {
+    const nextRole = draftRoles[user.auth_user_id] ?? "";
+
+    if (!user?.auth_user_id || !nextRole) {
+      setError("Select a role before applying the assignment.");
+      return;
+    }
+
+    if (user.role_code === nextRole) {
       return;
     }
 
     const approved = globalThis.confirm(
-      nextState === "DISABLED"
-        ? `Disable ERP access for ${user.user_code ?? shortId(user.auth_user_id)} now?`
-        : `Reactivate ERP access for ${user.user_code ?? shortId(user.auth_user_id)} now?`
+      `Apply role ${ROLE_LABELS[nextRole] ?? nextRole} to ${user.user_code ?? shortId(user.auth_user_id)} now?`
     );
 
     if (!approved) {
@@ -193,7 +211,7 @@ export default function SAUsers() {
 
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_API_BASE}/api/admin/users/state`,
+        `${import.meta.env.VITE_API_BASE}/api/admin/users/role`,
         {
           method: "POST",
           credentials: "include",
@@ -202,7 +220,7 @@ export default function SAUsers() {
           },
           body: JSON.stringify({
             target_auth_user_id: user.auth_user_id,
-            next_state: nextState,
+            next_role: nextRole,
           }),
         }
       );
@@ -210,7 +228,7 @@ export default function SAUsers() {
       const json = await readJsonSafe(response);
 
       if (!response.ok || !json?.ok) {
-        throw new Error("USER_STATE_UPDATE_FAILED");
+        throw new Error("USER_ROLE_UPDATE_FAILED");
       }
 
       setUsers((current) =>
@@ -218,28 +236,33 @@ export default function SAUsers() {
           row.auth_user_id === user.auth_user_id
             ? {
                 ...row,
-                state: nextState,
+                role_code: nextRole,
+                role_rank: ROLE_RANKS[nextRole] ?? null,
               }
             : row
         )
       );
     } catch {
-      setError("Unable to update ERP user state right now.");
+      setError("Unable to update ERP user role right now.");
     } finally {
       setUpdatingUserId("");
     }
   }
 
   const filteredUsers =
-    filter === "ALL"
+    roleFilter === "ALL"
       ? users
-      : users.filter((user) => user.state === filter);
+      : roleFilter === "UNASSIGNED"
+        ? users.filter((user) => !user.role_code)
+        : users.filter((user) => user.role_code === roleFilter);
 
-  const activeCount = users.filter((user) => user.state === "ACTIVE").length;
-  const disabledCount = users.filter((user) => user.state === "DISABLED").length;
-  const missingRoleCount = users.filter((user) => !user.role_code).length;
   const privilegedCount = users.filter((user) =>
     user.role_code === "SA" || user.role_code === "GA"
+  ).length;
+  const assignedCount = users.filter((user) => user.role_code).length;
+  const unassignedCount = users.filter((user) => !user.role_code).length;
+  const managerCount = users.filter((user) =>
+    ["L3_MANAGER", "L2_MANAGER", "L1_MANAGER"].includes(user.role_code)
   ).length;
 
   return (
@@ -249,24 +272,25 @@ export default function SAUsers() {
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="max-w-3xl">
               <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
-                SA User Governance
+                SA Role Governance
               </p>
               <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">
-                ERP User Directory
+                ERP User Role Assignment
               </h1>
               <p className="mt-3 text-sm leading-7 text-slate-500">
-                Review governable ERP users, inspect current role posture, and
-                activate or disable access from the Super Admin control plane.
+                Review current role posture, assign the canonical ERP role
+                ladder, and update user authority from the Super Admin control
+                plane.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-3">
               <button
                 type="button"
-                onClick={() => openScreen("SA_CONTROL_PANEL", { mode: "reset" })}
+                onClick={() => openScreen("SA_USERS")}
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
-                Control Panel
+                User Directory
               </button>
               <button
                 type="button"
@@ -277,17 +301,10 @@ export default function SAUsers() {
               </button>
               <button
                 type="button"
-                onClick={() => openScreen("SA_USER_ROLES")}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
-              >
-                Role Assignment
-              </button>
-              <button
-                type="button"
                 onClick={() => void handleRefresh()}
                 className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 shadow-[0_10px_24px_rgba(14,116,144,0.08)]"
               >
-                {loading ? "Refreshing..." : "Refresh Users"}
+                {loading ? "Refreshing..." : "Refresh Roles"}
               </button>
             </div>
           </div>
@@ -304,25 +321,25 @@ export default function SAUsers() {
             label="All Users"
             value={loading ? "..." : String(users.length)}
             tone="sky"
-            caption="Governable ERP users currently returned by the admin user inventory endpoint."
+            caption="Users currently visible for ERP role assignment governance."
           />
           <SummaryCard
-            label="Active"
-            value={loading ? "..." : String(activeCount)}
+            label="Assigned"
+            value={loading ? "..." : String(assignedCount)}
             tone="emerald"
-            caption="Users whose ERP access is currently enabled."
+            caption="Users that currently have a canonical ERP role assignment."
           />
           <SummaryCard
-            label="Disabled"
-            value={loading ? "..." : String(disabledCount)}
+            label="Unassigned"
+            value={loading ? "..." : String(unassignedCount)}
             tone="rose"
-            caption="Users whose ERP access has been suspended."
+            caption="Users missing an explicit role row and needing assignment attention."
           />
           <SummaryCard
-            label="Privileged"
-            value={loading ? "..." : String(privilegedCount)}
+            label="Managers"
+            value={loading ? "..." : String(managerCount)}
             tone="amber"
-            caption="Users presently carrying SA or GA posture in the ERP role ladder."
+            caption="Users currently placed in the manager tier of the role ladder."
           />
         </div>
 
@@ -330,61 +347,87 @@ export default function SAUsers() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
-                Contract Status
+                Role Contract
               </p>
               <h2 className="mt-3 text-xl font-semibold text-slate-900">
-                Role Visibility Is Now Part of the User Inventory Payload
+                Role Assignment Now Supports Both Existing And Missing Role Rows
               </h2>
             </div>
             <span className="rounded-full bg-sky-100 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-              {loading ? "Checking" : `${missingRoleCount} Missing Role`}
+              {loading ? "Checking" : `${privilegedCount} Privileged`}
             </span>
           </div>
 
           <p className="mt-4 text-sm leading-7 text-slate-600">
-            This screen now reads current role posture directly from the admin
-            users endpoint. Dedicated role assignment is now available through
-            the linked role panel, while scope mapping remains a later roadmap
-            surface after this user directory step.
+            This screen reads the shared admin user inventory and writes role
+            decisions to the existing admin role endpoint. Backend role updates
+            now use upsert semantics so assignment remains robust even if a user
+            role row is missing and needs to be created during governance.
           </p>
+
+          <div className="mt-5 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setRoleFilter("ALL")}
+              className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+                roleFilter === "ALL"
+                  ? "bg-sky-600 text-white"
+                  : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              All Roles
+            </button>
+            <button
+              type="button"
+              onClick={() => setRoleFilter("UNASSIGNED")}
+              className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+                roleFilter === "UNASSIGNED"
+                  ? "bg-sky-600 text-white"
+                  : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              Unassigned
+            </button>
+            {["SA", "GA", "DIRECTOR", "L1_USER"].map((roleCode) => (
+              <button
+                key={roleCode}
+                type="button"
+                onClick={() => setRoleFilter(roleCode)}
+                className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+                  roleFilter === roleCode
+                    ? "bg-sky-600 text-white"
+                    : "bg-slate-100 text-slate-600"
+                }`}
+              >
+                {roleCode}
+              </button>
+            ))}
+          </div>
         </section>
 
         <section className="mt-6 rounded-[30px] border border-slate-200 bg-white p-6 shadow-[0_14px_40px_rgba(15,23,42,0.08)]">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
-                User Filter
+                Role Panel
               </p>
               <h2 className="mt-3 text-xl font-semibold text-slate-900">
-                Governable User Inventory
+                User Role Assignment Workspace
               </h2>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              {FILTERS.map((option) => (
-                <button
-                  key={option.key}
-                  type="button"
-                  onClick={() => setFilter(option.key)}
-                  className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
-                    filter === option.key
-                      ? "bg-sky-600 text-white"
-                      : "bg-slate-100 text-slate-600"
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
+            <span className="rounded-full bg-slate-100 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-600">
+              {loading ? "Loading" : `${filteredUsers.length} Visible`}
+            </span>
           </div>
 
           {loading ? (
             <div className="mt-6 rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
-              Loading ERP users from the admin governance endpoint.
+              Loading ERP users for role governance.
             </div>
           ) : filteredUsers.length === 0 ? (
             <div className="mt-6 rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
-              No ERP users match the current governance filter.
+              No ERP users match the current role governance filter.
             </div>
           ) : (
             <div className="mt-6 overflow-x-auto">
@@ -395,26 +438,23 @@ export default function SAUsers() {
                       User
                     </th>
                     <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Role
+                      Current Role
+                    </th>
+                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Next Role
                     </th>
                     <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                       State
                     </th>
                     <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Created
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Actions
+                      Action
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredUsers.map((user) => {
-                    const actionLabel =
-                      user.state === "ACTIVE" ? "Disable" : "Activate";
-                    const nextState =
-                      user.state === "ACTIVE" ? "DISABLED" : "ACTIVE";
                     const isUpdating = updatingUserId === user.auth_user_id;
+                    const selectedRole = draftRoles[user.auth_user_id] ?? "";
 
                     return (
                       <tr
@@ -444,27 +484,49 @@ export default function SAUsers() {
                           </div>
                         </td>
                         <td className="px-4 py-4 text-sm text-slate-700">
+                          <select
+                            value={selectedRole}
+                            onChange={(event) =>
+                              setDraftRoles((current) => ({
+                                ...current,
+                                [user.auth_user_id]: event.target.value,
+                              }))
+                            }
+                            className="min-w-[190px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none"
+                          >
+                            <option value="">Select role</option>
+                            {ROLE_OPTIONS.map((role) => (
+                              <option key={role.code} value={role.code}>
+                                {role.label}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-4 py-4 text-sm text-slate-700">
                           <span
                             className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}
                           >
                             {user.state ?? "UNKNOWN"}
                           </span>
                         </td>
-                        <td className="px-4 py-4 text-sm text-slate-700">
-                          {formatDateTime(user.created_at)}
-                        </td>
                         <td className="rounded-none px-4 py-4 text-sm text-slate-700 last:rounded-r-2xl">
                           <button
                             type="button"
-                            disabled={isUpdating}
-                            onClick={() => void handleStateChange(user, nextState)}
-                            className={`rounded-2xl px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
-                              user.state === "ACTIVE"
-                                ? "bg-rose-50 text-rose-700"
-                                : "bg-emerald-50 text-emerald-700"
-                            } ${isUpdating ? "cursor-not-allowed opacity-60" : ""}`}
+                            disabled={
+                              isUpdating ||
+                              !selectedRole ||
+                              selectedRole === user.role_code
+                            }
+                            onClick={() => void handleApplyRole(user)}
+                            className={`rounded-2xl bg-sky-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700 ${
+                              isUpdating ||
+                              !selectedRole ||
+                              selectedRole === user.role_code
+                                ? "cursor-not-allowed opacity-60"
+                                : ""
+                            }`}
                           >
-                            {isUpdating ? "Updating..." : actionLabel}
+                            {isUpdating ? "Updating..." : "Apply Role"}
                           </button>
                         </td>
                       </tr>

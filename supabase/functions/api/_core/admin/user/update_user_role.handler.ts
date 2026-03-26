@@ -85,12 +85,15 @@ export async function updateUserRoleHandler(
   // --------------------------------------------------
   await db
     .schema("erp_acl").from("user_roles")
-    .update({
+    .upsert({
+      auth_user_id: target_auth_user_id,
       role_code: normalizedRole,
       role_rank: nextRank,
       assigned_by: ctx.auth_user_id,
-    })
-    .eq("auth_user_id", target_auth_user_id);
+      assigned_at: new Date().toISOString(),
+    }, {
+      onConflict: "auth_user_id",
+    });
 
   return okResponse(null, ctx.request_id);
 }
