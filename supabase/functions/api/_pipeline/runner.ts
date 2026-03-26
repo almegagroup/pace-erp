@@ -51,6 +51,44 @@ function enforceSessionLogout(
   return null;
 }
 
+async function persistLifecycleTermination(
+  session: SessionResolution | null,
+  lifecycleResult: { status?: string } | null
+): Promise<void> {
+  if (!session || session.status !== "ACTIVE" || !lifecycleResult?.status) {
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+
+  if (lifecycleResult.status === "IDLE_EXPIRED") {
+    await serviceRoleClient
+      .schema("erp_core")
+      .from("sessions")
+      .update({
+        status: "IDLE",
+        revoked_at: nowIso,
+        revoked_reason: "IDLE_TIMEOUT",
+      })
+      .eq("session_id", session.sessionId)
+      .eq("status", "ACTIVE");
+    return;
+  }
+
+  if (lifecycleResult.status === "TTL_EXPIRED") {
+    await serviceRoleClient
+      .schema("erp_core")
+      .from("sessions")
+      .update({
+        status: "EXPIRED",
+        revoked_at: nowIso,
+        revoked_reason: "TTL_EXPIRED",
+      })
+      .eq("session_id", session.sessionId)
+      .eq("status", "ACTIVE");
+  }
+}
+
 export async function runPipeline(
   req: Request,
   requestId: string
@@ -106,11 +144,21 @@ export async function runPipeline(
   const PUBLIC_ROUTES = new Set([
     "POST:/api/login",
     "POST:/api/signup",
-    "POST:/api/logout",
   ]);
 
   let sessionResult: SessionResolution | null = null;
   let contextResult: ContextResolution;
+
+  if (routeKey === "POST:/api/logout") {
+    sessionResult = await stepSession(req, requestId);
+
+    return await dispatchPublicRoute(
+      routeKey,
+      req,
+      requestId,
+      sessionResult
+    );
+  }
 
   // --------------------------------------------------
   // PROTECTED ROUTES
@@ -173,6 +221,11 @@ console.log("PIPELINE_SESSION_END", {
     });
 
     const lifecycleResult = enforceIdleLifecycle(sessionResult, new Date());
+
+    await persistLifecycleTermination(
+      sessionResult,
+      lifecycleResult && "status" in lifecycleResult ? lifecycleResult : null
+    );
 
 const gate3Logout = enforceSessionLogout(
   "action" in lifecycleResult ? lifecycleResult : null,
