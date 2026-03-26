@@ -4,12 +4,12 @@
  * Gate: 7
  * Phase: 7
  * Domain: FRONT
- * Purpose: Render menu UI strictly from backend snapshot
+ * Purpose: Render protected ERP shell from backend menu snapshot with keyboard-first workspace flow
  * Authority: Frontend
  */
 
 import { useMenu } from "../context/useMenu.js";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import {
   getScreenForRoute,
@@ -28,14 +28,63 @@ import {
   unsubscribeWorkspaceShell,
 } from "../store/workspaceShell.js";
 import { lockWorkspace } from "../store/workspaceLock.js";
+import { subscribeWorkspaceFocusCommands } from "../navigation/workspaceFocusBus.js";
 
-export default function MenuShell(){
-  //console.log("🔥 MenuShell ACTIVE");
+const WORKSPACE_ZONES = Object.freeze(["menu", "actions", "content"]);
+
+const SHORTCUT_GUIDE = Object.freeze([
+  "Esc Back or logout",
+  "F6 Next zone",
+  "Shift+F6 Previous zone",
+  "Ctrl+Left Hide menu",
+  "Ctrl+Right Show menu",
+  "Alt+L Lock workspace",
+  "Ctrl+Shift+L Logout confirm",
+  "? Toggle shortcut help",
+]);
+
+function focusElement(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+
+  element.focus();
+  return true;
+}
+
+function moveFocus(refs, nextIndex) {
+  const target = refs[nextIndex];
+
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+
+  target.focus();
+}
+
+export default function MenuShell() {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
+  const [activeZone, setActiveZone] = useState("content");
+  const [menuFocusIndex, setMenuFocusIndex] = useState(0);
+
+  const menuButtonRefs = useRef([]);
+  const actionButtonRefs = useRef([]);
+  const contentRegionRef = useRef(null);
 
   const { menu, loading, shellProfile } = useMenu();
   const stackDepth = getStackDepth();
+  const activeMenuIndex = useMemo(
+    () => menu.findIndex((item) => item.route_path === location.pathname),
+    [location.pathname, menu]
+  );
+  const resolvedMenuFocusIndex =
+    menuFocusIndex >= 0 && menuFocusIndex < menu.length
+      ? menuFocusIndex
+      : activeMenuIndex >= 0
+        ? activeMenuIndex
+        : 0;
 
   const activeTitle = useMemo(() => {
     const menuMatch = menu.find((item) => item.route_path === location.pathname);
@@ -52,10 +101,13 @@ export default function MenuShell(){
     return "Workspace";
   }, [location.pathname, menu]);
 
-  console.log("📊 MenuShell state:", {
-    loading,
-    menuLength: menu?.length,
-  });
+  useEffect(() => {
+    document.body.dataset.workspaceMode = "protected";
+
+    return () => {
+      delete document.body.dataset.workspaceMode;
+    };
+  }, []);
 
   useEffect(() => {
     const listener = (snapshot) => {
@@ -65,24 +117,6 @@ export default function MenuShell(){
     subscribeWorkspaceShell(listener);
     return () => unsubscribeWorkspaceShell(listener);
   }, []);
-
-  if (loading) {
-    console.log("⏳ Loading...");
-    return <div>Loading Menu...</div>;
-  }
-
-  async function handleLogout() {
-    await requestLogout();
-  }
-
-  function handleMenuRoute(routePath) {
-    if (!getScreenForRoute(routePath)) {
-      console.warn(`[NAVIGATION_ROUTE_MISSING] ${routePath}`);
-      return;
-    }
-
-    openRoute(routePath);
-  }
 
   function getHomeRouteTarget() {
     if (location.pathname.startsWith("/sa")) {
@@ -96,8 +130,17 @@ export default function MenuShell(){
     return "DASHBOARD_HOME";
   }
 
-  function handleGoHome() {
-    resetToScreen(getHomeRouteTarget());
+  function handleMenuRoute(routePath) {
+    if (!getScreenForRoute(routePath)) {
+      console.warn(`[NAVIGATION_ROUTE_MISSING] ${routePath}`);
+      return;
+    }
+
+    openRoute(routePath);
+  }
+
+  async function handleLogout() {
+    await requestLogout();
   }
 
   async function handleBack() {
@@ -109,197 +152,558 @@ export default function MenuShell(){
     popScreen();
   }
 
+  function handleGoHome() {
+    resetToScreen(getHomeRouteTarget());
+  }
+
   function handleLockWorkspace() {
     lockWorkspace();
   }
 
+  const focusZone = useCallback((zone) => {
+    if (zone === "menu") {
+      const button =
+        menuButtonRefs.current[resolvedMenuFocusIndex] ??
+        menuButtonRefs.current.find((item) => item instanceof HTMLElement);
+
+      if (focusElement(button)) {
+        setActiveZone("menu");
+      }
+
+      return;
+    }
+
+    if (zone === "actions") {
+      const button =
+        actionButtonRefs.current.find((item) => item instanceof HTMLElement);
+
+      if (focusElement(button)) {
+        setActiveZone("actions");
+      }
+
+      return;
+    }
+
+    if (focusElement(contentRegionRef.current)) {
+      setActiveZone("content");
+    }
+  }, [resolvedMenuFocusIndex]);
+
+  const cycleZoneFocus = useCallback((direction) => {
+    const currentIndex = WORKSPACE_ZONES.indexOf(activeZone);
+    const nextIndex =
+      (currentIndex + direction + WORKSPACE_ZONES.length) %
+      WORKSPACE_ZONES.length;
+
+    focusZone(WORKSPACE_ZONES[nextIndex]);
+  }, [activeZone, focusZone]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeWorkspaceFocusCommands((command) => {
+      if (command === "FOCUS_NEXT_ZONE") {
+        cycleZoneFocus(1);
+      }
+
+      if (command === "FOCUS_PREVIOUS_ZONE") {
+        cycleZoneFocus(-1);
+      }
+
+      if (command === "TOGGLE_SHORTCUT_HELP") {
+        setShowKeyboardHelp((current) => !current);
+      }
+    });
+
+    return unsubscribe;
+  }, [cycleZoneFocus]);
+
+  function handleMenuKeyDown(event, index) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const nextIndex = (index + 1) % menu.length;
+      setMenuFocusIndex(nextIndex);
+      moveFocus(menuButtonRefs.current, nextIndex);
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      const nextIndex = (index - 1 + menu.length) % menu.length;
+      setMenuFocusIndex(nextIndex);
+      moveFocus(menuButtonRefs.current, nextIndex);
+    }
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      setMenuFocusIndex(0);
+      moveFocus(menuButtonRefs.current, 0);
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      const nextIndex = menu.length - 1;
+      setMenuFocusIndex(nextIndex);
+      moveFocus(menuButtonRefs.current, nextIndex);
+    }
+  }
+
+  function handleActionKeyDown(event, index) {
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      const nextIndex = (index + 1) % actionButtonRefs.current.length;
+      moveFocus(actionButtonRefs.current, nextIndex);
+    }
+
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      const nextIndex =
+        (index - 1 + actionButtonRefs.current.length) %
+        actionButtonRefs.current.length;
+      moveFocus(actionButtonRefs.current, nextIndex);
+    }
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      moveFocus(actionButtonRefs.current, 0);
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      moveFocus(actionButtonRefs.current, actionButtonRefs.current.length - 1);
+    }
+  }
+
+  if (loading) {
+    return <div>Loading Menu...</div>;
+  }
+
+  const headerActions = [
+    {
+      label: stackDepth <= 1 ? "Logout" : "Back",
+      hint: "Esc",
+      onClick: () => void handleBack(),
+    },
+    {
+      label: "Dashboard",
+      hint: "Home",
+      onClick: handleGoHome,
+    },
+    {
+      label: collapsed ? "Show Menu" : "Hide Menu",
+      hint: collapsed ? "Ctrl+Right" : "Ctrl+Left",
+      onClick: () => toggleSidebarCollapsed(),
+    },
+    {
+      label: "Lock",
+      hint: "Alt+L",
+      onClick: handleLockWorkspace,
+    },
+    {
+      label: "Logout",
+      hint: "Ctrl+Shift+L",
+      onClick: () => void handleLogout(),
+    },
+  ];
+
   return (
-    <div style={{ display: "flex", minHeight: "100vh", background: "linear-gradient(180deg, #f4f8fb 0%, #edf3f7 100%)" }}>
-      <aside style={{ width: collapsed ? "88px" : "280px", transition: "width 180ms ease", borderRight: "1px solid #d6e2ea", display: "flex", flexDirection: "column", background: "linear-gradient(180deg, #06243a 0%, #0f3b59 100%)", color: "#fff" }}>
-        <div style={{ padding: "24px 22px 18px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
-              <img
-                src="/icon-192.png"
-                alt="PACE ERP"
+    <div
+      style={{
+        display: "flex",
+        minHeight: "100vh",
+        background: "#dfe7ec",
+        color: "#0f172a",
+      }}
+    >
+      <aside
+        aria-label="Workspace navigation"
+        style={{
+          width: collapsed ? "92px" : "290px",
+          transition: "width 140ms ease",
+          borderRight: "1px solid #9fb3c2",
+          display: "flex",
+          flexDirection: "column",
+          background: "#183447",
+          color: "#f8fafc",
+        }}
+      >
+        <div
+          style={{
+            padding: "16px 14px 14px",
+            borderBottom: "1px solid rgba(255,255,255,0.12)",
+            background: "#102939",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "10px",
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <p
                 style={{
-                  width: "38px",
-                  height: "38px",
-                  borderRadius: "12px",
-                  objectFit: "cover",
-                  border: "1px solid rgba(255,255,255,0.14)",
-                  boxShadow: "0 10px 24px rgba(2, 132, 199, 0.24)",
-                  flexShrink: 0,
+                  margin: 0,
+                  fontSize: "11px",
+                  letterSpacing: "0.24em",
+                  textTransform: "uppercase",
+                  color: "#8ed0f7",
+                  fontWeight: 700,
                 }}
-              />
+              >
+                Pace ERP
+              </p>
               {!collapsed ? (
-                <div style={{ minWidth: 0 }}>
-                  <p style={{ margin: 0, fontSize: "11px", letterSpacing: "0.24em", textTransform: "uppercase", color: "#90d5ff", fontWeight: 700 }}>
-                    Pace ERP
+                <>
+                  <p
+                    style={{
+                      margin: "6px 0 0",
+                      fontSize: "15px",
+                      fontWeight: 700,
+                      color: "#f8fafc",
+                    }}
+                  >
+                    {shellProfile?.roleCode || "Protected Workspace"}
                   </p>
-                  <p style={{ margin: "4px 0 0", fontSize: "12px", color: "rgba(255,255,255,0.62)" }}>
-                    {shellProfile?.userCode || "PACE ERP"}
+                  <p
+                    style={{
+                      margin: "4px 0 0",
+                      fontSize: "12px",
+                      color: "rgba(255,255,255,0.72)",
+                    }}
+                  >
+                    {shellProfile?.userCode || "ERP Operator"}
                   </p>
-                </div>
+                </>
               ) : null}
             </div>
+
             <button
               type="button"
               onClick={() => toggleSidebarCollapsed()}
-              title={collapsed ? "Show sidebar (Ctrl+Right Arrow)" : "Hide sidebar (Ctrl+Left Arrow)"}
+              title={collapsed ? "Show menu" : "Hide menu"}
               style={{
                 border: "1px solid rgba(255,255,255,0.16)",
                 background: "rgba(255,255,255,0.06)",
                 color: "#fff",
-                borderRadius: "12px",
+                borderRadius: "8px",
                 padding: "8px 10px",
                 cursor: "pointer",
                 fontSize: "12px",
+                fontWeight: 700,
               }}
             >
-              {collapsed ? ">>" : "<<"}
+              {collapsed ? ">" : "<"}
             </button>
           </div>
-          {!collapsed ? (
-            <>
-              <h2 style={{ margin: "16px 0 0", fontSize: "24px", fontWeight: 600, lineHeight: 1.2 }}>
-            {activeTitle}
-              </h2>
-              <p style={{ margin: "10px 0 0", fontSize: "13px", lineHeight: 1.6, color: "rgba(255,255,255,0.72)" }}>
-            {shellProfile?.tagline || "Process Automation & Control Environment"}
-              </p>
-            </>
-          ) : null}
         </div>
 
-        <div style={{ padding: "18px 16px 16px", flex: 1 }}>
+        <div style={{ padding: "12px", flex: 1 }}>
           {!collapsed ? (
-            <p style={{ margin: "0 8px 14px", fontSize: "11px", letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(255,255,255,0.56)", fontWeight: 700 }}>
-            Modules
-            </p>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr auto",
+                gap: "12px",
+                margin: "0 6px 10px",
+                fontSize: "11px",
+                textTransform: "uppercase",
+                letterSpacing: "0.18em",
+                color: "rgba(255,255,255,0.58)",
+                fontWeight: 700,
+              }}
+            >
+              <span>Navigation</span>
+              <span>Zone 1</span>
+            </div>
           ) : null}
-          <ul style={{ flex: 1, listStyle: "none", margin: 0, padding: 0 }}>
-          {menu.map(item => (
-            <li key={item.menu_code} style={{ marginBottom: "8px" }}>
-              {item.route_path ? (
-                <button
-                  type="button"
-                  onClick={() => handleMenuRoute(item.route_path)}
-                  disabled={location.pathname === item.route_path}
-                  style={{
-                    width: "100%",
-                    background: location.pathname === item.route_path ? "linear-gradient(90deg, rgba(56,189,248,0.24) 0%, rgba(59,130,246,0.08) 100%)" : "transparent",
-                    border: "none",
-                    borderRadius: "16px",
-                    padding: collapsed ? "14px 10px" : "14px 16px",
-                    color: location.pathname === item.route_path ? "#ffffff" : "rgba(255,255,255,0.82)",
-                    cursor: location.pathname === item.route_path ? "default" : "pointer",
-                    textAlign: collapsed ? "center" : "left",
-                    fontSize: "14px",
-                    fontWeight: location.pathname === item.route_path ? 600 : 500,
-                  }}
-                >
-                  {collapsed ? item.title.slice(0, 2).toUpperCase() : item.title}
-                </button>
-              ) : (
-                <span style={{ display: "block", padding: collapsed ? "14px 10px" : "14px 16px", color: "rgba(255,255,255,0.56)", textAlign: collapsed ? "center" : "left" }}>
-                  {collapsed ? item.title.slice(0, 2).toUpperCase() : item.title}
-                </span>
-              )}
-            </li>
-          ))}
-          </ul>
+
+          <nav>
+            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {menu.map((item, index) => {
+                const isActive = location.pathname === item.route_path;
+
+                return (
+                  <li key={item.menu_code} style={{ marginBottom: "6px" }}>
+                    {item.route_path ? (
+                      <button
+                        ref={(element) => {
+                          menuButtonRefs.current[index] = element;
+                        }}
+                        type="button"
+                        onFocus={() => {
+                          setActiveZone("menu");
+                          setMenuFocusIndex(index);
+                        }}
+                        onKeyDown={(event) => handleMenuKeyDown(event, index)}
+                        onClick={() => handleMenuRoute(item.route_path)}
+                        aria-current={isActive ? "page" : undefined}
+                        style={{
+                          width: "100%",
+                          display: "grid",
+                          gridTemplateColumns: collapsed ? "1fr" : "44px 1fr",
+                          alignItems: "center",
+                          gap: "10px",
+                          border: isActive
+                            ? "1px solid rgba(126,203,255,0.66)"
+                            : "1px solid rgba(255,255,255,0.06)",
+                          borderRadius: "10px",
+                          background: isActive ? "#245574" : "transparent",
+                          padding: collapsed ? "12px 8px" : "12px 12px",
+                          color: "#f8fafc",
+                          cursor: isActive ? "default" : "pointer",
+                          textAlign: "left",
+                          fontSize: "13px",
+                          fontWeight: isActive ? 700 : 600,
+                        }}
+                      >
+                        {collapsed ? (
+                          <span
+                            style={{
+                              textAlign: "center",
+                              fontFamily: "Consolas, 'Courier New', monospace",
+                              fontSize: "12px",
+                            }}
+                          >
+                            {(index + 1).toString().padStart(2, "0")}
+                          </span>
+                        ) : (
+                          <span
+                            style={{
+                              color: "rgba(255,255,255,0.66)",
+                              fontFamily: "Consolas, 'Courier New', monospace",
+                              fontSize: "12px",
+                            }}
+                          >
+                            {(index + 1).toString().padStart(2, "0")}
+                          </span>
+                        )}
+                        {!collapsed ? <span>{item.title}</span> : null}
+                      </button>
+                    ) : (
+                      <span
+                        style={{
+                          display: "block",
+                          padding: collapsed ? "12px 8px" : "12px 12px",
+                          color: "rgba(255,255,255,0.56)",
+                          fontSize: "13px",
+                        }}
+                      >
+                        {collapsed ? item.title.slice(0, 2).toUpperCase() : item.title}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </nav>
         </div>
 
-        <div style={{ padding: "16px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-          <button
-            onClick={handleLogout}
-            title="Logout (Ctrl+Shift+L)"
+        <div
+          style={{
+            padding: "12px",
+            borderTop: "1px solid rgba(255,255,255,0.12)",
+            background: "#102939",
+          }}
+        >
+          <p
             style={{
-              width: "100%",
-              border: "none",
-              borderRadius: "16px",
-              padding: collapsed ? "14px 10px" : "14px 16px",
-              background: "linear-gradient(90deg, #0ea5e9 0%, #2563eb 100%)",
-              color: "#fff",
-              fontSize: "14px",
-              fontWeight: 600,
-              cursor: "pointer",
+              margin: collapsed ? 0 : "0 0 6px",
+              fontSize: "11px",
+              color: "rgba(255,255,255,0.62)",
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
             }}
           >
-            {collapsed ? "Out" : "Logout (Ctrl+Shift+L)"}
-          </button>
+            {collapsed ? "?" : "Keyboard"}
+          </p>
+          {!collapsed ? (
+            <p
+              style={{
+                margin: 0,
+                fontSize: "12px",
+                color: "rgba(255,255,255,0.78)",
+                lineHeight: 1.5,
+              }}
+            >
+              F6 changes workspace zone. Use Up/Down inside menu and Enter to open the focused module.
+            </p>
+          ) : null}
         </div>
-
       </aside>
 
       <main style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "18px 26px", borderBottom: "1px solid #d6e2ea", background: "rgba(255,255,255,0.72)", backdropFilter: "blur(10px)" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "18px", flexWrap: "wrap" }}>
+        <div
+          style={{
+            padding: "14px 18px",
+            borderBottom: "1px solid #b2c3cf",
+            background: "#eef3f6",
+          }}
+        >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(0, 1fr) auto",
+              gap: "18px",
+              alignItems: "start",
+            }}
+          >
             <div>
-              <p style={{ margin: 0, fontSize: "11px", letterSpacing: "0.22em", textTransform: "uppercase", color: "#64748b", fontWeight: 700 }}>
-                {shellProfile?.roleCode || "Role"}
-              </p>
-              <h1 style={{ margin: "10px 0 0", fontSize: "20px", color: "#0f172a", fontWeight: 600 }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "10px 14px",
+                  fontSize: "11px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.18em",
+                  color: "#526372",
+                  fontWeight: 700,
+                }}
+              >
+                <span>{shellProfile?.roleCode || "Protected Role"}</span>
+                <span>{shellProfile?.userCode || "ERP User"}</span>
+                <span>Zone {WORKSPACE_ZONES.indexOf(activeZone) + 1}</span>
+              </div>
+              <h1
+                style={{
+                  margin: "8px 0 0",
+                  fontSize: "22px",
+                  fontWeight: 700,
+                  color: "#0f172a",
+                }}
+              >
                 {activeTitle}
               </h1>
-              <p style={{ margin: "6px 0 0", fontSize: "13px", color: "#64748b" }}>
-                {shellProfile?.userCode || "User"}
+              <p style={{ margin: "4px 0 0", fontSize: "13px", color: "#526372" }}>
+                Keyboard-first protected workspace. Use F6 to move between navigation, action strip, and content.
               </p>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={handleLockWorkspace}
-                title="Lock workspace (Alt+L)"
-                style={{
-                  border: "1px solid #cbd5e1",
-                  background: "#fff",
-                  borderRadius: "14px",
-                  padding: "10px 14px",
-                  color: "#0f172a",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                Lock (Alt+L)
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleBack()}
-                style={{
-                  border: "1px solid #cbd5e1",
-                  background: "#fff",
-                  borderRadius: "14px",
-                  padding: "10px 14px",
-                  color: "#0f172a",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                {stackDepth <= 1 ? "Logout" : "Back"}
-              </button>
-              <button
-                type="button"
-                onClick={handleGoHome}
-                style={{
-                  border: "1px solid #bae6fd",
-                  background: "#e0f2fe",
-                  borderRadius: "14px",
-                  padding: "10px 14px",
-                  color: "#075985",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                Main Dashboard
-              </button>
+            <div
+              aria-label="Workspace actions"
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "8px",
+                justifyContent: "flex-end",
+              }}
+            >
+              {headerActions.map((action, index) => (
+                <button
+                  key={action.label + action.hint}
+                  ref={(element) => {
+                    actionButtonRefs.current[index] = element;
+                  }}
+                  type="button"
+                  onClick={action.onClick}
+                  onFocus={() => setActiveZone("actions")}
+                  onKeyDown={(event) => handleActionKeyDown(event, index)}
+                  style={{
+                    border: "1px solid #9fb3c2",
+                    background: index === 1 ? "#d7ebf7" : "#ffffff",
+                    borderRadius: "8px",
+                    padding: "10px 12px",
+                    color: "#0f172a",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    display: "grid",
+                    gap: "4px",
+                    minWidth: "104px",
+                    textAlign: "left",
+                  }}
+                >
+                  <span style={{ fontSize: "13px" }}>{action.label}</span>
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      letterSpacing: "0.12em",
+                      textTransform: "uppercase",
+                      color: "#64748b",
+                    }}
+                  >
+                    {action.hint}
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
+
+          <div
+            style={{
+              marginTop: "12px",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "8px",
+            }}
+          >
+            {SHORTCUT_GUIDE.map((item) => (
+              <span
+                key={item}
+                style={{
+                  border: "1px solid #c8d5de",
+                  background: "#ffffff",
+                  borderRadius: "999px",
+                  padding: "6px 10px",
+                  fontSize: "11px",
+                  color: "#475569",
+                }}
+              >
+                {item}
+              </span>
+            ))}
+          </div>
+
+          {showKeyboardHelp ? (
+            <div
+              style={{
+                marginTop: "12px",
+                border: "1px solid #b2c3cf",
+                background: "#ffffff",
+                borderRadius: "10px",
+                padding: "12px 14px",
+              }}
+            >
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: "11px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.16em",
+                  color: "#475569",
+                  fontWeight: 700,
+                }}
+              >
+                Keyboard Help
+              </p>
+              <div
+                style={{
+                  marginTop: "8px",
+                  display: "grid",
+                  gap: "6px",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  fontSize: "13px",
+                  color: "#0f172a",
+                }}
+              >
+                <span>Zone 1: Menu navigation</span>
+                <span>Zone 2: Action strip</span>
+                <span>Zone 3: Active screen content</span>
+                <span>Up/Down moves inside the left menu</span>
+                <span>Left/Right moves across action buttons</span>
+                <span>Use Tab inside the content itself</span>
+              </div>
+            </div>
+          ) : null}
         </div>
-        <div style={{ flex: 1 }}>
-  <Outlet />
+
+        <div
+          ref={contentRegionRef}
+          tabIndex={-1}
+          onFocus={() => setActiveZone("content")}
+          style={{ flex: 1, outline: "none" }}
+          aria-label="Active workspace content"
+        >
+          <Outlet />
         </div>
       </main>
     </div>

@@ -1,40 +1,72 @@
-function StatCard({ item }) {
+/*
+ * File-ID: 9.1B-FRONT
+ * File-Path: frontend/src/components/dashboard/EnterpriseDashboard.jsx
+ * Gate: 9
+ * Phase: 9
+ * Domain: FRONT
+ * Purpose: Render dense keyboard-first protected dashboard workspaces
+ * Authority: Frontend
+ */
+
+import { useRef } from "react";
+
+function moveFocus(refs, nextIndex) {
+  const target = refs[nextIndex];
+
+  if (target instanceof HTMLElement) {
+    target.focus();
+  }
+}
+
+function StatRow({ item, index }) {
   return (
-    <article className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-[0_10px_28px_rgba(15,23,42,0.06)]">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-        {item.label}
-      </p>
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <h3 className="text-2xl font-semibold text-slate-900">{item.value}</h3>
-        <span className="rounded-full bg-sky-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-          {item.tag}
-        </span>
+    <article className="grid grid-cols-[70px_1fr_auto] items-center gap-3 rounded-lg border border-slate-300 bg-white px-4 py-3">
+      <span className="font-mono text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+        {(index + 1).toString().padStart(2, "0")}
+      </span>
+      <div className="min-w-0">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+          {item.label}
+        </p>
+        <p className="mt-1 font-mono text-2xl font-semibold text-slate-900">
+          {item.value}
+        </p>
       </div>
+      <span className="rounded-md border border-slate-300 bg-slate-100 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-700">
+        {item.tag}
+      </span>
     </article>
   );
 }
 
-function ActionCard({ action }) {
+function ActionRow({ action, index, refs, onKeyDown }) {
   return (
     <button
+      ref={(element) => {
+        refs.current[index] = element;
+      }}
       type="button"
       onClick={action.onClick}
-      className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-[0_10px_28px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-[0_16px_36px_rgba(14,116,144,0.12)]"
+      onKeyDown={(event) => onKeyDown(event, index)}
+      className="grid w-full grid-cols-[56px_1fr_auto] items-center gap-4 border-b border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50 focus:bg-sky-50 last:border-b-0"
     >
-      <div className="flex items-center justify-between gap-4">
-        <span className="rounded-2xl bg-sky-100 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-sky-700">
+      <span className="font-mono text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">
+        {(index + 1).toString().padStart(2, "0")}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
           {action.badge}
         </span>
-        <span className="text-slate-300 transition group-hover:text-sky-600">
-          ->
+        <span className="mt-1 block text-base font-semibold text-slate-900">
+          {action.title}
         </span>
-      </div>
-      <h3 className="mt-4 text-lg font-semibold text-slate-900">
-        {action.title}
-      </h3>
-      <p className="mt-2 text-sm leading-6 text-slate-600">
-        {action.description}
-      </p>
+        <span className="mt-1 block text-sm leading-6 text-slate-600">
+          {action.description}
+        </span>
+      </span>
+      <span className="font-mono text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">
+        Enter
+      </span>
     </button>
   );
 }
@@ -46,37 +78,110 @@ export default function EnterpriseDashboard({
   stats,
   actions,
 }) {
+  const actionRefs = useRef([]);
+
+  function handleActionKeyDown(event, index) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveFocus(actionRefs, (index + 1) % actions.length);
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveFocus(actionRefs, (index - 1 + actions.length) % actions.length);
+    }
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      moveFocus(actionRefs, 0);
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      moveFocus(actionRefs, actions.length - 1);
+    }
+  }
+
   return (
-    <section className="min-h-full bg-[linear-gradient(180deg,_#f8fbfd_0%,_#eef4f7_100%)] px-6 py-6 text-slate-900">
-      <div className="mx-auto max-w-6xl">
-        <div className="rounded-[28px] border border-slate-200 bg-white px-6 py-6 shadow-[0_14px_40px_rgba(15,23,42,0.08)]">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.26em] text-sky-700">
-            {eyebrow}
-          </p>
-          <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900 lg:text-3xl">
-            {title}
-          </h1>
-          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-500">
-            {subtitle}
-          </p>
-        </div>
-
-        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {stats.map((item) => (
-            <StatCard key={item.label} item={item} />
-          ))}
-        </div>
-
-        <div className="mt-6 rounded-[28px] border border-slate-200 bg-white p-6 shadow-[0_14px_40px_rgba(15,23,42,0.08)]">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-            Quick Workspace
-          </p>
-          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {actions.map((action) => (
-              <ActionCard key={action.title} action={action} />
-            ))}
+    <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
+      <div className="mx-auto max-w-7xl">
+        <div className="rounded-xl border border-slate-300 bg-white px-5 py-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-4xl">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-600">
+                {eyebrow}
+              </p>
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+                {title}
+              </h1>
+              <p className="mt-3 text-sm leading-7 text-slate-600">
+                {subtitle}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-300 bg-slate-50 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Workspace Mode
+              </p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">
+                Keyboard-first protected shell
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                F6 changes zone, arrows move inside lists.
+              </p>
+            </div>
           </div>
         </div>
+
+        <section className="mt-4 rounded-xl border border-slate-300 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Status Strip
+              </p>
+              <h2 className="mt-1 text-lg font-semibold text-slate-900">
+                Operating Snapshot
+              </h2>
+            </div>
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-slate-500">
+              Read-only counters
+            </p>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
+            {stats.map((item, index) => (
+              <StatRow key={item.label} item={item} index={index} />
+            ))}
+          </div>
+        </section>
+
+        <section className="mt-4 rounded-xl border border-slate-300 bg-white shadow-sm">
+          <div className="border-b border-slate-300 px-4 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Action Workspace
+                </p>
+                <h2 className="mt-1 text-lg font-semibold text-slate-900">
+                  Operator Action Queue
+                </h2>
+              </div>
+              <p className="font-mono text-xs uppercase tracking-[0.16em] text-slate-500">
+                Up or Down moves between actions
+              </p>
+            </div>
+          </div>
+
+          <div>
+            {actions.map((action, index) => (
+              <ActionRow
+                key={action.title}
+                action={action}
+                index={index}
+                refs={actionRefs}
+                onKeyDown={handleActionKeyDown}
+              />
+            ))}
+          </div>
+        </section>
       </div>
     </section>
   );

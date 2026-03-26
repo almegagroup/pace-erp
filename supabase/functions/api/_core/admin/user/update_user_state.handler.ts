@@ -13,6 +13,7 @@ import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { okResponse } from "../../response.ts";
 import { adminForceRevokeSessions } from "../../session/session.admin_revoke.ts";
 import { assertSelfLockoutSafe } from "./_guards/self_lockout.guard.ts";
+import { log } from "../../../_lib/logger.ts";
 
 /**
  * Update User State (ACTIVE / DISABLED)
@@ -39,7 +40,7 @@ export async function updateUserStateHandler(
   // Context gate
   // --------------------------------------------------
   if (ctx.context.status !== "RESOLVED") {
-    return okResponse(null, ctx.request_id);
+    return okResponse({ applied: false }, ctx.request_id);
   }
 
   const body = await req.json().catch(() => ({}));
@@ -49,7 +50,7 @@ export async function updateUserStateHandler(
     !target_auth_user_id ||
     (next_state !== "ACTIVE" && next_state !== "DISABLED")
   ) {
-    return okResponse(null, ctx.request_id);
+    return okResponse({ applied: false }, ctx.request_id);
   }
 
   const db = getServiceRoleClientWithContext(ctx.context);
@@ -66,21 +67,56 @@ export async function updateUserStateHandler(
   // --------------------------------------------------
   // Self-lockout protection (ID-9.6A)
   // --------------------------------------------------
-  await assertSelfLockoutSafe({
-    _actorAuthUserId: ctx.auth_user_id,
-    actorRoleCode: ctx.roleCode,
-    _targetAuthUserId: target_auth_user_id,
-    targetCurrentRole: roleRow?.role_code,
-    targetNextState: next_state,
-  });
+  try {
+    await assertSelfLockoutSafe({
+      _actorAuthUserId: ctx.auth_user_id,
+      actorRoleCode: ctx.roleCode,
+      _targetAuthUserId: target_auth_user_id,
+      targetCurrentRole: roleRow?.role_code,
+      targetNextState: next_state,
+    });
+  } catch (error) {
+    log({
+      level: "ERROR",
+      gate_id: "9.6",
+      request_id: ctx.request_id,
+      event: "USER_STATE_GUARD_BLOCKED",
+      actor: ctx.auth_user_id,
+      meta: {
+        target_auth_user_id,
+        next_state,
+        error_message: error instanceof Error ? error.message : String(error),
+      },
+    });
+
+    return okResponse({ applied: false }, ctx.request_id);
+  }
 
   // --------------------------------------------------
   // Apply state change (idempotent)
   // --------------------------------------------------
-  await db
+  const { data: updatedUsers, error: updateError } = await db
     .schema("erp_core").from("users")
     .update({ state: next_state })
-    .eq("auth_user_id", target_auth_user_id);
+    .eq("auth_user_id", target_auth_user_id)
+    .select("auth_user_id, state");
+
+  if (updateError || !Array.isArray(updatedUsers) || updatedUsers.length === 0) {
+    log({
+      level: "ERROR",
+      gate_id: "9.6",
+      request_id: ctx.request_id,
+      event: "USER_STATE_UPDATE_FAILED",
+      actor: ctx.auth_user_id,
+      meta: {
+        target_auth_user_id,
+        next_state,
+        error_message: updateError?.message ?? null,
+      },
+    });
+
+    return okResponse({ applied: false }, ctx.request_id);
+  }
 
   // --------------------------------------------------
   // Force session revoke on DISABLED
@@ -92,5 +128,11 @@ export async function updateUserStateHandler(
     );
   }
 
-  return okResponse(null, ctx.request_id);
+  return okResponse(
+    {
+      applied: true,
+      next_state,
+    },
+    ctx.request_id
+  );
 }

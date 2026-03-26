@@ -33,6 +33,18 @@ const INTENT_ACL_MAP = Object.freeze({
     resource: "SESSION",
     action: "WORKSPACE_LOCK",
   },
+  INTENT_FOCUS_NEXT_ZONE: {
+    resource: "NAVIGATION",
+    action: "FOCUS_NEXT_ZONE",
+  },
+  INTENT_FOCUS_PREVIOUS_ZONE: {
+    resource: "NAVIGATION",
+    action: "FOCUS_PREVIOUS_ZONE",
+  },
+  INTENT_TOGGLE_SHORTCUT_HELP: {
+    resource: "NAVIGATION",
+    action: "TOGGLE_SHORTCUT_HELP",
+  },
   // Future examples:
   // INTENT_SAVE: { resource: "DOCUMENT", action: "WRITE" }
 });

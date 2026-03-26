@@ -68,7 +68,27 @@ export async function approveSignupHandler(
 
   // Preserve enumeration safety
   if (error) {
-    return okResponse(null, requestId);
+    log({
+      level: "ERROR",
+      gate_id: "4.2A",
+      request_id: requestId,
+      event: "ERP_USER_ACTIVATION_FAILED",
+      actor: saAuthUserId,
+      meta: {
+        target_auth_user_id: auth_user_id,
+        error_message: error.message,
+        error_code: error.code ?? null,
+        error_details: error.details ?? null,
+      },
+    });
+
+    return okResponse(
+      {
+        applied: false,
+        user_code: null,
+      },
+      requestId
+    );
   }
 
   // --------------------------------------------------
@@ -88,5 +108,11 @@ export async function approveSignupHandler(
   // --------------------------------------------------
   // 5️⃣ Generic success
   // --------------------------------------------------
-  return okResponse(null, requestId);
+  return okResponse(
+    {
+      applied: true,
+      user_code: userCode ?? null,
+    },
+    requestId
+  );
 }

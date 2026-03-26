@@ -27,6 +27,23 @@ async function readJsonSafe(response) {
   }
 }
 
+async function fetchSessions() {
+  const response = await fetch(
+    `${import.meta.env.VITE_API_BASE}/api/admin/sessions`,
+    {
+      credentials: "include",
+    }
+  );
+
+  const json = await readJsonSafe(response);
+
+  if (!response.ok || !json?.ok || !Array.isArray(json.data)) {
+    throw new Error("SESSION_LIST_READ_FAILED");
+  }
+
+  return json.data;
+}
+
 function formatDateTime(value) {
   if (!value) return "N/A";
 
@@ -104,22 +121,11 @@ export default function SASessions() {
       setError("");
 
       try {
-        const response = await fetch(
-          `${import.meta.env.VITE_API_BASE}/api/admin/sessions`,
-          {
-            credentials: "include",
-          }
-        );
-
-        const json = await readJsonSafe(response);
+        const data = await fetchSessions();
 
         if (!alive) return;
 
-        if (!response.ok || !json?.ok || !Array.isArray(json.data)) {
-          throw new Error("SESSION_LIST_READ_FAILED");
-        }
-
-        setSessions(json.data);
+        setSessions(data);
       } catch {
         if (!alive) return;
         setError("Unable to load ERP sessions right now.");
@@ -142,20 +148,8 @@ export default function SASessions() {
     setError("");
 
     try {
-      const response = await fetch(
-        `${import.meta.env.VITE_API_BASE}/api/admin/sessions`,
-        {
-          credentials: "include",
-        }
-      );
-
-      const json = await readJsonSafe(response);
-
-      if (!response.ok || !json?.ok || !Array.isArray(json.data)) {
-        throw new Error("SESSION_LIST_REFRESH_FAILED");
-      }
-
-      setSessions(json.data);
+      const data = await fetchSessions();
+      setSessions(data);
     } catch {
       setError("Unable to refresh the session list right now.");
     } finally {
@@ -190,25 +184,22 @@ export default function SASessions() {
 
       const json = await readJsonSafe(response);
 
-      if (!response.ok || !json?.ok) {
+      if (!response.ok || !json?.ok || json?.data?.revoked !== true) {
         throw new Error("SESSION_REVOKE_FAILED");
       }
 
-      const revokedAt = new Date().toISOString();
-
-      setSessions((current) =>
-        current.map((session) =>
-          session.session_id === sessionId
-            ? {
-                ...session,
-                status: "REVOKED",
-                revoked_at: revokedAt,
-              }
-            : session
-        )
+      const refreshedSessions = await fetchSessions();
+      const revokedSession = refreshedSessions.find(
+        (session) => session.session_id === sessionId
       );
+
+      setSessions(refreshedSessions);
+
+      if (revokedSession?.status !== "REVOKED") {
+        throw new Error("SESSION_REVOKE_NOT_FINALIZED");
+      }
     } catch {
-      setError("Unable to revoke this ERP session right now.");
+      setError("Session revoke was not finalized by the backend.");
     } finally {
       setRevokingSessionId("");
     }
@@ -225,7 +216,7 @@ export default function SASessions() {
   const expiredCount = sessions.filter((session) => session.status === "EXPIRED").length;
 
   return (
-    <section className="min-h-full bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.09),_transparent_28%),linear-gradient(180deg,_#f8fbfd_0%,_#eef4f7_100%)] px-6 py-6 text-slate-900">
+    <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
       <div className="mx-auto max-w-7xl">
         <div className="rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.08)]">
           <div className="flex flex-wrap items-start justify-between gap-5">
