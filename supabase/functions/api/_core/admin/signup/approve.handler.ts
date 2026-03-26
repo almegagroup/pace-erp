@@ -86,6 +86,7 @@ export async function approveSignupHandler(
       {
         applied: false,
         user_code: null,
+        failure_reason: error.message ?? "APPROVAL_FAILED",
       },
       requestId
     );

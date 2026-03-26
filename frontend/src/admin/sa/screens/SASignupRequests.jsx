@@ -56,6 +56,11 @@ function shortId(value) {
   return String(value).slice(0, 8);
 }
 
+function formatLifecycleState(value) {
+  if (!value) return "UNKNOWN";
+  return String(value).replaceAll("_", " ");
+}
+
 function SummaryCard({ label, value, caption, tone = "sky" }) {
   const toneClassMap = {
     sky: "bg-sky-50 text-sky-700",
@@ -178,23 +183,41 @@ export default function SASignupRequests() {
       }
 
       if (json?.data?.applied !== true) {
-        throw new Error("SIGNUP_DECISION_NOT_APPLIED");
+        const failureReason = json?.data?.failure_reason ?? "UNKNOWN_FAILURE";
+        throw new Error(`SIGNUP_DECISION_NOT_APPLIED:${failureReason}`);
       }
 
       const refreshedRequests = await fetchSignupRequests();
-      const stillPending = refreshedRequests.some(
+      const pendingRow = refreshedRequests.find(
         (row) => row.auth_user_id === authUserId
       );
+      const stillPending = Boolean(pendingRow);
 
       setRequests(refreshedRequests);
 
       if (stillPending) {
-        throw new Error("SIGNUP_DECISION_NOT_FINALIZED");
+        const lifecycleState = pendingRow?.user_state ?? "UNKNOWN";
+        throw new Error(`SIGNUP_DECISION_NOT_FINALIZED:${lifecycleState}`);
       }
-    } catch {
-      setError(
-        "Signup decision was not finalized by the backend. The request is still pending."
-      );
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "";
+
+      if (message.startsWith("SIGNUP_DECISION_NOT_APPLIED:")) {
+        const failureReason = message.split(":")[1] ?? "UNKNOWN_FAILURE";
+        setError(
+          `Signup decision was rejected by the backend authority. Failure reason: ${failureReason}.`
+        );
+      } else if (message.startsWith("SIGNUP_DECISION_NOT_FINALIZED:")) {
+        const lifecycleState = message.split(":")[1] ?? "UNKNOWN";
+        setError(
+          `Signup decision was not finalized by the backend. The request is still pending and the current user lifecycle state is ${formatLifecycleState(lifecycleState)}.`
+        );
+      } else {
+        setError(
+          "Signup decision was not finalized by the backend. The request is still pending."
+        );
+      }
     } finally {
       setActingUserId("");
     }
@@ -350,6 +373,9 @@ export default function SASignupRequests() {
                       Submitted
                     </th>
                     <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Lifecycle
+                    </th>
+                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                       Actions
                     </th>
                   </tr>
@@ -382,6 +408,11 @@ export default function SASignupRequests() {
                         </td>
                         <td className="px-4 py-4 text-sm text-slate-700">
                           {formatDateTime(request.submitted_at)}
+                        </td>
+                        <td className="px-4 py-4 text-sm text-slate-700">
+                          <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-700">
+                            {formatLifecycleState(request.user_state)}
+                          </span>
                         </td>
                         <td className="rounded-none px-4 py-4 text-sm text-slate-700 last:rounded-r-2xl">
                           <div className="flex flex-wrap gap-2">

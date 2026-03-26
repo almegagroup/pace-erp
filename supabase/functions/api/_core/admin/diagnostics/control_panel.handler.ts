@@ -48,12 +48,46 @@ export async function controlPanelHandler(
   const db_status = dbError ? "DOWN" : "UP";
 
   /* -----------------------------
-   * user count
+   * company count
    * ----------------------------- */
 
-  const { count: userCount } = await db
+  const { count: companyCount } = await db
+    .schema("erp_master").from("companies")
+    .select("*", { count: "exact", head: true });
+
+  /* -----------------------------
+   * ERP user count
+   * ----------------------------- */
+
+  const { count: erpUserCount } = await db
+    .schema("erp_core").from("users")
+    .select("*", { count: "exact", head: true });
+
+  /* -----------------------------
+   * mapped user count
+   * ----------------------------- */
+
+  const { count: mappedUserCount } = await db
     .schema("erp_map").from("user_company_roles")
     .select("*", { count: "exact", head: true });
+
+  /* -----------------------------
+   * pending signup count
+   * ----------------------------- */
+
+  const { count: pendingSignupCount } = await db
+    .schema("erp_core").from("signup_requests")
+    .select("*", { count: "exact", head: true })
+    .eq("decision", "PENDING");
+
+  /* -----------------------------
+   * active session count
+   * ----------------------------- */
+
+  const { count: activeSessionCount } = await db
+    .schema("erp_core").from("sessions")
+    .select("*", { count: "exact", head: true })
+    .eq("status", "ACTIVE");
 
   /* -----------------------------
    * active sessions
@@ -92,7 +126,12 @@ export async function controlPanelHandler(
     {
       system: SYSTEM_VERSION,
       db_status,
-      user_count: userCount ?? 0,
+      company_count: companyCount ?? 0,
+      erp_user_count: erpUserCount ?? 0,
+      mapped_user_count: mappedUserCount ?? 0,
+      pending_signup_count: pendingSignupCount ?? 0,
+      active_session_count: activeSessionCount ?? 0,
+      user_count: mappedUserCount ?? 0,
       recent_sessions: sessions ?? [],
       recent_audit: audit ?? []
     },

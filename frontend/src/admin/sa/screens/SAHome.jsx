@@ -1,27 +1,124 @@
+import { useEffect, useState } from "react";
 import EnterpriseDashboard from "../../../components/dashboard/EnterpriseDashboard.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 
+async function readJsonSafe(response) {
+  try {
+    return await response.clone().json();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchControlPanelSnapshot() {
+  const response = await fetch(
+    `${import.meta.env.VITE_API_BASE}/api/admin/control-panel`,
+    {
+      credentials: "include",
+    }
+  );
+
+  const json = await readJsonSafe(response);
+
+  if (!response.ok || !json?.ok || !json?.data) {
+    throw new Error("CONTROL_PANEL_READ_FAILED");
+  }
+
+  return json.data;
+}
+
+async function fetchSystemHealthSnapshot() {
+  const response = await fetch(
+    `${import.meta.env.VITE_API_BASE}/api/admin/system-health`,
+    {
+      credentials: "include",
+    }
+  );
+
+  const json = await readJsonSafe(response);
+
+  if (!response.ok || !json?.ok || !json?.data) {
+    throw new Error("SYSTEM_HEALTH_READ_FAILED");
+  }
+
+  return json.data;
+}
+
+function deriveSnapshotHealth(health) {
+  if (!health) {
+    return "Loading";
+  }
+
+  const statuses = [
+    health.db_status,
+    health.acl_snapshot_status,
+    health.menu_snapshot_status,
+  ];
+
+  const isHealthy = statuses.every((value) =>
+    ["UP", "READY"].includes(value)
+  );
+
+  return isHealthy ? "READY" : "DEGRADED";
+}
+
 export default function SAHome() {
+  const [controlPanel, setControlPanel] = useState(null);
+  const [systemHealth, setSystemHealth] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function loadDashboardSnapshot() {
+      try {
+        const [controlPanelData, systemHealthData] = await Promise.all([
+          fetchControlPanelSnapshot(),
+          fetchSystemHealthSnapshot(),
+        ]);
+
+        if (!alive) {
+          return;
+        }
+
+        setControlPanel(controlPanelData);
+        setSystemHealth(systemHealthData);
+      } catch {
+        if (!alive) {
+          return;
+        }
+
+        setControlPanel(null);
+        setSystemHealth(null);
+      }
+    }
+
+    void loadDashboardSnapshot();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const stats = [
     {
       label: "Companies",
-      value: "24",
+      value: String(controlPanel?.company_count ?? "..."),
       tag: "Live",
     },
     {
       label: "Users",
-      value: "312",
-      tag: "Active",
+      value: String(controlPanel?.erp_user_count ?? "..."),
+      tag: "ERP",
     },
     {
       label: "Pending Signups",
-      value: "08",
+      value: String(controlPanel?.pending_signup_count ?? "..."),
       tag: "Queue",
     },
     {
       label: "Snapshot Health",
-      value: "99.2%",
-      tag: "Runtime",
+      value: deriveSnapshotHealth(systemHealth),
+      tag: systemHealth?.db_status ?? "Runtime",
     },
   ];
 
