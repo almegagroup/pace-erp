@@ -24,6 +24,7 @@ import ResetPassword from "../pages/public/ResetPassword.jsx";
 
 import MenuShell from "../layout/MenuShell.jsx";
 import SessionWatchdog from "../components/SessionWatchdog.jsx";
+import WorkspaceLockOverlay from "../components/WorkspaceLockOverlay.jsx";
 import DashboardShell from "../layout/DashboardShell.jsx";
 import NavigationStackBridge from "../navigation/NavigationStackBridge.jsx";
 import ProtectedBranchShell from "./ProtectedBranchShell.jsx";
@@ -44,6 +45,7 @@ export default function AppRouter() {
   //console.log("🧭 AppRouter RENDERED");
   return (
     <BrowserRouter>
+      <WorkspaceLockOverlay />
       {/* ✅ SINGLE SOURCE OF CONTEXT */}
       <MenuProvider>
   {/* 🔥 GLOBAL AUTH BOOT */}

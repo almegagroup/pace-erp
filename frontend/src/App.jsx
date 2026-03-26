@@ -9,7 +9,6 @@
  */
 
 import AppRouter from "./router/AppRouter.jsx";
-import WorkspaceLockOverlay from "./components/WorkspaceLockOverlay.jsx";
 import SessionOverlay from "./components/SessionOverlay.jsx";
 import LogoutConfirmOverlay from "./components/LogoutConfirmOverlay.jsx";
 
@@ -19,7 +18,6 @@ function App() {
       <div id="app-shell">
         <AppRouter />
       </div>
-      <WorkspaceLockOverlay />
       <SessionOverlay />
       <LogoutConfirmOverlay />
     </>
