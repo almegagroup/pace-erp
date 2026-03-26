@@ -58,7 +58,7 @@ export default function LoginScreen() {
         throw new Error("INVALID_LOGIN");
       }
 
-      navigate("/app");
+      navigate("/app", { replace: true });
     } catch (err) {
       let message = "Login failed";
       const code = err?.message || "UNKNOWN";

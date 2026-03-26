@@ -19,6 +19,27 @@ async function readJsonSafe(response) {
   }
 }
 
+function formatSystemVersion(value) {
+  if (!value) return "N/A";
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "object") {
+    const system = typeof value.system === "string" ? value.system : "PACE-ERP";
+    const version = typeof value.version === "string" ? value.version : "N/A";
+    const buildGate =
+      typeof value.build_gate === "string" ? value.build_gate : null;
+
+    return buildGate
+      ? `${system} ${version} (${buildGate})`
+      : `${system} ${version}`;
+  }
+
+  return String(value);
+}
+
 function HealthCard({ label, value, description, tone = "sky" }) {
   const toneClassMap = {
     sky: "bg-sky-50 text-sky-700",
@@ -121,7 +142,7 @@ export default function SASystemHealth() {
   const dbStatus = health?.db_status ?? "N/A";
   const aclStatus = health?.acl_snapshot_status ?? "N/A";
   const menuStatus = health?.menu_snapshot_status ?? "N/A";
-  const systemVersion = health?.system_version ?? "N/A";
+  const systemVersion = formatSystemVersion(health?.system_version);
 
   const alerts = [
     dbStatus === "DOWN"
