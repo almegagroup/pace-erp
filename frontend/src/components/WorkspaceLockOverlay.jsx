@@ -4,6 +4,7 @@ import BlockingLayer from "./layer/BlockingLayer.jsx";
 import { isPublicRoute } from "../router/publicRoutes.js";
 import {
   clearWorkspaceLock,
+  requestWorkspaceLockLogout,
   submitWorkspaceUnlock,
   subscribeWorkspaceLock,
   unsubscribeWorkspaceLock,
@@ -36,6 +37,28 @@ export default function WorkspaceLockOverlay() {
       clearWorkspaceLock();
     }
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (!visible || isPublicRoute(location.pathname)) {
+      return undefined;
+    }
+
+    let logoutRequested = false;
+
+    const handlePageUnload = () => {
+      if (logoutRequested) return;
+      logoutRequested = true;
+      void requestWorkspaceLockLogout({ keepalive: true });
+    };
+
+    window.addEventListener("pagehide", handlePageUnload);
+    window.addEventListener("beforeunload", handlePageUnload);
+
+    return () => {
+      window.removeEventListener("pagehide", handlePageUnload);
+      window.removeEventListener("beforeunload", handlePageUnload);
+    };
+  }, [location.pathname, visible]);
 
   if (!visible || isPublicRoute(location.pathname)) {
     return null;

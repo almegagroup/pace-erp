@@ -17,6 +17,10 @@ import {
   recordBackendActivity,
   showWarning,
 } from "./store/sessionWarning.js";
+import {
+  consumeLockedRefreshFlag,
+  requestWorkspaceLockLogout,
+} from "./store/workspaceLock.js";
 
 // 🔒 Gate-8 / G1 — Screen Registry Validation
 import { validateScreenRegistry } from "./navigation/screenRules.js";
@@ -152,8 +156,21 @@ if (!restored && !isPublicRoute(pathname)) {
   }
 }
 
-createRoot(document.getElementById("root")).render(
-  <StrictMode>
-    <App />
-  </StrictMode>
-);
+async function mountApp() {
+  if (consumeLockedRefreshFlag()) {
+    await requestWorkspaceLockLogout({
+      keepalive: true,
+      fetchImpl: __originalFetch,
+    });
+    hardLogout();
+    return;
+  }
+
+  createRoot(document.getElementById("root")).render(
+    <StrictMode>
+      <App />
+    </StrictMode>
+  );
+}
+
+void mountApp();

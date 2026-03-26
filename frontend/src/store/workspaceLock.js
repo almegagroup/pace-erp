@@ -5,6 +5,20 @@ let state = {
 };
 
 let listeners = [];
+const STORAGE_KEY = "__PACE_WORKSPACE_LOCK__";
+
+function setWorkspaceLockPersistence(locked) {
+  try {
+    if (locked) {
+      sessionStorage.setItem(STORAGE_KEY, "1");
+      return;
+    }
+
+    sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Session storage is a best-effort security hint for refresh handling.
+  }
+}
 
 function emit() {
   const snapshot = { ...state };
@@ -21,6 +35,7 @@ export function unsubscribeWorkspaceLock(fn) {
 }
 
 export function lockWorkspace() {
+  setWorkspaceLockPersistence(true);
   state = {
     visible: true,
     loading: false,
@@ -30,6 +45,7 @@ export function lockWorkspace() {
 }
 
 export function unlockWorkspaceLocally() {
+  setWorkspaceLockPersistence(false);
   state = {
     visible: false,
     loading: false,
@@ -40,6 +56,33 @@ export function unlockWorkspaceLocally() {
 
 export function clearWorkspaceLock() {
   unlockWorkspaceLocally();
+}
+
+export function consumeLockedRefreshFlag() {
+  try {
+    const locked = sessionStorage.getItem(STORAGE_KEY) === "1";
+    sessionStorage.removeItem(STORAGE_KEY);
+    return locked;
+  } catch {
+    return false;
+  }
+}
+
+export async function requestWorkspaceLockLogout(options = {}) {
+  const {
+    keepalive = false,
+    fetchImpl = globalThis.fetch,
+  } = options;
+
+  try {
+    await fetchImpl(`${import.meta.env.VITE_API_BASE}/api/logout`, {
+      method: "POST",
+      credentials: "include",
+      keepalive,
+    });
+  } catch {
+    // Best effort only. Startup hard logout will still clear the local shell.
+  }
 }
 
 export async function submitWorkspaceUnlock(password) {

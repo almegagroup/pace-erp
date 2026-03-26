@@ -15,9 +15,7 @@ import LogoutConfirmOverlay from "./components/LogoutConfirmOverlay.jsx";
 function App() {
   return (
     <>
-      <div id="app-shell">
-        <AppRouter />
-      </div>
+      <AppRouter />
       <SessionOverlay />
       <LogoutConfirmOverlay />
     </>
