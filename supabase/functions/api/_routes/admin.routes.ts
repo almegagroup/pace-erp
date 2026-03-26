@@ -3,6 +3,7 @@
  */
 import { meHandler } from "../_core/auth/me.handler.ts";
 import { meProfileHandler } from "../_core/auth/me_profile.handler.ts";
+import { unlockHandler } from "../_core/auth/unlock.handler.ts";
 import { listPendingSignupHandler } from "../_core/admin/signup/list_pending.handler.ts";
 import { approveSignupHandler } from "../_core/admin/signup/approve.handler.ts";
 import { rejectSignupHandler } from "../_core/admin/signup/reject.handler.ts";
@@ -59,6 +60,15 @@ export async function dispatchAdminRoutes(
         session,
         requestId,
         req,
+      });
+      break;
+
+    case "POST:/api/unlock":
+      response = await unlockHandler({
+        session,
+        requestId,
+        req,
+        body: await req.json(),
       });
       break;
   

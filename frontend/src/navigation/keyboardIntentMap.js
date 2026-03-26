@@ -13,6 +13,7 @@ import { isKeyboardIntentAllowed } from "./keyboardAclBridge.js";
 import { logNavigationEvent } from "./navigationEventLogger.js";
 import { confirmAndRequestLogout } from "../store/sessionWarning.js";
 import { hideSidebar, showSidebar } from "../store/workspaceShell.js";
+import { lockWorkspace } from "../store/workspaceLock.js";
 
 /**
  * SECURITY ALLOWLIST
@@ -23,6 +24,7 @@ const INTENT_HANDLERS = Object.freeze({
   INTENT_SIDEBAR_HIDE: handleSidebarHide,
   INTENT_SIDEBAR_SHOW: handleSidebarShow,
   INTENT_LOGOUT_CONFIRM: handleLogoutConfirm,
+  INTENT_WORKSPACE_LOCK: handleWorkspaceLock,
   // Future intents:
   // INTENT_SAVE: handleSave,
 });
@@ -87,6 +89,15 @@ function handleLogoutConfirm() {
     action: "OPEN_LOGOUT_CONFIRM",
   });
   void confirmAndRequestLogout();
+}
+
+function handleWorkspaceLock() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_WORKSPACE_LOCK",
+    action: "LOCK_WORKSPACE",
+  });
+  lockWorkspace();
 }
 
 function handleDeniedIntent(intent) {

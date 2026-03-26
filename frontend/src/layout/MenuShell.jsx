@@ -27,6 +27,7 @@ import {
   toggleSidebarCollapsed,
   unsubscribeWorkspaceShell,
 } from "../store/workspaceShell.js";
+import { lockWorkspace } from "../store/workspaceLock.js";
 
 export default function MenuShell(){
   //console.log("🔥 MenuShell ACTIVE");
@@ -106,6 +107,10 @@ export default function MenuShell(){
     }
 
     popScreen();
+  }
+
+  function handleLockWorkspace() {
+    lockWorkspace();
   }
 
   return (
@@ -244,6 +249,22 @@ export default function MenuShell(){
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={handleLockWorkspace}
+                title="Lock workspace (Alt+L)"
+                style={{
+                  border: "1px solid #cbd5e1",
+                  background: "#fff",
+                  borderRadius: "14px",
+                  padding: "10px 14px",
+                  color: "#0f172a",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Lock (Alt+L)
+              </button>
               <button
                 type="button"
                 onClick={() => void handleBack()}

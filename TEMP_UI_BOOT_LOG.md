@@ -7139,3 +7139,426 @@ Visual and source-level verification was completed,
 but no successful automated production build run
 was available in the local environment
 because of the previously observed EPERM build issue.
+
+207. SIGNUP INSTRUCTION INTERSTITIAL ADDED
+
+Status:
+Completed
+
+Date:
+2026-03-27
+
+Purpose:
+
+Prevent users from entering the signup form
+without first reading field-entry rules.
+
+Requirement implemented:
+
+Landing page Sign Up click
+must NOT go directly to signup form.
+
+New flow:
+
+Landing
+→ Signup Instructions
+→ OK
+→ Signup Form
+
+Files created / modified:
+
+frontend/src/pages/public/SignupInstructions.jsx
+frontend/src/router/AppRouter.jsx
+frontend/src/router/publicRoutes.js
+frontend/src/pages/public/LandingPage.jsx
+frontend/src/pages/public/LoginScreen.jsx
+frontend/src/pages/public/ForgotPassword.jsx
+frontend/src/pages/public/ResetPassword.jsx
+frontend/src/pages/public/EmailVerified.jsx
+
+Instruction content added in English:
+
+Full Name
+→ ALL IN CAPS
+
+Parent Company
+→ Full Company Name "-" Location City
+
+Designation
+→ Current designation
+
+Phone Number
+→ 10 digits only, no country code
+
+Email
+→ Must be remembered, password reset uses this email ID
+
+Password
+→ Minimum 8 characters, 1 capital, 1 special, 1 numeric
+
+Password note
+→ Same password will be used for login
+
+Routing result:
+
+/signup-instructions added as a public route
+
+Actual signup form route:
+
+/signup
+
+remains unchanged.
+
+208. PUBLIC PAGE ENTRY WIRING UPDATED FOR SIGNUP INSTRUCTIONS
+
+Status:
+Completed
+
+Purpose:
+
+Ensure all user-facing public entry points
+that previously opened signup directly
+now pass through the instruction page first.
+
+Updated entry points:
+
+Landing page Sign Up
+Login page Create Account
+Forgot Password page Create Account
+Reset Password page Create Account
+Email Verified page Back to Signup
+
+Result:
+
+All public signup entry paths now converge through:
+
+/signup-instructions
+
+before actual signup form access.
+
+209. PUBLIC AUTH DESIGN CONSISTENCY MAINTAINED
+
+Status:
+Confirmed
+
+Architectural rule preserved:
+
+New instruction page was built using the same
+public auth design system as the other public pages.
+
+Consistency preserved through:
+
+PublicAuthShell
+same logo language
+same background atmosphere
+same card language
+same button hierarchy
+same footer treatment
+
+Conclusion:
+
+Signup instruction interstitial was added
+without visually breaking public-page consistency.
+
+210. SIDEBAR / LOGOUT SHORTCUT FEATURE IMPLEMENTED
+
+Status:
+Completed
+
+Purpose:
+
+Add keyboard shortcuts for:
+
+sidebar collapse / expand
+logout confirmation modal
+
+Files created / modified:
+
+frontend/src/store/workspaceShell.js
+frontend/src/navigation/keyboardIntentEngine.js
+frontend/src/navigation/keyboardIntentMap.js
+frontend/src/navigation/keyboardAclBridge.js
+frontend/src/layout/MenuShell.jsx
+
+Shortcuts added:
+
+Ctrl + Left Arrow
+→ collapse sidebar
+
+Ctrl + Right Arrow
+→ expand sidebar
+
+Ctrl + Shift + L
+→ open logout confirmation modal
+
+Implementation details:
+
+Sidebar collapse state moved into shared store:
+
+workspaceShell.js
+
+MenuShell toggle button and keyboard shortcuts
+now drive the same shell state.
+
+Logout shortcut behavior:
+
+Shortcut opens existing logout confirmation modal
+instead of directly logging out.
+
+UI hint added:
+
+Logout button label now displays:
+
+Logout (Ctrl+Shift+L)
+
+Sidebar toggle button tooltip also reflects:
+
+Ctrl+Left / Ctrl+Right shortcuts
+
+211. WORKSPACE LOCK FEATURE FEASIBILITY CONFIRMED
+
+Status:
+Feasibility confirmed
+
+Requirement:
+
+User must be able to lock the dashboard
+on a shared computer
+without logging out.
+
+Business goal:
+
+Prevent data exposure on shared devices
+while keeping session / idle / TTL lifecycle active.
+
+Feasibility conclusion:
+
+YES — possible
+
+Reason:
+
+Main ERP login already delegates password verification
+to Supabase Auth using backend-only verification path.
+
+Therefore:
+
+unlock can be implemented by verifying
+the currently logged-in user's password again
+without replacing the active ERP session.
+
+212. WORKSPACE LOCK FEATURE ATTEMPTED
+
+Status:
+Partially implemented
+
+Files created / modified:
+
+supabase/functions/api/_core/auth/unlock.handler.ts
+supabase/functions/api/_routes/admin.routes.ts
+frontend/src/store/workspaceLock.js
+frontend/src/components/WorkspaceLockOverlay.jsx
+frontend/src/App.jsx
+frontend/src/router/AppRouter.jsx
+frontend/src/navigation/keyboardIntentEngine.js
+frontend/src/navigation/keyboardIntentMap.js
+frontend/src/navigation/keyboardAclBridge.js
+frontend/src/layout/MenuShell.jsx
+frontend/src/store/sessionWarning.js
+
+Planned behavior:
+
+Lock button in dashboard shell
+Alt + L shortcut
+full-screen workspace lock overlay
+unlock with current login password
+idle / TTL warning continues on top of lock screen
+
+Backend endpoint added:
+
+POST /api/unlock
+
+Backend unlock logic:
+
+Uses current active session's authUserId
+looks up Supabase Auth user email
+verifies password through existing verifyPassword()
+
+Intended frontend behavior:
+
+Lock Workspace button
+Alt + L keyboard shortcut
+Unlock Workspace overlay
+
+213. PUBLIC PAGE CRASH INTRODUCED DURING LOCK FEATURE
+
+Status:
+Identified and fixed
+
+Problem observed:
+
+Landing page crashed with:
+
+useLocation() may be used only in the context of a <Router> component
+
+Root cause:
+
+WorkspaceLockOverlay used:
+
+useLocation()
+
+but was mounted outside BrowserRouter.
+
+Fix applied:
+
+WorkspaceLockOverlay was moved inside router context.
+
+Note:
+
+This resolved the immediate React Router context error
+on public pages.
+
+214. WORKSPACE LOCK INPUT / CLICK FAILURE IDENTIFIED
+
+Status:
+Unresolved
+
+Problem observed:
+
+Lock screen became visible
+but user could not:
+
+click input
+type password
+click unlock button
+
+Root cause identified:
+
+Blocking layer infrastructure applies:
+
+inert
+
+to:
+
+#app-shell
+
+While workspace lock overlay was still structurally entangled
+with the application shell in a way that caused interaction deadlock.
+
+Meaning:
+
+Overlay visibility worked
+but unlock interaction path was effectively disabled.
+
+215. APP-SHELL / ROUTER STRUCTURE REWORK ATTEMPTED FOR LOCK FEATURE
+
+Status:
+Attempted
+
+Action taken:
+
+App shell ownership was moved
+between App.jsx and AppRouter.jsx
+to separate:
+
+router context
+overlay context
+inert target
+
+Intent:
+
+Keep WorkspaceLockOverlay:
+
+inside BrowserRouter
+outside inert application shell
+
+Expected result:
+
+Overlay remains interactive
+while background dashboard becomes inert
+
+Actual result:
+
+Lock feature still not verified as working.
+
+Additional side effects emerged,
+and feature was not stabilized in this session.
+
+216. WORKSPACE LOCK FEATURE CURRENT STATUS
+
+Status:
+OPEN / NOT READY
+
+Current truth:
+
+Unlock API path exists
+lock store exists
+lock overlay exists
+Alt + L shortcut exists
+dashboard button exists
+
+BUT:
+
+Workspace lock interaction is broken
+and must NOT be considered production-ready.
+
+System state classification:
+
+concept proved
+implementation incomplete
+UI wiring unstable
+
+217. CURRENT SAFE SYSTEM BOUNDARY AFTER THIS SESSION
+
+Status:
+Important continuity note
+
+Stable / previously working features still considered usable:
+
+public auth pages
+signup instruction interstitial
+idle / TTL warning system
+logout confirmation modal
+screen stack navigation
+sidebar collapse / expand shortcuts
+logout shortcut modal
+
+Unsafe / unresolved feature introduced in this session:
+
+workspace lock
+
+Important instruction for next session:
+
+DO NOT assume workspace lock is done.
+
+It requires fresh debugging starting from:
+
+overlay placement
+inert boundary
+interactive focus path
+unlock request verification
+
+218. NEXT SESSION STARTING POINT
+
+Status:
+Prepared
+
+Next session should continue from this exact scope:
+
+1. Re-verify current shell structure:
+   App.jsx
+   AppRouter.jsx
+   BlockingLayer
+   WorkspaceLockOverlay
+
+2. Fix workspace lock overlay interaction deadlock
+
+3. Confirm:
+   Alt + L opens lock screen
+   password input is interactive
+   wrong password fails
+   correct password unlocks
+   idle warning still appears above lock screen
+   30 min idle still logs out
+
+4. Only after lock feature is stable,
+   continue with remaining launch planning / scope freeze
