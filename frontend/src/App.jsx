@@ -11,6 +11,7 @@
 import AppRouter from "./router/AppRouter.jsx";
 import SessionOverlay from "./components/SessionOverlay.jsx";
 import LogoutConfirmOverlay from "./components/LogoutConfirmOverlay.jsx";
+import ActionConfirmOverlay from "./components/ActionConfirmOverlay.jsx";
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
       <AppRouter />
       <SessionOverlay />
       <LogoutConfirmOverlay />
+      <ActionConfirmOverlay />
     </>
   );
 }

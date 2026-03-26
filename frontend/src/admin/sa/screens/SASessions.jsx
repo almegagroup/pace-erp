@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { openActionConfirm } from "../../../store/actionConfirm.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Sessions" },
@@ -158,9 +159,13 @@ export default function SASessions() {
   }
 
   async function handleRevoke(sessionId) {
-    const approved = globalThis.confirm(
-      "Revoke this ERP session now?"
-    );
+    const approved = await openActionConfirm({
+      eyebrow: "SA Session Governance",
+      title: "Revoke ERP Session",
+      message: "Revoke this ERP session now?",
+      confirmLabel: "Revoke",
+      cancelLabel: "Cancel",
+    });
 
     if (!approved) {
       return;

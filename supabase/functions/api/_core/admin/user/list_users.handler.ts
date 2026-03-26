@@ -64,17 +64,36 @@ export async function listUsersHandler(
       .select("auth_user_id, role_code, role_rank")
       .in("auth_user_id", authUserIds);
 
+  const { data: signupRows } = authUserIds.length === 0
+    ? { data: [] }
+    : await db
+      .schema("erp_core").from("signup_requests")
+      .select(
+        "auth_user_id, name, parent_company_name, designation_hint, phone_number, decision, submitted_at"
+      )
+      .in("auth_user_id", authUserIds);
+
   const roleMap = new Map(
     (roleRows ?? []).map((row) => [row.auth_user_id, row])
+  );
+  const signupMap = new Map(
+    (signupRows ?? []).map((row) => [row.auth_user_id, row])
   );
 
   const payload = (users ?? []).map((user) => {
     const roleRow = roleMap.get(user.auth_user_id);
+    const signupRow = signupMap.get(user.auth_user_id);
 
     return {
       ...user,
       role_code: roleRow?.role_code ?? null,
       role_rank: roleRow?.role_rank ?? null,
+      name: signupRow?.name ?? null,
+      parent_company_name: signupRow?.parent_company_name ?? null,
+      designation_hint: signupRow?.designation_hint ?? null,
+      phone_number: signupRow?.phone_number ?? null,
+      signup_decision: signupRow?.decision ?? null,
+      signup_submitted_at: signupRow?.submitted_at ?? null,
     };
   });
 
