@@ -7562,3 +7562,237 @@ Next session should continue from this exact scope:
 
 4. Only after lock feature is stable,
    continue with remaining launch planning / scope freeze
+
+219. WORKSPACE LOCK FEATURE STABILIZED
+
+Status:
+Completed
+
+Date:
+2026-03-26
+
+User validation:
+Confirmed working
+
+Problems resolved:
+
+1. Lock screen password input is now interactive
+2. Unlock action now submits correctly
+3. Refresh / hard refresh while locked now forces logout
+
+Root cause resolved:
+
+Duplicate app-shell ownership caused BlockingLayer inert handling
+to disable the lock overlay interaction path.
+
+Implementation result:
+
+WorkspaceLockOverlay now remains inside router context
+while the inert target is limited to the protected application shell.
+
+Refresh handling added:
+
+Locked state is persisted temporarily in session storage.
+
+If refresh / hard refresh happens while locked:
+
+backend logout is attempted
+frontend hard logout is enforced on next boot
+
+Result:
+
+Lock screen is now production-usable.
+
+220. SESSION TERMINATION STATE PERSISTENCE FIXED
+
+Status:
+Completed
+
+Date:
+2026-03-26
+
+Problem resolved:
+
+Session table could retain one ACTIVE row
+after user-visible logout had already happened.
+
+Affected cases previously observed:
+
+normal logout
+idle logout
+absolute TTL expiry logout
+
+Root cause:
+
+POST /api/logout was passing through public dispatch
+without authoritative session resolution,
+so cookie clear could complete
+without revoking the current ERP session row.
+
+Additionally:
+
+idle / TTL lifecycle logout returned LOGOUT to frontend
+but did not persist final session state into erp_core.sessions.
+
+Backend fix applied:
+
+Logout route now resolves session before dispatch.
+
+Lifecycle termination now persists terminal state into DB.
+
+Current expected DB outcomes:
+
+Normal logout
+-> status REVOKED
+-> revoked_reason USER_LOGOUT
+
+Idle timeout logout
+-> status IDLE
+-> revoked_reason IDLE_TIMEOUT
+
+Absolute TTL expiry
+-> status EXPIRED
+-> revoked_reason TTL_EXPIRED
+
+Result:
+
+Stale ACTIVE session rows should no longer remain
+after logout / timeout termination paths.
+
+221. SAME-BROWSER SINGLE-TAB ENFORCEMENT ADDED
+
+Status:
+Completed
+
+Date:
+2026-03-26
+
+Requirement implemented:
+
+Same login must not remain usable
+across two protected tabs in the same browser profile.
+
+Clarification:
+
+Same browser tabs share the same cookie jar,
+so backend single-session policy alone is not enough
+to force one-tab-only behavior.
+
+Frontend coordination layer added:
+
+protected tab ownership registry
+cross-tab ownership claim via local storage
+forced hard logout of previous protected tab
+ownership release on logout
+
+Current behavior:
+
+If a second protected tab becomes active,
+the previous protected tab is forced back to /login.
+
+Only one protected tab remains usable at a time
+within the same browser profile.
+
+222. CURRENT SYSTEM STATE (LATEST CONFIRMED)
+
+Status:
+Stable
+
+Public layer:
+
+Landing -> working
+Login -> working
+Signup -> working
+Recovery -> working
+
+Protected layer:
+
+Menu shell -> working
+Stack navigation -> working
+Session warning -> working
+Logout confirmation -> working
+Workspace lock -> working
+Locked refresh logout -> working
+Single-tab enforcement -> working
+
+Session authority:
+
+new login revokes prior ACTIVE ERP session
+normal logout revokes current ERP session
+idle / TTL termination persists non-active session state
+
+223. CONTINUITY UPDATE
+
+Status:
+Supersedes previous unresolved lock note
+
+Sections 216 / 217 / 218 are now historical only.
+
+Previous warning:
+
+workspace lock not ready
+
+is no longer current.
+
+Latest truth:
+
+workspace lock is stabilized
+session termination persistence is corrected
+same-browser single-tab enforcement is active
+
+224. SA USER GOVERNANCE ROUTE FALLBACK EXPANDED
+
+Status:
+Active temporary allowance
+
+Date:
+2026-03-26
+
+Temporary UI change:
+
+routeIndex fallback coverage now also includes:
+
+/sa/users
+/sa/signup-requests
+
+Reason:
+
+These SA governance surfaces are being built ahead of
+formal menu snapshot expansion.
+
+This keeps the roadmap-built screens reachable
+while admin menu governance catches up.
+
+Constraint:
+
+This is temporary reachability support only.
+Authoritative long-term access must still come from
+menu snapshot governance.
+
+225. SA ROLE ASSIGNMENT ROUTE FALLBACK EXPANDED
+
+Status:
+Active temporary allowance
+
+Date:
+2026-03-26
+
+Temporary UI change:
+
+routeIndex fallback coverage now also includes:
+
+/sa/users/roles
+
+Reason:
+
+The dedicated SA role assignment workspace
+has been added before formal menu snapshot expansion.
+
+This keeps sequential user-governance build-out reachable
+while admin menu governance catches up.
+
+Constraint:
+
+This is temporary reachability support only.
+Authoritative long-term access must still come from
+menu snapshot governance.

@@ -10,6 +10,14 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: true,
   },
 
+  SA_CONTROL_PANEL: {
+    screen_code: "SA_CONTROL_PANEL",
+    route: "/sa/control-panel",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_COMPANY_CREATE: {
     screen_code: "SA_COMPANY_CREATE",
     route: "/sa/company/create",
@@ -21,6 +29,38 @@ export const ADMIN_SCREENS = Object.freeze({
   SA_USERS: {
     screen_code: "SA_USERS",
     route: "/sa/users",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_USER_ROLES: {
+    screen_code: "SA_USER_ROLES",
+    route: "/sa/users/roles",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_SESSIONS: {
+    screen_code: "SA_SESSIONS",
+    route: "/sa/sessions",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_AUDIT: {
+    screen_code: "SA_AUDIT",
+    route: "/sa/audit",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_SYSTEM_HEALTH: {
+    screen_code: "SA_SYSTEM_HEALTH",
+    route: "/sa/system-health",
     universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

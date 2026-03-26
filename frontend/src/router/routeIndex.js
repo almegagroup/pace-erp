@@ -21,6 +21,13 @@ export function buildRouteIndex(menuSnapshot) {
 
 // 🔥 IMPORTANT fallback routes
 routes.add("/sa/home");
+routes.add("/sa/control-panel");
+routes.add("/sa/audit");
+routes.add("/sa/sessions");
+routes.add("/sa/system-health");
+routes.add("/sa/users");
+routes.add("/sa/users/roles");
+routes.add("/sa/signup-requests");
 routes.add("/ga/home");
 routes.add("/dashboard");
 routes.add("/app");

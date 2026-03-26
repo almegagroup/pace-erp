@@ -29,8 +29,13 @@ import NavigationStackBridge from "../navigation/NavigationStackBridge.jsx";
 import ProtectedBranchShell from "./ProtectedBranchShell.jsx";
 import SADashboardShell from "../admin/sa/SADashboardShell.jsx";
 import GADashboardShell from "../admin/ga/GADashboardShell.jsx";
+import SAControlPanel from "../admin/sa/screens/SAControlPanel.jsx";
+import SAAudit from "../admin/sa/screens/SAAudit.jsx";
 import SACompanyCreate from "../admin/sa/screens/SACompanyCreate.jsx";
+import SASessions from "../admin/sa/screens/SASessions.jsx";
+import SASystemHealth from "../admin/sa/screens/SASystemHealth.jsx";
 import SAUsers from "../admin/sa/screens/SAUsers.jsx";
+import SAUserRoles from "../admin/sa/screens/SAUserRoles.jsx";
 import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
@@ -78,10 +83,21 @@ export default function AppRouter() {
                   <Route element={<MenuShell />}>
                     <Route path="home" element={<SAHome />} />
                     <Route
+                      path="control-panel"
+                      element={<SAControlPanel />}
+                    />
+                    <Route path="audit" element={<SAAudit />} />
+                    <Route path="sessions" element={<SASessions />} />
+                    <Route
+                      path="system-health"
+                      element={<SASystemHealth />}
+                    />
+                    <Route
                       path="company/create"
                       element={<SACompanyCreate />}
                     />
                     <Route path="users" element={<SAUsers />} />
+                    <Route path="users/roles" element={<SAUserRoles />} />
                     <Route
                       path="signup-requests"
                       element={<SASignupRequests />}

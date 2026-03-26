@@ -47,7 +47,7 @@ export async function listUsersHandler(
   // --------------------------------------------------
   // Fetch governable users
   // --------------------------------------------------
-  const { data } = await db
+  const { data: users } = await db
     .schema("erp_core").from("users")
     .select(
       "auth_user_id, user_code, state, created_at"
@@ -55,8 +55,31 @@ export async function listUsersHandler(
     .in("state", ["ACTIVE", "DISABLED"])
     .order("created_at", { ascending: true });
 
+  const authUserIds = (users ?? []).map((user) => user.auth_user_id);
+
+  const { data: roleRows } = authUserIds.length === 0
+    ? { data: [] }
+    : await db
+      .schema("erp_acl").from("user_roles")
+      .select("auth_user_id, role_code, role_rank")
+      .in("auth_user_id", authUserIds);
+
+  const roleMap = new Map(
+    (roleRows ?? []).map((row) => [row.auth_user_id, row])
+  );
+
+  const payload = (users ?? []).map((user) => {
+    const roleRow = roleMap.get(user.auth_user_id);
+
+    return {
+      ...user,
+      role_code: roleRow?.role_code ?? null,
+      role_rank: roleRow?.role_rank ?? null,
+    };
+  });
+
   // --------------------------------------------------
   // Deterministic response
   // --------------------------------------------------
-  return okResponse(data ?? [], ctx.request_id);
+  return okResponse(payload, ctx.request_id);
 }

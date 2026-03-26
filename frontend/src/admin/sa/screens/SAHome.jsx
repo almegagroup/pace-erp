@@ -27,6 +27,12 @@ export default function SAHome() {
 
   const actions = [
     {
+      badge: "Command",
+      title: "Control Panel",
+      description: "Open the SA command center to review runtime health, recent sessions, and admin activity.",
+      onClick: () => openScreen("SA_CONTROL_PANEL"),
+    },
+    {
       badge: "Provision",
       title: "Create Company",
       description: "Launch the company setup workspace for a fresh operational entity.",
@@ -50,7 +56,7 @@ export default function SAHome() {
     <EnterpriseDashboard
       eyebrow="Super Admin Command"
       title="Super Admin Dashboard"
-      subtitle="Use the shortcuts below to move into company setup, user control, and signup review."
+      subtitle="Use the shortcuts below to move into the SA control panel, company setup, user control, and signup review."
       stats={stats}
       actions={actions}
     />
