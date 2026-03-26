@@ -69,8 +69,10 @@ async function resolveContextFromDb(
   p_auth_user_id: string;
 };
 
-const { data: companyId, error: rpcError } = await db.rpc(
-  "erp_map.get_primary_company",
+const { data: companyId, error: rpcError } = await db
+  .schema("erp_map")
+  .rpc(
+  "get_primary_company",
   { p_auth_user_id: authUserId } as GetPrimaryCompanyRPC
 ) as { data: string | null; error: any };
 

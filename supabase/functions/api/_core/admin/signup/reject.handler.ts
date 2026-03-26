@@ -57,8 +57,10 @@ export async function rejectSignupHandler(
   // --------------------------------------------------
   // 3️⃣ SINGLE ATOMIC AUTHORITY CALL
   // --------------------------------------------------
-  const { error } = await db.rpc(
-    "erp_meta.reject_signup_atomic",
+  const { error } = await db
+    .schema("erp_meta")
+    .rpc(
+    "reject_signup_atomic",
     {
       p_target_auth_user_id: auth_user_id,
       p_actor_auth_user_id: saAuthUserId,
