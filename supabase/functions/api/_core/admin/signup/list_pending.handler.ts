@@ -50,7 +50,7 @@ export async function listPendingSignupHandler(
   // --------------------------------------------------
   // Fetch pending signup requests
   // --------------------------------------------------
-  const { data } = await db
+  const { data: requests } = await db
     .schema("erp_core").from("signup_requests")
     .select(
       "auth_user_id, name, parent_company_name, designation_hint, phone_number, submitted_at"
@@ -58,8 +58,26 @@ export async function listPendingSignupHandler(
     .eq("decision", "PENDING")
     .order("submitted_at", { ascending: true });
 
+  const authUserIds = (requests ?? []).map((request) => request.auth_user_id);
+
+  const { data: userRows } = authUserIds.length === 0
+    ? { data: [] }
+    : await db
+      .schema("erp_core").from("users")
+      .select("auth_user_id, state")
+      .in("auth_user_id", authUserIds);
+
+  const userStateMap = new Map(
+    (userRows ?? []).map((row) => [row.auth_user_id, row.state])
+  );
+
+  const payload = (requests ?? []).map((request) => ({
+    ...request,
+    user_state: userStateMap.get(request.auth_user_id) ?? null,
+  }));
+
   // --------------------------------------------------
   // Deterministic response
   // --------------------------------------------------
-  return okResponse(data ?? [], requestId);
+  return okResponse(payload, requestId);
 }

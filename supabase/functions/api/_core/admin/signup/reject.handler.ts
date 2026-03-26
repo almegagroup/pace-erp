@@ -84,6 +84,7 @@ export async function rejectSignupHandler(
     return okResponse(
       {
         applied: false,
+        failure_reason: error.message ?? "REJECTION_FAILED",
       },
       requestId
     );
