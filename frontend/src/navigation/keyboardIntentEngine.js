@@ -48,6 +48,7 @@ function normalizeKeyEvent(event) {
   if (ctrl && key === "ArrowLeft") return "INTENT_SIDEBAR_HIDE";
   if (ctrl && key === "ArrowRight") return "INTENT_SIDEBAR_SHOW";
   if (ctrl && shift && key.toLowerCase() === "l") return "INTENT_LOGOUT_CONFIRM";
+  if (event.altKey && key.toLowerCase() === "l") return "INTENT_WORKSPACE_LOCK";
 
   return null;
 }

@@ -29,6 +29,10 @@ const INTENT_ACL_MAP = Object.freeze({
     resource: "SESSION",
     action: "LOGOUT_CONFIRM",
   },
+  INTENT_WORKSPACE_LOCK: {
+    resource: "SESSION",
+    action: "WORKSPACE_LOCK",
+  },
   // Future examples:
   // INTENT_SAVE: { resource: "DOCUMENT", action: "WRITE" }
 });

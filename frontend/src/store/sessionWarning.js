@@ -10,6 +10,7 @@
 
 import { clearNavigationStack } from "../navigation/navigationPersistence.js";
 import { openLogoutConfirm } from "./logoutConfirm.js";
+import { clearWorkspaceLock } from "./workspaceLock.js";
 
 const WARNING_MESSAGES = {
   IDLE_WARNING:
@@ -134,6 +135,7 @@ export function resetWarningState() {
 export function hardLogout() {
   dismissHandler = null;
   clearNavigationStack();
+  clearWorkspaceLock();
 
   state = {
     ...state,
