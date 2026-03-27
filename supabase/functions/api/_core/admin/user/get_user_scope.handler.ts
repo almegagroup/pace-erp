@@ -63,6 +63,14 @@ export async function getUserScopeHandler(
       .eq("auth_user_id", authUserId)
       .maybeSingle();
 
+    if (!roleRow?.role_code) {
+      return errorResponse(
+        "USER_SCOPE_ACL_USER_REQUIRED",
+        "scope mapping is allowed only for ACL users",
+        ctx.request_id,
+      );
+    }
+
     const { data: signupRow } = await db
       .schema("erp_core").from("signup_requests")
       .select("name, parent_company_name, designation_hint, phone_number")
@@ -104,7 +112,7 @@ export async function getUserScopeHandler(
 
     const { data: availableCompanies } = await db
       .schema("erp_master").from("companies")
-      .select("id, company_code, company_name, status")
+      .select("id, company_code, company_name, state_name, full_address, pin_code, status")
       .eq("status", "ACTIVE")
       .eq("company_kind", "BUSINESS")
       .order("company_name", { ascending: true });
@@ -115,7 +123,7 @@ export async function getUserScopeHandler(
       ? { data: [] }
       : await db
         .schema("erp_master").from("companies")
-        .select("id, company_code, company_name, status")
+        .select("id, company_code, company_name, state_name, full_address, pin_code, status")
         .in("id", companyIdsToResolve)
         .eq("status", "ACTIVE")
         .eq("company_kind", "BUSINESS");
@@ -166,6 +174,7 @@ export async function getUserScopeHandler(
           ...user,
           role_code: roleRow?.role_code ?? null,
           role_rank: roleRow?.role_rank ?? null,
+          is_acl_user: Boolean(roleRow?.role_code),
           name: signupRow?.name ?? null,
           parent_company_hint: signupRow?.parent_company_name ?? null,
           designation_hint: signupRow?.designation_hint ?? null,

@@ -88,6 +88,7 @@ export async function listUsersHandler(
       ...user,
       role_code: roleRow?.role_code ?? null,
       role_rank: roleRow?.role_rank ?? null,
+      is_acl_user: Boolean(roleRow?.role_code),
       name: signupRow?.name ?? null,
       parent_company_name: signupRow?.parent_company_name ?? null,
       designation_hint: signupRow?.designation_hint ?? null,

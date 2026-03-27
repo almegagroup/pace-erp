@@ -68,6 +68,10 @@ function formatIdentityName(user) {
   return user.name ?? "Unknown User";
 }
 
+function canOpenScope(user) {
+  return Boolean(user?.is_acl_user ?? user?.role_code);
+}
+
 function getStateTone(state) {
   switch (state) {
     case "ACTIVE":
@@ -433,8 +437,8 @@ export default function SAUsers() {
           <p className="mt-4 text-sm leading-7 text-slate-600">
             This screen now reads current role posture directly from the admin
             users endpoint. Dedicated role assignment is now available through
-            the linked role panel, and the new user-scope surface can now open
-            Parent Company and Work Company mapping for a selected user.
+            the linked role panel, and the user-scope surface now opens only
+            for ACL users whose role posture is already assigned.
           </p>
         </section>
 
@@ -515,6 +519,7 @@ export default function SAUsers() {
                     const nextState =
                       user.state === "ACTIVE" ? "DISABLED" : "ACTIVE";
                     const isUpdating = updatingUserId === user.auth_user_id;
+                    const scopeEnabled = canOpenScope(user);
 
                     return (
                       <tr
@@ -564,13 +569,19 @@ export default function SAUsers() {
                         </td>
                         <td className="rounded-none px-4 py-4 text-sm text-slate-700 last:rounded-r-2xl">
                           <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenScope(user)}
-                              className="rounded-2xl bg-sky-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700"
-                            >
-                              Scope
-                            </button>
+                            {scopeEnabled ? (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenScope(user)}
+                                className="rounded-2xl bg-sky-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700"
+                              >
+                                Scope
+                              </button>
+                            ) : (
+                              <span className="rounded-2xl bg-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                ACL First
+                              </span>
+                            )}
                             <button
                               type="button"
                               disabled={isUpdating}

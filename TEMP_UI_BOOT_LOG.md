@@ -8170,3 +8170,42 @@ Result:
 
 Protected SA work surfaces now rely less on repeated Tab traversal
 and move closer to ERP-style operator flow.
+
+239. SA COMPANY CREATE FLOW MOVED FROM PLACEHOLDER TO WORKING GST UI
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Change:
+
+SA Create Company is no longer a placeholder surface.
+The screen now supports:
+
+GST number input
+GST profile lookup
+cache-first backend resolution
+Applyflow fallback
+legal name preview
+state preview
+full address preview
+PIN code preview
+company creation confirmation
+created company summary
+
+Related UI safety and governance changes completed in the same pass:
+
+current SA operator hidden from role-governance target list
+business-only company scope flow reinforced in SA surfaces
+
+Purpose:
+
+Replace a fake bootstrap screen with a usable operator flow
+so company onboarding can proceed through real backend-backed steps.
+
+Result:
+
+SA company creation is now a working temporary UI boot surface,
+aligned with the GST-backed backend contract and ready for live use.

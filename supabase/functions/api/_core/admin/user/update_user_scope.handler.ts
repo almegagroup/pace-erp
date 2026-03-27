@@ -85,6 +85,20 @@ export async function updateUserScopeHandler(
       );
     }
 
+    const { data: roleRow } = await db
+      .schema("erp_acl").from("user_roles")
+      .select("role_code")
+      .eq("auth_user_id", targetAuthUserId)
+      .maybeSingle();
+
+    if (!roleRow?.role_code) {
+      return errorResponse(
+        "USER_SCOPE_ACL_USER_REQUIRED",
+        "scope mapping is allowed only for ACL users",
+        ctx.request_id,
+      );
+    }
+
     const companyIdsToValidate = [...new Set([parentCompanyId, ...workCompanyIds])];
     const validCompanyCount = companyIdsToValidate.filter((companyId) =>
       activeBusinessCompanyIds.has(companyId)
