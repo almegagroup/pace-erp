@@ -4,7 +4,7 @@
  * gate_id:9
  * Phase: 9
  * Domain: APPROVAL
- * Purpose: Create or update approval routing rule for a module.
+ * Purpose: Create or update approval routing rule for a module or exact governed work scope.
  * Authority: Backend
  */
 
@@ -22,6 +22,8 @@ import { generateRequestId } from "../../../_lib/request_id.ts";
 type UpsertApproverInput = {
   company_id: string;
   module_code: string;
+  resource_code?: string;
+  action_code?: string;
   approval_stage: number;
   approver_role_code?: string;
   approver_user_id?: string;
@@ -76,6 +78,17 @@ export async function upsertApproverRuleHandler(
       );
     }
 
+    if (
+      (body.resource_code && !body.action_code) ||
+      (!body.resource_code && body.action_code)
+    ) {
+      return errorResponse(
+        "INVALID_SCOPE_INPUT",
+        "resource_code and action_code must be provided together",
+        requestId
+      );
+    }
+
     /* ---- XOR validation ---- */
 
     if (
@@ -111,17 +124,50 @@ export async function upsertApproverRuleHandler(
     const payload = {
       company_id: body.company_id,
       module_code: body.module_code,
+      resource_code: body.resource_code ?? null,
+      action_code: body.action_code ?? null,
       approval_stage: body.approval_stage,
       approver_role_code: roleCode,
       approver_user_id: body.approver_user_id ?? null,
       created_by: ctx.session.authUserId
     };
 
-    const { error } = await db
+    let existingQuery = db
       .schema("acl").from("approver_map")
-      .upsert(payload, {
-        onConflict: "company_id,module_code,approval_stage"
-      });
+      .select("approver_id")
+      .eq("company_id", payload.company_id)
+      .eq("module_code", payload.module_code)
+      .eq("approval_stage", payload.approval_stage);
+
+    if (payload.resource_code && payload.action_code) {
+      existingQuery = existingQuery
+        .eq("resource_code", payload.resource_code)
+        .eq("action_code", payload.action_code);
+    } else {
+      existingQuery = existingQuery
+        .is("resource_code", null)
+        .is("action_code", null);
+    }
+
+    const { data: existingRule, error: lookupError } =
+      await existingQuery.maybeSingle();
+
+    if (lookupError) {
+      return errorResponse(
+        "APPROVER_RULE_LOOKUP_FAILED",
+        "Lookup failed",
+        requestId
+      );
+    }
+
+    const { error } = existingRule
+      ? await db
+          .schema("acl").from("approver_map")
+          .update(payload)
+          .eq("approver_id", existingRule.approver_id)
+      : await db
+          .schema("acl").from("approver_map")
+          .insert(payload);
 
     if (error) {
 

@@ -20,8 +20,13 @@ import { listProjectsHandler } from "../_core/admin/project/list_projects.handle
 import { updateProjectStateHandler } from "../_core/admin/project/update_project_state.handler.ts";
 
 import { createDepartmentHandler } from "../_core/admin/department/create_department.handler.ts";
+import { listApproverRulesHandler } from "../_core/admin/approval/list_approver_rules.handler.ts";
+import { upsertApproverRuleHandler } from "../_core/admin/approval/upsert_approver_rule.handler.ts";
+import { deleteApproverRuleHandler } from "../_core/admin/approval/delete_approver_rule.handler.ts";
 
 import { listUsersHandler } from "../_core/admin/user/list_users.handler.ts";
+import { getUserScopeHandler } from "../_core/admin/user/get_user_scope.handler.ts";
+import { updateUserScopeHandler } from "../_core/admin/user/update_user_scope.handler.ts";
 import { updateUserStateHandler } from "../_core/admin/user/update_user_state.handler.ts";
 import { updateUserRoleHandler } from "../_core/admin/user/update_user_role.handler.ts";
 
@@ -158,10 +163,55 @@ export async function dispatchAdminRoutes(
       });
       break;
 
+    case "GET:/api/admin/approval/approvers":
+      response = await listApproverRulesHandler(req, {
+        context,
+        session: {
+          authUserId: session.authUserId,
+          roleCode: context.roleCode,
+        },
+      });
+      break;
+
+    case "POST:/api/admin/approval/approvers":
+      response = await upsertApproverRuleHandler(req, {
+        context,
+        session: {
+          authUserId: session.authUserId,
+          roleCode: context.roleCode,
+        },
+      });
+      break;
+
+    case "POST:/api/admin/approval/approvers/delete":
+      response = await deleteApproverRuleHandler(req, {
+        context,
+        session: {
+          authUserId: session.authUserId,
+          roleCode: context.roleCode,
+        },
+      });
+      break;
+
     case "GET:/api/admin/users":
       response = await listUsersHandler(req, {
         context,
         request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/users/scope":
+      response = await getUserScopeHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/users/scope":
+      response = await updateUserScopeHandler(req, {
+        context,
+        request_id: requestId,
+        auth_user_id: session.authUserId,
       });
       break;
 

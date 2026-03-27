@@ -27,6 +27,7 @@ routes.add("/sa/sessions");
 routes.add("/sa/system-health");
 routes.add("/sa/users");
 routes.add("/sa/users/roles");
+routes.add("/sa/users/scope");
 routes.add("/sa/signup-requests");
 routes.add("/ga/home");
 routes.add("/dashboard");

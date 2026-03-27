@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import {
@@ -131,6 +132,7 @@ function SummaryCard({ label, value, caption, tone = "sky" }) {
 }
 
 export default function SAUsers() {
+  const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -138,7 +140,6 @@ export default function SAUsers() {
   const [updatingUserId, setUpdatingUserId] = useState("");
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
-  const rowActionRefs = useRef([]);
 
   useEffect(() => {
     let alive = true;
@@ -254,6 +255,15 @@ export default function SAUsers() {
       ? users
       : users.filter((user) => user.state === filter);
 
+  function handleOpenScope(user) {
+    if (!user?.auth_user_id) {
+      return;
+    }
+
+    openScreen("SA_USER_SCOPE");
+    navigate(`/sa/users/scope?auth_user_id=${encodeURIComponent(user.auth_user_id)}`);
+  }
+
   const activeCount = users.filter((user) => user.state === "ACTIVE").length;
   const disabledCount = users.filter((user) => user.state === "DISABLED").length;
   const missingRoleCount = users.filter((user) => !user.role_code).length;
@@ -336,10 +346,30 @@ export default function SAUsers() {
                   actionBarRefs.current[3] = element;
                 }}
                 type="button"
-                onClick={() => void handleRefresh()}
+                onClick={() => {
+                  openScreen("SA_USER_SCOPE");
+                  navigate("/sa/users/scope");
+                }}
                 onKeyDown={(event) =>
                   handleLinearNavigation(event, {
                     index: 3,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
+              >
+                Scope Mapping
+              </button>
+              <button
+                ref={(element) => {
+                  actionBarRefs.current[4] = element;
+                }}
+                type="button"
+                onClick={() => void handleRefresh()}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 4,
                     refs: actionBarRefs.current,
                     orientation: "horizontal",
                   })
@@ -403,8 +433,8 @@ export default function SAUsers() {
           <p className="mt-4 text-sm leading-7 text-slate-600">
             This screen now reads current role posture directly from the admin
             users endpoint. Dedicated role assignment is now available through
-            the linked role panel, while scope mapping remains a later roadmap
-            surface after this user directory step.
+            the linked role panel, and the new user-scope surface can now open
+            Parent Company and Work Company mapping for a selected user.
           </p>
         </section>
 
@@ -479,7 +509,7 @@ export default function SAUsers() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredUsers.map((user, index) => {
+                  {filteredUsers.map((user) => {
                     const actionLabel =
                       user.state === "ACTIVE" ? "Disable" : "Activate";
                     const nextState =
@@ -533,28 +563,27 @@ export default function SAUsers() {
                           {formatDateTime(user.created_at)}
                         </td>
                         <td className="rounded-none px-4 py-4 text-sm text-slate-700 last:rounded-r-2xl">
-                          <button
-                            ref={(element) => {
-                              rowActionRefs.current[index] = element;
-                            }}
-                            type="button"
-                            disabled={isUpdating}
-                            onClick={() => void handleStateChange(user, nextState)}
-                            onKeyDown={(event) =>
-                              handleLinearNavigation(event, {
-                                index,
-                                refs: rowActionRefs.current,
-                                orientation: "vertical",
-                              })
-                            }
-                            className={`rounded-2xl px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
-                              user.state === "ACTIVE"
-                                ? "bg-rose-50 text-rose-700"
-                                : "bg-emerald-50 text-emerald-700"
-                            } ${isUpdating ? "cursor-not-allowed opacity-60" : ""}`}
-                          >
-                            {isUpdating ? "Updating..." : actionLabel}
-                          </button>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenScope(user)}
+                              className="rounded-2xl bg-sky-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700"
+                            >
+                              Scope
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isUpdating}
+                              onClick={() => void handleStateChange(user, nextState)}
+                              className={`rounded-2xl px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+                                user.state === "ACTIVE"
+                                  ? "bg-rose-50 text-rose-700"
+                                  : "bg-emerald-50 text-emerald-700"
+                              } ${isUpdating ? "cursor-not-allowed opacity-60" : ""}`}
+                            >
+                              {isUpdating ? "Updating..." : actionLabel}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
