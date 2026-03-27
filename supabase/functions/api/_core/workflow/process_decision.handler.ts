@@ -23,6 +23,8 @@ interface ApproverMapRow {
   approver_id: string;
   company_id: string;
   module_code: string;
+  resource_code: string | null;
+  action_code: string | null;
   approval_stage: number;
   approver_role_code: string | null;
   approver_user_id: string | null;
@@ -120,8 +122,27 @@ if (approverError || !approvers || approvers.length === 0) {
   );
 }
 
+const scopedApprovers = approvers.filter((approver) => {
+  if (workflow.resource_code && workflow.action_code) {
+    return (
+      approver.resource_code === workflow.resource_code &&
+      approver.action_code === workflow.action_code
+    );
+  }
+
+  return approver.resource_code === null && approver.action_code === null;
+});
+
+if (scopedApprovers.length === 0) {
+  return errorResponse(
+    "APPROVER_SCOPE_CONFIG_MISSING",
+    "No approver configuration found for the exact approval scope",
+    ctx.request_id
+  );
+}
+
 // Check if current user is valid approver
-const matchingApprover = approvers.find((a) => {
+const matchingApprover = scopedApprovers.find((a) => {
   if (a.approver_user_id) {
     return a.approver_user_id === ctx.auth_user_id;
   }
@@ -143,13 +164,23 @@ if (!matchingApprover) {
 // STEP 4.5: ACL Snapshot Authorization Check (7.5.17)
 // =========================================================
 
-const { data: aclCheck, error: aclError } = await serviceRoleClient
+let aclCheckQuery = serviceRoleClient
   .schema("acl").from("precomputed_acl_view")
   .select("auth_user_id")
   .eq("auth_user_id", ctx.auth_user_id)
-  .eq("company_id", workflow.company_id)
-  .eq("module_code", workflow.module_code)
-  .maybeSingle();
+  .eq("company_id", workflow.company_id);
+
+if (workflow.resource_code && workflow.action_code) {
+  aclCheckQuery = aclCheckQuery
+    .eq("resource_code", workflow.resource_code)
+    .eq("action_code", "APPROVE");
+} else {
+  aclCheckQuery = aclCheckQuery
+    .eq("resource_code", workflow.module_code)
+    .eq("action_code", "APPROVE");
+}
+
+const { data: aclCheck, error: aclError } = await aclCheckQuery.maybeSingle();
 
 if (aclError) {
   return errorResponse(
@@ -340,7 +371,7 @@ if (updatedDecisionError) {
 
 // Calculate distinct stage count
 const distinctStages = [
-  ...new Set(approvers.map((a) => a.approval_stage)),
+  ...new Set(scopedApprovers.map((a) => a.approval_stage)),
 ];
 const totalStages = distinctStages.length;
 

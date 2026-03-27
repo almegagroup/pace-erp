@@ -452,3 +452,89 @@ last je ta plan, ei approver jakhon set korbo, takhon role alada alada hote hobe
 Diroctor role er kajer kono approver thakbena, director er kaj ke keu approve korbena, r director will be higher approver.
 
 
+## 13. Project, Module, Page & Company Assignment Clarification
+
+Locked interpretation:
+
+- Project is reusable and may be assigned to multiple companies
+- Module belongs under exactly one Project
+- Page or Resource belongs under exactly one Module
+- Company-specific does NOT mean duplicate module creation
+- Company-specific means the same module code may be assigned to different companies
+
+Correct execution model:
+
+1. Create Project
+2. Create Module under that Project
+3. Bind pages / resources / governed actions under that Module
+4. Assign the same Module to selected companies
+
+Examples:
+
+- Supply Chain Management = Project
+- Supply Chain = Module
+- Planning / Create PO / Manage PO = resources under Supply Chain
+- ASCL may receive Supply Chain
+- MCPL may receive the same Supply Chain
+
+Important rule:
+
+The system must never require:
+
+- one module copy for ASCL
+- one module copy for MCPL
+
+That would be structurally wrong.
+
+The correct rule is:
+
+- one module truth
+- many company assignments
+
+## 14. Approval Target Unit Clarification
+
+Locked interpretation:
+
+- approval requirement must be tied to exact work scope
+- exact work scope means page / resource / action truth
+- module is a grouping layer, not automatic proof that all work inside it needs approval
+
+Meaning:
+
+The same Module may contain:
+
+- approval-required work
+- non-approval work
+
+Examples:
+
+- Leave Request may require approval
+- Leave Approval page may exist under the same HR module
+- Process Order Create may not require approval
+- both may still belong under their respective Modules
+
+Therefore:
+
+- approval must not be treated as blanket module-wide truth by default
+- SA must be able to decide which exact work needs approval
+
+## 15. Approver Scope Visibility Clarification
+
+Locked interpretation:
+
+- being an approver does NOT create universal approval visibility
+- approver visibility must be limited to exact assigned approval scope
+- exact assigned scope may be resource-based, action-based, company-based, or approved combined scope
+
+Examples:
+
+- Bikash may be approver for one Maintenance work surface only
+- Bikash may be approver for one company or multiple companies
+- Bikash must never see every approval in the system only because he is an approver somewhere
+
+Therefore:
+
+- approver authority must be narrow and explicit
+- inbox visibility must follow approver assignment exactly
+- role approver and specific-user approver both remain valid,
+  but neither grants blanket approval access

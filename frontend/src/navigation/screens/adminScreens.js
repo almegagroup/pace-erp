@@ -42,6 +42,14 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_USER_SCOPE: {
+    screen_code: "SA_USER_SCOPE",
+    route: "/sa/users/scope",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_SESSIONS: {
     screen_code: "SA_SESSIONS",
     route: "/sa/sessions",

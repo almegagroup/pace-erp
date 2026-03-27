@@ -46,11 +46,16 @@ export async function listApproverRulesHandler(
         approver_id,
         company_id,
         module_code,
+        resource_code,
+        action_code,
         approval_stage,
         approver_role_code,
         approver_user_id,
         created_at
       `)
+      .order("module_code", { ascending: true })
+      .order("resource_code", { ascending: true })
+      .order("action_code", { ascending: true })
       .order("approval_stage", { ascending: true });
 
     if (error) {

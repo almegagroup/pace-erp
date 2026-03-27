@@ -501,6 +501,83 @@ the user has no existing role row.
 Backend write behaviour therefore must tolerate
 both update and first-time assignment states.
 
+### Step 2 - /sa/users/scope Screen Contract
+
+Purpose:
+This is the dedicated SA user scope governance workspace.
+It lets SA separate HR identity truth from operational work truth
+and prepare a user for real ERP operation without direct DB mapping.
+
+Business interpretation:
+- Parent Company = HR identity truth
+- Work Company = operational work scope
+- Project is reusable
+- Module assignment is separate from user scope
+- approval readiness depends on later exact work scope governance,
+  not on vague role assignment only
+
+Primary backend sources:
+- GET /api/admin/users
+- future user scope read endpoint
+
+Required future write actions:
+- map user to parent company
+- map user to work company
+- map user to project
+- map user to department
+
+The screen should contain the following blocks:
+
+Block 1 - User Scope Summary
+- user_code
+- user_name
+- current state
+- current role
+- parent company
+- count of mapped work companies
+- count of mapped projects when available
+- department visibility when available
+
+Block 2 - Parent Company Binding
+- exactly one parent company selector
+- current parent company display
+- explicit note that HR identity and HR approvals bind here
+
+Block 3 - Work Company Mapping
+- multi-select or controlled assignment list
+- current work companies
+- add and remove work company actions
+- explicit note that operational work can only happen inside these companies
+
+Block 4 - Project Scope Hook
+- reusable project visibility
+- project assignment summary
+- future project mapping action surface
+
+Block 5 - Department Scope Hook
+- department assignment summary
+- future department mapping action surface
+
+Block 6 - Readiness Strip
+- missing parent company
+- no work company assigned
+- no role assigned
+- user not yet operationally ready
+
+Important rules:
+- every user must have exactly one parent company
+- a user may have one or many work companies
+- HR truth must never be confused with operational scope
+- user scope does not grant blanket approval authority
+- user scope does not duplicate module assignment governance
+
+Exit condition for this screen:
+- SA can take an approved user,
+  bind HR identity truth,
+  bind operational company scope,
+  and make later project and department governance possible
+  without manual DB work
+
 ## Step 3. Org Master Build-Out
 
 Goal:

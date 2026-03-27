@@ -890,6 +890,307 @@ This pass extends the contract into current SA control-plane screens instead of 
 Next step:
 Manually re-test the updated SA work surfaces, then extend the same screen-local keyboard contract into GA and future user-role operational screens
 
+## Entry 019
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- created a dedicated execution-sequence realignment note for the next ERP build phase
+- locked the corrected Project -> Module -> Page or Resource interpretation into ACL authority docs
+- locked the clarified approval target-unit and approver-visibility rules into ACL authority docs
+- added explicit schema truth for Module -> Resource ownership through a dedicated mapping migration
+
+What changed in repo:
+- docs/ERP build roadmap/ERP_EXECUTION_SEQUENCE_REALIGNMENT.md
+- docs/ACL_SSOT.md
+- supabase/migrations/20260410110000_gate7_5_21_create_module_resource_map.sql
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- current execution order is now documented before /sa/users/scope work begins
+- the repo now has an explicit schema place for binding governed resources to one module
+- the corrected business interpretation is now written down instead of being chat-only
+
+Problems or blockers:
+- approval policy in current implementation is still centered too heavily on module-level truth
+- approver routing and visibility are still not yet narrowed to exact action or resource scope
+- existing backend governance routes and SA UI surfaces remain incomplete in several ACL and workflow areas
+
+Decision or note:
+We will not jump directly into /sa/users/scope just because the old route sequence suggests it.
+First we will finish the upstream alignment needed so user scope becomes a clean governance surface instead of a patchwork screen.
+
+Next step:
+Review the current approval and workflow schema against the new action or resource-level approval target model,
+then implement the next alignment change before /sa/users/scope starts
+
+## Entry 020
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- reviewed the current workflow and approval schema against the corrected action or resource-level target model
+- identified that workflow_requests and current approval truth are still centered too heavily on module scope
+- added a dedicated resource-level approval policy table so exact governed work can now declare whether approval is required
+- preserved the existing approval method and 2 to 3 approver discipline while moving the source of truth closer to real work scope
+
+What changed in repo:
+- supabase/migrations/20260410111000_gate7_5_22_create_resource_approval_policy.sql
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- the repo now has a schema place for selective approval policy below blanket module level
+- approval-required and non-approval work can now be modeled separately even inside the same module
+
+Problems or blockers:
+- current approver routing is still keyed too broadly at company + module scope
+- workflow request and decision processing are still not yet narrowed to exact resource and action scope
+- admin governance routes and SA screens for approval control remain incomplete
+
+Decision or note:
+We are intentionally realigning approval truth before /sa/users/scope begins.
+Otherwise user scope would be built before the real approval target unit is stable.
+
+Next step:
+Tighten approver routing and approval visibility from module-wide scope toward exact resource and action scope before /sa/users/scope starts
+
+## Entry 021
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- added exact resource and action scope columns to approver routing truth and workflow request truth
+- replaced blanket module-wide approver uniqueness with scope-aware uniqueness for both legacy module scope and exact work scope
+- added scope integrity rules so exact approver rows must point to a module-owned resource and an approval-required resource-action pair
+- updated approval admin handlers to read and write exact scoped approver rules
+- updated workflow decision processing so exact-scoped approver rules are filtered correctly instead of being mixed with broad module rows
+
+What changed in repo:
+- supabase/migrations/20260410112000_gate7_5_23_narrow_approver_scope.sql
+- supabase/functions/api/_core/admin/approval/upsert_approver_rule.handler.ts
+- supabase/functions/api/_core/admin/approval/list_approver_rules.handler.ts
+- supabase/functions/api/_core/workflow/process_decision.handler.ts
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- the schema now has a place to represent exact approver scope below blanket module scope
+- admin approval rule handlers now accept exact governed scope fields
+- workflow decision routing now filters approver scope more narrowly when workflow rows carry exact resource and action data
+
+Problems or blockers:
+- workflow request creation paths are still not yet aligned end-to-end around exact resource and action scope
+- admin route exposure and SA approval governance UI are still incomplete
+- /sa/users/scope contract is still pending and must wait until these upstream truth layers are stable enough
+
+Decision or note:
+Approver means exact delegated approval authority only.
+The system is now moving closer to that truth structurally instead of assuming module-wide visibility by default.
+
+Next step:
+Review the remaining workflow request creation and approval-governance route gaps,
+then write the /sa/users/scope contract once upstream truth is stable enough
+
+## Entry 022
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- exposed approval-governance backend routes for listing,
+  creating,
+  updating,
+  and deleting approver rules
+- connected the existing approval admin handlers into the protected admin route dispatcher
+- kept the approval governance move backend-first before any SA approval UI build begins
+
+What changed in repo:
+- supabase/functions/api/_routes/admin.routes.ts
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- approval admin handlers are no longer stranded as unexposed backend files
+- the backend now has a consumable route surface for approver governance build-up
+
+Problems or blockers:
+- the route surface now exists,
+  but no SA approval governance screen consumes it yet
+- exact workflow request creation still needs aligned resource and action scope usage
+- /sa/users/scope contract is still pending
+
+Decision or note:
+Backend authority must be reachable before SA UI consumes it.
+This approval-governance route exposure step follows that rule.
+
+Next step:
+Write the /sa/users/scope contract from the now-aligned Parent Company,
+Work Company,
+Module,
+and Approval foundations,
+then begin the user-scope implementation sequence
+
+## Entry 023
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- added the dedicated /sa/users/scope screen contract into the full ERP roadmap
+- defined the screen around Parent Company,
+  Work Company,
+  reusable Project visibility,
+  and future Department hooks
+- made the distinction explicit that user scope does not duplicate module governance or grant blanket approval authority
+
+What changed in repo:
+- docs/ERP build roadmap/FULL_ERP_BUILD_ROADMAP.md
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- /sa/users/scope is now no longer a vague placeholder route in the roadmap
+- the user-scope screen now has a stable business contract before implementation begins
+
+Problems or blockers:
+- backend read and write handlers for user scope mapping are still not built
+- frontend route and screen implementation for /sa/users/scope are still pending
+- project and department mapping remain future hooks from this screen contract,
+  not yet implemented live surfaces
+
+Decision or note:
+The repo now has enough upstream alignment to begin the actual user-scope implementation sequence.
+The next work should move from truth alignment into backend user-scope route creation.
+
+Next step:
+Implement the backend read and write foundation for /sa/users/scope,
+then wire the new SA screen route and UI surface
+
+## Entry 024
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- split Parent Company truth away from Work Company scope through a dedicated parent-company mapping table
+- preserved the existing get_primary_company authority contract while moving it onto the new parent-company source
+- implemented backend read foundation for /api/admin/users/scope
+- implemented backend write foundation for /api/admin/users/scope covering parent company,
+  work companies,
+  and optional project and department mappings
+- exposed the new user-scope routes through the protected admin dispatcher
+
+What changed in repo:
+- supabase/migrations/20260410113000_gate6_6_6B_split_parent_from_work_company.sql
+- supabase/functions/api/_core/admin/user/get_user_scope.handler.ts
+- supabase/functions/api/_core/admin/user/update_user_scope.handler.ts
+- supabase/functions/api/_routes/admin.routes.ts
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- Parent Company is no longer forced to share the same storage truth as Work Company scope
+- the backend now has a dedicated user-scope read and write surface for the upcoming SA screen
+- existing get_primary_company consumers can continue using the same function contract
+
+Problems or blockers:
+- frontend /sa/users/scope route and screen are still not implemented
+- screen registry and user-directory launch wiring are still pending for user scope
+- project and department hooks exist in backend foundation,
+  but user-facing interaction still needs the new screen
+
+Decision or note:
+We corrected a structural truth before the UI was built:
+Parent Company is HR identity truth,
+while Work Company remains operational scope.
+This prevents the user-scope screen from being built on a mixed model.
+
+Next step:
+Implement the /sa/users/scope frontend route,
+screen,
+and launch wiring on top of the new backend user-scope foundation
+
+## Entry 025
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- implemented the SA User Scope screen
+- wired the screen to the new backend user-scope read and write endpoints
+- added route registration for /sa/users/scope
+- added screen registry and temporary route fallback coverage for the new user-scope surface
+- linked the user directory to open the scope screen for a selected user
+
+What changed in repo:
+- frontend/src/admin/sa/screens/SAUserScope.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/navigation/screens/adminScreens.js
+- frontend/src/router/AppRouter.jsx
+- frontend/src/router/routeIndex.js
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- /sa/users/scope now has a real frontend route and screen
+- user directory can open the user-scope surface
+
+Problems or blockers:
+- exact approval-governance UI surfaces are still not yet built
+- menu governance for the expanded SA route set is still in temporary fallback mode
+- backend user-scope foundation is now present,
+  but live environment validation still depends on deploy and runtime testing
+
+Decision or note:
+User scope is now no longer a roadmap-only placeholder.
+The system now has a first real surface for separating Parent Company truth from Work Company scope.
+
+Next step:
+Retest the new /sa/users/scope surface against live backend state,
+then continue into module governance and approval-governance surfaces in roadmap order
+
 ---
 
 # 6. Initial Program Entry
