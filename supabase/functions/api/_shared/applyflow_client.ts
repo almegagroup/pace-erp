@@ -51,6 +51,34 @@ function pickObject(
   return null;
 }
 
+function normalizeAddressPayload(
+  info: Record<string, unknown>,
+  raw: unknown,
+): Record<string, unknown> {
+  const directAddress =
+    pickObject(info, ["address", "principalAddress"]) ??
+    (isObject(raw) ? pickObject(raw, ["address"]) : null);
+
+  if (directAddress) {
+    return directAddress;
+  }
+
+  const principalRegistration = pickObject(info, ["pradr"]);
+  if (principalRegistration) {
+    const addr = pickObject(principalRegistration, ["addr"]);
+    if (addr) {
+      return {
+        ...principalRegistration,
+        ...addr,
+      };
+    }
+
+    return principalRegistration;
+  }
+
+  return {};
+}
+
 function buildInvalidResponseMeta(
   gst: string,
   raw: unknown,
@@ -114,13 +142,14 @@ export async function fetchGstFromApplyflow(
   // 3️⃣ Vendor-aligned endpoint (as per doc)
   // Example:
   // https://appyflow.in/api/verifyGST?gstNo=XXXXXXXXXXXXXXX
-  const url = `${baseUrl}?gstNo=${gst}`;
+  const separator = baseUrl.includes("?") ? "&" : "?";
+  const url = `${baseUrl}${separator}gstNo=${encodeURIComponent(gst)}&key_secret=${encodeURIComponent(apiKey)}`;
 
   // 4️⃣ Fetch
   const res = await fetch(url, {
     method: "GET",
     headers: {
-      "x-api-key": apiKey,
+      "Content-Type": "application/json",
       Accept: "application/json",
     },
   });
@@ -175,10 +204,7 @@ export async function fetchGstFromApplyflow(
   const legalName = pickString(info, ["legalName", "legal_name", "lgnm", "legal_name_of_business"]);
   const tradeName = pickString(info, ["tradeName", "trade_name", "tradeNam", "trade_name_of_business"]);
   const status = pickString(info, ["status", "sts", "gstStatus", "registrationStatus"]);
-  const address =
-    pickObject(info, ["address", "pradr", "principalAddress"]) ??
-    pickObject(raw, ["address"]) ??
-    {};
+  const address = normalizeAddressPayload(info, raw);
 
   if (!gstin || !legalName) {
     log({

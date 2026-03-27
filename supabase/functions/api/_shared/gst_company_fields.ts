@@ -70,6 +70,16 @@ function deriveFullAddress(address: GstAddress): string | null {
   }
 
   const orderedKeys = [
+    "bno",
+    "bnm",
+    "flno",
+    "st",
+    "lt",
+    "loc",
+    "city",
+    "dst",
+    "stcd",
+    "pncd",
     "buildingNumber",
     "building_number",
     "buildingName",
@@ -118,6 +128,7 @@ export function deriveCompanyFieldsFromGstProfile(
   return {
     company_name: normalizeText(profile.legal_name) ?? "",
     state_name: pickFirstString(address, [
+      "stcd",
       "state",
       "stateName",
       "state_name",
@@ -126,6 +137,7 @@ export function deriveCompanyFieldsFromGstProfile(
     full_address: deriveFullAddress(address),
     pin_code: normalizePinCode(
       pickFirstString(address, [
+        "pncd",
         "pincode",
         "pinCode",
         "pin_code",
