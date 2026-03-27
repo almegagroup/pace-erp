@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import { isPublicRoute } from "../router/publicRoutes.js";
 import {
+  SESSION_WARNING_ACK_QUERY,
   getSessionWatchdogSnapshot,
   hardLogout,
   recordBackendActivity,
@@ -41,9 +42,12 @@ async function passiveSessionCheck() {
 }
 
 async function refreshActiveSession() {
-  const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/me`, {
-    credentials: "include",
-  });
+  const response = await fetch(
+    `${import.meta.env.VITE_API_BASE}/api/me?${SESSION_WARNING_ACK_QUERY}`,
+    {
+      credentials: "include",
+    }
+  );
 
   const json = await readJsonSafe(response);
 

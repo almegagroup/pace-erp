@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
+import { useMenu } from "../../../context/useMenu.js";
 import {
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
@@ -136,6 +137,7 @@ function SummaryCard({ label, value, caption, tone = "sky" }) {
 }
 
 export default function SAUsers() {
+  const { shellProfile } = useMenu();
   const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -254,10 +256,14 @@ export default function SAUsers() {
     }
   }
 
+  const governableUsers = users.filter(
+    (user) => !shellProfile?.userCode || user.user_code !== shellProfile.userCode
+  );
+
   const filteredUsers =
     filter === "ALL"
-      ? users
-      : users.filter((user) => user.state === filter);
+      ? governableUsers
+      : governableUsers.filter((user) => user.state === filter);
 
   function handleOpenScope(user) {
     if (!user?.auth_user_id) {
@@ -268,10 +274,10 @@ export default function SAUsers() {
     navigate(`/sa/users/scope?auth_user_id=${encodeURIComponent(user.auth_user_id)}`);
   }
 
-  const activeCount = users.filter((user) => user.state === "ACTIVE").length;
-  const disabledCount = users.filter((user) => user.state === "DISABLED").length;
-  const missingRoleCount = users.filter((user) => !user.role_code).length;
-  const privilegedCount = users.filter((user) =>
+  const activeCount = governableUsers.filter((user) => user.state === "ACTIVE").length;
+  const disabledCount = governableUsers.filter((user) => user.state === "DISABLED").length;
+  const missingRoleCount = governableUsers.filter((user) => !user.role_code).length;
+  const privilegedCount = governableUsers.filter((user) =>
     user.role_code === "SA" || user.role_code === "GA"
   ).length;
 
@@ -395,9 +401,9 @@ export default function SAUsers() {
         <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <SummaryCard
             label="All Users"
-            value={loading ? "..." : String(users.length)}
+            value={loading ? "..." : String(governableUsers.length)}
             tone="sky"
-            caption="Governable ERP users currently returned by the admin user inventory endpoint."
+            caption="Governable ERP users currently visible in the directory. The current operator is excluded."
           />
           <SummaryCard
             label="Active"
@@ -438,7 +444,8 @@ export default function SAUsers() {
             This screen now reads current role posture directly from the admin
             users endpoint. Dedicated role assignment is now available through
             the linked role panel, and the user-scope surface now opens only
-            for ACL users whose role posture is already assigned.
+            for ACL users whose role posture is already assigned. The current
+            operator is excluded so SA cannot disable themselves by mistake.
           </p>
         </section>
 

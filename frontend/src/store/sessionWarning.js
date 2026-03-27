@@ -20,6 +20,8 @@ const WARNING_MESSAGES = {
     "Your session is about to expire. Press OK or Esc to continue working.",
 };
 
+export const SESSION_WARNING_ACK_QUERY = "session_refresh=warning_ack";
+
 let state = {
   visible: false,
   message: "",
