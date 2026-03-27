@@ -7963,3 +7963,95 @@ Additional note:
 
 Blocking layer focus handling was also adjusted to reduce
 aria-hidden focus warnings when overlays open.
+
+232. PROTECTED WORKSPACE TASK MODE INTRODUCED
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Purpose:
+
+Reduce protected-shell keyboard friction by separating
+dashboard-home navigation chrome
+from real task pages.
+
+New behavior:
+
+Home routes keep the full dashboard shell:
+
+/sa/home
+/ga/home
+/dashboard
+
+Non-home protected routes now open in a focused task page mode.
+
+Task mode characteristics:
+
+sidebar hidden
+content area becomes primary workspace
+top page actions remain available
+Esc / back stack behavior preserved
+
+Reason:
+
+The previous always-visible shell forced operators
+to cross sidebar and top actions too often
+before reaching the actual work surface.
+
+233. DIRECT WORKSPACE FOCUS JUMPS ADDED
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Protected keyboard improvements:
+
+Alt + C
+-> focus current page work area
+
+Alt + A
+-> focus page actions
+
+Alt + M
+-> focus menu when dashboard shell is visible
+
+Alt + H
+-> return to dashboard home
+
+Additional behavior:
+
+When task mode opens,
+focus is pushed into the current page workspace automatically.
+
+Meaning:
+
+Operators no longer need repeated Tab traversal
+just to re-enter the main content area.
+
+234. CONTENT-ONLY PROTECTED SCROLL BOUNDARY APPLIED
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Change:
+
+Protected shell now locks the overall viewport height
+and makes only the active content pane scrollable.
+
+Effect:
+
+sidebar and top shell remain stable
+while the work area scrolls independently.
+
+Result:
+
+Protected UX now moves closer to the intended ERP task-page behavior
+instead of scrolling the entire shell as one long page.

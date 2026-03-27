@@ -45,10 +45,11 @@ function ActionRow({ action, index, refs, onKeyDown }) {
       ref={(element) => {
         refs.current[index] = element;
       }}
+      data-workspace-primary-focus={index === 0 ? "true" : undefined}
       type="button"
       onClick={action.onClick}
       onKeyDown={(event) => onKeyDown(event, index)}
-      className="grid w-full grid-cols-[56px_1fr_auto] items-center gap-4 border-b border-slate-200 bg-white px-4 py-4 text-left transition hover:bg-slate-50 focus:bg-sky-50 last:border-b-0"
+      className="grid w-full grid-cols-[56px_1fr_auto] items-center gap-4 rounded-xl border border-slate-300 bg-white px-4 py-4 text-left shadow-sm transition hover:border-sky-300 hover:bg-slate-50 focus:border-sky-500 focus:bg-sky-50"
     >
       <span className="font-mono text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">
         {(index + 1).toString().padStart(2, "0")}
@@ -153,8 +154,8 @@ export default function EnterpriseDashboard({
           </div>
         </section>
 
-        <section className="mt-4 rounded-xl border border-slate-300 bg-white shadow-sm">
-          <div className="border-b border-slate-300 px-4 py-4">
+        <section className="mt-4 rounded-xl border border-slate-300 bg-white p-3 shadow-sm">
+          <div className="border-b border-slate-300 px-1 pb-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -170,7 +171,7 @@ export default function EnterpriseDashboard({
             </div>
           </div>
 
-          <div>
+          <div className="mt-3 grid gap-3">
             {actions.map((action, index) => (
               <ActionRow
                 key={action.title}

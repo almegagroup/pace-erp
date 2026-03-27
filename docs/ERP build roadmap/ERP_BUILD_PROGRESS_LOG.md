@@ -761,6 +761,48 @@ Current governance surfaces now move closer to practical ERP operation while rem
 Next step:
 Continue live retest of the patched SA governance surfaces, then resume the next sequential governance build surface after validation
 
+## Entry 016
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- refactored the protected shell into dashboard-home mode and focused task-page mode
+- added direct keyboard focus jumps so operators can reach content without repeated shell traversal
+- changed protected scrolling so only the active content pane scrolls
+- strengthened dashboard action cards to behave more like explicit keyboard-targetable action buttons
+
+What changed in repo:
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/navigation/keyboardIntentEngine.js
+- frontend/src/navigation/keyboardIntentMap.js
+- frontend/src/navigation/keyboardAclBridge.js
+- frontend/src/components/dashboard/EnterpriseDashboard.jsx
+- frontend/src/index.css
+- TEMP_UI_BOOT_LOG.md
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+
+Problems or blockers:
+- deeper per-screen keyboard patterns are still inconsistent in some operational screens
+- this step improves shell-level flow first, but screen-local tablists and form action layouts still need follow-up passes
+
+Decision or note:
+The previous always-visible protected shell created too much keyboard friction for real ERP work.
+The UI now begins moving toward a home-dashboard plus focused task-page model closer to operator expectations.
+
+Next step:
+Re-test the updated protected UX in live SA screens, then continue screen-level keyboard and workflow refinement where friction remains
+
 ---
 
 # 6. Initial Program Entry

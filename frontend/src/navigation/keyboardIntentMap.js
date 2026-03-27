@@ -26,6 +26,10 @@ const INTENT_HANDLERS = Object.freeze({
   INTENT_SIDEBAR_SHOW: handleSidebarShow,
   INTENT_LOGOUT_CONFIRM: handleLogoutConfirm,
   INTENT_WORKSPACE_LOCK: handleWorkspaceLock,
+  INTENT_GO_HOME: handleGoHome,
+  INTENT_FOCUS_MENU_ZONE: handleFocusMenuZone,
+  INTENT_FOCUS_ACTIONS_ZONE: handleFocusActionsZone,
+  INTENT_FOCUS_CONTENT_ZONE: handleFocusContentZone,
   INTENT_FOCUS_NEXT_ZONE: handleFocusNextZone,
   INTENT_FOCUS_PREVIOUS_ZONE: handleFocusPreviousZone,
   INTENT_TOGGLE_SHORTCUT_HELP: handleToggleShortcutHelp,
@@ -102,6 +106,42 @@ function handleWorkspaceLock() {
     action: "LOCK_WORKSPACE",
   });
   lockWorkspace();
+}
+
+function handleGoHome() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_GO_HOME",
+    action: "GO_HOME",
+  });
+  dispatchWorkspaceFocusCommand("GO_HOME");
+}
+
+function handleFocusMenuZone() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_FOCUS_MENU_ZONE",
+    action: "FOCUS_MENU_ZONE",
+  });
+  dispatchWorkspaceFocusCommand("FOCUS_MENU_ZONE");
+}
+
+function handleFocusActionsZone() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_FOCUS_ACTIONS_ZONE",
+    action: "FOCUS_ACTIONS_ZONE",
+  });
+  dispatchWorkspaceFocusCommand("FOCUS_ACTIONS_ZONE");
+}
+
+function handleFocusContentZone() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_FOCUS_CONTENT_ZONE",
+    action: "FOCUS_CONTENT_ZONE",
+  });
+  dispatchWorkspaceFocusCommand("FOCUS_CONTENT_ZONE");
 }
 
 function handleFocusNextZone() {

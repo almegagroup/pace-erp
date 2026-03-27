@@ -33,6 +33,22 @@ const INTENT_ACL_MAP = Object.freeze({
     resource: "SESSION",
     action: "WORKSPACE_LOCK",
   },
+  INTENT_GO_HOME: {
+    resource: "NAVIGATION",
+    action: "GO_HOME",
+  },
+  INTENT_FOCUS_MENU_ZONE: {
+    resource: "NAVIGATION",
+    action: "FOCUS_MENU_ZONE",
+  },
+  INTENT_FOCUS_ACTIONS_ZONE: {
+    resource: "NAVIGATION",
+    action: "FOCUS_ACTIONS_ZONE",
+  },
+  INTENT_FOCUS_CONTENT_ZONE: {
+    resource: "NAVIGATION",
+    action: "FOCUS_CONTENT_ZONE",
+  },
   INTENT_FOCUS_NEXT_ZONE: {
     resource: "NAVIGATION",
     action: "FOCUS_NEXT_ZONE",
