@@ -19,6 +19,24 @@ export type ApplyflowResponse = {
   address: Record<string, unknown>;
 };
 
+function normalizeRegistrationStatus(value: string | null): string {
+  const normalized = value?.trim().toUpperCase();
+
+  if (!normalized) {
+    return "UNKNOWN";
+  }
+
+  if (normalized === "ACTIVE") {
+    return "ACTIVE";
+  }
+
+  if (normalized === "CANCELLED" || normalized === "CANCELED") {
+    return "CANCELLED";
+  }
+
+  return "UNKNOWN";
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -221,7 +239,7 @@ export async function fetchGstFromApplyflow(
     gstin,
     legal_name: legalName,
     trade_name: tradeName ?? null,
-    status: status ?? "UNKNOWN",
+    status: normalizeRegistrationStatus(status),
     address,
   };
 }

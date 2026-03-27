@@ -10,6 +10,7 @@
 
 import { fetchGstFromApplyflow } from "./applyflow_client.ts";
 import { serviceRoleClient } from "./serviceRoleClient.ts";
+import { log } from "../_lib/logger.ts";
 
 type GstProfile = {
   gst_number: string;
@@ -83,6 +84,18 @@ export async function resolveGstProfileWithSource(
     .insert(profile);
 
   if (insertError) {
+    log({
+      level: "ERROR",
+      gate_id: "6.3.4",
+      event: "GST_CACHE_INSERT_ERROR",
+      meta: {
+        gst_number: gst,
+        code: insertError.code ?? null,
+        message: insertError.message ?? null,
+        details: insertError.details ?? null,
+        hint: insertError.hint ?? null,
+      },
+    });
     throw new Error("GST_CACHE_INSERT_FAILED");
   }
 
