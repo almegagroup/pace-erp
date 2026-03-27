@@ -9,6 +9,7 @@ import { approveSignupHandler } from "../_core/admin/signup/approve.handler.ts";
 import { rejectSignupHandler } from "../_core/admin/signup/reject.handler.ts";
 
 import { createCompanyHandler } from "../_core/admin/company/create_company.handler.ts";
+import { getCompanyGstProfileHandler } from "../_core/admin/company/get_company_gst_profile.handler.ts";
 
 import { createGroupHandler } from "../_core/admin/group/create_group.handler.ts";
 import { updateGroupStateHandler } from "../_core/admin/group/update_group_state.handler.ts";
@@ -102,6 +103,13 @@ export async function dispatchAdminRoutes(
 
     case "POST:/api/admin/company":
       response = await createCompanyHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/company/gst-profile":
+      response = await getCompanyGstProfileHandler(req, {
         context,
         request_id: requestId,
       });

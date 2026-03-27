@@ -36,11 +36,40 @@ export async function assertSelfLockoutSafe(
 } = params;
 
   // --------------------------------------------------
+  // Rule 0: Actor cannot mutate their own role
+  // --------------------------------------------------
+  if (
+    _actorAuthUserId === _targetAuthUserId &&
+    typeof targetNextRole === "string" &&
+    targetNextRole.length > 0
+  ) {
+    throw new Error("G4_SELF_ROLE_CHANGE_BLOCKED");
+  }
+
+  // --------------------------------------------------
   // Rule 1: Last Super Admin cannot be disabled
   // --------------------------------------------------
   if (
     isSuperAdmin(targetCurrentRole) &&
     targetNextState === "DISABLED"
+  ) {
+    const { count } = await serviceRoleClient
+      .schema("erp_acl").from("user_roles")
+      .select("*", { count: "exact", head: true })
+      .eq("role_code", "SA");
+
+    if ((count ?? 0) <= 1) {
+      throw new Error("G4_BLOCK_LAST_SUPER_ADMIN");
+    }
+  }
+
+  // --------------------------------------------------
+  // Rule 1A: Last Super Admin cannot be demoted
+  // --------------------------------------------------
+  if (
+    isSuperAdmin(targetCurrentRole) &&
+    targetNextRole &&
+    !isSuperAdmin(targetNextRole)
   ) {
     const { count } = await serviceRoleClient
       .schema("erp_acl").from("user_roles")

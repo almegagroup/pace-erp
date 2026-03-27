@@ -10,6 +10,7 @@
 
 import { fetchGstFromApplyflow } from "./applyflow_client.ts";
 import { serviceRoleClient } from "./serviceRoleClient.ts";
+import { log } from "../_lib/logger.ts";
 
 type GstProfile = {
   gst_number: string;
@@ -22,15 +23,20 @@ type GstProfile = {
   fetched_at: string;
 };
 
+export type GstProfileResolution = {
+  profile: GstProfile;
+  source: "CACHE" | "APPLYFLOW";
+};
+
 /**
  * Canonical GST resolver
  * - Cache-first
  * - Deterministic
  * - Cost-safe
  */
-export async function resolveGstProfile(
+export async function resolveGstProfileWithSource(
   rawGst: string
-): Promise<GstProfile> {
+): Promise<GstProfileResolution> {
   const gst = rawGst.trim().toUpperCase();
   const db = serviceRoleClient;
 
@@ -48,7 +54,10 @@ export async function resolveGstProfile(
   }
 
   if (cached) {
-    return cached as GstProfile;
+    return {
+      profile: cached as GstProfile,
+      source: "CACHE",
+    };
   }
 
   /* -----------------------------------------
@@ -75,8 +84,30 @@ export async function resolveGstProfile(
     .insert(profile);
 
   if (insertError) {
+    log({
+      level: "ERROR",
+      gate_id: "6.3.4",
+      event: "GST_CACHE_INSERT_ERROR",
+      meta: {
+        gst_number: gst,
+        code: insertError.code ?? null,
+        message: insertError.message ?? null,
+        details: insertError.details ?? null,
+        hint: insertError.hint ?? null,
+      },
+    });
     throw new Error("GST_CACHE_INSERT_FAILED");
   }
 
-  return profile;
+  return {
+    profile,
+    source: "APPLYFLOW",
+  };
+}
+
+export async function resolveGstProfile(
+  rawGst: string,
+): Promise<GstProfile> {
+  const resolved = await resolveGstProfileWithSource(rawGst);
+  return resolved.profile;
 }

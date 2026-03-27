@@ -102,47 +102,62 @@ export async function getUserScopeHandler(
       ...workCompanyIds,
     ])];
 
+    const { data: availableCompanies } = await db
+      .schema("erp_master").from("companies")
+      .select("id, company_code, company_name, status")
+      .eq("status", "ACTIVE")
+      .eq("company_kind", "BUSINESS")
+      .order("company_name", { ascending: true });
+
+    const businessCompanyIds = (availableCompanies ?? []).map((company) => company.id);
+
     const { data: scopedCompanies } = companyIdsToResolve.length === 0
       ? { data: [] }
       : await db
         .schema("erp_master").from("companies")
         .select("id, company_code, company_name, status")
-        .in("id", companyIdsToResolve);
+        .in("id", companyIdsToResolve)
+        .eq("status", "ACTIVE")
+        .eq("company_kind", "BUSINESS");
 
-    const { data: scopedProjects } = projectIds.length === 0
+    const { data: scopedProjects } = projectIds.length === 0 || businessCompanyIds.length === 0
       ? { data: [] }
       : await db
         .schema("erp_master").from("projects")
-        .select("id, project_code, project_name, status")
-        .in("id", projectIds);
+        .select("id, project_code, project_name, company_id, status")
+        .in("id", projectIds)
+        .eq("status", "ACTIVE")
+        .in("company_id", businessCompanyIds);
 
-    const { data: scopedDepartments } = departmentIds.length === 0
+    const { data: scopedDepartments } = departmentIds.length === 0 || businessCompanyIds.length === 0
       ? { data: [] }
       : await db
         .schema("erp_master").from("departments")
         .select("id, department_code, department_name, company_id, status")
-        .in("id", departmentIds);
+        .in("id", departmentIds)
+        .eq("status", "ACTIVE")
+        .in("company_id", businessCompanyIds);
 
     const companyMap = new Map((scopedCompanies ?? []).map((row) => [row.id, row]));
     const projectMap = new Map((scopedProjects ?? []).map((row) => [row.id, row]));
     const departmentMap = new Map((scopedDepartments ?? []).map((row) => [row.id, row]));
 
-    const { data: availableCompanies } = await db
-      .schema("erp_master").from("companies")
-      .select("id, company_code, company_name, status")
-      .eq("status", "ACTIVE")
-      .order("company_name", { ascending: true });
-
-    const { data: availableProjects } = await db
+    const { data: availableProjects } = businessCompanyIds.length === 0
+      ? { data: [] }
+      : await db
       .schema("erp_master").from("projects")
       .select("id, project_code, project_name, status")
       .eq("status", "ACTIVE")
+      .in("company_id", businessCompanyIds)
       .order("project_name", { ascending: true });
 
-    const { data: availableDepartments } = await db
+    const { data: availableDepartments } = businessCompanyIds.length === 0
+      ? { data: [] }
+      : await db
       .schema("erp_master").from("departments")
       .select("id, department_code, department_name, company_id, status")
       .eq("status", "ACTIVE")
+      .in("company_id", businessCompanyIds)
       .order("department_name", { ascending: true });
 
     return okResponse(
