@@ -30,17 +30,28 @@ import {
 import { lockWorkspace } from "../store/workspaceLock.js";
 import { subscribeWorkspaceFocusCommands } from "../navigation/workspaceFocusBus.js";
 
-const WORKSPACE_ZONES = Object.freeze(["menu", "actions", "content"]);
+const DASHBOARD_ROUTES = new Set(["/sa/home", "/ga/home", "/dashboard"]);
+const DASHBOARD_ZONES = Object.freeze(["menu", "actions", "content"]);
+const TASK_ZONES = Object.freeze(["actions", "content"]);
 
-const SHORTCUT_GUIDE = Object.freeze([
-  "Esc Back or logout",
+const DASHBOARD_SHORTCUT_GUIDE = Object.freeze([
+  "Alt+C Work area",
+  "Alt+M Menu",
+  "Alt+A Top actions",
+  "Alt+H Dashboard home",
   "F6 Next zone",
   "Shift+F6 Previous zone",
   "Ctrl+Left Hide menu",
   "Ctrl+Right Show menu",
+]);
+
+const TASK_SHORTCUT_GUIDE = Object.freeze([
+  "Alt+C Work area",
+  "Alt+A Page actions",
+  "Alt+H Dashboard home",
+  "Esc Back",
   "Alt+L Lock workspace",
   "Ctrl+Shift+L Logout confirm",
-  "? Toggle shortcut help",
 ]);
 
 function focusElement(element) {
@@ -62,6 +73,41 @@ function moveFocus(refs, nextIndex) {
   target.focus();
 }
 
+function isFocusableElement(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (element.hasAttribute("disabled")) {
+    return false;
+  }
+
+  if (element.getAttribute("aria-hidden") === "true") {
+    return false;
+  }
+
+  return true;
+}
+
+function findFirstFocusableWithin(container) {
+  if (!(container instanceof HTMLElement)) {
+    return null;
+  }
+
+  const preferred = container.querySelector("[data-workspace-primary-focus='true']");
+  if (isFocusableElement(preferred)) {
+    return preferred;
+  }
+
+  const focusable = container.querySelectorAll(
+    "button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"
+  );
+
+  return (
+    Array.from(focusable).find((element) => isFocusableElement(element)) ?? null
+  );
+}
+
 export default function MenuShell() {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
@@ -74,6 +120,15 @@ export default function MenuShell() {
   const contentRegionRef = useRef(null);
 
   const { menu, loading, shellProfile } = useMenu();
+  const shellMode = DASHBOARD_ROUTES.has(location.pathname)
+    ? "dashboard"
+    : "task";
+  const workspaceZones =
+    shellMode === "dashboard" ? DASHBOARD_ZONES : TASK_ZONES;
+  const shortcutGuide =
+    shellMode === "dashboard"
+      ? DASHBOARD_SHORTCUT_GUIDE
+      : TASK_SHORTCUT_GUIDE;
   const stackDepth = getStackDepth();
   const activeMenuIndex = useMemo(
     () => menu.findIndex((item) => item.route_path === location.pathname),
@@ -118,6 +173,16 @@ export default function MenuShell() {
     return () => unsubscribeWorkspaceShell(listener);
   }, []);
 
+  useEffect(() => {
+    setShowKeyboardHelp(false);
+  }, [shellMode]);
+
+  useEffect(() => {
+    if (!workspaceZones.includes(activeZone)) {
+      setActiveZone(workspaceZones[workspaceZones.length - 1]);
+    }
+  }, [activeZone, workspaceZones]);
+
   function getHomeRouteTarget() {
     if (location.pathname.startsWith("/sa")) {
       return "SA_HOME";
@@ -160,46 +225,80 @@ export default function MenuShell() {
     lockWorkspace();
   }
 
-  const focusZone = useCallback((zone) => {
-    if (zone === "menu") {
-      const button =
-        menuButtonRefs.current[resolvedMenuFocusIndex] ??
-        menuButtonRefs.current.find((item) => item instanceof HTMLElement);
+  const focusContentZone = useCallback(() => {
+    const target =
+      findFirstFocusableWithin(contentRegionRef.current) ?? contentRegionRef.current;
 
-      if (focusElement(button)) {
-        setActiveZone("menu");
-      }
-
-      return;
-    }
-
-    if (zone === "actions") {
-      const button =
-        actionButtonRefs.current.find((item) => item instanceof HTMLElement);
-
-      if (focusElement(button)) {
-        setActiveZone("actions");
-      }
-
-      return;
-    }
-
-    if (focusElement(contentRegionRef.current)) {
+    if (focusElement(target)) {
       setActiveZone("content");
     }
-  }, [resolvedMenuFocusIndex]);
+  }, []);
 
-  const cycleZoneFocus = useCallback((direction) => {
-    const currentIndex = WORKSPACE_ZONES.indexOf(activeZone);
-    const nextIndex =
-      (currentIndex + direction + WORKSPACE_ZONES.length) %
-      WORKSPACE_ZONES.length;
+  const focusZone = useCallback(
+    (zone) => {
+      if (zone === "menu" && shellMode !== "dashboard") {
+        zone = "actions";
+      }
 
-    focusZone(WORKSPACE_ZONES[nextIndex]);
-  }, [activeZone, focusZone]);
+      if (zone === "menu") {
+        const button =
+          menuButtonRefs.current[resolvedMenuFocusIndex] ??
+          menuButtonRefs.current.find((item) => item instanceof HTMLElement);
+
+        if (focusElement(button)) {
+          setActiveZone("menu");
+        }
+
+        return;
+      }
+
+      if (zone === "actions") {
+        const button = actionButtonRefs.current.find(
+          (item) => item instanceof HTMLElement
+        );
+
+        if (focusElement(button)) {
+          setActiveZone("actions");
+        }
+
+        return;
+      }
+
+      focusContentZone();
+    },
+    [focusContentZone, resolvedMenuFocusIndex, shellMode]
+  );
+
+  const cycleZoneFocus = useCallback(
+    (direction) => {
+      const currentIndex = workspaceZones.indexOf(activeZone);
+      const nextIndex =
+        (currentIndex + direction + workspaceZones.length) %
+        workspaceZones.length;
+
+      focusZone(workspaceZones[nextIndex]);
+    },
+    [activeZone, focusZone, workspaceZones]
+  );
 
   useEffect(() => {
     const unsubscribe = subscribeWorkspaceFocusCommands((command) => {
+      if (command === "GO_HOME") {
+        handleGoHome();
+      }
+
+      if (command === "FOCUS_MENU_ZONE") {
+        focusZone("menu");
+      }
+
+      if (command === "FOCUS_ACTIONS_ZONE") {
+        focusZone("actions");
+      }
+
+      if (command === "FOCUS_CONTENT_ZONE") {
+        focusZone("content");
+      }
+
       if (command === "FOCUS_NEXT_ZONE") {
         cycleZoneFocus(1);
       }
@@ -214,7 +313,17 @@ export default function MenuShell() {
     });
 
     return unsubscribe;
-  }, [cycleZoneFocus]);
+  }, [cycleZoneFocus, focusZone]);
+
+  useEffect(() => {
+    if (shellMode === "task") {
+      const timer = globalThis.setTimeout(() => {
+        focusContentZone();
+      }, 0);
+
+      return () => globalThis.clearTimeout(timer);
+    }
+  }, [focusContentZone, location.pathname, shellMode]);
 
   function handleMenuKeyDown(event, index) {
     if (event.key === "ArrowDown") {
@@ -283,13 +392,8 @@ export default function MenuShell() {
     },
     {
       label: "Dashboard",
-      hint: "Home",
+      hint: "Alt+H",
       onClick: handleGoHome,
-    },
-    {
-      label: collapsed ? "Show Menu" : "Hide Menu",
-      hint: collapsed ? "Ctrl+Right" : "Ctrl+Left",
-      onClick: () => toggleSidebarCollapsed(),
     },
     {
       label: "Lock",
@@ -303,240 +407,266 @@ export default function MenuShell() {
     },
   ];
 
+  if (shellMode === "dashboard") {
+    headerActions.splice(2, 0, {
+      label: collapsed ? "Show Menu" : "Hide Menu",
+      hint: collapsed ? "Ctrl+Right" : "Ctrl+Left",
+      onClick: () => toggleSidebarCollapsed(),
+    });
+  }
+
+  const zoneNumber = workspaceZones.indexOf(activeZone) + 1;
+  const isSidebarVisible = shellMode === "dashboard";
+
   return (
     <div
       style={{
         display: "flex",
-        minHeight: "100vh",
+        height: "100vh",
+        overflow: "hidden",
         background: "#dfe7ec",
         color: "#0f172a",
       }}
     >
-      <aside
-        aria-label="Workspace navigation"
-        style={{
-          width: collapsed ? "92px" : "290px",
-          transition: "width 140ms ease",
-          borderRight: "1px solid #9fb3c2",
-          display: "flex",
-          flexDirection: "column",
-          background: "#183447",
-          color: "#f8fafc",
-        }}
-      >
-        <div
+      {isSidebarVisible ? (
+        <aside
+          aria-label="Workspace navigation"
           style={{
-            padding: "16px 14px 14px",
-            borderBottom: "1px solid rgba(255,255,255,0.12)",
-            background: "#102939",
+            width: collapsed ? "92px" : "290px",
+            transition: "width 140ms ease",
+            borderRight: "1px solid #9fb3c2",
+            display: "flex",
+            flexDirection: "column",
+            background: "#183447",
+            color: "#f8fafc",
+            overflow: "hidden",
           }}
         >
           <div
             style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "10px",
+              padding: "16px 14px 14px",
+              borderBottom: "1px solid rgba(255,255,255,0.12)",
+              background: "#102939",
             }}
           >
-            <div style={{ minWidth: 0 }}>
-              <p
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "10px",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: "11px",
+                    letterSpacing: "0.24em",
+                    textTransform: "uppercase",
+                    color: "#8ed0f7",
+                    fontWeight: 700,
+                  }}
+                >
+                  Pace ERP
+                </p>
+                {!collapsed ? (
+                  <>
+                    <p
+                      style={{
+                        margin: "6px 0 0",
+                        fontSize: "15px",
+                        fontWeight: 700,
+                        color: "#f8fafc",
+                      }}
+                    >
+                      {shellProfile?.roleCode || "Protected Workspace"}
+                    </p>
+                    <p
+                      style={{
+                        margin: "4px 0 0",
+                        fontSize: "12px",
+                        color: "rgba(255,255,255,0.72)",
+                      }}
+                    >
+                      {shellProfile?.userCode || "ERP Operator"}
+                    </p>
+                  </>
+                ) : null}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => toggleSidebarCollapsed()}
+                title={collapsed ? "Show menu" : "Hide menu"}
                 style={{
-                  margin: 0,
-                  fontSize: "11px",
-                  letterSpacing: "0.24em",
-                  textTransform: "uppercase",
-                  color: "#8ed0f7",
+                  border: "1px solid rgba(255,255,255,0.16)",
+                  background: "rgba(255,255,255,0.06)",
+                  color: "#fff",
+                  borderRadius: "8px",
+                  padding: "8px 10px",
+                  cursor: "pointer",
+                  fontSize: "12px",
                   fontWeight: 700,
                 }}
               >
-                Pace ERP
-              </p>
-              {!collapsed ? (
-                <>
-                  <p
-                    style={{
-                      margin: "6px 0 0",
-                      fontSize: "15px",
-                      fontWeight: 700,
-                      color: "#f8fafc",
-                    }}
-                  >
-                    {shellProfile?.roleCode || "Protected Workspace"}
-                  </p>
-                  <p
-                    style={{
-                      margin: "4px 0 0",
-                      fontSize: "12px",
-                      color: "rgba(255,255,255,0.72)",
-                    }}
-                  >
-                    {shellProfile?.userCode || "ERP Operator"}
-                  </p>
-                </>
-              ) : null}
+                {collapsed ? ">" : "<"}
+              </button>
             </div>
-
-            <button
-              type="button"
-              onClick={() => toggleSidebarCollapsed()}
-              title={collapsed ? "Show menu" : "Hide menu"}
-              style={{
-                border: "1px solid rgba(255,255,255,0.16)",
-                background: "rgba(255,255,255,0.06)",
-                color: "#fff",
-                borderRadius: "8px",
-                padding: "8px 10px",
-                cursor: "pointer",
-                fontSize: "12px",
-                fontWeight: 700,
-              }}
-            >
-              {collapsed ? ">" : "<"}
-            </button>
           </div>
-        </div>
 
-        <div style={{ padding: "12px", flex: 1 }}>
-          {!collapsed ? (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr auto",
-                gap: "12px",
-                margin: "0 6px 10px",
-                fontSize: "11px",
-                textTransform: "uppercase",
-                letterSpacing: "0.18em",
-                color: "rgba(255,255,255,0.58)",
-                fontWeight: 700,
-              }}
-            >
-              <span>Navigation</span>
-              <span>Zone 1</span>
-            </div>
-          ) : null}
+          <div style={{ padding: "12px", flex: 1, overflowY: "auto" }}>
+            {!collapsed ? (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto",
+                  gap: "12px",
+                  margin: "0 6px 10px",
+                  fontSize: "11px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.18em",
+                  color: "rgba(255,255,255,0.58)",
+                  fontWeight: 700,
+                }}
+              >
+                <span>Navigation</span>
+                <span>Zone 1</span>
+              </div>
+            ) : null}
 
-          <nav>
-            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-              {menu.map((item, index) => {
-                const isActive = location.pathname === item.route_path;
+            <nav>
+              <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                {menu.map((item, index) => {
+                  const isActive = location.pathname === item.route_path;
 
-                return (
-                  <li key={item.menu_code} style={{ marginBottom: "6px" }}>
-                    {item.route_path ? (
-                      <button
-                        ref={(element) => {
-                          menuButtonRefs.current[index] = element;
-                        }}
-                        type="button"
-                        onFocus={() => {
-                          setActiveZone("menu");
-                          setMenuFocusIndex(index);
-                        }}
-                        onKeyDown={(event) => handleMenuKeyDown(event, index)}
-                        onClick={() => handleMenuRoute(item.route_path)}
-                        aria-current={isActive ? "page" : undefined}
-                        style={{
-                          width: "100%",
-                          display: "grid",
-                          gridTemplateColumns: collapsed ? "1fr" : "44px 1fr",
-                          alignItems: "center",
-                          gap: "10px",
-                          border: isActive
-                            ? "1px solid rgba(126,203,255,0.66)"
-                            : "1px solid rgba(255,255,255,0.06)",
-                          borderRadius: "10px",
-                          background: isActive ? "#245574" : "transparent",
-                          padding: collapsed ? "12px 8px" : "12px 12px",
-                          color: "#f8fafc",
-                          cursor: isActive ? "default" : "pointer",
-                          textAlign: "left",
-                          fontSize: "13px",
-                          fontWeight: isActive ? 700 : 600,
-                        }}
-                      >
-                        {collapsed ? (
-                          <span
-                            style={{
-                              textAlign: "center",
-                              fontFamily: "Consolas, 'Courier New', monospace",
-                              fontSize: "12px",
-                            }}
-                          >
-                            {(index + 1).toString().padStart(2, "0")}
-                          </span>
-                        ) : (
-                          <span
-                            style={{
-                              color: "rgba(255,255,255,0.66)",
-                              fontFamily: "Consolas, 'Courier New', monospace",
-                              fontSize: "12px",
-                            }}
-                          >
-                            {(index + 1).toString().padStart(2, "0")}
-                          </span>
-                        )}
-                        {!collapsed ? <span>{item.title}</span> : null}
-                      </button>
-                    ) : (
-                      <span
-                        style={{
-                          display: "block",
-                          padding: collapsed ? "12px 8px" : "12px 12px",
-                          color: "rgba(255,255,255,0.56)",
-                          fontSize: "13px",
-                        }}
-                      >
-                        {collapsed ? item.title.slice(0, 2).toUpperCase() : item.title}
-                      </span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </nav>
-        </div>
+                  return (
+                    <li key={item.menu_code} style={{ marginBottom: "6px" }}>
+                      {item.route_path ? (
+                        <button
+                          ref={(element) => {
+                            menuButtonRefs.current[index] = element;
+                          }}
+                          type="button"
+                          onFocus={() => {
+                            setActiveZone("menu");
+                            setMenuFocusIndex(index);
+                          }}
+                          onKeyDown={(event) => handleMenuKeyDown(event, index)}
+                          onClick={() => handleMenuRoute(item.route_path)}
+                          aria-current={isActive ? "page" : undefined}
+                          style={{
+                            width: "100%",
+                            display: "grid",
+                            gridTemplateColumns: collapsed ? "1fr" : "44px 1fr",
+                            alignItems: "center",
+                            gap: "10px",
+                            border: isActive
+                              ? "1px solid rgba(126,203,255,0.66)"
+                              : "1px solid rgba(255,255,255,0.06)",
+                            borderRadius: "10px",
+                            background: isActive ? "#245574" : "transparent",
+                            padding: collapsed ? "12px 8px" : "12px 12px",
+                            color: "#f8fafc",
+                            cursor: isActive ? "default" : "pointer",
+                            textAlign: "left",
+                            fontSize: "13px",
+                            fontWeight: isActive ? 700 : 600,
+                          }}
+                        >
+                          {collapsed ? (
+                            <span
+                              style={{
+                                textAlign: "center",
+                                fontFamily: "Consolas, 'Courier New', monospace",
+                                fontSize: "12px",
+                              }}
+                            >
+                              {(index + 1).toString().padStart(2, "0")}
+                            </span>
+                          ) : (
+                            <span
+                              style={{
+                                color: "rgba(255,255,255,0.66)",
+                                fontFamily: "Consolas, 'Courier New', monospace",
+                                fontSize: "12px",
+                              }}
+                            >
+                              {(index + 1).toString().padStart(2, "0")}
+                            </span>
+                          )}
+                          {!collapsed ? <span>{item.title}</span> : null}
+                        </button>
+                      ) : (
+                        <span
+                          style={{
+                            display: "block",
+                            padding: collapsed ? "12px 8px" : "12px 12px",
+                            color: "rgba(255,255,255,0.56)",
+                            fontSize: "13px",
+                          }}
+                        >
+                          {collapsed
+                            ? item.title.slice(0, 2).toUpperCase()
+                            : item.title}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
+          </div>
 
-        <div
-          style={{
-            padding: "12px",
-            borderTop: "1px solid rgba(255,255,255,0.12)",
-            background: "#102939",
-          }}
-        >
-          <p
+          <div
             style={{
-              margin: collapsed ? 0 : "0 0 6px",
-              fontSize: "11px",
-              color: "rgba(255,255,255,0.62)",
-              letterSpacing: "0.14em",
-              textTransform: "uppercase",
+              padding: "12px",
+              borderTop: "1px solid rgba(255,255,255,0.12)",
+              background: "#102939",
             }}
           >
-            {collapsed ? "?" : "Keyboard"}
-          </p>
-          {!collapsed ? (
             <p
               style={{
-                margin: 0,
-                fontSize: "12px",
-                color: "rgba(255,255,255,0.78)",
-                lineHeight: 1.5,
+                margin: collapsed ? 0 : "0 0 6px",
+                fontSize: "11px",
+                color: "rgba(255,255,255,0.62)",
+                letterSpacing: "0.14em",
+                textTransform: "uppercase",
               }}
             >
-              F6 changes workspace zone. Use Up/Down inside menu and Enter to open the focused module.
+              {collapsed ? "?" : "Keyboard"}
             </p>
-          ) : null}
-        </div>
-      </aside>
+            {!collapsed ? (
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: "12px",
+                  color: "rgba(255,255,255,0.78)",
+                  lineHeight: 1.5,
+                }}
+              >
+                Up/Down moves inside menu. Alt+C jumps straight into the current work surface.
+              </p>
+            ) : null}
+          </div>
+        </aside>
+      ) : null}
 
-      <main style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+      <main
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          minWidth: 0,
+          overflow: "hidden",
+        }}
+      >
         <div
           style={{
-            padding: "14px 18px",
+            padding: shellMode === "dashboard" ? "14px 18px" : "12px 18px",
             borderBottom: "1px solid #b2c3cf",
-            background: "#eef3f6",
+            background: shellMode === "dashboard" ? "#eef3f6" : "#f4f7f9",
+            flexShrink: 0,
           }}
         >
           <div
@@ -562,7 +692,10 @@ export default function MenuShell() {
               >
                 <span>{shellProfile?.roleCode || "Protected Role"}</span>
                 <span>{shellProfile?.userCode || "ERP User"}</span>
-                <span>Zone {WORKSPACE_ZONES.indexOf(activeZone) + 1}</span>
+                <span>
+                  {shellMode === "dashboard" ? "Dashboard Mode" : "Task Mode"}
+                </span>
+                <span>Zone {zoneNumber}</span>
               </div>
               <h1
                 style={{
@@ -575,7 +708,9 @@ export default function MenuShell() {
                 {activeTitle}
               </h1>
               <p style={{ margin: "4px 0 0", fontSize: "13px", color: "#526372" }}>
-                Keyboard-first protected workspace. Use F6 to move between navigation, action strip, and content.
+                {shellMode === "dashboard"
+                  ? "Dashboard shell stays visible here. Use Alt+C for the work area, Alt+M for menu, and F6 to rotate zones."
+                  : "Focused task page. The work area scrolls independently, and Alt+C returns focus straight into the active page."}
               </p>
             </div>
 
@@ -600,8 +735,13 @@ export default function MenuShell() {
                   onKeyDown={(event) => handleActionKeyDown(event, index)}
                   style={{
                     border: "1px solid #9fb3c2",
-                    background: index === 1 ? "#d7ebf7" : "#ffffff",
-                    borderRadius: "8px",
+                    background:
+                      shellMode === "task" && index === 0
+                        ? "#d7ebf7"
+                        : index === 1
+                          ? "#d7ebf7"
+                          : "#ffffff",
+                    borderRadius: "10px",
                     padding: "10px 12px",
                     color: "#0f172a",
                     fontWeight: 700,
@@ -636,7 +776,7 @@ export default function MenuShell() {
               gap: "8px",
             }}
           >
-            {SHORTCUT_GUIDE.map((item) => (
+            {shortcutGuide.map((item) => (
               <span
                 key={item}
                 style={{
@@ -685,12 +825,25 @@ export default function MenuShell() {
                   color: "#0f172a",
                 }}
               >
-                <span>Zone 1: Menu navigation</span>
-                <span>Zone 2: Action strip</span>
-                <span>Zone 3: Active screen content</span>
-                <span>Up/Down moves inside the left menu</span>
-                <span>Left/Right moves across action buttons</span>
-                <span>Use Tab inside the content itself</span>
+                {shellMode === "dashboard" ? (
+                  <>
+                    <span>Zone 1: Menu navigation</span>
+                    <span>Zone 2: Action strip</span>
+                    <span>Zone 3: Active screen content</span>
+                    <span>Alt+C jumps to the first usable control in content</span>
+                    <span>Up/Down moves inside the left menu</span>
+                    <span>Left/Right moves across action buttons</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Zone 1: Page actions</span>
+                    <span>Zone 2: Active screen content</span>
+                    <span>Alt+C jumps to the first usable control in content</span>
+                    <span>Esc returns through the protected stack</span>
+                    <span>Left/Right moves across top action buttons</span>
+                    <span>Tab stays local to the current page content</span>
+                  </>
+                )}
               </div>
             </div>
           ) : null}
@@ -700,7 +853,13 @@ export default function MenuShell() {
           ref={contentRegionRef}
           tabIndex={-1}
           onFocus={() => setActiveZone("content")}
-          style={{ flex: 1, outline: "none" }}
+          style={{
+            flex: 1,
+            outline: "none",
+            overflowY: "auto",
+            overflowX: "hidden",
+            minHeight: 0,
+          }}
           aria-label="Active workspace content"
         >
           <Outlet />

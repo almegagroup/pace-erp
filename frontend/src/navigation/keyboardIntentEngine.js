@@ -49,6 +49,10 @@ function normalizeKeyEvent(event) {
   if (ctrl && key === "ArrowRight") return "INTENT_SIDEBAR_SHOW";
   if (ctrl && shift && key.toLowerCase() === "l") return "INTENT_LOGOUT_CONFIRM";
   if (event.altKey && key.toLowerCase() === "l") return "INTENT_WORKSPACE_LOCK";
+  if (event.altKey && key.toLowerCase() === "h") return "INTENT_GO_HOME";
+  if (event.altKey && key.toLowerCase() === "m") return "INTENT_FOCUS_MENU_ZONE";
+  if (event.altKey && key.toLowerCase() === "a") return "INTENT_FOCUS_ACTIONS_ZONE";
+  if (event.altKey && key.toLowerCase() === "c") return "INTENT_FOCUS_CONTENT_ZONE";
   if (key === "F6" && shift) return "INTENT_FOCUS_PREVIOUS_ZONE";
   if (key === "F6") return "INTENT_FOCUS_NEXT_ZONE";
   if (key === "?") return "INTENT_TOGGLE_SHORTCUT_HELP";

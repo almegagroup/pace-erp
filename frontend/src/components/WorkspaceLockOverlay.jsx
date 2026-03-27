@@ -83,10 +83,17 @@ export default function WorkspaceLockOverlay() {
           Enter your current login password to unlock your workspace and continue.
         </p>
 
-        <form onSubmit={handleUnlock} style={formStyle}>
+        <form
+          onSubmit={handleUnlock}
+          style={formStyle}
+          data-erp-nav-group="true"
+          data-erp-nav-axis="vertical"
+          data-erp-nav-allow-editable="true"
+        >
           <label style={labelStyle}>Password</label>
           <input
             ref={passwordRef}
+            data-erp-nav-item="true"
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
@@ -97,7 +104,12 @@ export default function WorkspaceLockOverlay() {
 
           {error ? <div style={errorStyle}>{error}</div> : null}
 
-          <button type="submit" disabled={loading} style={buttonStyle}>
+          <button
+            type="submit"
+            disabled={loading}
+            style={buttonStyle}
+            data-erp-nav-item="true"
+          >
             {loading ? "Unlocking..." : "Unlock Workspace"}
           </button>
         </form>

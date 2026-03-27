@@ -15,6 +15,9 @@ const FOCUSABLE_SELECTOR = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
+const NAVIGATION_GROUP_SELECTOR = "[data-erp-nav-group='true']";
+const NAVIGATION_ITEM_SELECTOR = "[data-erp-nav-item='true']";
+
 function getFocusableElements(container) {
   if (!container) return [];
 
@@ -24,6 +27,98 @@ function getFocusableElements(container) {
       !element.hasAttribute("disabled") &&
       element.getAttribute("aria-hidden") !== "true"
   );
+}
+
+function isEditableElement(target) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tagName = target.tagName;
+
+  return (
+    target.isContentEditable ||
+    tagName === "INPUT" ||
+    tagName === "TEXTAREA" ||
+    tagName === "SELECT"
+  );
+}
+
+function getNavigationGroup(target, container) {
+  if (!(target instanceof HTMLElement) || !(container instanceof HTMLElement)) {
+    return null;
+  }
+
+  const group = target.closest(NAVIGATION_GROUP_SELECTOR);
+  if (!(group instanceof HTMLElement)) {
+    return null;
+  }
+
+  return container.contains(group) ? group : null;
+}
+
+function getNavigationItems(group) {
+  if (!(group instanceof HTMLElement)) {
+    return [];
+  }
+
+  const preferredItems = Array.from(
+    group.querySelectorAll(NAVIGATION_ITEM_SELECTOR)
+  ).filter(
+    (element) =>
+      element instanceof HTMLElement &&
+      element.closest(NAVIGATION_GROUP_SELECTOR) === group &&
+      !element.hasAttribute("disabled") &&
+      element.getAttribute("aria-hidden") !== "true"
+  );
+
+  if (preferredItems.length > 0) {
+    return preferredItems;
+  }
+
+  return getFocusableElements(group).filter(
+    (element) => element.closest(NAVIGATION_GROUP_SELECTOR) === group
+  );
+}
+
+function getNavigationDirection(group, key) {
+  const axis = group?.getAttribute("data-erp-nav-axis") ?? "horizontal";
+
+  if (axis === "vertical") {
+    if (key === "ArrowDown") return 1;
+    if (key === "ArrowUp") return -1;
+    return 0;
+  }
+
+  if (key === "ArrowRight") return 1;
+  if (key === "ArrowLeft") return -1;
+  if (key === "ArrowDown") return 1;
+  if (key === "ArrowUp") return -1;
+  return 0;
+}
+
+function shouldIgnoreNavigationKey(group, target, key) {
+  if (!isEditableElement(target)) {
+    return false;
+  }
+
+  if (!(group instanceof HTMLElement)) {
+    return true;
+  }
+
+  const allowEditable =
+    group.getAttribute("data-erp-nav-allow-editable") === "true";
+  const axis = group.getAttribute("data-erp-nav-axis") ?? "horizontal";
+
+  if (!allowEditable) {
+    return true;
+  }
+
+  if (axis !== "vertical") {
+    return true;
+  }
+
+  return key === "ArrowLeft" || key === "ArrowRight";
 }
 
 export default function BlockingLayer({
@@ -82,12 +177,46 @@ export default function BlockingLayer({
     const onKeyDown = (event) => {
       if (!isTopBlockingLayer(layerId)) return;
 
+      const dialog = dialogRef.current;
+      const navigationGroup = getNavigationGroup(event.target, dialog);
+
+      if (navigationGroup && !shouldIgnoreNavigationKey(navigationGroup, event.target, event.key)) {
+        const items = getNavigationItems(navigationGroup);
+
+        if (items.length > 0) {
+          if (event.key === "Home") {
+            event.preventDefault();
+            items[0]?.focus();
+            return;
+          }
+
+          if (event.key === "End") {
+            event.preventDefault();
+            items[items.length - 1]?.focus();
+            return;
+          }
+
+          const direction = getNavigationDirection(navigationGroup, event.key);
+          if (direction !== 0) {
+            const currentIndex = items.indexOf(event.target);
+            const nextIndex =
+              currentIndex === -1
+                ? 0
+                : (currentIndex + direction + items.length) % items.length;
+
+            event.preventDefault();
+            items[nextIndex]?.focus();
+            return;
+          }
+        }
+      }
+
       if (event.key === "Tab") {
-        const focusable = getFocusableElements(dialogRef.current);
+        const focusable = getFocusableElements(dialog);
 
         if (focusable.length === 0) {
           event.preventDefault();
-          dialogRef.current?.focus();
+          dialog?.focus();
           return;
         }
 

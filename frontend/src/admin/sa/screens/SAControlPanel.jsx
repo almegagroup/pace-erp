@@ -8,8 +8,9 @@
  * Authority: Frontend
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 
 async function readJsonSafe(response) {
   try {
@@ -87,11 +88,22 @@ function MetricCard({ label, value, tone = "sky", caption }) {
   );
 }
 
-function LaunchCard({ badge, title, description, onClick }) {
+function LaunchCard({
+  badge,
+  title,
+  description,
+  onClick,
+  buttonRef,
+  onKeyDown,
+  primaryFocus,
+}) {
   return (
     <button
+      ref={buttonRef}
+      data-workspace-primary-focus={primaryFocus ? "true" : undefined}
       type="button"
       onClick={onClick}
+      onKeyDown={onKeyDown}
       className="group rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-[0_12px_34px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-[0_18px_42px_rgba(14,116,144,0.12)]"
     >
       <div className="flex items-center justify-between gap-4">
@@ -109,6 +121,8 @@ function LaunchCard({ badge, title, description, onClick }) {
 }
 
 function DataTableCard({ eyebrow, title, rows, columns, emptyMessage, footer }) {
+  const rowRefs = useRef([]);
+
   return (
     <section className="rounded-[30px] border border-slate-200 bg-white p-6 shadow-[0_14px_40px_rgba(15,23,42,0.08)]">
       <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
@@ -137,7 +151,21 @@ function DataTableCard({ eyebrow, title, rows, columns, emptyMessage, footer }) 
             </thead>
             <tbody>
               {rows.map((row, index) => (
-                <tr key={row.id ?? `${title}-${index}`} className="bg-slate-50">
+                <tr
+                  key={row.id ?? `${title}-${index}`}
+                  ref={(element) => {
+                    rowRefs.current[index] = element;
+                  }}
+                  tabIndex={0}
+                  onKeyDown={(event) =>
+                    handleLinearNavigation(event, {
+                      index,
+                      refs: rowRefs.current,
+                      orientation: "vertical",
+                    })
+                  }
+                  className="bg-slate-50"
+                >
                   {columns.map((column) => (
                     <td
                       key={column.key}
@@ -163,6 +191,7 @@ export default function SAControlPanel() {
   const [error, setError] = useState("");
   const [controlPanel, setControlPanel] = useState(null);
   const [health, setHealth] = useState(null);
+  const quickLaunchRefs = useRef([]);
 
   useEffect(() => {
     let alive = true;
@@ -489,8 +518,22 @@ export default function SAControlPanel() {
               Open the next SA workspace
             </h2>
             <div className="mt-5 grid gap-4 md:grid-cols-2">
-              {quickLaunch.map((action) => (
-                <LaunchCard key={action.title} {...action} />
+              {quickLaunch.map((action, index) => (
+                <LaunchCard
+                  key={action.title}
+                  {...action}
+                  buttonRef={(element) => {
+                    quickLaunchRefs.current[index] = element;
+                  }}
+                  primaryFocus={index === 0}
+                  onKeyDown={(event) =>
+                    handleLinearNavigation(event, {
+                      index,
+                      refs: quickLaunchRefs.current,
+                      orientation: "vertical",
+                    })
+                  }
+                />
               ))}
             </div>
           </section>

@@ -8,8 +8,9 @@
  * Authority: Frontend
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Events" },
@@ -88,6 +89,9 @@ export default function SAAudit() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("ALL");
+  const actionBarRefs = useRef([]);
+  const filterRefs = useRef([]);
+  const rowRefs = useRef([]);
 
   useEffect(() => {
     let alive = true;
@@ -184,15 +188,35 @@ export default function SAAudit() {
 
             <div className="flex flex-wrap gap-3">
               <button
+                ref={(element) => {
+                  actionBarRefs.current[0] = element;
+                }}
                 type="button"
                 onClick={() => openScreen("SA_CONTROL_PANEL", { mode: "reset" })}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 0,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
                 Control Panel
               </button>
               <button
+                ref={(element) => {
+                  actionBarRefs.current[1] = element;
+                }}
                 type="button"
                 onClick={() => void handleRefresh()}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 1,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 shadow-[0_10px_24px_rgba(14,116,144,0.08)]"
               >
                 {loading ? "Refreshing..." : "Refresh Audit"}
@@ -246,11 +270,22 @@ export default function SAAudit() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {FILTERS.map((option) => (
+              {FILTERS.map((option, index) => (
                 <button
                   key={option.key}
+                  ref={(element) => {
+                    filterRefs.current[index] = element;
+                  }}
+                  data-workspace-primary-focus={index === 0 ? "true" : undefined}
                   type="button"
                   onClick={() => setFilter(option.key)}
+                  onKeyDown={(event) =>
+                    handleLinearNavigation(event, {
+                      index,
+                      refs: filterRefs.current,
+                      orientation: "horizontal",
+                    })
+                  }
                   className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
                     filter === option.key
                       ? "bg-sky-600 text-white"
@@ -298,8 +333,22 @@ export default function SAAudit() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map((row) => (
-                    <tr key={row.audit_id} className="bg-slate-50">
+                  {filteredRows.map((row, index) => (
+                    <tr
+                      key={row.audit_id}
+                      ref={(element) => {
+                        rowRefs.current[index] = element;
+                      }}
+                      tabIndex={0}
+                      onKeyDown={(event) =>
+                        handleLinearNavigation(event, {
+                          index,
+                          refs: rowRefs.current,
+                          orientation: "vertical",
+                        })
+                      }
+                      className="bg-slate-50"
+                    >
                       <td className="rounded-l-2xl px-4 py-3 text-sm text-slate-700">
                         <div>
                           <p className="font-medium text-slate-900">

@@ -43,12 +43,14 @@ export default function ActionConfirmOverlay() {
           <button
             ref={cancelButtonRef}
             style={secondaryButtonStyle}
+            data-erp-nav-item="true"
             onClick={() => resolveActionConfirm(false)}
           >
             {snapshot.cancelLabel}
           </button>
           <button
             style={primaryButtonStyle}
+            data-erp-nav-item="true"
             onClick={() => resolveActionConfirm(true)}
           >
             {snapshot.confirmLabel}

@@ -665,6 +665,231 @@ The UI now depends on verified backend state for completion.
 Next step:
 Retest the live SA mutation flows against real data before continuing deeper roadmap build-out
 
+## Entry 014
+
+Date:
+2026-03-26
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- traced the failing live signup approval flow down to schema-qualified Supabase RPC usage
+- fixed admin signup approve and reject handlers so non-public functions are called through explicit schema scoping instead of dotted rpc names
+- audited and corrected the same RPC usage pattern in context resolution, ACL snapshot activation, and workflow decision processing paths
+- removed placeholder snapshot counters from SA Home and replaced them with live control-panel and system-health driven values
+- continued keyboard-first SA operational build-out while keeping public routes unchanged
+
+What changed in repo:
+- supabase/functions/api/_core/admin/signup/approve.handler.ts
+- supabase/functions/api/_core/admin/signup/reject.handler.ts
+- supabase/functions/api/_pipeline/context.ts
+- supabase/functions/api/_core/admin/acl/activate_acl_version.handler.ts
+- supabase/functions/api/_core/workflow/process_decision.handler.ts
+- supabase/functions/api/_core/admin/diagnostics/control_panel.handler.ts
+- frontend/src/admin/sa/screens/SAHome.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- direct DB diagnostics confirmed the approval engine itself was healthy
+- production failure reason exposed the real issue as incorrect RPC schema resolution
+- frontend lint completed successfully
+- frontend build completed successfully
+
+Problems or blockers:
+- backend and frontend deploy remained required before production would reflect the corrected RPC invocation pattern
+
+Decision or note:
+The signup approval failure was not caused by runner.ts, lifecycle mismatch, or the DB approval function body.
+It was caused by calling non-public functions with dotted rpc names, which production PostgREST resolved incorrectly.
+
+Next step:
+Retest live SA approval, rejection, and any other schema-scoped RPC-backed governance action after deploy
+
+## Entry 015
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- replaced browser-native confirm dialogs across current SA mutation screens with a shared ERP confirmation overlay
+- enriched admin user payloads using existing ERP user plus signup intake data so governance screens now show user code, user name, parent company, and designation
+- refactored SA role assignment and user directory screens to present identity-first operator context instead of code-only rows
+- enriched the session governance payload so session rows now identify the ERP user rather than forcing SA to interpret long auth identifiers
+- fixed SA system-health rendering so object-shaped system version metadata no longer crashes the screen
+- corrected protected-route history handling so browser back from the dashboard root now follows the logout confirmation path and logout no longer leaves stale protected dashboard history behind
+
+What changed in repo:
+- frontend/src/store/actionConfirm.js
+- frontend/src/components/ActionConfirmOverlay.jsx
+- frontend/src/App.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SASystemHealth.jsx
+- frontend/src/components/layer/BlockingLayer.jsx
+- frontend/src/navigation/backGuardEngine.js
+- frontend/src/store/sessionWarning.js
+- frontend/src/pages/public/LoginScreen.jsx
+- supabase/functions/api/_core/admin/user/list_users.handler.ts
+- supabase/functions/api/_core/admin/session/list_sessions.handler.ts
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- current SA screens no longer use browser-native confirm dialogs
+- no new DB table or migration was required for the identity enrichment work
+
+Problems or blockers:
+- changes still depend on deploy before production behavior matches the local verified state
+
+Decision or note:
+Operator-facing SA screens must prioritize identifiable ERP business context over long technical identifiers.
+Current governance surfaces now move closer to practical ERP operation while remaining within the existing schema.
+
+Next step:
+Continue live retest of the patched SA governance surfaces, then resume the next sequential governance build surface after validation
+
+## Entry 016
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- refactored the protected shell into dashboard-home mode and focused task-page mode
+- added direct keyboard focus jumps so operators can reach content without repeated shell traversal
+- changed protected scrolling so only the active content pane scrolls
+- strengthened dashboard action cards to behave more like explicit keyboard-targetable action buttons
+
+What changed in repo:
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/navigation/keyboardIntentEngine.js
+- frontend/src/navigation/keyboardIntentMap.js
+- frontend/src/navigation/keyboardAclBridge.js
+- frontend/src/components/dashboard/EnterpriseDashboard.jsx
+- frontend/src/index.css
+- TEMP_UI_BOOT_LOG.md
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+
+Problems or blockers:
+- deeper per-screen keyboard patterns are still inconsistent in some operational screens
+- this step improves shell-level flow first, but screen-local tablists and form action layouts still need follow-up passes
+
+Decision or note:
+The previous always-visible protected shell created too much keyboard friction for real ERP work.
+The UI now begins moving toward a home-dashboard plus focused task-page model closer to operator expectations.
+
+Next step:
+Re-test the updated protected UX in live SA screens, then continue screen-level keyboard and workflow refinement where friction remains
+
+## Entry 017
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- fixed dashboard action queue arrow-key movement so focused action rows now move correctly with Up and Down
+- expanded the shared blocking-layer keyboard contract for modal, popup, and future drawer interactions
+- enabled arrow-key and Home/End movement inside declared overlay action groups
+- prepared overlay forms for ERP-style vertical keyboard traversal using the workspace lock screen as the first live example
+
+What changed in repo:
+- frontend/src/components/dashboard/EnterpriseDashboard.jsx
+- frontend/src/components/layer/BlockingLayer.jsx
+- frontend/src/components/layer/ModalBase.jsx
+- frontend/src/components/layer/DrawerBase.jsx
+- frontend/src/components/ActionConfirmOverlay.jsx
+- frontend/src/components/LogoutConfirmOverlay.jsx
+- frontend/src/components/SessionOverlay.jsx
+- frontend/src/components/WorkspaceLockOverlay.jsx
+- TEMP_UI_BOOT_LOG.md
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+
+Problems or blockers:
+- explicit tab-strip components are not yet centralized in the current repo, so tab-style arrow contracts still need to be applied where those controls appear later
+- screen-local tables and filter strips still need separate keyboard refinement beyond the shared overlay base
+
+Decision or note:
+ERP UX consistency must come from shared interaction contracts, not isolated screen patches.
+Modal, popup, and future drawer behavior now starts following that rule.
+
+Next step:
+Continue the next UX pass on screen-local tables, tab strips, and selection lists so protected workflows rely less on repeated Tab traversal
+
+## Entry 018
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- added a reusable roving-focus helper for protected screen-local keyboard navigation
+- applied arrow-key navigation to SA filter strips and local action bars
+- applied vertical or grid-style keyboard movement to current SA table action controls
+- made control-panel preview tables and audit rows keyboard-traversable for faster operator review
+
+What changed in repo:
+- frontend/src/navigation/erpRovingFocus.js
+- frontend/src/admin/sa/screens/SAControlPanel.jsx
+- frontend/src/admin/sa/screens/SAAudit.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- TEMP_UI_BOOT_LOG.md
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+
+Problems or blockers:
+- native select controls still keep their own browser arrow semantics, so deeper custom picker work may still be needed later if role selection should behave like a fully custom ERP chooser
+- GA and non-SA operational surfaces have not yet received the same screen-local keyboard pass
+
+Decision or note:
+Keyboard-first ERP UX must be enforced both at shell level and at individual work-surface level.
+This pass extends the contract into current SA control-plane screens instead of stopping at the shell.
+
+Next step:
+Manually re-test the updated SA work surfaces, then extend the same screen-local keyboard contract into GA and future user-role operational screens
+
 ---
 
 # 6. Initial Program Entry

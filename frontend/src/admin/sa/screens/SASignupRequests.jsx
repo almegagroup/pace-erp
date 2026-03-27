@@ -8,9 +8,13 @@
  * Authority: Frontend
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
+import {
+  handleGridNavigation,
+  handleLinearNavigation,
+} from "../../../navigation/erpRovingFocus.js";
 
 async function readJsonSafe(response) {
   try {
@@ -94,6 +98,8 @@ export default function SASignupRequests() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [actingUserId, setActingUserId] = useState("");
+  const actionBarRefs = useRef([]);
+  const rowActionRefs = useRef([]);
 
   useEffect(() => {
     let alive = true;
@@ -257,22 +263,53 @@ export default function SASignupRequests() {
 
             <div className="flex flex-wrap gap-3">
               <button
+                ref={(element) => {
+                  actionBarRefs.current[0] = element;
+                }}
                 type="button"
                 onClick={() => openScreen("SA_CONTROL_PANEL", { mode: "reset" })}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 0,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
                 Control Panel
               </button>
               <button
+                ref={(element) => {
+                  actionBarRefs.current[1] = element;
+                }}
                 type="button"
                 onClick={() => openScreen("SA_USERS")}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 1,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
                 User Directory
               </button>
               <button
+                ref={(element) => {
+                  actionBarRefs.current[2] = element;
+                }}
+                data-workspace-primary-focus="true"
                 type="button"
                 onClick={() => void handleRefresh()}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 2,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 shadow-[0_10px_24px_rgba(14,116,144,0.08)]"
               >
                 {loading ? "Refreshing..." : "Refresh Queue"}
@@ -390,7 +427,7 @@ export default function SASignupRequests() {
                   </tr>
                 </thead>
                 <tbody>
-                  {requests.map((request) => {
+                  {requests.map((request, index) => {
                     const isActing = actingUserId === request.auth_user_id;
 
                     return (
@@ -426,10 +463,21 @@ export default function SASignupRequests() {
                         <td className="rounded-none px-4 py-4 text-sm text-slate-700 last:rounded-r-2xl">
                           <div className="flex flex-wrap gap-2">
                             <button
+                              ref={(element) => {
+                                rowActionRefs.current[index] ??= [];
+                                rowActionRefs.current[index][0] = element;
+                              }}
                               type="button"
                               disabled={isActing}
                               onClick={() =>
                                 void handleDecision(request.auth_user_id, "APPROVE")
+                              }
+                              onKeyDown={(event) =>
+                                handleGridNavigation(event, {
+                                  rowIndex: index,
+                                  columnIndex: 0,
+                                  gridRefs: rowActionRefs.current,
+                                })
                               }
                               className={`rounded-2xl bg-emerald-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700 ${
                                 isActing ? "cursor-not-allowed opacity-60" : ""
@@ -438,10 +486,21 @@ export default function SASignupRequests() {
                               {isActing ? "Updating..." : "Approve"}
                             </button>
                             <button
+                              ref={(element) => {
+                                rowActionRefs.current[index] ??= [];
+                                rowActionRefs.current[index][1] = element;
+                              }}
                               type="button"
                               disabled={isActing}
                               onClick={() =>
                                 void handleDecision(request.auth_user_id, "REJECT")
+                              }
+                              onKeyDown={(event) =>
+                                handleGridNavigation(event, {
+                                  rowIndex: index,
+                                  columnIndex: 1,
+                                  gridRefs: rowActionRefs.current,
+                                })
                               }
                               className={`rounded-2xl bg-rose-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-700 ${
                                 isActing ? "cursor-not-allowed opacity-60" : ""

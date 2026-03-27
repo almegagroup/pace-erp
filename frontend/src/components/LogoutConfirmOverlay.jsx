@@ -39,6 +39,7 @@ export default function LogoutConfirmOverlay() {
           <button
             ref={noButtonRef}
             style={secondaryButtonStyle}
+            data-erp-nav-item="true"
             onClick={() => resolveLogoutConfirm(false)}
           >
             No
@@ -46,6 +47,7 @@ export default function LogoutConfirmOverlay() {
           <button
             ref={yesButtonRef}
             style={primaryButtonStyle}
+            data-erp-nav-item="true"
             onClick={() => resolveLogoutConfirm(true)}
           >
             Yes
