@@ -8,9 +8,12 @@
  * Authority: Frontend
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
+import {
+  handleLinearNavigation,
+} from "../../../navigation/erpRovingFocus.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Users" },
@@ -133,6 +136,9 @@ export default function SAUsers() {
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("ALL");
   const [updatingUserId, setUpdatingUserId] = useState("");
+  const actionBarRefs = useRef([]);
+  const filterRefs = useRef([]);
+  const rowActionRefs = useRef([]);
 
   useEffect(() => {
     let alive = true;
@@ -275,29 +281,69 @@ export default function SAUsers() {
 
             <div className="flex flex-wrap gap-3">
               <button
+                ref={(element) => {
+                  actionBarRefs.current[0] = element;
+                }}
                 type="button"
                 onClick={() => openScreen("SA_CONTROL_PANEL", { mode: "reset" })}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 0,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
                 Control Panel
               </button>
               <button
+                ref={(element) => {
+                  actionBarRefs.current[1] = element;
+                }}
                 type="button"
                 onClick={() => openScreen("SA_SIGNUP_REQUESTS")}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 1,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
                 Signup Queue
               </button>
               <button
+                ref={(element) => {
+                  actionBarRefs.current[2] = element;
+                }}
                 type="button"
                 onClick={() => openScreen("SA_USER_ROLES")}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 2,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
                 Role Assignment
               </button>
               <button
+                ref={(element) => {
+                  actionBarRefs.current[3] = element;
+                }}
                 type="button"
                 onClick={() => void handleRefresh()}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 3,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 shadow-[0_10px_24px_rgba(14,116,144,0.08)]"
               >
                 {loading ? "Refreshing..." : "Refresh Users"}
@@ -374,11 +420,22 @@ export default function SAUsers() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {FILTERS.map((option) => (
+              {FILTERS.map((option, index) => (
                 <button
                   key={option.key}
+                  ref={(element) => {
+                    filterRefs.current[index] = element;
+                  }}
+                  data-workspace-primary-focus={index === 0 ? "true" : undefined}
                   type="button"
                   onClick={() => setFilter(option.key)}
+                  onKeyDown={(event) =>
+                    handleLinearNavigation(event, {
+                      index,
+                      refs: filterRefs.current,
+                      orientation: "horizontal",
+                    })
+                  }
                   className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
                     filter === option.key
                       ? "bg-sky-600 text-white"
@@ -422,7 +479,7 @@ export default function SAUsers() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredUsers.map((user) => {
+                  {filteredUsers.map((user, index) => {
                     const actionLabel =
                       user.state === "ACTIVE" ? "Disable" : "Activate";
                     const nextState =
@@ -477,9 +534,19 @@ export default function SAUsers() {
                         </td>
                         <td className="rounded-none px-4 py-4 text-sm text-slate-700 last:rounded-r-2xl">
                           <button
+                            ref={(element) => {
+                              rowActionRefs.current[index] = element;
+                            }}
                             type="button"
                             disabled={isUpdating}
                             onClick={() => void handleStateChange(user, nextState)}
+                            onKeyDown={(event) =>
+                              handleLinearNavigation(event, {
+                                index,
+                                refs: rowActionRefs.current,
+                                orientation: "vertical",
+                              })
+                            }
                             className={`rounded-2xl px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
                               user.state === "ACTIVE"
                                 ? "bg-rose-50 text-rose-700"

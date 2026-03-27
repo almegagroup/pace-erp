@@ -48,6 +48,7 @@ export default function SessionOverlay() {
         <button
           ref={actionButtonRef}
           style={buttonStyle}
+          data-erp-nav-item="true"
           onClick={() => void clearWarning("ack")}
         >
           OK

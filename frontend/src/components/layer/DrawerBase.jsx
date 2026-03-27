@@ -5,6 +5,8 @@ export default function DrawerBase({
   title,
   children,
   actions,
+  contentProps,
+  actionsProps,
   onEscape,
   initialFocusRef,
   side = "right",
@@ -28,8 +30,28 @@ export default function DrawerBase({
       }}
     >
       {title ? <h2 style={titleStyle}>{title}</h2> : null}
-      <div style={contentStyle}>{children}</div>
-      {actions ? <div style={actionsStyle}>{actions}</div> : null}
+      <div
+        {...contentProps}
+        style={{
+          ...contentStyle,
+          ...(contentProps?.style || {}),
+        }}
+      >
+        {children}
+      </div>
+      {actions ? (
+        <div
+          data-erp-nav-group="true"
+          data-erp-nav-axis="horizontal"
+          {...actionsProps}
+          style={{
+            ...actionsStyle,
+            ...(actionsProps?.style || {}),
+          }}
+        >
+          {actions}
+        </div>
+      ) : null}
     </BlockingLayer>
   );
 }

@@ -8055,3 +8055,118 @@ Result:
 
 Protected UX now moves closer to the intended ERP task-page behavior
 instead of scrolling the entire shell as one long page.
+
+235. BLOCKING OVERLAY KEYBOARD CONTRACT EXPANDED
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Scope:
+
+shared blocking layer
+modal base
+drawer base
+confirm overlays
+workspace lock overlay
+
+Keyboard contract added:
+
+Esc
+-> close or back action when allowed
+
+Arrow keys
+-> move between declared overlay actions and list items
+
+Home / End
+-> jump to first or last item inside the active overlay navigation group
+
+Enter
+-> continues to use native button / form submission behavior
+
+Implementation note:
+
+BlockingLayer now recognizes explicit ERP navigation groups
+inside overlays so modal and popup interactions
+do not depend only on Tab cycling.
+
+236. OVERLAY FORM NAVIGATION PREPARED FOR ERP UX
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Change:
+
+Workspace lock form now uses vertical arrow navigation
+between its interactive controls.
+
+Purpose:
+
+Establish the same operator pattern that future drawers and modal forms
+should follow:
+
+Arrow keys for moving between controls
+Tab for fallback only
+
+237. SCREEN-LOCAL ROVING FOCUS HELPERS ADDED
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Purpose:
+
+Reduce repeated Tab traversal inside protected SA work surfaces.
+
+Shared helper added:
+
+frontend/src/navigation/erpRovingFocus.js
+
+Supported movement:
+
+horizontal groups
+-> Left / Right / Home / End
+
+vertical groups
+-> Up / Down / Home / End
+
+grid-like row action groups
+-> Left / Right across same row
+-> Up / Down across same column
+
+238. SA SCREEN KEYBOARD PASS EXPANDED
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Screens improved:
+
+SA Control Panel
+SA Audit
+SA Users
+SA Sessions
+SA Signup Requests
+SA User Roles
+
+Improved areas:
+
+header action bars
+filter strips
+quick launch cards
+table action buttons
+read-only preview table rows
+
+Result:
+
+Protected SA work surfaces now rely less on repeated Tab traversal
+and move closer to ERP-style operator flow.

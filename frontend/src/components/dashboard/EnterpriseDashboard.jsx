@@ -82,24 +82,28 @@ export default function EnterpriseDashboard({
   const actionRefs = useRef([]);
 
   function handleActionKeyDown(event, index) {
+    if (actions.length === 0) {
+      return;
+    }
+
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      moveFocus(actionRefs, (index + 1) % actions.length);
+      moveFocus(actionRefs.current, (index + 1) % actions.length);
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      moveFocus(actionRefs, (index - 1 + actions.length) % actions.length);
+      moveFocus(actionRefs.current, (index - 1 + actions.length) % actions.length);
     }
 
     if (event.key === "Home") {
       event.preventDefault();
-      moveFocus(actionRefs, 0);
+      moveFocus(actionRefs.current, 0);
     }
 
     if (event.key === "End") {
       event.preventDefault();
-      moveFocus(actionRefs, actions.length - 1);
+      moveFocus(actionRefs.current, actions.length - 1);
     }
   }
 

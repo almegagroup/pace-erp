@@ -7,6 +7,8 @@ export default function ModalBase({
   message,
   children,
   actions,
+  contentProps,
+  actionsProps,
   onEscape,
   initialFocusRef,
   width = "min(440px, calc(100vw - 32px))",
@@ -25,8 +27,20 @@ export default function ModalBase({
       {eyebrow ? <p style={eyebrowStyle}>{eyebrow}</p> : null}
       {title ? <p style={titleStyle}>{title}</p> : null}
       {message ? <p style={messageStyle}>{message}</p> : null}
-      {children}
-      {actions ? <div style={actionsStyle}>{actions}</div> : null}
+      {children ? <div {...contentProps}>{children}</div> : null}
+      {actions ? (
+        <div
+          data-erp-nav-group="true"
+          data-erp-nav-axis="horizontal"
+          {...actionsProps}
+          style={{
+            ...actionsStyle,
+            ...(actionsProps?.style || {}),
+          }}
+        >
+          {actions}
+        </div>
+      ) : null}
     </BlockingLayer>
   );
 }

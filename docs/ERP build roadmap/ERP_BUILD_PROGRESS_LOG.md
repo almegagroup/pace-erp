@@ -803,6 +803,93 @@ The UI now begins moving toward a home-dashboard plus focused task-page model cl
 Next step:
 Re-test the updated protected UX in live SA screens, then continue screen-level keyboard and workflow refinement where friction remains
 
+## Entry 017
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- fixed dashboard action queue arrow-key movement so focused action rows now move correctly with Up and Down
+- expanded the shared blocking-layer keyboard contract for modal, popup, and future drawer interactions
+- enabled arrow-key and Home/End movement inside declared overlay action groups
+- prepared overlay forms for ERP-style vertical keyboard traversal using the workspace lock screen as the first live example
+
+What changed in repo:
+- frontend/src/components/dashboard/EnterpriseDashboard.jsx
+- frontend/src/components/layer/BlockingLayer.jsx
+- frontend/src/components/layer/ModalBase.jsx
+- frontend/src/components/layer/DrawerBase.jsx
+- frontend/src/components/ActionConfirmOverlay.jsx
+- frontend/src/components/LogoutConfirmOverlay.jsx
+- frontend/src/components/SessionOverlay.jsx
+- frontend/src/components/WorkspaceLockOverlay.jsx
+- TEMP_UI_BOOT_LOG.md
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+
+Problems or blockers:
+- explicit tab-strip components are not yet centralized in the current repo, so tab-style arrow contracts still need to be applied where those controls appear later
+- screen-local tables and filter strips still need separate keyboard refinement beyond the shared overlay base
+
+Decision or note:
+ERP UX consistency must come from shared interaction contracts, not isolated screen patches.
+Modal, popup, and future drawer behavior now starts following that rule.
+
+Next step:
+Continue the next UX pass on screen-local tables, tab strips, and selection lists so protected workflows rely less on repeated Tab traversal
+
+## Entry 018
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- added a reusable roving-focus helper for protected screen-local keyboard navigation
+- applied arrow-key navigation to SA filter strips and local action bars
+- applied vertical or grid-style keyboard movement to current SA table action controls
+- made control-panel preview tables and audit rows keyboard-traversable for faster operator review
+
+What changed in repo:
+- frontend/src/navigation/erpRovingFocus.js
+- frontend/src/admin/sa/screens/SAControlPanel.jsx
+- frontend/src/admin/sa/screens/SAAudit.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- TEMP_UI_BOOT_LOG.md
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+
+Problems or blockers:
+- native select controls still keep their own browser arrow semantics, so deeper custom picker work may still be needed later if role selection should behave like a fully custom ERP chooser
+- GA and non-SA operational surfaces have not yet received the same screen-local keyboard pass
+
+Decision or note:
+Keyboard-first ERP UX must be enforced both at shell level and at individual work-surface level.
+This pass extends the contract into current SA control-plane screens instead of stopping at the shell.
+
+Next step:
+Manually re-test the updated SA work surfaces, then extend the same screen-local keyboard contract into GA and future user-role operational screens
+
 ---
 
 # 6. Initial Program Entry
