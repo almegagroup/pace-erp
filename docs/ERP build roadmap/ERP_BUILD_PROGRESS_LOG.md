@@ -665,6 +665,102 @@ The UI now depends on verified backend state for completion.
 Next step:
 Retest the live SA mutation flows against real data before continuing deeper roadmap build-out
 
+## Entry 014
+
+Date:
+2026-03-26
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- traced the failing live signup approval flow down to schema-qualified Supabase RPC usage
+- fixed admin signup approve and reject handlers so non-public functions are called through explicit schema scoping instead of dotted rpc names
+- audited and corrected the same RPC usage pattern in context resolution, ACL snapshot activation, and workflow decision processing paths
+- removed placeholder snapshot counters from SA Home and replaced them with live control-panel and system-health driven values
+- continued keyboard-first SA operational build-out while keeping public routes unchanged
+
+What changed in repo:
+- supabase/functions/api/_core/admin/signup/approve.handler.ts
+- supabase/functions/api/_core/admin/signup/reject.handler.ts
+- supabase/functions/api/_pipeline/context.ts
+- supabase/functions/api/_core/admin/acl/activate_acl_version.handler.ts
+- supabase/functions/api/_core/workflow/process_decision.handler.ts
+- supabase/functions/api/_core/admin/diagnostics/control_panel.handler.ts
+- frontend/src/admin/sa/screens/SAHome.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- direct DB diagnostics confirmed the approval engine itself was healthy
+- production failure reason exposed the real issue as incorrect RPC schema resolution
+- frontend lint completed successfully
+- frontend build completed successfully
+
+Problems or blockers:
+- backend and frontend deploy remained required before production would reflect the corrected RPC invocation pattern
+
+Decision or note:
+The signup approval failure was not caused by runner.ts, lifecycle mismatch, or the DB approval function body.
+It was caused by calling non-public functions with dotted rpc names, which production PostgREST resolved incorrectly.
+
+Next step:
+Retest live SA approval, rejection, and any other schema-scoped RPC-backed governance action after deploy
+
+## Entry 015
+
+Date:
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- replaced browser-native confirm dialogs across current SA mutation screens with a shared ERP confirmation overlay
+- enriched admin user payloads using existing ERP user plus signup intake data so governance screens now show user code, user name, parent company, and designation
+- refactored SA role assignment and user directory screens to present identity-first operator context instead of code-only rows
+- enriched the session governance payload so session rows now identify the ERP user rather than forcing SA to interpret long auth identifiers
+- fixed SA system-health rendering so object-shaped system version metadata no longer crashes the screen
+- corrected protected-route history handling so browser back from the dashboard root now follows the logout confirmation path and logout no longer leaves stale protected dashboard history behind
+
+What changed in repo:
+- frontend/src/store/actionConfirm.js
+- frontend/src/components/ActionConfirmOverlay.jsx
+- frontend/src/App.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SASystemHealth.jsx
+- frontend/src/components/layer/BlockingLayer.jsx
+- frontend/src/navigation/backGuardEngine.js
+- frontend/src/store/sessionWarning.js
+- frontend/src/pages/public/LoginScreen.jsx
+- supabase/functions/api/_core/admin/user/list_users.handler.ts
+- supabase/functions/api/_core/admin/session/list_sessions.handler.ts
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- current SA screens no longer use browser-native confirm dialogs
+- no new DB table or migration was required for the identity enrichment work
+
+Problems or blockers:
+- changes still depend on deploy before production behavior matches the local verified state
+
+Decision or note:
+Operator-facing SA screens must prioritize identifiable ERP business context over long technical identifiers.
+Current governance surfaces now move closer to practical ERP operation while remaining within the existing schema.
+
+Next step:
+Continue live retest of the patched SA governance surfaces, then resume the next sequential governance build surface after validation
+
 ---
 
 # 6. Initial Program Entry

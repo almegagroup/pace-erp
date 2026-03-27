@@ -7833,3 +7833,133 @@ Constraint:
 This is temporary reachability support only.
 Authoritative long-term access must still come from
 menu snapshot governance.
+
+227. ADMIN RPC SCHEMA RESOLUTION PATCH
+
+Status:
+Active
+
+Date:
+2026-03-26
+
+Issue:
+
+Live SA signup approval and rejection were failing even though
+the DB-owned atomic approval engine itself was healthy.
+
+Root cause:
+
+Several backend handlers were calling non-public SQL functions
+through dotted rpc names such as:
+
+schema.function_name
+
+Production PostgREST resolved those incorrectly against
+the public schema cache.
+
+Fix:
+
+Affected handlers were changed to use explicit schema scoping
+before rpc invocation.
+
+Operational note:
+
+This was not a DB approval-engine failure.
+It was an API invocation pattern failure.
+
+228. SA GOVERNANCE SCREENS SHIFTED AWAY FROM BROWSER NATIVE CONFIRM
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Change:
+
+Current SA mutation flows now use a shared ERP confirmation overlay
+instead of browser-native confirm dialogs.
+
+Covered screens:
+
+signup requests
+user directory
+user role assignment
+session revoke
+
+Reason:
+
+Browser-native dialogs break the intended ERP layer behavior
+and do not fit the protected workspace interaction model.
+
+229. SA IDENTITY CONTEXT ENRICHMENT
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Change:
+
+Existing admin payloads were enriched using current tables only.
+
+Result:
+
+SA user governance and session governance now surface:
+
+user code
+user name
+parent company
+designation
+
+Constraint:
+
+No new table was introduced for this step.
+No migration was required for this identity enrichment.
+
+230. PROTECTED HISTORY CONTRACT TIGHTENED
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Change:
+
+Protected-route browser history handling was tightened so that:
+
+after logout,
+back should return to landing instead of stale dashboard state
+
+from dashboard root,
+browser back should follow the logout confirmation flow
+
+Reason:
+
+Protected workspace history must not resurrect stale dashboard shells
+after logout or bypass explicit logout confirmation behavior.
+
+231. SA SYSTEM HEALTH RENDER SAFETY PATCH
+
+Status:
+Active
+
+Date:
+2026-03-27
+
+Issue:
+
+system-health screen could crash when backend version metadata
+arrived as an object instead of a string.
+
+Fix:
+
+object-safe system version formatting was added to the
+SA system-health screen.
+
+Additional note:
+
+Blocking layer focus handling was also adjusted to reduce
+aria-hidden focus warnings when overlays open.
