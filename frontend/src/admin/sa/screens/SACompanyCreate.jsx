@@ -32,7 +32,9 @@ async function lookupGstProfile(gstNumber) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !json?.data?.gst_profile) {
-    throw new Error("GST_PROFILE_LOOKUP_FAILED");
+    const error = new Error("GST_PROFILE_LOOKUP_FAILED");
+    error.status = response.status;
+    throw error;
   }
 
   return json.data.gst_profile;
@@ -51,7 +53,9 @@ async function createCompany(payload) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !json?.data?.company) {
-    throw new Error("COMPANY_CREATE_FAILED");
+    const error = new Error("COMPANY_CREATE_FAILED");
+    error.status = response.status;
+    throw error;
   }
 
   return json.data.company;
@@ -113,9 +117,13 @@ export default function SACompanyCreate() {
       const profile = await lookupGstProfile(normalizedGst);
       setGstProfile(profile);
       setCompanyName(profile.legal_name ?? "");
-    } catch {
+    } catch (error) {
       setGstProfile(null);
-      setError("Unable to resolve GST right now. Check the GST number or backend integration.");
+      setError(
+        error?.status >= 500
+          ? "GST service is unavailable right now. Check Applyflow/backend configuration."
+          : "Unable to resolve GST right now. Check the GST number or backend integration.",
+      );
     } finally {
       setLookingUp(false);
     }

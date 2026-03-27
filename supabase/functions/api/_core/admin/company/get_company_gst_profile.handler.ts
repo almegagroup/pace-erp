@@ -12,6 +12,7 @@ import { errorResponse, okResponse } from "../../../_core/response.ts";
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { deriveCompanyFieldsFromGstProfile } from "../../../_shared/gst_company_fields.ts";
 import { resolveGstProfileWithSource } from "../../../_shared/gst_resolver.ts";
+import { log } from "../../../_lib/logger.ts";
 
 type HandlerContext = {
   context: ContextResolution;
@@ -22,6 +23,32 @@ function assertAdmin(ctx: HandlerContext): void {
   if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
     throw new Error("ADMIN_ONLY");
   }
+}
+
+function resolveErrorStatus(code: string): number {
+  if (code === "GST_NUMBER_REQUIRED") {
+    return 400;
+  }
+
+  if (code === "APPLYFLOW_ENV_NOT_CONFIGURED") {
+    return 500;
+  }
+
+  if (
+    code.startsWith("APPLYFLOW_HTTP_") ||
+    code === "APPLYFLOW_INVALID_RESPONSE"
+  ) {
+    return 502;
+  }
+
+  if (
+    code === "GST_CACHE_LOOKUP_FAILED" ||
+    code === "GST_CACHE_INSERT_FAILED"
+  ) {
+    return 500;
+  }
+
+  return 500;
 }
 
 export async function getCompanyGstProfileHandler(
@@ -62,10 +89,26 @@ export async function getCompanyGstProfileHandler(
       ctx.request_id,
     );
   } catch (err) {
+    const errorCode = (err as Error).message || "COMPANY_GST_PROFILE_EXCEPTION";
+
+    log({
+      level: "ERROR",
+      request_id: ctx.request_id,
+      gate_id: "9.2D",
+      route_key: "GET:/api/admin/company/gst-profile",
+      event: "COMPANY_GST_PROFILE_LOOKUP_FAILED",
+      meta: {
+        error_code: errorCode,
+        request_url: req.url,
+      },
+    });
+
     return errorResponse(
-      (err as Error).message || "COMPANY_GST_PROFILE_EXCEPTION",
+      errorCode,
       "company gst profile exception",
       ctx.request_id,
+      "NONE",
+      resolveErrorStatus(errorCode),
     );
   }
 }
