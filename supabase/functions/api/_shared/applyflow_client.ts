@@ -9,6 +9,7 @@
  */
 
 import { ENV } from "./env.ts";
+import { log } from "../_lib/logger.ts";
 
 export type ApplyflowResponse = {
   gstin: string;
@@ -17,6 +18,75 @@ export type ApplyflowResponse = {
   status: string;
   address: Record<string, unknown>;
 };
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function pickString(
+  source: Record<string, unknown>,
+  keys: string[],
+): string | null {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function pickObject(
+  source: Record<string, unknown>,
+  keys: string[],
+): Record<string, unknown> | null {
+  for (const key of keys) {
+    const value = source[key];
+    if (isObject(value)) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function buildInvalidResponseMeta(
+  gst: string,
+  raw: unknown,
+): Record<string, unknown> {
+  const topLevelKeys = isObject(raw) ? Object.keys(raw) : [];
+  const candidateKeys = isObject(raw)
+    ? [
+        "taxpayerInfo",
+        "data",
+        "result",
+        "taxpayer",
+        "gst",
+        "gstDetails",
+      ].map((key) => {
+        const value = raw[key];
+        return {
+          key,
+          nested_keys: isObject(value) ? Object.keys(value) : [],
+        };
+      })
+    : [];
+
+  let rawPreview = "";
+  try {
+    rawPreview = JSON.stringify(raw).slice(0, 1500);
+  } catch {
+    rawPreview = "[unserializable]";
+  }
+
+  return {
+    gst_number: gst,
+    top_level_keys: topLevelKeys,
+    candidate_keys: candidateKeys,
+    raw_preview: rawPreview,
+  };
+}
 
 /**
  * Fetch GST profile from Applyflow
@@ -71,18 +141,61 @@ export async function fetchGstFromApplyflow(
    * raw.taxpayerInfo.address
    */
 
-  const info = raw?.taxpayerInfo;
+  const candidates = [
+    isObject(raw) ? raw.taxpayerInfo : null,
+    isObject(raw) && isObject(raw.data) ? raw.data.taxpayerInfo : null,
+    isObject(raw) ? raw.data : null,
+    isObject(raw) && isObject(raw.result) ? raw.result.taxpayerInfo : null,
+    isObject(raw) ? raw.result : null,
+    isObject(raw) ? raw.taxpayer : null,
+    isObject(raw) ? raw.gstDetails : null,
+    isObject(raw) ? raw.gst : null,
+    raw,
+  ].filter(isObject);
 
-  if (!info || typeof info.gstin !== "string") {
+  const info =
+    candidates.find((candidate) =>
+      Boolean(
+        pickString(candidate, ["gstin", "GSTIN", "gstNo", "gst_number"]) &&
+        pickString(candidate, ["legalName", "legal_name", "lgnm", "tradeNam"]),
+      ),
+    ) ?? candidates[0];
+
+  if (!info) {
+    log({
+      level: "ERROR",
+      gate_id: "6.3.2A",
+      event: "APPLYFLOW_RESPONSE_INVALID",
+      meta: buildInvalidResponseMeta(gst, raw),
+    });
+    throw new Error("APPLYFLOW_INVALID_RESPONSE");
+  }
+
+  const gstin = pickString(info, ["gstin", "GSTIN", "gstNo", "gst_number"]);
+  const legalName = pickString(info, ["legalName", "legal_name", "lgnm", "legal_name_of_business"]);
+  const tradeName = pickString(info, ["tradeName", "trade_name", "tradeNam", "trade_name_of_business"]);
+  const status = pickString(info, ["status", "sts", "gstStatus", "registrationStatus"]);
+  const address =
+    pickObject(info, ["address", "pradr", "principalAddress"]) ??
+    pickObject(raw, ["address"]) ??
+    {};
+
+  if (!gstin || !legalName) {
+    log({
+      level: "ERROR",
+      gate_id: "6.3.2A",
+      event: "APPLYFLOW_RESPONSE_INVALID",
+      meta: buildInvalidResponseMeta(gst, raw),
+    });
     throw new Error("APPLYFLOW_INVALID_RESPONSE");
   }
 
   // 6️⃣ Normalized SSOT-safe shape
   return {
-    gstin: info.gstin,
-    legal_name: String(info.legalName ?? ""),
-    trade_name: info.tradeName ?? null,
-    status: String(info.status ?? "UNKNOWN"),
-    address: info.address ?? {},
+    gstin,
+    legal_name: legalName,
+    trade_name: tradeName ?? null,
+    status: status ?? "UNKNOWN",
+    address,
   };
 }
