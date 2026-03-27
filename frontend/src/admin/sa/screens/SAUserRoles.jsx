@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useMenu } from "../../../context/useMenu.js";
 
 const ROLE_OPTIONS = Object.freeze([
   { code: "SA", label: "Super Admin", rank: 999 },
@@ -131,6 +132,7 @@ function SummaryCard({ label, value, caption, tone = "sky" }) {
 }
 
 export default function SAUserRoles() {
+  const { shellProfile } = useMenu();
   const [users, setUsers] = useState([]);
   const [draftRoles, setDraftRoles] = useState({});
   const [loading, setLoading] = useState(true);
@@ -269,19 +271,23 @@ export default function SAUserRoles() {
     }
   }
 
+  const governableUsers = users.filter(
+    (user) => !shellProfile?.userCode || user.user_code !== shellProfile.userCode
+  );
+
   const filteredUsers =
     roleFilter === "ALL"
-      ? users
+      ? governableUsers
       : roleFilter === "UNASSIGNED"
-        ? users.filter((user) => !user.role_code)
-        : users.filter((user) => user.role_code === roleFilter);
+        ? governableUsers.filter((user) => !user.role_code)
+        : governableUsers.filter((user) => user.role_code === roleFilter);
 
-  const privilegedCount = users.filter((user) =>
+  const privilegedCount = governableUsers.filter((user) =>
     user.role_code === "SA" || user.role_code === "GA"
   ).length;
-  const assignedCount = users.filter((user) => user.role_code).length;
-  const unassignedCount = users.filter((user) => !user.role_code).length;
-  const managerCount = users.filter((user) =>
+  const assignedCount = governableUsers.filter((user) => user.role_code).length;
+  const unassignedCount = governableUsers.filter((user) => !user.role_code).length;
+  const managerCount = governableUsers.filter((user) =>
     ["L3_MANAGER", "L2_MANAGER", "L1_MANAGER"].includes(user.role_code)
   ).length;
 
@@ -369,9 +375,9 @@ export default function SAUserRoles() {
         <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <SummaryCard
             label="All Users"
-            value={loading ? "..." : String(users.length)}
+            value={loading ? "..." : String(governableUsers.length)}
             tone="sky"
-            caption="Users currently visible for ERP role assignment governance."
+            caption="Governable users visible for role assignment. The current operator is excluded."
           />
           <SummaryCard
             label="Assigned"
@@ -413,6 +419,8 @@ export default function SAUserRoles() {
             decisions to the existing admin role endpoint. Backend role updates
             now use upsert semantics so assignment remains robust even if a user
             role row is missing and needs to be created during governance.
+            The current operator is intentionally excluded so SA cannot change
+            their own role from this workspace.
           </p>
 
           <div className="mt-5 flex flex-wrap gap-2">

@@ -61,6 +61,16 @@ export async function updateUserScopeHandler(
 
     const db = getServiceRoleClientWithContext(ctx.context);
 
+    const { data: activeBusinessCompanies } = await db
+      .schema("erp_master").from("companies")
+      .select("id")
+      .eq("status", "ACTIVE")
+      .eq("company_kind", "BUSINESS");
+
+    const activeBusinessCompanyIds = new Set(
+      (activeBusinessCompanies ?? []).map((row) => row.id),
+    );
+
     const { data: user } = await db
       .schema("erp_core").from("users")
       .select("auth_user_id")
@@ -76,18 +86,14 @@ export async function updateUserScopeHandler(
     }
 
     const companyIdsToValidate = [...new Set([parentCompanyId, ...workCompanyIds])];
-    const { data: validCompanies } = companyIdsToValidate.length === 0
-      ? { data: [] }
-      : await db
-        .schema("erp_master").from("companies")
-        .select("id")
-        .in("id", companyIdsToValidate)
-        .eq("status", "ACTIVE");
+    const validCompanyCount = companyIdsToValidate.filter((companyId) =>
+      activeBusinessCompanyIds.has(companyId)
+    ).length;
 
-    if ((validCompanies ?? []).length !== companyIdsToValidate.length) {
+    if (validCompanyCount !== companyIdsToValidate.length) {
       return errorResponse(
         "USER_SCOPE_COMPANY_INVALID",
-        "one or more companies are invalid",
+        "one or more companies are invalid or non-business",
         ctx.request_id,
       );
     }
@@ -96,14 +102,18 @@ export async function updateUserScopeHandler(
       ? { data: [] }
       : await db
         .schema("erp_master").from("projects")
-        .select("id")
+        .select("id, company_id")
         .in("id", projectIds)
         .eq("status", "ACTIVE");
 
-    if ((validProjects ?? []).length !== projectIds.length) {
+    const validProjectCount = (validProjects ?? []).filter((project) =>
+      activeBusinessCompanyIds.has(project.company_id)
+    ).length;
+
+    if (validProjectCount !== projectIds.length) {
       return errorResponse(
         "USER_SCOPE_PROJECT_INVALID",
-        "one or more projects are invalid",
+        "one or more projects are invalid or not mapped to a business company",
         ctx.request_id,
       );
     }
@@ -112,14 +122,18 @@ export async function updateUserScopeHandler(
       ? { data: [] }
       : await db
         .schema("erp_master").from("departments")
-        .select("id")
+        .select("id, company_id")
         .in("id", departmentIds)
         .eq("status", "ACTIVE");
 
-    if ((validDepartments ?? []).length !== departmentIds.length) {
+    const validDepartmentCount = (validDepartments ?? []).filter((department) =>
+      activeBusinessCompanyIds.has(department.company_id)
+    ).length;
+
+    if (validDepartmentCount !== departmentIds.length) {
       return errorResponse(
         "USER_SCOPE_DEPARTMENT_INVALID",
-        "one or more departments are invalid",
+        "one or more departments are invalid or not mapped to a business company",
         ctx.request_id,
       );
     }

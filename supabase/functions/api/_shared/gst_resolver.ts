@@ -22,15 +22,20 @@ type GstProfile = {
   fetched_at: string;
 };
 
+export type GstProfileResolution = {
+  profile: GstProfile;
+  source: "CACHE" | "APPLYFLOW";
+};
+
 /**
  * Canonical GST resolver
  * - Cache-first
  * - Deterministic
  * - Cost-safe
  */
-export async function resolveGstProfile(
+export async function resolveGstProfileWithSource(
   rawGst: string
-): Promise<GstProfile> {
+): Promise<GstProfileResolution> {
   const gst = rawGst.trim().toUpperCase();
   const db = serviceRoleClient;
 
@@ -48,7 +53,10 @@ export async function resolveGstProfile(
   }
 
   if (cached) {
-    return cached as GstProfile;
+    return {
+      profile: cached as GstProfile,
+      source: "CACHE",
+    };
   }
 
   /* -----------------------------------------
@@ -78,5 +86,15 @@ export async function resolveGstProfile(
     throw new Error("GST_CACHE_INSERT_FAILED");
   }
 
-  return profile;
+  return {
+    profile,
+    source: "APPLYFLOW",
+  };
+}
+
+export async function resolveGstProfile(
+  rawGst: string,
+): Promise<GstProfile> {
+  const resolved = await resolveGstProfileWithSource(rawGst);
+  return resolved.profile;
 }

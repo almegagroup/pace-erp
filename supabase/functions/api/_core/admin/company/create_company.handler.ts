@@ -12,6 +12,7 @@ import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleCli
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { resolveGstProfile } from "../../../_shared/gst_resolver.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
+import { deriveCompanyFieldsFromGstProfile } from "../../../_shared/gst_company_fields.ts";
 
 // ------------------------------------------------------------------
 // Minimal admin context (Gate-6 contract)
@@ -66,6 +67,15 @@ export async function createCompanyHandler(
       gstProfile?.legal_name ??
       body.company_name?.trim();
 
+    const derivedFields = gstProfile
+      ? deriveCompanyFieldsFromGstProfile(gstProfile)
+      : {
+        company_name: companyName ?? "",
+        state_name: null,
+        full_address: null,
+        pin_code: null,
+      };
+
     if (!companyName) {
       return errorResponse(
         "COMPANY_NAME_REQUIRED",
@@ -82,6 +92,10 @@ const { data, error } = await db
   .insert({
     company_name: companyName,
     gst_number: gst,
+    state_name: derivedFields.state_name,
+    full_address: derivedFields.full_address,
+    pin_code: derivedFields.pin_code,
+    company_kind: "BUSINESS",
   })
   .select()
   .single();
@@ -101,6 +115,9 @@ const { data, error } = await db
           company_code: data.company_code,
           company_name: data.company_name,
           gst_number: data.gst_number,
+          state_name: data.state_name ?? null,
+          full_address: data.full_address ?? null,
+          pin_code: data.pin_code ?? null,
         },
       },
       ctx.request_id
