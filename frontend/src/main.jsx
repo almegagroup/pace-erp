@@ -15,6 +15,7 @@ import App from "./App.jsx";
 import {
   hardLogout,
   recordBackendActivity,
+  SESSION_WARNING_ACK_QUERY,
   showWarning,
 } from "./store/sessionWarning.js";
 import {
@@ -78,9 +79,12 @@ const __originalFetch = globalThis.fetch;
 const API_BASE = import.meta.env.VITE_API_BASE;
 
 async function refreshSessionAfterWarning() {
-  const response = await __originalFetch(`${API_BASE}/api/me`, {
-    credentials: "include",
-  });
+  const response = await __originalFetch(
+    `${API_BASE}/api/me?${SESSION_WARNING_ACK_QUERY}`,
+    {
+      credentials: "include",
+    }
+  );
 
   let json = null;
 
@@ -109,6 +113,8 @@ globalThis.fetch = async (...args) => {
   const isApiRequest = url.startsWith(`${API_BASE}/api/`);
   const isPassiveProbe =
     isApiRequest && url.includes("session_mode=passive");
+  const isWarningAcknowledgeRefresh =
+    isApiRequest && url.includes(SESSION_WARNING_ACK_QUERY);
 
   const res = await __originalFetch(...args);
 
@@ -123,11 +129,14 @@ globalThis.fetch = async (...args) => {
   /* -------------------------------------------------------
    * WARNING (BACKEND AUTHORITY)
    * ------------------------------------------------------- */
-  if (json?.warning?.type === "IDLE_WARNING") {
+  if (!isWarningAcknowledgeRefresh && json?.warning?.type === "IDLE_WARNING") {
     showWarning("IDLE_WARNING", refreshSessionAfterWarning);
   }
 
-  if (json?.warning?.type === "ABSOLUTE_WARNING") {
+  if (
+    !isWarningAcknowledgeRefresh &&
+    json?.warning?.type === "ABSOLUTE_WARNING"
+  ) {
     showWarning("ABSOLUTE_WARNING", refreshSessionAfterWarning);
   }
 

@@ -12,6 +12,7 @@ import { errorResponse, okResponse } from "../../../_core/response.ts";
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { deriveCompanyFieldsFromGstProfile } from "../../../_shared/gst_company_fields.ts";
 import { resolveGstProfileWithSource } from "../../../_shared/gst_resolver.ts";
+import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import { log } from "../../../_lib/logger.ts";
 
 type HandlerContext = {
@@ -69,8 +70,14 @@ export async function getCompanyGstProfileHandler(
       );
     }
 
+    const db = getServiceRoleClientWithContext(ctx.context);
     const resolved = await resolveGstProfileWithSource(gstNumber);
     const companyFields = deriveCompanyFieldsFromGstProfile(resolved.profile);
+    const { data: existingCompany } = await db
+      .schema("erp_master").from("companies")
+      .select("id, company_code, company_name, gst_number, state_name, full_address, pin_code, status, company_kind")
+      .eq("gst_number", gstNumber)
+      .maybeSingle();
 
     return okResponse(
       {
@@ -85,6 +92,7 @@ export async function getCompanyGstProfileHandler(
           full_address: companyFields.full_address,
           pin_code: companyFields.pin_code,
         },
+        existing_company: existingCompany ?? null,
       },
       ctx.request_id,
     );

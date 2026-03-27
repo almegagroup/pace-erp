@@ -339,4 +339,4 @@ Open Risks:
 - Logical Observation: Route ↔ Resource identity mapping indirect (shared registry not yet enforced)
 
 Next Step:
-Phase-5 — Governance Normalization & Registry Hardening
+Phase-5 - Governance Normalization & Registry Hardening

@@ -47,6 +47,16 @@ export async function assertSelfLockoutSafe(
   }
 
   // --------------------------------------------------
+  // Rule 0A: Actor cannot disable themselves
+  // --------------------------------------------------
+  if (
+    _actorAuthUserId === _targetAuthUserId &&
+    targetNextState === "DISABLED"
+  ) {
+    throw new Error("G4_SELF_DISABLE_BLOCKED");
+  }
+
+  // --------------------------------------------------
   // Rule 1: Last Super Admin cannot be disabled
   // --------------------------------------------------
   if (

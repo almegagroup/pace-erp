@@ -8,10 +8,11 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
+import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 
 async function readJsonSafe(response) {
   try {
@@ -32,7 +33,8 @@ async function fetchUserScope(authUserId) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !json?.data) {
-    throw new Error("USER_SCOPE_READ_FAILED");
+    const error = new Error(json?.code ?? "USER_SCOPE_READ_FAILED");
+    throw error;
   }
 
   return json.data;
@@ -51,7 +53,8 @@ async function saveUserScope(payload) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    throw new Error("USER_SCOPE_SAVE_FAILED");
+    const error = new Error(json?.code ?? "USER_SCOPE_SAVE_FAILED");
+    throw error;
   }
 
   return json.data;
@@ -77,10 +80,36 @@ function extractIds(rows, key = "id") {
   return Array.isArray(rows) ? rows.map((row) => row?.[key]).filter(Boolean) : [];
 }
 
+function formatCompanyMeta(company) {
+  const parts = [
+    company?.state_name,
+    company?.pin_code ? `PIN ${company.pin_code}` : null,
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join(" | ") : "State and PIN not captured";
+}
+
+function formatCompanyAddress(company) {
+  return company?.full_address ?? "Address not captured";
+}
+
+function formatCompanyOptionLabel(company) {
+  const suffixParts = [
+    company?.state_name,
+    company?.pin_code ? `PIN ${company.pin_code}` : null,
+    company?.full_address,
+  ].filter(Boolean);
+
+  return suffixParts.length > 0
+    ? `${company.company_code} - ${company.company_name} | ${suffixParts.join(" | ")}`
+    : `${company.company_code} - ${company.company_name}`;
+}
+
 export default function SAUserScope() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const authUserId = searchParams.get("auth_user_id") ?? "";
+  const companySearchRef = useRef(null);
 
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -91,6 +120,8 @@ export default function SAUserScope() {
   const [workCompanyIds, setWorkCompanyIds] = useState([]);
   const [projectIds, setProjectIds] = useState([]);
   const [departmentIds, setDepartmentIds] = useState([]);
+  const [companyPickerOpen, setCompanyPickerOpen] = useState(false);
+  const [companySearch, setCompanySearch] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -115,9 +146,13 @@ export default function SAUserScope() {
         setWorkCompanyIds(extractIds(data.scope?.work_companies));
         setProjectIds(extractIds(data.scope?.projects));
         setDepartmentIds(extractIds(data.scope?.departments));
-      } catch {
+      } catch (error) {
         if (!alive) return;
-        setError("Unable to load user scope right now.");
+        setError(
+          error?.message === "USER_SCOPE_ACL_USER_REQUIRED"
+            ? "Scope mapping is available only after the user receives an ACL role."
+            : "Unable to load user scope right now.",
+        );
       } finally {
         if (alive) {
           setLoading(false);
@@ -139,6 +174,28 @@ export default function SAUserScope() {
   const availableCompanies = options.companies ?? [];
   const availableProjects = options.projects ?? [];
   const availableDepartments = options.departments ?? [];
+  const selectedParentCompany =
+    availableCompanies.find((company) => company.id === parentCompanyId) ?? null;
+
+  const filteredCompanies = useMemo(() => {
+    const query = companySearch.trim().toLowerCase();
+
+    if (!query) {
+      return availableCompanies;
+    }
+
+    return availableCompanies.filter((company) =>
+      [
+        company.company_code,
+        company.company_name,
+        company.state_name,
+        company.pin_code,
+        company.full_address,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query)),
+    );
+  }, [availableCompanies, companySearch]);
 
   const readinessFlags = useMemo(
     () => [
@@ -193,17 +250,48 @@ export default function SAUserScope() {
       setWorkCompanyIds(extractIds(refreshed.scope?.work_companies));
       setProjectIds(extractIds(refreshed.scope?.projects));
       setDepartmentIds(extractIds(refreshed.scope?.departments));
-    } catch {
-      setError("User scope was not finalized by the backend.");
+    } catch (error) {
+      setError(
+        error?.message === "USER_SCOPE_ACL_USER_REQUIRED"
+          ? "Scope mapping is available only for ACL users with an assigned role."
+          : "User scope was not finalized by the backend.",
+      );
     } finally {
       setSaving(false);
     }
   }
 
+  function closeCompanyPicker() {
+    setCompanyPickerOpen(false);
+    setCompanySearch("");
+  }
+
+  function selectParentCompany(companyId) {
+    setParentCompanyId(companyId);
+    closeCompanyPicker();
+  }
+
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") {
+        return;
+      }
+
+      event.preventDefault();
+
+      if (!loading && !saving && authUserId) {
+        void handleSave();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [loading, saving, authUserId, parentCompanyId, workCompanyIds, projectIds, departmentIds, user]);
+
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
       <div className="mx-auto max-w-7xl">
-        <div className="rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.08)]">
+        <div className="sticky top-4 z-20 rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.12)]">
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="max-w-3xl">
               <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
@@ -317,18 +405,30 @@ export default function SAUserScope() {
                   <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                     Select Parent Company
                   </span>
-                  <select
-                    value={parentCompanyId}
-                    onChange={(event) => setParentCompanyId(event.target.value)}
-                    className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none focus:border-sky-300 focus:bg-white"
+                  <button
+                    type="button"
+                    onClick={() => setCompanyPickerOpen(true)}
+                    className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
                   >
-                    <option value="">Choose Parent Company</option>
-                    {availableCompanies.map((company) => (
-                      <option key={company.id} value={company.id}>
-                        {company.company_code} - {company.company_name}
-                      </option>
-                    ))}
-                  </select>
+                    <span className="block font-semibold text-slate-900">
+                      {selectedParentCompany
+                        ? `${selectedParentCompany.company_code} - ${selectedParentCompany.company_name}`
+                        : "Choose Parent Company"}
+                    </span>
+                    <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
+                      {selectedParentCompany
+                        ? formatCompanyMeta(selectedParentCompany)
+                        : "Press Enter to open company picker"}
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500">
+                      {selectedParentCompany
+                        ? formatCompanyAddress(selectedParentCompany)
+                        : "State, address, and PIN stay visible during selection."}
+                    </span>
+                  </button>
+                  <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    Enter = open picker | Ctrl+S = save scope
+                  </p>
                 </label>
               </article>
 
@@ -369,6 +469,12 @@ export default function SAUserScope() {
                           <span className="font-semibold">{company.company_code}</span>
                           {" - "}
                           {company.company_name}
+                          <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
+                            {formatCompanyMeta(company)}
+                          </span>
+                          <span className="mt-1 block text-xs leading-5 text-slate-500">
+                            {formatCompanyAddress(company)}
+                          </span>
                         </span>
                       </label>
                     );
@@ -473,6 +579,79 @@ export default function SAUserScope() {
             </section>
           </>
         )}
+
+        <DrawerBase
+          visible={companyPickerOpen}
+          title="Select Parent Company"
+          onEscape={closeCompanyPicker}
+          initialFocusRef={companySearchRef}
+          width="min(620px, calc(100vw - 24px))"
+          actions={(
+            <button
+              type="button"
+              onClick={closeCompanyPicker}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            >
+              Close
+            </button>
+          )}
+        >
+          <div
+            data-erp-nav-group="true"
+            data-erp-nav-axis="vertical"
+            data-erp-nav-allow-editable="true"
+            className="space-y-4"
+          >
+            <label className="block">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Search Company
+              </span>
+              <input
+                ref={companySearchRef}
+                value={companySearch}
+                onChange={(event) => setCompanySearch(event.target.value)}
+                placeholder="Search by code, name, state, pin, or address"
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none focus:border-sky-300 focus:bg-white"
+              />
+            </label>
+
+            <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+              {filteredCompanies.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                  No company matches the current search.
+                </div>
+              ) : (
+                filteredCompanies.map((company) => {
+                  const selected = company.id === parentCompanyId;
+
+                  return (
+                    <button
+                      key={company.id}
+                      type="button"
+                      data-erp-nav-item="true"
+                      onClick={() => selectParentCompany(company.id)}
+                      className={`w-full rounded-2xl border px-4 py-4 text-left text-sm transition ${
+                        selected
+                          ? "border-sky-300 bg-sky-50 text-sky-900"
+                          : "border-slate-200 bg-white text-slate-700"
+                      }`}
+                    >
+                      <span className="block font-semibold">
+                        {company.company_code} - {company.company_name}
+                      </span>
+                      <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
+                        {formatCompanyMeta(company)}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-500">
+                        {formatCompanyAddress(company)}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </DrawerBase>
       </div>
     </section>
   );

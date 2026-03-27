@@ -721,6 +721,63 @@ Status:
 IN PROGRESS
 
 What was done:
+- hardened SA role governance so the current operator cannot edit their own role
+- blocked last-SA demotion to reduce accidental self-lockout risk
+- introduced business-only company filtering for user scope governance
+- added company_kind classification so SYSTEM companies stay out of business scope mapping
+- replaced the SA Create Company placeholder with a real GST-driven company creation flow
+- wired GST lookup to cache-first resolution, Applyflow fallback, and company-master autofill
+- added state_name, full_address, and pin_code capture for company master creation
+- fixed Applyflow integration to use key_secret query parameter as required by vendor docs
+- normalized Appyflow status values before cache insert so GST cache writes succeed
+
+What changed in repo:
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- frontend/src/admin/sa/screens/SAUserScope.jsx
+- frontend/src/admin/sa/screens/SACompanyCreate.jsx
+- supabase/functions/api/_core/admin/user/_guards/self_lockout.guard.ts
+- supabase/functions/api/_core/admin/user/get_user_scope.handler.ts
+- supabase/functions/api/_core/admin/user/update_user_scope.handler.ts
+- supabase/functions/api/_core/admin/company/create_company.handler.ts
+- supabase/functions/api/_core/admin/company/get_company_gst_profile.handler.ts
+- supabase/functions/api/_shared/applyflow_client.ts
+- supabase/functions/api/_shared/gst_company_fields.ts
+- supabase/functions/api/_shared/gst_resolver.ts
+- supabase/migrations/20260410114000_gate9_9_2B_company_kind_business_filter.sql
+- supabase/migrations/20260410115000_gate9_9_2C_company_address_fields.sql
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- deno check completed successfully on changed GST/backend files
+- live GST lookup now works after vendor-aligned Applyflow request correction
+- SA company create screen now resolves GST profile and is ready for business-company creation
+
+Problems or blockers:
+- live environment still needs the new migrations applied before all company-master fields and business/system filtering are fully authoritative in database state
+- broader company-master enrichment beyond legal name, GST, state, full address, and pin code remains out of scope for this step
+
+Decision or note:
+SA governance is now materially safer.
+Business scope and system scope are no longer mixed by design,
+and company creation is now moving on a GST-backed flow instead of a placeholder screen.
+
+Next step:
+Continue with the next company-governance task from the user,
+using the now-working GST-backed create-company surface as the new baseline
+
+---
+
+2026-03-27
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
 - replaced browser-native confirm dialogs across current SA mutation screens with a shared ERP confirmation overlay
 - enriched admin user payloads using existing ERP user plus signup intake data so governance screens now show user code, user name, parent company, and designation
 - refactored SA role assignment and user directory screens to present identity-first operator context instead of code-only rows
