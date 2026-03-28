@@ -38,6 +38,10 @@ import SAUsers from "../admin/sa/screens/SAUsers.jsx";
 import SAUserRoles from "../admin/sa/screens/SAUserRoles.jsx";
 import SAUserScope from "../admin/sa/screens/SAUserScope.jsx";
 import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
+import SAProjectMaster from "../admin/sa/screens/SAProjectMaster.jsx";
+import SARolePermissions from "../admin/sa/screens/SARolePermissions.jsx";
+import SAApprovalRules from "../admin/sa/screens/SAApprovalRules.jsx";
+import SACompanyModuleMap from "../admin/sa/screens/SACompanyModuleMap.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
 import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
@@ -100,6 +104,19 @@ export default function AppRouter() {
                     <Route path="users" element={<SAUsers />} />
                     <Route path="users/roles" element={<SAUserRoles />} />
                     <Route path="users/scope" element={<SAUserScope />} />
+                    <Route path="project-master" element={<SAProjectMaster />} />
+                    <Route
+                      path="acl/role-permissions"
+                      element={<SARolePermissions />}
+                    />
+                    <Route
+                      path="approval-rules"
+                      element={<SAApprovalRules />}
+                    />
+                    <Route
+                      path="acl/company-modules"
+                      element={<SACompanyModuleMap />}
+                    />
                     <Route
                       path="signup-requests"
                       element={<SASignupRequests />}

@@ -45,6 +45,7 @@ const DASHBOARD_SHORTCUT_GUIDE = Object.freeze([
   "Ctrl+K Command bar",
   "Ctrl+S Save when available",
   "Alt+R Refresh when available",
+  "Shift+F8 New ERP window",
   "Alt+Shift+F Search when available",
   "Alt+Shift+P Primary focus when available",
   "Alt+C Work area",
@@ -61,6 +62,7 @@ const TASK_SHORTCUT_GUIDE = Object.freeze([
   "Ctrl+K Command bar",
   "Ctrl+S Save when available",
   "Alt+R Refresh when available",
+  "Shift+F8 New ERP window",
   "Alt+Shift+F Search when available",
   "Alt+Shift+P Primary focus when available",
   "Alt+C Work area",
@@ -388,6 +390,10 @@ export default function MenuShell() {
         focusZone("content");
       }
 
+      if (command === "OPEN_NEW_WINDOW") {
+        void handleOpenNewWindow();
+      }
+
       if (command === "FOCUS_NEXT_ZONE") {
         cycleZoneFocus(1);
       }
@@ -486,7 +492,7 @@ export default function MenuShell() {
     },
     {
       label: "New Window",
-      hint: "Max 3",
+      hint: "Shift+F8",
       onClick: () => void handleOpenNewWindow(),
     },
     {
@@ -532,7 +538,7 @@ export default function MenuShell() {
       id: "shell-window",
       group: "Shell",
       label: "Open new ERP window",
-      hint: "Max 3",
+      hint: "Shift+F8",
       keywords: ["new window", "side by side", "cluster"],
       perform: () => void handleOpenNewWindow(),
       order: 30,
@@ -621,6 +627,45 @@ export default function MenuShell() {
       perform: () => handleMenuRoute(item.route_path),
       order: 200 + index,
     }));
+
+  const universeCommands = [];
+
+  if (location.pathname.startsWith("/sa")) {
+    universeCommands.push(
+      {
+        id: "sa-open-project-master",
+        group: "Navigation",
+        label: "Open Project Master",
+        keywords: ["project master", "org master", "projects"],
+        perform: () => openRoute("/sa/project-master"),
+        order: 320,
+      },
+      {
+        id: "sa-open-role-permissions",
+        group: "Navigation",
+        label: "Open ACL Role Permissions",
+        keywords: ["acl", "role permissions", "permission matrix"],
+        perform: () => openRoute("/sa/acl/role-permissions"),
+        order: 321,
+      },
+      {
+        id: "sa-open-approval-rules",
+        group: "Navigation",
+        label: "Open Approval Rules",
+        keywords: ["approval rules", "approver scope", "workflow routing"],
+        perform: () => openRoute("/sa/approval-rules"),
+        order: 322,
+      },
+      {
+        id: "sa-open-company-modules",
+        group: "Navigation",
+        label: "Open Company Module Map",
+        keywords: ["company modules", "module map", "acl module enablement"],
+        perform: () => openRoute("/sa/acl/company-modules"),
+        order: 323,
+      }
+    );
+  }
 
   const zoneNumber = workspaceZones.indexOf(activeZone) + 1;
   const isSidebarVisible = shellMode === "dashboard";
@@ -1083,6 +1128,7 @@ export default function MenuShell() {
                     <span>Zone 1: Menu navigation</span>
                     <span>Zone 2: Action strip</span>
                     <span>Zone 3: Active screen content</span>
+                    <span>Shift+F8 opens a governed second or third ERP window</span>
                     <span>Alt+C jumps to the first usable control in content</span>
                     <span>Up/Down moves inside the left menu</span>
                     <span>Left/Right moves across action buttons</span>
@@ -1091,6 +1137,7 @@ export default function MenuShell() {
                   <>
                     <span>Zone 1: Page actions</span>
                     <span>Zone 2: Active screen content</span>
+                    <span>Shift+F8 opens a governed second or third ERP window</span>
                     <span>Alt+C jumps to the first usable control in content</span>
                     <span>Esc returns through the protected stack</span>
                     <span>Left/Right moves across top action buttons</span>
@@ -1122,7 +1169,7 @@ export default function MenuShell() {
       <ErpCommandPalette
         activeRoute={location.pathname}
         shellCommands={shellCommands}
-        menuCommands={menuCommands}
+        menuCommands={[...menuCommands, ...universeCommands]}
       />
     </div>
   );

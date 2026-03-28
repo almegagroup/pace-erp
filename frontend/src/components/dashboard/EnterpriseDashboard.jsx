@@ -4,70 +4,57 @@
  * Gate: 9
  * Phase: 9
  * Domain: FRONT
- * Purpose: Render dense keyboard-first protected dashboard workspaces
+ * Purpose: Render keyboard-native protected dashboard workspaces on the shared ERP scaffold
  * Authority: Frontend
  */
 
 import { useRef } from "react";
+import ErpScreenScaffold, {
+  ErpSectionCard,
+} from "../templates/ErpScreenScaffold.jsx";
+import { handleGridNavigation } from "../../navigation/erpRovingFocus.js";
 
-function moveFocus(refs, nextIndex) {
-  const target = refs[nextIndex];
+function ActionCard({ action, index, gridRefs }) {
+  const rowIndex = Math.floor(index / 2);
+  const columnIndex = index % 2;
 
-  if (target instanceof HTMLElement) {
-    target.focus();
-  }
-}
-
-function StatRow({ item, index }) {
-  return (
-    <article className="grid grid-cols-[70px_1fr_auto] items-center gap-3 rounded-lg border border-slate-300 bg-white px-4 py-3">
-      <span className="font-mono text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-        {(index + 1).toString().padStart(2, "0")}
-      </span>
-      <div className="min-w-0">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-          {item.label}
-        </p>
-        <p className="mt-1 font-mono text-2xl font-semibold text-slate-900">
-          {item.value}
-        </p>
-      </div>
-      <span className="rounded-md border border-slate-300 bg-slate-100 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-700">
-        {item.tag}
-      </span>
-    </article>
-  );
-}
-
-function ActionRow({ action, index, refs, onKeyDown }) {
   return (
     <button
       ref={(element) => {
-        refs.current[index] = element;
+        gridRefs.current[rowIndex] ??= [];
+        gridRefs.current[rowIndex][columnIndex] = element;
       }}
       data-workspace-primary-focus={index === 0 ? "true" : undefined}
       type="button"
       onClick={action.onClick}
-      onKeyDown={(event) => onKeyDown(event, index)}
-      className="grid w-full grid-cols-[56px_1fr_auto] items-center gap-4 rounded-xl border border-slate-300 bg-white px-4 py-4 text-left shadow-sm transition hover:border-sky-300 hover:bg-slate-50 focus:border-sky-500 focus:bg-sky-50"
+      onKeyDown={(event) =>
+        handleGridNavigation(event, {
+          rowIndex,
+          columnIndex,
+          gridRefs: gridRefs.current,
+        })
+      }
+      className="group rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-[0_12px_34px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-[0_18px_42px_rgba(14,116,144,0.12)]"
     >
-      <span className="font-mono text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">
-        {(index + 1).toString().padStart(2, "0")}
-      </span>
-      <span className="min-w-0">
-        <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+      <div className="flex items-center justify-between gap-4">
+        <span className="rounded-full bg-sky-100 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
           {action.badge}
         </span>
-        <span className="mt-1 block text-base font-semibold text-slate-900">
-          {action.title}
+        <span className="text-slate-300 transition group-hover:text-sky-600">
+          {"->"}
         </span>
-        <span className="mt-1 block text-sm leading-6 text-slate-600">
-          {action.description}
-        </span>
-      </span>
-      <span className="font-mono text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">
-        Enter
-      </span>
+      </div>
+      <h3 className="mt-4 text-lg font-semibold text-slate-900">
+        {action.title}
+      </h3>
+      <p className="mt-2 text-sm leading-6 text-slate-600">
+        {action.description}
+      </p>
+      {action.hint ? (
+        <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+          {action.hint}
+        </p>
+      ) : null}
     </button>
   );
 }
@@ -76,118 +63,83 @@ export default function EnterpriseDashboard({
   eyebrow,
   title,
   subtitle,
-  stats,
-  actions,
+  stats = [],
+  actions = [],
+  topActions = [],
+  notices = [],
+  workspaceTitle = "Operator Action Queue",
+  workspaceDescription = "Arrow keys move inside the card grid. Enter opens the focused workspace.",
+  noteTitle = "Keyboard Grammar",
+  noteItems = [],
+  summaryTitle = "Workspace Snapshot",
+  summaryItems = [],
 }) {
-  const actionRefs = useRef([]);
+  const actionGridRefs = useRef([]);
 
-  function handleActionKeyDown(event, index) {
-    if (actions.length === 0) {
-      return;
-    }
-
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      moveFocus(actionRefs.current, (index + 1) % actions.length);
-    }
-
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      moveFocus(actionRefs.current, (index - 1 + actions.length) % actions.length);
-    }
-
-    if (event.key === "Home") {
-      event.preventDefault();
-      moveFocus(actionRefs.current, 0);
-    }
-
-    if (event.key === "End") {
-      event.preventDefault();
-      moveFocus(actionRefs.current, actions.length - 1);
-    }
-  }
+  const metrics = stats.map((item, index) => ({
+    key: item.key ?? `${item.label}-${index}`,
+    label: item.label,
+    value: item.value,
+    caption: item.caption ?? item.tag,
+    tone: item.tone ?? "sky",
+    badge: item.tag ?? "Live",
+  }));
 
   return (
-    <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
-      <div className="mx-auto max-w-7xl">
-        <div className="rounded-xl border border-slate-300 bg-white px-5 py-5 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="max-w-4xl">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-600">
-                {eyebrow}
-              </p>
-              <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
-                {title}
-              </h1>
-              <p className="mt-3 text-sm leading-7 text-slate-600">
-                {subtitle}
-              </p>
-            </div>
-            <div className="rounded-lg border border-slate-300 bg-slate-50 px-4 py-3">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Workspace Mode
-              </p>
-              <p className="mt-2 text-sm font-semibold text-slate-900">
-                Keyboard-first protected shell
-              </p>
-              <p className="mt-1 text-xs text-slate-600">
-                F6 changes zone, arrows move inside lists.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <section className="mt-4 rounded-xl border border-slate-300 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Status Strip
-              </p>
-              <h2 className="mt-1 text-lg font-semibold text-slate-900">
-                Operating Snapshot
-              </h2>
-            </div>
-            <p className="font-mono text-xs uppercase tracking-[0.16em] text-slate-500">
-              Read-only counters
-            </p>
-          </div>
-          <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
-            {stats.map((item, index) => (
-              <StatRow key={item.label} item={item} index={index} />
-            ))}
-          </div>
-        </section>
-
-        <section className="mt-4 rounded-xl border border-slate-300 bg-white p-3 shadow-sm">
-          <div className="border-b border-slate-300 px-1 pb-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  Action Workspace
-                </p>
-                <h2 className="mt-1 text-lg font-semibold text-slate-900">
-                  Operator Action Queue
-                </h2>
-              </div>
-              <p className="font-mono text-xs uppercase tracking-[0.16em] text-slate-500">
-                Up or Down moves between actions
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-3 grid gap-3">
+    <ErpScreenScaffold
+      eyebrow={eyebrow}
+      title={title}
+      description={subtitle}
+      actions={topActions}
+      notices={notices}
+      metrics={metrics}
+    >
+      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <ErpSectionCard
+          eyebrow="Action Workspace"
+          title={workspaceTitle}
+          description={workspaceDescription}
+        >
+          <div className="grid gap-4 md:grid-cols-2">
             {actions.map((action, index) => (
-              <ActionRow
+              <ActionCard
                 key={action.title}
                 action={action}
                 index={index}
-                refs={actionRefs}
-                onKeyDown={handleActionKeyDown}
+                gridRefs={actionGridRefs}
               />
             ))}
           </div>
-        </section>
+        </ErpSectionCard>
+
+        <div className="grid gap-6">
+          <ErpSectionCard eyebrow="Keyboard Mode" title={noteTitle}>
+            <div className="space-y-3">
+              {noteItems.map((item) => (
+                <div
+                  key={item}
+                  className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700"
+                >
+                  {item}
+                </div>
+              ))}
+            </div>
+          </ErpSectionCard>
+
+          <ErpSectionCard eyebrow="Live Summary" title={summaryTitle}>
+            <div className="space-y-3">
+              {summaryItems.map((item) => (
+                <div
+                  key={item}
+                  className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700"
+                >
+                  {item}
+                </div>
+              ))}
+            </div>
+          </ErpSectionCard>
+        </div>
       </div>
-    </section>
+    </ErpScreenScaffold>
   );
 }

@@ -46,6 +46,7 @@ function normalizeKeyEvent(event) {
   if (ctrl && key.toLowerCase() === "k") return "INTENT_GLOBAL_SEARCH";
   if (ctrl && key.toLowerCase() === "s") return "INTENT_SCREEN_SAVE";
   if (event.altKey && key.toLowerCase() === "r") return "INTENT_SCREEN_REFRESH";
+  if (shift && key === "F8") return "INTENT_OPEN_NEW_WINDOW";
   if (event.altKey && shift && key.toLowerCase() === "f") {
     return "INTENT_SCREEN_FOCUS_SEARCH";
   }

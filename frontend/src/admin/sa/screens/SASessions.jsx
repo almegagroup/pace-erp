@@ -13,6 +13,7 @@ import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -99,33 +100,6 @@ function getStatusTone(status) {
     default:
       return "bg-sky-50 text-sky-700";
   }
-}
-
-function SummaryCard({ label, value, caption, tone = "sky" }) {
-  const toneClassMap = {
-    sky: "bg-sky-50 text-sky-700",
-    emerald: "bg-emerald-50 text-emerald-700",
-    rose: "bg-rose-50 text-rose-700",
-    amber: "bg-amber-50 text-amber-700",
-    slate: "bg-slate-100 text-slate-700",
-  };
-
-  return (
-    <article className="rounded-3xl border border-slate-200 bg-white px-5 py-5 shadow-[0_12px_34px_rgba(15,23,42,0.06)]">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-        {label}
-      </p>
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <h3 className="text-2xl font-semibold text-slate-900">{value}</h3>
-        <span
-          className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${toneClassMap[tone] ?? toneClassMap.sky}`}
-        >
-          Live
-        </span>
-      </div>
-      <p className="mt-3 text-sm leading-6 text-slate-500">{caption}</p>
-    </article>
-  );
 }
 
 export default function SASessions() {
@@ -241,7 +215,7 @@ export default function SASessions() {
       filter === "ALL"
         ? sessions
         : sessions.filter((session) => session.status === filter),
-    [filter, sessions],
+    [filter, sessions]
   );
 
   const filteredSessions = useMemo(
@@ -255,7 +229,7 @@ export default function SASessions() {
         "auth_user_id",
         "status",
       ]),
-    [searchQuery, statusFilteredSessions],
+    [searchQuery, statusFilteredSessions]
   );
 
   const activeCount = sessions.filter((session) => session.status === "ACTIVE").length;
@@ -299,268 +273,268 @@ export default function SASessions() {
     focusSearch: {
       perform: () => searchInputRef.current?.focus(),
     },
+    focusPrimary: {
+      perform: () => filterRefs.current[0]?.focus(),
+    },
   });
 
-  return (
-    <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
-      <div className="mx-auto max-w-7xl">
-        <div className="sticky top-4 z-20 rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.12)]">
-          <div className="flex flex-wrap items-start justify-between gap-5">
-            <div className="max-w-3xl">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
-                SA Session Governance
-              </p>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">
-                ERP Sessions
-              </h1>
-              <p className="mt-3 text-sm leading-7 text-slate-500">
-                Review current and historical ERP sessions, inspect lifecycle state, and revoke suspicious or stale access from the Super Admin control plane.
-              </p>
-            </div>
+  const topActions = [
+    {
+      key: "control-panel",
+      label: "Control Panel",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionBarRefs.current[0] = element;
+      },
+      onClick: () => openScreen("SA_CONTROL_PANEL", { mode: "reset" }),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 0,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
+      key: "refresh-sessions",
+      label: loading ? "Refreshing..." : "Refresh Sessions",
+      hint: "Alt+R",
+      tone: "primary",
+      buttonRef: (element) => {
+        actionBarRefs.current[1] = element;
+      },
+      onClick: () => void handleRefresh(),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 1,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+  ];
 
-            <div className="flex flex-wrap gap-3">
-              <button
-                ref={(element) => {
-                  actionBarRefs.current[0] = element;
-                }}
-                type="button"
-                onClick={() => openScreen("SA_CONTROL_PANEL", { mode: "reset" })}
-                onKeyDown={(event) =>
-                  handleLinearNavigation(event, {
-                    index: 0,
-                    refs: actionBarRefs.current,
-                    orientation: "horizontal",
-                  })
-                }
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
-              >
-                Control Panel
-              </button>
-              <button
-                ref={(element) => {
-                  actionBarRefs.current[1] = element;
-                }}
-                type="button"
-                onClick={() => void handleRefresh()}
-                onKeyDown={(event) =>
-                  handleLinearNavigation(event, {
-                    index: 1,
-                    refs: actionBarRefs.current,
-                    orientation: "horizontal",
-                  })
-                }
-                className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 shadow-[0_10px_24px_rgba(14,116,144,0.08)]"
-              >
-                {loading ? "Refreshing..." : "Refresh Sessions"}
-              </button>
-            </div>
-          </div>
+  const metrics = [
+    {
+      key: "all-sessions",
+      label: "All Sessions",
+      value: loading ? "..." : String(sessions.length),
+      tone: "sky",
+      caption:
+        "Full admin-visible session inventory returned by the ERP session governance endpoint.",
+    },
+    {
+      key: "active-sessions",
+      label: "Active",
+      value: loading ? "..." : String(activeCount),
+      tone: "emerald",
+      caption:
+        "Currently live ERP sessions that can still access protected routes.",
+    },
+    {
+      key: "revoked-sessions",
+      label: "Revoked",
+      value: loading ? "..." : String(revokedCount),
+      tone: "rose",
+      caption:
+        "Sessions explicitly terminated by logout, new login, or revoke governance.",
+    },
+    {
+      key: "idle-expired",
+      label: "Idle / Expired",
+      value: loading ? "..." : String(idleCount + expiredCount),
+      tone: "amber",
+      caption:
+        "Sessions that are no longer usable because lifecycle termination already occurred.",
+    },
+  ];
+
+  const filterSection = {
+    eyebrow: "Session Filter",
+    title: "Session Inventory",
+    aside: (
+      <div className="flex flex-wrap gap-2">
+        {FILTERS.map((option, index) => (
+          <button
+            key={option.key}
+            ref={(element) => {
+              filterRefs.current[index] = element;
+            }}
+            data-workspace-primary-focus={index === 0 ? "true" : undefined}
+            type="button"
+            onClick={() => setFilter(option.key)}
+            onKeyDown={(event) =>
+              handleLinearNavigation(event, {
+                index,
+                refs: filterRefs.current,
+                orientation: "horizontal",
+              })
+            }
+            className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+              filter === option.key
+                ? "bg-sky-600 text-white"
+                : "bg-slate-100 text-slate-600"
+            }`}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    ),
+    children: (
+      <QuickFilterInput
+        inputRef={searchInputRef}
+        label="Quick Search"
+        value={searchQuery}
+        onChange={setSearchQuery}
+        placeholder="Search by session, user, company, designation, auth, or status"
+        hint="Visible quick filter for the session inventory. Alt+Shift+F jumps here, Alt+Shift+P returns to the filter rail."
+      />
+    ),
+  };
+
+  const listSection = {
+    eyebrow: "Session Rows",
+    title: loading
+      ? "Refreshing session inventory"
+      : `${filteredSessions.length} visible session${filteredSessions.length === 1 ? "" : "s"}`,
+    children:
+      filteredSessions.length === 0 ? (
+        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+          {loading
+            ? "Loading session inventory..."
+            : "No sessions match the selected filter right now."}
         </div>
-
-        {error ? (
-          <div className="mt-6 rounded-[28px] border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700 shadow-[0_12px_30px_rgba(190,24,93,0.08)]">
-            {error}
-          </div>
-        ) : null}
-
-        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard
-            label="All Sessions"
-            value={loading ? "..." : String(sessions.length)}
-            tone="sky"
-            caption="Full admin-visible session inventory returned by the ERP session governance endpoint."
-          />
-          <SummaryCard
-            label="Active"
-            value={loading ? "..." : String(activeCount)}
-            tone="emerald"
-            caption="Currently live ERP sessions that can still access protected routes."
-          />
-          <SummaryCard
-            label="Revoked"
-            value={loading ? "..." : String(revokedCount)}
-            tone="rose"
-            caption="Sessions explicitly terminated by logout, new login, or revoke governance."
-          />
-          <SummaryCard
-            label="Idle / Expired"
-            value={loading ? "..." : String(idleCount + expiredCount)}
-            tone="amber"
-            caption="Sessions that are no longer usable because lifecycle termination already occurred."
-          />
-        </div>
-
-        <section className="mt-6 rounded-[30px] border border-slate-200 bg-white p-6 shadow-[0_14px_40px_rgba(15,23,42,0.08)]">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
-                Session Filter
-              </p>
-              <h2 className="mt-3 text-xl font-semibold text-slate-900">
-                Session Inventory
-              </h2>
-            </div>
-
-          <div className="flex flex-wrap gap-2">
-              {FILTERS.map((option, index) => (
-                <button
-                  key={option.key}
-                  ref={(element) => {
-                    filterRefs.current[index] = element;
-                  }}
-                  data-workspace-primary-focus={index === 0 ? "true" : undefined}
-                  type="button"
-                  onClick={() => setFilter(option.key)}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: filterRefs.current,
-                      orientation: "horizontal",
-                    })
-                  }
-                  className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
-                    filter === option.key
-                      ? "bg-sky-600 text-white"
-                      : "bg-slate-100 text-slate-600"
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {filteredSessions.length === 0 ? (
-            <div className="mt-6 rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
-              {loading
-                ? "Loading session inventory..."
-                : "No sessions match the selected filter right now."}
-            </div>
-          ) : (
-            <div className="mt-6 overflow-x-auto">
-              <table className="min-w-full border-separate border-spacing-y-3">
-                <thead>
-                  <tr>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Session
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      ERP User
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Status
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Created
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Last Seen
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Expires
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Revoked
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Action
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredSessions.map((session, index) => (
-                    <tr
-                      key={session.session_id}
-                      className="bg-slate-50"
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full border-separate border-spacing-y-3">
+            <thead>
+              <tr>
+                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Session
+                </th>
+                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  ERP User
+                </th>
+                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Status
+                </th>
+                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Created
+                </th>
+                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Last Seen
+                </th>
+                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Expires
+                </th>
+                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Revoked
+                </th>
+                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Action
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredSessions.map((session, index) => (
+                <tr key={session.session_id} className="bg-slate-50">
+                  <td className="rounded-l-2xl px-4 py-3 text-sm text-slate-700">
+                    <div>
+                      <p className="font-medium text-slate-900">
+                        {shortId(session.session_id)}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {session.session_id}
+                      </p>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-slate-700">
+                    <div>
+                      <p className="font-medium text-slate-900">
+                        {formatSessionIdentity(session)}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {session.parent_company_name ?? "Company Not Captured"}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {session.designation_hint ?? `Auth ${shortId(session.auth_user_id)}`}
+                      </p>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-slate-700">
+                    <span
+                      className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${getStatusTone(session.status)}`}
                     >
-                      <td className="rounded-l-2xl px-4 py-3 text-sm text-slate-700">
-                        <div>
-                          <p className="font-medium text-slate-900">
-                            {shortId(session.session_id)}
-                          </p>
-                          <p className="text-xs text-slate-500">
-                            {session.session_id}
-                          </p>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-700">
-                        <div>
-                          <p className="font-medium text-slate-900">
-                            {formatSessionIdentity(session)}
-                          </p>
-                          <p className="text-xs text-slate-500">
-                            {session.parent_company_name ?? "Company Not Captured"}
-                          </p>
-                          <p className="text-xs text-slate-500">
-                            {session.designation_hint ?? `Auth ${shortId(session.auth_user_id)}`}
-                          </p>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-700">
-                        <span
-                          className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${getStatusTone(session.status)}`}
-                        >
-                          {session.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-700">
-                        {formatDateTime(session.created_at)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-700">
-                        {formatDateTime(session.last_seen_at)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-700">
-                        {formatDateTime(session.expires_at)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-700">
-                        {formatDateTime(session.revoked_at)}
-                      </td>
-                      <td className="rounded-r-2xl px-4 py-3 text-sm text-slate-700">
-                        {session.status === "ACTIVE" ? (
-                          <button
-                            ref={(element) => {
-                              rowActionRefs.current[index] = element;
-                            }}
-                            type="button"
-                            onClick={() => void handleRevoke(session)}
-                            disabled={revokingSessionId === session.session_id}
-                            onKeyDown={(event) =>
-                              handleLinearNavigation(event, {
-                                index,
-                                refs: rowActionRefs.current,
-                                orientation: "vertical",
-                              })
-                            }
-                            className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {revokingSessionId === session.session_id
-                              ? "Revoking..."
-                              : "Revoke"}
-                          </button>
-                        ) : (
-                          <span className="text-xs uppercase tracking-[0.16em] text-slate-400">
-                            Read Only
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-          </div>
+                      {session.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-slate-700">
+                    {formatDateTime(session.created_at)}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-slate-700">
+                    {formatDateTime(session.last_seen_at)}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-slate-700">
+                    {formatDateTime(session.expires_at)}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-slate-700">
+                    {formatDateTime(session.revoked_at)}
+                  </td>
+                  <td className="rounded-r-2xl px-4 py-3 text-sm text-slate-700">
+                    {session.status === "ACTIVE" ? (
+                      <button
+                        ref={(element) => {
+                          rowActionRefs.current[index] = element;
+                        }}
+                        type="button"
+                        onClick={() => void handleRevoke(session)}
+                        disabled={revokingSessionId === session.session_id}
+                        onKeyDown={(event) =>
+                          handleLinearNavigation(event, {
+                            index,
+                            refs: rowActionRefs.current,
+                            orientation: "vertical",
+                          })
+                        }
+                        className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {revokingSessionId === session.session_id
+                          ? "Revoking..."
+                          : "Revoke"}
+                      </button>
+                    ) : (
+                      <span className="text-xs uppercase tracking-[0.16em] text-slate-400">
+                        Read Only
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ),
+  };
 
-          <QuickFilterInput
-            inputRef={searchInputRef}
-            className="mt-5"
-            label="Quick Search"
-            value={searchQuery}
-            onChange={setSearchQuery}
-            placeholder="Search by session, user, company, designation, auth, or status"
-            hint="Visible quick filter for the session inventory."
-          />
-        </section>
+  return (
+    <ErpMasterListTemplate
+      eyebrow="SA Session Governance"
+      title="ERP Sessions"
+      description="This keyboard-native list keeps session filters, quick search, and revoke actions in one structured operating surface."
+      actions={topActions}
+      notices={
+        error
+          ? [
+              {
+                key: "error",
+                tone: "error",
+                message: error,
+              },
+            ]
+          : []
+      }
+      metrics={metrics}
+      filterSection={filterSection}
+      listSection={listSection}
+    />
   );
 }

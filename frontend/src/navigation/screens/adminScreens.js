@@ -82,6 +82,38 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_PROJECT_MASTER: {
+    screen_code: "SA_PROJECT_MASTER",
+    route: "/sa/project-master",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_ROLE_PERMISSIONS: {
+    screen_code: "SA_ROLE_PERMISSIONS",
+    route: "/sa/acl/role-permissions",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_APPROVAL_RULES: {
+    screen_code: "SA_APPROVAL_RULES",
+    route: "/sa/approval-rules",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_COMPANY_MODULE_MAP: {
+    screen_code: "SA_COMPANY_MODULE_MAP",
+    route: "/sa/acl/company-modules",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   GA_HOME: {
     screen_code: "GA_HOME",
     route: "/ga/home",
