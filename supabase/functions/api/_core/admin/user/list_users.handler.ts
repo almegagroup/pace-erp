@@ -12,6 +12,21 @@ import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleCli
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { okResponse } from "../../response.ts";
 
+function normalizeText(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  return String(value).trim();
+}
+
+function compareText(left: unknown, right: unknown): number {
+  return normalizeText(left).localeCompare(normalizeText(right), "en", {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
 /**
  * List Users (Admin Governance)
  *
@@ -96,6 +111,18 @@ export async function listUsersHandler(
       signup_decision: signupRow?.decision ?? null,
       signup_submitted_at: signupRow?.submitted_at ?? null,
     };
+  }).sort((left, right) => {
+    const codeCompare = compareText(left.user_code, right.user_code);
+    if (codeCompare !== 0) {
+      return codeCompare;
+    }
+
+    const nameCompare = compareText(left.name, right.name);
+    if (nameCompare !== 0) {
+      return nameCompare;
+    }
+
+    return compareText(left.auth_user_id, right.auth_user_id);
   });
 
   // --------------------------------------------------

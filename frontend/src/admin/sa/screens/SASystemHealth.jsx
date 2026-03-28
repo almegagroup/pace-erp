@@ -8,8 +8,9 @@
  * Authority: Frontend
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 
 async function readJsonSafe(response) {
   try {
@@ -68,6 +69,7 @@ function HealthCard({ label, value, description, tone = "sky" }) {
 }
 
 export default function SASystemHealth() {
+  const actionBarRefs = useRef([]);
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -171,7 +173,7 @@ export default function SASystemHealth() {
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
       <div className="mx-auto max-w-7xl">
-        <div className="rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.08)]">
+        <div className="sticky top-4 z-20 rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.12)]">
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="max-w-3xl">
               <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
@@ -187,15 +189,35 @@ export default function SASystemHealth() {
 
             <div className="flex flex-wrap gap-3">
               <button
+                ref={(element) => {
+                  actionBarRefs.current[0] = element;
+                }}
                 type="button"
                 onClick={() => openScreen("SA_CONTROL_PANEL", { mode: "reset" })}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 0,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
                 Control Panel
               </button>
               <button
+                ref={(element) => {
+                  actionBarRefs.current[1] = element;
+                }}
                 type="button"
                 onClick={() => void handleRefresh()}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 1,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 shadow-[0_10px_24px_rgba(14,116,144,0.08)]"
               >
                 {loading ? "Refreshing..." : "Refresh Health"}

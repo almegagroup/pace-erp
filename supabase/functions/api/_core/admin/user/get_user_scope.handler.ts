@@ -23,6 +23,45 @@ function assertAdmin(ctx: HandlerContext): void {
   }
 }
 
+function normalizeText(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  return String(value).trim();
+}
+
+function compareText(left: unknown, right: unknown): number {
+  return normalizeText(left).localeCompare(normalizeText(right), "en", {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function sortByCodeThenName(
+  rows: Array<Record<string, unknown> | null | undefined> | null | undefined,
+  codeKey: string,
+  nameKey: string,
+): Record<string, unknown>[] {
+  return (rows ?? []).filter(isRecord).slice().sort((left, right) => {
+    const codeCompare = compareText(left[codeKey], right[codeKey]);
+    if (codeCompare !== 0) {
+      return codeCompare;
+    }
+
+    const nameCompare = compareText(left[nameKey], right[nameKey]);
+    if (nameCompare !== 0) {
+      return nameCompare;
+    }
+
+    return 0;
+  });
+}
+
 export async function getUserScopeHandler(
   req: Request,
   ctx: HandlerContext,
@@ -182,20 +221,44 @@ export async function getUserScopeHandler(
         },
         scope: {
           parent_company: parentCompanyId ? companyMap.get(parentCompanyId) ?? null : null,
-          work_companies: workCompanyIds
+          work_companies: sortByCodeThenName(
+            workCompanyIds
             .map((companyId) => companyMap.get(companyId))
             .filter(Boolean),
-          projects: projectIds
+            "company_code",
+            "company_name",
+          ),
+          projects: sortByCodeThenName(
+            projectIds
             .map((projectId) => projectMap.get(projectId))
             .filter(Boolean),
-          departments: departmentIds
+            "project_code",
+            "project_name",
+          ),
+          departments: sortByCodeThenName(
+            departmentIds
             .map((departmentId) => departmentMap.get(departmentId))
             .filter(Boolean),
+            "department_code",
+            "department_name",
+          ),
         },
         options: {
-          companies: availableCompanies ?? [],
-          projects: availableProjects ?? [],
-          departments: availableDepartments ?? [],
+          companies: sortByCodeThenName(
+            availableCompanies,
+            "company_code",
+            "company_name",
+          ),
+          projects: sortByCodeThenName(
+            availableProjects,
+            "project_code",
+            "project_name",
+          ),
+          departments: sortByCodeThenName(
+            availableDepartments,
+            "department_code",
+            "department_name",
+          ),
         },
       },
       ctx.request_id,
