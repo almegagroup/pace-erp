@@ -73,6 +73,10 @@ function headersForAction(action: Action): HeadersInit {
  * Normalize internal error codes to Gate-2 compliant public codes
  */
 function normalizeCode(code: string): string {
+  if (code === "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED") {
+    return code;
+  }
+
   // SESSION_* is the ONLY family allowed to force logout
   if (code.startsWith("SESSION_")) {
     return code;
@@ -96,6 +100,10 @@ function normalizeCode(code: string): string {
  * Normalize user-facing message (ID-2.6A)
  */
 function normalizeMessage(publicCode: string): string {
+  if (publicCode === "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED") {
+    return "Maximum window limit reached";
+  }
+
   if (publicCode === "AUTH_INVALID_CREDENTIALS") {
     return GENERIC_AUTH_MESSAGE;
   }
@@ -123,7 +131,10 @@ export function errorResponse(
   const publicCode = normalizeCode(code);
 
   const action: Action =
-    publicCode.startsWith("SESSION_") ? "LOGOUT" : "NONE";
+    publicCode.startsWith("SESSION_") &&
+    publicCode !== "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED"
+      ? "LOGOUT"
+      : "NONE";
 
   const message = normalizeMessage(publicCode);
 

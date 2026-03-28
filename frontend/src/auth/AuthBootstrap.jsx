@@ -113,19 +113,23 @@ export default function AuthBootstrap({ children }) {
           }
         }
 
-        const profileRes = await fetch(
-          `${import.meta.env.VITE_API_BASE}/api/me/profile`,
-          { credentials: "include" }
-        );
+        const [profileRes, menuRes] = await Promise.all([
+          fetch(`${import.meta.env.VITE_API_BASE}/api/me/profile`, {
+            credentials: "include",
+          }),
+          fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+            credentials: "include",
+          }),
+        ]);
 
-        if (!profileRes.ok) {
-          clearMenuSnapshot();
-          clearClusterAdmission();
-          navigate("/login", { replace: true });
-          return;
+        if (!profileRes.ok || !menuRes.ok) {
+          throw new Error("AUTH_BOOTSTRAP_FETCH_FAILED");
         }
 
-        const profileData = await profileRes.json();
+        const [profileData, data] = await Promise.all([
+          profileRes.json(),
+          menuRes.json(),
+        ]);
 
         if (!alive) {
           return;
@@ -136,21 +140,6 @@ export default function AuthBootstrap({ children }) {
           roleCode: profileData?.data?.role_code ?? "",
           tagline: "Process Automation & Control Environment",
         });
-
-        const menuRes = await fetch(
-          `${import.meta.env.VITE_API_BASE}/api/me/menu`,
-          { credentials: "include" }
-        );
-
-        if (!menuRes.ok) {
-          throw new Error("MENU_FETCH_FAILED");
-        }
-
-        const data = await menuRes.json();
-
-        if (!alive) {
-          return;
-        }
 
         const menuData = data?.data?.menu ?? [];
         setMenuSnapshot(menuData);

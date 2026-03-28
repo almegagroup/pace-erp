@@ -47,7 +47,6 @@ const DASHBOARD_SHORTCUT_GUIDE = Object.freeze([
   "Alt+H Dashboard home",
   "F6 Next zone",
   "Shift+F6 Previous zone",
-  "Alt+Shift+W New window",
   "Ctrl+Left Hide menu",
   "Ctrl+Right Show menu",
 ]);
@@ -404,28 +403,6 @@ export default function MenuShell() {
     }
   }, [focusContentZone, location.pathname, shellMode]);
 
-  useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (
-        shellMode === "dashboard" &&
-        (
-          (event.altKey &&
-            event.shiftKey &&
-            event.key.toLowerCase() === "w") ||
-          (event.ctrlKey &&
-            event.altKey &&
-            event.key.toLowerCase() === "n")
-        )
-      ) {
-        event.preventDefault();
-        void handleOpenNewWindow();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [location.pathname, shellMode]);
-
   function handleMenuKeyDown(event, index) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -511,7 +488,7 @@ export default function MenuShell() {
   if (shellMode === "dashboard") {
     headerActions.splice(2, 0, {
       label: "New Window",
-      hint: "Alt+Shift+W",
+      hint: "Max 3",
       onClick: () => void handleOpenNewWindow(),
     });
 
