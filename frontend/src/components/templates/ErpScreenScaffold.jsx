@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { Fragment } from "react";
+import { Fragment, useEffect, useMemo } from "react";
 
 const ACTION_TONE_CLASS = Object.freeze({
   primary: "border-sky-300 bg-sky-50 text-sky-900 hover:bg-sky-100",
@@ -37,6 +37,82 @@ const SECTION_TONE_CLASS = Object.freeze({
   warning: "border-amber-200 bg-[#fffaf2]",
   success: "border-emerald-200 bg-[#f5fffa]",
 });
+
+const RESERVED_MNEMONICS = new Set(["A", "C", "H", "K", "L", "M"]);
+
+function extractHintMnemonic(hint) {
+  const match = /^Alt\+([A-Z])$/i.exec(hint ?? "");
+  return match ? match[1].toUpperCase() : null;
+}
+
+function findMnemonic(label, used) {
+  const candidates = Array.from((label ?? "").toUpperCase()).filter((char) =>
+    /[A-Z]/.test(char)
+  );
+
+  for (const char of candidates) {
+    if (!used.has(char) && !RESERVED_MNEMONICS.has(char)) {
+      used.add(char);
+      return char;
+    }
+  }
+
+  for (const char of candidates) {
+    if (!used.has(char)) {
+      used.add(char);
+      return char;
+    }
+  }
+
+  return null;
+}
+
+function withActionMnemonics(actions) {
+  const used = new Set();
+
+  return actions.map((action) => {
+    const hintedMnemonic = extractHintMnemonic(action.hint);
+    const mnemonic =
+      action.mnemonic?.toUpperCase() ??
+      (hintedMnemonic && !used.has(hintedMnemonic)
+        ? hintedMnemonic
+        : findMnemonic(action.label, used));
+
+    if (hintedMnemonic) {
+      used.add(hintedMnemonic);
+    } else if (mnemonic) {
+      used.add(mnemonic);
+    }
+
+    return {
+      ...action,
+      mnemonic,
+      mnemonicHint: mnemonic ? `Alt+${mnemonic}` : null,
+    };
+  });
+}
+
+function renderMnemonicLabel(label, mnemonic) {
+  if (!label || !mnemonic) {
+    return label;
+  }
+
+  const index = label.toUpperCase().indexOf(mnemonic);
+
+  if (index < 0) {
+    return label;
+  }
+
+  return (
+    <>
+      {label.slice(0, index)}
+      <span className="underline decoration-[1.5px] underline-offset-[3px]">
+        {label[index]}
+      </span>
+      {label.slice(index + 1)}
+    </>
+  );
+}
 
 export function ErpMetricCard({
   label,
@@ -125,10 +201,18 @@ export function ErpActionStrip({ actions = [] }) {
             onKeyDown={action.onKeyDown}
             className={`border px-3 py-2 text-left transition ${toneClass}`}
           >
-            <span className="block text-sm font-semibold">{action.label}</span>
-            {action.hint ? (
+            <span className="block text-sm font-semibold">
+              {renderMnemonicLabel(action.label, action.mnemonic)}
+            </span>
+            {[action.hint, action.mnemonicHint]
+              .filter(Boolean)
+              .filter((value, index, values) => values.indexOf(value) === index)
+              .length > 0 ? (
               <span className="mt-1 block text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                {action.hint}
+                {[action.hint, action.mnemonicHint]
+                  .filter(Boolean)
+                  .filter((value, index, values) => values.indexOf(value) === index)
+                  .join(" | ")}
               </span>
             ) : null}
           </button>
@@ -190,9 +274,40 @@ export default function ErpScreenScaffold({
   footerHints = [],
   children,
 }) {
+  const resolvedActions = useMemo(() => withActionMnemonics(actions), [actions]);
+
+  useEffect(() => {
+    function handleMnemonic(event) {
+      if (
+        !event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        typeof event.key !== "string"
+      ) {
+        return;
+      }
+
+      const key = event.key.toUpperCase();
+      const action = resolvedActions.find(
+        (item) => !item.disabled && item.mnemonic === key
+      );
+
+      if (!action) {
+        return;
+      }
+
+      event.preventDefault();
+      action.onClick?.(event);
+    }
+
+    window.addEventListener("keydown", handleMnemonic, true);
+    return () => window.removeEventListener("keydown", handleMnemonic, true);
+  }, [resolvedActions]);
+
   return (
     <section className="min-h-full text-slate-900">
-      <div className="mx-auto flex max-w-[1560px] flex-col gap-3">
+      <div className="mx-auto flex max-w-none flex-col gap-3">
         <div className="border border-slate-300 bg-white">
           <div className="border-b border-slate-300 bg-[#eef4fb] px-4 py-2">
             <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
@@ -212,7 +327,7 @@ export default function ErpScreenScaffold({
 
               {actions.length > 0 ? (
                 <div className="xl:justify-self-end">
-                  <ErpActionStrip actions={actions} />
+                  <ErpActionStrip actions={resolvedActions} />
                 </div>
               ) : null}
             </div>

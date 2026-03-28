@@ -17,6 +17,7 @@ import {
 } from "../../../navigation/erpRovingFocus.js";
 import { useMenu } from "../../../context/useMenu.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import { applyQuickFilter, sortUsers } from "../../../shared/erpCollections.js";
 import {
@@ -27,6 +28,7 @@ import {
 } from "../../../shared/erpRoles.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
 async function readJsonSafe(response) {
   try {
@@ -280,6 +282,7 @@ export default function SAUserRoles() {
   const managerCount = governableUsers.filter((user) =>
     ["L3_MANAGER", "L2_MANAGER", "L1_MANAGER"].includes(user.role_code)
   ).length;
+  const rolePagination = useErpPagination(filteredUsers, 10);
 
   useErpScreenCommands([
     {
@@ -435,18 +438,6 @@ export default function SAUserRoles() {
     },
   ];
 
-  const summarySection = {
-    eyebrow: "Role Contract",
-    title: "Role Assignment Now Supports Both Existing And Missing Role Rows",
-    description:
-      "This screen reads the shared admin user inventory and writes role decisions to the existing admin role endpoint. Backend role updates now use upsert semantics so assignment remains robust even if a user role row is missing and needs to be created during governance. The current operator is intentionally excluded so SA cannot change their own role from this workspace.",
-    aside: (
-      <span className="border border-sky-200 bg-sky-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
-        {loading ? "Checking" : `${privilegedCount} Privileged`}
-      </span>
-    ),
-  };
-
   const filterSection = {
     eyebrow: "Role Filters",
     title: "Role Assignment Control Rail",
@@ -548,6 +539,14 @@ export default function SAUserRoles() {
       </div>
     ) : (
       <div className="overflow-x-auto">
+        <ErpPaginationStrip
+          page={rolePagination.page}
+          setPage={rolePagination.setPage}
+          totalPages={rolePagination.totalPages}
+          startIndex={rolePagination.startIndex}
+          endIndex={rolePagination.endIndex}
+          totalItems={filteredUsers.length}
+        />
         <table className="min-w-full border-collapse">
           <thead>
             <tr>
@@ -569,7 +568,7 @@ export default function SAUserRoles() {
             </tr>
           </thead>
           <tbody>
-            {filteredUsers.map((user, index) => {
+            {rolePagination.pageItems.map((user, index) => {
               const isUpdating = updatingUserId === user.auth_user_id;
               const selectedRole = draftRoles[user.auth_user_id] ?? "";
 
@@ -711,7 +710,6 @@ export default function SAUserRoles() {
           : []
       }
       metrics={metrics}
-      summarySection={summarySection}
       filterSection={filterSection}
       listSection={listSection}
     />

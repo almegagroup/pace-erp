@@ -40,19 +40,14 @@ export default function ErpReportFilterTemplate({
         "Ctrl+K Command Bar",
       ]}
     >
-      <div className="grid gap-3 xl:grid-cols-[280px_minmax(0,1fr)]">
-        <div className="grid gap-3">
-          {summarySection ? <ErpSectionCard {...summarySection} /> : null}
-          {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
-          {sideSection ? <ErpSectionCard {...sideSection} /> : null}
-        </div>
-
-        <div className="grid gap-3">
-          {reportSection ? (
-            <ErpSectionCard {...reportSection} className="min-h-[480px]" />
-          ) : null}
-          {bottomSection ? <div>{bottomSection}</div> : null}
-        </div>
+      <div className="grid gap-3">
+        {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
+        {summarySection ? <ErpSectionCard {...summarySection} /> : null}
+        {sideSection ? <ErpSectionCard {...sideSection} /> : null}
+        {reportSection ? (
+          <ErpSectionCard {...reportSection} className="min-h-[560px]" />
+        ) : null}
+        {bottomSection ? <div>{bottomSection}</div> : null}
       </div>
     </ErpScreenScaffold>
   );

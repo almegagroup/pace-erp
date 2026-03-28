@@ -12,6 +12,7 @@
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
+import { log } from "../../../_lib/logger.ts";
 
 /* --------------------------------------------------
 
@@ -44,10 +45,11 @@ import { okResponse, errorResponse } from "../../../_core/response.ts";
 
 * Handler
 * -------------------------------------------------- */
-  export async function createProjectHandler(
+export async function createProjectHandler(
   req: Request,
   ctx: { context: ContextResolution; request_id: string }
-  ): Promise<Response> {
+): Promise<Response> {
+  const routeKey = "POST:/api/admin/project";
   try {
   // 1️⃣ Admin-only
   assertAdmin(ctx);
@@ -78,11 +80,18 @@ import { okResponse, errorResponse } from "../../../_core/response.ts";
   .single();
 
   if (error || !data) {
-  return errorResponse(
-  "PROJECT_CREATE_FAILED",
-  "project create failed",
-  ctx.request_id
-  );
+    return errorResponse(
+      "PROJECT_CREATE_FAILED",
+      "project create failed",
+      ctx.request_id,
+      "NONE",
+      403,
+      {
+        gateId: "9.4",
+        routeKey,
+        decisionTrace: "PROJECT_CREATE_FAILED",
+      }
+    );
   }
 
   // 5️⃣ Map project → company
@@ -94,11 +103,18 @@ import { okResponse, errorResponse } from "../../../_core/response.ts";
   });
 
   if (mapError) {
-  return errorResponse(
-  "PROJECT_COMPANY_MAPPING_FAILED",
-  "project company mapping failed",
-  ctx.request_id
-  );
+    return errorResponse(
+      "PROJECT_COMPANY_MAPPING_FAILED",
+      "project company mapping failed",
+      ctx.request_id,
+      "NONE",
+      403,
+      {
+        gateId: "9.4",
+        routeKey,
+        decisionTrace: "PROJECT_COMPANY_MAPPING_FAILED",
+      }
+    );
   }
 
   // 6️⃣ Success
@@ -114,10 +130,27 @@ import { okResponse, errorResponse } from "../../../_core/response.ts";
   ctx.request_id
   );
   } catch (err) {
+  log({
+    level: "ERROR",
+    request_id: ctx.request_id,
+    gate_id: "9.4",
+    route_key: routeKey,
+    event: "PROJECT_CREATE_EXCEPTION",
+    meta: {
+      error_code: (err as Error).message || "PROJECT_CREATE_EXCEPTION",
+    },
+  });
   return errorResponse(
   (err as Error).message || "PROJECT_CREATE_EXCEPTION",
   "project create exception",
-  ctx.request_id
+  ctx.request_id,
+  "NONE",
+  403,
+  {
+    gateId: "9.4",
+    routeKey,
+    decisionTrace: (err as Error).message || "PROJECT_CREATE_EXCEPTION",
+  }
   );
   }
   }

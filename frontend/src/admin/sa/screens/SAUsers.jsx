@@ -18,10 +18,12 @@ import {
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import { applyQuickFilter, sortUsers } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Users" },
@@ -275,6 +277,7 @@ export default function SAUsers() {
     () => filteredUsers.find((user) => canOpenScope(user)) ?? null,
     [filteredUsers]
   );
+  const userPagination = useErpPagination(filteredUsers, 10);
 
   function handleOpenScope(user) {
     if (!user?.auth_user_id) {
@@ -467,18 +470,6 @@ export default function SAUsers() {
     },
   ];
 
-  const summarySection = {
-    eyebrow: "Contract Status",
-    title: "Role Visibility Is Now Part of the User Inventory Payload",
-    description:
-      "This screen now reads current role posture directly from the admin users endpoint. Dedicated role assignment is available through the linked role panel, and the user-scope surface opens only for ACL users whose role posture is already assigned. The current operator is excluded so SA cannot disable themselves by mistake.",
-    aside: (
-      <span className="border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700">
-        {loading ? "Checking" : `${missingRoleCount} Missing Role`}
-      </span>
-    ),
-  };
-
   const filterSection = {
     eyebrow: "User Filter",
     title: "Governable User Inventory",
@@ -538,6 +529,14 @@ export default function SAUsers() {
       </div>
     ) : (
       <div className="overflow-x-auto">
+        <ErpPaginationStrip
+          page={userPagination.page}
+          setPage={userPagination.setPage}
+          totalPages={userPagination.totalPages}
+          startIndex={userPagination.startIndex}
+          endIndex={userPagination.endIndex}
+          totalItems={filteredUsers.length}
+        />
         <table className="min-w-full border-collapse">
           <thead>
             <tr>
@@ -559,7 +558,7 @@ export default function SAUsers() {
             </tr>
           </thead>
           <tbody>
-            {filteredUsers.map((user, rowIndex) => {
+            {userPagination.pageItems.map((user, rowIndex) => {
               const actionLabel =
                 user.state === "ACTIVE" ? "Disable" : "Activate";
               const nextState =
@@ -688,7 +687,6 @@ export default function SAUsers() {
           : []
       }
       metrics={metrics}
-      summarySection={summarySection}
       filterSection={filterSection}
       listSection={listSection}
     />

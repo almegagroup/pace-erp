@@ -40,20 +40,14 @@ export default function ErpApprovalReviewTemplate({
         "Ctrl+K Command Bar",
       ]}
     >
-      <div className="grid gap-3 xl:grid-cols-[280px_minmax(0,1fr)_280px]">
-        <div className="grid gap-3">
-          {summarySection ? <ErpSectionCard {...summarySection} /> : null}
-          {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
-        </div>
-
-        <div className="grid gap-3">
-          {reviewSection ? (
-            <ErpSectionCard {...reviewSection} className="min-h-[480px]" />
-          ) : null}
-          {bottomSection ? <div>{bottomSection}</div> : null}
-        </div>
-
-        {sideSection ? <ErpSectionCard {...sideSection} /> : null}
+      <div className="grid gap-3">
+        {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
+        {sideSection ? <ErpSectionCard {...sideSection} tone="accent" /> : null}
+        {reviewSection ? (
+          <ErpSectionCard {...reviewSection} className="min-h-[560px]" />
+        ) : null}
+        {summarySection ? <ErpSectionCard {...summarySection} /> : null}
+        {bottomSection ? <div>{bottomSection}</div> : null}
       </div>
     </ErpScreenScaffold>
   );

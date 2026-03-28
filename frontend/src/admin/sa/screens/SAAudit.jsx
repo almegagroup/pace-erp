@@ -12,10 +12,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Events" },
@@ -161,6 +163,7 @@ export default function SAAudit() {
       ]),
     [searchQuery, statusFilteredRows]
   );
+  const auditPagination = useErpPagination(filteredRows, 10);
 
   const successCount = auditRows.filter((row) => row.status === "SUCCESS").length;
   const failedCount = auditRows.filter((row) => row.status === "FAILED").length;
@@ -332,6 +335,14 @@ export default function SAAudit() {
         </div>
       ) : (
         <div className="overflow-x-auto">
+          <ErpPaginationStrip
+            page={auditPagination.page}
+            setPage={auditPagination.setPage}
+            totalPages={auditPagination.totalPages}
+            startIndex={auditPagination.startIndex}
+            endIndex={auditPagination.endIndex}
+            totalItems={filteredRows.length}
+          />
           <table className="min-w-full border-collapse">
             <thead>
               <tr>
@@ -359,7 +370,7 @@ export default function SAAudit() {
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((row, index) => (
+              {auditPagination.pageItems.map((row, index) => (
                 <tr
                   key={row.audit_id}
                   ref={(element) => {

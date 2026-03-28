@@ -241,14 +241,6 @@ if (!sessionResult) {
 );
 }
 
-const sessionMs = Math.round((performance.now() - tSession0) * 100) / 100;
-
-console.log("PIPELINE_SESSION_END", {
-  request_id: requestId,
-  route: routeKey,
-  duration_ms: sessionMs
-});
-
     const gate2Logout = enforceSessionLogout(
       "action" in sessionResult ? sessionResult : null,
       requestId
@@ -360,14 +352,6 @@ contextResult = await stepContext(req, {
   roleCode: activeSession.roleCode,
 });
 
-const contextMs = Math.round((performance.now() - tContext0) * 100) / 100;
-
-console.log("PIPELINE_CONTEXT_END", {
-  request_id: requestId,
-  route: routeKey,
-  duration_ms: contextMs
-});
-
     if (contextResult.status === "UNRESOLVED") {
       return errorResponse(
         "CONTEXT_UNRESOLVED",
@@ -420,15 +404,6 @@ const tAcl0 = performance.now();
       action: "VIEW", // temporary placeholder
       },
     });
-    const aclMs = Math.round((performance.now() - tAcl0) * 100) / 100;
-
-console.log("PIPELINE_ACL_END", {
-  request_id: requestId,
-  route: routeKey,
-  duration_ms: aclMs,
-  decision: acl.decision
-});
-
     if (acl.decision === "DENY") {
       return errorResponse(
         acl.reason,

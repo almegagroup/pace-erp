@@ -6,10 +6,12 @@ import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
+import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
+import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
 async function readJsonSafe(response) {
   try {
@@ -144,6 +146,7 @@ export default function SARolePermissions() {
       ]),
     [permissions, searchQuery]
   );
+  const permissionPagination = useErpPagination(filteredPermissions, 10);
 
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
@@ -371,25 +374,19 @@ export default function SARolePermissions() {
           caption: "Rows matching the current resource search.",
         },
       ]}
-      summarySection={{
-        eyebrow: "ACL Rule Contract",
-        title: "Role-resource permissions remain backend-owned",
-        description:
-          "This screen consumes the role permission APIs directly. Edit keeps the row idempotent, and disable clears flags without deleting the governance record.",
-      }}
       filterSection={{
         eyebrow: "Role Filter",
         title: "Select role and filter resources",
         children: (
           <div className="space-y-5">
             <label className="block">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Role Code
               </span>
               <select
                 value={selectedRoleCode}
                 onChange={(event) => setSelectedRoleCode(event.target.value)}
-                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400/50 focus:bg-black/30"
+                className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
               >
                 {ERP_ROLE_OPTIONS.map((role) => (
                   <option key={role.code} value={role.code}>
@@ -416,26 +413,35 @@ export default function SARolePermissions() {
           ? "Loading permission rows"
           : `${filteredPermissions.length} visible resource row${filteredPermissions.length === 1 ? "" : "s"}`,
         children: loading ? (
-          <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading role permissions from ACL governance APIs.
           </div>
         ) : filteredPermissions.length === 0 ? (
-          <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             No resource row matches the current role filter.
           </div>
         ) : (
-          <div className="space-y-3">
-            {filteredPermissions.map((row, index) => (
+          <div className="border border-slate-300">
+            <ErpPaginationStrip
+              page={permissionPagination.page}
+              setPage={permissionPagination.setPage}
+              totalPages={permissionPagination.totalPages}
+              startIndex={permissionPagination.startIndex}
+              endIndex={permissionPagination.endIndex}
+              totalItems={filteredPermissions.length}
+            />
+            <div className="space-y-0">
+            {permissionPagination.pageItems.map((row, index) => (
               <div
                 key={`${row.resource_code}-${index}`}
-                className="rounded-[22px] border border-white/8 bg-black/10 px-4 py-4"
+                className="border-b border-slate-300 bg-white px-4 py-3 last:border-b-0"
               >
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <p className="text-sm font-semibold text-white">
+                    <p className="text-sm font-semibold text-slate-900">
                       {row.resource_code}
                     </p>
-                    <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                    <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
                       {[
                         row.can_view ? "V" : null,
                         row.can_write ? "W" : null,
@@ -475,7 +481,7 @@ export default function SARolePermissions() {
                           orientation: "horizontal",
                         })
                       }
-                      className="rounded-2xl border border-cyan-400/25 bg-cyan-400/12 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-50"
+                      className="border border-cyan-300 bg-cyan-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700"
                     >
                       Edit
                     </button>
@@ -493,7 +499,7 @@ export default function SARolePermissions() {
                           orientation: "horizontal",
                         })
                       }
-                      className="rounded-2xl border border-rose-400/25 bg-rose-400/12 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-rose-50"
+                      className="border border-rose-300 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700"
                     >
                       Disable
                     </button>
@@ -501,6 +507,7 @@ export default function SARolePermissions() {
                 </div>
               </div>
             ))}
+            </div>
           </div>
         ),
       }}
@@ -511,9 +518,9 @@ export default function SARolePermissions() {
         children: (
           <div ref={formContainerRef} className="space-y-4">
             <label className="block">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-                Resource Code
-              </span>
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Resource Code
+                </span>
               <input
                 ref={resourceInputRef}
                 data-workspace-primary-focus="true"
@@ -527,7 +534,7 @@ export default function SARolePermissions() {
                   }))
                 }
                 placeholder="RESOURCE_CODE"
-                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
+                className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
               />
             </label>
 
@@ -541,7 +548,7 @@ export default function SARolePermissions() {
             ].map(([key, label]) => (
               <label
                 key={key}
-                className="flex items-center justify-between rounded-2xl border border-white/8 bg-black/10 px-4 py-3 text-sm text-slate-200"
+                className="flex items-center justify-between border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700"
               >
                 <span>{label}</span>
                 <input
@@ -554,7 +561,7 @@ export default function SARolePermissions() {
                       [key]: event.target.checked,
                     }))
                   }
-                  className="h-4 w-4 rounded border-white/20 bg-black/20 text-emerald-500"
+                  className="h-4 w-4 border-slate-300 bg-white text-emerald-600"
                 />
               </label>
             ))}

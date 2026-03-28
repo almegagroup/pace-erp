@@ -13,9 +13,5 @@ export function logNavigationEvent(event) {
   // - Read-only
   // - No side effects
   // - No control flow impact
-
-  console.info("[NAV_EVENT]", {
-    ts: Date.now(),
-    ...event,
-  });
+  void event;
 }

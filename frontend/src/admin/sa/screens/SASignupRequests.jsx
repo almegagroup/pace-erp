@@ -16,10 +16,12 @@ import {
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
 async function readJsonSafe(response) {
   try {
@@ -230,6 +232,7 @@ export default function SASignupRequests() {
       ]),
     [requests, searchQuery]
   );
+  const signupPagination = useErpPagination(filteredRequests, 10);
 
   const totalRequests = requests.length;
   const withCompanyHintCount = requests.filter((row) => row.parent_company_name).length;
@@ -418,6 +421,14 @@ export default function SASignupRequests() {
       </div>
     ) : (
       <div className="overflow-x-auto">
+        <ErpPaginationStrip
+          page={signupPagination.page}
+          setPage={signupPagination.setPage}
+          totalPages={signupPagination.totalPages}
+          startIndex={signupPagination.startIndex}
+          endIndex={signupPagination.endIndex}
+          totalItems={filteredRequests.length}
+        />
         <table className="min-w-full border-collapse">
           <thead>
             <tr>
@@ -445,7 +456,7 @@ export default function SASignupRequests() {
             </tr>
           </thead>
           <tbody>
-            {filteredRequests.map((request, index) => {
+            {signupPagination.pageItems.map((request, index) => {
               const isActing = actingUserId === request.auth_user_id;
 
               return (

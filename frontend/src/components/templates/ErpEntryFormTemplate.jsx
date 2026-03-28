@@ -46,27 +46,27 @@ export default function ErpEntryFormTemplate({
       metrics={metrics}
       footerHints={footerHints}
     >
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.3fr)_320px]">
-        <div className="grid gap-4">
+      <div className="grid gap-3">
+        {sideContent ? (
           <ErpSectionCard
-            eyebrow={formEyebrow}
-            title={formTitle}
-            description={formDescription}
-            tone="accent"
+            eyebrow="Workspace Tools"
+            title="Search, context, and supporting references"
+            description="Keep quick filters and live context visible above the worksheet."
           >
-            {formContent}
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">{sideContent}</div>
           </ErpSectionCard>
-
-          {bottomContent ? <div>{bottomContent}</div> : null}
-        </div>
+        ) : null}
 
         <ErpSectionCard
-          eyebrow="Reference Rail"
-          title="Live Review Context"
-          description="Reference values stay fixed on the right while the operator moves down the worksheet."
+          eyebrow={formEyebrow}
+          title={formTitle}
+          description={formDescription}
+          tone="accent"
         >
-          <div className="grid gap-2">{sideContent}</div>
+          {formContent}
         </ErpSectionCard>
+
+        {bottomContent ? <div>{bottomContent}</div> : null}
       </div>
     </ErpScreenScaffold>
   );

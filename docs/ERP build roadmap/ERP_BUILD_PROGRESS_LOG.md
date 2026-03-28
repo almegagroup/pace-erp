@@ -112,6 +112,72 @@ new inconsistent formats.
 
 Use this section to append all future progress updates.
 
+## Entry
+
+Date:
+2026-03-29
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- made the protected function rail collapsible with `Alt+Left` and `Alt+Right`
+- removed the always-visible right-side shortcut and page-command blocks from the default workspace view
+- added shell branding logo from `frontend/public/lm.jpg`
+- moved keyboard tool/context blocks above entry worksheets so filters no longer live in side columns
+- reordered shared list and review templates so the main list/review surface appears before non-essential narrative blocks
+- added reusable pagination strip and applied it across major SA list/review surfaces
+- removed several narrative side/contract panels from SA user, role, approval, and permission screens to preserve work area
+- converted SA company-module governance from the old dark card style into the same light worksheet grammar
+- removed frontend navigation debug spam and improved backend project-create error metadata for blocked-request diagnosis
+
+What changed in repo:
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/components/templates/ErpMasterListTemplate.jsx
+- frontend/src/components/templates/ErpApprovalReviewTemplate.jsx
+- frontend/src/components/templates/ErpEntryFormTemplate.jsx
+- frontend/src/components/ErpPaginationStrip.jsx
+- frontend/src/hooks/useErpPagination.js
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- frontend/src/admin/sa/screens/SAApprovalRules.jsx
+- frontend/src/admin/sa/screens/SARolePermissions.jsx
+- frontend/src/admin/sa/screens/SACompanyModuleMap.jsx
+- frontend/src/admin/sa/screens/SAProjectMaster.jsx
+- frontend/src/admin/sa/screens/SAAudit.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SAUserScope.jsx
+- frontend/src/components/layer/DrawerBase.jsx
+- frontend/src/context/MenuProvider.jsx
+- frontend/src/navigation/navigationEventLogger.js
+- supabase/functions/api/index.ts
+- supabase/functions/api/_pipeline/runner.ts
+- supabase/functions/api/_core/admin/project/create_project.handler.ts
+
+What was verified:
+- frontend build completed successfully
+- frontend lint completed successfully
+- function rail can collapse without losing keyboard access to shell actions
+- top action buttons now expose underlined Alt-letter mnemonics through the shared scaffold
+- major SA list/review screens now keep filters above the list and paginate large result sets
+
+Problems or blockers:
+- the backend project-create/request-blocked issue is now easier to diagnose, but it still needs a live request trace with the new metadata to confirm the exact policy cause
+- some non-SA screens still need the same full-width worksheet migration
+
+Decision or note:
+The main work canvas must stay visually dominant.
+Context, help, and narrative blocks may exist,
+but they must never shrink the operator worksheet into a side-column experience.
+
+Next step:
+Carry the same canvas-first cleanup into the remaining non-SA and governance screens,
+then close the backend blocked-request diagnosis using the new structured error metadata.
+
 ## Entry Template
 
 Date:

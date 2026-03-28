@@ -44,18 +44,13 @@ export default function ErpMasterListTemplate({
       metrics={metrics}
       footerHints={footerHints}
     >
-      <div className="grid gap-3 xl:grid-cols-[280px_minmax(0,1fr)]">
-        <div className="grid gap-3">
-          {summarySection ? <ErpSectionCard {...summarySection} /> : null}
-          {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
-          {sideSection ? <ErpSectionCard {...sideSection} /> : null}
-        </div>
-
-        <div className="grid gap-3">
-          {listSection ? (
-            <ErpSectionCard {...listSection} className="min-h-[480px]" />
-          ) : null}
-        </div>
+      <div className="grid gap-3">
+        {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
+        {listSection ? (
+          <ErpSectionCard {...listSection} className="min-h-[560px]" />
+        ) : null}
+        {sideSection ? <ErpSectionCard {...sideSection} /> : null}
+        {summarySection ? <ErpSectionCard {...summarySection} /> : null}
       </div>
     </ErpScreenScaffold>
   );

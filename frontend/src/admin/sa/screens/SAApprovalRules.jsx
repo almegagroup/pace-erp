@@ -6,10 +6,12 @@ import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
+import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
+import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
 async function readJsonSafe(response) {
   try {
@@ -135,6 +137,7 @@ export default function SAApprovalRules() {
       ]),
     [rules, searchQuery]
   );
+  const rulePagination = useErpPagination(filteredRules, 10);
 
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
@@ -371,12 +374,6 @@ export default function SAApprovalRules() {
           caption: "The current target type in the editor pane.",
         },
       ]}
-      summarySection={{
-        eyebrow: "Routing Contract",
-        title: "Approver rules stay exact and backend-owned",
-        description:
-          "Blanket module rules and exact resource-action scope are both handled here. Resource code and action code must move together when narrowing below module level.",
-      }}
       filterSection={{
         eyebrow: "Rule Search",
         title: "Filter approval routing rows",
@@ -397,32 +394,41 @@ export default function SAApprovalRules() {
           ? "Loading approval rules"
           : `${filteredRules.length} visible approval rule${filteredRules.length === 1 ? "" : "s"}`,
         children: loading ? (
-          <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading approval routing rules.
           </div>
         ) : filteredRules.length === 0 ? (
-          <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             No approval rule matches the current filter.
           </div>
         ) : (
-          <div className="space-y-3">
-            {filteredRules.map((row, index) => (
+          <div className="border border-slate-300">
+            <ErpPaginationStrip
+              page={rulePagination.page}
+              setPage={rulePagination.setPage}
+              totalPages={rulePagination.totalPages}
+              startIndex={rulePagination.startIndex}
+              endIndex={rulePagination.endIndex}
+              totalItems={filteredRules.length}
+            />
+            <div className="space-y-0">
+            {rulePagination.pageItems.map((row, index) => (
               <div
                 key={row.approver_id}
-                className="rounded-[22px] border border-white/8 bg-black/10 px-4 py-4"
+                className="border-b border-slate-300 bg-white px-4 py-3 last:border-b-0"
               >
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <p className="text-sm font-semibold text-white">
+                    <p className="text-sm font-semibold text-slate-900">
                       {row.module_code} | Stage {row.approval_stage}
                     </p>
                     <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
                       Company {row.company_id}
                     </p>
-                    <p className="mt-2 text-xs text-slate-400">
+                    <p className="mt-2 text-xs text-slate-600">
                       Scope {row.resource_code && row.action_code ? `${row.resource_code} | ${row.action_code}` : "Blanket module scope"}
                     </p>
-                    <p className="mt-1 text-xs text-slate-400">
+                    <p className="mt-1 text-xs text-slate-600">
                       Target {row.approver_role_code ? ERP_ROLE_LABELS[row.approver_role_code] ?? row.approver_role_code : row.approver_user_id}
                     </p>
                   </div>
@@ -453,7 +459,7 @@ export default function SAApprovalRules() {
                           orientation: "horizontal",
                         })
                       }
-                      className="rounded-2xl border border-cyan-400/25 bg-cyan-400/12 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-50"
+                      className="border border-cyan-300 bg-cyan-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700"
                     >
                       Edit
                     </button>
@@ -471,7 +477,7 @@ export default function SAApprovalRules() {
                           orientation: "horizontal",
                         })
                       }
-                      className="rounded-2xl border border-rose-400/25 bg-rose-400/12 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-rose-50"
+                      className="border border-rose-300 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700"
                     >
                       Delete
                     </button>
@@ -479,6 +485,7 @@ export default function SAApprovalRules() {
                 </div>
               </div>
             ))}
+            </div>
           </div>
         ),
       }}
@@ -496,7 +503,7 @@ export default function SAApprovalRules() {
               ["Approval Stage", "approval_stage", null, "1"],
             ].map(([label, key, ref, placeholder]) => (
               <label key={key} className="block">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   {label}
                 </span>
                 <input
@@ -512,13 +519,13 @@ export default function SAApprovalRules() {
                     }))
                   }
                   placeholder={placeholder}
-                  className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
+                  className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
                 />
               </label>
             ))}
 
             <label className="block">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Target Mode
               </span>
               <select
@@ -530,7 +537,7 @@ export default function SAApprovalRules() {
                     target_mode: event.target.value,
                   }))
                 }
-                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400/50 focus:bg-black/30"
+                className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
               >
                 <option value="role">Approver Role</option>
                 <option value="user">Approver User</option>
@@ -539,7 +546,7 @@ export default function SAApprovalRules() {
 
             {draft.target_mode === "role" ? (
               <label className="block">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Approver Role
                 </span>
                 <select
@@ -551,7 +558,7 @@ export default function SAApprovalRules() {
                       approver_role_code: event.target.value,
                     }))
                   }
-                  className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400/50 focus:bg-black/30"
+                  className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
                 >
                   {ERP_ROLE_OPTIONS.map((role) => (
                     <option key={role.code} value={role.code}>
@@ -562,7 +569,7 @@ export default function SAApprovalRules() {
               </label>
             ) : (
               <label className="block">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Approver User ID
                 </span>
                 <input
@@ -576,7 +583,7 @@ export default function SAApprovalRules() {
                     }))
                   }
                   placeholder="Auth user ID"
-                  className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
+                  className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
                 />
               </label>
             )}

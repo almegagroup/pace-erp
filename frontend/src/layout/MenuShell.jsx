@@ -127,6 +127,7 @@ export default function MenuShell() {
   const { menu, loading, shellProfile } = useMenu();
   const [collapsed, setCollapsed] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
+  const [actionRailCollapsed, setActionRailCollapsed] = useState(false);
   const [activeZone, setActiveZone] = useState("content");
   const [menuFocusIndex, setMenuFocusIndex] = useState(0);
   const [clusterAdmission, setClusterAdmission] = useState(() =>
@@ -249,6 +250,10 @@ export default function MenuShell() {
   }, [location.pathname]);
 
   useEffect(() => {
+    setActionRailCollapsed(workspaceMode);
+  }, [workspaceMode]);
+
+  useEffect(() => {
     if (!clusterWindowMessage) {
       return undefined;
     }
@@ -284,6 +289,20 @@ export default function MenuShell() {
       }
 
       if (zone === "actions") {
+        if (actionRailCollapsed) {
+          setActionRailCollapsed(false);
+          window.requestAnimationFrame(() => {
+            const button = actionButtonRefs.current.find(
+              (item) => item instanceof HTMLElement
+            );
+
+            if (focusElement(button)) {
+              setActiveZone("actions");
+            }
+          });
+          return;
+        }
+
         const button = actionButtonRefs.current.find(
           (item) => item instanceof HTMLElement
         );
@@ -297,7 +316,7 @@ export default function MenuShell() {
 
       focusContentZone();
     },
-    [focusContentZone, resolvedMenuFocusIndex]
+    [actionRailCollapsed, focusContentZone, resolvedMenuFocusIndex]
   );
 
   const cycleZoneFocus = useCallback(
@@ -395,6 +414,28 @@ export default function MenuShell() {
     return unsubscribe;
   }, [cycleZoneFocus, focusZone]);
 
+  useEffect(() => {
+    function handleRailToggle(event) {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+        return;
+      }
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setActionRailCollapsed(true);
+        setActiveZone("content");
+      }
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setActionRailCollapsed(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleRailToggle, true);
+    return () => window.removeEventListener("keydown", handleRailToggle, true);
+  }, []);
+
   function handleMenuKeyDown(event, index) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -437,8 +478,13 @@ export default function MenuShell() {
     { label: "Esc", title: stackDepth <= 1 ? "Logout" : "Back", onClick: () => void handleBack() },
     { label: "Alt+H", title: "Home", onClick: handleGoHome },
     {
+      label: actionRailCollapsed ? "Alt+Right" : "Alt+Left",
+      title: actionRailCollapsed ? "Show Rail" : "Hide Rail",
+      onClick: () => setActionRailCollapsed((current) => !current),
+    },
+    {
       label: collapsed ? "Ctrl+Right" : "Ctrl+Left",
-      title: collapsed ? "Expand" : "Collapse",
+      title: collapsed ? "Show Menu" : "Hide Menu",
       onClick: () => toggleSidebarCollapsed(),
     },
     { label: "Shift+F8", title: "Window", onClick: () => void handleOpenNewWindow() },
@@ -473,6 +519,15 @@ export default function MenuShell() {
       keywords: ["new window", "cluster"],
       perform: () => void handleOpenNewWindow(),
       order: 30,
+    },
+    {
+      id: "shell-action-rail-toggle",
+      group: "Shell",
+      label: actionRailCollapsed ? "Show function rail" : "Hide function rail",
+      hint: actionRailCollapsed ? "Alt+Right" : "Alt+Left",
+      keywords: ["function rail", "action rail", "collapse"],
+      perform: () => setActionRailCollapsed((current) => !current),
+      order: 35,
     },
     {
       id: "shell-lock",
@@ -562,9 +617,16 @@ export default function MenuShell() {
         className={`flex shrink-0 flex-col border-r bg-[#f7f9fc] ${workspaceMode ? "w-[88px]" : collapsed ? "w-[88px]" : "w-[260px]"} ${zoneBorder(activeZone, "menu")}`}
       >
         <div className="border-b bg-[#1c5aa6] px-3 py-3 text-white">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.28em]">
-            Pace ERP
-          </p>
+          <div className="flex items-center gap-2">
+            <img
+              src="/lm.jpg"
+              alt="PACE ERP"
+              className="h-9 w-9 border border-white/25 object-cover"
+            />
+            <p className="text-[10px] font-semibold uppercase tracking-[0.28em]">
+              Pace ERP
+            </p>
+          </div>
           {!workspaceMode && !collapsed ? (
             <>
               <p className="mt-2 text-xl font-semibold">{shellProfile?.roleCode || "ERP"}</p>
@@ -696,7 +758,7 @@ export default function MenuShell() {
 
         <div className="border-b bg-[#eef4fb] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
           {workspaceMode
-            ? "Esc Back | Alt+H Home | Alt+A Function Rail | Alt+C Work Area | Ctrl+K Command Bar"
+            ? "Esc Back | Alt+H Home | Alt+Left Hide Rail | Alt+Right Show Rail | Ctrl+K Command Bar"
             : "Alt+M Menu | Alt+A Function Rail | Alt+C Work Area | Ctrl+K Command Bar"}
         </div>
 
@@ -720,90 +782,82 @@ export default function MenuShell() {
           tabIndex={-1}
           onFocus={() => setActiveZone("content")}
           aria-label="Active workspace content"
-          className={`min-h-0 flex-1 overflow-y-auto bg-[#f7f9fc] outline-none ${workspaceMode ? "px-2 py-2" : "px-3 py-3"}`}
+          className={`min-h-0 flex-1 overflow-y-auto bg-[#f7f9fc] outline-none ${workspaceMode ? "px-1.5 py-1.5" : "px-3 py-3"}`}
         >
           <Outlet />
         </div>
 
         <footer className="border-t bg-[#eef4fb] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-          Ctrl+S Save | Alt+R Refresh | Alt+Shift+F Search | Alt+Shift+P Primary | Esc Back
+          Esc Back | Alt+H Home | Ctrl+K Command Bar | Ctrl+S Save | Alt+R Refresh | Alt+Shift+F Search | Alt+Shift+P Primary
           {activeScreenHotkeys.length > 0
             ? ` | ${activeScreenHotkeys.map((item) => `${item.key} ${item.label}`).join(" | ")}`
             : ""}
         </footer>
       </main>
 
-      <aside
-        aria-label="Workspace action rail"
-        className={`flex shrink-0 flex-col bg-[#f7f9fc] ${workspaceMode ? "w-[176px]" : "w-[196px]"} ${zoneBorder(activeZone, "actions")}`}
-      >
-        <div className="border-b bg-[#d9e7f8] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-600">
-          Function Rail
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-2 py-2">
-          <div className="grid gap-1">
-            {shellActions.map((action, index) => (
-              <button
-                key={action.label + action.title}
-                ref={(element) => {
-                  actionButtonRefs.current[index] = element;
-                }}
-                type="button"
-                onClick={action.onClick}
-                onFocus={() => setActiveZone("actions")}
-                onKeyDown={(event) => handleActionKeyDown(event, index)}
-                className="grid grid-cols-[72px_minmax(0,1fr)] border border-slate-300 bg-white px-2 py-2 text-left hover:bg-slate-50"
-              >
-                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700">
-                  {action.label}
-                </span>
-                <span className="truncate text-sm font-medium text-slate-800">
-                  {action.title}
-                </span>
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-3 border border-slate-300 bg-white">
-            <div className="border-b bg-[#eef4fb] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Screen Shortcuts
+      <div className={`border-l border-slate-300 bg-[#f7f9fc] transition-all ${actionRailCollapsed ? "w-[18px]" : "w-[176px]"}`}>
+        {actionRailCollapsed ? (
+          <button
+            type="button"
+            onClick={() => setActionRailCollapsed(false)}
+            className="flex h-full w-full items-start justify-center bg-[#eef4fb] pt-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500"
+          >
+            &gt;
+          </button>
+        ) : (
+          <aside
+            aria-label="Workspace action rail"
+            className={`flex h-full flex-col ${zoneBorder(activeZone, "actions")}`}
+          >
+            <div className="border-b bg-[#d9e7f8] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-600">
+              Function Rail
             </div>
-            <div className="px-3 py-2 text-xs leading-6 text-slate-700">
-              {activeScreenHotkeys.length > 0 ? (
-                activeScreenHotkeys.map((item) => (
-                  <div key={item.id} className="flex items-center justify-between gap-2 border-b border-slate-100 py-1 last:border-b-0">
-                    <span>{item.label}</span>
-                    <span className="font-semibold text-sky-700">{item.key}</span>
+
+            <div className="flex-1 overflow-y-auto px-2 py-2">
+              <div className="grid gap-1">
+                {shellActions.map((action, index) => (
+                  <button
+                    key={action.label + action.title}
+                    ref={(element) => {
+                      actionButtonRefs.current[index] = element;
+                    }}
+                    type="button"
+                    onClick={action.onClick}
+                    onFocus={() => setActiveZone("actions")}
+                    onKeyDown={(event) => handleActionKeyDown(event, index)}
+                    className="grid grid-cols-[72px_minmax(0,1fr)] border border-slate-300 bg-white px-2 py-2 text-left hover:bg-slate-50"
+                  >
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700">
+                      {action.label}
+                    </span>
+                    <span className="truncate text-sm font-medium text-slate-800">
+                      {action.title}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              {showKeyboardHelp && visibleScreenCommands.length > 0 ? (
+                <div className="mt-3 border border-slate-300 bg-white">
+                  <div className="border-b bg-[#eef4fb] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Page Commands
                   </div>
-                ))
-              ) : (
-                <p>No extra route shortcuts.</p>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-3 border border-slate-300 bg-white">
-            <div className="border-b bg-[#eef4fb] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              {workspaceMode ? "Page Commands" : "Current Screen"}
-            </div>
-            <div className="px-3 py-2 text-xs leading-6 text-slate-700">
-              {visibleScreenCommands.length > 0 ? (
-                visibleScreenCommands.map((command) => (
-                  <div key={command.id} className="border-b border-slate-100 py-1 last:border-b-0">
-                    <div className="font-medium text-slate-800">{command.label}</div>
-                    <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                      {command.hint || "Command"}
-                    </div>
+                  <div className="px-3 py-2 text-xs leading-6 text-slate-700">
+                    {visibleScreenCommands.map((command) => (
+                      <div key={command.id} className="border-b border-slate-100 py-1 last:border-b-0">
+                        <div className="font-medium text-slate-800">{command.label}</div>
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                          {command.hint || "Command"}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))
-              ) : (
-                <p>No current-screen commands.</p>
-              )}
+                </div>
+              ) : null}
             </div>
-          </div>
-        </div>
-      </aside>
+          </aside>
+        )}
+      </div>
 
       <ErpCommandPalette
         activeRoute={location.pathname}

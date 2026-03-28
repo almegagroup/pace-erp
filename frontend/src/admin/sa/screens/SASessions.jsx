@@ -13,10 +13,12 @@ import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Sessions" },
@@ -231,6 +233,7 @@ export default function SASessions() {
       ]),
     [searchQuery, statusFilteredSessions]
   );
+  const sessionPagination = useErpPagination(filteredSessions, 10);
 
   const activeCount = sessions.filter((session) => session.status === "ACTIVE").length;
   const revokedCount = sessions.filter((session) => session.status === "REVOKED").length;
@@ -405,6 +408,14 @@ export default function SASessions() {
         </div>
       ) : (
         <div className="overflow-x-auto">
+          <ErpPaginationStrip
+            page={sessionPagination.page}
+            setPage={sessionPagination.setPage}
+            totalPages={sessionPagination.totalPages}
+            startIndex={sessionPagination.startIndex}
+            endIndex={sessionPagination.endIndex}
+            totalItems={filteredSessions.length}
+          />
           <table className="min-w-full border-collapse">
             <thead>
               <tr>
@@ -435,7 +446,7 @@ export default function SASessions() {
               </tr>
             </thead>
             <tbody>
-              {filteredSessions.map((session, index) => (
+              {sessionPagination.pageItems.map((session, index) => (
                 <tr key={session.session_id} className="border-b border-slate-200 bg-white">
                   <td className="px-3 py-2 text-sm text-slate-700">
                     <div>

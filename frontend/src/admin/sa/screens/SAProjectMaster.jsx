@@ -7,12 +7,14 @@ import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
 import {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { applyQuickFilter, sortProjects } from "../../../shared/erpCollections.js";
+import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
 async function readJsonSafe(response) {
   try {
@@ -155,6 +157,7 @@ export default function SAProjectMaster() {
       ]),
     [projects, searchQuery]
   );
+  const projectPagination = useErpPagination(filteredProjects, 10);
 
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
@@ -424,7 +427,15 @@ export default function SAProjectMaster() {
             </div>
           ) : (
             <div className="space-y-0 border border-slate-300">
-              {filteredProjects.map((project, index) => (
+              <ErpPaginationStrip
+                page={projectPagination.page}
+                setPage={projectPagination.setPage}
+                totalPages={projectPagination.totalPages}
+                startIndex={projectPagination.startIndex}
+                endIndex={projectPagination.endIndex}
+                totalItems={filteredProjects.length}
+              />
+              {projectPagination.pageItems.map((project, index) => (
                 <button
                   key={project.id}
                   ref={(element) => {
