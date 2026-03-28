@@ -20,7 +20,6 @@ import {
 } from "../navigation/screenStackEngine.js";
 import {
   confirmAndRequestLogout,
-  requestLogout,
 } from "../store/sessionWarning.js";
 import {
   subscribeWorkspaceShell,
@@ -48,7 +47,7 @@ const DASHBOARD_SHORTCUT_GUIDE = Object.freeze([
   "Alt+H Dashboard home",
   "F6 Next zone",
   "Shift+F6 Previous zone",
-  "Ctrl+Alt+N New window",
+  "Alt+Shift+W New window",
   "Ctrl+Left Hide menu",
   "Ctrl+Right Show menu",
 ]);
@@ -246,7 +245,7 @@ export default function MenuShell() {
   }
 
   async function handleLogout() {
-    await requestLogout();
+    await confirmAndRequestLogout();
   }
 
   async function handleBack() {
@@ -409,9 +408,14 @@ export default function MenuShell() {
     const handleKeyDown = (event) => {
       if (
         shellMode === "dashboard" &&
-        event.ctrlKey &&
-        event.altKey &&
-        event.key.toLowerCase() === "n"
+        (
+          (event.altKey &&
+            event.shiftKey &&
+            event.key.toLowerCase() === "w") ||
+          (event.ctrlKey &&
+            event.altKey &&
+            event.key.toLowerCase() === "n")
+        )
       ) {
         event.preventDefault();
         void handleOpenNewWindow();
@@ -507,7 +511,7 @@ export default function MenuShell() {
   if (shellMode === "dashboard") {
     headerActions.splice(2, 0, {
       label: "New Window",
-      hint: "Ctrl+Alt+N",
+      hint: "Alt+Shift+W",
       onClick: () => void handleOpenNewWindow(),
     });
 

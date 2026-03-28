@@ -17,6 +17,13 @@ const OWNER_HEARTBEAT_MS = 5000;
 const OWNER_STALE_MS = 15000;
 const CLUSTER_WINDOW_FEATURES =
   "popup=yes,width=1440,height=900,left=80,top=80,resizable=yes,scrollbars=yes";
+const POPUP_SESSION_RESET_KEYS = Object.freeze([
+  WINDOW_INSTANCE_KEY,
+  ADMISSION_KEY,
+  "__PACE_NAV_STACK__",
+  "__PACE_WORKSPACE_LOCK__",
+  "__PACE_SINGLE_TAB_ID__",
+]);
 const RUNTIME_WINDOW_ID = createUuid();
 
 let admissionState = readAdmissionState();
@@ -200,6 +207,14 @@ function buildClusterJoinUrl(homePath, joinToken) {
 }
 
 function primeClusterPopupWindow(openedWindow) {
+  try {
+    POPUP_SESSION_RESET_KEYS.forEach((key) => {
+      openedWindow.sessionStorage.removeItem(key);
+    });
+  } catch {
+    // Session storage reset is best-effort only.
+  }
+
   try {
     openedWindow.document.title = "Opening Pace ERP window...";
     openedWindow.document.body.innerHTML = `

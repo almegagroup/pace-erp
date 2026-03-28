@@ -60,11 +60,18 @@ function closeChildWindowOrRedirect() {
     // Close is best effort only.
   }
 
+  try {
+    globalThis.open("", "_self");
+    globalThis.close();
+  } catch {
+    // Secondary close strategy is best effort only.
+  }
+
   globalThis.setTimeout(() => {
     if (!globalThis.closed && document.visibilityState !== "hidden") {
       redirectToLogin();
     }
-  }, 1200);
+  }, 1500);
 }
 
 export function subscribe(fn) {
