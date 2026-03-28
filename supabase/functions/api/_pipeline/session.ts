@@ -4,7 +4,7 @@
  * Gate: 2
  * Phase: 2
  * Domain: SESSION
- * Purpose: Session lookup + bind invariant enforcement
+ * Purpose: Session lookup + bind invariant enforcement with session-cluster validation.
  * Authority: Backend
  */
 
@@ -20,7 +20,9 @@ export type SessionResolution =
       status: "ACTIVE";
       sessionId: string;
       authUserId: string;
-      roleCode: string; // 🔥 ADD THIS
+      roleCode: string;
+      clusterId: string | null;
+      clusterWindowToken: string | null;
       created_at: string;
       last_seen_at: string;
       expires_at: string;
@@ -32,54 +34,67 @@ function readCookie(req: Request, name: string): string | null {
   const cookie = req.headers.get("cookie");
   if (!cookie) return null;
 
-  const parts = cookie.split(";").map(p => p.trim());
-  for (const p of parts) {
-    if (p.startsWith(name + "=")) {
-      return p.slice(name.length + 1);
+  const parts = cookie.split(";").map((part) => part.trim());
+  for (const part of parts) {
+    if (part.startsWith(`${name}=`)) {
+      return part.slice(name.length + 1);
     }
   }
+
   return null;
+}
+
+function readHeader(req: Request, name: string): string | null {
+  const raw = req.headers.get(name);
+  if (!raw) return null;
+
+  const value = raw.trim();
+  return value.length > 0 ? value : null;
 }
 
 export async function stepSession(
   req: Request,
-  _requestId: string
+  requestId: string
 ): Promise<SessionResolution> {
   const sessionId = readCookie(req, "erp_session");
+  const clusterWindowToken = readHeader(req, "x-erp-window-token");
 
   if (!sessionId) {
     log({
       level: "OBSERVABILITY",
-      request_id: _requestId,
+      request_id: requestId,
       event: "SESSION_ABSENT",
     });
-    recordSecurityEvent(req, _requestId, "SESSION_COOKIE_MISSING", "SESSION");
+    recordSecurityEvent(req, requestId, "SESSION_COOKIE_MISSING", "SESSION");
 
-    return { status: "ABSENT", action: "LOGOUT" }; 
+    return { status: "ABSENT", action: "LOGOUT" };
   }
 
   assertRlsEnabled();
 
   const { data, error } = await serviceRoleClient
-    .schema("erp_core").from("sessions")
-    .select("session_id, auth_user_id, role_code, status, created_at, last_seen_at, expires_at")
+    .schema("erp_core")
+    .from("sessions")
+    .select(
+      "session_id, auth_user_id, role_code, status, cluster_id, created_at, last_seen_at, expires_at"
+    )
     .eq("session_id", sessionId)
     .single();
 
   if (error || !data) {
     log({
       level: "OBSERVABILITY",
-      request_id: _requestId,
+      request_id: requestId,
       event: "SESSION_REVOKED",
       meta: { session_id: sessionId },
     });
-    recordSecurityEvent(req, _requestId, "SESSION_REVOKED", "SESSION");
+    recordSecurityEvent(req, requestId, "SESSION_REVOKED", "SESSION");
 
     return { status: "REVOKED", action: "LOGOUT" };
   }
 
   if (data.status === "REVOKED") {
-    recordSecurityEvent(req, _requestId, "SESSION_REVOKED","SESSION");
+    recordSecurityEvent(req, requestId, "SESSION_REVOKED", "SESSION");
     return { status: "REVOKED", action: "LOGOUT" };
   }
 
@@ -92,59 +107,94 @@ export async function stepSession(
     return { status: "EXPIRED", action: "LOGOUT" };
   }
 
+  if (data.cluster_id) {
+    const { data: clusterRow, error: clusterError } = await serviceRoleClient
+      .schema("erp_core")
+      .from("session_clusters")
+      .select("cluster_id, status")
+      .eq("cluster_id", data.cluster_id)
+      .maybeSingle();
+
+    if (
+      clusterError ||
+      !clusterRow ||
+      clusterRow.status !== "ACTIVE"
+    ) {
+      recordSecurityEvent(req, requestId, "SESSION_CLUSTER_INVALID", "SESSION");
+      return { status: "REVOKED", action: "LOGOUT" };
+    }
+
+    if (clusterWindowToken) {
+      const { data: clusterWindow, error: clusterWindowError } =
+        await serviceRoleClient
+          .schema("erp_core")
+          .from("session_cluster_windows")
+          .select("cluster_window_id")
+          .eq("cluster_id", data.cluster_id)
+          .eq("window_token", clusterWindowToken)
+          .eq("status", "ADMITTED")
+          .maybeSingle();
+
+      if (clusterWindowError || !clusterWindow?.cluster_window_id) {
+        recordSecurityEvent(
+          req,
+          requestId,
+          "SESSION_CLUSTER_WINDOW_INVALID",
+          "SESSION"
+        );
+        return { status: "REVOKED", action: "LOGOUT" };
+      }
+    }
+  }
+
   log({
-  level: "OBSERVABILITY",
-  request_id: _requestId,
-  event: "SESSION_ACTIVE",
-  meta: { session_id: sessionId },
-});
+    level: "OBSERVABILITY",
+    request_id: requestId,
+    event: "SESSION_ACTIVE",
+    meta: { session_id: sessionId },
+  });
 
-recordSessionTimeline({
-  requestId: _requestId,
-  sessionId: sessionId,
-  userId: data.auth_user_id,
-  event: "ACTIVE",
-});
+  recordSessionTimeline({
+    requestId,
+    sessionId,
+    userId: data.auth_user_id,
+    event: "ACTIVE",
+  });
 
-// 🔹 Step 1 — get user_code
-const { data: userRow } = await serviceRoleClient
-  .schema("erp_core")
-  .from("users")
-  .select("user_code")
-  .eq("auth_user_id", data.auth_user_id)
-  .single();
+  const { data: userRow } = await serviceRoleClient
+    .schema("erp_core")
+    .from("users")
+    .select("user_code")
+    .eq("auth_user_id", data.auth_user_id)
+    .single();
 
-const userCode = userRow?.user_code || "";
+  const userCode = userRow?.user_code || "";
+  let roleCode = data.role_code;
 
-let roleCode = data.role_code;
-
-// 🟢 Step 2 — Admin detection (SA / GA)
-if (userCode.startsWith("SA")) {
-  roleCode = "SA";
-} else if (userCode.startsWith("GA")) {
-  roleCode = "GA";
-} else {
-  // 🔴 Step 3 — ACL users must have role
-  if (!roleCode) {
+  if (userCode.startsWith("SA")) {
+    roleCode = "SA";
+  } else if (userCode.startsWith("GA")) {
+    roleCode = "GA";
+  } else if (!roleCode) {
     log({
       level: "SECURITY",
-      request_id: _requestId,
+      request_id: requestId,
       event: "ROLE_MISSING_DENY",
-      meta: { session_id: sessionId }
+      meta: { session_id: sessionId },
     });
 
     return { status: "REVOKED", action: "LOGOUT" };
   }
-}
 
-// 🟢 Step 4 — return session
-return {
-  status: "ACTIVE",
-  sessionId,
-  authUserId: data.auth_user_id,
-  roleCode,
-  created_at: data.created_at,
-  last_seen_at: data.last_seen_at,
-  expires_at: data.expires_at,
-};
+  return {
+    status: "ACTIVE",
+    sessionId,
+    authUserId: data.auth_user_id,
+    roleCode,
+    clusterId: data.cluster_id ?? null,
+    clusterWindowToken,
+    created_at: data.created_at,
+    last_seen_at: data.last_seen_at,
+    expires_at: data.expires_at,
+  };
 }

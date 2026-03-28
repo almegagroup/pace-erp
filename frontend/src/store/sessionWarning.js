@@ -11,6 +11,10 @@
 import { clearNavigationStack } from "../navigation/navigationPersistence.js";
 import { openLogoutConfirm } from "./logoutConfirm.js";
 import { clearWorkspaceLock } from "./workspaceLock.js";
+import {
+  broadcastClusterMessage,
+  clearClusterAdmission,
+} from "./sessionCluster.js";
 import { releaseSingleTabOwnership } from "./singleTabSession.js";
 
 const WARNING_MESSAGES = {
@@ -90,7 +94,9 @@ export function getSessionWatchdogSnapshot() {
   return { ...state };
 }
 
-export function showWarning(type, onDismiss) {
+export function showWarning(type, onDismiss, options = {}) {
+  const { broadcast = true } = options;
+
   if (state.visible && state.type === type) {
     dismissHandler = typeof onDismiss === "function" ? onDismiss : dismissHandler;
     return;
@@ -104,9 +110,17 @@ export function showWarning(type, onDismiss) {
   };
   dismissHandler = typeof onDismiss === "function" ? onDismiss : null;
   emit();
+
+  if (broadcast) {
+    broadcastClusterMessage({
+      type: "SESSION_WARNING_SHOW",
+      warningType: type,
+    });
+  }
 }
 
-export async function clearWarning(reason = "dismiss") {
+export async function clearWarning(reason = "dismiss", options = {}) {
+  const { broadcast = true } = options;
   const handler = dismissHandler;
 
   dismissHandler = null;
@@ -118,6 +132,13 @@ export async function clearWarning(reason = "dismiss") {
     frontendActivityAt: Date.now(),
   };
   emit();
+
+  if (broadcast) {
+    broadcastClusterMessage({
+      type: "SESSION_WARNING_CLEAR",
+      reason,
+    });
+  }
 
   if (handler) {
     await handler(reason);
@@ -135,10 +156,19 @@ export function resetWarningState() {
   emit();
 }
 
-export function hardLogout() {
+export function hardLogout(options = {}) {
+  const { broadcast = true } = options;
   dismissHandler = null;
+
+  if (broadcast) {
+    broadcastClusterMessage({
+      type: "SESSION_LOGOUT",
+    });
+  }
+
   clearNavigationStack();
   clearWorkspaceLock();
+  clearClusterAdmission();
   releaseSingleTabOwnership();
 
   state = {

@@ -10,6 +10,11 @@
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertRlsEnabled } from "../../_shared/rls_assert.ts";
+import {
+  createSessionCluster,
+  prepareActiveClustersForFreshLogin,
+  replaceActiveClustersForFreshLogin,
+} from "./session.cluster.ts";
 
 export async function createSession(
   authUserId: string,
@@ -18,7 +23,7 @@ export async function createSession(
     device_id: string;
     device_summary: string;
   }
-): Promise<string> {
+): Promise<{ sessionId: string; clusterId: string }> {
   assertRlsEnabled();
 
     // 🔴 ADD THIS BLOCK HERE
@@ -30,9 +35,12 @@ export async function createSession(
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const expiresIso = new Date(now + 12 * 60 * 60 * 1000).toISOString(); // 12h TTL
-
+  const replacedClusterIds = await prepareActiveClustersForFreshLogin(
+    authUserId,
+    nowIso
+  );
   // ------------------------------------------------
-  // Revoke all existing ACTIVE sessions (single-session policy)
+  // Revoke all existing ACTIVE sessions (fresh-login replacement policy)
   // ------------------------------------------------
   const { error: revokeError } = await serviceRoleClient
     .schema("erp_core").from("sessions")
@@ -46,10 +54,9 @@ export async function createSession(
     .eq("status", "ACTIVE");
 
   if (revokeError) {
-  console.error("SESSION_REVOKE_FAILED", revokeError);
-
-  throw new Error("SESSION_REVOKE_FAILED");
-}
+    console.error("SESSION_REVOKE_FAILED", revokeError);
+    throw new Error("SESSION_REVOKE_FAILED");
+  }
 
 // 🔥 ADD THIS BLOCK HERE — CLEAN OLD SNAPSHOT
 const { error: snapshotDeleteError } = await serviceRoleClient
@@ -95,5 +102,33 @@ if (snapshotDeleteError) {
   throw new Error("SESSION_CREATE_FAILED");
 }
 
-  return sessionId;
+  const clusterId = await createSessionCluster({
+    authUserId,
+    sessionId,
+    expiresAtIso: expiresIso,
+  });
+
+  const { error: sessionClusterLinkError } = await serviceRoleClient
+    .schema("erp_core")
+    .from("sessions")
+    .update({
+      cluster_id: clusterId,
+    })
+    .eq("session_id", sessionId);
+
+  if (sessionClusterLinkError) {
+    console.error("SESSION_CLUSTER_LINK_FAILED", sessionClusterLinkError);
+    throw new Error("SESSION_CLUSTER_LINK_FAILED");
+  }
+
+  await replaceActiveClustersForFreshLogin({
+    clusterIds: replacedClusterIds,
+    replacedByClusterId: clusterId,
+    replacedAtIso: nowIso,
+  });
+
+  return {
+    sessionId,
+    clusterId,
+  };
 }

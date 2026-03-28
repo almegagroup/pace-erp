@@ -1,3 +1,5 @@
+import { broadcastClusterMessage } from "./sessionCluster.js";
+
 let state = {
   visible: false,
   loading: false,
@@ -34,7 +36,9 @@ export function unsubscribeWorkspaceLock(fn) {
   listeners = listeners.filter((listener) => listener !== fn);
 }
 
-export function lockWorkspace() {
+export function lockWorkspace(options = {}) {
+  const { broadcast = true } = options;
+
   setWorkspaceLockPersistence(true);
   state = {
     visible: true,
@@ -42,9 +46,17 @@ export function lockWorkspace() {
     error: "",
   };
   emit();
+
+  if (broadcast) {
+    broadcastClusterMessage({
+      type: "WORKSPACE_LOCK",
+    });
+  }
 }
 
-export function unlockWorkspaceLocally() {
+export function unlockWorkspaceLocally(options = {}) {
+  const { broadcast = true } = options;
+
   setWorkspaceLockPersistence(false);
   state = {
     visible: false,
@@ -52,10 +64,16 @@ export function unlockWorkspaceLocally() {
     error: "",
   };
   emit();
+
+  if (broadcast) {
+    broadcastClusterMessage({
+      type: "WORKSPACE_UNLOCK",
+    });
+  }
 }
 
 export function clearWorkspaceLock() {
-  unlockWorkspaceLocally();
+  unlockWorkspaceLocally({ broadcast: false });
 }
 
 export function consumeLockedRefreshFlag() {

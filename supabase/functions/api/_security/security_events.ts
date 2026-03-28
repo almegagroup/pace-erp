@@ -30,6 +30,8 @@ export type SecurityEvent =
   | "SESSION_COOKIE_MISSING"
   | "SESSION_REVOKED"
   | "SESSION_EXPIRED"
+  | "SESSION_CLUSTER_INVALID"
+  | "SESSION_CLUSTER_WINDOW_INVALID"
   | "ACL_DENY";
 
 /* --------------------------------------------------

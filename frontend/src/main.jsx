@@ -22,6 +22,7 @@ import {
   consumeLockedRefreshFlag,
   requestWorkspaceLockLogout,
 } from "./store/workspaceLock.js";
+import { getClusterFetchHeaders } from "./store/sessionCluster.js";
 
 // 🔒 Gate-8 / G1 — Screen Registry Validation
 import { validateScreenRegistry } from "./navigation/screenRules.js";
@@ -78,6 +79,43 @@ Only authenticated universe may activate navigation stack.
 const __originalFetch = globalThis.fetch;
 const API_BASE = import.meta.env.VITE_API_BASE;
 
+function withClusterHeaders(args) {
+  const requestTarget = args[0];
+  const requestInit = args[1] ?? {};
+  const clusterHeaders = getClusterFetchHeaders();
+
+  if (Object.keys(clusterHeaders).length === 0) {
+    return args;
+  }
+
+  if (requestTarget instanceof Request) {
+    const headers = new Headers(requestTarget.headers);
+    Object.entries(clusterHeaders).forEach(([key, value]) => {
+      headers.set(key, value);
+    });
+
+    return [
+      new Request(requestTarget, {
+        headers,
+      }),
+      requestInit,
+    ];
+  }
+
+  const headers = new Headers(requestInit.headers ?? {});
+  Object.entries(clusterHeaders).forEach(([key, value]) => {
+    headers.set(key, value);
+  });
+
+  return [
+    requestTarget,
+    {
+      ...requestInit,
+      headers,
+    },
+  ];
+}
+
 async function refreshSessionAfterWarning() {
   const response = await __originalFetch(
     `${API_BASE}/api/me?${SESSION_WARNING_ACK_QUERY}`,
@@ -115,8 +153,11 @@ globalThis.fetch = async (...args) => {
     isApiRequest && url.includes("session_mode=passive");
   const isWarningAcknowledgeRefresh =
     isApiRequest && url.includes(SESSION_WARNING_ACK_QUERY);
+  const shouldAttachClusterHeaders =
+    isApiRequest && !url.includes("/api/session/cluster/admit");
 
-  const res = await __originalFetch(...args);
+  const finalArgs = shouldAttachClusterHeaders ? withClusterHeaders(args) : args;
+  const res = await __originalFetch(...finalArgs);
 
   let json;
 

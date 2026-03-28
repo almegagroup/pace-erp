@@ -8,6 +8,7 @@ import { dispatchAdminRoutes } from "../_routes/admin.routes.ts";
 import { dispatchAclRoutes } from "../_routes/acl.routes.ts";
 import { dispatchWorkflowRoutes } from "../_routes/workflow.routes.ts";
 import { dispatchMenuRoutes } from "../_routes/menu.routes.ts";
+import { dispatchSessionRoutes } from "../_routes/session.routes.ts";
 import { logoutHandler } from "../_core/auth/logout.handler.ts";
 import { errorResponse } from "../_core/response.ts";
 
@@ -56,6 +57,14 @@ const menu = await dispatchMenuRoutes(
   contextResult
 );
 if (menu) return menu;
+
+const sessionRoute = await dispatchSessionRoutes(
+  routeKey,
+  req,
+  requestId,
+  sessionResult
+);
+if (sessionRoute) return sessionRoute;
 
     switch (routeKey) {
       case "POST:/api/logout":

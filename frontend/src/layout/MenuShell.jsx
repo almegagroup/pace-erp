@@ -28,6 +28,12 @@ import {
   unsubscribeWorkspaceShell,
 } from "../store/workspaceShell.js";
 import { lockWorkspace } from "../store/workspaceLock.js";
+import {
+  getClusterAdmission,
+  requestOpenClusterWindow,
+  subscribeClusterAdmission,
+  unsubscribeClusterAdmission,
+} from "../store/sessionCluster.js";
 import { subscribeWorkspaceFocusCommands } from "../navigation/workspaceFocusBus.js";
 
 const DASHBOARD_ROUTES = new Set(["/sa/home", "/ga/home", "/dashboard"]);
@@ -41,6 +47,7 @@ const DASHBOARD_SHORTCUT_GUIDE = Object.freeze([
   "Alt+H Dashboard home",
   "F6 Next zone",
   "Shift+F6 Previous zone",
+  "Ctrl+Shift+N New window",
   "Ctrl+Left Hide menu",
   "Ctrl+Right Show menu",
 ]);
@@ -114,6 +121,9 @@ export default function MenuShell() {
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [activeZone, setActiveZone] = useState("content");
   const [menuFocusIndex, setMenuFocusIndex] = useState(0);
+  const [clusterAdmission, setClusterAdmission] = useState(() =>
+    getClusterAdmission()
+  );
 
   const menuButtonRefs = useRef([]);
   const actionButtonRefs = useRef([]);
@@ -174,6 +184,15 @@ export default function MenuShell() {
   }, []);
 
   useEffect(() => {
+    const listener = (snapshot) => {
+      setClusterAdmission(snapshot);
+    };
+
+    subscribeClusterAdmission(listener);
+    return () => unsubscribeClusterAdmission(listener);
+  }, []);
+
+  useEffect(() => {
     setShowKeyboardHelp(false);
   }, [shellMode]);
 
@@ -223,6 +242,20 @@ export default function MenuShell() {
 
   function handleLockWorkspace() {
     lockWorkspace();
+  }
+
+  async function handleOpenNewWindow() {
+    const result = await requestOpenClusterWindow(
+      location.pathname.startsWith("/sa")
+        ? "/sa/home"
+        : location.pathname.startsWith("/ga")
+          ? "/ga/home"
+          : "/dashboard"
+    );
+
+    if (!result.ok) {
+      console.error("SESSION_CLUSTER_OPEN_WINDOW_FAILED", result.code);
+    }
   }
 
   const focusContentZone = useCallback(() => {
@@ -325,6 +358,23 @@ export default function MenuShell() {
     }
   }, [focusContentZone, location.pathname, shellMode]);
 
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (
+        shellMode === "dashboard" &&
+        event.ctrlKey &&
+        event.shiftKey &&
+        event.key.toLowerCase() === "n"
+      ) {
+        event.preventDefault();
+        void handleOpenNewWindow();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [location.pathname, shellMode]);
+
   function handleMenuKeyDown(event, index) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -408,6 +458,12 @@ export default function MenuShell() {
   ];
 
   if (shellMode === "dashboard") {
+    headerActions.splice(2, 0, {
+      label: "New Window",
+      hint: "Ctrl+Shift+N",
+      onClick: () => void handleOpenNewWindow(),
+    });
+
     headerActions.splice(2, 0, {
       label: collapsed ? "Show Menu" : "Hide Menu",
       hint: collapsed ? "Ctrl+Right" : "Ctrl+Left",
@@ -696,6 +752,12 @@ export default function MenuShell() {
                   {shellMode === "dashboard" ? "Dashboard Mode" : "Task Mode"}
                 </span>
                 <span>Zone {zoneNumber}</span>
+                {clusterAdmission?.windowSlot ? (
+                  <span>
+                    Window {clusterAdmission.windowSlot}/
+                    {clusterAdmission.maxWindowCount ?? 3}
+                  </span>
+                ) : null}
               </div>
               <h1
                 style={{

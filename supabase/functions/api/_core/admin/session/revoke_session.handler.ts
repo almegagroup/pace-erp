@@ -4,13 +4,18 @@
  * Gate: 9
  * Phase: 9
  * Domain: SECURITY
- * Purpose: Admin forced session revoke
+ * Purpose: Admin forced session revoke with cluster-wide termination semantics.
  * Authority: Backend
  */
 
 import { okResponse, errorResponse } from "../../response.ts";
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import { log } from "../../../_lib/logger.ts";
+import { terminateSessionCluster } from "../../session/session.cluster.ts";
+import {
+  SESSION_CLUSTER_STATE,
+  SESSION_CLUSTER_WINDOW_STATE,
+} from "../../session/session.cluster.types.ts";
 
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 
@@ -23,7 +28,6 @@ export async function revokeSessionHandler(
   req: Request,
   ctx: SessionRevokeCtx
 ): Promise<Response> {
-
   if (ctx.context.status !== "RESOLVED") {
     return errorResponse(
       "CONTEXT_UNRESOLVED",
@@ -48,17 +52,58 @@ export async function revokeSessionHandler(
 
   const db = getServiceRoleClientWithContext(ctx.context);
 
-  const { data: revokedRows, error } = await db
-    .schema("erp_core").from("sessions")
-    .update({
-      status: "REVOKED",
-      revoked_at: new Date().toISOString(),
-      revoked_reason: "ADMIN_REVOKE"
-    })
+  const { data: sessionRow, error: sessionReadError } = await db
+    .schema("erp_core")
+    .from("sessions")
+    .select("session_id, cluster_id, auth_user_id")
     .eq("session_id", body.session_id)
-    .select("session_id, status");
+    .maybeSingle();
 
-  if (error) {
+  if (sessionReadError) {
+    return errorResponse(
+      "SESSION_REVOKE_LOOKUP_FAILED",
+      sessionReadError.message,
+      ctx.request_id,
+      "NONE",
+      500
+    );
+  }
+
+  if (!sessionRow?.session_id) {
+    return okResponse(
+      {
+        revoked: false,
+        session_id: body.session_id,
+      },
+      ctx.request_id
+    );
+  }
+
+  try {
+    if (sessionRow.cluster_id) {
+      await terminateSessionCluster({
+        clusterId: sessionRow.cluster_id,
+        clusterStatus: SESSION_CLUSTER_STATE.REVOKED,
+        windowStatus: SESSION_CLUSTER_WINDOW_STATE.REVOKED,
+        sessionStatus: "REVOKED",
+        reason: "ADMIN_REVOKE",
+      });
+    } else {
+      const { error } = await db
+        .schema("erp_core")
+        .from("sessions")
+        .update({
+          status: "REVOKED",
+          revoked_at: new Date().toISOString(),
+          revoked_reason: "ADMIN_REVOKE",
+        })
+        .eq("session_id", body.session_id);
+
+      if (error) {
+        throw error;
+      }
+    }
+  } catch (error) {
     log({
       level: "ERROR",
       gate_id: "9.15B",
@@ -67,24 +112,22 @@ export async function revokeSessionHandler(
       event: "SESSION_REVOKE_FAILED",
       meta: {
         session_id: body.session_id,
-        error_message: error.message,
+        error_message: error instanceof Error ? error.message : String(error),
       },
     });
 
     return errorResponse(
       "SESSION_REVOKE_FAILED",
-      error.message,
+      error instanceof Error ? error.message : String(error),
       ctx.request_id,
       "NONE",
       500
     );
   }
 
-  const applied = Array.isArray(revokedRows) && revokedRows.length > 0;
-
   return okResponse(
     {
-      revoked: applied,
+      revoked: true,
       session_id: body.session_id,
     },
     ctx.request_id

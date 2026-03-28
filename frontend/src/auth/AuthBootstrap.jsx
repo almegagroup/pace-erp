@@ -3,6 +3,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import { isPublicRoute } from "../router/publicRoutes.js";
 import { resetToScreen } from "../navigation/screenStackEngine.js";
+import {
+  claimClusterWindowOwnership,
+  clearClusterAdmission,
+  requestSessionClusterAdmission,
+} from "../store/sessionCluster.js";
 
 export default function AuthBootstrap({ children }) {
   const location = useLocation();
@@ -44,6 +49,7 @@ if (
   pathname === "/auth/callback"
 ) {
   hasBootedRef.current = false;
+  clearClusterAdmission();
   return;
 }
 
@@ -82,10 +88,43 @@ hasBootedRef.current = true;
 
   // 🔥 ADD THIS (logout detection)
   clearMenuSnapshot();
+  clearClusterAdmission();
   navigate("/login", { replace: true });
 
           return; // ❗ MUST STOP FLOW
 }
+
+        const currentUrl = new URL(globalThis.location.href);
+        const joinToken = currentUrl.searchParams.get("cluster_join");
+        const clusterAdmission = await requestSessionClusterAdmission(joinToken);
+
+        if (!clusterAdmission.ok) {
+          clearMenuSnapshot();
+          clearClusterAdmission();
+          navigate("/login", { replace: true });
+          return;
+        }
+
+        if (!claimClusterWindowOwnership()) {
+          clearMenuSnapshot();
+          clearClusterAdmission();
+          navigate("/login", { replace: true });
+          return;
+        }
+
+        if (joinToken) {
+          currentUrl.searchParams.delete("cluster_join");
+
+          try {
+            globalThis.history.replaceState(
+              null,
+              "",
+              `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`
+            );
+          } catch {
+            // History cleanup is best-effort only.
+          }
+        }
 
         const profileRes = await fetch(
           `${import.meta.env.VITE_API_BASE}/api/me/profile`,
@@ -94,6 +133,7 @@ hasBootedRef.current = true;
 
         if (!profileRes.ok) {
           clearMenuSnapshot();
+          clearClusterAdmission();
           navigate("/login", { replace: true });
           return;
         }
@@ -169,6 +209,7 @@ hasBootedRef.current = true;
         console.error("🔥 AuthBootstrap ERROR:", err);
 
         clearMenuSnapshot();
+        clearClusterAdmission();
 
         //console.log("➡️ Redirect → /login");
         navigate("/login", { replace: true });

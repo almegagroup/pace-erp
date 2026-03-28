@@ -21,6 +21,14 @@ import { serviceRoleClient } from "../_shared/serviceRoleClient.ts";
 import { dispatchProtectedRoute } from "./protected_routes.dispatch.ts";
 import { dispatchPublicRoute } from "./public_routes.dispatch.ts";
 import { errorResponse } from "../_core/response.ts";
+import {
+  terminateSessionCluster,
+  touchSessionClusterWindow,
+} from "../_core/session/session.cluster.ts";
+import {
+  SESSION_CLUSTER_STATE,
+  SESSION_CLUSTER_WINDOW_STATE,
+} from "../_core/session/session.cluster.types.ts";
 
 import { log } from "../_lib/logger.ts";
 
@@ -62,6 +70,19 @@ async function persistLifecycleTermination(
   const nowIso = new Date().toISOString();
 
   if (lifecycleResult.status === "IDLE_EXPIRED") {
+    if (session.clusterId) {
+      await terminateSessionCluster({
+        clusterId: session.clusterId,
+        clusterStatus: SESSION_CLUSTER_STATE.EXPIRED,
+        windowStatus: SESSION_CLUSTER_WINDOW_STATE.EXPIRED,
+        sessionStatus: "IDLE",
+        reason: "IDLE_TIMEOUT",
+        actedByAuthUserId: session.authUserId,
+        atIso: nowIso,
+      });
+      return;
+    }
+
     await serviceRoleClient
       .schema("erp_core")
       .from("sessions")
@@ -76,6 +97,19 @@ async function persistLifecycleTermination(
   }
 
   if (lifecycleResult.status === "TTL_EXPIRED") {
+    if (session.clusterId) {
+      await terminateSessionCluster({
+        clusterId: session.clusterId,
+        clusterStatus: SESSION_CLUSTER_STATE.EXPIRED,
+        windowStatus: SESSION_CLUSTER_WINDOW_STATE.EXPIRED,
+        sessionStatus: "EXPIRED",
+        reason: "TTL_EXPIRED",
+        actedByAuthUserId: session.authUserId,
+        atIso: nowIso,
+      });
+      return;
+    }
+
     await serviceRoleClient
       .schema("erp_core")
       .from("sessions")
@@ -268,13 +302,21 @@ if (
 
 // Passive session probes must never extend the backend session clock.
 if (!isPassiveSessionProbe(req)) {
+  const nowIso = new Date().toISOString();
   await serviceRoleClient
     .schema("erp_core")
     .from("sessions")
     .update({
-      last_seen_at: new Date().toISOString(),
+      last_seen_at: nowIso,
     })
     .eq("session_id", activeSession.sessionId);
+
+  if (activeSession.clusterId && activeSession.clusterWindowToken) {
+    await touchSessionClusterWindow(
+      activeSession.clusterId,
+      activeSession.clusterWindowToken
+    );
+  }
 }
 
 

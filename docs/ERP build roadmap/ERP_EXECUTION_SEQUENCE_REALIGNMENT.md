@@ -511,3 +511,378 @@ We will also always enforce:
 - repo-consistent script structure
 - repo-consistent migration naming
 - repo-consistent file-writing pattern
+
+---
+
+# 12. Protected Session Cluster Realignment
+
+This section is now added as a controlled next-phase execution guide
+for protected ERP session behavior.
+
+It must be read together with:
+- Constitution
+- Gate-2 Session
+- Gate-3 Session Lifecycle
+- Gate-8 Protected Navigation
+- current protected-shell and workspace-lock behavior
+
+This section does NOT authorize random implementation.
+It defines the exact model to implement in a new session.
+
+## 12.1 Locked Business Interpretation
+
+Target operating model:
+- one login creates one authoritative ERP session cluster
+- one session cluster may open maximum 3 governed Home workspaces
+- those 3 Home workspaces must open as separate browser windows
+- they are NOT generic unlimited tabs
+- all cluster members share the same backend session truth
+- idle warning,
+  idle expiry,
+  absolute TTL,
+  workspace lock,
+  unlock,
+  logout,
+  admin revoke,
+  and forced session replacement
+  must remain cluster-synchronized
+
+Meaning:
+- if one window acknowledges idle warning,
+  all cluster windows recover together
+- if one window is locked,
+  all cluster windows lock
+- if one window is unlocked,
+  all cluster windows unlock
+- if one window logs out,
+  all cluster windows log out
+- if admin revokes the session,
+  all cluster windows die together
+- if the same login ID signs in again anywhere,
+  the previous cluster dies fully
+  and the new login starts a fresh cluster
+
+Important boundary:
+- this is not multi-login expansion
+- this is controlled multi-window operation under one session authority
+
+## 12.2 Constitution Interpretation
+
+The Constitution must remain intact.
+
+Locked authority rule:
+- backend remains the only authority for session truth
+- frontend may coordinate,
+  display,
+  and synchronize UX
+  but frontend may never become the authority for:
+  active session count,
+  cluster legitimacy,
+  revoke truth,
+  TTL truth,
+  or max-window enforcement
+
+Meaning:
+- frontend may use browser coordination helpers
+- but max-3 enforcement must be backend-backed
+- forced replacement on new login must be backend-backed
+- all warnings and lock state must be explainable from session authority
+
+Frontend authority remains:
+- display
+- focus handling
+- window coordination
+- broadcast relay
+
+Backend authority remains:
+- session creation
+- session replacement
+- cluster lifecycle
+- window-slot admission
+- revoke
+- expiry
+- session legitimacy
+
+## 12.3 Explicit Target Model
+
+The correct model is:
+
+1. Login creates one backend session cluster
+2. First protected Home window becomes cluster window 1
+3. User may explicitly open window 2 and window 3 from inside the governed app
+4. Window 4 must be denied
+5. A fresh login anywhere using the same credentials revokes the old cluster
+6. Old cluster windows must all hard logout
+7. New cluster starts again from one Home window and may expand back up to 3
+
+Important clarification:
+- cluster expansion is by controlled "open new Home window" flow
+- not by allowing arbitrary unlimited duplicated tabs
+- if a user manually goes to login again,
+  that is treated as a fresh login and old cluster must die
+
+## 12.4 Window Form Rule
+
+For this phase,
+the governed expansion target is:
+- separate browser windows
+
+Not the target:
+- arbitrary same-session tab duplication
+
+Meaning:
+- the official flow should open or register a new protected Home window
+- same-session expansion must not depend on the user manually duplicating tabs
+- browser-window membership must be deliberate and governable
+
+---
+
+# 13. Current Misalignment Against This Target
+
+The repo currently contains the opposite behavior in key places:
+
+- backend session create currently revokes all active sessions on each new login
+- frontend protected shell currently enforces single-tab ownership
+- workspace lock is currently browser-tab local
+- idle warning state is currently frontend-local and not yet cluster-authoritative
+
+Meaning:
+- the current system protects single-session/single-tab behavior
+- it does NOT yet implement controlled multi-window clustered operation
+
+So this future change must be treated as architecture work,
+not as a small UI tweak.
+
+---
+
+# 14. Required Execution Order For The Session Cluster Phase
+
+This is the correct execution order for the future session-cluster implementation.
+
+## Step SC-1 - Lock the authority contract in writing
+
+Work:
+- declare that one login creates one session cluster
+- declare maximum cluster size = 3 Home windows
+- declare separate-window target
+- declare fresh login replaces old cluster
+- declare cluster-wide sync rules for warning,
+  lock,
+  unlock,
+  revoke,
+  logout,
+  and TTL
+
+Output:
+- written execution truth with no ambiguity
+
+## Step SC-2 - Design backend session-cluster truth first
+
+Work:
+- define parent session cluster truth in backend storage
+- define child window-slot truth in backend storage
+- define max-3 admission rule in backend authority
+- define replacement semantics for fresh login
+- define what happens when a window closes unexpectedly
+
+Output:
+- backend-first cluster model
+- no frontend-assumed admission logic
+
+## Step SC-3 - Define lifecycle and synchronization events
+
+Work:
+- define exact cluster events:
+  warning,
+  warning acknowledged,
+  lock,
+  unlock,
+  logout,
+  revoke,
+  expired,
+  replaced by new login
+- define how each event propagates to all windows
+- define how stale windows detect cluster death
+
+Output:
+- event vocabulary for cluster synchronization
+
+## Step SC-4 - Align protected-shell routing and shell ownership
+
+Work:
+- replace single-tab ownership thinking
+  with governed cluster membership thinking
+- protected shell must know whether the current window belongs to
+  a valid admitted cluster slot
+- invalid or excess windows must be rejected deterministically
+
+Output:
+- protected shell becomes cluster-aware
+
+## Step SC-5 - Build frontend coordination only after backend truth exists
+
+Work:
+- add browser coordination for cluster windows
+- sync warning state across all admitted windows
+- sync lock/unlock across all admitted windows
+- sync logout/revoke across all admitted windows
+- keep backend as the final source of truth on every critical transition
+
+Output:
+- user-perceived cluster sync
+- no frontend-only fake authority
+
+## Step SC-6 - Add controlled "Open New Home Window" flow
+
+Work:
+- only governed protected Home surfaces may open additional windows
+- new window must register as cluster window 2 or 3
+- if cluster is already at 3,
+  deny opening window 4
+- expansion must open a separate browser window
+  and not depend on manual tab duplication
+
+Output:
+- SAP-like 3-window work mode
+
+## Step SC-7 - Final forced-replacement validation
+
+Work:
+- same-user fresh login anywhere must revoke old cluster
+- all old windows must die together
+- new login begins with one fresh Home window
+- same behavior must hold even if the new login happens
+  from the same browser in another page
+
+Output:
+- clean single-cluster-per-login guarantee
+
+---
+
+# 15. File Planning Rules For This Phase
+
+This phase must follow existing repo patterns.
+
+## 15.1 Header Pattern
+
+All new implementation files must preserve the repo header style where applicable:
+- File-ID
+- File-Path
+- Gate
+- Phase
+- Domain
+- Purpose
+- Authority
+
+No ad-hoc undocumented file headers are allowed.
+
+## 15.2 Naming Pattern
+
+Use existing naming logic,
+not new stylistic invention.
+
+Backend:
+- session core helpers stay under session-oriented files
+- auth request handlers stay under auth handler naming
+- route exposure stays under existing route files
+- use existing dotted handler/helper style
+  such as `session.create.ts`,
+  `session.cookie.ts`,
+  `*.handler.ts`
+
+Frontend:
+- store-level coordination files stay under `frontend/src/store`
+- shell or route enforcement stays under `frontend/src/router`
+- visual overlays stay under `frontend/src/components`
+- use concise concern-based naming,
+  not framework-fashion naming
+
+Migrations:
+- use timestamp-first migration naming
+- keep gate and descriptive suffix in filename
+- keep comment header aligned with existing migration pattern
+
+## 15.3 Scripting Pattern
+
+If supporting scripts are required:
+- they must follow repo-consistent script structure
+- they must not bypass existing backend authority
+- they must not introduce shadow session state outside the governed model
+
+## 15.4 Authority Placement Rule
+
+Likely authority mapping for this phase:
+- backend session truth = Gate-2 / Gate-3
+- protected shell coordination = Gate-8
+- admin revoke compatibility = existing admin session governance surface
+
+No frontend-only shortcut may redefine these boundaries.
+
+---
+
+# 16. Implementation Guardrails
+
+This phase must explicitly avoid the following mistakes:
+
+- unlimited same-session tabs
+- frontend-only max-window counting
+- lock state that exists only in one browser window
+- warning acknowledgement that clears only one window
+- session replacement that kills only one surface while leaving others alive
+- introducing a second authority source outside backend session truth
+
+This phase must explicitly guarantee:
+
+- one login -> one backend session cluster
+- maximum 3 admitted Home windows
+- separate-window governed expansion
+- cluster-wide lock,
+  unlock,
+  warning,
+  logout,
+  revoke,
+  and replacement behavior
+- deterministic hard logout of all old windows on fresh login
+
+This section is now part of the practical execution guide
+and must govern the next implementation session for protected multi-window behavior.
+
+---
+
+# 17. Next Session Heads-Up
+
+The next implementation session must begin from this exact understanding:
+
+- do NOT continue single-tab thinking
+- do NOT build generic unlimited tab support
+- do NOT let frontend become session-cluster authority
+- do build a backend-authoritative session cluster model
+- do target maximum 3 governed Home windows
+- do keep all 3 windows synchronized for:
+  idle warning,
+  idle logout,
+  absolute TTL,
+  workspace lock,
+  unlock,
+  revoke,
+  logout,
+  and fresh-login replacement
+
+Implementation start rule:
+- begin with Step SC-1 and Step SC-2 only
+- do not jump into UI-first experimentation
+- first write and align backend session-cluster truth,
+  then align protected-shell membership,
+  then align frontend coordination
+
+Current repo warning:
+- existing `singleTabSession` logic reflects the old policy
+- existing session create logic reflects single-session replacement logic
+- both must be treated as current-state inputs,
+  not as the target design
+
+Success condition for the next session:
+- one fresh login starts one cluster
+- user may expand that cluster to 3 governed Home windows
+- all cluster windows stay synchronized
+- any fresh login elsewhere kills the old cluster completely
