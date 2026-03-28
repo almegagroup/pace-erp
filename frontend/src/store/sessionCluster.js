@@ -8,6 +8,9 @@
  * Authority: Frontend (COORDINATION ONLY)
  */
 
+import paceBackground from "../assets/pace-bgr.png";
+import { pickRandomRedirectTip } from "../auth/redirectGuidance.js";
+
 const WINDOW_INSTANCE_KEY = "__PACE_CLUSTER_WINDOW_INSTANCE__";
 const ADMISSION_KEY = "__PACE_CLUSTER_ADMISSION__";
 const STORAGE_EVENT_KEY = "__PACE_CLUSTER_EVENT__";
@@ -207,6 +210,8 @@ function buildClusterJoinUrl(homePath, joinToken) {
 }
 
 function primeClusterPopupWindow(openedWindow) {
+  const tip = pickRandomRedirectTip();
+
   try {
     POPUP_SESSION_RESET_KEYS.forEach((key) => {
       openedWindow.sessionStorage.removeItem(key);
@@ -218,12 +223,40 @@ function primeClusterPopupWindow(openedWindow) {
   try {
     openedWindow.document.title = "Opening Pace ERP window...";
     openedWindow.document.body.innerHTML = `
-      <div style="margin:0;min-height:100vh;display:grid;place-items:center;background:#e6eef3;color:#102939;font:600 16px Segoe UI,sans-serif;">
-        <div style="text-align:center">
-          <div style="font-size:12px;letter-spacing:.2em;text-transform:uppercase;opacity:.7">Pace ERP</div>
-          <div style="margin-top:10px">Preparing your new workspace window...</div>
+      <div style="margin:0;min-height:100vh;display:grid;place-items:center;padding:28px;background:radial-gradient(circle at top, rgba(145,188,214,0.24), transparent 38%), linear-gradient(135deg, #edf4f8 0%, #f7fbfd 48%, #e4eef4 100%);color:#102939;font:600 16px 'Segoe UI',sans-serif;">
+        <div style="width:min(680px,100%);border:1px solid rgba(24,52,71,0.12);border-radius:28px;background:rgba(255,255,255,0.92);box-shadow:0 28px 80px rgba(16,41,57,0.14);padding:32px;box-sizing:border-box;">
+          <div style="display:inline-flex;align-items:center;gap:10px;padding:8px 12px;border-radius:999px;background:#dfeef7;color:#245574;font-size:12px;letter-spacing:.16em;text-transform:uppercase;font-weight:800;">
+            <span style="width:10px;height:10px;border-radius:999px;background:#2f7db1;animation:pace-window-pulse 1s ease-in-out infinite;"></span>
+            Secure Window Launch
+          </div>
+          <div style="margin-top:22px;display:flex;justify-content:center;">
+            <img src="${paceBackground}" alt="Pace ERP" style="width:min(220px,58vw);height:auto;object-fit:contain;filter:drop-shadow(0 10px 20px rgba(16,41,57,0.12));" />
+          </div>
+          <div style="margin-top:18px;font-size:29px;line-height:1.1;letter-spacing:-.04em;font-weight:700;">Preparing your new ERP window</div>
+          <div style="margin-top:10px;font-size:15px;line-height:1.7;color:#4a6273;">
+            We are validating the window admission ticket and loading the correct governed workspace surface.
+          </div>
+          <div style="margin-top:22px;height:10px;border-radius:999px;overflow:hidden;background:#dbe8ef;">
+            <div style="width:38%;height:100%;border-radius:999px;background:linear-gradient(90deg, #2f7db1 0%, #7ecbff 100%);animation:pace-window-slide 1.25s ease-in-out infinite;transform-origin:left center;"></div>
+          </div>
+          <div style="margin-top:16px;border:1px solid #d7e5ee;border-radius:18px;background:#f8fbfd;padding:18px 18px 16px;min-height:122px;">
+            <div style="margin:0;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#628099;font-weight:800;">Security And Data Hygiene</div>
+            <div style="margin-top:12px;font-size:18px;line-height:1.7;color:#17354a;font-weight:500;">${tip}</div>
+          </div>
         </div>
       </div>
+      <style>
+        @keyframes pace-window-slide {
+          0% { transform: translateX(-40%) scaleX(0.75); opacity: 0.55; }
+          50% { transform: translateX(145%) scaleX(1); opacity: 1; }
+          100% { transform: translateX(250%) scaleX(0.8); opacity: 0.55; }
+        }
+
+        @keyframes pace-window-pulse {
+          0%, 100% { transform: scale(0.9); opacity: 0.55; }
+          50% { transform: scale(1.05); opacity: 1; }
+        }
+      </style>
     `;
   } catch {
     // Some browsers restrict placeholder writes after navigation; ignore.

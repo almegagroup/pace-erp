@@ -35,6 +35,7 @@ import {
 import { restoreNavigationStack } from "./navigation/navigationPersistence.js";
 import { isPublicRoute } from "./router/publicRoutes.js";
 
+const CLIENT_SHELL_REFRESH_KEY = "__PACE_CLIENT_SHELL_REFRESHED__";
 
 
 // Enforce screen metadata invariants at boot
@@ -206,7 +207,53 @@ if (!restored && !isPublicRoute(pathname)) {
   }
 }
 
+async function ensureFreshClientShell() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  let changed = false;
+
+  if ("serviceWorker" in navigator) {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+
+    if (registrations.length > 0) {
+      changed = true;
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+    }
+  }
+
+  if ("caches" in globalThis) {
+    const cacheKeys = await caches.keys();
+    const staleKeys = cacheKeys.filter((key) =>
+      key.startsWith("workbox-") ||
+      key.includes("precache") ||
+      key === "ui-assets"
+    );
+
+    if (staleKeys.length > 0) {
+      changed = true;
+      await Promise.all(staleKeys.map((key) => caches.delete(key)));
+    }
+  }
+
+  const alreadyReloaded =
+    sessionStorage.getItem(CLIENT_SHELL_REFRESH_KEY) === "1";
+
+  if (changed && !alreadyReloaded) {
+    sessionStorage.setItem(CLIENT_SHELL_REFRESH_KEY, "1");
+    globalThis.location.reload();
+    return;
+  }
+
+  if (!changed && alreadyReloaded) {
+    sessionStorage.removeItem(CLIENT_SHELL_REFRESH_KEY);
+  }
+}
+
 async function mountApp() {
+  await ensureFreshClientShell();
+
   if (consumeLockedRefreshFlag()) {
     await requestWorkspaceLockLogout({
       keepalive: true,

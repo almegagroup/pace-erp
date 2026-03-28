@@ -10,35 +10,15 @@ import { useLocation } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import { resetToScreen } from "../navigation/screenStackEngine.js";
 import paceBackground from "../assets/pace-bgr.png";
-
-const REDIRECT_TIPS = Object.freeze([
-  "Protect access with strong passwords and never reuse ERP credentials across personal services.",
-  "Review shared reports carefully and remove unneeded exports from email threads and downloads.",
-  "Lock your workspace before stepping away so operational data stays protected from shoulder surfing.",
-  "Download only the files you need, and delete outdated local copies after approved use is complete.",
-  "Check recipient names twice before sharing finance, payroll, costing, or supplier data.",
-  "Keep master data clean by updating records at the source instead of maintaining side spreadsheets.",
-  "Treat customer, employee, and vendor data as confidential even inside internal chat groups.",
-  "Use the ERP as the single source of truth so teams do not make decisions from stale copied data.",
-  "Report suspicious logins, unusual exports, or unexpected permission changes as soon as they are noticed.",
-  "Good data hygiene starts with small habits: accurate entry, timely updates, and careful access control.",
-]);
-
-function shuffleTips(seedItems) {
-  const items = [...seedItems];
-
-  for (let index = items.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
-    [items[index], items[swapIndex]] = [items[swapIndex], items[index]];
-  }
-
-  return items;
-}
+import {
+  REDIRECT_TIPS,
+  shuffleRedirectTips,
+} from "../auth/redirectGuidance.js";
 
 export default function AuthResolver() {
   const location = useLocation();
   const { menu } = useMenu();
-  const shuffledTips = useMemo(() => shuffleTips(REDIRECT_TIPS), []);
+  const shuffledTips = useMemo(() => shuffleRedirectTips(REDIRECT_TIPS), []);
   const [tipIndex, setTipIndex] = useState(0);
 
   useEffect(() => {
