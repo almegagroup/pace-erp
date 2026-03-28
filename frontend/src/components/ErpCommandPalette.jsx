@@ -153,7 +153,7 @@ export default function ErpCommandPalette({
         <button
           type="button"
           onClick={closeErpCommandPalette}
-          className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-slate-100"
+          className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
         >
           Esc Close
         </button>
@@ -161,7 +161,7 @@ export default function ErpCommandPalette({
     >
       <div className="grid gap-4">
         <label className="block">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
             Find Command
           </span>
           <input
@@ -184,28 +184,28 @@ export default function ErpCommandPalette({
               }
             }}
             placeholder="Search commands, screens, save actions, navigation, lock, logout..."
-            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
+            className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
           />
         </label>
 
-        <div className="flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-          <span className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-2">
+        <div className="flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+          <span className="border border-slate-300 bg-white px-3 py-2">
             Ctrl+K Open
           </span>
-          <span className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-2">
+          <span className="border border-slate-300 bg-white px-3 py-2">
             Arrow Up/Down Move
           </span>
-          <span className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-2">
+          <span className="border border-slate-300 bg-white px-3 py-2">
             Enter Execute
           </span>
-          <span className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-2">
+          <span className="border border-slate-300 bg-white px-3 py-2">
             Esc Close
           </span>
         </div>
 
         <div className="max-h-[26rem] overflow-y-auto pr-1">
           {filteredCommands.length === 0 ? (
-            <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-5 py-5 text-sm leading-7 text-slate-400">
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-5 text-sm leading-7 text-slate-500">
               No command matches the current search.
             </div>
           ) : (
@@ -228,7 +228,7 @@ export default function ErpCommandPalette({
                     disabled={command.disabled}
                     onFocus={() => setActiveIndex(index)}
                     onClick={() => void executeCommand(command)}
-                    onKeyDown={(event) => {
+                  onKeyDown={(event) => {
                       if (event.key === "Enter") {
                         event.preventDefault();
                         void executeCommand(command);
@@ -243,28 +243,28 @@ export default function ErpCommandPalette({
                     }}
                     className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${
                       command.disabled
-                        ? "cursor-not-allowed border-white/6 bg-white/[0.03] text-slate-500"
+                        ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
                         : highlighted
-                          ? "border-emerald-400/30 bg-emerald-400/12 text-emerald-50"
-                          : "border-white/8 bg-white/[0.03] text-slate-100"
+                          ? "border-sky-400 bg-sky-50 text-slate-900"
+                          : "border-slate-300 bg-white text-slate-900 hover:bg-slate-50"
                     }`}
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                           {command.group}
                         </p>
                         <p className="mt-2 text-sm font-semibold">
                           {command.label}
                         </p>
                         {command.keywords?.length ? (
-                          <p className="mt-2 text-xs leading-5 text-slate-400">
+                          <p className="mt-2 text-xs leading-5 text-slate-500">
                             {command.keywords.join(" | ")}
                           </p>
                         ) : null}
                       </div>
                       {command.hint ? (
-                        <span className="rounded-full border border-white/8 bg-black/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                        <span className="border border-slate-300 bg-[#f8fbfd] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                           {command.hint}
                         </span>
                       ) : null}

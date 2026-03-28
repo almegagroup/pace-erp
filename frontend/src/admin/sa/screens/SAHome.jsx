@@ -3,7 +3,6 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import {
-  handleGridNavigation,
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
@@ -71,25 +70,21 @@ function deriveSnapshotHealth(health) {
 function HomeActionCard({
   action,
   index,
-  gridRefs,
+  refs,
 }) {
-  const rowIndex = Math.floor(index / 2);
-  const columnIndex = index % 2;
-
   return (
     <button
       ref={(element) => {
-        gridRefs.current[rowIndex] ??= [];
-        gridRefs.current[rowIndex][columnIndex] = element;
+        refs.current[index] = element;
       }}
       data-workspace-primary-focus={index === 0 ? "true" : undefined}
       type="button"
       onClick={action.onClick}
       onKeyDown={(event) =>
-        handleGridNavigation(event, {
-          rowIndex,
-          columnIndex,
-          gridRefs: gridRefs.current,
+        handleLinearNavigation(event, {
+          index,
+          refs: refs.current,
+          orientation: "vertical",
         })
       }
       className="grid w-full grid-cols-[96px_minmax(0,1fr)_110px] items-center border border-slate-300 bg-white px-3 py-3 text-left hover:bg-slate-50"
@@ -116,7 +111,7 @@ export default function SAHome() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const topActionRefs = useRef([]);
-  const cardGridRefs = useRef([]);
+  const cardRefs = useRef([]);
 
   async function refreshDashboardSnapshot() {
     setLoading(true);
@@ -286,7 +281,7 @@ export default function SAHome() {
         group: "Current Screen",
         label: "Focus launch grid",
         keywords: ["focus", "launch", "actions", "home"],
-        perform: () => cardGridRefs.current[0]?.[0]?.focus?.(),
+        perform: () => cardRefs.current[0]?.focus?.(),
         order: 20,
       },
       ...launchActions.map((action, index) => ({
@@ -308,7 +303,7 @@ export default function SAHome() {
       perform: () => void refreshDashboardSnapshot(),
     },
     focusPrimary: {
-      perform: () => cardGridRefs.current[0]?.[0]?.focus?.(),
+      perform: () => cardRefs.current[0]?.focus?.(),
     },
   });
 
@@ -342,7 +337,7 @@ export default function SAHome() {
               key={action.title}
               action={action}
               index={index}
-              gridRefs={cardGridRefs}
+              refs={cardRefs}
             />
           ))}
         </div>
