@@ -61,10 +61,10 @@ function closeChildWindowOrRedirect() {
   }
 
   globalThis.setTimeout(() => {
-    if (!globalThis.closed) {
+    if (!globalThis.closed && document.visibilityState !== "hidden") {
       redirectToLogin();
     }
-  }, 150);
+  }, 1200);
 }
 
 export function subscribe(fn) {

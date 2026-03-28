@@ -201,12 +201,6 @@ function buildClusterJoinUrl(homePath, joinToken) {
 
 function primeClusterPopupWindow(openedWindow) {
   try {
-    openedWindow.opener = null;
-  } catch {
-    // Best-effort only.
-  }
-
-  try {
     openedWindow.document.title = "Opening Pace ERP window...";
     openedWindow.document.body.innerHTML = `
       <div style="margin:0;min-height:100vh;display:grid;place-items:center;background:#e6eef3;color:#102939;font:600 16px Segoe UI,sans-serif;">

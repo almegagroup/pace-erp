@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import { isPublicRoute } from "../router/publicRoutes.js";
@@ -6,14 +6,17 @@ import { resetToScreen } from "../navigation/screenStackEngine.js";
 import {
   claimClusterWindowOwnership,
   clearClusterAdmission,
+  getClusterAdmission,
   requestSessionClusterAdmission,
 } from "../store/sessionCluster.js";
 
 export default function AuthBootstrap({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
-
-  const hasBootedRef = useRef(false);
+  const bootStateRef = useRef({
+    bootKey: null,
+    inFlight: false,
+  });
 
   const {
     menu,
@@ -23,86 +26,70 @@ export default function AuthBootstrap({ children }) {
     clearMenuSnapshot,
   } = useMenu();
 
-  // ✅ ADD THIS BLOCK HERE (exactly here)
-useEffect(() => {
-  if (!menu || menu.length === 0) {
-  hasBootedRef.current = false;
-}
-}, [menu]);
-
- 
-
   useEffect(() => {
     let alive = true;
 
     async function boot() {
       const pathname = location.pathname;
+      const currentUrl = new URL(globalThis.location.href);
+      const joinToken = currentUrl.searchParams.get("cluster_join");
+      const bootKey = `${pathname}|${joinToken ?? ""}`;
 
-      //console.log("🚀 [BOOT START]");
-      //console.log("📍 Path:", pathname);
-      //console.log("📦 Menu (before):", menu);
+      if (isPublicRoute(pathname) || pathname === "/auth/callback") {
+        bootStateRef.current = {
+          bootKey: null,
+          inFlight: false,
+        };
+        clearClusterAdmission();
+        return;
+      }
 
-      // 🟢 PUBLIC ROUTE
-      // 🔥 PUBLIC ROUTES + AUTH CALLBACK SKIP
-if (
-  isPublicRoute(pathname) ||
-  pathname === "/auth/callback"
-) {
-  hasBootedRef.current = false;
-  clearClusterAdmission();
-  return;
-}
+      if (Array.isArray(menu) && menu.length > 0) {
+        bootStateRef.current = {
+          bootKey: pathname,
+          inFlight: false,
+        };
+        return;
+      }
 
-      // 🔥 Skip if menu already exists
-if (menu && menu.length > 0 && hasBootedRef.current) {
-  //console.log("⛔ Boot skipped (already ran + menu exists)");
-  return;
-}
+      if (
+        bootStateRef.current.inFlight &&
+        bootStateRef.current.bootKey === bootKey
+      ) {
+        return;
+      }
 
-// 🔥 Prevent duplicate boot
-if (hasBootedRef.current) {
-  //console.log("⛔ Boot skipped (already ran)");
-  return;
-}
-hasBootedRef.current = true;
-
-      
+      bootStateRef.current = {
+        bootKey,
+        inFlight: true,
+      };
 
       try {
-        //console.log("⏳ Starting menu loading...");
         startMenuLoading();
 
-        // =========================
-        // STEP 1: SESSION CHECK
-        // =========================
-        //console.log("📡 Calling /api/me...");
-        const meRes = await fetch(
-          `${import.meta.env.VITE_API_BASE}/api/me`,
-          { credentials: "include" }
-        );
-
-        //console.log("🧾 /api/me status:", meRes.status);
+        const meRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/me`, {
+          credentials: "include",
+        });
 
         if (!meRes.ok) {
-  //console.log("❌ SESSION INVALID");
-
-  // 🔥 ADD THIS (logout detection)
-  clearMenuSnapshot();
-  clearClusterAdmission();
-  navigate("/login", { replace: true });
-
-          return; // ❗ MUST STOP FLOW
-}
-
-        const currentUrl = new URL(globalThis.location.href);
-        const joinToken = currentUrl.searchParams.get("cluster_join");
-        const clusterAdmission = await requestSessionClusterAdmission(joinToken);
-
-        if (!clusterAdmission.ok) {
           clearMenuSnapshot();
           clearClusterAdmission();
           navigate("/login", { replace: true });
           return;
+        }
+
+        const existingAdmission = getClusterAdmission();
+        const shouldRequestAdmission = Boolean(joinToken) || !existingAdmission;
+
+        if (shouldRequestAdmission) {
+          const clusterAdmission = await requestSessionClusterAdmission(joinToken);
+
+          if (!clusterAdmission.ok) {
+            clearMenuSnapshot();
+            clearClusterAdmission();
+            navigate("/login", { replace: true });
+            return;
+          }
         }
 
         if (!claimClusterWindowOwnership()) {
@@ -139,7 +126,10 @@ hasBootedRef.current = true;
         }
 
         const profileData = await profileRes.json();
-        if (!alive) return;
+
+        if (!alive) {
+          return;
+        }
 
         setShellProfile({
           userCode: profileData?.data?.user_code ?? "",
@@ -147,49 +137,32 @@ hasBootedRef.current = true;
           tagline: "Process Automation & Control Environment",
         });
 
-        // =========================
-        // STEP 2: MENU FETCH
-        // =========================
-        //console.log("📡 Calling /api/me/menu...");
         const menuRes = await fetch(
           `${import.meta.env.VITE_API_BASE}/api/me/menu`,
           { credentials: "include" }
         );
 
-        //console.log("🧾 /api/me/menu status:", menuRes.status);
-
         if (!menuRes.ok) {
-          console.log("❌ MENU FETCH FAILED");
           throw new Error("MENU_FETCH_FAILED");
         }
 
         const data = await menuRes.json();
-        if (!alive) return;
 
-        //console.log("📦 Raw menu response:", data);
+        if (!alive) {
+          return;
+        }
 
         const menuData = data?.data?.menu ?? [];
-
-        //console.log("📊 Final menuData:", menuData);
-        console.log("📊 Menu length:", menuData.length);
-
-        // =========================
-        // STEP 3: STORE SNAPSHOT
-        // =========================
         setMenuSnapshot(menuData);
-        //console.log("✅ Menu snapshot set");
 
-        // =========================
-        // STEP 4: ENTRY REDIRECT
-        // =========================
+        bootStateRef.current = {
+          bootKey: pathname,
+          inFlight: false,
+        };
+
         if (pathname === "/app") {
-          //console.log("🔀 Resolving /app redirect...");
-
-          const sa = menuData.find(m => m.menu_code === "SA_HOME");
-          const ga = menuData.find(m => m.menu_code === "GA_HOME");
-
-          console.log("SA:", sa);
-          //console.log("GA:", ga);
+          const sa = menuData.find((item) => item.menu_code === "SA_HOME");
+          const ga = menuData.find((item) => item.menu_code === "GA_HOME");
 
           if (sa) {
             resetToScreen("SA_HOME");
@@ -201,34 +174,41 @@ hasBootedRef.current = true;
             return;
           }
 
-          console.log("➡️ Redirect → /dashboard");
           resetToScreen("DASHBOARD_HOME");
         }
+      } catch (error) {
+        bootStateRef.current = {
+          bootKey: null,
+          inFlight: false,
+        };
 
-      } catch (err) {
-        console.error("🔥 AuthBootstrap ERROR:", err);
-
+        console.error("AUTH_BOOTSTRAP_FAILED", error);
         clearMenuSnapshot();
         clearClusterAdmission();
-
-        //console.log("➡️ Redirect → /login");
         navigate("/login", { replace: true });
+      } finally {
+        if (alive && bootStateRef.current.bootKey === bootKey) {
+          bootStateRef.current = {
+            bootKey: pathname,
+            inFlight: false,
+          };
+        }
       }
     }
 
-    boot();
+    void boot();
 
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    clearMenuSnapshot,
     location.pathname,
+    menu,
     navigate,
-  startMenuLoading,
-  setMenuSnapshot,
-  setShellProfile,
-  clearMenuSnapshot,
+    setMenuSnapshot,
+    setShellProfile,
+    startMenuLoading,
   ]);
 
   return children;
