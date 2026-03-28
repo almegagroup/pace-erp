@@ -10,7 +10,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
-import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import {
+  handleGridNavigation,
+  handleLinearNavigation,
+} from "../../../navigation/erpRovingFocus.js";
 
 async function readJsonSafe(response) {
   try {
@@ -322,7 +325,7 @@ export default function SAControlPanel() {
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
       <div className="mx-auto max-w-7xl">
-        <div className="rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.08)]">
+        <div className="sticky top-4 z-20 rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.12)]">
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="max-w-3xl">
               <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
@@ -523,14 +526,17 @@ export default function SAControlPanel() {
                   key={action.title}
                   {...action}
                   buttonRef={(element) => {
-                    quickLaunchRefs.current[index] = element;
+                    const rowIndex = Math.floor(index / 2);
+                    const columnIndex = index % 2;
+                    quickLaunchRefs.current[rowIndex] ??= [];
+                    quickLaunchRefs.current[rowIndex][columnIndex] = element;
                   }}
                   primaryFocus={index === 0}
                   onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: quickLaunchRefs.current,
-                      orientation: "vertical",
+                    handleGridNavigation(event, {
+                      rowIndex: Math.floor(index / 2),
+                      columnIndex: index % 2,
+                      gridRefs: quickLaunchRefs.current,
                     })
                   }
                 />

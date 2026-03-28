@@ -8,13 +8,15 @@
  * Authority: Frontend
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import {
   handleGridNavigation,
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import { applyQuickFilter } from "../../../shared/erpCollections.js";
 
 async function readJsonSafe(response) {
   try {
@@ -97,6 +99,7 @@ export default function SASignupRequests() {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [actingUserId, setActingUserId] = useState("");
   const actionBarRefs = useRef([]);
   const rowActionRefs = useRef([]);
@@ -238,6 +241,19 @@ export default function SASignupRequests() {
     }
   }
 
+  const filteredRequests = useMemo(
+    () =>
+      applyQuickFilter(requests, searchQuery, [
+        "name",
+        "auth_user_id",
+        "parent_company_name",
+        "designation_hint",
+        "phone_number",
+        "user_state",
+      ]),
+    [requests, searchQuery],
+  );
+
   const totalRequests = requests.length;
   const withCompanyHintCount = requests.filter((row) => row.parent_company_name).length;
   const withPhoneCount = requests.filter((row) => row.phone_number).length;
@@ -246,7 +262,7 @@ export default function SASignupRequests() {
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
       <div className="mx-auto max-w-7xl">
-        <div className="rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.08)]">
+        <div className="sticky top-4 z-20 rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.12)]">
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="max-w-3xl">
               <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
@@ -386,17 +402,26 @@ export default function SASignupRequests() {
             </div>
 
             <span className="rounded-full bg-slate-100 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-600">
-              {loading ? "Loading" : `${totalRequests} Pending`}
+              {loading ? "Loading" : `${filteredRequests.length} Visible`}
             </span>
           </div>
+
+          <QuickFilterInput
+            className="mt-5"
+            label="Quick Search"
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="Search by requester, auth, company, designation, phone, or lifecycle"
+            hint="Visible quick filter for the onboarding queue."
+          />
 
           {loading ? (
             <div className="mt-6 rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
               Loading pending signup requests from the onboarding queue.
             </div>
-          ) : requests.length === 0 ? (
+          ) : filteredRequests.length === 0 ? (
             <div className="mt-6 rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
-              There are no pending signup requests in the ERP onboarding queue right now.
+              There are no pending signup requests matching the current filter right now.
             </div>
           ) : (
             <div className="mt-6 overflow-x-auto">
@@ -427,7 +452,7 @@ export default function SASignupRequests() {
                   </tr>
                 </thead>
                 <tbody>
-                  {requests.map((request, index) => {
+                  {filteredRequests.map((request, index) => {
                     const isActing = actingUserId === request.auth_user_id;
 
                     return (

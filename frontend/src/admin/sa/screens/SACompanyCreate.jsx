@@ -8,10 +8,11 @@
  * Authority: Frontend
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
+import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 
 async function readJsonSafe(response) {
   try {
@@ -93,6 +94,7 @@ function FieldCard({ label, value, caption, multiline = false }) {
 
 export default function SACompanyCreate() {
   const navigate = useNavigate();
+  const actionBarRefs = useRef([]);
   const [gstNumber, setGstNumber] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [gstProfile, setGstProfile] = useState(null);
@@ -236,29 +238,59 @@ export default function SACompanyCreate() {
 
             <div className="flex flex-wrap gap-3">
               <button
+                ref={(element) => {
+                  actionBarRefs.current[0] = element;
+                }}
                 type="button"
                 onClick={() => {
                   openScreen("SA_CONTROL_PANEL", { mode: "replace" });
                   navigate("/sa/control-panel");
                 }}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 0,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
                 Control Panel
               </button>
               <button
+                ref={(element) => {
+                  actionBarRefs.current[1] = element;
+                }}
                 type="button"
                 onClick={() => {
                   openScreen("SA_HOME", { mode: "reset" });
                   navigate("/sa/home");
                 }}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 1,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
                 SA Home
               </button>
               <button
+                ref={(element) => {
+                  actionBarRefs.current[2] = element;
+                }}
                 type="button"
                 disabled={creating || hasExistingCompany}
                 onClick={() => void handleCreate()}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 2,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className={`rounded-2xl px-4 py-3 text-sm font-semibold shadow-[0_10px_24px_rgba(14,116,144,0.08)] ${
                   creating || hasExistingCompany
                     ? "cursor-not-allowed bg-slate-200 text-slate-500"

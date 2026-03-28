@@ -8,10 +8,12 @@
  * Authority: Frontend
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import { applyQuickFilter } from "../../../shared/erpCollections.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Sessions" },
@@ -129,6 +131,7 @@ export default function SASessions() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
   const [revokingSessionId, setRevokingSessionId] = useState("");
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
@@ -230,10 +233,27 @@ export default function SASessions() {
     }
   }
 
-  const filteredSessions =
-    filter === "ALL"
-      ? sessions
-      : sessions.filter((session) => session.status === filter);
+  const statusFilteredSessions = useMemo(
+    () =>
+      filter === "ALL"
+        ? sessions
+        : sessions.filter((session) => session.status === filter),
+    [filter, sessions],
+  );
+
+  const filteredSessions = useMemo(
+    () =>
+      applyQuickFilter(statusFilteredSessions, searchQuery, [
+        "session_id",
+        "user_code",
+        "name",
+        "parent_company_name",
+        "designation_hint",
+        "auth_user_id",
+        "status",
+      ]),
+    [searchQuery, statusFilteredSessions],
+  );
 
   const activeCount = sessions.filter((session) => session.status === "ACTIVE").length;
   const revokedCount = sessions.filter((session) => session.status === "REVOKED").length;
@@ -243,7 +263,7 @@ export default function SASessions() {
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
       <div className="mx-auto max-w-7xl">
-        <div className="rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.08)]">
+        <div className="sticky top-4 z-20 rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.12)]">
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="max-w-3xl">
               <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
@@ -340,7 +360,7 @@ export default function SASessions() {
               </h2>
             </div>
 
-            <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
               {FILTERS.map((option, index) => (
                 <button
                   key={option.key}
@@ -489,7 +509,16 @@ export default function SASessions() {
             </div>
           )}
         </section>
-      </div>
-    </section>
+          </div>
+
+          <QuickFilterInput
+            className="mt-5"
+            label="Quick Search"
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="Search by session, user, company, designation, auth, or status"
+            hint="Visible quick filter for the session inventory."
+          />
+        </section>
   );
 }

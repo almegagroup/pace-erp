@@ -8,34 +8,22 @@
  * Authority: Frontend
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
-import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import {
+  handleGridNavigation,
+  handleLinearNavigation,
+} from "../../../navigation/erpRovingFocus.js";
 import { useMenu } from "../../../context/useMenu.js";
-
-const ROLE_OPTIONS = Object.freeze([
-  { code: "SA", label: "Super Admin", rank: 999 },
-  { code: "GA", label: "Global Admin", rank: 888 },
-  { code: "DIRECTOR", label: "Director", rank: 100 },
-  { code: "L3_MANAGER", label: "L3 Manager", rank: 90 },
-  { code: "L2_AUDITOR", label: "L2 Auditor", rank: 80 },
-  { code: "L1_AUDITOR", label: "L1 Auditor", rank: 70 },
-  { code: "L2_MANAGER", label: "L2 Manager", rank: 60 },
-  { code: "L1_MANAGER", label: "L1 Manager", rank: 50 },
-  { code: "L4_USER", label: "L4 User", rank: 40 },
-  { code: "L3_USER", label: "L3 User", rank: 30 },
-  { code: "L2_USER", label: "L2 User", rank: 20 },
-  { code: "L1_USER", label: "L1 User", rank: 10 },
-]);
-
-const ROLE_LABELS = Object.freeze(
-  Object.fromEntries(ROLE_OPTIONS.map((role) => [role.code, role.label]))
-);
-
-const ROLE_RANKS = Object.freeze(
-  Object.fromEntries(ROLE_OPTIONS.map((role) => [role.code, role.rank]))
-);
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import { applyQuickFilter, sortUsers } from "../../../shared/erpCollections.js";
+import {
+  ERP_ROLE_FILTERS,
+  ERP_ROLE_LABELS,
+  ERP_ROLE_OPTIONS,
+  ERP_ROLE_RANKS,
+} from "../../../shared/erpRoles.js";
 
 async function readJsonSafe(response) {
   try {
@@ -138,10 +126,11 @@ export default function SAUserRoles() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [roleFilter, setRoleFilter] = useState("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
   const [updatingUserId, setUpdatingUserId] = useState("");
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
-  const applyButtonRefs = useRef([]);
+  const rowControlRefs = useRef([]);
 
   useEffect(() => {
     let alive = true;
@@ -212,7 +201,7 @@ export default function SAUserRoles() {
     const approved = await openActionConfirm({
       eyebrow: "SA Role Governance",
       title: "Apply ERP Role",
-      message: `Apply role ${ROLE_LABELS[nextRole] ?? nextRole} to ${user.user_code ?? shortId(user.auth_user_id)} ${formatIdentityName(user)} now?`,
+      message: `Apply role ${ERP_ROLE_LABELS[nextRole] ?? nextRole} to ${user.user_code ?? shortId(user.auth_user_id)} ${formatIdentityName(user)} now?`,
       confirmLabel: "Apply Role",
       cancelLabel: "Cancel",
     });
@@ -260,7 +249,7 @@ export default function SAUserRoles() {
 
       if (
         refreshedTarget?.role_code !== nextRole ||
-        refreshedTarget?.role_rank !== (ROLE_RANKS[nextRole] ?? null)
+        refreshedTarget?.role_rank !== (ERP_ROLE_RANKS[nextRole] ?? null)
       ) {
         throw new Error("USER_ROLE_NOT_FINALIZED");
       }
@@ -271,16 +260,40 @@ export default function SAUserRoles() {
     }
   }
 
-  const governableUsers = users.filter(
-    (user) => !shellProfile?.userCode || user.user_code !== shellProfile.userCode
+  const governableUsers = useMemo(
+    () =>
+      sortUsers(
+        users.filter(
+          (user) =>
+            !shellProfile?.userCode || user.user_code !== shellProfile.userCode,
+        ),
+      ),
+    [shellProfile?.userCode, users],
   );
 
-  const filteredUsers =
-    roleFilter === "ALL"
-      ? governableUsers
-      : roleFilter === "UNASSIGNED"
-        ? governableUsers.filter((user) => !user.role_code)
-        : governableUsers.filter((user) => user.role_code === roleFilter);
+  const roleFilteredUsers = useMemo(
+    () =>
+      roleFilter === "ALL"
+        ? governableUsers
+        : roleFilter === "UNASSIGNED"
+          ? governableUsers.filter((user) => !user.role_code)
+          : governableUsers.filter((user) => user.role_code === roleFilter),
+    [governableUsers, roleFilter],
+  );
+
+  const filteredUsers = useMemo(
+    () =>
+      applyQuickFilter(roleFilteredUsers, searchQuery, [
+        "user_code",
+        "name",
+        "parent_company_name",
+        "designation_hint",
+        "auth_user_id",
+        "role_code",
+        "state",
+      ]),
+    [roleFilteredUsers, searchQuery],
+  );
 
   const privilegedCount = governableUsers.filter((user) =>
     user.role_code === "SA" || user.role_code === "GA"
@@ -294,7 +307,7 @@ export default function SAUserRoles() {
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
       <div className="mx-auto max-w-7xl">
-        <div className="rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.08)]">
+        <div className="sticky top-4 z-20 rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.12)]">
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="max-w-3xl">
               <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
@@ -467,14 +480,14 @@ export default function SAUserRoles() {
             >
               Unassigned
             </button>
-            {["SA", "GA", "DIRECTOR", "L1_USER"].map((roleCode, index) => (
+            {ERP_ROLE_FILTERS.map((role, index) => (
               <button
-                key={roleCode}
+                key={role.key}
                 ref={(element) => {
                   filterRefs.current[index + 2] = element;
                 }}
                 type="button"
-                onClick={() => setRoleFilter(roleCode)}
+                onClick={() => setRoleFilter(role.key)}
                 onKeyDown={(event) =>
                   handleLinearNavigation(event, {
                     index: index + 2,
@@ -483,15 +496,24 @@ export default function SAUserRoles() {
                   })
                 }
                 className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
-                  roleFilter === roleCode
+                  roleFilter === role.key
                     ? "bg-sky-600 text-white"
                     : "bg-slate-100 text-slate-600"
                 }`}
               >
-                {roleCode}
+                {role.label}
               </button>
             ))}
           </div>
+
+          <QuickFilterInput
+            className="mt-5"
+            label="Quick Search"
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="Search by user code, name, company, designation, auth, role, or state"
+            hint="Visible quick filter for dense role governance."
+          />
         </section>
 
         <section className="mt-6 rounded-[30px] border border-slate-200 bg-white p-6 shadow-[0_14px_40px_rgba(15,23,42,0.08)]">
@@ -583,6 +605,10 @@ export default function SAUserRoles() {
                         </td>
                         <td className="px-4 py-4 text-sm text-slate-700">
                           <select
+                            ref={(element) => {
+                              rowControlRefs.current[index] ??= [];
+                              rowControlRefs.current[index][0] = element;
+                            }}
                             value={selectedRole}
                             onChange={(event) =>
                               setDraftRoles((current) => ({
@@ -590,10 +616,24 @@ export default function SAUserRoles() {
                                 [user.auth_user_id]: event.target.value,
                               }))
                             }
+                            onKeyDown={(event) => {
+                              if (
+                                event.key === "ArrowLeft" ||
+                                event.key === "ArrowRight" ||
+                                event.key === "Home" ||
+                                event.key === "End"
+                              ) {
+                                handleGridNavigation(event, {
+                                  rowIndex: index,
+                                  columnIndex: 0,
+                                  gridRefs: rowControlRefs.current,
+                                });
+                              }
+                            }}
                             className="min-w-[190px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none"
                           >
                             <option value="">Select role</option>
-                            {ROLE_OPTIONS.map((role) => (
+                            {ERP_ROLE_OPTIONS.map((role) => (
                               <option key={role.code} value={role.code}>
                                 {role.label}
                               </option>
@@ -610,7 +650,8 @@ export default function SAUserRoles() {
                         <td className="rounded-none px-4 py-4 text-sm text-slate-700 last:rounded-r-2xl">
                           <button
                             ref={(element) => {
-                              applyButtonRefs.current[index] = element;
+                              rowControlRefs.current[index] ??= [];
+                              rowControlRefs.current[index][1] = element;
                             }}
                             type="button"
                             disabled={
@@ -620,10 +661,10 @@ export default function SAUserRoles() {
                             }
                             onClick={() => void handleApplyRole(user)}
                             onKeyDown={(event) =>
-                              handleLinearNavigation(event, {
-                                index,
-                                refs: applyButtonRefs.current,
-                                orientation: "vertical",
+                              handleGridNavigation(event, {
+                                rowIndex: index,
+                                columnIndex: 1,
+                                gridRefs: rowControlRefs.current,
                               })
                             }
                             className={`rounded-2xl bg-sky-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700 ${

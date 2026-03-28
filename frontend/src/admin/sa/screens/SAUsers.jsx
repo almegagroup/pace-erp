@@ -8,14 +8,17 @@
  * Authority: Frontend
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { useMenu } from "../../../context/useMenu.js";
 import {
+  handleGridNavigation,
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import { applyQuickFilter, sortUsers } from "../../../shared/erpCollections.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Users" },
@@ -143,9 +146,11 @@ export default function SAUsers() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
   const [updatingUserId, setUpdatingUserId] = useState("");
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
+  const rowActionRefs = useRef([]);
 
   useEffect(() => {
     let alive = true;
@@ -256,14 +261,38 @@ export default function SAUsers() {
     }
   }
 
-  const governableUsers = users.filter(
-    (user) => !shellProfile?.userCode || user.user_code !== shellProfile.userCode
+  const governableUsers = useMemo(
+    () =>
+      sortUsers(
+        users.filter(
+          (user) =>
+            !shellProfile?.userCode || user.user_code !== shellProfile.userCode,
+        ),
+      ),
+    [shellProfile?.userCode, users],
   );
 
-  const filteredUsers =
-    filter === "ALL"
-      ? governableUsers
-      : governableUsers.filter((user) => user.state === filter);
+  const stateFilteredUsers = useMemo(
+    () =>
+      filter === "ALL"
+        ? governableUsers
+        : governableUsers.filter((user) => user.state === filter),
+    [filter, governableUsers],
+  );
+
+  const filteredUsers = useMemo(
+    () =>
+      applyQuickFilter(stateFilteredUsers, searchQuery, [
+        "user_code",
+        "name",
+        "parent_company_name",
+        "designation_hint",
+        "auth_user_id",
+        "role_code",
+        "state",
+      ]),
+    [searchQuery, stateFilteredUsers],
+  );
 
   function handleOpenScope(user) {
     if (!user?.auth_user_id) {
@@ -284,7 +313,7 @@ export default function SAUsers() {
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
       <div className="mx-auto max-w-7xl">
-        <div className="rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.08)]">
+        <div className="sticky top-4 z-20 rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.12)]">
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="max-w-3xl">
               <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
@@ -489,6 +518,15 @@ export default function SAUsers() {
             </div>
           </div>
 
+          <QuickFilterInput
+            className="mt-5"
+            label="Quick Search"
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="Search by user code, name, company, designation, auth, role, or state"
+            hint="Type to filter the governable user inventory instantly."
+          />
+
           {loading ? (
             <div className="mt-6 rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
               Loading ERP users from the admin governance endpoint.
@@ -520,7 +558,7 @@ export default function SAUsers() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredUsers.map((user) => {
+                  {filteredUsers.map((user, rowIndex) => {
                     const actionLabel =
                       user.state === "ACTIVE" ? "Disable" : "Activate";
                     const nextState =
@@ -578,8 +616,19 @@ export default function SAUsers() {
                           <div className="flex flex-wrap gap-2">
                             {scopeEnabled ? (
                               <button
+                                ref={(element) => {
+                                  rowActionRefs.current[rowIndex] ??= [];
+                                  rowActionRefs.current[rowIndex][0] = element;
+                                }}
                                 type="button"
                                 onClick={() => handleOpenScope(user)}
+                                onKeyDown={(event) =>
+                                  handleGridNavigation(event, {
+                                    rowIndex,
+                                    columnIndex: 0,
+                                    gridRefs: rowActionRefs.current,
+                                  })
+                                }
                                 className="rounded-2xl bg-sky-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700"
                               >
                                 Scope
@@ -590,9 +639,20 @@ export default function SAUsers() {
                               </span>
                             )}
                             <button
+                              ref={(element) => {
+                                rowActionRefs.current[rowIndex] ??= [];
+                                rowActionRefs.current[rowIndex][1] = element;
+                              }}
                               type="button"
                               disabled={isUpdating}
                               onClick={() => void handleStateChange(user, nextState)}
+                              onKeyDown={(event) =>
+                                handleGridNavigation(event, {
+                                  rowIndex,
+                                  columnIndex: 1,
+                                  gridRefs: rowActionRefs.current,
+                                })
+                              }
                               className={`rounded-2xl px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
                                 user.state === "ACTIVE"
                                   ? "bg-rose-50 text-rose-700"

@@ -72,7 +72,10 @@ const panelStyle = {
   borderRadius: "24px",
   boxShadow: "0 24px 80px rgba(15, 23, 42, 0.24)",
   padding: "24px",
-  overflow: "auto",
+  overflow: "hidden",
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
 };
 
 const titleStyle = {
@@ -84,6 +87,9 @@ const titleStyle = {
 
 const contentStyle = {
   marginTop: "18px",
+  flex: 1,
+  minHeight: 0,
+  overflow: "hidden",
 };
 
 const actionsStyle = {
@@ -92,4 +98,5 @@ const actionsStyle = {
   justifyContent: "flex-end",
   gap: "10px",
   flexWrap: "wrap",
+  flexShrink: 0,
 };

@@ -13,6 +13,14 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import {
+  applyQuickFilter,
+  sortCompanies,
+  sortDepartments,
+  sortProjects,
+} from "../../../shared/erpCollections.js";
 
 async function readJsonSafe(response) {
   try {
@@ -110,6 +118,11 @@ export default function SAUserScope() {
   const [searchParams] = useSearchParams();
   const authUserId = searchParams.get("auth_user_id") ?? "";
   const companySearchRef = useRef(null);
+  const actionBarRefs = useRef([]);
+  const companyOptionRefs = useRef([]);
+  const workCompanyRefs = useRef([]);
+  const projectRefs = useRef([]);
+  const departmentRefs = useRef([]);
 
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -122,6 +135,9 @@ export default function SAUserScope() {
   const [departmentIds, setDepartmentIds] = useState([]);
   const [companyPickerOpen, setCompanyPickerOpen] = useState(false);
   const [companySearch, setCompanySearch] = useState("");
+  const [workCompanySearch, setWorkCompanySearch] = useState("");
+  const [projectSearch, setProjectSearch] = useState("");
+  const [departmentSearch, setDepartmentSearch] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -171,31 +187,60 @@ export default function SAUserScope() {
   const user = payload?.user ?? null;
   const scope = payload?.scope ?? null;
 
-  const availableCompanies = options.companies ?? [];
-  const availableProjects = options.projects ?? [];
-  const availableDepartments = options.departments ?? [];
+  const availableCompanies = useMemo(
+    () => sortCompanies(options.companies ?? []),
+    [options.companies],
+  );
+  const availableProjects = useMemo(
+    () => sortProjects(options.projects ?? []),
+    [options.projects],
+  );
+  const availableDepartments = useMemo(
+    () => sortDepartments(options.departments ?? []),
+    [options.departments],
+  );
   const selectedParentCompany =
     availableCompanies.find((company) => company.id === parentCompanyId) ?? null;
 
   const filteredCompanies = useMemo(() => {
-    const query = companySearch.trim().toLowerCase();
-
-    if (!query) {
-      return availableCompanies;
-    }
-
-    return availableCompanies.filter((company) =>
-      [
-        company.company_code,
-        company.company_name,
-        company.state_name,
-        company.pin_code,
-        company.full_address,
-      ]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query)),
-    );
+    return applyQuickFilter(availableCompanies, companySearch, [
+      "company_code",
+      "company_name",
+      "state_name",
+      "pin_code",
+      "full_address",
+    ]);
   }, [availableCompanies, companySearch]);
+
+  const filteredWorkCompanies = useMemo(
+    () =>
+      applyQuickFilter(availableCompanies, workCompanySearch, [
+        "company_code",
+        "company_name",
+        "state_name",
+        "pin_code",
+        "full_address",
+      ]),
+    [availableCompanies, workCompanySearch],
+  );
+
+  const filteredProjects = useMemo(
+    () =>
+      applyQuickFilter(availableProjects, projectSearch, [
+        "project_code",
+        "project_name",
+      ]),
+    [availableProjects, projectSearch],
+  );
+
+  const filteredDepartments = useMemo(
+    () =>
+      applyQuickFilter(availableDepartments, departmentSearch, [
+        "department_code",
+        "department_name",
+      ]),
+    [availableDepartments, departmentSearch],
+  );
 
   const readinessFlags = useMemo(
     () => [
@@ -309,29 +354,59 @@ export default function SAUserScope() {
 
             <div className="flex flex-wrap gap-3">
               <button
+                ref={(element) => {
+                  actionBarRefs.current[0] = element;
+                }}
                 type="button"
                 onClick={() => {
                   openScreen("SA_USERS", { mode: "replace" });
                   navigate("/sa/users");
                 }}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 0,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
                 User Directory
               </button>
               <button
+                ref={(element) => {
+                  actionBarRefs.current[1] = element;
+                }}
                 type="button"
                 onClick={() => {
                   openScreen("SA_USER_ROLES");
                   navigate("/sa/users/roles");
                 }}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 1,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
               >
                 Role Assignment
               </button>
               <button
+                ref={(element) => {
+                  actionBarRefs.current[2] = element;
+                }}
                 type="button"
                 disabled={saving || loading || !authUserId}
                 onClick={() => void handleSave()}
+                onKeyDown={(event) =>
+                  handleLinearNavigation(event, {
+                    index: 2,
+                    refs: actionBarRefs.current,
+                    orientation: "horizontal",
+                  })
+                }
                 className={`rounded-2xl px-4 py-3 text-sm font-semibold shadow-[0_10px_24px_rgba(14,116,144,0.08)] ${
                   saving || loading || !authUserId
                     ? "cursor-not-allowed bg-slate-200 text-slate-500"
@@ -408,6 +483,16 @@ export default function SAUserScope() {
                   <button
                     type="button"
                     onClick={() => setCompanyPickerOpen(true)}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Enter" ||
+                        event.key === " " ||
+                        event.key === "ArrowDown"
+                      ) {
+                        event.preventDefault();
+                        setCompanyPickerOpen(true);
+                      }
+                    }}
                     className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
                   >
                     <span className="block font-semibold text-slate-900">
@@ -444,8 +529,32 @@ export default function SAUserScope() {
                   Companies. Approval authority is still governed separately.
                 </p>
 
-                <div className="mt-5 grid gap-3">
-                  {availableCompanies.map((company) => {
+                <QuickFilterInput
+                  className="mt-5"
+                  label="Filter Work Companies"
+                  value={workCompanySearch}
+                  onChange={setWorkCompanySearch}
+                  placeholder="Filter by code, name, state, pin, or address"
+                  hint="Arrow keys move through company checkboxes."
+                  inputProps={{
+                    onKeyDown: (event) => {
+                      if (
+                        event.key === "ArrowDown" &&
+                        filteredWorkCompanies.length > 0
+                      ) {
+                        event.preventDefault();
+                        workCompanyRefs.current[0]?.focus();
+                      }
+                    },
+                  }}
+                />
+
+                <div className="mt-5 max-h-[24rem] space-y-3 overflow-y-auto pr-1">
+                  {filteredWorkCompanies.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                      No work company matches the current filter.
+                    </div>
+                  ) : filteredWorkCompanies.map((company, index) => {
                     const selected = workCompanyIds.includes(company.id);
 
                     return (
@@ -458,10 +567,21 @@ export default function SAUserScope() {
                         }`}
                       >
                         <input
+                          ref={(element) => {
+                            workCompanyRefs.current[index] = element;
+                          }}
+                          data-erp-nav-item="true"
                           type="checkbox"
                           checked={selected}
                           onChange={() =>
                             toggleSelection(company.id, workCompanyIds, setWorkCompanyIds)
+                          }
+                          onKeyDown={(event) =>
+                            handleLinearNavigation(event, {
+                              index,
+                              refs: workCompanyRefs.current,
+                              orientation: "vertical",
+                            })
                           }
                           className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-600"
                         />
@@ -496,8 +616,32 @@ export default function SAUserScope() {
                   the project universe they can work inside.
                 </p>
 
-                <div className="mt-5 grid gap-3">
-                  {availableProjects.map((project) => {
+                <QuickFilterInput
+                  className="mt-5"
+                  label="Filter Projects"
+                  value={projectSearch}
+                  onChange={setProjectSearch}
+                  placeholder="Filter by project code or project name"
+                  hint="Arrow keys move through project checkboxes."
+                  inputProps={{
+                    onKeyDown: (event) => {
+                      if (
+                        event.key === "ArrowDown" &&
+                        filteredProjects.length > 0
+                      ) {
+                        event.preventDefault();
+                        projectRefs.current[0]?.focus();
+                      }
+                    },
+                  }}
+                />
+
+                <div className="mt-5 max-h-[24rem] space-y-3 overflow-y-auto pr-1">
+                  {filteredProjects.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                      No project matches the current filter.
+                    </div>
+                  ) : filteredProjects.map((project, index) => {
                     const selected = projectIds.includes(project.id);
 
                     return (
@@ -510,10 +654,21 @@ export default function SAUserScope() {
                         }`}
                       >
                         <input
+                          ref={(element) => {
+                            projectRefs.current[index] = element;
+                          }}
+                          data-erp-nav-item="true"
                           type="checkbox"
                           checked={selected}
                           onChange={() =>
                             toggleSelection(project.id, projectIds, setProjectIds)
+                          }
+                          onKeyDown={(event) =>
+                            handleLinearNavigation(event, {
+                              index,
+                              refs: projectRefs.current,
+                              orientation: "vertical",
+                            })
                           }
                           className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600"
                         />
@@ -541,8 +696,32 @@ export default function SAUserScope() {
                   surface.
                 </p>
 
-                <div className="mt-5 grid gap-3">
-                  {availableDepartments.map((department) => {
+                <QuickFilterInput
+                  className="mt-5"
+                  label="Filter Departments"
+                  value={departmentSearch}
+                  onChange={setDepartmentSearch}
+                  placeholder="Filter by department code or department name"
+                  hint="Arrow keys move through department checkboxes."
+                  inputProps={{
+                    onKeyDown: (event) => {
+                      if (
+                        event.key === "ArrowDown" &&
+                        filteredDepartments.length > 0
+                      ) {
+                        event.preventDefault();
+                        departmentRefs.current[0]?.focus();
+                      }
+                    },
+                  }}
+                />
+
+                <div className="mt-5 max-h-[24rem] space-y-3 overflow-y-auto pr-1">
+                  {filteredDepartments.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                      No department matches the current filter.
+                    </div>
+                  ) : filteredDepartments.map((department, index) => {
                     const selected = departmentIds.includes(department.id);
 
                     return (
@@ -555,6 +734,10 @@ export default function SAUserScope() {
                         }`}
                       >
                         <input
+                          ref={(element) => {
+                            departmentRefs.current[index] = element;
+                          }}
+                          data-erp-nav-item="true"
                           type="checkbox"
                           checked={selected}
                           onChange={() =>
@@ -563,6 +746,13 @@ export default function SAUserScope() {
                               departmentIds,
                               setDepartmentIds,
                             )
+                          }
+                          onKeyDown={(event) =>
+                            handleLinearNavigation(event, {
+                              index,
+                              refs: departmentRefs.current,
+                              orientation: "vertical",
+                            })
                           }
                           className="mt-1 h-4 w-4 rounded border-slate-300 text-amber-600"
                         />
@@ -596,40 +786,50 @@ export default function SAUserScope() {
             </button>
           )}
         >
-          <div
-            data-erp-nav-group="true"
-            data-erp-nav-axis="vertical"
-            data-erp-nav-allow-editable="true"
-            className="space-y-4"
-          >
-            <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Search Company
-              </span>
-              <input
-                ref={companySearchRef}
-                value={companySearch}
-                onChange={(event) => setCompanySearch(event.target.value)}
-                placeholder="Search by code, name, state, pin, or address"
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none focus:border-sky-300 focus:bg-white"
-              />
-            </label>
+          <div className="flex h-full min-h-0 flex-col">
+            <QuickFilterInput
+              label="Search Company"
+              value={companySearch}
+              onChange={setCompanySearch}
+              inputRef={companySearchRef}
+              placeholder="Search by code, name, state, pin, or address"
+              hint="Arrow Down moves into the results. Enter selects the focused company."
+              inputProps={{
+                onKeyDown: (event) => {
+                  if (event.key === "ArrowDown" && filteredCompanies.length > 0) {
+                    event.preventDefault();
+                    companyOptionRefs.current[0]?.focus();
+                  }
+                },
+              }}
+            />
 
-            <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
               {filteredCompanies.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
                   No company matches the current search.
                 </div>
               ) : (
-                filteredCompanies.map((company) => {
+                <div className="space-y-3">
+                {filteredCompanies.map((company, index) => {
                   const selected = company.id === parentCompanyId;
 
                   return (
                     <button
                       key={company.id}
+                      ref={(element) => {
+                        companyOptionRefs.current[index] = element;
+                      }}
                       type="button"
                       data-erp-nav-item="true"
                       onClick={() => selectParentCompany(company.id)}
+                      onKeyDown={(event) =>
+                        handleLinearNavigation(event, {
+                          index,
+                          refs: companyOptionRefs.current,
+                          orientation: "vertical",
+                        })
+                      }
                       className={`w-full rounded-2xl border px-4 py-4 text-left text-sm transition ${
                         selected
                           ? "border-sky-300 bg-sky-50 text-sky-900"
@@ -647,7 +847,8 @@ export default function SAUserScope() {
                       </span>
                     </button>
                   );
-                })
+                })}
+                </div>
               )}
             </div>
           </div>
