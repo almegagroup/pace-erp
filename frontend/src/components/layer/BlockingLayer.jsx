@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   closeBlockingLayer,
   isBlockingLayerActive,
@@ -280,7 +281,7 @@ export default function BlockingLayer({
 
   if (!visible) return null;
 
-  return (
+  return createPortal(
     <div style={overlayStyle} aria-modal="true" role="dialog">
       <div
         ref={dialogRef}
@@ -290,6 +291,7 @@ export default function BlockingLayer({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
