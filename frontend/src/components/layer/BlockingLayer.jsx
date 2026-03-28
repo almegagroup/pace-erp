@@ -153,9 +153,6 @@ export default function BlockingLayer({
       ) {
         activeElement.blur();
       }
-
-      appShell.setAttribute("inert", "");
-      appShell.setAttribute("aria-hidden", "true");
     }
 
     const layerId = openBlockingLayer();
@@ -267,10 +264,6 @@ export default function BlockingLayer({
 
       if (!isBlockingLayerActive()) {
         document.body.style.overflow = previousOverflowRef.current;
-        if (appShell) {
-          appShell.removeAttribute("inert");
-          appShell.removeAttribute("aria-hidden");
-        }
       }
 
       if (previousFocusRef.current instanceof HTMLElement) {

@@ -804,13 +804,20 @@ export default function SAUserScope() {
               }}
             />
 
-            <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+            <div
+              className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1"
+              style={{ overscrollBehavior: "contain" }}
+            >
               {filteredCompanies.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
                   No company matches the current search.
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div
+                  data-erp-nav-group="true"
+                  data-erp-nav-axis="vertical"
+                  className="space-y-3"
+                >
                 {filteredCompanies.map((company, index) => {
                   const selected = company.id === parentCompanyId;
 
