@@ -8,4 +8,4 @@ This frontend does not control or inspect auth cookies or domains.
 All auth/session/domain decisions are handled by the backend.
 Production pipeline test
 
-Almega
+Almega-pace
