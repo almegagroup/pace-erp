@@ -14,6 +14,9 @@
 
 import { recordSecurityEvent } from "../_security/security_events.ts";
 
+const ALLOWED_CORS_HEADERS =
+  "Content-Type, Authorization, X-Requested-With, x-erp-window-token";
+
 
 const allowedEnv =
   (typeof Deno !== "undefined"
@@ -101,10 +104,7 @@ console.log("Allowed Origins:", ALLOWED_ORIGINS);
   headers.set("Vary", "Origin");
   headers.set("Access-Control-Allow-Credentials", "true");
   headers.set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  headers.set(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Requested-With"
-  );
+  headers.set("Access-Control-Allow-Headers", ALLOWED_CORS_HEADERS);
 
   console.log("✅ CORS PASSED:", origin);
 console.log("------------------------------");
@@ -161,10 +161,7 @@ console.log("Incoming Origin:", origin);
   headers.set("Vary", "Origin");
   headers.set("Access-Control-Allow-Credentials", "true");
   headers.set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  headers.set(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Requested-With"
-  );
+  headers.set("Access-Control-Allow-Headers", ALLOWED_CORS_HEADERS);
   headers.set("Access-Control-Max-Age", "86400");
 
   console.log("✅ PREFLIGHT PASSED:", origin);

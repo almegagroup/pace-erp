@@ -1,18 +1,23 @@
 /*
  * File-ID: 2.4B-AUTH-LOGOUT-IDEMPOTENT
  * File-Path: supabase/functions/api/_core/auth/logout.handler.ts
- * gate_id: 2
+ * Gate: 2
  * Phase: 2
  * Domain: AUTH
- * Purpose: Logout API – idempotent, deterministic, cookie invalidation
+ * Purpose: Logout API with deterministic cookie invalidation and cluster-wide termination.
  * Authority: Backend
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertRlsEnabled } from "../../_shared/rls_assert.ts";
 import type { SessionResolution } from "../../_pipeline/session.ts";
-import { log } from "../../_lib/logger.ts"; 
+import { log } from "../../_lib/logger.ts";
 import { recordSessionTimeline } from "../session/session_timeline.ts";
+import { terminateSessionCluster } from "../session/session.cluster.ts";
+import {
+  SESSION_CLUSTER_STATE,
+  SESSION_CLUSTER_WINDOW_STATE,
+} from "../session/session.cluster.types.ts";
 
 interface LogoutContext {
   session: SessionResolution;
@@ -37,31 +42,21 @@ function buildExpiredCookie(requestUrl: string): string {
   ];
 
   if (!isLocalhost) {
-    // 🔥 MUST MATCH LOGIN COOKIE EXACTLY
     parts.push("SameSite=None");
     parts.push("Secure");
-    parts.push("Domain=almegagroup.in"); // 🔥 CRITICAL
+    parts.push("Domain=almegagroup.in");
     parts.push("Priority=High");
   } else {
-    // 🧪 DEV
     parts.push("SameSite=Lax");
   }
 
   return parts.join("; ");
 }
-/**
- * /api/logout
- * RULES:
- * - ALWAYS idempotent
- * - ALWAYS invalidates cookie
- * - ALWAYS returns LOGOUT action
- * - DB errors never block logout
- */
+
 export async function logoutHandler(ctx: LogoutContext): Promise<Response> {
   const { session, requestId, requestUrl } = ctx;
   const expiredCookie = buildExpiredCookie(requestUrl);
 
-  // ID-2.7: Auth event log (always)
   log({
     level: "SECURITY",
     request_id: requestId,
@@ -69,36 +64,44 @@ export async function logoutHandler(ctx: LogoutContext): Promise<Response> {
     event: "AUTH_LOGOUT",
   });
 
-  // Try server-side revoke ONLY if there is an active session.
-  // Failure here must NOT change the response.
   if (session.status === "ACTIVE") {
-  try {
-    assertRlsEnabled();
-    await serviceRoleClient
-      .schema("erp_core").from("sessions")
-      .update({
-        status: "REVOKED",
-        revoked_at: new Date().toISOString(),
-        revoked_reason: "USER_LOGOUT",
-        revoked_by: session.authUserId,
-      })
-      .eq("session_id", session.sessionId)
-      .eq("status", "ACTIVE");
-  } catch {
-    // Intentionally swallowed — idempotency guarantee
+    try {
+      assertRlsEnabled();
+
+      if (session.clusterId) {
+        await terminateSessionCluster({
+          clusterId: session.clusterId,
+          clusterStatus: SESSION_CLUSTER_STATE.REVOKED,
+          windowStatus: SESSION_CLUSTER_WINDOW_STATE.REVOKED,
+          sessionStatus: "REVOKED",
+          reason: "USER_LOGOUT",
+          actedByAuthUserId: session.authUserId,
+        });
+      } else {
+        await serviceRoleClient
+          .schema("erp_core")
+          .from("sessions")
+          .update({
+            status: "REVOKED",
+            revoked_at: new Date().toISOString(),
+            revoked_reason: "USER_LOGOUT",
+            revoked_by: session.authUserId,
+          })
+          .eq("session_id", session.sessionId)
+          .eq("status", "ACTIVE");
+      }
+    } catch {
+      // Idempotent logout must not fail closed on DB write issues.
+    }
+
+    recordSessionTimeline({
+      requestId,
+      sessionId: session.sessionId,
+      userId: session.authUserId,
+      event: "LOGOUT",
+    });
   }
 
-  recordSessionTimeline({
-    requestId: requestId,
-    sessionId: session.sessionId,
-    userId: session.authUserId,
-    event: "LOGOUT",
-  });
-}
-  
-  
-
-  // Deterministic logout response (same for all cases)
   return new Response(
     JSON.stringify({
       ok: false,

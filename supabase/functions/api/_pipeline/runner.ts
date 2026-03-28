@@ -21,11 +21,21 @@ import { serviceRoleClient } from "../_shared/serviceRoleClient.ts";
 import { dispatchProtectedRoute } from "./protected_routes.dispatch.ts";
 import { dispatchPublicRoute } from "./public_routes.dispatch.ts";
 import { errorResponse } from "../_core/response.ts";
+import {
+  terminateSessionCluster,
+  touchSessionClusterWindow,
+} from "../_core/session/session.cluster.ts";
+import {
+  SESSION_CLUSTER_STATE,
+  SESSION_CLUSTER_WINDOW_STATE,
+} from "../_core/session/session.cluster.types.ts";
 
 import { log } from "../_lib/logger.ts";
 
 import type { SessionResolution } from "./session.ts";
 import type { ContextResolution } from "./context.ts";
+
+const SESSION_TOUCH_INTERVAL_MS = 60 * 1000;
 
 /**
  * SESSION logout enforcement
@@ -33,6 +43,19 @@ import type { ContextResolution } from "./context.ts";
 function isPassiveSessionProbe(req: Request): boolean {
   const url = new URL(req.url);
   return url.searchParams.get("session_mode") === "passive";
+}
+
+function shouldTouchSessionClock(
+  session: Extract<SessionResolution, { status: "ACTIVE" }>,
+  nowMs: number
+): boolean {
+  const lastSeenMs = new Date(session.last_seen_at).getTime();
+
+  if (!Number.isFinite(lastSeenMs)) {
+    return true;
+  }
+
+  return nowMs - lastSeenMs >= SESSION_TOUCH_INTERVAL_MS;
 }
 
 function enforceSessionLogout(
@@ -62,6 +85,19 @@ async function persistLifecycleTermination(
   const nowIso = new Date().toISOString();
 
   if (lifecycleResult.status === "IDLE_EXPIRED") {
+    if (session.clusterId) {
+      await terminateSessionCluster({
+        clusterId: session.clusterId,
+        clusterStatus: SESSION_CLUSTER_STATE.EXPIRED,
+        windowStatus: SESSION_CLUSTER_WINDOW_STATE.EXPIRED,
+        sessionStatus: "IDLE",
+        reason: "IDLE_TIMEOUT",
+        actedByAuthUserId: session.authUserId,
+        atIso: nowIso,
+      });
+      return;
+    }
+
     await serviceRoleClient
       .schema("erp_core")
       .from("sessions")
@@ -76,6 +112,19 @@ async function persistLifecycleTermination(
   }
 
   if (lifecycleResult.status === "TTL_EXPIRED") {
+    if (session.clusterId) {
+      await terminateSessionCluster({
+        clusterId: session.clusterId,
+        clusterStatus: SESSION_CLUSTER_STATE.EXPIRED,
+        windowStatus: SESSION_CLUSTER_WINDOW_STATE.EXPIRED,
+        sessionStatus: "EXPIRED",
+        reason: "TTL_EXPIRED",
+        actedByAuthUserId: session.authUserId,
+        atIso: nowIso,
+      });
+      return;
+    }
+
     await serviceRoleClient
       .schema("erp_core")
       .from("sessions")
@@ -268,13 +317,26 @@ if (
 
 // Passive session probes must never extend the backend session clock.
 if (!isPassiveSessionProbe(req)) {
-  await serviceRoleClient
-    .schema("erp_core")
-    .from("sessions")
-    .update({
-      last_seen_at: new Date().toISOString(),
-    })
-    .eq("session_id", activeSession.sessionId);
+  const nowMs = Date.now();
+
+  if (shouldTouchSessionClock(activeSession, nowMs)) {
+    const nowIso = new Date(nowMs).toISOString();
+
+    await serviceRoleClient
+      .schema("erp_core")
+      .from("sessions")
+      .update({
+        last_seen_at: nowIso,
+      })
+      .eq("session_id", activeSession.sessionId);
+
+    if (activeSession.clusterId && activeSession.clusterWindowToken) {
+      await touchSessionClusterWindow(
+        activeSession.clusterId,
+        activeSession.clusterWindowToken
+      );
+    }
+  }
 }
 
 

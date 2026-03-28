@@ -712,6 +712,62 @@ Retest live SA approval, rejection, and any other schema-scoped RPC-backed gover
 ## Entry 015
 
 Date:
+2026-03-28
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- implemented shared keyboard-first hardening primitives for protected ERP pages
+- added visible quick-filter support and stable sorting helpers for dense protected inventories
+- expanded SA screens to support more consistent arrow-key navigation, quick filtering, and sticky action access
+- hardened the SA User Scope company picker so Parent Company selection is now keyboard- and mouse-usable
+- confirmed the signup runtime break was not caused by backend logic; the live failure came from a wrong frontend deployment anon key
+
+What changed in repo:
+- frontend/src/components/inputs/QuickFilterInput.jsx
+- frontend/src/components/layer/BlockingLayer.jsx
+- frontend/src/components/layer/DrawerBase.jsx
+- frontend/src/shared/erpCollections.js
+- frontend/src/shared/erpRoles.js
+- frontend/src/admin/sa/screens/SAControlPanel.jsx
+- frontend/src/admin/sa/screens/SACompanyCreate.jsx
+- frontend/src/admin/sa/screens/SAAudit.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SAUserScope.jsx
+- frontend/src/navigation/erpRovingFocus.js
+- supabase/functions/api/_core/admin/user/get_user_scope.handler.ts
+- supabase/functions/api/_core/admin/user/list_users.handler.ts
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- backend deno check completed successfully on changed admin user handlers
+- SA scope picker is now reachable through keyboard and mouse after live frontend deployment
+- signup failure RCA was completed and traced to wrong frontend deployment anon key, not SPF, ImprovMX, or backend CORS policy
+
+Problems or blockers:
+- the broader protected-page keyboard standard still needs to be carried forward screen by screen as new protected work surfaces are added
+- live behavior remains dependent on correct frontend deployment environment values
+
+Decision or note:
+Protected ERP pages must follow a keyboard-first operating model.
+The SA scope drawer issue was a real accessibility blocker and is now resolved in the shared layer path.
+The signup incident also confirmed that direct Supabase frontend paths can fail independently of backend health when deployment env values drift.
+
+Next step:
+Continue protected-surface keyboard hardening and governance work in roadmap order,
+using the new shared sorting, filtering, and navigation primitives as the default pattern.
+
+---
+
 2026-03-27
 
 Roadmap step:
@@ -1249,6 +1305,187 @@ Retest the new /sa/users/scope surface against live backend state,
 then continue into module governance and approval-governance surfaces in roadmap order
 
 ---
+
+## Entry 026
+
+Date:
+2026-03-28
+
+Roadmap step:
+Protected Session Cluster Realignment - SC-1 and SC-2
+
+Status:
+IN PROGRESS
+
+What was done:
+- wrote the dedicated session-cluster authority contract as a separate execution reference
+- added backend storage foundation for parent session clusters
+- added governed window-slot storage foundation for admitted cluster members
+- linked existing ERP session rows to optional parent cluster identity
+- declared typed backend constants for cluster states,
+  slot states,
+  and future synchronization event vocabulary
+
+What changed in repo:
+- docs/ERP build roadmap/ERP_SESSION_CLUSTER_AUTHORITY.md
+- supabase/migrations/20260410116000_gate3_10_session_cluster_foundation.sql
+- supabase/functions/api/_core/session/session.cluster.types.ts
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- backend schema now has a dedicated place for one ACTIVE cluster per user
+- backend schema now has a dedicated place for maximum 3 admitted governed windows
+- current runtime behavior remains unchanged because protected-shell and login wiring were intentionally not changed in this step
+
+Problems or blockers:
+- session create,
+  logout,
+  revoke,
+  and lifecycle handlers do not yet read or write the new cluster tables
+- protected shell still enforces the old single-tab policy
+- cluster synchronization events are declared,
+  but not yet propagated through backend and frontend lifecycle flows
+
+Decision or note:
+This step intentionally starts with authority and storage truth only.
+The repo now has backend-first cluster foundations without prematurely jumping into frontend-only coordination.
+
+Next step:
+Define SC-3 cluster lifecycle and synchronization events,
+then wire backend login and session lifecycle handlers to create,
+replace,
+and terminate clusters before protected-shell behavior is changed
+
+## Entry 027
+
+Date:
+2026-03-28
+
+Roadmap step:
+Protected Session Cluster Realignment - SC-3 through SC-7 foundation wiring
+
+Status:
+IN PROGRESS
+
+What was done:
+- extended the session-cluster foundation to support window-instance identity and one-time join tickets
+- wired login to create a fresh session cluster and replace the old active cluster on fresh login
+- wired backend session resolution to validate active cluster truth and admitted window-token truth
+- wired logout,
+  admin revoke,
+  user disable revoke,
+  and lifecycle expiry paths to terminate the whole cluster instead of only one browser surface
+- exposed protected backend routes for cluster admission,
+  controlled open-window tickets,
+  and best-effort window close signaling
+- replaced the old protected single-tab ownership behavior with governed cluster-window ownership guarding
+- added frontend cluster admission storage,
+  cluster fetch header injection,
+  same-cluster warning/lock/logout broadcast sync,
+  and the governed New Window action from protected Home shells
+
+What changed in repo:
+- supabase/migrations/20260410116000_gate3_10_session_cluster_foundation.sql
+- supabase/functions/api/_core/session/session.cluster.ts
+- supabase/functions/api/_core/session/session.cluster.handler.ts
+- supabase/functions/api/_core/session/session.cluster.types.ts
+- supabase/functions/api/_core/session/session.create.ts
+- supabase/functions/api/_core/auth/login.handler.ts
+- supabase/functions/api/_core/auth/logout.handler.ts
+- supabase/functions/api/_core/session/session.admin_revoke.ts
+- supabase/functions/api/_core/admin/session/revoke_session.handler.ts
+- supabase/functions/api/_core/admin/session/list_sessions.handler.ts
+- supabase/functions/api/_pipeline/session.ts
+- supabase/functions/api/_pipeline/runner.ts
+- supabase/functions/api/_pipeline/protected_routes.dispatch.ts
+- supabase/functions/api/_routes/session.routes.ts
+- frontend/src/store/sessionCluster.js
+- frontend/src/store/sessionWarning.js
+- frontend/src/store/workspaceLock.js
+- frontend/src/components/SessionClusterBridge.jsx
+- frontend/src/components/SessionWatchdog.jsx
+- frontend/src/auth/AuthBootstrap.jsx
+- frontend/src/router/ProtectedBranchShell.jsx
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/main.jsx
+- frontend/src/App.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- migration naming is now sequenced after the existing 20260410115000 file
+- the protected shell no longer depends on the old single-tab ownership rule
+- the repo now has a backend-backed route surface for cluster admission and governed new-window expansion
+
+Problems or blockers:
+- backend route and handler wiring were verified structurally,
+  but live session-cluster behavior still depends on applying the new migration and exercising the flows against runtime backend state
+- window-close handling remains best-effort because browser unload delivery is never perfectly guaranteed
+- same-cluster UX synchronization is currently browser-coordination based,
+  while backend remains the authority for cluster legitimacy and forced replacement
+
+Decision or note:
+This pass moves the repo from session-cluster theory into working implementation foundations.
+The live target is now backend-authoritative cluster legitimacy with frontend coordination layered on top,
+instead of the previous same-browser single-tab policy.
+
+Next step:
+Apply the new migration,
+run live login and multi-window validation,
+then tighten any runtime edge cases found during real browser testing
+
+## Entry 028
+
+Date:
+2026-03-28
+
+Roadmap step:
+Protected Session Cluster Realignment - runtime stabilization and UX completion
+
+Status:
+COMPLETED
+
+What was done:
+- completed live runtime stabilization for governed multi-window session clusters
+- reduced login-to-home handoff time by parallelizing protected bootstrap profile and menu fetches
+- replaced the plain redirect placeholder with a secure redirect experience that shows animated loading and shuffled data-security/data-hygiene guidance
+- removed the reserved keyboard shortcut path for opening new windows and kept governed expansion on the visible shell button
+- hardened popup boot so child windows reset inherited sessionStorage state before cluster admission
+- fixed max-window denial so a 4th window request is blocked with a user-facing restriction message instead of forcing logout
+- aligned logout confirmation behavior so the explicit Logout button now matches the Esc confirmation path
+- tightened child-window logout behavior so auxiliary windows attempt auto-close while the primary window returns to login
+
+What changed in repo:
+- frontend/src/auth/AuthBootstrap.jsx
+- frontend/src/admin/AuthResolver.jsx
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/store/sessionCluster.js
+- frontend/src/store/sessionWarning.js
+- supabase/functions/api/_core/response.ts
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- backend type-check completed successfully with `deno check supabase/functions/api/index.ts`
+- frontend lint completed successfully
+- frontend build completed successfully
+- live browser validation confirmed governed new-window opening now works
+- live browser validation confirmed login redirect,
+  redirect-screen guidance,
+  logout confirmation,
+  and max-window restriction behavior are now aligned with the intended UX
+
+Problems or blockers:
+- child-window auto-close remains browser-behavior-sensitive by nature,
+  so it is still implemented as best-effort popup closure with redirect fallback if the browser refuses the close call
+
+Decision or note:
+The protected session-cluster realignment is now functionally complete for the governed Home-window scope.
+The old single-tab behavior is no longer the active model,
+and runtime behavior now matches the backend-authoritative cluster design validated during testing.
+
+Next step:
+Resume the main ERP roadmap from the next scheduled program item outside this session-cluster stabilization pass
 
 # 6. Initial Program Entry
 

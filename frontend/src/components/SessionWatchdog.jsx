@@ -11,6 +11,10 @@ import {
   setProtectedRouteActive,
   showWarning,
 } from "../store/sessionWarning.js";
+import {
+  releaseClusterWindowOwnership,
+  requestCloseCurrentClusterWindow,
+} from "../store/sessionCluster.js";
 
 const IDLE_WARNING_MS = 10 * 60 * 1000;
 const IDLE_LOGOUT_MS = 30 * 60 * 1000;
@@ -184,6 +188,23 @@ export default function SessionWatchdog() {
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
+    };
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!isProtectedPath(location.pathname)) return undefined;
+
+    const handlePageUnload = () => {
+      releaseClusterWindowOwnership();
+      void requestCloseCurrentClusterWindow({ keepalive: true });
+    };
+
+    window.addEventListener("pagehide", handlePageUnload);
+    window.addEventListener("beforeunload", handlePageUnload);
+
+    return () => {
+      window.removeEventListener("pagehide", handlePageUnload);
+      window.removeEventListener("beforeunload", handlePageUnload);
     };
   }, [location.pathname]);
 

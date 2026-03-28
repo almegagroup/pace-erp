@@ -40,6 +40,7 @@ export async function listSessionsHandler(
     .select(`
       session_id,
       auth_user_id,
+      cluster_id,
       status,
       created_at,
       last_seen_at,

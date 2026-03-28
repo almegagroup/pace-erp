@@ -20,7 +20,6 @@ import {
 } from "../navigation/screenStackEngine.js";
 import {
   confirmAndRequestLogout,
-  requestLogout,
 } from "../store/sessionWarning.js";
 import {
   subscribeWorkspaceShell,
@@ -28,6 +27,13 @@ import {
   unsubscribeWorkspaceShell,
 } from "../store/workspaceShell.js";
 import { lockWorkspace } from "../store/workspaceLock.js";
+import {
+  getClusterAdmission,
+  openPendingClusterWindow,
+  requestOpenClusterWindow,
+  subscribeClusterAdmission,
+  unsubscribeClusterAdmission,
+} from "../store/sessionCluster.js";
 import { subscribeWorkspaceFocusCommands } from "../navigation/workspaceFocusBus.js";
 
 const DASHBOARD_ROUTES = new Set(["/sa/home", "/ga/home", "/dashboard"]);
@@ -108,12 +114,36 @@ function findFirstFocusableWithin(container) {
   );
 }
 
+function getClusterWindowErrorMessage(code) {
+  switch (code) {
+    case "SESSION_CLUSTER_WINDOW_POPUP_BLOCKED":
+      return "Browser blocked the new ERP window. Allow popups for this site and try again.";
+    case "SESSION_CLUSTER_OPEN_WINDOW_BLOCKED":
+    case "SESSION_CLUSTER_OPEN_WINDOW_FAILED":
+      return "Unable to open a new ERP window right now. Please try again.";
+    case "SESSION_CLUSTER_ADMISSION_LIMIT_REACHED":
+      return "Maximum 3 ERP windows are already open for this session.";
+    case "SESSION_CLUSTER_OPEN_WINDOW_MAX_REACHED":
+      return "Maximum 3 ERP windows are already open for this session.";
+    case "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED":
+      return "Maximum 3 ERP windows are already open for this session.";
+    case "SESSION_CLUSTER_WINDOW_NAVIGATION_FAILED":
+      return "A new window opened, but navigation into the ERP workspace failed.";
+    default:
+      return "Unable to open a new ERP window right now.";
+  }
+}
+
 export default function MenuShell() {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [activeZone, setActiveZone] = useState("content");
   const [menuFocusIndex, setMenuFocusIndex] = useState(0);
+  const [clusterAdmission, setClusterAdmission] = useState(() =>
+    getClusterAdmission()
+  );
+  const [clusterWindowMessage, setClusterWindowMessage] = useState("");
 
   const menuButtonRefs = useRef([]);
   const actionButtonRefs = useRef([]);
@@ -174,6 +204,15 @@ export default function MenuShell() {
   }, []);
 
   useEffect(() => {
+    const listener = (snapshot) => {
+      setClusterAdmission(snapshot);
+    };
+
+    subscribeClusterAdmission(listener);
+    return () => unsubscribeClusterAdmission(listener);
+  }, []);
+
+  useEffect(() => {
     setShowKeyboardHelp(false);
   }, [shellMode]);
 
@@ -205,7 +244,7 @@ export default function MenuShell() {
   }
 
   async function handleLogout() {
-    await requestLogout();
+    await confirmAndRequestLogout();
   }
 
   async function handleBack() {
@@ -224,6 +263,45 @@ export default function MenuShell() {
   function handleLockWorkspace() {
     lockWorkspace();
   }
+
+  async function handleOpenNewWindow() {
+    const homePath = location.pathname.startsWith("/sa")
+      ? "/sa/home"
+      : location.pathname.startsWith("/ga")
+        ? "/ga/home"
+        : "/dashboard";
+    const pendingWindow = openPendingClusterWindow();
+
+    if (!pendingWindow) {
+      setClusterWindowMessage(
+        getClusterWindowErrorMessage("SESSION_CLUSTER_WINDOW_POPUP_BLOCKED")
+      );
+      return;
+    }
+
+    setClusterWindowMessage("");
+
+    const result = await requestOpenClusterWindow(homePath, {
+      openedWindow: pendingWindow,
+    });
+
+    if (!result.ok) {
+      setClusterWindowMessage(getClusterWindowErrorMessage(result.code));
+      console.error("SESSION_CLUSTER_OPEN_WINDOW_FAILED", result.code);
+    }
+  }
+
+  useEffect(() => {
+    if (!clusterWindowMessage) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setClusterWindowMessage("");
+    }, 5000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [clusterWindowMessage]);
 
   const focusContentZone = useCallback(() => {
     const target =
@@ -409,6 +487,12 @@ export default function MenuShell() {
 
   if (shellMode === "dashboard") {
     headerActions.splice(2, 0, {
+      label: "New Window",
+      hint: "Max 3",
+      onClick: () => void handleOpenNewWindow(),
+    });
+
+    headerActions.splice(2, 0, {
       label: collapsed ? "Show Menu" : "Hide Menu",
       hint: collapsed ? "Ctrl+Right" : "Ctrl+Left",
       onClick: () => toggleSidebarCollapsed(),
@@ -458,18 +542,40 @@ export default function MenuShell() {
               }}
             >
               <div style={{ minWidth: 0 }}>
-                <p
+                <div
                   style={{
-                    margin: 0,
-                    fontSize: "11px",
-                    letterSpacing: "0.24em",
-                    textTransform: "uppercase",
-                    color: "#8ed0f7",
-                    fontWeight: 700,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: collapsed ? "0" : "10px",
                   }}
                 >
-                  Pace ERP
-                </p>
+                  <img
+                    src="/icon-192.png"
+                    alt="Pace ERP"
+                    style={{
+                      width: collapsed ? "34px" : "42px",
+                      height: collapsed ? "34px" : "42px",
+                      borderRadius: "10px",
+                      objectFit: "cover",
+                      boxShadow: "0 10px 22px rgba(0,0,0,0.18)",
+                      flexShrink: 0,
+                    }}
+                  />
+                  {!collapsed ? (
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: "11px",
+                        letterSpacing: "0.24em",
+                        textTransform: "uppercase",
+                        color: "#8ed0f7",
+                        fontWeight: 700,
+                      }}
+                    >
+                      Pace ERP
+                    </p>
+                  ) : null}
+                </div>
                 {!collapsed ? (
                   <>
                     <p
@@ -696,6 +802,12 @@ export default function MenuShell() {
                   {shellMode === "dashboard" ? "Dashboard Mode" : "Task Mode"}
                 </span>
                 <span>Zone {zoneNumber}</span>
+                {clusterAdmission?.windowSlot ? (
+                  <span>
+                    Window {clusterAdmission.windowSlot}/
+                    {clusterAdmission.maxWindowCount ?? 3}
+                  </span>
+                ) : null}
               </div>
               <h1
                 style={{
@@ -790,8 +902,26 @@ export default function MenuShell() {
               >
                 {item}
               </span>
-            ))}
-          </div>
+              ))}
+            </div>
+
+          {clusterWindowMessage ? (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                marginTop: "12px",
+                border: "1px solid #d9b15f",
+                background: "#fff7e6",
+                borderRadius: "10px",
+                padding: "10px 12px",
+                fontSize: "13px",
+                color: "#7c4a03",
+              }}
+            >
+              {clusterWindowMessage}
+            </div>
+          ) : null}
 
           {showKeyboardHelp ? (
             <div

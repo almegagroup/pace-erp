@@ -12,10 +12,12 @@ import AppRouter from "./router/AppRouter.jsx";
 import SessionOverlay from "./components/SessionOverlay.jsx";
 import LogoutConfirmOverlay from "./components/LogoutConfirmOverlay.jsx";
 import ActionConfirmOverlay from "./components/ActionConfirmOverlay.jsx";
+import SessionClusterBridge from "./components/SessionClusterBridge.jsx";
 
 function App() {
   return (
     <>
+      <SessionClusterBridge />
       <AppRouter />
       <SessionOverlay />
       <LogoutConfirmOverlay />

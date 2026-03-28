@@ -406,7 +406,7 @@ log({
   meta: { roleCode, userCode },
 });
 
-  const sessionId = await createSession(
+  const { sessionId } = await createSession(
   authUserId,
   roleCode,                    // 🔥 ADD
   extractDeviceInfo(ctx)

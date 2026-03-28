@@ -11,6 +11,11 @@
 import { clearNavigationStack } from "../navigation/navigationPersistence.js";
 import { openLogoutConfirm } from "./logoutConfirm.js";
 import { clearWorkspaceLock } from "./workspaceLock.js";
+import {
+  broadcastClusterMessage,
+  clearClusterAdmission,
+  getClusterAdmission,
+} from "./sessionCluster.js";
 import { releaseSingleTabOwnership } from "./singleTabSession.js";
 
 const WARNING_MESSAGES = {
@@ -36,6 +41,37 @@ let dismissHandler = null;
 
 function emit() {
   listeners.forEach((listener) => listener({ ...state }));
+}
+
+function redirectToLogin() {
+  try {
+    globalThis.history.replaceState(null, "", "/login");
+  } catch {
+    // History replacement is best effort only.
+  }
+
+  globalThis.location.replace("/login");
+}
+
+function closeChildWindowOrRedirect() {
+  try {
+    globalThis.close();
+  } catch {
+    // Close is best effort only.
+  }
+
+  try {
+    globalThis.open("", "_self");
+    globalThis.close();
+  } catch {
+    // Secondary close strategy is best effort only.
+  }
+
+  globalThis.setTimeout(() => {
+    if (!globalThis.closed && document.visibilityState !== "hidden") {
+      redirectToLogin();
+    }
+  }, 1500);
 }
 
 export function subscribe(fn) {
@@ -90,7 +126,9 @@ export function getSessionWatchdogSnapshot() {
   return { ...state };
 }
 
-export function showWarning(type, onDismiss) {
+export function showWarning(type, onDismiss, options = {}) {
+  const { broadcast = true } = options;
+
   if (state.visible && state.type === type) {
     dismissHandler = typeof onDismiss === "function" ? onDismiss : dismissHandler;
     return;
@@ -104,9 +142,17 @@ export function showWarning(type, onDismiss) {
   };
   dismissHandler = typeof onDismiss === "function" ? onDismiss : null;
   emit();
+
+  if (broadcast) {
+    broadcastClusterMessage({
+      type: "SESSION_WARNING_SHOW",
+      warningType: type,
+    });
+  }
 }
 
-export async function clearWarning(reason = "dismiss") {
+export async function clearWarning(reason = "dismiss", options = {}) {
+  const { broadcast = true } = options;
   const handler = dismissHandler;
 
   dismissHandler = null;
@@ -118,6 +164,13 @@ export async function clearWarning(reason = "dismiss") {
     frontendActivityAt: Date.now(),
   };
   emit();
+
+  if (broadcast) {
+    broadcastClusterMessage({
+      type: "SESSION_WARNING_CLEAR",
+      reason,
+    });
+  }
 
   if (handler) {
     await handler(reason);
@@ -135,10 +188,20 @@ export function resetWarningState() {
   emit();
 }
 
-export function hardLogout() {
+export function hardLogout(options = {}) {
+  const { broadcast = true } = options;
+  const clusterAdmission = getClusterAdmission();
   dismissHandler = null;
+
+  if (broadcast) {
+    broadcastClusterMessage({
+      type: "SESSION_LOGOUT",
+    });
+  }
+
   clearNavigationStack();
   clearWorkspaceLock();
+  clearClusterAdmission();
   releaseSingleTabOwnership();
 
   state = {
@@ -150,13 +213,12 @@ export function hardLogout() {
   };
   emit();
 
-  try {
-    globalThis.history.replaceState(null, "", "/");
-  } catch {
-    // History replacement is best effort only.
+  if ((clusterAdmission?.windowSlot ?? 1) > 1) {
+    closeChildWindowOrRedirect();
+    return;
   }
 
-  globalThis.location.assign("/login");
+  redirectToLogin();
 }
 
 export async function requestLogout() {

@@ -8209,3 +8209,38 @@ Result:
 
 SA company creation is now a working temporary UI boot surface,
 aligned with the GST-backed backend contract and ready for live use.
+
+240. SA SCOPE PICKER ACCESSIBILITY AND FRONTEND AUTH RCA
+
+Status:
+Active
+
+Date:
+2026-03-28
+
+Change:
+
+The protected UI pass was extended with shared keyboard-first sorting,
+filtering, and navigation primitives, then retested against live SA screens.
+
+During live validation, two important runtime findings were closed:
+
+SA User Scope parent-company picker:
+- drawer was visually open but operationally inaccessible
+- keyboard and mouse interaction were hardened through the shared blocking/drawer path
+- picker now works as an actual operator surface instead of a stub-like overlay
+
+Signup runtime incident:
+- the live signup failure was investigated to final RCA
+- the cause was a wrong frontend deployment anon key
+- this was confirmed to be a frontend deployment issue, not a backend CORS issue and not an email/SPF/ImprovMX issue
+
+Purpose:
+
+Keep the temporary UI boot record aligned with what was actually learned in live runtime,
+not only what was changed in code.
+
+Result:
+
+The SA scope picker is now live-usable,
+and the signup incident now has a closed root cause with no backend false alarm remaining.
