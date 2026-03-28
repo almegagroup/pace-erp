@@ -474,6 +474,11 @@ export default function MenuShell() {
       onClick: handleGoHome,
     },
     {
+      label: "New Window",
+      hint: "Max 3",
+      onClick: () => void handleOpenNewWindow(),
+    },
+    {
       label: "Lock",
       hint: "Alt+L",
       onClick: handleLockWorkspace,
@@ -486,12 +491,6 @@ export default function MenuShell() {
   ];
 
   if (shellMode === "dashboard") {
-    headerActions.splice(2, 0, {
-      label: "New Window",
-      hint: "Max 3",
-      onClick: () => void handleOpenNewWindow(),
-    });
-
     headerActions.splice(2, 0, {
       label: collapsed ? "Show Menu" : "Hide Menu",
       hint: collapsed ? "Ctrl+Right" : "Ctrl+Left",
