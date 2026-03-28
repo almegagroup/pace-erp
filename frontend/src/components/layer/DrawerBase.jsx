@@ -64,6 +64,8 @@ const overlayStyle = {
   display: "flex",
   alignItems: "stretch",
   padding: "12px",
+  pointerEvents: "auto",
+  overscrollBehavior: "contain",
 };
 
 const panelStyle = {
@@ -76,6 +78,8 @@ const panelStyle = {
   display: "flex",
   flexDirection: "column",
   minHeight: 0,
+  pointerEvents: "auto",
+  overscrollBehavior: "contain",
 };
 
 const titleStyle = {

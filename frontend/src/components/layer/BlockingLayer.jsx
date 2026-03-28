@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   closeBlockingLayer,
   isBlockingLayerActive,
@@ -152,9 +153,6 @@ export default function BlockingLayer({
       ) {
         activeElement.blur();
       }
-
-      appShell.setAttribute("inert", "");
-      appShell.setAttribute("aria-hidden", "true");
     }
 
     const layerId = openBlockingLayer();
@@ -266,10 +264,6 @@ export default function BlockingLayer({
 
       if (!isBlockingLayerActive()) {
         document.body.style.overflow = previousOverflowRef.current;
-        if (appShell) {
-          appShell.removeAttribute("inert");
-          appShell.removeAttribute("aria-hidden");
-        }
       }
 
       if (previousFocusRef.current instanceof HTMLElement) {
@@ -280,7 +274,7 @@ export default function BlockingLayer({
 
   if (!visible) return null;
 
-  return (
+  return createPortal(
     <div style={overlayStyle} aria-modal="true" role="dialog">
       <div
         ref={dialogRef}
@@ -290,6 +284,7 @@ export default function BlockingLayer({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
