@@ -13,6 +13,8 @@ import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 
 async function readJsonSafe(response) {
   try {
@@ -95,6 +97,8 @@ function FieldCard({ label, value, caption, multiline = false }) {
 export default function SACompanyCreate() {
   const navigate = useNavigate();
   const actionBarRefs = useRef([]);
+  const gstInputRef = useRef(null);
+  const companyNameInputRef = useRef(null);
   const [gstNumber, setGstNumber] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [gstProfile, setGstProfile] = useState(null);
@@ -109,22 +113,83 @@ export default function SACompanyCreate() {
     Boolean(createdCompany?.company_code) &&
     (!normalizedGst || createdCompany?.gst_number === normalizedGst);
 
-  useEffect(() => {
-    function onKeyDown(event) {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") {
-        return;
-      }
+  useErpScreenHotkeys({
+    save: {
+      disabled: creating || hasExistingCompany,
+      perform: () => void handleCreate(),
+    },
+    focusSearch: {
+      perform: () => gstInputRef.current?.focus(),
+    },
+    focusPrimary: {
+      perform: () => gstInputRef.current?.focus(),
+    },
+  });
 
-      event.preventDefault();
-
-      if (!creating && !hasExistingCompany) {
-        void handleCreate();
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [creating, hasExistingCompany, normalizedGst, companyName, gstProfile, createdCompany]);
+  useErpScreenCommands([
+    {
+      id: "sa-company-control-panel",
+      group: "Current Screen",
+      label: "Go to SA control panel",
+      keywords: ["control panel", "sa admin"],
+      perform: () => {
+        openScreen("SA_CONTROL_PANEL", { mode: "replace" });
+        navigate("/sa/control-panel");
+      },
+      order: 10,
+    },
+    {
+      id: "sa-company-home",
+      group: "Current Screen",
+      label: "Go to SA home",
+      keywords: ["sa home", "dashboard"],
+      perform: () => {
+        openScreen("SA_HOME", { mode: "reset" });
+        navigate("/sa/home");
+      },
+      order: 20,
+    },
+    {
+      id: "sa-company-focus-gst",
+      group: "Current Screen",
+      label: "Focus GST number",
+      keywords: ["gst", "tax", "input"],
+      perform: () => gstInputRef.current?.focus(),
+      order: 30,
+    },
+    {
+      id: "sa-company-lookup-gst",
+      group: "Current Screen",
+      label: lookingUp ? "Checking GST profile..." : "Check GST profile",
+      hint: "Enter",
+      keywords: ["lookup", "gst profile", "applyflow"],
+      disabled: lookingUp,
+      perform: () => void handleLookup(),
+      order: 40,
+    },
+    {
+      id: "sa-company-focus-name",
+      group: "Current Screen",
+      label: "Focus company name",
+      keywords: ["company name", "legal name"],
+      perform: () => companyNameInputRef.current?.focus(),
+      order: 50,
+    },
+    {
+      id: "sa-company-create",
+      group: "Current Screen",
+      label: creating
+        ? "Creating company..."
+        : hasExistingCompany
+          ? "Company already created"
+          : "Create company",
+      hint: "Ctrl+S",
+      keywords: ["create company", "save company", "master"],
+      disabled: creating || hasExistingCompany,
+      perform: () => void handleCreate(),
+      order: 60,
+    },
+  ]);
 
   async function handleLookup() {
     if (!normalizedGst) {
@@ -360,6 +425,8 @@ export default function SACompanyCreate() {
                 GST Number
               </span>
               <input
+                ref={gstInputRef}
+                data-workspace-primary-focus="true"
                 value={gstNumber}
                 onChange={(event) => {
                   setGstNumber(event.target.value.toUpperCase());
@@ -402,6 +469,7 @@ export default function SACompanyCreate() {
                 Company Name
               </span>
               <input
+                ref={companyNameInputRef}
                 value={companyName}
                 onChange={(event) => setCompanyName(event.target.value)}
                 placeholder="Company legal name"

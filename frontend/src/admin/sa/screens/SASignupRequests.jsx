@@ -17,6 +17,8 @@ import {
 } from "../../../navigation/erpRovingFocus.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
+import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 
 async function readJsonSafe(response) {
   try {
@@ -103,6 +105,7 @@ export default function SASignupRequests() {
   const [actingUserId, setActingUserId] = useState("");
   const actionBarRefs = useRef([]);
   const rowActionRefs = useRef([]);
+  const searchInputRef = useRef(null);
 
   useEffect(() => {
     let alive = true;
@@ -259,6 +262,52 @@ export default function SASignupRequests() {
   const withPhoneCount = requests.filter((row) => row.phone_number).length;
   const withDesignationCount = requests.filter((row) => row.designation_hint).length;
 
+  useErpScreenCommands([
+    {
+      id: "sa-signups-refresh",
+      group: "Current Screen",
+      label: loading ? "Refreshing signup queue..." : "Refresh signup queue",
+      keywords: ["refresh", "signup", "queue", "requests"],
+      disabled: loading,
+      perform: () => void handleRefresh(),
+      order: 10,
+    },
+    {
+      id: "sa-signups-focus-search",
+      group: "Current Screen",
+      label: "Focus signup search",
+      keywords: ["search", "filter", "signup"],
+      perform: () => searchInputRef.current?.focus(),
+      order: 20,
+    },
+    {
+      id: "sa-signups-open-users",
+      group: "Current Screen",
+      label: "Open user directory",
+      keywords: ["users", "directory"],
+      perform: () => openScreen("SA_USERS"),
+      order: 30,
+    },
+    {
+      id: "sa-signups-open-control-panel",
+      group: "Current Screen",
+      label: "Open control panel",
+      keywords: ["control panel", "sa"],
+      perform: () => openScreen("SA_CONTROL_PANEL", { mode: "reset" }),
+      order: 40,
+    },
+  ]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void handleRefresh(),
+    },
+    focusSearch: {
+      perform: () => searchInputRef.current?.focus(),
+    },
+  });
+
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
       <div className="mx-auto max-w-7xl">
@@ -407,6 +456,7 @@ export default function SASignupRequests() {
           </div>
 
           <QuickFilterInput
+            inputRef={searchInputRef}
             className="mt-5"
             label="Quick Search"
             value={searchQuery}

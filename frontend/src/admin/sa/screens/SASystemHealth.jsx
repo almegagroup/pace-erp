@@ -11,6 +11,8 @@
 import { useEffect, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 
 async function readJsonSafe(response) {
   try {
@@ -169,6 +171,33 @@ export default function SASystemHealth() {
         }
       : null,
   ].filter(Boolean);
+
+  useErpScreenCommands([
+    {
+      id: "sa-system-health-refresh",
+      group: "Current Screen",
+      label: loading ? "Refreshing system health..." : "Refresh system health",
+      keywords: ["refresh", "system health", "diagnostics"],
+      disabled: loading,
+      perform: () => void handleRefresh(),
+      order: 10,
+    },
+    {
+      id: "sa-system-health-open-control-panel",
+      group: "Current Screen",
+      label: "Open control panel",
+      keywords: ["control panel", "sa"],
+      perform: () => openScreen("SA_CONTROL_PANEL", { mode: "reset" }),
+      order: 20,
+    },
+  ]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void handleRefresh(),
+    },
+  });
 
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">

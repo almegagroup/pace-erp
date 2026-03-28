@@ -19,6 +19,8 @@ import {
 } from "../../../navigation/erpRovingFocus.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import { applyQuickFilter, sortUsers } from "../../../shared/erpCollections.js";
+import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Users" },
@@ -151,6 +153,7 @@ export default function SAUsers() {
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
   const rowActionRefs = useRef([]);
+  const searchInputRef = useRef(null);
 
   useEffect(() => {
     let alive = true;
@@ -293,6 +296,10 @@ export default function SAUsers() {
       ]),
     [searchQuery, stateFilteredUsers],
   );
+  const firstScopedUser = useMemo(
+    () => filteredUsers.find((user) => canOpenScope(user)) ?? null,
+    [filteredUsers],
+  );
 
   function handleOpenScope(user) {
     if (!user?.auth_user_id) {
@@ -309,6 +316,67 @@ export default function SAUsers() {
   const privilegedCount = governableUsers.filter((user) =>
     user.role_code === "SA" || user.role_code === "GA"
   ).length;
+
+  useErpScreenCommands([
+    {
+      id: "sa-users-refresh",
+      group: "Current Screen",
+      label: loading ? "Refreshing user directory..." : "Refresh user directory",
+      keywords: ["refresh", "users", "directory"],
+      disabled: loading,
+      perform: () => void handleRefresh(),
+      order: 10,
+    },
+    {
+      id: "sa-users-focus-search",
+      group: "Current Screen",
+      label: "Focus user search",
+      keywords: ["search", "filter", "users"],
+      perform: () => searchInputRef.current?.focus(),
+      order: 20,
+    },
+    {
+      id: "sa-users-open-roles",
+      group: "Current Screen",
+      label: "Open role assignment",
+      keywords: ["roles", "role assignment"],
+      perform: () => openScreen("SA_USER_ROLES"),
+      order: 30,
+    },
+    {
+      id: "sa-users-open-signups",
+      group: "Current Screen",
+      label: "Open signup requests",
+      keywords: ["signup", "requests", "onboarding"],
+      perform: () => openScreen("SA_SIGNUP_REQUESTS"),
+      order: 40,
+    },
+    {
+      id: "sa-users-open-scope",
+      group: "Current Screen",
+      label: firstScopedUser
+        ? `Open scope for ${firstScopedUser.user_code ?? formatIdentityName(firstScopedUser)}`
+        : "Open scope for first visible ACL user",
+      keywords: ["scope", "mapping", "user scope"],
+      disabled: !firstScopedUser,
+      perform: () => {
+        if (firstScopedUser) {
+          handleOpenScope(firstScopedUser);
+        }
+      },
+      order: 50,
+    },
+  ]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void handleRefresh(),
+    },
+    focusSearch: {
+      perform: () => searchInputRef.current?.focus(),
+    },
+  });
 
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
@@ -519,6 +587,7 @@ export default function SAUsers() {
           </div>
 
           <QuickFilterInput
+            inputRef={searchInputRef}
             className="mt-5"
             label="Quick Search"
             value={searchQuery}

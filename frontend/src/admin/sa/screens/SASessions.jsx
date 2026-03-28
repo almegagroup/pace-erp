@@ -14,6 +14,8 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
+import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Sessions" },
@@ -136,6 +138,7 @@ export default function SASessions() {
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
   const rowActionRefs = useRef([]);
+  const searchInputRef = useRef(null);
 
   useEffect(() => {
     let alive = true;
@@ -259,6 +262,44 @@ export default function SASessions() {
   const revokedCount = sessions.filter((session) => session.status === "REVOKED").length;
   const idleCount = sessions.filter((session) => session.status === "IDLE").length;
   const expiredCount = sessions.filter((session) => session.status === "EXPIRED").length;
+
+  useErpScreenCommands([
+    {
+      id: "sa-sessions-refresh",
+      group: "Current Screen",
+      label: loading ? "Refreshing sessions..." : "Refresh session inventory",
+      keywords: ["refresh", "sessions", "session list"],
+      disabled: loading,
+      perform: () => void handleRefresh(),
+      order: 10,
+    },
+    {
+      id: "sa-sessions-focus-search",
+      group: "Current Screen",
+      label: "Focus session search",
+      keywords: ["search", "filter", "sessions"],
+      perform: () => searchInputRef.current?.focus(),
+      order: 20,
+    },
+    {
+      id: "sa-sessions-open-control-panel",
+      group: "Current Screen",
+      label: "Open control panel",
+      keywords: ["control panel", "sa"],
+      perform: () => openScreen("SA_CONTROL_PANEL", { mode: "reset" }),
+      order: 30,
+    },
+  ]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void handleRefresh(),
+    },
+    focusSearch: {
+      perform: () => searchInputRef.current?.focus(),
+    },
+  });
 
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
@@ -512,6 +553,7 @@ export default function SASessions() {
           </div>
 
           <QuickFilterInput
+            inputRef={searchInputRef}
             className="mt-5"
             label="Quick Search"
             value={searchQuery}
