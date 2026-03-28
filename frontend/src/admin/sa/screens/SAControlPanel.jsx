@@ -85,18 +85,18 @@ function LaunchCard({
       type="button"
       onClick={onClick}
       onKeyDown={onKeyDown}
-      className="group rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-[0_12px_34px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-[0_18px_42px_rgba(14,116,144,0.12)]"
+      className="grid w-full grid-cols-[96px_minmax(0,1fr)_110px] items-center border border-slate-300 bg-white px-3 py-3 text-left hover:bg-slate-50"
     >
-      <div className="flex items-center justify-between gap-4">
-        <span className="rounded-full bg-sky-100 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-          {badge}
-        </span>
-        <span className="text-slate-300 transition group-hover:text-sky-600">
-          {"->"}
-        </span>
-      </div>
-      <h3 className="mt-4 text-lg font-semibold text-slate-900">{title}</h3>
-      <p className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
+      <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+        {badge}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-slate-900">{title}</span>
+        <span className="mt-1 block truncate text-xs text-slate-500">{description}</span>
+      </span>
+      <span className="justify-self-end text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+        Enter Open
+      </span>
     </button>
   );
 }
@@ -107,18 +107,18 @@ function DataTableCard({ eyebrow, title, rows, columns, emptyMessage, footer }) 
   return (
     <ErpSectionCard eyebrow={eyebrow} title={title}>
       {rows.length === 0 ? (
-        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+        <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
           {emptyMessage}
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-full border-separate border-spacing-y-3">
+          <table className="min-w-full border-collapse">
             <thead>
               <tr>
                 {columns.map((column) => (
                   <th
                     key={column.key}
-                    className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500"
+                    className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
                   >
                     {column.label}
                   </th>
@@ -140,12 +140,12 @@ function DataTableCard({ eyebrow, title, rows, columns, emptyMessage, footer }) 
                       orientation: "vertical",
                     })
                   }
-                  className="bg-slate-50"
+                  className="border-b border-slate-200 bg-white"
                 >
                   {columns.map((column) => (
                     <td
                       key={column.key}
-                      className="rounded-none px-4 py-3 text-sm text-slate-700 first:rounded-l-2xl last:rounded-r-2xl"
+                      className="px-3 py-2 text-sm text-slate-700"
                     >
                       {column.render(row)}
                     </td>
@@ -545,7 +545,7 @@ export default function SAControlPanel() {
             title="Access Projection Status"
           >
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="rounded-3xl bg-slate-50 px-5 py-4">
+              <div className="border border-slate-200 bg-white px-4 py-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                   ACL Snapshot
                 </p>
@@ -553,7 +553,7 @@ export default function SAControlPanel() {
                   {loading ? "..." : health?.acl_snapshot_status ?? "N/A"}
                 </p>
               </div>
-              <div className="rounded-3xl bg-slate-50 px-5 py-4">
+              <div className="border border-slate-200 bg-white px-4 py-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                   Menu Snapshot
                 </p>
@@ -570,9 +570,9 @@ export default function SAControlPanel() {
         <ErpSectionCard
           eyebrow="Quick Launch"
           title="Open the next SA workspace"
-          description="The launch grid is now the primary working target for keyboard-first control-plane movement."
+          description="The launch list is now the primary working target for keyboard-first control-plane movement."
         >
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-2">
             {quickLaunch.map((action, index) => (
               <LaunchCard
                 key={action.title}
@@ -600,14 +600,14 @@ export default function SAControlPanel() {
           eyebrow="Build Program"
           title="Next governance waves"
         >
-          <div className="space-y-3">
+          <div className="space-y-2">
             {launchSummary.map((item) => (
               <div
                 key={item}
-                className="flex items-center justify-between gap-4 rounded-2xl bg-slate-50 px-4 py-3"
+                className="flex items-center justify-between gap-4 border border-slate-200 bg-white px-3 py-2"
               >
                 <p className="text-sm font-medium text-slate-700">{item}</p>
-                <span className="rounded-full bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                   Live
                 </span>
               </div>

@@ -368,10 +368,10 @@ export default function SASessions() {
                 orientation: "horizontal",
               })
             }
-            className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+            className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
               filter === option.key
-                ? "bg-sky-600 text-white"
-                : "bg-slate-100 text-slate-600"
+                ? "border-sky-400 bg-sky-50 text-sky-900"
+                : "border-slate-300 bg-white text-slate-600"
             }`}
           >
             {option.label}
@@ -398,46 +398,46 @@ export default function SASessions() {
       : `${filteredSessions.length} visible session${filteredSessions.length === 1 ? "" : "s"}`,
     children:
       filteredSessions.length === 0 ? (
-        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+        <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
           {loading
             ? "Loading session inventory..."
             : "No sessions match the selected filter right now."}
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-full border-separate border-spacing-y-3">
+          <table className="min-w-full border-collapse">
             <thead>
               <tr>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Session
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   ERP User
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Status
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Created
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Last Seen
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Expires
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Revoked
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Action
                 </th>
               </tr>
             </thead>
             <tbody>
               {filteredSessions.map((session, index) => (
-                <tr key={session.session_id} className="bg-slate-50">
-                  <td className="rounded-l-2xl px-4 py-3 text-sm text-slate-700">
+                <tr key={session.session_id} className="border-b border-slate-200 bg-white">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     <div>
                       <p className="font-medium text-slate-900">
                         {shortId(session.session_id)}
@@ -447,7 +447,7 @@ export default function SASessions() {
                       </p>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     <div>
                       <p className="font-medium text-slate-900">
                         {formatSessionIdentity(session)}
@@ -460,26 +460,26 @@ export default function SASessions() {
                       </p>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     <span
-                      className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${getStatusTone(session.status)}`}
+                      className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStatusTone(session.status)}`}
                     >
                       {session.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     {formatDateTime(session.created_at)}
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     {formatDateTime(session.last_seen_at)}
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     {formatDateTime(session.expires_at)}
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     {formatDateTime(session.revoked_at)}
                   </td>
-                  <td className="rounded-r-2xl px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     {session.status === "ACTIVE" ? (
                       <button
                         ref={(element) => {
@@ -495,7 +495,7 @@ export default function SASessions() {
                             orientation: "vertical",
                           })
                         }
-                        className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="border border-rose-300 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {revokingSessionId === session.session_id
                           ? "Revoking..."

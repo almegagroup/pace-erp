@@ -457,32 +457,33 @@ export default function SACompanyCreate() {
     <ErpEntryFormTemplate
       eyebrow="SA Company Governance"
       title="Create Business Company"
-      description="This keyboard-native entry form keeps GST lookup, company identity review, and final create action in one deterministic flow."
+      description="This worksheet keeps GST lookup, company identity review, and final create action in one direct keyboard path."
       actions={topActions}
       notices={notices}
       metrics={metrics}
       formEyebrow="Entry Form"
       formTitle="GST-driven company setup"
-      formDescription="The operator starts at GST, resolves identity, confirms the canonical company name, and finishes with a direct save path. Focus ownership stays inside the form until the create decision is complete."
+      formDescription="Start at GST, confirm the canonical company name, then save directly without leaving the worksheet flow."
       formContent={(
-        <div ref={formContainerRef} className="grid gap-5">
+        <div ref={formContainerRef} className="grid gap-3">
           <div
             data-erp-form-section="true"
-            className="rounded-[24px] border border-white/8 bg-black/10 px-5 py-5"
+            className="border border-slate-300 bg-white"
           >
-            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-              Section 1
-            </p>
-            <h3 className="mt-2 text-lg font-semibold text-white">
-              Resolve GST identity
-            </h3>
-            <p className="mt-2 text-sm leading-7 text-slate-300">
-              Start with GST. The backend reads cache first, calls Applyflow only
-              when the cache misses, and hydrates the right-hand review rail.
-            </p>
+            <div className="border-b border-slate-300 bg-[#eef4fb] px-4 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+                Section 1
+              </p>
+              <h3 className="mt-1 text-base font-semibold text-slate-900">
+                Resolve GST identity
+              </h3>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                Start with GST. The backend reads cache first, then calls Applyflow only when the cache misses.
+              </p>
+            </div>
 
-            <label className="mt-5 block">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+            <label className="grid gap-2 bg-white px-4 py-3">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                 GST Number
               </span>
               <input
@@ -504,46 +505,47 @@ export default function SACompanyCreate() {
                   }
                 }}
                 placeholder="29ABCDE1234F1Z5"
-                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
+                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
               />
             </label>
 
-            <div className="mt-4 flex flex-wrap gap-3">
+            <div className="flex flex-wrap items-center gap-3 border-t border-slate-300 bg-slate-50 px-4 py-2">
               <button
                 type="button"
                 disabled={lookingUp}
                 onClick={() => void handleLookup()}
-                className={`rounded-2xl px-4 py-3 text-sm font-semibold ${
+                className={`border px-3 py-2 text-sm font-semibold ${
                   lookingUp
-                    ? "cursor-not-allowed border border-white/6 bg-white/[0.04] text-slate-500"
-                    : "border border-emerald-400/30 bg-emerald-400/12 text-emerald-50"
+                    ? "cursor-not-allowed border-slate-300 bg-slate-100 text-slate-400"
+                    : "border-sky-300 bg-sky-50 text-sky-900 hover:bg-sky-100"
                 }`}
               >
                 {lookingUp ? "Checking GST..." : "Check GST Profile"}
               </button>
-              <span className="self-center text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Enter = Check GST | Alt+PageDown = Next Section
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Enter Check GST | Alt+PageDown Next Section
               </span>
             </div>
           </div>
 
           <div
             data-erp-form-section="true"
-            className="rounded-[24px] border border-white/8 bg-black/10 px-5 py-5"
+            className="border border-slate-300 bg-white"
           >
-            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-              Section 2
-            </p>
-            <h3 className="mt-2 text-lg font-semibold text-white">
-              Confirm the ERP company name
-            </h3>
-            <p className="mt-2 text-sm leading-7 text-slate-300">
-              After GST resolution, adjust the canonical company name if needed.
-              Use Ctrl+S to create once the review rail looks correct.
-            </p>
+            <div className="border-b border-slate-300 bg-[#eef4fb] px-4 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+                Section 2
+              </p>
+              <h3 className="mt-1 text-base font-semibold text-slate-900">
+                Confirm the ERP company name
+              </h3>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                After GST resolution, adjust the canonical company name if needed and save with Ctrl+S.
+              </p>
+            </div>
 
-            <label className="mt-5 block">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+            <label className="grid gap-2 bg-white px-4 py-3">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                 Company Name
               </span>
               <input
@@ -552,12 +554,12 @@ export default function SACompanyCreate() {
                 value={companyName}
                 onChange={(event) => setCompanyName(event.target.value)}
                 placeholder="Company legal name"
-                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
+                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
               />
             </label>
 
-            <div className="mt-5 grid gap-3 rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-5 py-5 text-sm leading-7 text-slate-300">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
+            <div className="grid gap-2 border-t border-slate-300 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                 Dense-form rules on this screen:
               </p>
               <p>

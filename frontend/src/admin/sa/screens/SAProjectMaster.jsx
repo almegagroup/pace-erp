@@ -344,9 +344,9 @@ export default function SAProjectMaster() {
       formTitle="Create a new project"
       formDescription="The backend binds the new project to the current company context automatically."
       formContent={
-        <div ref={formContainerRef} className="space-y-5">
-          <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+        <div ref={formContainerRef} className="grid gap-3">
+          <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
               Project Name
             </span>
             <input
@@ -357,9 +357,9 @@ export default function SAProjectMaster() {
               value={projectName}
               onChange={(event) => setProjectName(event.target.value)}
               placeholder="Project name"
-              className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
             />
-            <p className="mt-2 text-xs uppercase tracking-[0.14em] text-slate-500">
+            <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
               Enter moves forward | Ctrl+S creates the project
             </p>
           </label>
@@ -399,7 +399,7 @@ export default function SAProjectMaster() {
                   ? `Status ${recentProject.status ?? "ACTIVE"}`
                   : "Create a project to populate this preview."
               }
-              tone={recentProject ? "success" : "white"}
+              tone={recentProject ? "success" : "default"}
             />
           </ErpSectionCard>
         </>
@@ -415,15 +415,15 @@ export default function SAProjectMaster() {
           description="The list below comes from the current company-scoped project master endpoint."
         >
           {loading ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
               Loading project master rows.
             </div>
           ) : filteredProjects.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
               No project matches the current filter.
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-0 border border-slate-300">
               {filteredProjects.map((project, index) => (
                 <button
                   key={project.id}
@@ -438,7 +438,7 @@ export default function SAProjectMaster() {
                       orientation: "vertical",
                     })
                   }
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-left text-sm text-slate-700 transition focus:border-sky-300 focus:bg-white"
+                  className="w-full border-b border-slate-300 bg-white px-4 py-3 text-left text-sm text-slate-700 transition last:border-b-0 focus:bg-sky-50"
                 >
                   <span className="block font-semibold text-slate-900">
                     {project.project_code} - {project.project_name}

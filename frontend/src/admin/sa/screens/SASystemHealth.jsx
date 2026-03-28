@@ -315,7 +315,7 @@ export default function SASystemHealth() {
         description="Use these operator notes as the immediate response rail after checking the live health metrics above."
       >
         <div className="grid gap-4 lg:grid-cols-3">
-          <div className="rounded-3xl bg-slate-50 px-5 py-5">
+          <div className="border border-slate-300 bg-white px-4 py-3">
             <p className="text-sm font-semibold text-slate-900">
               If Database is DOWN
             </p>
@@ -323,7 +323,7 @@ export default function SASystemHealth() {
               Treat this as operationally urgent. Avoid provisioning new governance actions until the core runtime is stable again.
             </p>
           </div>
-          <div className="rounded-3xl bg-slate-50 px-5 py-5">
+          <div className="border border-slate-300 bg-white px-4 py-3">
             <p className="text-sm font-semibold text-slate-900">
               If ACL Snapshot is UNAVAILABLE
             </p>
@@ -331,7 +331,7 @@ export default function SASystemHealth() {
               Review access-governance inputs and upcoming ACL administration surfaces before expanding user scope.
             </p>
           </div>
-          <div className="rounded-3xl bg-slate-50 px-5 py-5">
+          <div className="border border-slate-300 bg-white px-4 py-3">
             <p className="text-sm font-semibold text-slate-900">
               If Menu Snapshot is UNAVAILABLE
             </p>

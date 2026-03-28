@@ -46,7 +46,7 @@ export default function ErpEntryFormTemplate({
       metrics={metrics}
       footerHints={footerHints}
     >
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.18fr)_360px]">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.3fr)_320px]">
         <div className="grid gap-4">
           <ErpSectionCard
             eyebrow={formEyebrow}
@@ -61,11 +61,11 @@ export default function ErpEntryFormTemplate({
         </div>
 
         <ErpSectionCard
-          eyebrow="Review Rail"
+          eyebrow="Reference Rail"
           title="Live Review Context"
-          description="The right rail stays visible while the operator advances through the form, so validation never requires mouse travel."
+          description="Reference values stay fixed on the right while the operator moves down the worksheet."
         >
-          <div className="grid gap-4">{sideContent}</div>
+          <div className="grid gap-2">{sideContent}</div>
         </ErpSectionCard>
       </div>
     </ErpScreenScaffold>

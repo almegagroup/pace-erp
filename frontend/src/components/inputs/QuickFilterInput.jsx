@@ -21,7 +21,7 @@ export default function QuickFilterInput({
 }) {
   return (
     <label className={`block ${className}`.trim()}>
-      <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
         {label}
       </span>
       <input
@@ -30,11 +30,11 @@ export default function QuickFilterInput({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
+        className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
         {...inputProps}
       />
       {hint ? (
-        <p className="mt-2 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+        <p className="mt-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">
           {hint}
         </p>
       ) : null}

@@ -92,22 +92,20 @@ function HomeActionCard({
           gridRefs: gridRefs.current,
         })
       }
-      className="group rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-[0_12px_34px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-[0_18px_42px_rgba(14,116,144,0.12)]"
+      className="grid w-full grid-cols-[96px_minmax(0,1fr)_110px] items-center border border-slate-300 bg-white px-3 py-3 text-left hover:bg-slate-50"
     >
-      <div className="flex items-center justify-between gap-4">
-        <span className="rounded-full bg-sky-100 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-          {action.badge}
+      <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+        {action.badge}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-slate-900">{action.title}</span>
+        <span className="mt-1 block truncate text-xs text-slate-500">
+          {action.description}
         </span>
-        <span className="text-slate-300 transition group-hover:text-sky-600">
-          {"->"}
-        </span>
-      </div>
-      <h3 className="mt-4 text-lg font-semibold text-slate-900">
-        {action.title}
-      </h3>
-      <p className="mt-2 text-sm leading-6 text-slate-600">
-        {action.description}
-      </p>
+      </span>
+      <span className="justify-self-end text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+        Enter Open
+      </span>
     </button>
   );
 }
@@ -318,7 +316,7 @@ export default function SAHome() {
     <ErpScreenScaffold
       eyebrow="Super Admin Command"
       title="Super Admin Dashboard"
-      description="This entry surface now follows the same keyboard-native grammar as the rest of the SA control plane, with deterministic launch paths into the next governed workspace."
+      description="Dense launch surface for Super Admin work. Pick the next governance job directly from the launch list without mouse travel."
       actions={topActions}
       notices={
         error
@@ -336,9 +334,9 @@ export default function SAHome() {
       <ErpSectionCard
         eyebrow="Launch Rail"
         title="Open the next SA workspace"
-        description="Use the first-card focus rail with arrows, Enter, or the command bar to move straight into the next governance job."
+        description="Use arrows, Enter, or the command bar to move straight into the next governance job."
       >
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-2">
           {launchActions.map((action, index) => (
             <HomeActionCard
               key={action.title}
@@ -353,24 +351,20 @@ export default function SAHome() {
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <ErpSectionCard
           eyebrow="Operating Pattern"
-          title="Keyboard-first shell notes"
-          description="This dashboard no longer acts as a passive landing page. It is a working launch surface."
+          title="Keyboard Operation"
+          description="This page is a worksheet-style launcher, not a poster dashboard."
         >
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-3xl bg-slate-50 px-5 py-5">
-              <p className="text-sm font-semibold text-slate-900">
-                Alt+Shift+P
-              </p>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                Returns focus to the launch rail so you can move card-to-card without a mouse.
+          <div className="grid gap-2">
+            <div className="grid grid-cols-[140px_minmax(0,1fr)] border border-slate-200 bg-white px-3 py-3">
+              <p className="text-sm font-semibold text-slate-900">Alt+Shift+P</p>
+              <p className="text-sm text-slate-600">
+                Returns focus to the launch list.
               </p>
             </div>
-            <div className="rounded-3xl bg-slate-50 px-5 py-5">
-              <p className="text-sm font-semibold text-slate-900">
-                Alt+R
-              </p>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                Reloads the control-plane snapshot without leaving the shell.
+            <div className="grid grid-cols-[140px_minmax(0,1fr)] border border-slate-200 bg-white px-3 py-3">
+              <p className="text-sm font-semibold text-slate-900">Alt+R</p>
+              <p className="text-sm text-slate-600">
+                Reloads the snapshot without leaving the shell.
               </p>
             </div>
           </div>
@@ -381,7 +375,7 @@ export default function SAHome() {
           title="Current readiness view"
           description="These figures are derived from the same backend-owned admin projections used by the deeper SA surfaces."
         >
-          <div className="space-y-3">
+          <div className="grid gap-2">
             {[
               `System health: ${deriveSnapshotHealth(systemHealth)}`,
               `Database: ${systemHealth?.db_status ?? "Loading"}`,
@@ -390,7 +384,7 @@ export default function SAHome() {
             ].map((item) => (
               <div
                 key={item}
-                className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700"
+                className="border border-slate-200 bg-white px-3 py-3 text-sm text-slate-700"
               >
                 {item}
               </div>

@@ -1911,6 +1911,65 @@ not only technically wrapped by the new shell.
 Next step:
 Continue the same visible rebuild pass across the remaining SA and non-SA operational screens until the old admin-card grammar is fully eliminated
 
+## Entry 033
+
+Date:
+2026-03-29
+
+Roadmap step:
+Keyboard-Native UI Phase - SAP/Tally-style stacked workspace rollout across remaining SA list and diagnostics screens
+
+Status:
+COMPLETED
+
+What was done:
+- split the protected shell more aggressively into launcher mode and active-workspace mode so pushed pages now consume the main work area instead of visually competing with the dashboard
+- flattened the shared quick-filter, approval-review, and report/filter templates so search rails and secondary panels no longer read like leftover admin cards
+- migrated additional SA list and diagnostics surfaces into the lighter worksheet grammar:
+  audit,
+  sessions,
+  signup requests,
+  system health,
+  user directory,
+  role assignment,
+  and project master
+- replaced rounded card rows and soft pills with border-ledger tables,
+  thinner action controls,
+  flatter badges,
+  and denser full-width work surfaces
+
+What changed in repo:
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/components/inputs/QuickFilterInput.jsx
+- frontend/src/components/templates/ErpApprovalReviewTemplate.jsx
+- frontend/src/components/templates/ErpReportFilterTemplate.jsx
+- frontend/src/admin/sa/screens/SAAudit.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SASystemHealth.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- frontend/src/admin/sa/screens/SAProjectMaster.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend build completed successfully
+- frontend lint completed successfully
+- active pages now enter a more SAP/Tally-like stacked work mode with stable side controls and broader central canvas
+
+Problems or blockers:
+- some remaining governance/editor surfaces still need the same flatter worksheet pass
+- non-SA universes have not yet been migrated through the same sequence
+
+Decision or note:
+The rebuild direction is now explicitly launcher-versus-workspace,
+not dashboard-plus-page at the same time.
+That stack behavior must remain the default as the rest of the ERP screens are migrated.
+
+Next step:
+Carry the same flattened full-workspace pass into the remaining governance/editor screens,
+then continue the sequence into non-SA modules on the same shared shell and template grammar
+
 # 6. Initial Program Entry
 
 Date:

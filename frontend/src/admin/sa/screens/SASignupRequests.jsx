@@ -375,7 +375,7 @@ export default function SASignupRequests() {
     description:
       "This screen consumes the pending queue and sends decisions to the existing atomic backend authority. Approval creates the ERP user lifecycle through the DB-owned function, while rejection closes the request without frontend-owned mutation logic.",
     aside: (
-      <span className="rounded-full bg-sky-100 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+      <span className="border border-sky-200 bg-sky-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
         Gate 4 Intake
       </span>
     ),
@@ -385,7 +385,7 @@ export default function SASignupRequests() {
     eyebrow: "Review Queue",
     title: "Pending ERP Onboarding Intake",
     aside: (
-      <span className="rounded-full bg-slate-100 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-600">
+      <span className="border border-slate-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-600">
         {loading ? "Loading" : `${filteredRequests.length} Visible`}
       </span>
     ),
@@ -409,37 +409,37 @@ export default function SASignupRequests() {
       ? "Refreshing onboarding queue"
       : `${filteredRequests.length} visible request${filteredRequests.length === 1 ? "" : "s"}`,
     children: loading ? (
-      <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+      <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
         Loading pending signup requests from the onboarding queue.
       </div>
     ) : filteredRequests.length === 0 ? (
-      <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+      <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
         There are no pending signup requests matching the current filter right now.
       </div>
     ) : (
       <div className="overflow-x-auto">
-        <table className="min-w-full border-separate border-spacing-y-3">
+        <table className="min-w-full border-collapse">
           <thead>
             <tr>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Requester
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Company
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Designation
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Contact
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Submitted
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Lifecycle
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Actions
               </th>
             </tr>
@@ -449,8 +449,8 @@ export default function SASignupRequests() {
               const isActing = actingUserId === request.auth_user_id;
 
               return (
-                <tr key={request.auth_user_id} className="bg-slate-50 align-top">
-                  <td className="rounded-none px-4 py-4 text-sm text-slate-700 first:rounded-l-2xl">
+                <tr key={request.auth_user_id} className="border-b border-slate-200 bg-white align-top">
+                  <td className="px-3 py-3 text-sm text-slate-700">
                     <div className="font-semibold text-slate-900">
                       {request.name ?? "Unnamed Request"}
                     </div>
@@ -458,24 +458,24 @@ export default function SASignupRequests() {
                       Auth {shortId(request.auth_user_id)}
                     </div>
                   </td>
-                  <td className="px-4 py-4 text-sm text-slate-700">
+                  <td className="px-3 py-3 text-sm text-slate-700">
                     {request.parent_company_name ?? "Not Provided"}
                   </td>
-                  <td className="px-4 py-4 text-sm text-slate-700">
+                  <td className="px-3 py-3 text-sm text-slate-700">
                     {request.designation_hint ?? "Not Provided"}
                   </td>
-                  <td className="px-4 py-4 text-sm text-slate-700">
+                  <td className="px-3 py-3 text-sm text-slate-700">
                     {request.phone_number ?? "Not Provided"}
                   </td>
-                  <td className="px-4 py-4 text-sm text-slate-700">
+                  <td className="px-3 py-3 text-sm text-slate-700">
                     {formatDateTime(request.submitted_at)}
                   </td>
-                  <td className="px-4 py-4 text-sm text-slate-700">
-                    <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-700">
+                  <td className="px-3 py-3 text-sm text-slate-700">
+                    <span className="inline-flex border border-slate-300 bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700">
                       {formatLifecycleState(request.user_state)}
                     </span>
                   </td>
-                  <td className="rounded-none px-4 py-4 text-sm text-slate-700 last:rounded-r-2xl">
+                  <td className="px-3 py-3 text-sm text-slate-700">
                     <div className="flex flex-wrap gap-2">
                       <button
                         ref={(element) => {
@@ -494,7 +494,7 @@ export default function SASignupRequests() {
                             gridRefs: rowActionRefs.current,
                           })
                         }
-                        className={`rounded-2xl bg-emerald-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700 ${
+                        className={`border border-emerald-300 bg-emerald-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700 ${
                           isActing ? "cursor-not-allowed opacity-60" : ""
                         }`}
                       >
@@ -517,7 +517,7 @@ export default function SASignupRequests() {
                             gridRefs: rowActionRefs.current,
                           })
                         }
-                        className={`rounded-2xl bg-rose-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-700 ${
+                        className={`border border-rose-300 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700 ${
                           isActing ? "cursor-not-allowed opacity-60" : ""
                         }`}
                       >

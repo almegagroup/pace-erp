@@ -4,7 +4,7 @@
  * Gate: 7
  * Phase: 7
  * Domain: FRONT
- * Purpose: Render the protected ERP shell using fixed keyboard-native menu, action, and work zones
+ * Purpose: Render the protected ERP shell using a dense SAP/Tally-style keyboard workspace grammar
  * Authority: Frontend
  */
 
@@ -13,6 +13,7 @@ import { Outlet, useLocation } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import {
   getScreenForRoute,
+  getPreviousScreen,
   getStackDepth,
   openRoute,
   popScreen,
@@ -33,42 +34,16 @@ import {
   unsubscribeClusterAdmission,
 } from "../store/sessionCluster.js";
 import { subscribeWorkspaceFocusCommands } from "../navigation/workspaceFocusBus.js";
-import ErpCommandPalette from "../components/ErpCommandPalette.jsx";
 import { subscribeRegisteredScreenCommands } from "../store/erpCommandPalette.js";
 import { subscribeRegisteredScreenHotkeys } from "../store/erpScreenHotkeys.js";
+import ErpCommandPalette from "../components/ErpCommandPalette.jsx";
 
 const WORKSPACE_ZONES = Object.freeze(["menu", "actions", "content"]);
-const SHORTCUT_GUIDE = Object.freeze([
-  "Ctrl+K Command Bar",
-  "Ctrl+S Save",
-  "Alt+R Refresh",
-  "Alt+Shift+F Search",
-  "Alt+Shift+P Primary Focus",
-  "Alt+M Menu Zone",
-  "Alt+A Action Rail",
-  "Alt+C Work Canvas",
-  "Alt+H Home",
-  "Alt+L Lock",
-  "Ctrl+Shift+L Logout",
-  "Esc Back",
-]);
 const SCREEN_HOTKEY_LABELS = Object.freeze({
-  save: {
-    key: "Ctrl+S",
-    label: "Save current work",
-  },
-  refresh: {
-    key: "Alt+R",
-    label: "Refresh current surface",
-  },
-  focusSearch: {
-    key: "Alt+Shift+F",
-    label: "Focus search or filter target",
-  },
-  focusPrimary: {
-    key: "Alt+Shift+P",
-    label: "Focus primary work target",
-  },
+  save: { key: "Ctrl+S", label: "Save" },
+  refresh: { key: "Alt+R", label: "Refresh" },
+  focusSearch: { key: "Alt+Shift+F", label: "Search" },
+  focusPrimary: { key: "Alt+Shift+P", label: "Primary" },
 });
 
 function focusElement(element) {
@@ -126,25 +101,14 @@ function findFirstFocusableWithin(container) {
 function getClusterWindowErrorMessage(code) {
   switch (code) {
     case "SESSION_CLUSTER_WINDOW_POPUP_BLOCKED":
-      return "Browser blocked the new ERP window. Allow popups for this site and try again.";
-    case "SESSION_CLUSTER_OPEN_WINDOW_BLOCKED":
-    case "SESSION_CLUSTER_OPEN_WINDOW_FAILED":
-      return "Unable to open a new ERP window right now. Please try again.";
+      return "Allow popups to open the new ERP window.";
     case "SESSION_CLUSTER_ADMISSION_LIMIT_REACHED":
     case "SESSION_CLUSTER_OPEN_WINDOW_MAX_REACHED":
     case "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED":
-      return "Maximum 3 ERP windows are already open for this session.";
-    case "SESSION_CLUSTER_WINDOW_NAVIGATION_FAILED":
-      return "A new window opened, but navigation into the ERP workspace failed.";
+      return "Maximum 3 ERP windows are already open.";
     default:
       return "Unable to open a new ERP window right now.";
   }
-}
-
-function getZoneShellClass(active, zone) {
-  return active === zone
-    ? "border-emerald-400/70 shadow-[0_0_0_1px_rgba(52,211,153,0.22)]"
-    : "border-white/8";
 }
 
 function formatScreenTitle(screenCode) {
@@ -152,6 +116,10 @@ function formatScreenTitle(screenCode) {
     .split("_")
     .map((part) => part.charAt(0) + part.slice(1).toLowerCase())
     .join(" ");
+}
+
+function zoneBorder(activeZone, zone) {
+  return activeZone === zone ? "border-sky-500" : "border-slate-300";
 }
 
 export default function MenuShell() {
@@ -177,6 +145,7 @@ export default function MenuShell() {
     () => menu.findIndex((item) => item.route_path === location.pathname),
     [location.pathname, menu]
   );
+
   const resolvedMenuFocusIndex =
     menuFocusIndex >= 0 && menuFocusIndex < menu.length
       ? menuFocusIndex
@@ -197,6 +166,7 @@ export default function MenuShell() {
 
     return "Workspace";
   }, [location.pathname, menu]);
+
   const activeScreenCommands = useMemo(
     () =>
       (screenCommandRegistry.get(location.pathname) ?? [])
@@ -204,6 +174,7 @@ export default function MenuShell() {
         .sort((left, right) => (left.order ?? 0) - (right.order ?? 0)),
     [location.pathname, screenCommandRegistry]
   );
+
   const activeScreenHotkeys = useMemo(() => {
     const routeHotkeys = screenHotkeyRegistry.get(location.pathname) ?? {};
 
@@ -223,6 +194,9 @@ export default function MenuShell() {
       })
       .filter(Boolean);
   }, [location.pathname, screenHotkeyRegistry]);
+
+  const previousScreen = getPreviousScreen();
+  const workspaceMode = stackDepth > 1;
 
   useEffect(() => {
     document.body.dataset.workspaceMode = "protected";
@@ -281,7 +255,7 @@ export default function MenuShell() {
 
     const timeoutId = window.setTimeout(() => {
       setClusterWindowMessage("");
-    }, 5000);
+    }, 4000);
 
     return () => window.clearTimeout(timeoutId);
   }, [clusterWindowMessage]);
@@ -352,7 +326,6 @@ export default function MenuShell() {
 
   function handleMenuRoute(routePath) {
     if (!getScreenForRoute(routePath)) {
-      console.warn(`[NAVIGATION_ROUTE_MISSING] ${routePath}`);
       return;
     }
 
@@ -386,6 +359,7 @@ export default function MenuShell() {
       : location.pathname.startsWith("/ga")
         ? "/ga/home"
         : "/dashboard";
+
     const pendingWindow = openPendingClusterWindow();
 
     if (!pendingWindow) {
@@ -395,48 +369,24 @@ export default function MenuShell() {
       return;
     }
 
-    setClusterWindowMessage("");
-
     const result = await requestOpenClusterWindow(homePath, {
       openedWindow: pendingWindow,
     });
 
     if (!result.ok) {
       setClusterWindowMessage(getClusterWindowErrorMessage(result.code));
-      console.error("SESSION_CLUSTER_OPEN_WINDOW_FAILED", result.code);
     }
   }
 
   useEffect(() => {
     const unsubscribe = subscribeWorkspaceFocusCommands((command) => {
-      if (command === "GO_HOME") {
-        handleGoHome();
-      }
-
-      if (command === "FOCUS_MENU_ZONE") {
-        focusZone("menu");
-      }
-
-      if (command === "FOCUS_ACTIONS_ZONE") {
-        focusZone("actions");
-      }
-
-      if (command === "FOCUS_CONTENT_ZONE") {
-        focusZone("content");
-      }
-
-      if (command === "OPEN_NEW_WINDOW") {
-        void handleOpenNewWindow();
-      }
-
-      if (command === "FOCUS_NEXT_ZONE") {
-        cycleZoneFocus(1);
-      }
-
-      if (command === "FOCUS_PREVIOUS_ZONE") {
-        cycleZoneFocus(-1);
-      }
-
+      if (command === "GO_HOME") handleGoHome();
+      if (command === "FOCUS_MENU_ZONE") focusZone("menu");
+      if (command === "FOCUS_ACTIONS_ZONE") focusZone("actions");
+      if (command === "FOCUS_CONTENT_ZONE") focusZone("content");
+      if (command === "OPEN_NEW_WINDOW") void handleOpenNewWindow();
+      if (command === "FOCUS_NEXT_ZONE") cycleZoneFocus(1);
+      if (command === "FOCUS_PREVIOUS_ZONE") cycleZoneFocus(-1);
       if (command === "TOGGLE_SHORTCUT_HELP") {
         setShowKeyboardHelp((current) => !current);
       }
@@ -459,19 +409,6 @@ export default function MenuShell() {
       setMenuFocusIndex(nextIndex);
       moveFocus(menuButtonRefs.current, nextIndex);
     }
-
-    if (event.key === "Home") {
-      event.preventDefault();
-      setMenuFocusIndex(0);
-      moveFocus(menuButtonRefs.current, 0);
-    }
-
-    if (event.key === "End") {
-      event.preventDefault();
-      const nextIndex = menu.length - 1;
-      setMenuFocusIndex(nextIndex);
-      moveFocus(menuButtonRefs.current, nextIndex);
-    }
   }
 
   function handleActionKeyDown(event, index) {
@@ -486,69 +423,27 @@ export default function MenuShell() {
       event.preventDefault();
       moveFocus(actionButtonRefs.current, index <= 0 ? maxIndex : index - 1);
     }
-
-    if (event.key === "Home") {
-      event.preventDefault();
-      moveFocus(actionButtonRefs.current, 0);
-    }
-
-    if (event.key === "End") {
-      event.preventDefault();
-      moveFocus(actionButtonRefs.current, maxIndex);
-    }
   }
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-[#061017] text-sm uppercase tracking-[0.24em] text-slate-400">
-        Loading governed workspace
+      <div className="flex h-screen items-center justify-center bg-[#f0f4f8] text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">
+        Loading workspace
       </div>
     );
   }
 
   const shellActions = [
+    { label: "Esc", title: stackDepth <= 1 ? "Logout" : "Back", onClick: () => void handleBack() },
+    { label: "Alt+H", title: "Home", onClick: handleGoHome },
     {
-      label: stackDepth <= 1 ? "Logout Flow" : "Back",
-      hint: "Esc",
-      onClick: () => void handleBack(),
-      tone: "warning",
-    },
-    {
-      label: "Home",
-      hint: "Alt+H",
-      onClick: handleGoHome,
-      tone: "primary",
-    },
-    {
-      label: collapsed ? "Expand Menu" : "Collapse Menu",
-      hint: collapsed ? "Ctrl+Right" : "Ctrl+Left",
+      label: collapsed ? "Ctrl+Right" : "Ctrl+Left",
+      title: collapsed ? "Expand" : "Collapse",
       onClick: () => toggleSidebarCollapsed(),
-      tone: "neutral",
     },
-    {
-      label: "New Window",
-      hint: "Shift+F8",
-      onClick: () => void handleOpenNewWindow(),
-      tone: "neutral",
-    },
-    {
-      label: "Lock",
-      hint: "Alt+L",
-      onClick: handleLockWorkspace,
-      tone: "neutral",
-    },
-    {
-      label: showKeyboardHelp ? "Hide Help" : "Show Help",
-      hint: "?",
-      onClick: () => setShowKeyboardHelp((current) => !current),
-      tone: "neutral",
-    },
-    {
-      label: "Logout",
-      hint: "Ctrl+Shift+L",
-      onClick: () => void handleLogout(),
-      tone: "danger",
-    },
+    { label: "Shift+F8", title: "Window", onClick: () => void handleOpenNewWindow() },
+    { label: "Alt+L", title: "Lock", onClick: handleLockWorkspace },
+    { label: "Ctrl+Shift+L", title: "Logout", onClick: () => void handleLogout() },
   ];
 
   const shellCommands = [
@@ -566,25 +461,16 @@ export default function MenuShell() {
       group: "Shell",
       label: "Go to dashboard home",
       hint: "Alt+H",
-      keywords: ["home", "dashboard", "start"],
+      keywords: ["home", "dashboard"],
       perform: handleGoHome,
       order: 20,
-    },
-    {
-      id: "shell-toggle-menu",
-      group: "Shell",
-      label: collapsed ? "Expand menu zone" : "Collapse menu zone",
-      hint: collapsed ? "Ctrl+Right" : "Ctrl+Left",
-      keywords: ["sidebar", "menu", "collapse", "expand"],
-      perform: () => toggleSidebarCollapsed(),
-      order: 25,
     },
     {
       id: "shell-window",
       group: "Shell",
       label: "Open new ERP window",
       hint: "Shift+F8",
-      keywords: ["new window", "side by side", "cluster"],
+      keywords: ["new window", "cluster"],
       perform: () => void handleOpenNewWindow(),
       order: 30,
     },
@@ -593,7 +479,7 @@ export default function MenuShell() {
       group: "Shell",
       label: "Lock workspace",
       hint: "Alt+L",
-      keywords: ["lock", "secure", "pause"],
+      keywords: ["lock"],
       perform: handleLockWorkspace,
       order: 40,
     },
@@ -602,7 +488,7 @@ export default function MenuShell() {
       group: "Shell",
       label: "Open logout confirmation",
       hint: "Ctrl+Shift+L",
-      keywords: ["logout", "sign out", "session"],
+      keywords: ["logout", "sign out"],
       perform: () => void handleLogout(),
       order: 50,
     },
@@ -611,7 +497,7 @@ export default function MenuShell() {
       group: "Focus",
       label: "Focus menu zone",
       hint: "Alt+M",
-      keywords: ["focus", "zone", "menu"],
+      keywords: ["menu"],
       perform: () => focusZone("menu"),
       order: 60,
     },
@@ -620,7 +506,7 @@ export default function MenuShell() {
       group: "Focus",
       label: "Focus action rail",
       hint: "Alt+A",
-      keywords: ["focus", "actions", "rail"],
+      keywords: ["actions"],
       perform: () => focusZone("actions"),
       order: 70,
     },
@@ -629,18 +515,9 @@ export default function MenuShell() {
       group: "Focus",
       label: "Focus active work canvas",
       hint: "Alt+C",
-      keywords: ["focus", "content", "work canvas"],
+      keywords: ["content"],
       perform: () => focusZone("content"),
       order: 80,
-    },
-    {
-      id: "shell-help",
-      group: "Shell",
-      label: showKeyboardHelp ? "Hide keyboard help" : "Show keyboard help",
-      hint: "?",
-      keywords: ["keyboard help", "shortcut guide", "help"],
-      perform: () => setShowKeyboardHelp((current) => !current),
-      order: 90,
     },
   ];
 
@@ -651,424 +528,287 @@ export default function MenuShell() {
       group: "Navigation",
       label: `Open ${item.title}`,
       hint: `${index + 1}`,
-      keywords: [item.title, item.route_path, item.menu_code].filter(Boolean),
+      keywords: [item.title, item.route_path].filter(Boolean),
       perform: () => handleMenuRoute(item.route_path),
       order: 200 + index,
     }));
 
-  const universeCommands = [];
-
-  if (location.pathname.startsWith("/sa")) {
-    universeCommands.push(
-      {
-        id: "sa-open-project-master",
-        group: "Navigation",
-        label: "Open Project Master",
-        keywords: ["project master", "org master", "projects"],
-        perform: () => openRoute("/sa/project-master"),
-        order: 320,
-      },
-      {
-        id: "sa-open-role-permissions",
-        group: "Navigation",
-        label: "Open ACL Role Permissions",
-        keywords: ["acl", "role permissions", "permission matrix"],
-        perform: () => openRoute("/sa/acl/role-permissions"),
-        order: 321,
-      },
-      {
-        id: "sa-open-approval-rules",
-        group: "Navigation",
-        label: "Open Approval Rules",
-        keywords: ["approval rules", "approver scope", "workflow routing"],
-        perform: () => openRoute("/sa/approval-rules"),
-        order: 322,
-      },
-      {
-        id: "sa-open-company-modules",
-        group: "Navigation",
-        label: "Open Company Module Map",
-        keywords: ["company modules", "module map", "acl module enablement"],
-        perform: () => openRoute("/sa/acl/company-modules"),
-        order: 323,
-      }
-    );
-  }
-
-  const visibleScreenCommands = activeScreenCommands.slice(0, 6);
+  const visibleScreenCommands = activeScreenCommands.slice(0, workspaceMode ? 10 : 8);
+  const workspaceMenuActions = [
+    {
+      key: "back",
+      code: "Esc",
+      title: stackDepth <= 1 ? "Logout" : "Back",
+      onClick: () => void handleBack(),
+    },
+    {
+      key: "home",
+      code: "Alt+H",
+      title: "Home",
+      onClick: handleGoHome,
+    },
+    {
+      key: "help",
+      code: "?",
+      title: "Help",
+      onClick: () => setShowKeyboardHelp((current) => !current),
+    },
+  ];
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-[#061017] text-slate-100 lg:flex-row">
+    <div className="flex h-screen overflow-hidden bg-[#dfe7ef] text-slate-900">
       <aside
         aria-label="Workspace navigation"
-        className={`flex shrink-0 flex-col overflow-hidden border-b border-r bg-[#0a171d] transition-all duration-150 lg:border-b-0 ${collapsed ? "lg:w-[92px]" : "lg:w-[272px]"} ${getZoneShellClass(activeZone, "menu")}`}
+        className={`flex shrink-0 flex-col border-r bg-[#f7f9fc] ${workspaceMode ? "w-[88px]" : collapsed ? "w-[88px]" : "w-[260px]"} ${zoneBorder(activeZone, "menu")}`}
       >
-        <div className="border-b border-white/8 bg-[#071116] px-4 py-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.32em] text-emerald-300">
-                Pace ERP
-              </p>
-              {!collapsed ? (
-                <>
-                  <h1 className="mt-2 text-sm font-semibold text-slate-50">
-                    {shellProfile?.roleCode || "Protected Workspace"}
-                  </h1>
-                  <p className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-400">
-                    {shellProfile?.userCode || "ERP Operator"}
-                  </p>
-                </>
-              ) : null}
-            </div>
-            <div className="rounded-xl border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-300">
-              Z1
-            </div>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-3 py-3">
-          <div className={`mb-3 ${collapsed ? "text-center" : ""}`}>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-              {collapsed ? "Nav" : "Menu Zone"}
+        <div className="border-b bg-[#1c5aa6] px-3 py-3 text-white">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.28em]">
+            Pace ERP
+          </p>
+          {!workspaceMode && !collapsed ? (
+            <>
+              <p className="mt-2 text-xl font-semibold">{shellProfile?.roleCode || "ERP"}</p>
+              <p className="text-sm opacity-90">{shellProfile?.userCode || "User"}</p>
+            </>
+          ) : workspaceMode ? (
+            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em]">
+              Stack
             </p>
-            {!collapsed ? (
-              <p className="mt-2 text-xs leading-5 text-slate-400">
-                Arrow keys move through governed routes. Alt+M always returns here.
-              </p>
-            ) : null}
-          </div>
-
-          <nav>
-            <ul className="space-y-2">
-              {menu.map((item, index) => {
-                const isActive = location.pathname === item.route_path;
-
-                return (
-                  <li key={item.menu_code}>
-                    {item.route_path ? (
-                      <button
-                        ref={(element) => {
-                          menuButtonRefs.current[index] = element;
-                        }}
-                        type="button"
-                        onFocus={() => {
-                          setActiveZone("menu");
-                          setMenuFocusIndex(index);
-                        }}
-                        onKeyDown={(event) => handleMenuKeyDown(event, index)}
-                        onClick={() => handleMenuRoute(item.route_path)}
-                        aria-current={isActive ? "page" : undefined}
-                        className={`grid w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition ${collapsed ? "grid-cols-1 justify-items-center" : "grid-cols-[34px_minmax(0,1fr)]"} ${
-                          isActive
-                            ? "border-emerald-400/60 bg-emerald-400/12 text-white"
-                            : "border-white/6 bg-white/[0.03] text-slate-200 hover:border-white/12 hover:bg-white/[0.05]"
-                        }`}
-                      >
-                        <span className="font-mono text-[11px] font-semibold text-slate-400">
-                          {(index + 1).toString().padStart(2, "0")}
-                        </span>
-                        {!collapsed ? (
-                          <span className="truncate text-sm font-medium">
-                            {item.title}
-                          </span>
-                        ) : null}
-                      </button>
-                    ) : (
-                      <span className="block rounded-2xl border border-white/4 bg-white/[0.02] px-3 py-3 text-xs uppercase tracking-[0.16em] text-slate-500">
-                        {collapsed ? item.title.slice(0, 2).toUpperCase() : item.title}
-                      </span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </nav>
+          ) : null}
         </div>
 
-        <div className="border-t border-white/8 bg-[#071116] px-4 py-3">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-            Active Route
-          </p>
-          <p className="mt-2 text-xs leading-5 text-slate-300">
-            {collapsed ? activeTitle.slice(0, 10) : activeTitle}
-          </p>
+        <div className="border-b bg-[#eef4fb] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+          {workspaceMode ? "Rail" : collapsed ? "Menu" : "Menu Zone"}
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-2 py-2">
+          {workspaceMode ? (
+            <div className="grid gap-1">
+              {workspaceMenuActions.map((action, index) => (
+                <button
+                  key={action.key}
+                  ref={(element) => {
+                    menuButtonRefs.current[index] = element;
+                  }}
+                  type="button"
+                  onClick={action.onClick}
+                  onFocus={() => {
+                    setActiveZone("menu");
+                    setMenuFocusIndex(index);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowDown") {
+                      event.preventDefault();
+                      moveFocus(menuButtonRefs.current, index >= workspaceMenuActions.length - 1 ? 0 : index + 1);
+                    }
+
+                    if (event.key === "ArrowUp") {
+                      event.preventDefault();
+                      moveFocus(menuButtonRefs.current, index <= 0 ? workspaceMenuActions.length - 1 : index - 1);
+                    }
+                  }}
+                  className="grid justify-items-center gap-1 border border-slate-300 bg-white px-2 py-3 text-center hover:bg-slate-50"
+                >
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700">
+                    {action.code}
+                  </span>
+                  <span className="text-[11px] font-semibold text-slate-700">
+                    {action.title}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <nav>
+              <ul className="space-y-1">
+                {menu.map((item, index) => {
+                  const isActive = location.pathname === item.route_path;
+
+                  return (
+                    <li key={item.menu_code}>
+                      {item.route_path ? (
+                        <button
+                          ref={(element) => {
+                            menuButtonRefs.current[index] = element;
+                          }}
+                          type="button"
+                          onFocus={() => {
+                            setActiveZone("menu");
+                            setMenuFocusIndex(index);
+                          }}
+                          onKeyDown={(event) => handleMenuKeyDown(event, index)}
+                          onClick={() => handleMenuRoute(item.route_path)}
+                          aria-current={isActive ? "page" : undefined}
+                          className={`grid w-full items-center gap-2 border px-2 py-2 text-left text-sm ${collapsed ? "grid-cols-1 justify-items-center" : "grid-cols-[32px_minmax(0,1fr)]"} ${
+                            isActive
+                              ? "border-sky-400 bg-sky-50 font-semibold text-sky-900"
+                              : "border-transparent bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                          }`}
+                        >
+                          <span className="font-mono text-[11px] text-slate-500">
+                            {(index + 1).toString().padStart(2, "0")}
+                          </span>
+                          {!collapsed ? <span className="truncate">{item.title}</span> : null}
+                        </button>
+                      ) : (
+                        <span className="block px-2 py-2 text-[11px] uppercase tracking-[0.14em] text-slate-400">
+                          {collapsed ? item.title.slice(0, 2).toUpperCase() : item.title}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
+          )}
+        </div>
+
+        <div className="border-t bg-white px-2 py-2 text-center text-[11px] text-slate-500">
+          {workspaceMode ? (
+            <>
+              <div className="font-semibold text-slate-700">{shellProfile?.roleCode || "ERP"}</div>
+              <div className="mt-1 truncate">{shellProfile?.userCode || "User"}</div>
+            </>
+          ) : (
+            <>{collapsed ? activeTitle.slice(0, 8) : activeTitle}</>
+          )}
         </div>
       </aside>
 
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col border-b border-white/8 lg:border-b-0 lg:border-x">
-        <header className="border-b border-white/8 bg-[#09151b] px-4 py-4">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_340px]">
-            <div className="min-w-0">
-              <div className="flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5">
-                  {shellProfile?.roleCode || "Protected Role"}
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5">
-                  {shellProfile?.userCode || "ERP User"}
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5">
-                  Zone {WORKSPACE_ZONES.indexOf(activeZone) + 1}
-                </span>
-                {clusterAdmission?.windowSlot ? (
-                  <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1.5 text-emerald-200">
-                    Window {clusterAdmission.windowSlot}/
-                    {clusterAdmission.maxWindowCount ?? 3}
-                  </span>
-                ) : null}
-              </div>
-
-              <h1 className="mt-3 text-2xl font-semibold tracking-tight text-white">
-                {activeTitle}
-              </h1>
-              <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-300">
-                Keyboard-native operator canvas with stable menu, stable action rail, and deterministic work-area return. Use Alt+M, Alt+A, and Alt+C instead of mouse recovery.
-              </p>
-            </div>
-
-            <div className="rounded-[24px] border border-white/8 bg-white/[0.04] px-4 py-4">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                Focus Ownership
-              </p>
-              <div className="mt-3 grid gap-2 text-sm text-slate-200">
-                <div className="flex items-center justify-between rounded-2xl border border-white/6 bg-black/10 px-3 py-2">
-                  <span>Menu Zone</span>
-                  <span className={activeZone === "menu" ? "text-emerald-300" : "text-slate-500"}>
-                    Alt+M
-                  </span>
-                </div>
-                <div className="flex items-center justify-between rounded-2xl border border-white/6 bg-black/10 px-3 py-2">
-                  <span>Action Rail</span>
-                  <span className={activeZone === "actions" ? "text-emerald-300" : "text-slate-500"}>
-                    Alt+A
-                  </span>
-                </div>
-                <div className="flex items-center justify-between rounded-2xl border border-white/6 bg-black/10 px-3 py-2">
-                  <span>Work Canvas</span>
-                  <span className={activeZone === "content" ? "text-emerald-300" : "text-slate-500"}>
-                    Alt+C
-                  </span>
-                </div>
-              </div>
-            </div>
+      <main className={`flex min-w-0 flex-1 flex-col border-r bg-white ${zoneBorder(activeZone, "content")}`}>
+        <header className="border-b bg-[#1c5aa6] px-4 py-2 text-white">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+            <span className="font-semibold">
+              {workspaceMode && previousScreen?.screen_code
+                ? `${formatScreenTitle(previousScreen.screen_code)} / ${activeTitle}`
+                : activeTitle}
+            </span>
+            <span>{shellProfile?.roleCode || "Role"}</span>
+            <span>{shellProfile?.userCode || "User"}</span>
+            <span>{workspaceMode ? `Stack ${stackDepth}` : `Zone ${WORKSPACE_ZONES.indexOf(activeZone) + 1}`}</span>
+            {clusterAdmission?.windowSlot ? (
+              <span>
+                Window {clusterAdmission.windowSlot}/{clusterAdmission.maxWindowCount ?? 3}
+              </span>
+            ) : null}
           </div>
-
-          {showKeyboardHelp ? (
-            <div className="mt-4 grid gap-3 rounded-[24px] border border-white/8 bg-[#0d1f28] px-4 py-4 text-sm text-slate-200 xl:grid-cols-4">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                  Menu
-                </p>
-                <p className="mt-2 leading-6 text-slate-300">
-                  Arrow Up and Arrow Down move through governed routes. Home and End jump to route boundaries.
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                  Action Rail
-                </p>
-                <p className="mt-2 leading-6 text-slate-300">
-                  Arrow keys rotate through shell actions. Esc stays back-oriented, not context-breaking.
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                  Work Canvas
-                </p>
-                <p className="mt-2 leading-6 text-slate-300">
-                  Alt+Shift+F jumps into filters, Alt+Shift+P jumps into the page primary target, and Ctrl+K stays the universal command doorway.
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                  Current Screen Hotkeys
-                </p>
-                <div className="mt-2 grid gap-2">
-                  {activeScreenHotkeys.length > 0 ? (
-                    activeScreenHotkeys.map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex items-center justify-between rounded-2xl border border-white/8 bg-black/10 px-3 py-2"
-                      >
-                        <span className="text-slate-300">{item.label}</span>
-                        <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
-                          {item.key}
-                        </span>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="leading-6 text-slate-400">
-                      This surface has no extra hotkeys registered beyond the shell defaults.
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {clusterWindowMessage ? (
-            <div className="mt-4 rounded-2xl border border-amber-400/25 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
-              {clusterWindowMessage}
-            </div>
-          ) : null}
         </header>
+
+        <div className="border-b bg-[#eef4fb] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+          {workspaceMode
+            ? "Esc Back | Alt+H Home | Alt+A Function Rail | Alt+C Work Area | Ctrl+K Command Bar"
+            : "Alt+M Menu | Alt+A Function Rail | Alt+C Work Area | Ctrl+K Command Bar"}
+        </div>
+
+        {showKeyboardHelp || clusterWindowMessage ? (
+          <div className="border-b bg-[#fffdf2] px-4 py-2 text-sm text-slate-700">
+            {clusterWindowMessage ? (
+              <p>{clusterWindowMessage}</p>
+            ) : (
+              <p>
+                Screen shortcuts:{" "}
+                {activeScreenHotkeys.length > 0
+                  ? activeScreenHotkeys.map((item) => `${item.key} ${item.label}`).join(" | ")
+                  : "No extra route shortcuts"}
+              </p>
+            )}
+          </div>
+        ) : null}
 
         <div
           ref={contentRegionRef}
           tabIndex={-1}
           onFocus={() => setActiveZone("content")}
           aria-label="Active workspace content"
-          className={`min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(34,197,94,0.09),_transparent_30%),linear-gradient(180deg,_rgba(6,16,23,1)_0%,_rgba(8,20,28,1)_100%)] px-3 py-3 outline-none md:px-4 md:py-4 ${getZoneShellClass(activeZone, "content")}`}
+          className={`min-h-0 flex-1 overflow-y-auto bg-[#f7f9fc] outline-none ${workspaceMode ? "px-2 py-2" : "px-3 py-3"}`}
         >
           <Outlet />
         </div>
 
-        <footer className="border-t border-white/8 bg-[#071116] px-4 py-3">
-          <div className="flex flex-wrap items-center gap-2">
-            {SHORTCUT_GUIDE.map((item) => (
-              <span
-                key={item}
-                className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300"
-              >
-                {item}
-              </span>
-            ))}
-            {activeScreenHotkeys.map((item) => (
-              <span
-                key={item.id}
-                className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-100"
-              >
-                {item.key} {item.label}
-              </span>
-            ))}
-          </div>
+        <footer className="border-t bg-[#eef4fb] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+          Ctrl+S Save | Alt+R Refresh | Alt+Shift+F Search | Alt+Shift+P Primary | Esc Back
+          {activeScreenHotkeys.length > 0
+            ? ` | ${activeScreenHotkeys.map((item) => `${item.key} ${item.label}`).join(" | ")}`
+            : ""}
         </footer>
       </main>
 
       <aside
         aria-label="Workspace action rail"
-        className={`flex shrink-0 flex-col border-t border-white/8 bg-[#0a171d] lg:w-[260px] lg:border-t-0 ${getZoneShellClass(activeZone, "actions")}`}
+        className={`flex shrink-0 flex-col bg-[#f7f9fc] ${workspaceMode ? "w-[176px]" : "w-[196px]"} ${zoneBorder(activeZone, "actions")}`}
       >
-        <div className="border-b border-white/8 px-4 py-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                Action Rail
-              </p>
-              <p className="mt-2 text-xs leading-5 text-slate-300">
-                Stable shell actions stay here for every screen.
-              </p>
-            </div>
-            <div className="rounded-xl border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-300">
-              Z2
-            </div>
-          </div>
+        <div className="border-b bg-[#d9e7f8] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-600">
+          Function Rail
         </div>
 
-        <div className="flex-1 overflow-y-auto px-3 py-3">
-          <div className="grid gap-2">
-            {shellActions.map((action, index) => {
-              const toneClass =
-                action.tone === "danger"
-                  ? "border-rose-400/30 bg-rose-400/12 text-rose-100"
-                  : action.tone === "warning"
-                    ? "border-amber-400/30 bg-amber-300/12 text-amber-50"
-                    : action.tone === "primary"
-                      ? "border-emerald-400/30 bg-emerald-400/12 text-emerald-50"
-                      : "border-white/8 bg-white/[0.04] text-slate-100";
-
-              return (
-                <button
-                  key={action.label + action.hint}
-                  ref={(element) => {
-                    actionButtonRefs.current[index] = element;
-                  }}
-                  type="button"
-                  onClick={action.onClick}
-                  onFocus={() => setActiveZone("actions")}
-                  onKeyDown={(event) => handleActionKeyDown(event, index)}
-                  className={`grid w-full gap-1 rounded-2xl border px-4 py-3 text-left transition hover:bg-white/[0.08] ${toneClass}`}
-                >
-                  <span className="text-sm font-semibold">{action.label}</span>
-                  <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">
-                    {action.hint}
-                  </span>
-                </button>
-              );
-            })}
+        <div className="flex-1 overflow-y-auto px-2 py-2">
+          <div className="grid gap-1">
+            {shellActions.map((action, index) => (
+              <button
+                key={action.label + action.title}
+                ref={(element) => {
+                  actionButtonRefs.current[index] = element;
+                }}
+                type="button"
+                onClick={action.onClick}
+                onFocus={() => setActiveZone("actions")}
+                onKeyDown={(event) => handleActionKeyDown(event, index)}
+                className="grid grid-cols-[72px_minmax(0,1fr)] border border-slate-300 bg-white px-2 py-2 text-left hover:bg-slate-50"
+              >
+                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700">
+                  {action.label}
+                </span>
+                <span className="truncate text-sm font-medium text-slate-800">
+                  {action.title}
+                </span>
+              </button>
+            ))}
           </div>
 
-          <div className="mt-4 rounded-[22px] border border-white/8 bg-[#091319] px-4 py-4">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-              Current Screen Shortcuts
-            </p>
-            <div className="mt-3 grid gap-2">
+          <div className="mt-3 border border-slate-300 bg-white">
+            <div className="border-b bg-[#eef4fb] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Screen Shortcuts
+            </div>
+            <div className="px-3 py-2 text-xs leading-6 text-slate-700">
               {activeScreenHotkeys.length > 0 ? (
                 activeScreenHotkeys.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between rounded-2xl border border-white/8 bg-white/[0.04] px-3 py-2"
-                  >
-                    <span className="text-xs text-slate-300">{item.label}</span>
-                    <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
-                      {item.key}
-                    </span>
+                  <div key={item.id} className="flex items-center justify-between gap-2 border-b border-slate-100 py-1 last:border-b-0">
+                    <span>{item.label}</span>
+                    <span className="font-semibold text-sky-700">{item.key}</span>
                   </div>
                 ))
               ) : (
-                <p className="text-xs leading-5 text-slate-400">
-                  No extra route-level hotkeys are registered on this screen yet.
-                </p>
+                <p>No extra route shortcuts.</p>
               )}
             </div>
           </div>
 
-          <div className="mt-4 rounded-[22px] border border-white/8 bg-[#091319] px-4 py-4">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-              Current Screen Commands
-            </p>
-            <div className="mt-3 grid gap-2">
+          <div className="mt-3 border border-slate-300 bg-white">
+            <div className="border-b bg-[#eef4fb] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              {workspaceMode ? "Page Commands" : "Current Screen"}
+            </div>
+            <div className="px-3 py-2 text-xs leading-6 text-slate-700">
               {visibleScreenCommands.length > 0 ? (
                 visibleScreenCommands.map((command) => (
-                  <div
-                    key={command.id}
-                    className="rounded-2xl border border-white/8 bg-white/[0.04] px-3 py-3"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-xs font-semibold text-slate-200">
-                        {command.label}
-                      </span>
-                      <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
-                        {command.hint || "Command"}
-                      </span>
+                  <div key={command.id} className="border-b border-slate-100 py-1 last:border-b-0">
+                    <div className="font-medium text-slate-800">{command.label}</div>
+                    <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                      {command.hint || "Command"}
                     </div>
                   </div>
                 ))
               ) : (
-                <p className="text-xs leading-5 text-slate-400">
-                  No route-level screen commands are visible here yet. Shell commands remain available through Ctrl+K.
-                </p>
+                <p>No current-screen commands.</p>
               )}
             </div>
           </div>
-        </div>
-
-        <div className="border-t border-white/8 px-4 py-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-            Current Stack
-          </p>
-          <p className="mt-2 text-sm text-slate-200">
-            {stackDepth <= 1 ? "Root surface" : `${stackDepth} screens in stack`}
-          </p>
-          <p className="mt-2 text-xs leading-5 text-slate-400">
-            Action rail stays stable so keyboard flow never needs mouse rescue.
-          </p>
         </div>
       </aside>
 
       <ErpCommandPalette
         activeRoute={location.pathname}
         shellCommands={shellCommands}
-        menuCommands={[...menuCommands, ...universeCommands]}
+        menuCommands={menuCommands}
       />
     </div>
   );

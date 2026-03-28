@@ -295,10 +295,10 @@ export default function SAAudit() {
                 orientation: "horizontal",
               })
             }
-            className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+            className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
               filter === option.key
-                ? "bg-sky-600 text-white"
-                : "bg-slate-100 text-slate-600"
+                ? "border-sky-400 bg-sky-50 text-sky-900"
+                : "border-slate-300 bg-white text-slate-600"
             }`}
           >
             {option.label}
@@ -325,35 +325,35 @@ export default function SAAudit() {
       : `${filteredRows.length} visible audit row${filteredRows.length === 1 ? "" : "s"}`,
     children:
       filteredRows.length === 0 ? (
-        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+        <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
           {loading
             ? "Loading audit inventory..."
             : "No audit rows match the selected filter right now."}
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-full border-separate border-spacing-y-3">
+          <table className="min-w-full border-collapse">
             <thead>
               <tr>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Action
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Actor
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Resource
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Company
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Request
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Performed
                 </th>
-                <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Status
                 </th>
               </tr>
@@ -373,9 +373,9 @@ export default function SAAudit() {
                       orientation: "vertical",
                     })
                   }
-                  className="bg-slate-50"
+                  className="border-b border-slate-200 bg-white"
                 >
-                  <td className="rounded-l-2xl px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     <div>
                       <p className="font-medium text-slate-900">
                         {row.action_code ?? "N/A"}
@@ -385,7 +385,7 @@ export default function SAAudit() {
                       </p>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     <div>
                       <p className="font-medium text-slate-900">
                         {shortId(row.admin_user_id)}
@@ -395,7 +395,7 @@ export default function SAAudit() {
                       </p>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     <div>
                       <p className="font-medium text-slate-900">
                         {row.resource_type ?? "N/A"}
@@ -405,10 +405,10 @@ export default function SAAudit() {
                       </p>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     {row.company_id ? shortId(row.company_id) : "Global"}
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     <div>
                       <p className="font-medium text-slate-900">
                         {shortId(row.request_id)}
@@ -418,12 +418,12 @@ export default function SAAudit() {
                       </p>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     {formatDateTime(row.performed_at)}
                   </td>
-                  <td className="rounded-r-2xl px-4 py-3 text-sm text-slate-700">
+                  <td className="px-3 py-2 text-sm text-slate-700">
                     <span
-                      className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${getStatusTone(row.status)}`}
+                      className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStatusTone(row.status)}`}
                     >
                       {row.status ?? "UNKNOWN"}
                     </span>

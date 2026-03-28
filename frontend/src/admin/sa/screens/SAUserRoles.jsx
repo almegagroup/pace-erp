@@ -441,7 +441,7 @@ export default function SAUserRoles() {
     description:
       "This screen reads the shared admin user inventory and writes role decisions to the existing admin role endpoint. Backend role updates now use upsert semantics so assignment remains robust even if a user role row is missing and needs to be created during governance. The current operator is intentionally excluded so SA cannot change their own role from this workspace.",
     aside: (
-      <span className="rounded-full bg-sky-100 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+      <span className="border border-sky-200 bg-sky-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
         {loading ? "Checking" : `${privilegedCount} Privileged`}
       </span>
     ),
@@ -466,10 +466,10 @@ export default function SAUserRoles() {
               orientation: "horizontal",
             })
           }
-          className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+          className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
             roleFilter === "ALL"
-              ? "bg-sky-600 text-white"
-              : "bg-slate-100 text-slate-600"
+              ? "border-sky-400 bg-sky-50 text-sky-900"
+              : "border-slate-300 bg-white text-slate-600"
           }`}
         >
           All Roles
@@ -487,10 +487,10 @@ export default function SAUserRoles() {
               orientation: "horizontal",
             })
           }
-          className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+          className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
             roleFilter === "UNASSIGNED"
-              ? "bg-sky-600 text-white"
-              : "bg-slate-100 text-slate-600"
+              ? "border-sky-400 bg-sky-50 text-sky-900"
+              : "border-slate-300 bg-white text-slate-600"
           }`}
         >
           Unassigned
@@ -510,10 +510,10 @@ export default function SAUserRoles() {
                 orientation: "horizontal",
               })
             }
-            className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+            className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
               roleFilter === role.key
-                ? "bg-sky-600 text-white"
-                : "bg-slate-100 text-slate-600"
+                ? "border-sky-400 bg-sky-50 text-sky-900"
+                : "border-slate-300 bg-white text-slate-600"
             }`}
           >
             {role.label}
@@ -539,31 +539,31 @@ export default function SAUserRoles() {
       ? "Refreshing role assignment workspace"
       : `${filteredUsers.length} visible user${filteredUsers.length === 1 ? "" : "s"} in the current role filter`,
     children: loading ? (
-      <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+      <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
         Loading ERP users for role governance.
       </div>
     ) : filteredUsers.length === 0 ? (
-      <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+      <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
         No ERP users match the current role governance filter.
       </div>
     ) : (
       <div className="overflow-x-auto">
-        <table className="min-w-full border-separate border-spacing-y-3">
+        <table className="min-w-full border-collapse">
           <thead>
             <tr>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 User Identity
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Current Role
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Next Role
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 State
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Action
               </th>
             </tr>
@@ -576,9 +576,9 @@ export default function SAUserRoles() {
               return (
                 <tr
                   key={user.auth_user_id}
-                  className="bg-slate-50 align-top"
+                  className="border-b border-slate-200 bg-white align-top"
                 >
-                  <td className="rounded-none px-4 py-4 text-sm text-slate-700 first:rounded-l-2xl">
+                  <td className="px-3 py-3 text-sm text-slate-700">
                     <div className="font-semibold text-slate-900">
                       {user.user_code ?? "Uncoded User"}{" "}
                       <span className="text-slate-600">
@@ -595,10 +595,10 @@ export default function SAUserRoles() {
                       Auth {shortId(user.auth_user_id)}
                     </div>
                   </td>
-                  <td className="px-4 py-4 text-sm text-slate-700">
+                  <td className="px-3 py-3 text-sm text-slate-700">
                     <div className="flex flex-wrap items-center gap-2">
                       <span
-                        className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${getRoleTone(user.role_code)}`}
+                        className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getRoleTone(user.role_code)}`}
                       >
                         {user.role_code ?? "UNASSIGNED"}
                       </span>
@@ -609,7 +609,7 @@ export default function SAUserRoles() {
                       ) : null}
                     </div>
                   </td>
-                  <td className="px-4 py-4 text-sm text-slate-700">
+                  <td className="px-3 py-3 text-sm text-slate-700">
                     <select
                       ref={(element) => {
                         rowControlRefs.current[index] ??= [];
@@ -636,7 +636,7 @@ export default function SAUserRoles() {
                           });
                         }
                       }}
-                      className="min-w-[190px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none"
+                      className="min-w-[190px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-700 outline-none"
                     >
                       <option value="">Select role</option>
                       {ERP_ROLE_OPTIONS.map((role) => (
@@ -646,14 +646,14 @@ export default function SAUserRoles() {
                       ))}
                     </select>
                   </td>
-                  <td className="px-4 py-4 text-sm text-slate-700">
+                  <td className="px-3 py-3 text-sm text-slate-700">
                     <span
-                      className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}
+                      className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}
                     >
                       {user.state ?? "UNKNOWN"}
                     </span>
                   </td>
-                  <td className="rounded-none px-4 py-4 text-sm text-slate-700 last:rounded-r-2xl">
+                  <td className="px-3 py-3 text-sm text-slate-700">
                     <button
                       ref={(element) => {
                         rowControlRefs.current[index] ??= [];
@@ -673,7 +673,7 @@ export default function SAUserRoles() {
                           gridRefs: rowControlRefs.current,
                         })
                       }
-                      className={`rounded-2xl bg-sky-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700 ${
+                      className={`border border-sky-300 bg-sky-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 ${
                         isUpdating ||
                         !selectedRole ||
                         selectedRole === user.role_code

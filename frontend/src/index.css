@@ -42,10 +42,8 @@ body {
 
 body[data-workspace-mode="protected"] {
   font-family: "Bahnschrift", "Aptos", "Noto Sans", sans-serif;
-  background:
-    radial-gradient(circle at top, rgba(16, 185, 129, 0.12), transparent 28%),
-    linear-gradient(180deg, #061017 0%, #09141b 48%, #0b1820 100%);
-  color: #f8fafc;
+  background: #dfe7ef;
+  color: #0f172a;
   overflow: hidden;
 }
 
@@ -57,13 +55,13 @@ body[data-workspace-mode="protected"] :is(
   textarea,
   [tabindex]:not([tabindex="-1"])
 ):focus-visible {
-  outline: 3px solid rgba(52, 211, 153, 0.92);
+  outline: 3px solid rgba(37, 99, 235, 0.78);
   outline-offset: 2px;
-  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.18);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.16);
 }
 
 body[data-workspace-mode="protected"] ::selection {
-  background: rgba(16, 185, 129, 0.22);
+  background: rgba(59, 130, 246, 0.18);
 }
 
 body[data-workspace-mode="protected"] .font-mono {
