@@ -383,13 +383,13 @@ export default function SARolePermissions() {
         children: (
           <div className="space-y-5">
             <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                 Role Code
               </span>
               <select
                 value={selectedRoleCode}
                 onChange={(event) => setSelectedRoleCode(event.target.value)}
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400/50 focus:bg-black/30"
               >
                 {ERP_ROLE_OPTIONS.map((role) => (
                   <option key={role.code} value={role.code}>
@@ -416,11 +416,11 @@ export default function SARolePermissions() {
           ? "Loading permission rows"
           : `${filteredPermissions.length} visible resource row${filteredPermissions.length === 1 ? "" : "s"}`,
         children: loading ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
             Loading role permissions from ACL governance APIs.
           </div>
         ) : filteredPermissions.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
             No resource row matches the current role filter.
           </div>
         ) : (
@@ -428,14 +428,14 @@ export default function SARolePermissions() {
             {filteredPermissions.map((row, index) => (
               <div
                 key={`${row.resource_code}-${index}`}
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
+                className="rounded-[22px] border border-white/8 bg-black/10 px-4 py-4"
               >
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">
+                    <p className="text-sm font-semibold text-white">
                       {row.resource_code}
                     </p>
-                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                    <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
                       {[
                         row.can_view ? "V" : null,
                         row.can_write ? "W" : null,
@@ -475,7 +475,7 @@ export default function SARolePermissions() {
                           orientation: "horizontal",
                         })
                       }
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-700"
+                      className="rounded-2xl border border-cyan-400/25 bg-cyan-400/12 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-50"
                     >
                       Edit
                     </button>
@@ -493,7 +493,7 @@ export default function SARolePermissions() {
                           orientation: "horizontal",
                         })
                       }
-                      className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-700"
+                      className="rounded-2xl border border-rose-400/25 bg-rose-400/12 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-rose-50"
                     >
                       Disable
                     </button>
@@ -511,7 +511,7 @@ export default function SARolePermissions() {
         children: (
           <div ref={formContainerRef} className="space-y-4">
             <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                 Resource Code
               </span>
               <input
@@ -527,7 +527,7 @@ export default function SARolePermissions() {
                   }))
                 }
                 placeholder="RESOURCE_CODE"
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
               />
             </label>
 
@@ -541,7 +541,7 @@ export default function SARolePermissions() {
             ].map(([key, label]) => (
               <label
                 key={key}
-                className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700"
+                className="flex items-center justify-between rounded-2xl border border-white/8 bg-black/10 px-4 py-3 text-sm text-slate-200"
               >
                 <span>{label}</span>
                 <input
@@ -554,7 +554,7 @@ export default function SARolePermissions() {
                       [key]: event.target.checked,
                     }))
                   }
-                  className="h-4 w-4 rounded border-slate-300 text-sky-600"
+                  className="h-4 w-4 rounded border-white/20 bg-black/20 text-emerald-500"
                 />
               </label>
             ))}

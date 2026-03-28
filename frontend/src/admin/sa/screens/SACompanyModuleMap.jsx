@@ -338,11 +338,11 @@ export default function SACompanyModuleMap() {
           ? "Loading module rows"
           : `${filteredRows.length} visible module row${filteredRows.length === 1 ? "" : "s"}`,
         children: loading ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
             Loading company module rows.
           </div>
         ) : filteredRows.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
             No module row matches the current state.
           </div>
         ) : (
@@ -350,14 +350,14 @@ export default function SACompanyModuleMap() {
             {filteredRows.map((row, index) => (
               <div
                 key={`${row.module_code}-${index}`}
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
+                className="rounded-[22px] border border-white/8 bg-black/10 px-4 py-4"
               >
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">
+                    <p className="text-sm font-semibold text-white">
                       {row.module_code}
                     </p>
-                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                    <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
                       {row.enabled ? "ENABLED" : "DISABLED"}
                     </p>
                   </div>
@@ -377,7 +377,7 @@ export default function SACompanyModuleMap() {
                           orientation: "horizontal",
                         })
                       }
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-700"
+                      className="rounded-2xl border border-cyan-400/25 bg-cyan-400/12 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-50"
                     >
                       Reuse Code
                     </button>
@@ -396,10 +396,10 @@ export default function SACompanyModuleMap() {
                           orientation: "horizontal",
                         })
                       }
-                      className={`rounded-2xl border px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+                      className={`rounded-2xl border px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] ${
                         row.enabled
-                          ? "border-rose-200 bg-rose-50 text-rose-700"
-                          : "border-slate-200 bg-slate-200 text-slate-500"
+                          ? "border-rose-400/25 bg-rose-400/12 text-rose-50"
+                          : "border-white/8 bg-white/[0.04] text-slate-500"
                       }`}
                     >
                       Disable
@@ -418,7 +418,7 @@ export default function SACompanyModuleMap() {
         children: (
           <div ref={formContainerRef} className="space-y-4">
             <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                 Company ID
               </span>
               <input
@@ -429,12 +429,12 @@ export default function SACompanyModuleMap() {
                 value={selectedCompanyId}
                 onChange={(event) => setSelectedCompanyId(event.target.value)}
                 placeholder="Company UUID"
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
               />
             </label>
 
             <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                 Module Code
               </span>
               <input
@@ -443,11 +443,11 @@ export default function SACompanyModuleMap() {
                 value={moduleCode}
                 onChange={(event) => setModuleCode(event.target.value)}
                 placeholder="MODULE_CODE"
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
               />
             </label>
 
-            <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-600">
+            <div className="rounded-[22px] border border-white/8 bg-black/10 px-4 py-4 text-sm text-slate-300">
               Load uses the current company ID. Save enables the typed module for that same company.
             </div>
           </div>

@@ -1736,6 +1736,181 @@ but also practical for side-by-side report checking and cross-screen ERP workflo
 Next step:
 Continue from the next roadmap item outside protected session-cluster work unless a new production issue appears
 
+## Entry 030
+
+Date:
+2026-03-28
+
+Roadmap step:
+Keyboard-Native UI Phase - shell grammar rebuild, canonical templates, and first SA surface conversion
+
+Status:
+COMPLETED
+
+What was done:
+- rebuilt the protected frontend shell around fixed keyboard-owned zones:
+  menu,
+  action rail,
+  and work canvas
+- kept `Alt+M`,
+  `Alt+A`,
+  and `Alt+C` meaningful on task screens instead of only dashboard-like surfaces
+- replaced the old card-oriented screen scaffold with dense operator-work-canvas templates for:
+  entry form,
+  master list,
+  approval review,
+  and report filter screens
+- strengthened dense-form traversal so section jumps now work through reusable shared behavior
+- restyled the command bar and shared modal layer to match the new keyboard-native shell grammar
+- rebuilt `SA Company Create` as the first canonical entry-form surface on the new template
+- rebuilt `SA Users` as the first canonical master-list surface on the new template
+- preserved current protected/session/security/governance behavior while replacing the frontend interaction model
+
+What changed in repo:
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/components/templates/ErpScreenScaffold.jsx
+- frontend/src/components/templates/ErpEntryFormTemplate.jsx
+- frontend/src/components/templates/ErpMasterListTemplate.jsx
+- frontend/src/components/templates/ErpApprovalReviewTemplate.jsx
+- frontend/src/components/templates/ErpReportFilterTemplate.jsx
+- frontend/src/hooks/useErpDenseFormNavigation.js
+- frontend/src/components/ErpCommandPalette.jsx
+- frontend/src/components/layer/ModalBase.jsx
+- frontend/src/components/inputs/QuickFilterInput.jsx
+- frontend/src/admin/sa/screens/SACompanyCreate.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/index.css
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- the rebuild was applied without touching session-cluster,
+  lock,
+  logout,
+  idle,
+  or route/menu governance behavior
+
+Problems or blockers:
+- only the first canonical entry-form and master-list examples have been rebuilt so far;
+  the remaining SA governance screens still need migration into the same template system
+- shared picker behavior and deeper table-level roving patterns still need broader rollout across more screens
+
+Decision or note:
+The frontend interaction model is now being treated as replaceable structure,
+not as an admin UI to be lightly polished.
+Future org masters,
+governance surfaces,
+and HR modules must consume this shell and template grammar instead of reviving the old card/admin layout.
+
+Next step:
+Carry the same keyboard-native template system into the remaining SA governance screens,
+then start the org-master wave directly on these reusable templates
+
+## Entry 031
+
+Date:
+2026-03-28
+
+Roadmap step:
+Keyboard-Native UI Phase - universal shortcut visibility and current-screen help wiring
+
+Status:
+COMPLETED
+
+What was done:
+- added universal registry-backed shortcut visibility for protected screens
+- wired the shell to read current-route screen commands and screen hotkeys directly from the shared registries
+- exposed current-screen hotkeys visibly in:
+  shell help,
+  action rail,
+  and footer strip
+- exposed current-screen commands visibly in the stable action rail so operators no longer need to depend only on the command bar to discover available actions
+- kept the same protected-shell,
+  session-cluster,
+  lock,
+  logout,
+  and route/menu governance behavior unchanged while extending keyboard discoverability
+
+What changed in repo:
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/store/erpScreenHotkeys.js
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- registered screen hotkeys now have a reusable shell-level visibility path
+- registered screen commands now have a reusable shell-level visibility path
+
+Problems or blockers:
+- visible help can only show actions already registered by each screen;
+  any screen without route-level registrations will still show only shell defaults
+- repo state still records broader backend/runtime items as HALF-DONE or DEFERRED,
+  so the full ERP cannot yet be declared globally complete
+
+Decision or note:
+Keyboard help is now a platform feature of the protected shell,
+not a one-off overlay.
+From this point forward,
+every protected screen should register commands and hotkeys so the shell can expose them deterministically.
+
+Next step:
+Continue migrating remaining screens and missing workflow surfaces into the same registry-backed keyboard-native model,
+while closing the separately documented backend and DB state gaps gate-by-gate
+
+## Entry 032
+
+Date:
+2026-03-28
+
+Roadmap step:
+Keyboard-Native UI Phase - visible governance-surface rebuild pass
+
+Status:
+COMPLETED
+
+What was done:
+- rebuilt the inner working surfaces of key SA governance pages so they no longer read as leftover light admin cards inside the new shell
+- restyled:
+  approval rules,
+  role permissions,
+  company module map,
+  user scope,
+  and parent-company picker drawer
+  into the same dense operator-work-canvas grammar
+- moved row cards,
+  editors,
+  selection surfaces,
+  and destructive actions into the darker governed shell language so the governance pages now visibly match the rebuild direction
+- aligned the shared drawer layer with the same protected keyboard-native visual system as the command bar and modal overlays
+
+What changed in repo:
+- frontend/src/admin/sa/screens/SAApprovalRules.jsx
+- frontend/src/admin/sa/screens/SARolePermissions.jsx
+- frontend/src/admin/sa/screens/SACompanyModuleMap.jsx
+- frontend/src/admin/sa/screens/SAUserScope.jsx
+- frontend/src/components/layer/DrawerBase.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend build completed successfully
+- frontend lint completed successfully
+- governance pages now inherit visibly rebuilt inner surfaces instead of only the outer shell/template layer
+
+Problems or blockers:
+- other governance and master screens still need the same direct inner-surface rebuild pass
+- this is still frontend interaction work only;
+  broader backend and DB state-file gaps remain separately tracked
+
+Decision or note:
+This closes the most obvious mismatch the user reported:
+the governance pages should now visibly look rebuilt,
+not only technically wrapped by the new shell.
+
+Next step:
+Continue the same visible rebuild pass across the remaining SA and non-SA operational screens until the old admin-card grammar is fully eliminated
+
 # 6. Initial Program Entry
 
 Date:

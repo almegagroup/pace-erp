@@ -413,7 +413,7 @@ export default function SACompanyCreate() {
           ? "Company master row already exists for this GST"
           : "Company master row created successfully"
       }
-      className="border-emerald-200 bg-emerald-50 shadow-[0_14px_40px_rgba(16,185,129,0.08)]"
+      tone="success"
     >
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <ErpFieldPreview
@@ -463,26 +463,26 @@ export default function SACompanyCreate() {
       metrics={metrics}
       formEyebrow="Entry Form"
       formTitle="GST-driven company setup"
-      formDescription="Enter moves between primary fields, the final field can trigger the create confirmation, Shift+Enter moves back, and Alt+PageDown or Alt+PageUp jumps across sections without needing the mouse."
+      formDescription="The operator starts at GST, resolves identity, confirms the canonical company name, and finishes with a direct save path. Focus ownership stays inside the form until the create decision is complete."
       formContent={(
         <div ref={formContainerRef} className="grid gap-5">
           <div
             data-erp-form-section="true"
-            className="rounded-[26px] border border-slate-200 bg-slate-50/80 px-5 py-5"
+            className="rounded-[24px] border border-white/8 bg-black/10 px-5 py-5"
           >
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
               Section 1
             </p>
-            <h3 className="mt-2 text-lg font-semibold text-slate-900">
+            <h3 className="mt-2 text-lg font-semibold text-white">
               Resolve GST identity
             </h3>
-            <p className="mt-2 text-sm leading-7 text-slate-600">
+            <p className="mt-2 text-sm leading-7 text-slate-300">
               Start with GST. The backend reads cache first, calls Applyflow only
               when the cache misses, and hydrates the right-hand review rail.
             </p>
 
             <label className="mt-5 block">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                 GST Number
               </span>
               <input
@@ -504,7 +504,7 @@ export default function SACompanyCreate() {
                   }
                 }}
                 placeholder="29ABCDE1234F1Z5"
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
               />
             </label>
 
@@ -515,13 +515,13 @@ export default function SACompanyCreate() {
                 onClick={() => void handleLookup()}
                 className={`rounded-2xl px-4 py-3 text-sm font-semibold ${
                   lookingUp
-                    ? "cursor-not-allowed bg-slate-200 text-slate-500"
-                    : "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                    ? "cursor-not-allowed border border-white/6 bg-white/[0.04] text-slate-500"
+                    : "border border-emerald-400/30 bg-emerald-400/12 text-emerald-50"
                 }`}
               >
                 {lookingUp ? "Checking GST..." : "Check GST Profile"}
               </button>
-              <span className="self-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              <span className="self-center text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Enter = Check GST | Alt+PageDown = Next Section
               </span>
             </div>
@@ -529,21 +529,21 @@ export default function SACompanyCreate() {
 
           <div
             data-erp-form-section="true"
-            className="rounded-[26px] border border-slate-200 bg-slate-50/80 px-5 py-5"
+            className="rounded-[24px] border border-white/8 bg-black/10 px-5 py-5"
           >
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
               Section 2
             </p>
-            <h3 className="mt-2 text-lg font-semibold text-slate-900">
+            <h3 className="mt-2 text-lg font-semibold text-white">
               Confirm the ERP company name
             </h3>
-            <p className="mt-2 text-sm leading-7 text-slate-600">
+            <p className="mt-2 text-sm leading-7 text-slate-300">
               After GST resolution, adjust the canonical company name if needed.
               Use Ctrl+S to create once the review rail looks correct.
             </p>
 
             <label className="mt-5 block">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                 Company Name
               </span>
               <input
@@ -552,12 +552,12 @@ export default function SACompanyCreate() {
                 value={companyName}
                 onChange={(event) => setCompanyName(event.target.value)}
                 placeholder="Company legal name"
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
               />
             </label>
 
-            <div className="mt-5 grid gap-3 rounded-3xl border border-dashed border-slate-200 bg-white px-5 py-5 text-sm leading-7 text-slate-600">
-              <p>
+            <div className="mt-5 grid gap-3 rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-5 py-5 text-sm leading-7 text-slate-300">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
                 Dense-form rules on this screen:
               </p>
               <p>

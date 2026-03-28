@@ -82,36 +82,36 @@ function canOpenScope(user) {
 function getStateTone(state) {
   switch (state) {
     case "ACTIVE":
-      return "bg-emerald-50 text-emerald-700";
+      return "border border-emerald-400/25 bg-emerald-400/12 text-emerald-50";
     case "DISABLED":
-      return "bg-rose-50 text-rose-700";
+      return "border border-rose-400/25 bg-rose-400/12 text-rose-50";
     default:
-      return "bg-slate-100 text-slate-700";
+      return "border border-white/8 bg-white/[0.04] text-slate-200";
   }
 }
 
 function getRoleTone(roleCode) {
   switch (roleCode) {
     case "SA":
-      return "bg-sky-100 text-sky-700";
+      return "border border-cyan-400/25 bg-cyan-400/12 text-cyan-50";
     case "GA":
-      return "bg-indigo-100 text-indigo-700";
+      return "border border-indigo-400/25 bg-indigo-400/12 text-indigo-50";
     case "DIRECTOR":
-      return "bg-violet-100 text-violet-700";
+      return "border border-fuchsia-400/25 bg-fuchsia-400/12 text-fuchsia-50";
     case "L3_MANAGER":
     case "L2_MANAGER":
     case "L1_MANAGER":
-      return "bg-amber-100 text-amber-700";
+      return "border border-amber-400/25 bg-amber-300/12 text-amber-50";
     case "L2_AUDITOR":
     case "L1_AUDITOR":
-      return "bg-cyan-100 text-cyan-700";
+      return "border border-sky-400/25 bg-sky-400/12 text-sky-50";
     case "L4_USER":
     case "L3_USER":
     case "L2_USER":
     case "L1_USER":
-      return "bg-slate-100 text-slate-700";
+      return "border border-white/8 bg-white/[0.04] text-slate-100";
     default:
-      return "bg-rose-50 text-rose-700";
+      return "border border-rose-400/25 bg-rose-400/12 text-rose-50";
   }
 }
 
@@ -473,7 +473,7 @@ export default function SAUsers() {
     description:
       "This screen now reads current role posture directly from the admin users endpoint. Dedicated role assignment is available through the linked role panel, and the user-scope surface opens only for ACL users whose role posture is already assigned. The current operator is excluded so SA cannot disable themselves by mistake.",
     aside: (
-      <span className="rounded-full bg-sky-100 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+      <span className="rounded-full border border-amber-400/25 bg-amber-300/12 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-100">
         {loading ? "Checking" : `${missingRoleCount} Missing Role`}
       </span>
     ),
@@ -500,10 +500,10 @@ export default function SAUsers() {
                 orientation: "horizontal",
               })
             }
-            className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+            className={`rounded-full border px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] ${
               filter === option.key
-                ? "bg-sky-600 text-white"
-                : "bg-slate-100 text-slate-600"
+                ? "border-emerald-400/30 bg-emerald-400/12 text-emerald-50"
+                : "border-white/10 bg-white/[0.04] text-slate-300"
             }`}
           >
             {option.label}
@@ -529,31 +529,31 @@ export default function SAUsers() {
       ? "Refreshing governable users"
       : `${filteredUsers.length} visible user${filteredUsers.length === 1 ? "" : "s"} in the current filter`,
     children: loading ? (
-      <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+      <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-5 py-6 text-sm text-slate-400">
         Loading ERP users from the admin governance endpoint.
       </div>
     ) : filteredUsers.length === 0 ? (
-      <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+      <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-5 py-6 text-sm text-slate-400">
         No ERP users match the current governance filter.
       </div>
     ) : (
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto rounded-[22px] border border-white/8 bg-black/10 px-3 py-3">
         <table className="min-w-full border-separate border-spacing-y-3">
           <thead>
             <tr>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="px-4 text-left text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
                 User
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="px-4 text-left text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
                 Role
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="px-4 text-left text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
                 State
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="px-4 text-left text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
                 Created
               </th>
-              <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <th className="px-4 text-left text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
                 Actions
               </th>
             </tr>
@@ -568,25 +568,25 @@ export default function SAUsers() {
               const scopeEnabled = canOpenScope(user);
 
               return (
-                <tr key={user.auth_user_id} className="bg-slate-50 align-top">
-                  <td className="rounded-none px-4 py-4 text-sm text-slate-700 first:rounded-l-2xl">
-                    <div className="font-semibold text-slate-900">
+                <tr key={user.auth_user_id} className="align-top">
+                  <td className="rounded-none border-y border-l border-white/8 bg-white/[0.04] px-4 py-4 text-sm text-slate-200 first:rounded-l-2xl">
+                    <div className="font-semibold text-white">
                       {user.user_code ?? "Uncoded User"}{" "}
-                      <span className="text-slate-600">
+                      <span className="text-slate-400">
                         {formatIdentityName(user)}
                       </span>
                     </div>
-                    <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                    <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
                       {user.parent_company_name ?? "Company Not Captured"}
                     </div>
-                    <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                    <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
                       {user.designation_hint ?? "Designation Not Captured"}
                     </div>
-                    <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                    <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
                       Auth {shortId(user.auth_user_id)}
                     </div>
                   </td>
-                  <td className="px-4 py-4 text-sm text-slate-700">
+                  <td className="border-y border-white/8 bg-white/[0.04] px-4 py-4 text-sm text-slate-200">
                     <div className="flex flex-wrap items-center gap-2">
                       <span
                         className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${getRoleTone(user.role_code)}`}
@@ -594,23 +594,23 @@ export default function SAUsers() {
                         {user.role_code ?? "UNASSIGNED"}
                       </span>
                       {typeof user.role_rank === "number" ? (
-                        <span className="text-xs text-slate-500">
+                        <span className="text-[10px] text-slate-500">
                           Rank {user.role_rank}
                         </span>
                       ) : null}
                     </div>
                   </td>
-                  <td className="px-4 py-4 text-sm text-slate-700">
+                  <td className="border-y border-white/8 bg-white/[0.04] px-4 py-4 text-sm text-slate-200">
                     <span
                       className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}
                     >
                       {user.state ?? "UNKNOWN"}
                     </span>
                   </td>
-                  <td className="px-4 py-4 text-sm text-slate-700">
+                  <td className="border-y border-white/8 bg-white/[0.04] px-4 py-4 text-sm text-slate-300">
                     {formatDateTime(user.created_at)}
                   </td>
-                  <td className="rounded-none px-4 py-4 text-sm text-slate-700 last:rounded-r-2xl">
+                  <td className="rounded-none border-y border-r border-white/8 bg-white/[0.04] px-4 py-4 text-sm text-slate-200 last:rounded-r-2xl">
                     <div className="flex flex-wrap gap-2">
                       {scopeEnabled ? (
                         <button
@@ -627,12 +627,12 @@ export default function SAUsers() {
                               gridRefs: rowActionRefs.current,
                             })
                           }
-                          className="rounded-2xl bg-sky-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700"
+                          className="rounded-2xl border border-cyan-400/25 bg-cyan-400/12 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-50"
                         >
                           Scope
                         </button>
                       ) : (
-                        <span className="rounded-2xl bg-slate-100 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        <span className="rounded-2xl border border-white/8 bg-white/[0.04] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                           ACL First
                         </span>
                       )}
@@ -645,16 +645,16 @@ export default function SAUsers() {
                         disabled={isUpdating}
                         onClick={() => void handleStateChange(user, nextState)}
                         onKeyDown={(event) =>
-                          handleGridNavigation(event, {
-                            rowIndex,
-                            columnIndex: 1,
-                            gridRefs: rowActionRefs.current,
-                          })
-                        }
-                        className={`rounded-2xl px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+                            handleGridNavigation(event, {
+                              rowIndex,
+                              columnIndex: 1,
+                              gridRefs: rowActionRefs.current,
+                            })
+                          }
+                        className={`rounded-2xl border px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] ${
                           user.state === "ACTIVE"
-                            ? "bg-rose-50 text-rose-700"
-                            : "bg-emerald-50 text-emerald-700"
+                            ? "border-rose-400/25 bg-rose-400/12 text-rose-50"
+                            : "border-emerald-400/25 bg-emerald-400/12 text-emerald-50"
                         } ${isUpdating ? "cursor-not-allowed opacity-60" : ""}`}
                       >
                         {isUpdating ? "Updating..." : actionLabel}

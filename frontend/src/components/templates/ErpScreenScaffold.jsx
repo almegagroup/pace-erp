@@ -1,30 +1,44 @@
+/*
+ * File-ID: 9.10-FRONT
+ * File-Path: frontend/src/components/templates/ErpScreenScaffold.jsx
+ * Gate: 9
+ * Phase: 9
+ * Domain: FRONT
+ * Purpose: Provide the canonical keyboard-native screen scaffold for dense ERP work surfaces
+ * Authority: Frontend
+ */
+
 import { Fragment } from "react";
 
 const ACTION_TONE_CLASS = Object.freeze({
   primary:
-    "border border-sky-200 bg-sky-50 text-sky-700 shadow-[0_10px_24px_rgba(14,116,144,0.08)]",
+    "border-emerald-400/30 bg-emerald-400/12 text-emerald-50 hover:bg-emerald-400/18",
   neutral:
-    "border border-slate-200 bg-white text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]",
+    "border-white/8 bg-white/[0.04] text-slate-100 hover:bg-white/[0.08]",
   danger:
-    "border border-rose-200 bg-rose-50 text-rose-700 shadow-[0_10px_24px_rgba(190,24,93,0.08)]",
+    "border-rose-400/30 bg-rose-400/12 text-rose-50 hover:bg-rose-400/18",
 });
 
 const METRIC_TONE_CLASS = Object.freeze({
-  sky: "bg-sky-50 text-sky-700",
-  emerald: "bg-emerald-50 text-emerald-700",
-  rose: "bg-rose-50 text-rose-700",
-  amber: "bg-amber-50 text-amber-700",
-  slate: "bg-slate-100 text-slate-700",
+  sky: "border-cyan-400/25 bg-cyan-400/10 text-cyan-50",
+  emerald: "border-emerald-400/25 bg-emerald-400/10 text-emerald-50",
+  rose: "border-rose-400/25 bg-rose-400/10 text-rose-50",
+  amber: "border-amber-400/25 bg-amber-400/10 text-amber-50",
+  slate: "border-white/8 bg-white/[0.04] text-slate-50",
 });
 
 const NOTICE_TONE_CLASS = Object.freeze({
-  success:
-    "border-emerald-200 bg-emerald-50 text-emerald-700 shadow-[0_12px_30px_rgba(16,185,129,0.08)]",
-  error:
-    "border-rose-200 bg-rose-50 text-rose-700 shadow-[0_12px_30px_rgba(190,24,93,0.08)]",
-  info: "border-sky-200 bg-sky-50 text-sky-700 shadow-[0_12px_30px_rgba(14,116,144,0.08)]",
-  neutral:
-    "border-slate-200 bg-white text-slate-700 shadow-[0_12px_30px_rgba(15,23,42,0.06)]",
+  success: "border-emerald-400/30 bg-emerald-400/12 text-emerald-50",
+  error: "border-rose-400/30 bg-rose-400/12 text-rose-50",
+  info: "border-cyan-400/25 bg-cyan-400/10 text-cyan-50",
+  neutral: "border-white/8 bg-white/[0.04] text-slate-100",
+});
+
+const SECTION_TONE_CLASS = Object.freeze({
+  default: "border-white/8 bg-[#0d1a21]",
+  accent: "border-emerald-400/20 bg-[linear-gradient(180deg,rgba(16,185,129,0.08),rgba(10,23,29,0.92))]",
+  warning: "border-amber-400/20 bg-[linear-gradient(180deg,rgba(245,158,11,0.08),rgba(10,23,29,0.92))]",
+  success: "border-emerald-400/20 bg-[linear-gradient(180deg,rgba(52,211,153,0.08),rgba(10,23,29,0.92))]",
 });
 
 export function ErpMetricCard({
@@ -35,24 +49,24 @@ export function ErpMetricCard({
   badge = "Live",
 }) {
   return (
-    <article className="rounded-3xl border border-slate-200 bg-white px-5 py-5 shadow-[0_12px_34px_rgba(15,23,42,0.06)]">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-        {label}
-      </p>
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <h3 className="text-2xl font-semibold text-slate-900">{value}</h3>
+    <article
+      className={`rounded-[24px] border px-4 py-4 ${METRIC_TONE_CLASS[tone] ?? METRIC_TONE_CLASS.sky}`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-300">
+          {label}
+        </p>
         {badge ? (
-          <span
-            className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${
-              METRIC_TONE_CLASS[tone] ?? METRIC_TONE_CLASS.sky
-            }`}
-          >
+          <span className="rounded-full border border-white/10 bg-black/10 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-200">
             {badge}
           </span>
         ) : null}
       </div>
+      <h3 className="mt-4 text-2xl font-semibold tracking-tight text-white">
+        {value}
+      </h3>
       {caption ? (
-        <p className="mt-3 text-sm leading-6 text-slate-500">{caption}</p>
+        <p className="mt-3 text-sm leading-6 text-slate-300">{caption}</p>
       ) : null}
     </article>
   );
@@ -63,29 +77,29 @@ export function ErpFieldPreview({
   value,
   caption,
   multiline = false,
-  tone = "white",
+  tone = "default",
 }) {
   const toneClass =
     tone === "success"
-      ? "border-emerald-200 bg-emerald-50"
-      : "border-slate-200 bg-white";
+      ? "border-emerald-400/20 bg-emerald-400/10"
+      : "border-white/8 bg-black/10";
 
   return (
-    <article className={`rounded-[28px] border p-5 shadow-[0_12px_34px_rgba(15,23,42,0.06)] ${toneClass}`}>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+    <article className={`rounded-[22px] border px-4 py-4 ${toneClass}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">
         {label}
       </p>
       {multiline ? (
-        <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-900">
+        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-100">
           {value || "Not available yet"}
         </p>
       ) : (
-        <p className="mt-3 text-base font-semibold text-slate-900">
+        <p className="mt-3 text-sm font-semibold text-white">
           {value || "Not available yet"}
         </p>
       )}
       {caption ? (
-        <p className="mt-3 text-sm leading-6 text-slate-500">{caption}</p>
+        <p className="mt-3 text-xs leading-5 text-slate-400">{caption}</p>
       ) : null}
     </article>
   );
@@ -93,11 +107,11 @@ export function ErpFieldPreview({
 
 export function ErpActionStrip({ actions = [] }) {
   return (
-    <div className="flex flex-wrap gap-3">
+    <div className="flex flex-wrap gap-2">
       {actions.map((action, index) => {
         const toneClass =
           action.disabled
-            ? "cursor-not-allowed bg-slate-200 text-slate-500 shadow-none"
+            ? "cursor-not-allowed border-white/6 bg-white/[0.03] text-slate-500"
             : ACTION_TONE_CLASS[action.tone] ?? ACTION_TONE_CLASS.neutral;
 
         return (
@@ -108,11 +122,11 @@ export function ErpActionStrip({ actions = [] }) {
             disabled={action.disabled}
             onClick={action.onClick}
             onKeyDown={action.onKeyDown}
-            className={`rounded-2xl px-4 py-3 text-sm font-semibold ${toneClass}`}
+            className={`rounded-2xl border px-4 py-3 text-left transition ${toneClass}`}
           >
-            <span>{action.label}</span>
+            <span className="block text-sm font-semibold">{action.label}</span>
             {action.hint ? (
-              <span className="ml-2 text-[10px] uppercase tracking-[0.16em] opacity-70">
+              <span className="mt-1 block text-[10px] uppercase tracking-[0.18em] text-slate-400">
                 {action.hint}
               </span>
             ) : null}
@@ -123,72 +137,6 @@ export function ErpActionStrip({ actions = [] }) {
   );
 }
 
-export default function ErpScreenScaffold({
-  eyebrow,
-  title,
-  description,
-  actions = [],
-  notices = [],
-  metrics = [],
-  children,
-}) {
-  return (
-    <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
-      <div className="mx-auto max-w-7xl">
-        <div className="sticky top-4 z-20 rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.12)]">
-          <div className="flex flex-wrap items-start justify-between gap-5">
-            <div className="max-w-3xl">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
-                {eyebrow}
-              </p>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">
-                {title}
-              </h1>
-              {description ? (
-                <p className="mt-3 text-sm leading-7 text-slate-500">
-                  {description}
-                </p>
-              ) : null}
-            </div>
-
-            {actions.length > 0 ? <ErpActionStrip actions={actions} /> : null}
-          </div>
-        </div>
-
-        {notices.map((notice, index) => {
-          if (!notice?.message) {
-            return null;
-          }
-
-          return (
-            <div
-              key={notice.key ?? `${notice.tone}-${index}`}
-              className={`mt-4 rounded-[28px] border px-5 py-4 text-sm ${
-                NOTICE_TONE_CLASS[notice.tone] ?? NOTICE_TONE_CLASS.info
-              }`}
-            >
-              {notice.message}
-            </div>
-          );
-        })}
-
-        {metrics.length > 0 ? (
-          <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {metrics.map((metric, index) => (
-              <ErpMetricCard
-                key={metric.key ?? `${metric.label}-${index}`}
-                {...metric}
-              />
-            ))}
-          </div>
-        ) : null}
-
-        <div className="mt-6">{children}</div>
-      </div>
-    </section>
-  );
-}
-
 export function ErpSectionCard({
   eyebrow,
   title,
@@ -196,26 +144,27 @@ export function ErpSectionCard({
   aside,
   children,
   className = "",
+  tone = "default",
 }) {
   return (
     <section
-      className={`rounded-[30px] border border-slate-200 bg-white p-6 shadow-[0_14px_40px_rgba(15,23,42,0.08)] ${className}`.trim()}
+      className={`rounded-[28px] border px-5 py-5 shadow-[0_18px_40px_rgba(0,0,0,0.18)] ${SECTION_TONE_CLASS[tone] ?? SECTION_TONE_CLASS.default} ${className}`.trim()}
     >
       {(eyebrow || title || description || aside) ? (
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
             {eyebrow ? (
-              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-400">
                 {eyebrow}
               </p>
             ) : null}
             {title ? (
-              <h2 className="mt-3 text-xl font-semibold text-slate-900">
+              <h2 className="mt-3 text-lg font-semibold tracking-tight text-white">
                 {title}
               </h2>
             ) : null}
             {description ? (
-              <p className="mt-4 text-sm leading-7 text-slate-600">
+              <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-300">
                 {description}
               </p>
             ) : null}
@@ -225,6 +174,106 @@ export function ErpSectionCard({
       ) : null}
       <div className={eyebrow || title || description || aside ? "mt-5" : ""}>
         {children}
+      </div>
+    </section>
+  );
+}
+
+export default function ErpScreenScaffold({
+  eyebrow,
+  title,
+  description,
+  actions = [],
+  notices = [],
+  metrics = [],
+  footerHints = [],
+  children,
+}) {
+  return (
+    <section className="min-h-full text-slate-100">
+      <div className="mx-auto flex max-w-[1600px] flex-col gap-4">
+        <div className="rounded-[30px] border border-white/8 bg-[#0b161c] px-5 py-5 shadow-[0_20px_56px_rgba(0,0,0,0.28)]">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_360px]">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-emerald-300">
+                {eyebrow}
+              </p>
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">
+                {title}
+              </h1>
+              {description ? (
+                <p className="mt-3 max-w-4xl text-sm leading-7 text-slate-300">
+                  {description}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="rounded-[24px] border border-white/8 bg-white/[0.03] px-4 py-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+                Screen Actions
+              </p>
+              <div className="mt-3">
+                {actions.length > 0 ? (
+                  <ErpActionStrip actions={actions} />
+                ) : (
+                  <p className="text-sm text-slate-400">
+                    No direct actions registered on this surface yet.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {metrics.length > 0 ? (
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {metrics.map((metric, index) => (
+                <ErpMetricCard
+                  key={metric.key ?? `${metric.label}-${index}`}
+                  {...metric}
+                />
+              ))}
+            </div>
+          ) : null}
+
+          {notices.length > 0 ? (
+            <div className="mt-4 grid gap-3">
+              {notices.map((notice, index) => {
+                if (!notice?.message) {
+                  return null;
+                }
+
+                return (
+                  <div
+                    key={notice.key ?? `${notice.tone}-${index}`}
+                    className={`rounded-[22px] border px-4 py-3 text-sm ${NOTICE_TONE_CLASS[notice.tone] ?? NOTICE_TONE_CLASS.info}`}
+                  >
+                    {notice.message}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="grid gap-4">{children}</div>
+
+        {footerHints.length > 0 ? (
+          <div className="rounded-[24px] border border-white/8 bg-[#091319] px-4 py-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+              Operating Flow
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {footerHints.map((hint) => (
+                <span
+                  key={hint}
+                  className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300"
+                >
+                  {hint}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </section>
   );

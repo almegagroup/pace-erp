@@ -397,11 +397,11 @@ export default function SAApprovalRules() {
           ? "Loading approval rules"
           : `${filteredRules.length} visible approval rule${filteredRules.length === 1 ? "" : "s"}`,
         children: loading ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
             Loading approval routing rules.
           </div>
         ) : filteredRules.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+          <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
             No approval rule matches the current filter.
           </div>
         ) : (
@@ -409,20 +409,20 @@ export default function SAApprovalRules() {
             {filteredRules.map((row, index) => (
               <div
                 key={row.approver_id}
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4"
+                className="rounded-[22px] border border-white/8 bg-black/10 px-4 py-4"
               >
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">
+                    <p className="text-sm font-semibold text-white">
                       {row.module_code} | Stage {row.approval_stage}
                     </p>
-                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                    <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
                       Company {row.company_id}
                     </p>
-                    <p className="mt-2 text-xs text-slate-500">
+                    <p className="mt-2 text-xs text-slate-400">
                       Scope {row.resource_code && row.action_code ? `${row.resource_code} | ${row.action_code}` : "Blanket module scope"}
                     </p>
-                    <p className="mt-1 text-xs text-slate-500">
+                    <p className="mt-1 text-xs text-slate-400">
                       Target {row.approver_role_code ? ERP_ROLE_LABELS[row.approver_role_code] ?? row.approver_role_code : row.approver_user_id}
                     </p>
                   </div>
@@ -453,7 +453,7 @@ export default function SAApprovalRules() {
                           orientation: "horizontal",
                         })
                       }
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-700"
+                      className="rounded-2xl border border-cyan-400/25 bg-cyan-400/12 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-50"
                     >
                       Edit
                     </button>
@@ -471,7 +471,7 @@ export default function SAApprovalRules() {
                           orientation: "horizontal",
                         })
                       }
-                      className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-700"
+                      className="rounded-2xl border border-rose-400/25 bg-rose-400/12 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-rose-50"
                     >
                       Delete
                     </button>
@@ -496,7 +496,7 @@ export default function SAApprovalRules() {
               ["Approval Stage", "approval_stage", null, "1"],
             ].map(([label, key, ref, placeholder]) => (
               <label key={key} className="block">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                   {label}
                 </span>
                 <input
@@ -512,13 +512,13 @@ export default function SAApprovalRules() {
                     }))
                   }
                   placeholder={placeholder}
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+                  className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
                 />
               </label>
             ))}
 
             <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                 Target Mode
               </span>
               <select
@@ -530,7 +530,7 @@ export default function SAApprovalRules() {
                     target_mode: event.target.value,
                   }))
                 }
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400/50 focus:bg-black/30"
               >
                 <option value="role">Approver Role</option>
                 <option value="user">Approver User</option>
@@ -539,7 +539,7 @@ export default function SAApprovalRules() {
 
             {draft.target_mode === "role" ? (
               <label className="block">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                   Approver Role
                 </span>
                 <select
@@ -551,7 +551,7 @@ export default function SAApprovalRules() {
                       approver_role_code: event.target.value,
                     }))
                   }
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+                  className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400/50 focus:bg-black/30"
                 >
                   {ERP_ROLE_OPTIONS.map((role) => (
                     <option key={role.code} value={role.code}>
@@ -562,7 +562,7 @@ export default function SAApprovalRules() {
               </label>
             ) : (
               <label className="block">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                   Approver User ID
                 </span>
                 <input
@@ -576,7 +576,7 @@ export default function SAApprovalRules() {
                     }))
                   }
                   placeholder="Auth user ID"
-                  className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+                  className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-emerald-400/50 focus:bg-black/30"
                 />
               </label>
             )}

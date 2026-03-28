@@ -133,6 +133,19 @@ function shouldIgnoreEnter(target, event) {
   return false;
 }
 
+function isSectionJumpIntent(event) {
+  if (event.ctrlKey || event.metaKey || !event.altKey) {
+    return false;
+  }
+
+  return (
+    event.key === "PageDown" ||
+    event.key === "PageUp" ||
+    event.key === "ArrowDown" ||
+    event.key === "ArrowUp"
+  );
+}
+
 export function useErpDenseFormNavigation(
   containerRef,
   { disabled = false, submitOnFinalField = false, onSubmit } = {}
@@ -156,15 +169,12 @@ export function useErpDenseFormNavigation(
       }
 
       if (
-        event.altKey &&
-        !event.ctrlKey &&
-        !event.metaKey &&
-        (event.key === "PageDown" || event.key === "PageUp")
+        isSectionJumpIntent(event)
       ) {
         const jumpTarget = findSectionJumpTarget(
           container,
           target,
-          event.key === "PageDown" ? 1 : -1
+          event.key === "PageDown" || event.key === "ArrowDown" ? 1 : -1
         );
 
         if (jumpTarget) {

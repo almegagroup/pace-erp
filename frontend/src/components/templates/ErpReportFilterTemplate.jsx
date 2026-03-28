@@ -1,3 +1,13 @@
+/*
+ * File-ID: 9.14-FRONT
+ * File-Path: frontend/src/components/templates/ErpReportFilterTemplate.jsx
+ * Gate: 9
+ * Phase: 9
+ * Domain: FRONT
+ * Purpose: Provide the keyboard-native report and filter template on the shared work-canvas grammar
+ * Authority: Frontend
+ */
+
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "./ErpScreenScaffold.jsx";
@@ -9,7 +19,7 @@ export default function ErpReportFilterTemplate({
   actions = [],
   notices = [],
   metrics = [],
- summarySection = null,
+  summarySection = null,
   filterSection = null,
   reportSection = null,
   sideSection = null,
@@ -23,21 +33,27 @@ export default function ErpReportFilterTemplate({
       actions={actions}
       notices={notices}
       metrics={metrics}
+      footerHints={[
+        "Alt+Shift+F Filter Target",
+        "Arrow Keys Traverse Reports",
+        "Alt+R Refresh Report",
+        "Ctrl+K Command Bar",
+      ]}
     >
-      {summarySection ? <ErpSectionCard {...summarySection} /> : null}
-
-      {(filterSection || reportSection || sideSection) ? (
-        <div className={summarySection ? "mt-6 grid gap-6 xl:grid-cols-[0.9fr_1.1fr]" : "grid gap-6 xl:grid-cols-[0.9fr_1.1fr]"}>
-          <div className="grid gap-6">
-            {filterSection ? <ErpSectionCard {...filterSection} /> : null}
-            {sideSection ? <ErpSectionCard {...sideSection} /> : null}
-          </div>
-
-          {reportSection ? <ErpSectionCard {...reportSection} /> : null}
+      <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="grid gap-4">
+          {summarySection ? <ErpSectionCard {...summarySection} /> : null}
+          {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
+          {sideSection ? <ErpSectionCard {...sideSection} /> : null}
         </div>
-      ) : null}
 
-      {bottomSection ? <div className="mt-6">{bottomSection}</div> : null}
+        <div className="grid gap-4">
+          {reportSection ? (
+            <ErpSectionCard {...reportSection} className="min-h-[480px]" />
+          ) : null}
+          {bottomSection ? <div>{bottomSection}</div> : null}
+        </div>
+      </div>
     </ErpScreenScaffold>
   );
 }

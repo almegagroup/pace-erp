@@ -523,13 +523,13 @@ export default function SAUserScope() {
       title="Open this screen from the User Directory"
       description="A governed user must be selected before scope mapping can begin."
     >
-      <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-sm text-slate-600">
+      <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-6 py-8 text-sm text-slate-400">
         Open this screen from the ERP User Directory so a governed user can be selected for scope mapping.
       </div>
     </ErpSectionCard>
   ) : loading ? (
     <ErpSectionCard eyebrow="Loading" title="Fetching scope payload">
-      <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-sm text-slate-600">
+      <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-6 py-8 text-sm text-slate-400">
         Loading user scope from the admin governance endpoint.
       </div>
     </ErpSectionCard>
@@ -542,7 +542,7 @@ export default function SAUserScope() {
           description="This is the HR authority source for the user. It is not the same thing as operational work scope."
         >
           <label className="block">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
               Select Parent Company
             </span>
             <button
@@ -560,25 +560,25 @@ export default function SAUserScope() {
                   openParentCompanyPicker();
                 }
               }}
-              className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:bg-white"
+              className="mt-2 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-left text-sm text-slate-200 outline-none transition focus:border-emerald-400/50 focus:bg-black/30"
             >
-              <span className="block font-semibold text-slate-900">
+              <span className="block font-semibold text-white">
                 {selectedParentCompany
                   ? `${selectedParentCompany.company_code} - ${selectedParentCompany.company_name}`
                   : "Choose Parent Company"}
               </span>
-              <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
+              <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
                 {selectedParentCompany
                   ? formatCompanyMeta(selectedParentCompany)
                   : "Press Enter to open company picker"}
               </span>
-              <span className="mt-1 block text-xs leading-5 text-slate-500">
+              <span className="mt-1 block text-xs leading-5 text-slate-400">
                 {selectedParentCompany
                   ? formatCompanyAddress(selectedParentCompany)
                   : "State, address, and PIN stay visible during selection."}
               </span>
             </button>
-            <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+            <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
               Enter = open picker | Ctrl+S = save scope
             </p>
           </label>
@@ -590,20 +590,20 @@ export default function SAUserScope() {
           description="Keep HR identity and operational scope visible together while editing."
         >
           <div className="space-y-3">
-            <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-              <span className="font-semibold text-slate-900">
+            <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-3 text-sm text-slate-200">
+              <span className="font-semibold text-white">
                 {user?.user_code ?? "N/A"}
               </span>
               {" - "}
               {formatIdentityName(user)}
             </div>
-            <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-3 text-sm text-slate-200">
               Role: {user?.role_code ?? "UNASSIGNED"}
             </div>
-            <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-3 text-sm text-slate-200">
               Parent company: {scope?.parent_company?.company_name ?? "Unset"}
             </div>
-            <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <div className="rounded-2xl border border-white/8 bg-black/10 px-4 py-3 text-sm text-slate-200">
               Readiness:{" "}
               {readinessFlags.length === 0
                 ? "Ready"
@@ -641,7 +641,7 @@ export default function SAUserScope() {
 
           <div className="mt-5 max-h-[24rem] space-y-3 overflow-y-auto pr-1">
             {filteredWorkCompanies.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
                 No work company matches the current filter.
               </div>
             ) : (
@@ -653,8 +653,8 @@ export default function SAUserScope() {
                     key={company.id}
                     className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm ${
                       selected
-                        ? "border-sky-200 bg-sky-50 text-sky-800"
-                        : "border-slate-200 bg-slate-50 text-slate-700"
+                        ? "border-cyan-400/25 bg-cyan-400/12 text-cyan-50"
+                        : "border-white/8 bg-black/10 text-slate-200"
                     }`}
                   >
                     <input
@@ -674,16 +674,16 @@ export default function SAUserScope() {
                           orientation: "vertical",
                         })
                       }
-                      className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-600"
+                      className="mt-1 h-4 w-4 rounded border-white/20 bg-black/20 text-cyan-500"
                     />
                     <span>
                       <span className="font-semibold">{company.company_code}</span>
                       {" - "}
                       {company.company_name}
-                      <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
+                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
                         {formatCompanyMeta(company)}
                       </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-500">
+                      <span className="mt-1 block text-xs leading-5 text-slate-400">
                         {formatCompanyAddress(company)}
                       </span>
                     </span>
@@ -721,7 +721,7 @@ export default function SAUserScope() {
 
           <div className="mt-5 max-h-[24rem] space-y-3 overflow-y-auto pr-1">
             {filteredProjects.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
                 No project matches the current filter.
               </div>
             ) : (
@@ -733,8 +733,8 @@ export default function SAUserScope() {
                     key={project.id}
                     className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm ${
                       selected
-                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                        : "border-slate-200 bg-slate-50 text-slate-700"
+                        ? "border-emerald-400/25 bg-emerald-400/12 text-emerald-50"
+                        : "border-white/8 bg-black/10 text-slate-200"
                     }`}
                   >
                     <input
@@ -754,7 +754,7 @@ export default function SAUserScope() {
                           orientation: "vertical",
                         })
                       }
-                      className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600"
+                      className="mt-1 h-4 w-4 rounded border-white/20 bg-black/20 text-emerald-500"
                     />
                     <span>
                       <span className="font-semibold">{project.project_code}</span>
@@ -797,7 +797,7 @@ export default function SAUserScope() {
 
           <div className="mt-5 grid gap-3 md:grid-cols-2">
             {filteredDepartments.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
                 No department matches the current filter.
               </div>
             ) : (
@@ -809,8 +809,8 @@ export default function SAUserScope() {
                     key={department.id}
                     className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm ${
                       selected
-                        ? "border-amber-200 bg-amber-50 text-amber-800"
-                        : "border-slate-200 bg-slate-50 text-slate-700"
+                        ? "border-amber-400/25 bg-amber-300/12 text-amber-50"
+                        : "border-white/8 bg-black/10 text-slate-200"
                     }`}
                   >
                     <input
@@ -834,7 +834,7 @@ export default function SAUserScope() {
                           orientation: "vertical",
                         })
                       }
-                      className="mt-1 h-4 w-4 rounded border-slate-300 text-amber-600"
+                      className="mt-1 h-4 w-4 rounded border-white/20 bg-black/20 text-amber-500"
                     />
                     <span>
                       <span className="font-semibold">
@@ -874,7 +874,7 @@ export default function SAUserScope() {
           <button
             type="button"
             onClick={closeCompanyPicker}
-            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-slate-100"
           >
             Close
           </button>
@@ -903,7 +903,7 @@ export default function SAUserScope() {
             style={{ overscrollBehavior: "contain" }}
           >
             {filteredCompanies.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="rounded-[22px] border border-dashed border-white/12 bg-white/[0.03] px-4 py-4 text-sm text-slate-400">
                 No company matches the current search.
               </div>
             ) : (
@@ -933,17 +933,17 @@ export default function SAUserScope() {
                       }
                       className={`w-full rounded-2xl border px-4 py-4 text-left text-sm transition ${
                         selected
-                          ? "border-sky-300 bg-sky-50 text-sky-900"
-                          : "border-slate-200 bg-white text-slate-700"
+                          ? "border-cyan-400/25 bg-cyan-400/12 text-cyan-50"
+                          : "border-white/8 bg-black/10 text-slate-200"
                       }`}
                     >
                       <span className="block font-semibold">
                         {company.company_code} - {company.company_name}
                       </span>
-                      <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
+                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
                         {formatCompanyMeta(company)}
                       </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-500">
+                      <span className="mt-1 block text-xs leading-5 text-slate-400">
                         {formatCompanyAddress(company)}
                       </span>
                     </button>
