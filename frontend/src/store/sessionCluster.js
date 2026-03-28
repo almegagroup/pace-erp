@@ -15,6 +15,8 @@ const OWNER_KEY_PREFIX = "__PACE_CLUSTER_OWNER__:";
 const CHANNEL_NAME = "pace-erp-session-cluster";
 const OWNER_HEARTBEAT_MS = 5000;
 const OWNER_STALE_MS = 15000;
+const CLUSTER_WINDOW_FEATURES =
+  "popup=yes,width=1440,height=900,left=80,top=80,resizable=yes,scrollbars=yes";
 const RUNTIME_WINDOW_ID = createUuid();
 
 let admissionState = readAdmissionState();
@@ -189,6 +191,49 @@ export function getWindowInstanceId() {
 
 export function getClusterAdmission() {
   return admissionState ? { ...admissionState } : null;
+}
+
+function buildClusterJoinUrl(homePath, joinToken) {
+  const url = new URL(homePath, globalThis.location.origin);
+  url.searchParams.set("cluster_join", joinToken);
+  return url;
+}
+
+function primeClusterPopupWindow(openedWindow) {
+  try {
+    openedWindow.opener = null;
+  } catch {
+    // Best-effort only.
+  }
+
+  try {
+    openedWindow.document.title = "Opening Pace ERP window...";
+    openedWindow.document.body.innerHTML = `
+      <div style="margin:0;min-height:100vh;display:grid;place-items:center;background:#e6eef3;color:#102939;font:600 16px Segoe UI,sans-serif;">
+        <div style="text-align:center">
+          <div style="font-size:12px;letter-spacing:.2em;text-transform:uppercase;opacity:.7">Pace ERP</div>
+          <div style="margin-top:10px">Preparing your new workspace window...</div>
+        </div>
+      </div>
+    `;
+  } catch {
+    // Some browsers restrict placeholder writes after navigation; ignore.
+  }
+}
+
+export function openPendingClusterWindow() {
+  const openedWindow = globalThis.open(
+    "about:blank",
+    "_blank",
+    CLUSTER_WINDOW_FEATURES
+  );
+
+  if (!openedWindow) {
+    return null;
+  }
+
+  primeClusterPopupWindow(openedWindow);
+  return openedWindow;
 }
 
 export function subscribeClusterAdmission(listener) {
@@ -387,7 +432,20 @@ export async function requestSessionClusterAdmission(joinToken = null) {
   return { ok: true };
 }
 
-export async function requestOpenClusterWindow(homePath) {
+export async function requestOpenClusterWindow(homePath, options = {}) {
+  const { openedWindow = null } = options;
+  const popupWindow =
+    openedWindow && !openedWindow.closed
+      ? openedWindow
+      : openPendingClusterWindow();
+
+  if (!popupWindow) {
+    return {
+      ok: false,
+      code: "SESSION_CLUSTER_WINDOW_POPUP_BLOCKED",
+    };
+  }
+
   const response = await globalThis.fetch(
     `${import.meta.env.VITE_API_BASE}/api/session/cluster/open-window`,
     {
@@ -404,25 +462,33 @@ export async function requestOpenClusterWindow(homePath) {
   const json = await response.clone().json().catch(() => null);
 
   if (!response.ok || !json?.ok || !json?.data?.join_token) {
+    try {
+      popupWindow.close();
+    } catch {
+      // Best-effort only.
+    }
+
     return {
       ok: false,
       code: json?.code ?? "SESSION_CLUSTER_OPEN_WINDOW_FAILED",
     };
   }
 
-  const url = new URL(homePath, globalThis.location.origin);
-  url.searchParams.set("cluster_join", json.data.join_token);
+  const url = buildClusterJoinUrl(homePath, json.data.join_token);
 
-  const openedWindow = globalThis.open(
-    url.toString(),
-    "_blank",
-    "noopener,noreferrer"
-  );
+  try {
+    popupWindow.location.replace(url.toString());
+    popupWindow.focus?.();
+  } catch {
+    try {
+      popupWindow.close();
+    } catch {
+      // Best-effort only.
+    }
 
-  if (!openedWindow) {
     return {
       ok: false,
-      code: "SESSION_CLUSTER_WINDOW_POPUP_BLOCKED",
+      code: "SESSION_CLUSTER_WINDOW_NAVIGATION_FAILED",
     };
   }
 

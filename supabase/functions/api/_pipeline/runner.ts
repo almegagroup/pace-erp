@@ -35,12 +35,27 @@ import { log } from "../_lib/logger.ts";
 import type { SessionResolution } from "./session.ts";
 import type { ContextResolution } from "./context.ts";
 
+const SESSION_TOUCH_INTERVAL_MS = 60 * 1000;
+
 /**
  * SESSION logout enforcement
  */
 function isPassiveSessionProbe(req: Request): boolean {
   const url = new URL(req.url);
   return url.searchParams.get("session_mode") === "passive";
+}
+
+function shouldTouchSessionClock(
+  session: Extract<SessionResolution, { status: "ACTIVE" }>,
+  nowMs: number
+): boolean {
+  const lastSeenMs = new Date(session.last_seen_at).getTime();
+
+  if (!Number.isFinite(lastSeenMs)) {
+    return true;
+  }
+
+  return nowMs - lastSeenMs >= SESSION_TOUCH_INTERVAL_MS;
 }
 
 function enforceSessionLogout(
@@ -302,20 +317,25 @@ if (
 
 // Passive session probes must never extend the backend session clock.
 if (!isPassiveSessionProbe(req)) {
-  const nowIso = new Date().toISOString();
-  await serviceRoleClient
-    .schema("erp_core")
-    .from("sessions")
-    .update({
-      last_seen_at: nowIso,
-    })
-    .eq("session_id", activeSession.sessionId);
+  const nowMs = Date.now();
 
-  if (activeSession.clusterId && activeSession.clusterWindowToken) {
-    await touchSessionClusterWindow(
-      activeSession.clusterId,
-      activeSession.clusterWindowToken
-    );
+  if (shouldTouchSessionClock(activeSession, nowMs)) {
+    const nowIso = new Date(nowMs).toISOString();
+
+    await serviceRoleClient
+      .schema("erp_core")
+      .from("sessions")
+      .update({
+        last_seen_at: nowIso,
+      })
+      .eq("session_id", activeSession.sessionId);
+
+    if (activeSession.clusterId && activeSession.clusterWindowToken) {
+      await touchSessionClusterWindow(
+        activeSession.clusterId,
+        activeSession.clusterWindowToken
+      );
+    }
   }
 }
 

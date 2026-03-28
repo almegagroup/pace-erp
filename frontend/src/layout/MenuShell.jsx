@@ -30,6 +30,7 @@ import {
 import { lockWorkspace } from "../store/workspaceLock.js";
 import {
   getClusterAdmission,
+  openPendingClusterWindow,
   requestOpenClusterWindow,
   subscribeClusterAdmission,
   unsubscribeClusterAdmission,
@@ -47,7 +48,7 @@ const DASHBOARD_SHORTCUT_GUIDE = Object.freeze([
   "Alt+H Dashboard home",
   "F6 Next zone",
   "Shift+F6 Previous zone",
-  "Ctrl+Shift+N New window",
+  "Ctrl+Alt+N New window",
   "Ctrl+Left Hide menu",
   "Ctrl+Right Show menu",
 ]);
@@ -115,6 +116,26 @@ function findFirstFocusableWithin(container) {
   );
 }
 
+function getClusterWindowErrorMessage(code) {
+  switch (code) {
+    case "SESSION_CLUSTER_WINDOW_POPUP_BLOCKED":
+      return "Browser blocked the new ERP window. Allow popups for this site and try again.";
+    case "SESSION_CLUSTER_OPEN_WINDOW_BLOCKED":
+    case "SESSION_CLUSTER_OPEN_WINDOW_FAILED":
+      return "Unable to open a new ERP window right now. Please try again.";
+    case "SESSION_CLUSTER_ADMISSION_LIMIT_REACHED":
+      return "Maximum 3 ERP windows are already open for this session.";
+    case "SESSION_CLUSTER_OPEN_WINDOW_MAX_REACHED":
+      return "Maximum 3 ERP windows are already open for this session.";
+    case "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED":
+      return "Maximum 3 ERP windows are already open for this session.";
+    case "SESSION_CLUSTER_WINDOW_NAVIGATION_FAILED":
+      return "A new window opened, but navigation into the ERP workspace failed.";
+    default:
+      return "Unable to open a new ERP window right now.";
+  }
+}
+
 export default function MenuShell() {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
@@ -124,6 +145,7 @@ export default function MenuShell() {
   const [clusterAdmission, setClusterAdmission] = useState(() =>
     getClusterAdmission()
   );
+  const [clusterWindowMessage, setClusterWindowMessage] = useState("");
 
   const menuButtonRefs = useRef([]);
   const actionButtonRefs = useRef([]);
@@ -245,18 +267,43 @@ export default function MenuShell() {
   }
 
   async function handleOpenNewWindow() {
-    const result = await requestOpenClusterWindow(
-      location.pathname.startsWith("/sa")
-        ? "/sa/home"
-        : location.pathname.startsWith("/ga")
-          ? "/ga/home"
-          : "/dashboard"
-    );
+    const homePath = location.pathname.startsWith("/sa")
+      ? "/sa/home"
+      : location.pathname.startsWith("/ga")
+        ? "/ga/home"
+        : "/dashboard";
+    const pendingWindow = openPendingClusterWindow();
+
+    if (!pendingWindow) {
+      setClusterWindowMessage(
+        getClusterWindowErrorMessage("SESSION_CLUSTER_WINDOW_POPUP_BLOCKED")
+      );
+      return;
+    }
+
+    setClusterWindowMessage("");
+
+    const result = await requestOpenClusterWindow(homePath, {
+      openedWindow: pendingWindow,
+    });
 
     if (!result.ok) {
+      setClusterWindowMessage(getClusterWindowErrorMessage(result.code));
       console.error("SESSION_CLUSTER_OPEN_WINDOW_FAILED", result.code);
     }
   }
+
+  useEffect(() => {
+    if (!clusterWindowMessage) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setClusterWindowMessage("");
+    }, 5000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [clusterWindowMessage]);
 
   const focusContentZone = useCallback(() => {
     const target =
@@ -363,7 +410,7 @@ export default function MenuShell() {
       if (
         shellMode === "dashboard" &&
         event.ctrlKey &&
-        event.shiftKey &&
+        event.altKey &&
         event.key.toLowerCase() === "n"
       ) {
         event.preventDefault();
@@ -460,7 +507,7 @@ export default function MenuShell() {
   if (shellMode === "dashboard") {
     headerActions.splice(2, 0, {
       label: "New Window",
-      hint: "Ctrl+Shift+N",
+      hint: "Ctrl+Alt+N",
       onClick: () => void handleOpenNewWindow(),
     });
 
@@ -852,8 +899,26 @@ export default function MenuShell() {
               >
                 {item}
               </span>
-            ))}
-          </div>
+              ))}
+            </div>
+
+          {clusterWindowMessage ? (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                marginTop: "12px",
+                border: "1px solid #d9b15f",
+                background: "#fff7e6",
+                borderRadius: "10px",
+                padding: "10px 12px",
+                fontSize: "13px",
+                color: "#7c4a03",
+              }}
+            >
+              {clusterWindowMessage}
+            </div>
+          ) : null}
 
           {showKeyboardHelp ? (
             <div

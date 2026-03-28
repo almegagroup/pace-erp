@@ -74,8 +74,14 @@ export async function admitSessionClusterWindowHandler(
       req
     );
   } catch (error) {
+    const errorCode =
+      error instanceof Error &&
+      error.message === "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED"
+        ? "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED"
+        : "SESSION_CLUSTER_ADMISSION_BLOCKED";
+
     return errorResponse(
-      "SESSION_CLUSTER_ADMISSION_BLOCKED",
+      errorCode,
       error instanceof Error ? error.message : "Admission blocked",
       requestId,
       "NONE",
@@ -118,8 +124,14 @@ export async function issueSessionClusterJoinTicketHandler(
       req
     );
   } catch (error) {
+    const errorCode =
+      error instanceof Error &&
+      error.message === "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED"
+        ? "SESSION_CLUSTER_MAX_WINDOWS_EXCEEDED"
+        : "SESSION_CLUSTER_OPEN_WINDOW_BLOCKED";
+
     return errorResponse(
-      "SESSION_CLUSTER_OPEN_WINDOW_BLOCKED",
+      errorCode,
       error instanceof Error ? error.message : "Open window blocked",
       requestId,
       "NONE",

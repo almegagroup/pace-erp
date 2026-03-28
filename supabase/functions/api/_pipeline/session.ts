@@ -4,7 +4,7 @@
  * Gate: 2
  * Phase: 2
  * Domain: SESSION
- * Purpose: Session lookup + bind invariant enforcement with session-cluster validation.
+ * Purpose: Session lookup + bind invariant enforcement with lightweight session-cluster awareness.
  * Authority: Backend
  */
 
@@ -107,46 +107,6 @@ export async function stepSession(
     return { status: "EXPIRED", action: "LOGOUT" };
   }
 
-  if (data.cluster_id) {
-    const { data: clusterRow, error: clusterError } = await serviceRoleClient
-      .schema("erp_core")
-      .from("session_clusters")
-      .select("cluster_id, status")
-      .eq("cluster_id", data.cluster_id)
-      .maybeSingle();
-
-    if (
-      clusterError ||
-      !clusterRow ||
-      clusterRow.status !== "ACTIVE"
-    ) {
-      recordSecurityEvent(req, requestId, "SESSION_CLUSTER_INVALID", "SESSION");
-      return { status: "REVOKED", action: "LOGOUT" };
-    }
-
-    if (clusterWindowToken) {
-      const { data: clusterWindow, error: clusterWindowError } =
-        await serviceRoleClient
-          .schema("erp_core")
-          .from("session_cluster_windows")
-          .select("cluster_window_id")
-          .eq("cluster_id", data.cluster_id)
-          .eq("window_token", clusterWindowToken)
-          .eq("status", "ADMITTED")
-          .maybeSingle();
-
-      if (clusterWindowError || !clusterWindow?.cluster_window_id) {
-        recordSecurityEvent(
-          req,
-          requestId,
-          "SESSION_CLUSTER_WINDOW_INVALID",
-          "SESSION"
-        );
-        return { status: "REVOKED", action: "LOGOUT" };
-      }
-    }
-  }
-
   log({
     level: "OBSERVABILITY",
     request_id: requestId,
@@ -161,21 +121,29 @@ export async function stepSession(
     event: "ACTIVE",
   });
 
-  const { data: userRow } = await serviceRoleClient
-    .schema("erp_core")
-    .from("users")
-    .select("user_code")
-    .eq("auth_user_id", data.auth_user_id)
-    .single();
+  let roleCode =
+    typeof data.role_code === "string" && data.role_code.trim().length > 0
+      ? data.role_code.trim()
+      : null;
 
-  const userCode = userRow?.user_code || "";
-  let roleCode = data.role_code;
+  if (!roleCode) {
+    const { data: userRow } = await serviceRoleClient
+      .schema("erp_core")
+      .from("users")
+      .select("user_code")
+      .eq("auth_user_id", data.auth_user_id)
+      .single();
 
-  if (userCode.startsWith("SA")) {
-    roleCode = "SA";
-  } else if (userCode.startsWith("GA")) {
-    roleCode = "GA";
-  } else if (!roleCode) {
+    const userCode = userRow?.user_code || "";
+
+    if (userCode.startsWith("SA")) {
+      roleCode = "SA";
+    } else if (userCode.startsWith("GA")) {
+      roleCode = "GA";
+    }
+  }
+
+  if (!roleCode) {
     log({
       level: "SECURITY",
       request_id: requestId,

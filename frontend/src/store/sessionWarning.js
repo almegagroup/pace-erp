@@ -14,6 +14,7 @@ import { clearWorkspaceLock } from "./workspaceLock.js";
 import {
   broadcastClusterMessage,
   clearClusterAdmission,
+  getClusterAdmission,
 } from "./sessionCluster.js";
 import { releaseSingleTabOwnership } from "./singleTabSession.js";
 
@@ -40,6 +41,30 @@ let dismissHandler = null;
 
 function emit() {
   listeners.forEach((listener) => listener({ ...state }));
+}
+
+function redirectToLogin() {
+  try {
+    globalThis.history.replaceState(null, "", "/login");
+  } catch {
+    // History replacement is best effort only.
+  }
+
+  globalThis.location.replace("/login");
+}
+
+function closeChildWindowOrRedirect() {
+  try {
+    globalThis.close();
+  } catch {
+    // Close is best effort only.
+  }
+
+  globalThis.setTimeout(() => {
+    if (!globalThis.closed) {
+      redirectToLogin();
+    }
+  }, 150);
 }
 
 export function subscribe(fn) {
@@ -158,6 +183,7 @@ export function resetWarningState() {
 
 export function hardLogout(options = {}) {
   const { broadcast = true } = options;
+  const clusterAdmission = getClusterAdmission();
   dismissHandler = null;
 
   if (broadcast) {
@@ -180,13 +206,12 @@ export function hardLogout(options = {}) {
   };
   emit();
 
-  try {
-    globalThis.history.replaceState(null, "", "/");
-  } catch {
-    // History replacement is best effort only.
+  if ((clusterAdmission?.windowSlot ?? 1) > 1) {
+    closeChildWindowOrRedirect();
+    return;
   }
 
-  globalThis.location.assign("/login");
+  redirectToLogin();
 }
 
 export async function requestLogout() {
