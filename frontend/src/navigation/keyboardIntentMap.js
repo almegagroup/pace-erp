@@ -15,6 +15,8 @@ import { confirmAndRequestLogout } from "../store/sessionWarning.js";
 import { hideSidebar, showSidebar } from "../store/workspaceShell.js";
 import { lockWorkspace } from "../store/workspaceLock.js";
 import { dispatchWorkspaceFocusCommand } from "./workspaceFocusBus.js";
+import { openErpCommandPalette } from "../store/erpCommandPalette.js";
+import { executeErpScreenHotkey } from "../store/erpScreenHotkeys.js";
 
 /**
  * SECURITY ALLOWLIST
@@ -22,6 +24,11 @@ import { dispatchWorkspaceFocusCommand } from "./workspaceFocusBus.js";
  */
 const INTENT_HANDLERS = Object.freeze({
   INTENT_BACK: handleBack,
+  INTENT_GLOBAL_SEARCH: handleGlobalSearch,
+  INTENT_SCREEN_SAVE: handleScreenSave,
+  INTENT_SCREEN_REFRESH: handleScreenRefresh,
+  INTENT_SCREEN_FOCUS_SEARCH: handleScreenFocusSearch,
+  INTENT_SCREEN_FOCUS_PRIMARY: handleScreenFocusPrimary,
   INTENT_SIDEBAR_HIDE: handleSidebarHide,
   INTENT_SIDEBAR_SHOW: handleSidebarShow,
   INTENT_LOGOUT_CONFIRM: handleLogoutConfirm,
@@ -70,6 +77,67 @@ function handleBack() {
     action: "POP_SCREEN",
   });
   popScreen();
+}
+
+function handleGlobalSearch() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_GLOBAL_SEARCH",
+    action: "OPEN_COMMAND_PALETTE",
+  });
+  openErpCommandPalette();
+}
+
+function handleScreenSave() {
+  const executed = executeErpScreenHotkey("save");
+  if (!executed) {
+    return;
+  }
+
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_SCREEN_SAVE",
+    action: "SCREEN_SAVE",
+  });
+}
+
+function handleScreenRefresh() {
+  const executed = executeErpScreenHotkey("refresh");
+  if (!executed) {
+    return;
+  }
+
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_SCREEN_REFRESH",
+    action: "SCREEN_REFRESH",
+  });
+}
+
+function handleScreenFocusSearch() {
+  const executed = executeErpScreenHotkey("focusSearch");
+  if (!executed) {
+    return;
+  }
+
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_SCREEN_FOCUS_SEARCH",
+    action: "SCREEN_FOCUS_SEARCH",
+  });
+}
+
+function handleScreenFocusPrimary() {
+  const executed = executeErpScreenHotkey("focusPrimary");
+  if (!executed) {
+    return;
+  }
+
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_SCREEN_FOCUS_PRIMARY",
+    action: "SCREEN_FOCUS_PRIMARY",
+  });
 }
 
 function handleSidebarHide() {

@@ -1,4 +1,6 @@
 import EnterpriseDashboard from "../../../components/dashboard/EnterpriseDashboard.jsx";
+import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 
 export default function GAHome() {
   const stats = [
@@ -44,6 +46,29 @@ export default function GAHome() {
       onClick: () => {},
     },
   ];
+
+  useErpScreenCommands([
+    {
+      id: "ga-home-focus-actions",
+      group: "Current Screen",
+      label: "Focus GA action queue",
+      keywords: ["ga home", "actions", "dashboard"],
+      perform: () => {
+        const target = document.querySelector("[data-workspace-primary-focus='true']");
+        target?.focus?.();
+      },
+      order: 10,
+    },
+  ]);
+
+  useErpScreenHotkeys({
+    focusPrimary: {
+      perform: () => {
+        const target = document.querySelector("[data-workspace-primary-focus='true']");
+        target?.focus?.();
+      },
+    },
+  });
 
   return (
     <EnterpriseDashboard

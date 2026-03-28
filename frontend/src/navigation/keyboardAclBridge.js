@@ -17,6 +17,26 @@ const INTENT_ACL_MAP = Object.freeze({
     resource: "NAVIGATION",
     action: "BACK",
   },
+  INTENT_GLOBAL_SEARCH: {
+    resource: "NAVIGATION",
+    action: "COMMAND_PALETTE_OPEN",
+  },
+  INTENT_SCREEN_SAVE: {
+    resource: "DOCUMENT",
+    action: "SAVE",
+  },
+  INTENT_SCREEN_REFRESH: {
+    resource: "NAVIGATION",
+    action: "REFRESH",
+  },
+  INTENT_SCREEN_FOCUS_SEARCH: {
+    resource: "NAVIGATION",
+    action: "FOCUS_SEARCH",
+  },
+  INTENT_SCREEN_FOCUS_PRIMARY: {
+    resource: "NAVIGATION",
+    action: "FOCUS_PRIMARY",
+  },
   INTENT_SIDEBAR_HIDE: {
     resource: "NAVIGATION",
     action: "COLLAPSE_SIDEBAR",

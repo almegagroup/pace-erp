@@ -14,6 +14,8 @@ import {
   handleGridNavigation,
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
+import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 
 async function readJsonSafe(response) {
   try {
@@ -196,6 +198,38 @@ export default function SAControlPanel() {
   const [health, setHealth] = useState(null);
   const quickLaunchRefs = useRef([]);
 
+  async function handleRefresh() {
+    setLoading(true);
+    setError("");
+
+    try {
+      const [controlPanelResponse, healthResponse] = await Promise.all([
+        fetch(`${import.meta.env.VITE_API_BASE}/api/admin/control-panel`, {
+          credentials: "include",
+        }),
+        fetch(`${import.meta.env.VITE_API_BASE}/api/admin/system-health`, {
+          credentials: "include",
+        }),
+      ]);
+
+      const [controlPanelJson, healthJson] = await Promise.all([
+        readJsonSafe(controlPanelResponse),
+        readJsonSafe(healthResponse),
+      ]);
+
+      if (!controlPanelResponse.ok || !controlPanelJson?.ok) {
+        throw new Error("CONTROL_PANEL_READ_FAILED");
+      }
+
+      setControlPanel(controlPanelJson.data ?? null);
+      setHealth(healthJson?.ok ? healthJson.data ?? null : null);
+    } catch {
+      setError("Unable to load the SA control panel right now.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
     let alive = true;
 
@@ -321,6 +355,44 @@ export default function SAControlPanel() {
       onClick: () => openScreen("SA_HOME", { mode: "reset" }),
     },
   ];
+
+  useErpScreenCommands([
+    {
+      id: "sa-control-panel-refresh",
+      group: "Current Screen",
+      label: loading ? "Refreshing control panel..." : "Refresh control panel",
+      keywords: ["refresh", "control panel", "diagnostics", "health"],
+      disabled: loading,
+      perform: () => void handleRefresh(),
+      order: 10,
+    },
+    {
+      id: "sa-control-panel-focus-launch",
+      group: "Current Screen",
+      label: "Focus quick launch grid",
+      keywords: ["focus", "quick launch", "actions"],
+      perform: () => quickLaunchRefs.current[0]?.[0]?.focus?.(),
+      order: 20,
+    },
+    ...quickLaunch.map((action, index) => ({
+      id: `sa-control-panel-${action.title.toLowerCase().replaceAll(" ", "-")}`,
+      group: "Current Screen",
+      label: `Open ${action.title}`,
+      keywords: [action.badge, action.title, action.description],
+      perform: action.onClick,
+      order: 30 + index,
+    })),
+  ]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void handleRefresh(),
+    },
+    focusPrimary: {
+      perform: () => quickLaunchRefs.current[0]?.[0]?.focus?.(),
+    },
+  });
 
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">

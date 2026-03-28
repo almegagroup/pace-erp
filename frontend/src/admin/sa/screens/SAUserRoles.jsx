@@ -24,6 +24,8 @@ import {
   ERP_ROLE_OPTIONS,
   ERP_ROLE_RANKS,
 } from "../../../shared/erpRoles.js";
+import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 
 async function readJsonSafe(response) {
   try {
@@ -131,6 +133,7 @@ export default function SAUserRoles() {
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
   const rowControlRefs = useRef([]);
+  const searchInputRef = useRef(null);
 
   useEffect(() => {
     let alive = true;
@@ -303,6 +306,52 @@ export default function SAUserRoles() {
   const managerCount = governableUsers.filter((user) =>
     ["L3_MANAGER", "L2_MANAGER", "L1_MANAGER"].includes(user.role_code)
   ).length;
+
+  useErpScreenCommands([
+    {
+      id: "sa-user-roles-refresh",
+      group: "Current Screen",
+      label: loading ? "Refreshing role assignments..." : "Refresh role assignment list",
+      keywords: ["refresh", "roles", "role assignment"],
+      disabled: loading,
+      perform: () => void handleRefresh(),
+      order: 10,
+    },
+    {
+      id: "sa-user-roles-focus-search",
+      group: "Current Screen",
+      label: "Focus role search",
+      keywords: ["search", "filter", "roles"],
+      perform: () => searchInputRef.current?.focus(),
+      order: 20,
+    },
+    {
+      id: "sa-user-roles-open-users",
+      group: "Current Screen",
+      label: "Open user directory",
+      keywords: ["users", "directory"],
+      perform: () => openScreen("SA_USERS"),
+      order: 30,
+    },
+    {
+      id: "sa-user-roles-open-signups",
+      group: "Current Screen",
+      label: "Open signup requests",
+      keywords: ["signup", "requests"],
+      perform: () => openScreen("SA_SIGNUP_REQUESTS"),
+      order: 40,
+    },
+  ]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void handleRefresh(),
+    },
+    focusSearch: {
+      perform: () => searchInputRef.current?.focus(),
+    },
+  });
 
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
@@ -507,6 +556,7 @@ export default function SAUserRoles() {
           </div>
 
           <QuickFilterInput
+            inputRef={searchInputRef}
             className="mt-5"
             label="Quick Search"
             value={searchQuery}

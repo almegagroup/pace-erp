@@ -34,7 +34,6 @@ function normalizeKeyEvent(event) {
   if (event.defaultPrevented) return null;
   if (isBlockingLayerActive()) return null;
   if (isPublicRoute(globalThis.location.pathname)) return null;
-  if (isEditableTarget(event.target)) return null;
 
   const key = event.key;
   const ctrl = event.ctrlKey || event.metaKey;
@@ -44,7 +43,16 @@ function normalizeKeyEvent(event) {
   // Only normalized, symbolic intents
   if (key === "Escape") return "INTENT_BACK";
 
-  if (ctrl && key === "k") return "INTENT_GLOBAL_SEARCH";
+  if (ctrl && key.toLowerCase() === "k") return "INTENT_GLOBAL_SEARCH";
+  if (ctrl && key.toLowerCase() === "s") return "INTENT_SCREEN_SAVE";
+  if (event.altKey && key.toLowerCase() === "r") return "INTENT_SCREEN_REFRESH";
+  if (event.altKey && shift && key.toLowerCase() === "f") {
+    return "INTENT_SCREEN_FOCUS_SEARCH";
+  }
+  if (event.altKey && shift && key.toLowerCase() === "p") {
+    return "INTENT_SCREEN_FOCUS_PRIMARY";
+  }
+  if (isEditableTarget(event.target)) return null;
   if (ctrl && key === "ArrowLeft") return "INTENT_SIDEBAR_HIDE";
   if (ctrl && key === "ArrowRight") return "INTENT_SIDEBAR_SHOW";
   if (ctrl && shift && key.toLowerCase() === "l") return "INTENT_LOGOUT_CONFIRM";

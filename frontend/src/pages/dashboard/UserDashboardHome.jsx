@@ -1,4 +1,6 @@
 import EnterpriseDashboard from "../../components/dashboard/EnterpriseDashboard.jsx";
+import { useErpScreenCommands } from "../../hooks/useErpScreenCommands.js";
+import { useErpScreenHotkeys } from "../../hooks/useErpScreenHotkeys.js";
 
 export default function UserDashboardHome() {
   const stats = [
@@ -44,6 +46,29 @@ export default function UserDashboardHome() {
       onClick: () => {},
     },
   ];
+
+  useErpScreenCommands([
+    {
+      id: "user-home-focus-actions",
+      group: "Current Screen",
+      label: "Focus user action queue",
+      keywords: ["user dashboard", "actions", "queue"],
+      perform: () => {
+        const target = document.querySelector("[data-workspace-primary-focus='true']");
+        target?.focus?.();
+      },
+      order: 10,
+    },
+  ]);
+
+  useErpScreenHotkeys({
+    focusPrimary: {
+      perform: () => {
+        const target = document.querySelector("[data-workspace-primary-focus='true']");
+        target?.focus?.();
+      },
+    },
+  });
 
   return (
     <EnterpriseDashboard

@@ -1487,6 +1487,211 @@ and runtime behavior now matches the backend-authoritative cluster design valida
 Next step:
 Resume the main ERP roadmap from the next scheduled program item outside this session-cluster stabilization pass
 
+## Entry 032
+
+Date:
+2026-03-28
+
+Roadmap step:
+Keyboard-First ERP global framework - shared screen hotkeys
+
+Status:
+COMPLETED
+
+What was done:
+- introduced a shared route-level screen hotkey registry so screens can register save,
+  refresh,
+  quick-search focus,
+  and primary-focus actions without writing their own global keydown listeners
+- wired the global shortcuts:
+  `Ctrl+S`,
+  `Alt+R`,
+  `Alt+Shift+F`,
+  and
+  `Alt+Shift+P`
+  into the central keyboard intent engine
+- migrated the existing SA Company Create and SA User Scope save flow away from manual `window` key listeners into the shared hotkey registry
+- registered refresh and search hotkeys across the current SA list/diagnostic screens,
+  plus primary-focus hotkeys for the current dashboard homes
+
+What changed in repo:
+- frontend/src/store/erpScreenHotkeys.js
+- frontend/src/hooks/useErpScreenHotkeys.js
+- frontend/src/navigation/keyboardIntentEngine.js
+- frontend/src/navigation/keyboardIntentMap.js
+- frontend/src/navigation/keyboardAclBridge.js
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/admin/sa/screens/SAHome.jsx
+- frontend/src/admin/sa/screens/SAControlPanel.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- frontend/src/admin/sa/screens/SAUserScope.jsx
+- frontend/src/admin/sa/screens/SACompanyCreate.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SAAudit.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SASystemHealth.jsx
+- frontend/src/admin/ga/screens/GAHome.jsx
+- frontend/src/pages/dashboard/UserDashboardHome.jsx
+- docs/Base Docs/ERP_KEYBOARD_FIRST_INTERACTION_STANDARD.md
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- shared hotkeys now execute through the central keyboard intent system instead of isolated screen-local listeners where this layer was adopted
+
+Problems or blockers:
+- future screens still need to register themselves to this shared hotkey registry as they are built
+- dense form-enter traversal still remains a separate future enhancement for the keyboard-first layer
+
+Decision or note:
+The keyboard-first foundation now has two reusable global layers:
+command-bar registration
+and
+shared screen hotkey registration.
+Future screens should consume those layers instead of inventing ad-hoc keydown logic.
+
+Next step:
+Carry the same global framework into the next governance build wave and later add shared dense-form traversal for HR data-entry modules
+
+## Entry 031
+
+Date:
+2026-03-28
+
+Roadmap step:
+Keyboard-First ERP rollout - current SA protected screens
+
+Status:
+COMPLETED
+
+What was done:
+- extended the new `Ctrl+K` ERP command bar across the current SA protected surface
+- added screen-command registration for:
+  - SA Home
+  - SA Control Panel
+  - SA Users
+  - SA User Roles
+  - SA User Scope
+  - SA Company Create
+  - SA Sessions
+  - SA Audit
+  - SA Signup Requests
+  - SA System Health
+- added minimum command-bar coverage for the currently implemented
+  GA home
+  and
+  generic user dashboard home
+- exposed the practical keyboard actions that matter on those screens:
+  refresh,
+  quick search focus,
+  quick-launch jumps,
+  related-screen jumps,
+  and current-screen governance actions
+- kept all existing protected-session behavior unchanged while making the present SA control plane keyboard-accessible through one shared command center
+
+What changed in repo:
+- frontend/src/admin/sa/screens/SAHome.jsx
+- frontend/src/admin/sa/screens/SAControlPanel.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- frontend/src/admin/sa/screens/SAUserScope.jsx
+- frontend/src/admin/sa/screens/SACompanyCreate.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SAAudit.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SASystemHealth.jsx
+- frontend/src/admin/ga/screens/GAHome.jsx
+- frontend/src/pages/dashboard/UserDashboardHome.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- command-bar coverage now exists across the current SA protected screens without removing existing runtime protections
+
+Problems or blockers:
+- future org-master screens,
+  module governance screens,
+  approval-governance screens,
+  and upcoming HR module screens still need to be built or registered to the same keyboard-first standard
+
+Decision or note:
+For the currently implemented SA surface,
+keyboard-first operation is no longer limited to isolated screens.
+The command-bar pattern is now a live control-plane baseline.
+
+Next step:
+Carry the same keyboard-first standard into the next governance build wave:
+Company Master,
+Group Master,
+Project Master,
+Department Master,
+and the HR module surfaces
+
+## Entry 030
+
+Date:
+2026-03-28
+
+Roadmap step:
+Keyboard-First ERP foundation - protected command bar baseline
+
+Status:
+COMPLETED
+
+What was done:
+- introduced a protected-shell ERP command bar opened by `Ctrl+K`
+- added a reusable screen-command registry so each protected screen can publish its own keyboard actions
+- exposed shell actions,
+  allowed navigation targets,
+  and current-screen actions through one keyboard command center
+- wired the first route-level screen commands into:
+  `SA Company Create`
+  and
+  `SA User Scope`
+- preserved existing protected behavior:
+  idle warning,
+  idle logout,
+  absolute warning,
+  absolute logout,
+  workspace lock,
+  logout confirmation,
+  and max-3 governed window flow
+
+What changed in repo:
+- frontend/src/store/erpCommandPalette.js
+- frontend/src/hooks/useErpScreenCommands.js
+- frontend/src/components/ErpCommandPalette.jsx
+- frontend/src/navigation/keyboardIntentEngine.js
+- frontend/src/navigation/keyboardIntentMap.js
+- frontend/src/navigation/keyboardAclBridge.js
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/admin/sa/screens/SACompanyCreate.jsx
+- frontend/src/admin/sa/screens/SAUserScope.jsx
+- docs/Base Docs/ERP_KEYBOARD_FIRST_INTERACTION_STANDARD.md
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- command bar integration was added without removing any protected-session or governed multi-window behavior
+
+Problems or blockers:
+- this is only the first keyboard-first layer;
+  most remaining protected screens still need screen-level command registration
+
+Decision or note:
+Keyboard-first ERP work has now moved from intention
+to reusable runtime foundation.
+Future protected screens should register commands
+instead of inventing one-off keyboard behavior.
+
+Next step:
+Extend keyboard command registration across the remaining SA governance screens,
+then carry the same pattern into org masters and upcoming HR modules
+
 ## Entry 029
 
 Date:

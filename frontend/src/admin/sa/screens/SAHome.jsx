@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import EnterpriseDashboard from "../../../components/dashboard/EnterpriseDashboard.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 
 async function readJsonSafe(response) {
   try {
@@ -65,6 +67,21 @@ function deriveSnapshotHealth(health) {
 export default function SAHome() {
   const [controlPanel, setControlPanel] = useState(null);
   const [systemHealth, setSystemHealth] = useState(null);
+
+  async function refreshDashboardSnapshot() {
+    try {
+      const [controlPanelData, systemHealthData] = await Promise.all([
+        fetchControlPanelSnapshot(),
+        fetchSystemHealthSnapshot(),
+      ]);
+
+      setControlPanel(controlPanelData);
+      setSystemHealth(systemHealthData);
+    } catch {
+      setControlPanel(null);
+      setSystemHealth(null);
+    }
+  }
 
   useEffect(() => {
     let alive = true;
@@ -148,6 +165,36 @@ export default function SAHome() {
       onClick: () => openScreen("SA_SIGNUP_REQUESTS"),
     },
   ];
+
+  const commands = useMemo(
+    () => [
+      {
+        id: "sa-home-refresh",
+        group: "Current Screen",
+        label: "Refresh SA dashboard snapshot",
+        keywords: ["refresh", "dashboard", "snapshot", "home"],
+        perform: () => void refreshDashboardSnapshot(),
+        order: 10,
+      },
+      ...actions.map((action, index) => ({
+        id: `sa-home-${action.title.toLowerCase().replaceAll(" ", "-")}`,
+        group: "Current Screen",
+        label: `Open ${action.title}`,
+        keywords: [action.badge, action.title, action.description],
+        perform: action.onClick,
+        order: 20 + index,
+      })),
+    ],
+    [actions]
+  );
+
+  useErpScreenCommands(commands);
+
+  useErpScreenHotkeys({
+    refresh: {
+      perform: () => void refreshDashboardSnapshot(),
+    },
+  });
 
   return (
     <EnterpriseDashboard

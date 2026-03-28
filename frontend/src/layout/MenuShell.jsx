@@ -35,12 +35,18 @@ import {
   unsubscribeClusterAdmission,
 } from "../store/sessionCluster.js";
 import { subscribeWorkspaceFocusCommands } from "../navigation/workspaceFocusBus.js";
+import ErpCommandPalette from "../components/ErpCommandPalette.jsx";
 
 const DASHBOARD_ROUTES = new Set(["/sa/home", "/ga/home", "/dashboard"]);
 const DASHBOARD_ZONES = Object.freeze(["menu", "actions", "content"]);
 const TASK_ZONES = Object.freeze(["actions", "content"]);
 
 const DASHBOARD_SHORTCUT_GUIDE = Object.freeze([
+  "Ctrl+K Command bar",
+  "Ctrl+S Save when available",
+  "Alt+R Refresh when available",
+  "Alt+Shift+F Search when available",
+  "Alt+Shift+P Primary focus when available",
   "Alt+C Work area",
   "Alt+M Menu",
   "Alt+A Top actions",
@@ -52,6 +58,11 @@ const DASHBOARD_SHORTCUT_GUIDE = Object.freeze([
 ]);
 
 const TASK_SHORTCUT_GUIDE = Object.freeze([
+  "Ctrl+K Command bar",
+  "Ctrl+S Save when available",
+  "Alt+R Refresh when available",
+  "Alt+Shift+F Search when available",
+  "Alt+Shift+P Primary focus when available",
   "Alt+C Work area",
   "Alt+A Page actions",
   "Alt+H Dashboard home",
@@ -497,6 +508,119 @@ export default function MenuShell() {
       onClick: () => toggleSidebarCollapsed(),
     });
   }
+
+  const shellCommands = [
+    {
+      id: "shell-back",
+      group: "Shell",
+      label: stackDepth <= 1 ? "Exit to logout confirmation" : "Back one screen",
+      hint: "Esc",
+      keywords: ["back", "previous", "logout"],
+      perform: () => void handleBack(),
+      order: 10,
+    },
+    {
+      id: "shell-home",
+      group: "Shell",
+      label: "Go to dashboard home",
+      hint: "Alt+H",
+      keywords: ["home", "dashboard", "start"],
+      perform: handleGoHome,
+      order: 20,
+    },
+    {
+      id: "shell-window",
+      group: "Shell",
+      label: "Open new ERP window",
+      hint: "Max 3",
+      keywords: ["new window", "side by side", "cluster"],
+      perform: () => void handleOpenNewWindow(),
+      order: 30,
+    },
+    {
+      id: "shell-lock",
+      group: "Shell",
+      label: "Lock workspace",
+      hint: "Alt+L",
+      keywords: ["lock", "secure", "pause"],
+      perform: handleLockWorkspace,
+      order: 40,
+    },
+    {
+      id: "shell-logout",
+      group: "Shell",
+      label: "Open logout confirmation",
+      hint: "Ctrl+Shift+L",
+      keywords: ["logout", "sign out", "session"],
+      perform: () => void handleLogout(),
+      order: 50,
+    },
+    {
+      id: "shell-focus-menu",
+      group: "Focus",
+      label: "Focus menu zone",
+      hint: "Alt+M",
+      keywords: ["focus", "zone", "menu"],
+      disabled: shellMode !== "dashboard",
+      perform: () => focusZone("menu"),
+      order: 60,
+    },
+    {
+      id: "shell-focus-actions",
+      group: "Focus",
+      label: "Focus action strip",
+      hint: "Alt+A",
+      keywords: ["focus", "actions", "top bar"],
+      perform: () => focusZone("actions"),
+      order: 70,
+    },
+    {
+      id: "shell-focus-content",
+      group: "Focus",
+      label: "Focus active work area",
+      hint: "Alt+C",
+      keywords: ["focus", "content", "work area"],
+      perform: () => focusZone("content"),
+      order: 80,
+    },
+    {
+      id: "shell-help",
+      group: "Shell",
+      label: showKeyboardHelp ? "Hide keyboard help" : "Show keyboard help",
+      hint: "?",
+      keywords: ["keyboard help", "shortcut guide", "help"],
+      perform: () => setShowKeyboardHelp((current) => !current),
+      order: 90,
+    },
+  ];
+
+  if (shellMode === "dashboard") {
+    shellCommands.push({
+      id: "shell-toggle-menu",
+      group: "Shell",
+      label: collapsed ? "Show left menu" : "Hide left menu",
+      hint: collapsed ? "Ctrl+Right" : "Ctrl+Left",
+      keywords: ["sidebar", "menu", "collapse", "expand"],
+      perform: () => toggleSidebarCollapsed(),
+      order: 25,
+    });
+  }
+
+  const menuCommands = menu
+    .filter((item) => item.route_path)
+    .map((item, index) => ({
+      id: `menu-${item.menu_code}`,
+      group: "Navigation",
+      label: `Open ${item.title}`,
+      hint: shellMode === "dashboard" ? `${index + 1}` : "",
+      keywords: [
+        item.title,
+        item.route_path,
+        item.menu_code,
+      ].filter(Boolean),
+      perform: () => handleMenuRoute(item.route_path),
+      order: 200 + index,
+    }));
 
   const zoneNumber = workspaceZones.indexOf(activeZone) + 1;
   const isSidebarVisible = shellMode === "dashboard";
@@ -994,6 +1118,12 @@ export default function MenuShell() {
           <Outlet />
         </div>
       </main>
+
+      <ErpCommandPalette
+        activeRoute={location.pathname}
+        shellCommands={shellCommands}
+        menuCommands={menuCommands}
+      />
     </div>
   );
 }

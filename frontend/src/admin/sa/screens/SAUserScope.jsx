@@ -15,6 +15,8 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import {
   applyQuickFilter,
   sortCompanies,
@@ -119,6 +121,9 @@ export default function SAUserScope() {
   const authUserId = searchParams.get("auth_user_id") ?? "";
   const companySearchRef = useRef(null);
   const actionBarRefs = useRef([]);
+  const workCompanySearchRef = useRef(null);
+  const projectSearchRef = useRef(null);
+  const departmentSearchRef = useRef(null);
   const companyOptionRefs = useRef([]);
   const workCompanyRefs = useRef([]);
   const projectRefs = useRef([]);
@@ -316,22 +321,90 @@ export default function SAUserScope() {
     closeCompanyPicker();
   }
 
-  useEffect(() => {
-    function onKeyDown(event) {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") {
-        return;
-      }
+  useErpScreenHotkeys({
+    save: {
+      disabled: loading || saving || !authUserId,
+      perform: () => void handleSave(),
+    },
+    focusSearch: {
+      perform: () => workCompanySearchRef.current?.focus(),
+    },
+    focusPrimary: {
+      perform: () => companySearchRef.current?.focus(),
+    },
+  });
 
-      event.preventDefault();
-
-      if (!loading && !saving && authUserId) {
-        void handleSave();
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [loading, saving, authUserId, parentCompanyId, workCompanyIds, projectIds, departmentIds, user]);
+  useErpScreenCommands([
+    {
+      id: "sa-user-scope-directory",
+      group: "Current Screen",
+      label: "Go to user directory",
+      keywords: ["users", "directory", "sa users"],
+      perform: () => {
+        openScreen("SA_USERS", { mode: "replace" });
+        navigate("/sa/users");
+      },
+      order: 10,
+    },
+    {
+      id: "sa-user-scope-roles",
+      group: "Current Screen",
+      label: "Go to role assignment",
+      keywords: ["role assignment", "user roles"],
+      perform: () => {
+        openScreen("SA_USER_ROLES");
+        navigate("/sa/users/roles");
+      },
+      order: 20,
+    },
+    {
+      id: "sa-user-scope-parent",
+      group: "Current Screen",
+      label: "Open parent company picker",
+      keywords: ["parent company", "company picker", "hr identity"],
+      perform: () => {
+        setCompanyPickerOpen(true);
+        window.setTimeout(() => {
+          companySearchRef.current?.focus();
+        }, 0);
+      },
+      order: 30,
+    },
+    {
+      id: "sa-user-scope-work",
+      group: "Current Screen",
+      label: "Focus work company filter",
+      keywords: ["work company", "operational scope"],
+      perform: () => workCompanySearchRef.current?.focus(),
+      order: 40,
+    },
+    {
+      id: "sa-user-scope-projects",
+      group: "Current Screen",
+      label: "Focus project filter",
+      keywords: ["projects", "project scope"],
+      perform: () => projectSearchRef.current?.focus(),
+      order: 50,
+    },
+    {
+      id: "sa-user-scope-departments",
+      group: "Current Screen",
+      label: "Focus department filter",
+      keywords: ["departments", "department scope"],
+      perform: () => departmentSearchRef.current?.focus(),
+      order: 60,
+    },
+    {
+      id: "sa-user-scope-save",
+      group: "Current Screen",
+      label: saving ? "Saving scope..." : "Save user scope",
+      hint: "Ctrl+S",
+      keywords: ["save scope", "user scope", "persist"],
+      disabled: saving || loading || !authUserId,
+      perform: () => void handleSave(),
+      order: 70,
+    },
+  ]);
 
   return (
     <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
@@ -534,6 +607,7 @@ export default function SAUserScope() {
                   label="Filter Work Companies"
                   value={workCompanySearch}
                   onChange={setWorkCompanySearch}
+                  inputRef={workCompanySearchRef}
                   placeholder="Filter by code, name, state, pin, or address"
                   hint="Arrow keys move through company checkboxes."
                   inputProps={{
@@ -621,6 +695,7 @@ export default function SAUserScope() {
                   label="Filter Projects"
                   value={projectSearch}
                   onChange={setProjectSearch}
+                  inputRef={projectSearchRef}
                   placeholder="Filter by project code or project name"
                   hint="Arrow keys move through project checkboxes."
                   inputProps={{
@@ -701,6 +776,7 @@ export default function SAUserScope() {
                   label="Filter Departments"
                   value={departmentSearch}
                   onChange={setDepartmentSearch}
+                  inputRef={departmentSearchRef}
                   placeholder="Filter by department code or department name"
                   hint="Arrow keys move through department checkboxes."
                   inputProps={{
