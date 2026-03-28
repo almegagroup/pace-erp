@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import { resetToScreen } from "../navigation/screenStackEngine.js";
+import paceBackground from "../assets/pace-bgr.png";
 
 const REDIRECT_TIPS = Object.freeze([
   "Protect access with strong passwords and never reuse ERP credentials across personal services.",
@@ -152,6 +153,25 @@ export default function AuthResolver() {
             gap: "14px",
           }}
         >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              paddingTop: "4px",
+            }}
+          >
+            <img
+              src={paceBackground}
+              alt="Pace ERP"
+              style={{
+                width: "min(220px, 58vw)",
+                height: "auto",
+                objectFit: "contain",
+                filter: "drop-shadow(0 10px 20px rgba(16,41,57,0.12))",
+              }}
+            />
+          </div>
+
           <div
             style={{
               height: "10px",

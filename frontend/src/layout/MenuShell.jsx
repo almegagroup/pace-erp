@@ -542,18 +542,40 @@ export default function MenuShell() {
               }}
             >
               <div style={{ minWidth: 0 }}>
-                <p
+                <div
                   style={{
-                    margin: 0,
-                    fontSize: "11px",
-                    letterSpacing: "0.24em",
-                    textTransform: "uppercase",
-                    color: "#8ed0f7",
-                    fontWeight: 700,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: collapsed ? "0" : "10px",
                   }}
                 >
-                  Pace ERP
-                </p>
+                  <img
+                    src="/icon-192.png"
+                    alt="Pace ERP"
+                    style={{
+                      width: collapsed ? "34px" : "42px",
+                      height: collapsed ? "34px" : "42px",
+                      borderRadius: "10px",
+                      objectFit: "cover",
+                      boxShadow: "0 10px 22px rgba(0,0,0,0.18)",
+                      flexShrink: 0,
+                    }}
+                  />
+                  {!collapsed ? (
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: "11px",
+                        letterSpacing: "0.24em",
+                        textTransform: "uppercase",
+                        color: "#8ed0f7",
+                        fontWeight: 700,
+                      }}
+                    >
+                      Pace ERP
+                    </p>
+                  ) : null}
+                </div>
                 {!collapsed ? (
                   <>
                     <p

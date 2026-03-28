@@ -886,3 +886,39 @@ Success condition for the next session:
 - user may expand that cluster to 3 governed Home windows
 - all cluster windows stay synchronized
 - any fresh login elsewhere kills the old cluster completely
+
+---
+
+# 18. Runtime Validation Closure
+
+Date:
+2026-03-28
+
+Runtime validation and stabilization have now been completed for this realignment target.
+
+Confirmed outcome:
+- fresh login creates one backend-authoritative session cluster
+- governed Home-window expansion opens separate ERP windows correctly
+- the practical Home-window limit is enforced at 3 admitted windows
+- a 4th open attempt is blocked without logging the user out
+- lock,
+  warning,
+  logout,
+  revoke,
+  and replacement coordination remain cluster-oriented,
+  not single-tab oriented
+- login handoff and redirect experience have been tightened for faster protected entry
+
+UX closure notes:
+- the visible shell entrypoint for governed expansion is now the `New Window` button
+- reserved browser shortcut handling was intentionally removed instead of forcing a fragile keyboard binding
+- redirect handoff now shows loading motion and rotating data-security/data-hygiene guidance while the protected home route resolves
+
+Residual implementation note:
+- child-window auto-close on logout remains best-effort because browser popup-closing rules are not fully deterministic,
+  but the implemented path now prefers closure for auxiliary windows and keeps the primary surface as the returning login anchor
+
+Execution status for this realignment:
+- SC target is functionally closed for the governed Home-window scope
+- future work should treat this session-cluster model as current-state baseline,
+  not as experimental partial wiring

@@ -1435,6 +1435,58 @@ Apply the new migration,
 run live login and multi-window validation,
 then tighten any runtime edge cases found during real browser testing
 
+## Entry 028
+
+Date:
+2026-03-28
+
+Roadmap step:
+Protected Session Cluster Realignment - runtime stabilization and UX completion
+
+Status:
+COMPLETED
+
+What was done:
+- completed live runtime stabilization for governed multi-window session clusters
+- reduced login-to-home handoff time by parallelizing protected bootstrap profile and menu fetches
+- replaced the plain redirect placeholder with a secure redirect experience that shows animated loading and shuffled data-security/data-hygiene guidance
+- removed the reserved keyboard shortcut path for opening new windows and kept governed expansion on the visible shell button
+- hardened popup boot so child windows reset inherited sessionStorage state before cluster admission
+- fixed max-window denial so a 4th window request is blocked with a user-facing restriction message instead of forcing logout
+- aligned logout confirmation behavior so the explicit Logout button now matches the Esc confirmation path
+- tightened child-window logout behavior so auxiliary windows attempt auto-close while the primary window returns to login
+
+What changed in repo:
+- frontend/src/auth/AuthBootstrap.jsx
+- frontend/src/admin/AuthResolver.jsx
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/store/sessionCluster.js
+- frontend/src/store/sessionWarning.js
+- supabase/functions/api/_core/response.ts
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- backend type-check completed successfully with `deno check supabase/functions/api/index.ts`
+- frontend lint completed successfully
+- frontend build completed successfully
+- live browser validation confirmed governed new-window opening now works
+- live browser validation confirmed login redirect,
+  redirect-screen guidance,
+  logout confirmation,
+  and max-window restriction behavior are now aligned with the intended UX
+
+Problems or blockers:
+- child-window auto-close remains browser-behavior-sensitive by nature,
+  so it is still implemented as best-effort popup closure with redirect fallback if the browser refuses the close call
+
+Decision or note:
+The protected session-cluster realignment is now functionally complete for the governed Home-window scope.
+The old single-tab behavior is no longer the active model,
+and runtime behavior now matches the backend-authoritative cluster design validated during testing.
+
+Next step:
+Resume the main ERP roadmap from the next scheduled program item outside this session-cluster stabilization pass
+
 # 6. Initial Program Entry
 
 Date:
