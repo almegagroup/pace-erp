@@ -1487,6 +1487,50 @@ and runtime behavior now matches the backend-authoritative cluster design valida
 Next step:
 Resume the main ERP roadmap from the next scheduled program item outside this session-cluster stabilization pass
 
+## Entry 029
+
+Date:
+2026-03-28
+
+Roadmap step:
+Protected Session Cluster Realignment - post-validation UX polish and client refresh hardening
+
+Status:
+COMPLETED
+
+What was done:
+- hardened frontend boot against stale client-shell cache state so deploys no longer depend on users manually pressing Ctrl+F5
+- upgraded governed new-window loading with branded artwork,
+  loading animation,
+  and rotating security/data-hygiene guidance
+- restored shared ERP branding in the protected shell sidebar using the public icon asset
+- exposed the governed `New Window` action from all protected pages instead of only the dashboard home screen
+- kept the same backend-authoritative max-3 multi-window rules while improving practical day-to-day workflow access
+
+What changed in repo:
+- frontend/src/main.jsx
+- frontend/src/auth/redirectGuidance.js
+- frontend/src/admin/AuthResolver.jsx
+- frontend/src/store/sessionCluster.js
+- frontend/src/layout/MenuShell.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- live validation confirmed users can launch governed new windows from non-home protected pages
+- live validation confirmed the branded loader experience now appears for both redirect handoff and new-window expansion
+
+Problems or blockers:
+- stale browser environments created before this hardening may still need one final deploy cycle before all users naturally converge onto the fresh client shell
+
+Decision or note:
+The session-cluster feature set is now not only functionally stable,
+but also practical for side-by-side report checking and cross-screen ERP workflows without forcing users back to Home before opening another governed window.
+
+Next step:
+Continue from the next roadmap item outside protected session-cluster work unless a new production issue appears
+
 # 6. Initial Program Entry
 
 Date:

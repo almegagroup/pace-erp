@@ -913,6 +913,9 @@ UX closure notes:
 - the visible shell entrypoint for governed expansion is now the `New Window` button
 - reserved browser shortcut handling was intentionally removed instead of forcing a fragile keyboard binding
 - redirect handoff now shows loading motion and rotating data-security/data-hygiene guidance while the protected home route resolves
+- governed new-window access is now available from protected task/report screens as well,
+  so users do not need to navigate back to Home before opening a side-by-side comparison window
+- the frontend now self-cleans stale service-worker/cache state during boot so deploys do not rely on manual Ctrl+F5 recovery
 
 Residual implementation note:
 - child-window auto-close on logout remains best-effort because browser popup-closing rules are not fully deterministic,
