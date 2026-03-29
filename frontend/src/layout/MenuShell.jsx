@@ -12,9 +12,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import {
-  branchContainsRoute,
   buildMenuTree,
+  flattenDrawerEntries,
   flattenRouteableMenu,
+  getAncestorMenuCodes,
 } from "../navigation/menuProjection.js";
 import {
   getScreenForRoute,
@@ -135,6 +136,7 @@ export default function MenuShell() {
   const [actionRailCollapsed, setActionRailCollapsed] = useState(false);
   const [activeZone, setActiveZone] = useState("content");
   const [menuFocusIndex, setMenuFocusIndex] = useState(0);
+  const [expandedMenuCodes, setExpandedMenuCodes] = useState(() => new Set());
   const [clusterAdmission, setClusterAdmission] = useState(() =>
     getClusterAdmission()
   );
@@ -149,16 +151,19 @@ export default function MenuShell() {
 
   const navigationTree = useMemo(() => buildMenuTree(menu), [menu]);
   const navigationMenu = useMemo(
-    () => flattenRouteableMenu(navigationTree),
-    [navigationTree]
+    () => flattenDrawerEntries(navigationTree, expandedMenuCodes),
+    [navigationTree, expandedMenuCodes]
   );
   const menuIndexByCode = useMemo(
-    () => new Map(navigationMenu.map((item, index) => [item.menu_code, index])),
+    () => new Map(navigationMenu.map((entry, index) => [entry.key, index])),
     [navigationMenu]
   );
 
   const activeMenuIndex = useMemo(
-    () => navigationMenu.findIndex((item) => item.route_path === location.pathname),
+    () =>
+      navigationMenu.findIndex(
+        (entry) => entry.kind === "page" && entry.item.route_path === location.pathname
+      ),
     [location.pathname, navigationMenu]
   );
 
@@ -269,6 +274,28 @@ export default function MenuShell() {
   }, [workspaceMode]);
 
   useEffect(() => {
+    const requiredOpenCodes = getAncestorMenuCodes(navigationTree, location.pathname);
+
+    if (requiredOpenCodes.length === 0) {
+      return;
+    }
+
+    setExpandedMenuCodes((current) => {
+      const next = new Set(current);
+      let changed = false;
+
+      for (const code of requiredOpenCodes) {
+        if (!next.has(code)) {
+          next.add(code);
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [location.pathname, navigationTree]);
+
+  useEffect(() => {
     if (!clusterWindowMessage) {
       return undefined;
     }
@@ -366,66 +393,18 @@ export default function MenuShell() {
     openRoute(routePath);
   }
 
-  function renderNavigationNodes(nodes, depth = 0) {
-    return (
-      <ul className={depth === 0 ? "space-y-1" : "mt-1 space-y-1"}>
-        {nodes.map((node) => {
-          const { item, children } = node;
-          const isGroup = item.menu_type === "GROUP";
-          const isActive = item.route_path === location.pathname;
-          const isBranchActive = branchContainsRoute(node, location.pathname);
-          const buttonIndex = menuIndexByCode.get(item.menu_code) ?? -1;
+  function toggleDrawer(menuCode) {
+    setExpandedMenuCodes((current) => {
+      const next = new Set(current);
 
-          return (
-            <li key={item.menu_code}>
-              {isGroup ? (
-                <div
-                  className={`px-2 py-2 text-[11px] uppercase tracking-[0.14em] ${
-                    isBranchActive ? "text-sky-700" : "text-slate-400"
-                  }`}
-                  style={collapsed ? undefined : { paddingLeft: `${depth * 14 + 8}px` }}
-                >
-                  {collapsed ? item.title.slice(0, 2).toUpperCase() : item.title}
-                </div>
-              ) : item.route_path ? (
-                <button
-                  ref={(element) => {
-                    if (buttonIndex >= 0) {
-                      menuButtonRefs.current[buttonIndex] = element;
-                    }
-                  }}
-                  type="button"
-                  onFocus={() => {
-                    setActiveZone("menu");
-                    if (buttonIndex >= 0) {
-                      setMenuFocusIndex(buttonIndex);
-                    }
-                  }}
-                  onKeyDown={(event) => handleMenuKeyDown(event, buttonIndex)}
-                  onClick={() => handleMenuRoute(item.route_path)}
-                  aria-current={isActive ? "page" : undefined}
-                  className={`grid w-full items-center gap-2 border px-2 py-2 text-left text-sm ${
-                    collapsed ? "grid-cols-1 justify-items-center" : "grid-cols-[32px_minmax(0,1fr)]"
-                  } ${
-                    isActive
-                      ? "border-sky-400 bg-sky-50 font-semibold text-sky-900"
-                      : "border-transparent bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
-                  }`}
-                  style={collapsed ? undefined : { paddingLeft: `${depth * 14 + 8}px` }}
-                >
-                  <span className="font-mono text-[11px] text-slate-500">
-                    {(buttonIndex + 1).toString().padStart(2, "0")}
-                  </span>
-                  {!collapsed ? <span className="truncate">{item.title}</span> : null}
-                </button>
-              ) : null}
+      if (next.has(menuCode)) {
+        next.delete(menuCode);
+      } else {
+        next.add(menuCode);
+      }
 
-              {children.length > 0 ? renderNavigationNodes(children, depth + 1) : null}
-            </li>
-          );
-        })}
-      </ul>
-    );
+      return next;
+    });
   }
 
   async function handleLogout() {
@@ -530,6 +509,34 @@ export default function MenuShell() {
       const nextIndex = (index - 1 + navigationMenu.length) % navigationMenu.length;
       setMenuFocusIndex(nextIndex);
       moveFocus(menuButtonRefs.current, nextIndex);
+    }
+
+    if (event.key === "Enter" || event.key === "ArrowRight") {
+      const entry = navigationMenu[index];
+
+      if (!entry) {
+        return;
+      }
+
+      if (entry.kind === "drawer") {
+        event.preventDefault();
+        toggleDrawer(entry.item.menu_code);
+        return;
+      }
+
+      if (entry.kind === "page" && entry.item.route_path) {
+        event.preventDefault();
+        handleMenuRoute(entry.item.route_path);
+      }
+    }
+
+    if (event.key === "ArrowLeft") {
+      const entry = navigationMenu[index];
+
+      if (entry?.kind === "drawer" && entry.isExpanded) {
+        event.preventDefault();
+        toggleDrawer(entry.item.menu_code);
+      }
     }
   }
 
@@ -763,7 +770,57 @@ export default function MenuShell() {
             </div>
           ) : (
             <nav>
-              {renderNavigationNodes(navigationTree)}
+              <ul className="space-y-1">
+                {navigationMenu.map((entry, index) => {
+                  const isDrawer = entry.kind === "drawer";
+                  const isActive = entry.item.route_path === location.pathname;
+
+                  return (
+                    <li key={entry.key}>
+                      <button
+                        ref={(element) => {
+                          menuButtonRefs.current[index] = element;
+                        }}
+                        type="button"
+                        onFocus={() => {
+                          setActiveZone("menu");
+                          setMenuFocusIndex(index);
+                        }}
+                        onKeyDown={(event) => handleMenuKeyDown(event, index)}
+                        onClick={() => {
+                          if (isDrawer) {
+                            toggleDrawer(entry.item.menu_code);
+                            return;
+                          }
+
+                          if (entry.item.route_path) {
+                            handleMenuRoute(entry.item.route_path);
+                          }
+                        }}
+                        aria-current={!isDrawer && isActive ? "page" : undefined}
+                        className={`grid w-full items-center gap-2 border px-2 py-2 text-left text-sm ${
+                          collapsed ? "grid-cols-1 justify-items-center" : "grid-cols-[32px_minmax(0,1fr)_20px]"
+                        } ${
+                          isActive
+                            ? "border-sky-400 bg-sky-50 font-semibold text-sky-900"
+                            : "border-transparent bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                        }`}
+                        style={collapsed ? undefined : { paddingLeft: `${entry.depth * 14 + 8}px` }}
+                      >
+                        <span className="font-mono text-[11px] text-slate-500">
+                          {(index + 1).toString().padStart(2, "0")}
+                        </span>
+                        {!collapsed ? <span className="truncate">{entry.item.title}</span> : null}
+                        {!collapsed ? (
+                          <span className="justify-self-end text-[11px] text-slate-400">
+                            {isDrawer ? (entry.isExpanded ? "-" : "+") : ""}
+                          </span>
+                        ) : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             </nav>
           )}
         </div>

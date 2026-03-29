@@ -20,7 +20,7 @@ import {
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../context/useMenu.js";
-import { buildMenuTree, flattenRouteableMenu } from "../../../navigation/menuProjection.js";
+import { buildMenuTree, getTopLevelRoutePages } from "../../../navigation/menuProjection.js";
 
 async function readJsonSafe(response) {
   try {
@@ -248,7 +248,7 @@ export default function SAControlPanel() {
   ].filter(Boolean);
 
   const quickLaunch = useMemo(() => {
-    const rootAndDeepLaunches = flattenRouteableMenu(buildMenuTree(menu))
+    const rootAndDeepLaunches = getTopLevelRoutePages(buildMenuTree(menu))
       .filter(
         (item) =>
           item.menu_code !== "SA_HOME" &&

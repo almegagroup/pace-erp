@@ -9,7 +9,7 @@ import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js"
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../context/useMenu.js";
-import { buildMenuTree, flattenRouteableMenu } from "../../../navigation/menuProjection.js";
+import { buildMenuTree, getTopLevelRoutePages } from "../../../navigation/menuProjection.js";
 
 async function readJsonSafe(response) {
   try {
@@ -143,7 +143,7 @@ export default function SAHome() {
 
   const launchActions = useMemo(
     () => {
-      const pages = flattenRouteableMenu(buildMenuTree(menu));
+      const pages = getTopLevelRoutePages(buildMenuTree(menu));
 
       return pages
         .filter((item) => item.menu_code !== "SA_HOME")

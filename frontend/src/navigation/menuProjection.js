@@ -86,3 +86,87 @@ export function branchContainsRoute(node, routePath) {
 
   return (node.children ?? []).some((child) => branchContainsRoute(child, routePath));
 }
+
+export function getAncestorMenuCodes(tree, routePath) {
+  const ancestors = [];
+
+  function visit(nodes, trail = []) {
+    for (const node of nodes) {
+      const nextTrail = node.item?.menu_code
+        ? [...trail, node.item.menu_code]
+        : trail;
+
+      if (node.item?.route_path === routePath) {
+        ancestors.push(...trail);
+        return true;
+      }
+
+      if (node.children?.length && visit(node.children, nextTrail)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  visit(tree);
+  return ancestors;
+}
+
+export function flattenDrawerEntries(tree, expandedMenuCodes = new Set()) {
+  const entries = [];
+
+  function visit(nodes, depth = 0) {
+    for (const node of nodes) {
+      const hasChildren = (node.children ?? []).length > 0;
+      const isExpanded = expandedMenuCodes.has(node.item.menu_code);
+
+      if (hasChildren) {
+        entries.push({
+          key: node.item.menu_code,
+          kind: "drawer",
+          item: node.item,
+          depth,
+          children: node.children,
+          isExpanded,
+        });
+
+        if (isExpanded) {
+          if (node.item.route_path) {
+            entries.push({
+              key: `${node.item.menu_code}__page`,
+              kind: "page",
+              item: {
+                ...node.item,
+                title: `Open ${node.item.title}`,
+              },
+              depth: depth + 1,
+            });
+          }
+
+          visit(node.children, depth + 1);
+        }
+
+        continue;
+      }
+
+      if (node.item.route_path) {
+        entries.push({
+          key: node.item.menu_code,
+          kind: "page",
+          item: node.item,
+          depth,
+        });
+      }
+    }
+  }
+
+  visit(tree);
+  return entries;
+}
+
+export function getTopLevelRoutePages(tree) {
+  return (Array.isArray(tree) ? tree : [])
+    .map((node) => node?.item)
+    .filter((item) => item?.route_path);
+}
