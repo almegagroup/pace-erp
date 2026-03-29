@@ -77,7 +77,7 @@ export function getServiceRoleClientWithContext(ctx: ContextResolution) {
     });
 
     headers = {
-      "x-is-admin": "true"
+      "x-erp-is-admin": "true"
     };
   } else {
     // 🔹 3️⃣ NON-ADMIN SAFETY CHECK

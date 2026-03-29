@@ -11,11 +11,13 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { evaluateRouting as _evaluateRouting } from "./routing.engine.ts";
 import { errorResponse } from "../response.ts";
+import { getActiveAclVersionIdForCompany } from "../../_shared/acl_runtime.ts";
 
 interface HandlerContext {
   auth_user_id: string;
   roleCode: string;
   companyId: string;
+  workContextId: string;
   request_id: string;
 }
 
@@ -84,6 +86,14 @@ export async function processDecisionHandler(
       return errorResponse(
         "INVALID_STATE",
         "Only PENDING requests can be decided",
+        ctx.request_id
+      );
+    }
+
+    if (workflow.company_id !== ctx.companyId) {
+      return errorResponse(
+        "WORKFLOW_CONTEXT_MISMATCH",
+        "Workflow request does not belong to the selected work company",
         ctx.request_id
       );
     }
@@ -164,11 +174,19 @@ if (!matchingApprover) {
 // STEP 4.5: ACL Snapshot Authorization Check (7.5.17)
 // =========================================================
 
+const activeAclVersionId = await getActiveAclVersionIdForCompany(
+  serviceRoleClient,
+  workflow.company_id,
+);
+
 let aclCheckQuery = serviceRoleClient
   .schema("acl").from("precomputed_acl_view")
   .select("auth_user_id")
+  .eq("acl_version_id", activeAclVersionId)
   .eq("auth_user_id", ctx.auth_user_id)
-  .eq("company_id", workflow.company_id);
+  .eq("company_id", workflow.company_id)
+  .eq("work_context_id", ctx.workContextId)
+  .eq("decision", "ALLOW");
 
 if (workflow.resource_code && workflow.action_code) {
   aclCheckQuery = aclCheckQuery

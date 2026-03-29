@@ -42,6 +42,7 @@ import SAUserScope from "../admin/sa/screens/SAUserScope.jsx";
 import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
 import SAProjectMaster from "../admin/sa/screens/SAProjectMaster.jsx";
 import SARolePermissions from "../admin/sa/screens/SARolePermissions.jsx";
+import SACapabilityGovernance from "../admin/sa/screens/SACapabilityGovernance.jsx";
 import SAApprovalRules from "../admin/sa/screens/SAApprovalRules.jsx";
 import SACompanyModuleMap from "../admin/sa/screens/SACompanyModuleMap.jsx";
 import SAMenuGovernance from "../admin/sa/screens/SAMenuGovernance.jsx";
@@ -119,6 +120,10 @@ export default function AppRouter() {
                     <Route
                       path="acl/role-permissions"
                       element={<SARolePermissions />}
+                    />
+                    <Route
+                      path="acl/capabilities"
+                      element={<SACapabilityGovernance />}
                     />
                     <Route
                       path="approval-rules"

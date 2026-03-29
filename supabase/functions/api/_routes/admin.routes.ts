@@ -2,6 +2,10 @@
  * Admin Route Dispatcher
  */
 import { meHandler } from "../_core/auth/me.handler.ts";
+import {
+  meContextHandler,
+  updateMeContextHandler,
+} from "../_core/auth/me_context.handler.ts";
 import { meProfileHandler } from "../_core/auth/me_profile.handler.ts";
 import { unlockHandler } from "../_core/auth/unlock.handler.ts";
 import { listPendingSignupHandler } from "../_core/admin/signup/list_pending.handler.ts";
@@ -67,6 +71,22 @@ export async function dispatchAdminRoutes(
 
     case "GET:/api/me/profile":
       response = await meProfileHandler({
+        session,
+        requestId,
+        req,
+      });
+      break;
+
+    case "GET:/api/me/context":
+      response = await meContextHandler({
+        session,
+        requestId,
+        req,
+      });
+      break;
+
+    case "POST:/api/me/context":
+      response = await updateMeContextHandler({
         session,
         requestId,
         req,

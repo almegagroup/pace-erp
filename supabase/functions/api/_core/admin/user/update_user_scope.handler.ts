@@ -24,6 +24,7 @@ type UpdateUserScopeInput = {
   work_company_ids?: string[];
   project_ids?: string[];
   department_ids?: string[];
+  work_context_ids?: string[];
 };
 
 function assertAdmin(ctx: HandlerContext): void {
@@ -50,6 +51,7 @@ export async function updateUserScopeHandler(
     const workCompanyIds = normalizeIdArray(body.work_company_ids);
     const projectIds = normalizeIdArray(body.project_ids);
     const departmentIds = normalizeIdArray(body.department_ids);
+    const explicitWorkContextIds = normalizeIdArray(body.work_context_ids);
 
     if (!targetAuthUserId || !parentCompanyId) {
       return errorResponse(
@@ -151,6 +153,41 @@ export async function updateUserScopeHandler(
         ctx.request_id,
       );
     }
+
+    const { data: validWorkContexts } = workCompanyIds.length === 0
+      ? { data: [] }
+      : await db
+        .schema("erp_acl").from("work_contexts")
+        .select("work_context_id, company_id, work_context_code")
+        .eq("is_active", true)
+        .in("company_id", workCompanyIds);
+
+    const validWorkContextMap = new Map(
+      (validWorkContexts ?? []).map((row) => [row.work_context_id, row]),
+    );
+
+    if (
+      explicitWorkContextIds.some((workContextId) => !validWorkContextMap.has(workContextId))
+    ) {
+      return errorResponse(
+        "USER_SCOPE_WORK_CONTEXT_INVALID",
+        "one or more work contexts are invalid or outside the selected work companies",
+        ctx.request_id,
+      );
+    }
+
+    const defaultWorkContextIds = workCompanyIds
+      .map((companyId) =>
+        (validWorkContexts ?? []).find((row) =>
+          row.company_id === companyId && row.work_context_code === "GENERAL_OPS"
+        )?.work_context_id ?? null
+      )
+      .filter(Boolean) as string[];
+
+    const workContextIds = [...new Set([
+      ...defaultWorkContextIds,
+      ...explicitWorkContextIds,
+    ])];
 
     const parentPayload = {
       auth_user_id: targetAuthUserId,
@@ -268,6 +305,41 @@ export async function updateUserScopeHandler(
       }
     }
 
+    const { error: workContextDeleteError } = await db
+      .schema("erp_acl").from("user_work_contexts")
+      .delete()
+      .eq("auth_user_id", targetAuthUserId);
+
+    if (workContextDeleteError) {
+      return errorResponse(
+        "USER_SCOPE_WORK_CONTEXT_DELETE_FAILED",
+        "work context reset failed",
+        ctx.request_id,
+      );
+    }
+
+    if (workContextIds.length > 0) {
+      const { error: workContextInsertError } = await db
+        .schema("erp_acl")
+        .from("user_work_contexts")
+        .insert(
+          workContextIds.map((workContextId) => ({
+            auth_user_id: targetAuthUserId,
+            company_id: validWorkContextMap.get(workContextId)?.company_id ?? null,
+            work_context_id: workContextId,
+            is_primary: defaultWorkContextIds.includes(workContextId),
+          })),
+        );
+
+      if (workContextInsertError) {
+        return errorResponse(
+          "USER_SCOPE_WORK_CONTEXT_SAVE_FAILED",
+          "work context save failed",
+          ctx.request_id,
+        );
+      }
+    }
+
     return okResponse(
       {
         auth_user_id: targetAuthUserId,
@@ -275,6 +347,7 @@ export async function updateUserScopeHandler(
         work_company_ids: workCompanyIds,
         project_ids: projectIds,
         department_ids: departmentIds,
+        work_context_ids: workContextIds,
         updated_by: ctx.auth_user_id,
       },
       ctx.request_id,

@@ -34,8 +34,20 @@ import { log } from "../_lib/logger.ts";
 
 import type { SessionResolution } from "./session.ts";
 import type { ContextResolution } from "./context.ts";
+import type { VwedAction } from "../_acl/vwed_engine.ts";
 
 const SESSION_TOUCH_INTERVAL_MS = 60 * 1000;
+const ACL_SUPPORT_ROUTES = new Set([
+  "GET:/api/me",
+  "GET:/api/me/profile",
+  "GET:/api/me/context",
+  "POST:/api/me/context",
+  "GET:/api/me/menu",
+  "POST:/api/unlock",
+  "POST:/api/session/cluster/admit",
+  "POST:/api/session/cluster/open-window",
+  "POST:/api/session/cluster/window-close",
+]);
 
 /**
  * SESSION logout enforcement
@@ -136,6 +148,49 @@ async function persistLifecycleTermination(
       .eq("session_id", session.sessionId)
       .eq("status", "ACTIVE");
   }
+}
+
+async function resolveProtectedRouteAclMeta(
+  req: Request,
+  routeKey: string,
+  context: Extract<ContextResolution, { status: "RESOLVED" }>,
+): Promise<{
+  skipAcl: boolean;
+  resourceCode?: string;
+  action?: VwedAction;
+}> {
+  if (ACL_SUPPORT_ROUTES.has(routeKey)) {
+    return { skipAcl: true };
+  }
+
+  if (routeKey === "POST:/api/workflow/decision") {
+    const body = await req.clone().json().catch(() => null);
+    const workflowRequestId =
+      typeof body?.request_id === "string" ? body.request_id.trim() : "";
+
+    if (!workflowRequestId || !context.companyId) {
+      return { skipAcl: false };
+    }
+
+    const { data } = await serviceRoleClient
+      .schema("acl")
+      .from("workflow_requests")
+      .select("company_id, module_code, resource_code")
+      .eq("request_id", workflowRequestId)
+      .maybeSingle();
+
+    if (!data || data.company_id !== context.companyId) {
+      return { skipAcl: false };
+    }
+
+    return {
+      skipAcl: false,
+      resourceCode: data.resource_code ?? data.module_code ?? undefined,
+      action: "APPROVE",
+    };
+  }
+
+  return { skipAcl: false };
 }
 
 export async function runPipeline(
@@ -350,6 +405,8 @@ if (!isPassiveSessionProbe(req)) {
 contextResult = await stepContext(req, {
   authUserId: activeSession.authUserId,
   roleCode: activeSession.roleCode,
+  selectedCompanyId: activeSession.selectedCompanyId,
+  selectedWorkContextId: activeSession.selectedWorkContextId,
 });
 
     if (contextResult.status === "UNRESOLVED") {
@@ -386,22 +443,27 @@ if (contextResult.status !== "RESOLVED") {
   throw new Error("CONTEXT_NOT_RESOLVED_AFTER_CHECK");
 }
 
+const aclRouteMeta = await resolveProtectedRouteAclMeta(
+  req,
+  routeKey,
+  contextResult
+);
+
 const tAcl0 = performance.now();
     const acl = await stepAcl(req, requestId, {
-     context: {
+ context: {
   state: contextResult.status,
   authUserId: activeSession.authUserId,
   roleCode: contextResult.roleCode,
   companyId: contextResult.companyId,
-  moduleEnabled: true, // temporarily, until wired properly
-
-  // 🔥 CRITICAL FIX
+  workContextId: contextResult.workContextId,
   isAdmin: contextResult.isAdmin === true,
 },
       route: {
         isPublic: false,
-        resourceCode: routeKey, // temporarily, proper resource mapping
-      action: "VIEW", // temporary placeholder
+        skipAcl: aclRouteMeta.skipAcl,
+        resourceCode: aclRouteMeta.resourceCode,
+        action: aclRouteMeta.action,
       },
     });
     if (acl.decision === "DENY") {

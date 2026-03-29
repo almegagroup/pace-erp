@@ -13,6 +13,8 @@ import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { okResponse, errorResponse } from "../../response.ts";
 import { log } from "../../../_lib/logger.ts";
 import { generateRequestId } from "../../../_lib/request_id.ts";
+import { resolveOrProvisionAclMenuResource } from "../../../_shared/acl_menu_resource.ts";
+import type { VwedAction } from "../../../_acl/vwed_engine.ts";
 
 /* =========================================================
  * Types
@@ -27,6 +29,7 @@ type UpsertRolePermissionInput = {
   can_delete?: boolean;
   can_approve?: boolean;
   can_export?: boolean;
+  denied_actions?: VwedAction[];
 };
 
 type AdminContext = {
@@ -82,28 +85,52 @@ export async function upsertRolePermissionHandler(
     }
 
     const payload = {
-  role_code: body.role_code,
-  resource_code: body.resource_code,
-  can_view: Boolean(body.can_view),
-  can_write: Boolean(body.can_write),
-  can_edit: Boolean(body.can_edit),
-  can_delete: Boolean(body.can_delete),
-  can_approve: Boolean(body.can_approve),
-  can_export: Boolean(body.can_export),
-};
+      role_code: body.role_code,
+      resource_code: body.resource_code.trim().toUpperCase(),
+      can_view: Boolean(body.can_view),
+      can_write: Boolean(body.can_write),
+      can_edit: Boolean(body.can_edit),
+      can_delete: Boolean(body.can_delete),
+      can_approve: Boolean(body.can_approve),
+      can_export: Boolean(body.can_export),
+      denied_actions: Array.from(
+        new Set(
+          Array.isArray(body.denied_actions)
+            ? body.denied_actions
+                .map((action) =>
+                  typeof action === "string" ? action.trim().toUpperCase() : "",
+                )
+                .filter((action) =>
+                  ["VIEW", "WRITE", "EDIT", "DELETE", "APPROVE", "EXPORT"].includes(action),
+                )
+            : [],
+        ),
+      ) as VwedAction[],
+    };
 
-const hasAnyPermission =
-  payload.can_view ||
-  payload.can_write ||
-  payload.can_edit ||
-  payload.can_delete ||
-  payload.can_approve ||
-  payload.can_export;
+const allowedActions: VwedAction[] = [
+  payload.can_view ? "VIEW" : null,
+  payload.can_write ? "WRITE" : null,
+  payload.can_edit ? "EDIT" : null,
+  payload.can_delete ? "DELETE" : null,
+  payload.can_approve ? "APPROVE" : null,
+  payload.can_export ? "EXPORT" : null,
+].filter(Boolean) as VwedAction[];
+
+const hasAnyPermission = allowedActions.length > 0 || payload.denied_actions.length > 0;
 
 if (!hasAnyPermission) {
   return errorResponse(
     "INVALID_PERMISSION_SET",
-    "At least one permission must be true",
+    "At least one allow or deny action must be provided",
+    requestId
+  );
+}
+
+if (allowedActions.some((action) => payload.denied_actions.includes(action))) {
+  return errorResponse(
+    "INVALID_PERMISSION_SET",
+    "The same action cannot be both allowed and denied",
     requestId
   );
 }
@@ -113,12 +140,47 @@ if (!hasAnyPermission) {
      * 3️⃣ Upsert VWED permission (idempotent)
      * -------------------------------------------------- */
     const db = getServiceRoleClientWithContext(ctx.context);
+    const { aclMenuId, resourceCode } = await resolveOrProvisionAclMenuResource(
+      db,
+      payload.resource_code,
+    );
+
+    const { error: deleteError } = await db
+      .schema("acl")
+      .from("role_menu_permissions")
+      .delete()
+      .eq("role_code", payload.role_code)
+      .eq("menu_id", aclMenuId);
+
+    if (deleteError) {
+      return errorResponse(
+        "ROLE_PERMISSION_UPSERT_FAILED",
+        "Upsert failed",
+        requestId
+      );
+    }
+
+    const rows = [
+      ...allowedActions.map((action) => ({
+        action,
+        effect: "ALLOW" as const,
+      })),
+      ...payload.denied_actions.map((action) => ({
+        action,
+        effect: "DENY" as const,
+      })),
+    ].map((row) => ({
+        role_code: payload.role_code,
+        menu_id: aclMenuId,
+        action: row.action,
+        effect: row.effect,
+        approval_required: false,
+      }));
 
     const { error } = await db
-      .schema("acl").from("role_menu_permissions")
-      .upsert(payload, {
-        onConflict: "role_code,resource_code",
-      });
+      .schema("acl")
+      .from("role_menu_permissions")
+      .insert(rows);
 
     if (error) {
       log({
@@ -150,7 +212,7 @@ if (!hasAnyPermission) {
     return okResponse(
       {
         role_code: payload.role_code,
-        resource_code: payload.resource_code,
+        resource_code: resourceCode,
         permissions: {
           can_view: payload.can_view,
           can_write: payload.can_write,
@@ -158,6 +220,7 @@ if (!hasAnyPermission) {
           can_delete: payload.can_delete,
           can_approve: payload.can_approve,
           can_export: payload.can_export,
+          denied_actions: payload.denied_actions,
         },
       },
       requestId

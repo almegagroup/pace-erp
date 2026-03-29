@@ -16,6 +16,7 @@ import { generateRequestId } from "../../../_lib/request_id.ts";
 
 type ActivateInput = {
   acl_version_id: string;
+  company_id: string;
 };
 
 type AdminContext = {
@@ -43,10 +44,10 @@ export async function activateAclVersionHandler(
 
     const body = (await req.json()) as Partial<ActivateInput>;
 
-    if (!body.acl_version_id) {
+    if (!body.acl_version_id || !body.company_id) {
   return errorResponse(
-    "ACL_VERSION_ID_REQUIRED",
-    "acl_version_id required",
+    "ACL_VERSION_INPUT_REQUIRED",
+    "acl_version_id and company_id required",
     requestId
   );
 }
@@ -55,15 +56,7 @@ export async function activateAclVersionHandler(
 
     const db = getServiceRoleClientWithContext(ctx.context);
 
-    if (ctx.context.status !== "RESOLVED") {
-  return errorResponse(
-    "CONTEXT_UNRESOLVED",
-    "Context unresolved",
-    requestId
-  );
-}
-
-const companyId = ctx.context.companyId;
+const companyId = body.company_id;
 
     /* -------------------------------------------------- */
     /* Deactivate current active version                  */
@@ -94,26 +87,46 @@ const companyId = ctx.context.companyId;
     }
 
     /* -------------------------------------------------- */
-    /* Generate deterministic ACL snapshot                */
+    /* Generate deterministic ACL snapshot only when this */
+    /* version has not been materialized before           */
     /* -------------------------------------------------- */
 
-    const { error: snapshotError } = await db
-  .schema("acl")
-  .rpc(
-  "generate_acl_snapshot",
-  {
-    p_acl_version_id: body.acl_version_id,
-    p_company_id: companyId,
-  }
-);
+    const { data: existingSnapshot, error: snapshotLookupError } = await db
+      .schema("acl")
+      .from("precomputed_acl_view")
+      .select("snapshot_id")
+      .eq("acl_version_id", body.acl_version_id)
+      .eq("company_id", companyId)
+      .limit(1)
+      .maybeSingle();
 
-if (snapshotError) {
-  return errorResponse(
-    "ACL_SNAPSHOT_GENERATION_FAILED",
-    snapshotError.message,
-    requestId
-  );
-}
+    if (snapshotLookupError) {
+      return errorResponse(
+        "ACL_SNAPSHOT_LOOKUP_FAILED",
+        snapshotLookupError.message,
+        requestId
+      );
+    }
+
+    if (!existingSnapshot) {
+      const { error: snapshotError } = await db
+        .schema("acl")
+        .rpc(
+          "generate_acl_snapshot",
+          {
+            p_acl_version_id: body.acl_version_id,
+            p_company_id: companyId,
+          }
+        );
+
+      if (snapshotError) {
+        return errorResponse(
+          "ACL_SNAPSHOT_GENERATION_FAILED",
+          snapshotError.message,
+          requestId
+        );
+      }
+    }
 
     log({
       level: "SECURITY",
@@ -123,6 +136,7 @@ if (snapshotError) {
       meta: {
         company_id: companyId,
         acl_version_id: body.acl_version_id,
+        reused_existing_snapshot: Boolean(existingSnapshot),
       },
     });
 
@@ -130,6 +144,7 @@ if (snapshotError) {
       {
         acl_version_id: body.acl_version_id,
         status: "ACTIVE",
+        reused_existing_snapshot: Boolean(existingSnapshot),
       },
       requestId
     );

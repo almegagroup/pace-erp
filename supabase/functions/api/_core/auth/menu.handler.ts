@@ -13,8 +13,13 @@ import { getServiceRoleClientWithContext } from "../../_shared/serviceRoleClient
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import {
   resolveCanonicalAccessProfile,
-  resolveCanonicalPrimaryCompanyId,
+  resolveDefaultWorkCompanyId,
+  resolveDefaultWorkContextId,
 } from "../../_shared/canonical_access.ts";
+import {
+  rebuildAclSessionMenuSnapshot,
+  rebuildAdminSessionMenuSnapshot,
+} from "../../_shared/acl_runtime.ts";
 
 /* =========================================================
  * Types
@@ -62,17 +67,20 @@ export async function meMenuHandler(
   }
 
   const resolvedContext = context;
+  const resolvedWorkContextId =
+    resolvedContext.isAdmin === true ? null : resolvedContext.workContextId ?? null;
 
   
 
   const universe = resolvedContext.isAdmin === true ? "SA" : "ACL";
 
-  console.log("MENU_CONTEXT", {
+console.log("MENU_CONTEXT", {
   request_id,
   session_id,
   auth_user_id,
   universe,
-  company_id: resolvedContext.companyId ?? null
+  company_id: resolvedContext.companyId ?? null,
+  work_context_id: resolvedWorkContextId,
 });
 
   const db = getServiceRoleClientWithContext(resolvedContext);
@@ -84,12 +92,24 @@ export async function meMenuHandler(
   let data: unknown[] = [];
 
   try {
+    if (resolvedContext.isAdmin) {
+      await rebuildAdminSessionMenuSnapshot(db, auth_user_id, session_id);
+    } else if (resolvedContext.companyId && resolvedWorkContextId) {
+      await rebuildAclSessionMenuSnapshot(
+        db,
+        auth_user_id,
+        resolvedContext.companyId,
+        resolvedWorkContextId,
+        session_id,
+      );
+    }
+
     const t0 = performance.now();
 
     let query = db
       .schema("erp_cache")
       .from("session_menu_snapshot")
-      .select("menu_json, snapshot_version, company_id")
+      .select("menu_json, snapshot_version, company_id, work_context_id")
       .eq("session_id", session_id)
       .eq("universe", universe);
 
@@ -107,7 +127,9 @@ export async function meMenuHandler(
 
      
 
-      query = query.eq("company_id", resolvedContext.companyId);
+      query = query
+        .eq("company_id", resolvedContext.companyId)
+        .eq("work_context_id", resolvedWorkContextId);
     }
 
     const { data: row, error } = await query.maybeSingle();
@@ -268,62 +290,22 @@ async function refreshAdminSessionMenuSnapshot(
   }
 
   const db = getServiceRoleClientWithContext(ctx.context);
+  try {
+    const rows = await rebuildAdminSessionMenuSnapshot(
+      db,
+      ctx.auth_user_id,
+      ctx.session_id,
+    );
 
-  const { error: snapshotError } = await db
-    .schema("erp_menu")
-    .rpc("generate_menu_snapshot", {
-      p_user_id: ctx.auth_user_id,
-      p_company_id: null,
-      p_universe: "SA",
-    });
+    if (rows.length === 0) {
+      return { ok: false, reason: "SNAPSHOT_EMPTY" };
+    }
 
-  if (snapshotError) {
-    console.error("ADMIN_MENU_SNAPSHOT_REBUILD_FAILED", snapshotError);
+    return { ok: true };
+  } catch (error) {
+    console.error("ADMIN_MENU_SNAPSHOT_REBUILD_FAILED", error);
     return { ok: false, reason: "SNAPSHOT_REBUILD_FAILED" };
   }
-
-  const { data: menuRows, error: menuReadError } = await db
-    .schema("erp_menu")
-    .from("menu_snapshot")
-    .select("*")
-    .eq("user_id", ctx.auth_user_id)
-    .eq("universe", "SA")
-    .eq("is_visible", true)
-    .order("display_order", { ascending: true });
-
-  if (menuReadError) {
-    console.error("ADMIN_MENU_SNAPSHOT_READ_FAILED", menuReadError);
-    return { ok: false, reason: "SNAPSHOT_READ_FAILED" };
-  }
-
-  if (!menuRows || menuRows.length === 0) {
-    return { ok: false, reason: "SNAPSHOT_EMPTY" };
-  }
-
-  const { error: sessionSnapshotError } = await db
-    .schema("erp_cache")
-    .from("session_menu_snapshot")
-    .upsert(
-      {
-        session_id: ctx.session_id,
-        auth_user_id: ctx.auth_user_id,
-        universe: "SA",
-        company_id: null,
-        snapshot_version: menuRows[0]?.snapshot_version ?? 0,
-        menu_json: menuRows,
-      },
-      { onConflict: "session_id,universe,company_id" }
-    );
-
-  if (sessionSnapshotError) {
-    console.error(
-      "ADMIN_SESSION_MENU_SNAPSHOT_UPSERT_FAILED",
-      sessionSnapshotError
-    );
-    return { ok: false, reason: "SESSION_SNAPSHOT_UPSERT_FAILED" };
-  }
-
-  return { ok: true };
 }
 
 /* =========================================================
@@ -690,14 +672,30 @@ export async function previewUserHandler(
   }
 
   let companyId: string | null = null;
+  let workContextId: string | null = null;
   if (!profile.isAdmin) {
-    companyId = await resolveCanonicalPrimaryCompanyId(db, targetUserId)
+    companyId = await resolveDefaultWorkCompanyId(db, targetUserId)
       .catch(() => null);
 
     if (!companyId) {
       return errorResponse(
         "PREVIEW_USER_NOT_FOUND",
         "Target user has no company binding",
+        ctx.request_id,
+        "NONE",
+        404,
+        undefined,
+        req
+      );
+    }
+
+    workContextId = await resolveDefaultWorkContextId(db, targetUserId, companyId)
+      .catch(() => null);
+
+    if (!workContextId) {
+      return errorResponse(
+        "PREVIEW_USER_NOT_FOUND",
+        "Target user has no work context binding",
         ctx.request_id,
         "NONE",
         404,
@@ -721,7 +719,6 @@ if (!profile.roleCode) {
   );
 }
 
-const roleCode = profile.roleCode;
 
 /* --------------------------------------------------
  * 3️⃣ Determine universe from role
@@ -739,27 +736,26 @@ console.log("🟡 PREVIEW_SNAPSHOT_CALL", {
   universe
 });
 
-const { error: snapshotError } = await db
-  .schema("erp_menu")
-  .rpc("generate_menu_snapshot", {
-    p_user_id: targetUserId,
-    p_company_id: companyId,
-    p_universe: universe
-  });
-
-
-  
-if (snapshotError) {
-  
-  
-  return errorResponse(
-    "SNAPSHOT_GENERATION_FAILED",
-    snapshotError.message,
-    ctx.request_id,
-    "NONE",
-    500
-  );
-}
+  try {
+    if (profile.isAdmin) {
+      await rebuildAdminSessionMenuSnapshot(db, targetUserId);
+    } else if (companyId && workContextId) {
+      await rebuildAclSessionMenuSnapshot(
+        db,
+        targetUserId,
+        companyId,
+        workContextId,
+      );
+    }
+  } catch (error) {
+    return errorResponse(
+      error instanceof Error ? error.message : "SNAPSHOT_GENERATION_FAILED",
+      "Failed to generate preview snapshot",
+      ctx.request_id,
+      "NONE",
+      500
+    );
+  }
 
   /* --------------------------------------------------
    * 5️⃣ Read snapshot
@@ -782,7 +778,7 @@ if (snapshotError) {
     .order("display_order");
 
   snapshotQuery = companyId
-    ? snapshotQuery.eq("company_id", companyId)
+    ? snapshotQuery.eq("company_id", companyId).eq("work_context_id", workContextId)
     : snapshotQuery.is("company_id", null);
 
   const { data, error } = await snapshotQuery;
@@ -803,6 +799,7 @@ if (snapshotError) {
       preview_user: targetUserId,
       universe,
       company_id: companyId,
+      work_context_id: workContextId,
       menu: data
     },
     ctx.request_id,

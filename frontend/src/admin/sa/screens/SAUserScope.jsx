@@ -4,7 +4,7 @@
  * Gate: 9
  * Phase: 9
  * Domain: FRONT
- * Purpose: Super Admin user scope governance surface for Parent Company, Work Company, Project, and Department mapping
+ * Purpose: Super Admin user scope governance surface for Parent Company, Work Company, Work Context, Project, and Department mapping
  * Authority: Frontend
  */
 
@@ -105,10 +105,12 @@ export default function SAUserScope() {
   const parentCompanyButtonRef = useRef(null);
   const companySearchRef = useRef(null);
   const workCompanySearchRef = useRef(null);
+  const workContextSearchRef = useRef(null);
   const projectSearchRef = useRef(null);
   const departmentSearchRef = useRef(null);
   const companyOptionRefs = useRef([]);
   const workCompanyRefs = useRef([]);
+  const workContextRefs = useRef([]);
   const projectRefs = useRef([]);
   const departmentRefs = useRef([]);
 
@@ -120,11 +122,13 @@ export default function SAUserScope() {
 
   const [parentCompanyId, setParentCompanyId] = useState("");
   const [workCompanyIds, setWorkCompanyIds] = useState([]);
+  const [workContextIds, setWorkContextIds] = useState([]);
   const [projectIds, setProjectIds] = useState([]);
   const [departmentIds, setDepartmentIds] = useState([]);
   const [companyPickerOpen, setCompanyPickerOpen] = useState(false);
   const [companySearch, setCompanySearch] = useState("");
   const [workCompanySearch, setWorkCompanySearch] = useState("");
+  const [workContextSearch, setWorkContextSearch] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [departmentSearch, setDepartmentSearch] = useState("");
 
@@ -150,6 +154,7 @@ export default function SAUserScope() {
         setPayload(data);
         setParentCompanyId(data.scope?.parent_company?.id ?? "");
         setWorkCompanyIds(extractIds(data.scope?.work_companies));
+        setWorkContextIds(extractIds(data.scope?.work_contexts));
         setProjectIds(extractIds(data.scope?.projects));
         setDepartmentIds(extractIds(data.scope?.departments));
       } catch (caughtError) {
@@ -188,6 +193,24 @@ export default function SAUserScope() {
   const availableDepartments = useMemo(
     () => sortDepartments(options.departments ?? []),
     [options.departments]
+  );
+  const availableWorkContexts = useMemo(
+    () =>
+      (options.work_contexts ?? [])
+        .filter((workContext) =>
+          workCompanyIds.length === 0
+            ? true
+            : workCompanyIds.includes(workContext.company_id)
+        )
+        .slice()
+        .sort((left, right) =>
+          `${left.company_code ?? ""}|${left.work_context_code ?? ""}|${left.work_context_name ?? ""}`.localeCompare(
+            `${right.company_code ?? ""}|${right.work_context_code ?? ""}|${right.work_context_name ?? ""}`,
+            "en",
+            { numeric: true, sensitivity: "base" }
+          )
+        ),
+    [options.work_contexts, workCompanyIds]
   );
 
   const selectedParentCompany =
@@ -234,16 +257,41 @@ export default function SAUserScope() {
       ]),
     [availableDepartments, departmentSearch]
   );
+  const filteredWorkContexts = useMemo(
+    () =>
+      applyQuickFilter(availableWorkContexts, workContextSearch, [
+        "work_context_code",
+        "work_context_name",
+        "company_code",
+        "company_name",
+        "department_code",
+        "department_name",
+      ]),
+    [availableWorkContexts, workContextSearch]
+  );
 
   const readinessFlags = useMemo(
     () =>
       [
         !parentCompanyId ? "Missing Parent Company" : null,
         workCompanyIds.length === 0 ? "No Work Company" : null,
+        workContextIds.length === 0 ? "No Work Context" : null,
         !user?.role_code ? "No Role Assigned" : null,
       ].filter(Boolean),
-    [parentCompanyId, workCompanyIds.length, user?.role_code]
+    [parentCompanyId, workCompanyIds.length, workContextIds.length, user?.role_code]
   );
+
+  useEffect(() => {
+    const allowedIds = new Set(
+      (options.work_contexts ?? [])
+        .filter((workContext) => workCompanyIds.includes(workContext.company_id))
+        .map((workContext) => workContext.id)
+    );
+
+    setWorkContextIds((current) =>
+      current.filter((workContextId) => allowedIds.has(workContextId))
+    );
+  }, [options.work_contexts, workCompanyIds]);
 
   function toggleSelection(value, current, setter) {
     setter(
@@ -280,6 +328,7 @@ export default function SAUserScope() {
         auth_user_id: authUserId,
         parent_company_id: parentCompanyId,
         work_company_ids: workCompanyIds,
+        work_context_ids: workContextIds,
         project_ids: projectIds,
         department_ids: departmentIds,
       });
@@ -288,6 +337,7 @@ export default function SAUserScope() {
       setPayload(refreshed);
       setParentCompanyId(refreshed.scope?.parent_company?.id ?? "");
       setWorkCompanyIds(extractIds(refreshed.scope?.work_companies));
+      setWorkContextIds(extractIds(refreshed.scope?.work_contexts));
       setProjectIds(extractIds(refreshed.scope?.projects));
       setDepartmentIds(extractIds(refreshed.scope?.departments));
       setNotice("User scope saved successfully.");
@@ -373,12 +423,20 @@ export default function SAUserScope() {
       order: 40,
     },
     {
+      id: "sa-user-scope-work-contexts",
+      group: "Current Screen",
+      label: "Focus work context filter",
+      keywords: ["work context", "functional context"],
+      perform: () => workContextSearchRef.current?.focus(),
+      order: 50,
+    },
+    {
       id: "sa-user-scope-projects",
       group: "Current Screen",
       label: "Focus project filter",
       keywords: ["projects", "project scope"],
       perform: () => projectSearchRef.current?.focus(),
-      order: 50,
+      order: 60,
     },
     {
       id: "sa-user-scope-departments",
@@ -386,7 +444,7 @@ export default function SAUserScope() {
       label: "Focus department filter",
       keywords: ["departments", "department scope"],
       perform: () => departmentSearchRef.current?.focus(),
-      order: 60,
+      order: 65,
     },
     {
       id: "sa-user-scope-save",
@@ -482,6 +540,14 @@ export default function SAUserScope() {
             caption:
               "Operational company scope currently assigned to this user.",
             tone: workCompanyIds.length > 0 ? "emerald" : "amber",
+          },
+          {
+            key: "work-contexts",
+            label: "Work Contexts",
+            value: String(workContextIds.length),
+            caption:
+              "Runtime functional contexts currently available to this user.",
+            tone: workContextIds.length > 0 ? "emerald" : "amber",
           },
           {
             key: "readiness",
@@ -760,6 +826,98 @@ export default function SAUserScope() {
                       <span className="font-semibold">{project.project_code}</span>
                       {" - "}
                       {project.project_name}
+                    </span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </ErpSectionCard>
+      </div>
+
+      <div className="mt-6">
+        <ErpSectionCard
+          eyebrow="Work Context"
+          title="Runtime Functional Context"
+          description="Selected Work Contexts decide which functional capability packs the user may activate inside the selected Work Companies."
+        >
+          <QuickFilterInput
+            label="Filter Work Contexts"
+            value={workContextSearch}
+            onChange={setWorkContextSearch}
+            inputRef={workContextSearchRef}
+            placeholder="Filter by company, context, or department"
+            hint="Arrow Down moves into the work-context checkbox list."
+            inputProps={{
+              onKeyDown: (event) => {
+                if (
+                  event.key === "ArrowDown" &&
+                  filteredWorkContexts.length > 0
+                ) {
+                  event.preventDefault();
+                  workContextRefs.current[0]?.focus();
+                }
+              },
+            }}
+          />
+
+          <div className="mt-5 grid gap-3 md:grid-cols-2">
+            {filteredWorkContexts.length === 0 ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                {workCompanyIds.length === 0
+                  ? "Select at least one work company to see work-context options."
+                  : "No work context matches the current filter."}
+              </div>
+            ) : (
+              filteredWorkContexts.map((workContext, index) => {
+                const selected = workContextIds.includes(workContext.id);
+
+                return (
+                  <label
+                    key={workContext.id}
+                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                      selected
+                        ? "border-violet-300 bg-violet-50 text-violet-900"
+                        : "border-slate-300 bg-white text-slate-700"
+                    }`}
+                  >
+                    <input
+                      ref={(element) => {
+                        workContextRefs.current[index] = element;
+                      }}
+                      data-erp-nav-item="true"
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() =>
+                        toggleSelection(
+                          workContext.id,
+                          workContextIds,
+                          setWorkContextIds
+                        )
+                      }
+                      onKeyDown={(event) =>
+                        handleLinearNavigation(event, {
+                          index,
+                          refs: workContextRefs.current,
+                          orientation: "vertical",
+                        })
+                      }
+                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-violet-600"
+                    />
+                    <span>
+                      <span className="font-semibold">
+                        {workContext.work_context_code}
+                      </span>
+                      {" - "}
+                      {workContext.work_context_name}
+                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                        {workContext.company_code} | {workContext.company_name}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-600">
+                        {workContext.department_code
+                          ? `${workContext.department_code} | ${workContext.department_name}`
+                          : "Company-wide functional context"}
+                      </span>
                     </span>
                   </label>
                 );

@@ -29,6 +29,7 @@ type UpsertUserOverrideInput = {
 
 type AdminContext = {
   context: ContextResolution;
+  auth_user_id: string;
 };
 
 /* =========================================================
@@ -37,7 +38,7 @@ type AdminContext = {
 
 function assertAdmin(
   ctx: AdminContext
-): asserts ctx is { context: ContextResolution & { status: "RESOLVED"; authUserId: string; isAdmin: true } } {
+): asserts ctx is { context: ContextResolution & { status: "RESOLVED"; isAdmin: true }; auth_user_id: string } {
   if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
     throw new Error("ADMIN_ONLY");
   }
@@ -87,11 +88,11 @@ export async function upsertUserOverrideHandler(
     const payload = {
       user_id: body.user_id,
       company_id: body.company_id,
-      resource_code: body.resource_code,
-      action_code: body.action_code,
+      resource_code: body.resource_code.trim().toUpperCase(),
+      action_code: body.action_code.trim().toUpperCase(),
       effect: body.effect,
       reason: body.reason,
-      created_by: ctx.context.authUserId,
+      created_by: ctx.auth_user_id,
       revoked_at: null,
       revoked_by: null,
     };

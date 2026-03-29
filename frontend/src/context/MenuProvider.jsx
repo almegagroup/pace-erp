@@ -21,6 +21,14 @@ export function MenuProvider({ children }) {
     roleCode: "",
     tagline: "Process Automation & Control Environment",
   });
+  const [runtimeContext, setRuntimeContextState] = useState({
+    isAdmin: false,
+    selectedCompanyId: "",
+    currentCompany: null,
+    availableCompanies: [],
+    availableWorkContexts: [],
+    selectedWorkContext: null,
+  });
 
   const startMenuLoading = useCallback(() => {
     setLoading(true);
@@ -33,6 +41,14 @@ export function MenuProvider({ children }) {
       userCode: "",
       roleCode: "",
       tagline: "Process Automation & Control Environment",
+    });
+    setRuntimeContextState({
+      isAdmin: false,
+      selectedCompanyId: "",
+      currentCompany: null,
+      availableCompanies: [],
+      availableWorkContexts: [],
+      selectedWorkContext: null,
     });
     setLoading(false);
   }, []);
@@ -59,6 +75,21 @@ export function MenuProvider({ children }) {
     });
   }, []);
 
+  const setRuntimeContext = useCallback((context) => {
+    setRuntimeContextState({
+      isAdmin: context?.isAdmin === true,
+      selectedCompanyId: context?.selectedCompanyId ?? "",
+      currentCompany: context?.currentCompany ?? null,
+      availableCompanies: Array.isArray(context?.availableCompanies)
+        ? context.availableCompanies
+        : [],
+      availableWorkContexts: Array.isArray(context?.availableWorkContexts)
+        ? context.availableWorkContexts
+        : [],
+      selectedWorkContext: context?.selectedWorkContext ?? null,
+    });
+  }, []);
+
   return (
     <MenuContext.Provider
       value={{
@@ -66,10 +97,12 @@ export function MenuProvider({ children }) {
         allowedRoutes,
         loading,
         shellProfile,
+        runtimeContext,
         startMenuLoading,
         clearMenuSnapshot,
         setMenuSnapshot,
         setShellProfile,
+        setRuntimeContext,
       }}
     >
       {children}

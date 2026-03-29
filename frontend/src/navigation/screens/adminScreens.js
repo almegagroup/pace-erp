@@ -115,6 +115,14 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_CAPABILITY_GOVERNANCE: {
+    screen_code: "SA_CAPABILITY_GOVERNANCE",
+    route: "/sa/acl/capabilities",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_APPROVAL_RULES: {
     screen_code: "SA_APPROVAL_RULES",
     route: "/sa/approval-rules",

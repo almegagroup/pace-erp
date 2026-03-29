@@ -1,35 +1,23 @@
 /*
- * File-ID: ID-9.7
- * File-Path: supabase/functions/api/_core/admin/acl/list_role_permissions.handler.ts
- * gate_id: 9
+ * File-ID: ID-9.7B
+ * File-Path: supabase/functions/api/_core/admin/acl/list_capability_actions.handler.ts
+ * Gate: 9
  * Phase: 9
  * Domain: ACL
- * Purpose: List VWED permissions assigned to a role for admin governance visibility.
+ * Purpose: List governed resource-action rows assigned to a capability pack
  * Authority: Backend
  */
 
-import {
-  getServiceRoleClientWithContext,
-} from "../../../_shared/serviceRoleClient.ts";
-
+import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import type { ContextResolution } from "../../../_pipeline/context.ts";
-
 import { okResponse, errorResponse } from "../../response.ts";
 import { log } from "../../../_lib/logger.ts";
 import { generateRequestId } from "../../../_lib/request_id.ts";
 import type { VwedAction } from "../../../_acl/vwed_engine.ts";
 
-/* =========================================================
- * Types
- * ========================================================= */
-
 type AdminContext = {
   context: ContextResolution;
 };
-
-/* =========================================================
- * Guards
- * ========================================================= */
 
 function assertAdmin(ctx: AdminContext): void {
   if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
@@ -37,82 +25,56 @@ function assertAdmin(ctx: AdminContext): void {
   }
 }
 
-/* =========================================================
- * Handler
- * ========================================================= */
-
-export async function listRolePermissionsHandler(
+export async function listCapabilityActionsHandler(
   req: Request,
   ctx: AdminContext
 ): Promise<Response> {
   const requestId = generateRequestId();
 
   try {
-    /* --------------------------------------------------
-     * 1️⃣ Authority assertions
-     * -------------------------------------------------- */
-    
     assertAdmin(ctx);
 
-    /* --------------------------------------------------
-     * 2️⃣ Parse query (?role_code=)
-     * -------------------------------------------------- */
     const url = new URL(req.url);
-    const roleCode = url.searchParams.get("role_code");
+    const capabilityCode = url.searchParams.get("capability_code")?.trim() ?? "";
 
-    if (!roleCode) {
-      log({
-        level: "SECURITY",
-        request_id: requestId,
-        gate_id: "9.7",
-        event: "ROLE_PERMISSION_LIST_INVALID_INPUT",
-      });
-
+    if (!capabilityCode) {
       return errorResponse(
         "INVALID_INPUT",
-        "role_code is required",
+        "capability_code is required",
         requestId
       );
     }
 
-    /* --------------------------------------------------
-     * 3️⃣ Fetch VWED permissions (role lattice)
-     * -------------------------------------------------- */
     const db = getServiceRoleClientWithContext(ctx.context);
-
     const { data, error } = await db
-      .schema("acl").from("role_menu_permissions")
-      .select(
-        `
-          action,
-          effect,
-          menu:menu_id!inner (
-            menu_code
-          )
-        `
-      )
-      .eq("role_code", roleCode)
+      .schema("acl")
+      .from("capability_menu_actions")
+      .select(`
+        action,
+        allowed,
+        menu:menu_id!inner (
+          menu_code
+        )
+      `)
+      .eq("capability_code", capabilityCode)
       .order("action", { ascending: true });
 
     if (error) {
       log({
         level: "ERROR",
         request_id: requestId,
-        gate_id: "9.7",
-        event: "ROLE_PERMISSION_LIST_DB_ERROR",
+        gate_id: "9.7B",
+        event: "CAPABILITY_ACTION_LIST_FAILED",
         meta: { error: error.message },
       });
 
       return errorResponse(
-        "ROLE_PERMISSION_LIST_FAILED",
-        "Fetch failed",
+        "CAPABILITY_ACTION_LIST_FAILED",
+        "Failed to list capability actions",
         requestId
       );
     }
 
-    /* --------------------------------------------------
-     * 4️⃣ Success
-     * -------------------------------------------------- */
     const grouped = new Map<string, {
       resource_code: string;
       can_view: boolean;
@@ -143,9 +105,8 @@ export async function listRolePermissionsHandler(
       };
 
       const action = row.action as VwedAction;
-      const isAllowed = row.effect === "ALLOW";
 
-      if (isAllowed) {
+      if (row.allowed === true) {
         if (action === "VIEW") existing.can_view = true;
         if (action === "WRITE") existing.can_write = true;
         if (action === "EDIT") existing.can_edit = true;
@@ -161,7 +122,7 @@ export async function listRolePermissionsHandler(
 
     return okResponse(
       {
-        role_code: roleCode,
+        capability_code: capabilityCode,
         permissions: Array.from(grouped.values()).sort((left, right) =>
           left.resource_code.localeCompare(right.resource_code, "en", {
             numeric: true,
@@ -172,14 +133,6 @@ export async function listRolePermissionsHandler(
       requestId
     );
   } catch (err) {
-    log({
-      level: "ERROR",
-      request_id: requestId,
-      gate_id: "9.7",
-      event: "ROLE_PERMISSION_LIST_EXCEPTION",
-      meta: { error: String(err) },
-    });
-
     return errorResponse(
       (err as Error).message || "REQUEST_BLOCKED",
       "Unhandled error",

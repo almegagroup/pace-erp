@@ -87,6 +87,7 @@ function countEnabledFlags(row) {
     row.can_delete,
     row.can_approve,
     row.can_export,
+    Array.isArray(row.denied_actions) && row.denied_actions.length > 0,
   ].filter(Boolean).length;
 }
 
@@ -100,8 +101,18 @@ function createEmptyDraft(roleCode) {
     can_delete: false,
     can_approve: false,
     can_export: false,
+    denied_actions: [],
   };
 }
+
+const ACTION_MATRIX = [
+  ["VIEW", "can_view", "View"],
+  ["WRITE", "can_write", "Write"],
+  ["EDIT", "can_edit", "Edit"],
+  ["DELETE", "can_delete", "Delete"],
+  ["APPROVE", "can_approve", "Approve"],
+  ["EXPORT", "can_export", "Export"],
+];
 
 export default function SARolePermissions() {
   const navigate = useNavigate();
@@ -169,6 +180,7 @@ export default function SARolePermissions() {
         ...draft,
         role_code: selectedRoleCode,
         resource_code: draft.resource_code.trim(),
+        denied_actions: draft.denied_actions,
       });
       await loadPermissions(selectedRoleCode);
       setNotice(`Permission updated for ${selectedRoleCode} on ${draft.resource_code.trim()}.`);
@@ -364,7 +376,7 @@ export default function SARolePermissions() {
           label: "Active Rows",
           value: loading ? "..." : String(permissions.filter((row) => countEnabledFlags(row) > 0).length),
           tone: "amber",
-          caption: "Rows with at least one enabled VWED permission flag.",
+          caption: "Rows with at least one explicit allow or deny action.",
         },
         {
           key: "visible",
@@ -453,6 +465,11 @@ export default function SARolePermissions() {
                         .filter(Boolean)
                         .join(" ") || "NO FLAGS"}
                     </p>
+                    {Array.isArray(row.denied_actions) && row.denied_actions.length > 0 ? (
+                      <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-rose-600">
+                        Deny: {row.denied_actions.join(" ")}
+                      </p>
+                    ) : null}
                   </div>
 
                   <div className="flex flex-wrap gap-2">
@@ -472,6 +489,9 @@ export default function SARolePermissions() {
                           can_delete: Boolean(row.can_delete),
                           can_approve: Boolean(row.can_approve),
                           can_export: Boolean(row.can_export),
+                          denied_actions: Array.isArray(row.denied_actions)
+                            ? row.denied_actions
+                            : [],
                         })
                       }
                       onKeyDown={(event) =>
@@ -538,33 +558,67 @@ export default function SARolePermissions() {
               />
             </label>
 
-            {[
-              ["can_view", "Can View"],
-              ["can_write", "Can Write"],
-              ["can_edit", "Can Edit"],
-              ["can_delete", "Can Delete"],
-              ["can_approve", "Can Approve"],
-              ["can_export", "Can Export"],
-            ].map(([key, label]) => (
-              <label
-                key={key}
-                className="flex items-center justify-between border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700"
-              >
-                <span>{label}</span>
-                <input
-                  data-erp-form-field="true"
-                  type="checkbox"
-                  checked={Boolean(draft[key])}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      [key]: event.target.checked,
-                    }))
-                  }
-                  className="h-4 w-4 border-slate-300 bg-white text-emerald-600"
-                />
-              </label>
-            ))}
+            <div className="border border-slate-300 bg-white">
+              <div className="grid grid-cols-[minmax(0,1fr)_84px_84px] border-b border-slate-300 bg-slate-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                <span>Action</span>
+                <span className="text-center">Allow</span>
+                <span className="text-center">Deny</span>
+              </div>
+              {ACTION_MATRIX.map(([action, key, label]) => (
+                <div
+                  key={action}
+                  className="grid grid-cols-[minmax(0,1fr)_84px_84px] items-center border-b border-slate-200 px-4 py-3 text-sm text-slate-700 last:border-b-0"
+                >
+                  <span>{label}</span>
+                  <label className="flex justify-center">
+                    <input
+                      data-erp-form-field="true"
+                      type="checkbox"
+                      checked={Boolean(draft[key])}
+                      onChange={(event) =>
+                        setDraft((current) => {
+                          const deniedActions = (current.denied_actions ?? []).filter(
+                            (item) => item !== action
+                          );
+
+                          return {
+                            ...current,
+                            [key]: event.target.checked,
+                            denied_actions: deniedActions,
+                          };
+                        })
+                      }
+                      className="h-4 w-4 border-slate-300 bg-white text-emerald-600"
+                    />
+                  </label>
+                  <label className="flex justify-center">
+                    <input
+                      data-erp-form-field="true"
+                      type="checkbox"
+                      checked={(draft.denied_actions ?? []).includes(action)}
+                      onChange={(event) =>
+                        setDraft((current) => {
+                          const deniedActions = new Set(current.denied_actions ?? []);
+
+                          if (event.target.checked) {
+                            deniedActions.add(action);
+                          } else {
+                            deniedActions.delete(action);
+                          }
+
+                          return {
+                            ...current,
+                            [key]: false,
+                            denied_actions: Array.from(deniedActions),
+                          };
+                        })
+                      }
+                      className="h-4 w-4 border-slate-300 bg-white text-rose-600"
+                    />
+                  </label>
+                </div>
+              ))}
+            </div>
           </div>
         ),
       }}

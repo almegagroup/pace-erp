@@ -158,7 +158,14 @@ function resolveTopLevelIndex(nodes, routePath) {
 
 export default function MenuShell() {
   const location = useLocation();
-  const { menu, loading, shellProfile } = useMenu();
+  const {
+    menu,
+    loading,
+    shellProfile,
+    runtimeContext,
+    setMenuSnapshot,
+    setRuntimeContext,
+  } = useMenu();
   const [collapsed, setCollapsed] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [actionRailCollapsed, setActionRailCollapsed] = useState(false);
@@ -170,6 +177,7 @@ export default function MenuShell() {
     getClusterAdmission()
   );
   const [clusterWindowMessage, setClusterWindowMessage] = useState("");
+  const [runtimeContextError, setRuntimeContextError] = useState("");
   const [screenCommandRegistry, setScreenCommandRegistry] = useState(() => new Map());
   const [screenHotkeyRegistry, setScreenHotkeyRegistry] = useState(() => new Map());
 
@@ -228,6 +236,151 @@ export default function MenuShell() {
 
     return "Workspace";
   }, [location.pathname, menu]);
+  const availableCompanies = Array.isArray(runtimeContext?.availableCompanies)
+    ? runtimeContext.availableCompanies
+    : [];
+  const availableWorkContexts = Array.isArray(runtimeContext?.availableWorkContexts)
+    ? runtimeContext.availableWorkContexts
+    : [];
+  const showCompanySwitcher =
+    shellProfile?.roleCode !== "SA" &&
+    shellProfile?.roleCode !== "GA" &&
+    availableCompanies.length > 1;
+  const showWorkContextSwitcher =
+    shellProfile?.roleCode !== "SA" &&
+    shellProfile?.roleCode !== "GA" &&
+    availableWorkContexts.length > 1;
+  const currentCompanyLabel = runtimeContext?.currentCompany
+    ? `${runtimeContext.currentCompany.company_code} | ${runtimeContext.currentCompany.company_name}`
+    : "No work company selected";
+  const currentWorkContextLabel = runtimeContext?.selectedWorkContext
+    ? `${runtimeContext.selectedWorkContext.work_context_code} | ${runtimeContext.selectedWorkContext.work_context_name}`
+    : "No work context selected";
+
+  const handleWorkCompanyChange = useCallback(
+    async (nextCompanyId) => {
+      if (!nextCompanyId || nextCompanyId === runtimeContext?.selectedCompanyId) {
+        return;
+      }
+
+      setRuntimeContextError("");
+
+      try {
+        const contextResponse = await fetch(
+          `${import.meta.env.VITE_API_BASE}/api/me/context`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              selected_company_id: nextCompanyId,
+            }),
+          }
+        );
+        const contextJson = await contextResponse.json().catch(() => null);
+
+        if (!contextResponse.ok || !contextJson?.ok || !contextJson?.data) {
+          throw new Error(contextJson?.code ?? "WORK_COMPANY_SWITCH_FAILED");
+        }
+
+        const menuResponse = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+          credentials: "include",
+        });
+        const menuJson = await menuResponse.json().catch(() => null);
+
+        if (!menuResponse.ok || !menuJson?.ok) {
+          throw new Error(menuJson?.code ?? "MENU_REFRESH_FAILED");
+        }
+
+        setRuntimeContext({
+          isAdmin: contextJson.data.is_admin === true,
+          selectedCompanyId: contextJson.data.selected_company_id ?? "",
+          currentCompany: contextJson.data.current_company ?? null,
+          availableCompanies: contextJson.data.available_companies ?? [],
+          availableWorkContexts: contextJson.data.available_work_contexts ?? [],
+          selectedWorkContext: contextJson.data.selected_work_context ?? null,
+        });
+        setMenuSnapshot(menuJson?.data?.menu ?? []);
+      } catch (error) {
+        console.error("WORK_COMPANY_SWITCH_FAILED", error);
+        setRuntimeContextError("Work company could not be switched.");
+      }
+    },
+    [
+      runtimeContext?.selectedCompanyId,
+      setMenuSnapshot,
+      setRuntimeContext,
+    ]
+  );
+
+  const handleWorkContextChange = useCallback(
+    async (nextWorkContextId) => {
+      const currentWorkContextId =
+        runtimeContext?.selectedWorkContext?.work_context_id ?? "";
+
+      if (
+        !nextWorkContextId ||
+        !runtimeContext?.selectedCompanyId ||
+        nextWorkContextId === currentWorkContextId
+      ) {
+        return;
+      }
+
+      setRuntimeContextError("");
+
+      try {
+        const contextResponse = await fetch(
+          `${import.meta.env.VITE_API_BASE}/api/me/context`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              selected_company_id: runtimeContext.selectedCompanyId,
+              selected_work_context_id: nextWorkContextId,
+            }),
+          }
+        );
+        const contextJson = await contextResponse.json().catch(() => null);
+
+        if (!contextResponse.ok || !contextJson?.ok || !contextJson?.data) {
+          throw new Error(contextJson?.code ?? "WORK_CONTEXT_SWITCH_FAILED");
+        }
+
+        const menuResponse = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+          credentials: "include",
+        });
+        const menuJson = await menuResponse.json().catch(() => null);
+
+        if (!menuResponse.ok || !menuJson?.ok) {
+          throw new Error(menuJson?.code ?? "MENU_REFRESH_FAILED");
+        }
+
+        setRuntimeContext({
+          isAdmin: contextJson.data.is_admin === true,
+          selectedCompanyId: contextJson.data.selected_company_id ?? "",
+          currentCompany: contextJson.data.current_company ?? null,
+          availableCompanies: contextJson.data.available_companies ?? [],
+          availableWorkContexts: contextJson.data.available_work_contexts ?? [],
+          selectedWorkContext: contextJson.data.selected_work_context ?? null,
+        });
+        setMenuSnapshot(menuJson?.data?.menu ?? []);
+      } catch (error) {
+        console.error("WORK_CONTEXT_SWITCH_FAILED", error);
+        setRuntimeContextError("Work context could not be switched.");
+      }
+    },
+    [
+      runtimeContext?.selectedCompanyId,
+      runtimeContext?.selectedWorkContext?.work_context_id,
+      setMenuSnapshot,
+      setRuntimeContext,
+    ]
+  );
 
   const activeScreenCommands = useMemo(
     () =>
@@ -814,6 +967,50 @@ export default function MenuShell() {
             <>
               <p className="mt-2 text-xl font-semibold">{shellProfile?.roleCode || "ERP"}</p>
               <p className="text-sm opacity-90">{shellProfile?.userCode || "User"}</p>
+              {showCompanySwitcher ? (
+                <label className="mt-3 block text-[10px] font-semibold uppercase tracking-[0.18em] text-white/80">
+                  Work Company
+                  <select
+                    value={runtimeContext?.selectedCompanyId ?? ""}
+                    onChange={(event) => void handleWorkCompanyChange(event.target.value)}
+                    className="mt-1 w-full border border-white/30 bg-white/10 px-2 py-1 text-xs font-medium text-white outline-none"
+                  >
+                    {availableCompanies.map((company) => (
+                      <option
+                        key={company.id}
+                        value={company.id}
+                        className="text-slate-900"
+                      >
+                        {company.company_code} | {company.company_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : !runtimeContext?.isAdmin && runtimeContext?.currentCompany ? (
+                <p className="mt-3 text-xs opacity-90">{currentCompanyLabel}</p>
+              ) : null}
+              {showWorkContextSwitcher ? (
+                <label className="mt-3 block text-[10px] font-semibold uppercase tracking-[0.18em] text-white/80">
+                  Work Context
+                  <select
+                    value={runtimeContext?.selectedWorkContext?.work_context_id ?? ""}
+                    onChange={(event) => void handleWorkContextChange(event.target.value)}
+                    className="mt-1 w-full border border-white/30 bg-white/10 px-2 py-1 text-xs font-medium text-white outline-none"
+                  >
+                    {availableWorkContexts.map((workContext) => (
+                      <option
+                        key={workContext.work_context_id}
+                        value={workContext.work_context_id}
+                        className="text-slate-900"
+                      >
+                        {workContext.work_context_code} | {workContext.work_context_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : !runtimeContext?.isAdmin && runtimeContext?.selectedWorkContext ? (
+                <p className="mt-2 text-xs opacity-90">{currentWorkContextLabel}</p>
+              ) : null}
             </>
           ) : workspaceMode ? (
             <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em]">
@@ -997,6 +1194,12 @@ export default function MenuShell() {
             </span>
             <span>{shellProfile?.roleCode || "Role"}</span>
             <span>{shellProfile?.userCode || "User"}</span>
+            {!runtimeContext?.isAdmin && runtimeContext?.currentCompany ? (
+              <span>{runtimeContext.currentCompany.company_code}</span>
+            ) : null}
+            {!runtimeContext?.isAdmin && runtimeContext?.selectedWorkContext ? (
+              <span>{runtimeContext.selectedWorkContext.work_context_code}</span>
+            ) : null}
             <span>{workspaceMode ? `Stack ${stackDepth}` : `Zone ${WORKSPACE_ZONES.indexOf(activeZone) + 1}`}</span>
             {clusterAdmission?.windowSlot ? (
               <span>
@@ -1024,6 +1227,12 @@ export default function MenuShell() {
                   : "No extra route shortcuts"}
               </p>
             )}
+          </div>
+        ) : null}
+
+        {runtimeContextError ? (
+          <div className="border-b bg-rose-50 px-4 py-2 text-sm text-rose-700">
+            <p>{runtimeContextError}</p>
           </div>
         ) : null}
 

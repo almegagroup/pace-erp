@@ -19,31 +19,30 @@ import {
 export async function createSession(
   authUserId: string,
   roleCode: string,
+  selectedCompanyId: string | null,
+  selectedWorkContextId: string | null,
   device?: {
     device_id: string;
     device_summary: string;
-  }
+  },
 ): Promise<{ sessionId: string; clusterId: string }> {
   assertRlsEnabled();
 
-    // 🔴 ADD THIS BLOCK HERE
   if (!roleCode || typeof roleCode !== "string") {
     throw new Error("INVALID_ROLE_CODE");
   }
 
-
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
-  const expiresIso = new Date(now + 12 * 60 * 60 * 1000).toISOString(); // 12h TTL
+  const expiresIso = new Date(now + 12 * 60 * 60 * 1000).toISOString();
   const replacedClusterIds = await prepareActiveClustersForFreshLogin(
     authUserId,
-    nowIso
+    nowIso,
   );
-  // ------------------------------------------------
-  // Revoke all existing ACTIVE sessions (fresh-login replacement policy)
-  // ------------------------------------------------
+
   const { error: revokeError } = await serviceRoleClient
-    .schema("erp_core").from("sessions")
+    .schema("erp_core")
+    .from("sessions")
     .update({
       status: "REVOKED",
       revoked_at: nowIso,
@@ -58,49 +57,44 @@ export async function createSession(
     throw new Error("SESSION_REVOKE_FAILED");
   }
 
-// 🔥 ADD THIS BLOCK HERE — CLEAN OLD SNAPSHOT
-const { error: snapshotDeleteError } = await serviceRoleClient
-  .schema("erp_cache")
-  .from("session_menu_snapshot")
-  .delete()
-  .eq("auth_user_id", authUserId);
+  const { error: snapshotDeleteError } = await serviceRoleClient
+    .schema("erp_cache")
+    .from("session_menu_snapshot")
+    .delete()
+    .eq("auth_user_id", authUserId);
 
-if (snapshotDeleteError) {
-  console.error("SNAPSHOT_DELETE_FAILED", snapshotDeleteError);
-  throw new Error("SNAPSHOT_DELETE_FAILED");
-}
+  if (snapshotDeleteError) {
+    console.error("SNAPSHOT_DELETE_FAILED", snapshotDeleteError);
+    throw new Error("SNAPSHOT_DELETE_FAILED");
+  }
 
-  // ------------------------------------------------
-  // Generate fresh session ID (fixation prevention)
-  // ------------------------------------------------
   const sessionId = crypto.randomUUID();
 
   if (!sessionId) {
     throw new Error("SESSION_ID_GENERATION_FAILED");
   }
 
-  // ------------------------------------------------
-  // Insert new ACTIVE session
-  // ------------------------------------------------
   const { error: insertError } = await serviceRoleClient
-    .schema("erp_core").from("sessions")
+    .schema("erp_core")
+    .from("sessions")
     .insert({
-  session_id: sessionId,
-  auth_user_id: authUserId,
-  role_code: roleCode,
-  status: "ACTIVE",
-  created_at: nowIso,
-  last_seen_at: nowIso,
-  expires_at: expiresIso,
-  device_id: device?.device_id ?? null,
-  device_summary: device?.device_summary ?? null,
-});
+      session_id: sessionId,
+      auth_user_id: authUserId,
+      role_code: roleCode,
+      selected_company_id: selectedCompanyId,
+      selected_work_context_id: selectedWorkContextId,
+      status: "ACTIVE",
+      created_at: nowIso,
+      last_seen_at: nowIso,
+      expires_at: expiresIso,
+      device_id: device?.device_id ?? null,
+      device_summary: device?.device_summary ?? null,
+    });
 
   if (insertError) {
-  console.error("SESSION_CREATE_FAILED", insertError);
-
-  throw new Error("SESSION_CREATE_FAILED");
-}
+    console.error("SESSION_CREATE_FAILED", insertError);
+    throw new Error("SESSION_CREATE_FAILED");
+  }
 
   const clusterId = await createSessionCluster({
     authUserId,

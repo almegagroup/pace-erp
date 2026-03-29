@@ -13,23 +13,22 @@
  * - If ACL cannot decide deterministically → DENY
  */
 
-
-import { resolveAcl } from "../_acl/acl_resolver.ts";
 import { log } from "../_lib/logger.ts";
 import type {
   VwedAction,
-  VwedPermissionRow,
 } from "../_acl/vwed_engine.ts";
 import { getServiceRoleClientWithContext } from "../_shared/serviceRoleClient.ts";
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { recordSecurityEvent } from "../_security/security_events.ts";
 
 async function getActiveAclVersionId(
-  db: SupabaseClient
+  db: SupabaseClient,
+  companyId: string,
 ): Promise<string> {
   const { data, error } = await db
     .schema("acl").from("acl_versions")
     .select("acl_version_id")
+    .eq("company_id", companyId)
     .eq("is_active", true)
     .single();
 
@@ -67,16 +66,13 @@ export async function stepAcl(
       authUserId?: string;
       roleCode?: string;
       companyId?: string;
-
-      // ===== Gate-6 truth flags (no permission materialization yet) =====
-      moduleEnabled?: boolean;
-      userOverrides?: { effect: "ALLOW" | "DENY" } | null;
-      // 🔥 ADD THIS (CRITICAL)
-  isAdmin?: boolean;
+      workContextId?: string;
+      isAdmin?: boolean;
     };
 
     route?: {
       isPublic?: boolean;
+      skipAcl?: boolean;
       resourceCode?: string;
       action?: VwedAction;
     };
@@ -96,6 +92,10 @@ if (ctx?.context?.isAdmin === true) {
     return { decision: "ALLOW" };
   }
 
+  if (ctx?.route?.skipAcl === true) {
+    return { decision: "ALLOW" };
+  }
+
   /* --------------------------------------------------
    * 2️⃣ Context authority enforcement (Gate-5 invariant)
    * -------------------------------------------------- */
@@ -112,20 +112,17 @@ if (ctx?.context?.isAdmin === true) {
    * -------------------------------------------------- */
   const {
     authUserId,
-    roleCode,
     companyId,
-    moduleEnabled,
-    userOverrides,
+    workContextId,
   } = ctx.context ?? {};
 
   const { resourceCode, action } = ctx.route ?? {};
 
   if (
-     !authUserId ||
-  (!companyId && !ctx.context?.isAdmin) ||
+    !authUserId ||
+    ((!companyId || !workContextId) && !ctx.context?.isAdmin) ||
     !resourceCode ||
-    !action ||
-    moduleEnabled === undefined
+    !action
   ) {
     return {
       decision: "DENY",
@@ -150,11 +147,11 @@ const db = getServiceRoleClientWithContext({
   status: "RESOLVED",
   source: "BACKEND",
   companyId: companyId as string,
-  roleCode: roleCode ?? "",
+  roleCode: ctx.context?.roleCode ?? "",
   isAdmin: false,
 } as ContextForDb);
 
-const activeAclVersionId = await getActiveAclVersionId(db);
+const activeAclVersionId = await getActiveAclVersionId(db, companyId as string);
 
 const { data, error } = await db
   .schema("acl").from("precomputed_acl_view")
@@ -167,8 +164,10 @@ const { data, error } = await db
   .eq("acl_version_id", activeAclVersionId)
   .eq("auth_user_id", authUserId)
   .eq("company_id", companyId)
+  .eq("work_context_id", workContextId)
   .eq("resource_code", resourceCode)
-  .eq("action_code", action);
+  .eq("action_code", action)
+  .maybeSingle();
 
 if (error) {
   return {
@@ -178,33 +177,13 @@ if (error) {
   };
 }
 
-const snapshotPermissions: VwedPermissionRow[] = [];
-
-for (const row of data ?? []) {
-  if (row.decision !== "ALLOW") continue;
-
-  snapshotPermissions.push({
-    resource_code: row.resource_code,
-    can_view: row.action_code === "VIEW",
-    can_write: row.action_code === "WRITE",
-    can_edit: row.action_code === "EDIT",
-    can_delete: row.action_code === "DELETE",
-    can_approve: row.action_code === "APPROVE",
-    can_export: row.action_code === "EXPORT",
-  });
+if (!data) {
+  return {
+    decision: "DENY",
+    reason: "ACL_DEFAULT_DENY_NO_MATCH",
+    action: "NONE",
+  };
 }
-
-const result = resolveAcl({
-  authUserId,
-  roleCode,
-  companyId: companyId as string,  // 🔥 THIS LINE CHANGED
-  resourceCode,
-  action,
-  moduleEnabled,
-  userOverrides,
-  rolePermissions: snapshotPermissions,
-  capabilityPermissions: snapshotPermissions,
-});
 
   log({
   level: "OBSERVABILITY",
@@ -212,17 +191,19 @@ const result = resolveAcl({
   gate_id: "10.4",
   route_key: `${resourceCode}:${action}`,
   event: "ACL_DECISION_TRACE",
-  decision: result.decision,
+  decision: data.decision,
   actor: authUserId,
   meta: {
     company_id: companyId,
+    work_context_id: workContextId,
     resource_code: resourceCode,
     action,
-    trace: result.trace,
+    decision_reason: data.decision_reason,
+    acl_version_id: activeAclVersionId,
   },
 });
 
-  if (result.decision === "ALLOW") {
+  if (data.decision === "ALLOW") {
     return { decision: "ALLOW" };
   }
 
@@ -235,13 +216,14 @@ recordSecurityEvent(
   {
     user_id: authUserId,
     company_id: companyId,
-    reason: result.reason
+    work_context_id: workContextId,
+    reason: data.decision_reason
   }
 );
 
 return {
   decision: "DENY",
-  reason: result.reason,
+  reason: data.decision_reason || "ACL_DEFAULT_DENY_NO_MATCH",
   action: "NONE",
 };
 }

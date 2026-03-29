@@ -13,6 +13,7 @@ import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { okResponse, errorResponse } from "../../response.ts";
 import { log } from "../../../_lib/logger.ts";
 import { generateRequestId } from "../../../_lib/request_id.ts";
+import { resolveOrProvisionAclMenuResource } from "../../../_shared/acl_menu_resource.ts";
 
 /* =========================================================
  * Types
@@ -79,13 +80,17 @@ export async function disableRolePermissionHandler(
      * 3️⃣ Clear VWED flags (soft-disable)
      * -------------------------------------------------- */
     const db = getServiceRoleClientWithContext(ctx.context);
+    const { aclMenuId, resourceCode } = await resolveOrProvisionAclMenuResource(
+      db,
+      body.resource_code.trim().toUpperCase(),
+    );
 
     const { data: existing } = await db
-  .schema("acl").from("role_menu_permissions")
-  .select("role_code")
-  .eq("role_code", body.role_code)
-  .eq("resource_code", body.resource_code)
-  .maybeSingle();
+      .schema("acl").from("role_menu_permissions")
+      .select("role_code")
+      .eq("role_code", body.role_code)
+      .eq("menu_id", aclMenuId)
+      .maybeSingle();
 
 if (!existing) {
   return errorResponse(
@@ -97,16 +102,9 @@ if (!existing) {
 
 const { error } = await db
   .schema("acl").from("role_menu_permissions")
-  .update({
-    can_view: false,
-    can_write: false,
-    can_edit: false,
-    can_delete: false,
-    can_approve: false,
-    can_export: false,
-  })
+  .delete()
   .eq("role_code", body.role_code)
-  .eq("resource_code", body.resource_code);
+  .eq("menu_id", aclMenuId);
 
 
     if (error) {
@@ -135,14 +133,14 @@ const { error } = await db
       event: "ROLE_PERMISSION_DISABLED",
       meta: {
         role_code: body.role_code,
-        resource_code: body.resource_code,
+        resource_code: resourceCode,
       },
     });
 
     return okResponse(
       {
         role_code: body.role_code,
-        resource_code: body.resource_code,
+        resource_code: resourceCode,
         disabled: true,
       },
       requestId

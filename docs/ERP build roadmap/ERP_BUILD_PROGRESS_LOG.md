@@ -2480,3 +2480,11 @@ then validate that SA and ACL paths work cleanly after the legacy bridge table i
     - frontend/src/admin/sa/screens/SAMenuGovernance.jsx
     - supabase/functions/api/_core/auth/menu.handler.ts
     - supabase/migrations/20260410126000_gate7_7_3H_menu_snapshot_description_projection.sql
+042. Clarified ACL SSOT runtime scope model for scalable product direction.
+    - locked Parent Company vs Work Company vs Department vs Work Context responsibilities
+    - defined Project / Module / Page / Role / Capability Pack / Menu boundaries
+    - locked final access formula as:
+      User + Selected Work Company + Selected Work Context + Role + Enabled Modules + Overrides
+    - explicitly declared automatic menu recompute on company or work-context switch
+    - explicitly declared user overrides as exception layer, not default permission stitching
+    - docs/ACL_SSOT.md

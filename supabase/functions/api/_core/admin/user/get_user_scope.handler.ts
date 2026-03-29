@@ -143,6 +143,12 @@ export async function getUserScopeHandler(
       .eq("auth_user_id", authUserId);
 
     const departmentIds = [...new Set((departmentRows ?? []).map((row) => row.department_id))];
+    const { data: workContextRows } = await db
+      .schema("erp_acl").from("user_work_contexts")
+      .select("work_context_id")
+      .eq("auth_user_id", authUserId);
+
+    const workContextIds = [...new Set((workContextRows ?? []).map((row) => row.work_context_id))];
 
     const companyIdsToResolve = [...new Set([
       ...(parentCompanyId ? [parentCompanyId] : []),
@@ -184,10 +190,19 @@ export async function getUserScopeHandler(
         .in("id", departmentIds)
         .eq("status", "ACTIVE")
         .in("company_id", businessCompanyIds);
+    const { data: availableWorkContexts } = businessCompanyIds.length === 0
+      ? { data: [] }
+      : await db
+        .schema("erp_acl").from("work_contexts")
+        .select("work_context_id, company_id, work_context_code, work_context_name, description, department_id, is_active")
+        .eq("is_active", true)
+        .in("company_id", businessCompanyIds)
+        .order("work_context_code", { ascending: true });
 
     const companyMap = new Map((scopedCompanies ?? []).map((row) => [row.id, row]));
     const projectMap = new Map((scopedProjects ?? []).map((row) => [row.id, row]));
     const departmentMap = new Map((scopedDepartments ?? []).map((row) => [row.id, row]));
+    const workContextMap = new Map((availableWorkContexts ?? []).map((row) => [row.work_context_id, row]));
 
     const { data: availableProjects } = businessCompanyIds.length === 0
       ? { data: [] }
@@ -242,6 +257,32 @@ export async function getUserScopeHandler(
             "department_code",
             "department_name",
           ),
+          work_contexts: sortByCodeThenName(
+            workContextIds
+              .map((workContextId) => {
+                const workContext = workContextMap.get(workContextId);
+                if (!workContext) {
+                  return null;
+                }
+
+                const company = companyMap.get(workContext.company_id) ?? null;
+                const department = workContext.department_id
+                  ? departmentMap.get(workContext.department_id) ?? null
+                  : null;
+
+                return {
+                  id: workContext.work_context_id,
+                  ...workContext,
+                  company_code: company?.company_code ?? null,
+                  company_name: company?.company_name ?? null,
+                  department_code: department?.department_code ?? null,
+                  department_name: department?.department_name ?? null,
+                };
+              })
+              .filter(Boolean),
+            "work_context_code",
+            "work_context_name",
+          ),
         },
         options: {
           companies: sortByCodeThenName(
@@ -258,6 +299,29 @@ export async function getUserScopeHandler(
             availableDepartments,
             "department_code",
             "department_name",
+          ),
+          work_contexts: sortByCodeThenName(
+            (availableWorkContexts ?? []).map((workContext) => {
+              const company = (availableCompanies ?? []).find(
+                (row) => row.id === workContext.company_id,
+              ) ?? null;
+              const department = workContext.department_id
+                ? (availableDepartments ?? []).find(
+                  (row) => row.id === workContext.department_id,
+                ) ?? null
+                : null;
+
+              return {
+                id: workContext.work_context_id,
+                ...workContext,
+                company_code: company?.company_code ?? null,
+                company_name: company?.company_name ?? null,
+                department_code: department?.department_code ?? null,
+                department_name: department?.department_name ?? null,
+              };
+            }),
+            "work_context_code",
+            "work_context_name",
           ),
         },
       },

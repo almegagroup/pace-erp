@@ -16,9 +16,14 @@ import { log } from "../../_lib/logger.ts";
 import { authClient } from "./authClient.ts";
 import { recordSessionTimeline } from "../session/session_timeline.ts";
 import {
-  listCanonicalCompanyIds,
+  resolveDefaultWorkCompanyId,
+  resolveDefaultWorkContextId,
   resolveCanonicalAccessProfile,
 } from "../../_shared/canonical_access.ts";
+import {
+  rebuildAclSessionMenuSnapshot,
+  rebuildAdminSessionMenuSnapshot,
+} from "../../_shared/acl_runtime.ts";
 
 function extractDeviceInfo(_ctx: LoginContext) {
   return {
@@ -31,6 +36,8 @@ async function buildAndStoreMenuSnapshot(
   sessionId: string,
   authUserId: string,
   requestId: string,
+  selectedCompanyId: string | null,
+  selectedWorkContextId: string | null,
 ) {
   const start = Date.now();
 
@@ -67,174 +74,69 @@ async function buildAndStoreMenuSnapshot(
     });
 
     if (isAdmin) {
-      const { error: rebuildError } = await supabase
-        .schema("erp_menu")
-        .rpc("generate_menu_snapshot", {
-          p_user_id: authUserId,
-          p_company_id: null,
-          p_universe: "SA",
-        });
-
-      if (rebuildError) {
-        log({
-          level: "ERROR",
-          request_id: requestId,
-          event: "SA_MENU_REBUILD_FAILED",
-          meta: { rebuildError },
-        });
-        return;
-      }
-
-      const { data: menuRows, error: menuError } = await supabase
-        .schema("erp_menu")
-        .from("menu_snapshot")
-        .select("*")
-        .eq("user_id", authUserId)
-        .eq("universe", "SA")
-        .eq("is_visible", true)
-        .order("display_order", { ascending: true });
-
-      log({
-        level: "INFO",
-        request_id: requestId,
-        event: "SA_MENU_FETCH",
-        meta: {
-          count: menuRows?.length ?? 0,
-          error: menuError?.message ?? null,
-        },
-      });
-
-      if (menuError) {
-        log({
-          level: "ERROR",
-          request_id: requestId,
-          event: "SA_MENU_FETCH_FAILED",
-          meta: { menuError },
-        });
-        return;
-      }
-
-      if (!menuRows || menuRows.length === 0) {
-        log({
-          level: "WARN",
-          request_id: requestId,
-          event: "SA_MENU_EMPTY",
-        });
-        return;
-      }
-
-      const { error: upsertError } = await supabase
-        .schema("erp_cache")
-        .from("session_menu_snapshot")
-        .upsert(
-          {
-            session_id: sessionId,
-            auth_user_id: authUserId,
-            universe: "SA",
-            company_id: null,
-            snapshot_version: menuRows[0]?.snapshot_version ?? 0,
-            menu_json: menuRows,
-          },
-          { onConflict: "session_id,universe,company_id" },
+      try {
+        const menuRows = await rebuildAdminSessionMenuSnapshot(
+          supabase,
+          authUserId,
+          sessionId,
         );
 
-      if (upsertError) {
-        log({
-          level: "ERROR",
-          request_id: requestId,
-          event: "SA_SNAPSHOT_UPSERT_FAILED",
-          meta: { upsertError },
-        });
-      } else {
         log({
           level: "INFO",
           request_id: requestId,
           event: "SA_SNAPSHOT_SUCCESS",
           meta: { count: menuRows.length },
         });
+      } catch (error) {
+        log({
+          level: "ERROR",
+          request_id: requestId,
+          event: "SA_SNAPSHOT_REBUILD_FAILED",
+          meta: { error: String(error) },
+        });
       }
 
       return;
     }
 
-    let companyIds: string[] = [];
+    const companyId = selectedCompanyId ??
+      await resolveDefaultWorkCompanyId(supabase, authUserId);
+    const workContextId = companyId
+      ? selectedWorkContextId ??
+        await resolveDefaultWorkContextId(supabase, authUserId, companyId)
+      : null;
+
+    if (!companyId || !workContextId) {
+      log({
+        level: "WARN",
+        request_id: requestId,
+        event: "NO_RUNTIME_CONTEXT_FOUND",
+      });
+      return;
+    }
 
     try {
-      companyIds = await listCanonicalCompanyIds(supabase, authUserId);
+      const menuRows = await rebuildAclSessionMenuSnapshot(
+        supabase,
+        authUserId,
+        companyId,
+        workContextId,
+        sessionId,
+      );
+
+      log({
+        level: "INFO",
+        request_id: requestId,
+        event: "ACL_SNAPSHOT_SUCCESS",
+        meta: { companyId, workContextId, count: menuRows.length },
+      });
     } catch (error) {
       log({
         level: "ERROR",
         request_id: requestId,
-        event: "COMPANY_FETCH_FAILED",
-        meta: { error: String(error) },
+        event: "ACL_SNAPSHOT_REBUILD_FAILED",
+        meta: { companyId, workContextId, error: String(error) },
       });
-      return;
-    }
-
-    if (companyIds.length === 0) {
-      log({
-        level: "WARN",
-        request_id: requestId,
-        event: "NO_COMPANY_FOUND",
-      });
-      return;
-    }
-
-    for (const companyId of companyIds) {
-      const { data: menuRows, error: menuError } = await supabase
-        .schema("erp_menu")
-        .from("menu_snapshot")
-        .select("*")
-        .eq("user_id", authUserId)
-        .eq("universe", "ACL")
-        .eq("company_id", companyId)
-        .eq("is_visible", true)
-        .order("display_order", { ascending: true });
-
-      if (menuError) {
-        log({
-          level: "ERROR",
-          request_id: requestId,
-          event: "ACL_MENU_FETCH_FAILED",
-          meta: { companyId, menuError },
-        });
-        continue;
-      }
-
-      if (!menuRows || menuRows.length === 0) {
-        continue;
-      }
-
-      const { error: upsertError } = await supabase
-        .schema("erp_cache")
-        .from("session_menu_snapshot")
-        .upsert(
-          {
-            session_id: sessionId,
-            auth_user_id: authUserId,
-            universe: "ACL",
-            company_id: companyId,
-            snapshot_version: menuRows[0]?.snapshot_version ?? 0,
-            menu_json: menuRows,
-          },
-          { onConflict: "session_id,universe,company_id" },
-        );
-
-      if (upsertError) {
-        log({
-          level: "ERROR",
-          request_id: requestId,
-          event: "ACL_SNAPSHOT_UPSERT_FAILED",
-          meta: { companyId, upsertError },
-        });
-      } else {
-        log({
-          level: "INFO",
-          request_id: requestId,
-          event: "ACL_SNAPSHOT_SUCCESS",
-          meta: { companyId, count: menuRows.length },
-        });
-      }
     }
   } catch (err) {
     log({
@@ -351,13 +253,88 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
     meta: { roleCode, userCode },
   });
 
+  let selectedCompanyId: string | null = null;
+  let selectedWorkContextId: string | null = null;
+
+  if (roleCode !== "SA" && roleCode !== "GA") {
+    try {
+      selectedCompanyId = await resolveDefaultWorkCompanyId(supabase, authUserId);
+    } catch (error) {
+      log({
+        level: "ERROR",
+        request_id: requestId,
+        event: "WORK_COMPANY_RESOLUTION_FAILED",
+        meta: { error: String(error), authUserId },
+      });
+
+      return errorResponse(
+        "AUTH_FAIL",
+        "Work company not assigned",
+        requestId,
+        "NONE",
+        403,
+      );
+    }
+
+    if (!selectedCompanyId) {
+      return errorResponse(
+        "AUTH_FAIL",
+        "Work company not assigned",
+        requestId,
+        "NONE",
+        403,
+      );
+    }
+
+    try {
+      selectedWorkContextId = await resolveDefaultWorkContextId(
+        supabase,
+        authUserId,
+        selectedCompanyId,
+      );
+    } catch (error) {
+      log({
+        level: "ERROR",
+        request_id: requestId,
+        event: "WORK_CONTEXT_RESOLUTION_FAILED",
+        meta: { error: String(error), authUserId, selectedCompanyId },
+      });
+
+      return errorResponse(
+        "AUTH_FAIL",
+        "Work context not assigned",
+        requestId,
+        "NONE",
+        403,
+      );
+    }
+
+    if (!selectedWorkContextId) {
+      return errorResponse(
+        "AUTH_FAIL",
+        "Work context not assigned",
+        requestId,
+        "NONE",
+        403,
+      );
+    }
+  }
+
   const { sessionId } = await createSession(
     authUserId,
     roleCode,
+    selectedCompanyId,
+    selectedWorkContextId,
     extractDeviceInfo(ctx),
   );
 
-  await buildAndStoreMenuSnapshot(sessionId, authUserId, requestId);
+  await buildAndStoreMenuSnapshot(
+    sessionId,
+    authUserId,
+    requestId,
+    selectedCompanyId,
+    selectedWorkContextId,
+  );
 
   recordSessionTimeline({
     requestId,

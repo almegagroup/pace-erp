@@ -1,10 +1,10 @@
 /*
- * File-ID: ID-9.7A
- * File-Path: supabase/functions/api/_core/admin/acl/list_role_capabilities.handler.ts
+ * File-ID: ID-9.7C
+ * File-Path: supabase/functions/api/_core/admin/acl/list_work_context_capabilities.handler.ts
  * Gate: 9
  * Phase: 9
  * Domain: ACL
- * Purpose: List capability packs assigned to a role (admin governance).
+ * Purpose: List capability packs bound to a work context
  * Authority: Backend
  */
 
@@ -12,19 +12,10 @@ import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleCli
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { okResponse, errorResponse } from "../../response.ts";
 import { generateRequestId } from "../../../_lib/request_id.ts";
-import { log } from "../../../_lib/logger.ts";
-
-/* =========================================================
- * Types
- * ========================================================= */
 
 type AdminContext = {
   context: ContextResolution;
 };
-
-/* =========================================================
- * Guards
- * ========================================================= */
 
 function assertAdmin(ctx: AdminContext): void {
   if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
@@ -32,37 +23,30 @@ function assertAdmin(ctx: AdminContext): void {
   }
 }
 
-/* =========================================================
- * Handler
- * ========================================================= */
-
-export async function listRoleCapabilitiesHandler(
+export async function listWorkContextCapabilitiesHandler(
   req: Request,
-  ctx: AdminContext
+  ctx: AdminContext,
 ): Promise<Response> {
   const requestId = generateRequestId();
 
   try {
-    /* 1️⃣ Admin guard */
     assertAdmin(ctx);
 
-    /* 2️⃣ Parse query (?role_code=) */
     const url = new URL(req.url);
-    const roleCode = url.searchParams.get("role_code");
+    const workContextId = url.searchParams.get("work_context_id")?.trim() ?? "";
 
-    if (!roleCode) {
+    if (!workContextId) {
       return errorResponse(
         "INVALID_INPUT",
-        "role_code is required",
-        requestId
+        "work_context_id is required",
+        requestId,
       );
     }
 
     const db = getServiceRoleClientWithContext(ctx.context);
-
-    /* 3️⃣ Fetch assigned capabilities */
     const { data, error } = await db
-      .schema("acl").from("role_capabilities")
+      .schema("acl")
+      .from("work_context_capabilities")
       .select(`
         capability_code,
         capability:capability_code!inner (
@@ -71,29 +55,20 @@ export async function listRoleCapabilitiesHandler(
           is_system
         )
       `)
-      .eq("role_code", roleCode)
+      .eq("work_context_id", workContextId)
       .order("capability_code", { ascending: true });
 
     if (error) {
-      log({
-        level: "ERROR",
-        request_id: requestId,
-        gate_id: "9.7A",
-        event: "LIST_ROLE_CAPABILITIES_DB_ERROR",
-        meta: { error: error.message },
-      });
-
       return errorResponse(
-        "ROLE_CAPABILITY_LIST_FAILED",
-        "List failed",
-        requestId
+        "WORK_CONTEXT_CAPABILITY_LIST_FAILED",
+        error.message,
+        requestId,
       );
     }
 
-    /* 4️⃣ Success */
     return okResponse(
       {
-        role_code: roleCode,
+        work_context_id: workContextId,
         capabilities: (data ?? []).map((row) => ({
           capability_code: row.capability_code,
           capability_name: row.capability?.capability_name ?? null,
@@ -101,13 +76,13 @@ export async function listRoleCapabilitiesHandler(
           is_system: row.capability?.is_system ?? false,
         })),
       },
-      requestId
+      requestId,
     );
   } catch (err) {
     return errorResponse(
       (err as Error).message || "REQUEST_BLOCKED",
       "Unhandled error",
-      requestId
+      requestId,
     );
   }
 }
