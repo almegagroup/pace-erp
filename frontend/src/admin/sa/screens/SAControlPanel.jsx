@@ -47,6 +47,11 @@ const QUICK_LAUNCH_META = Object.freeze({
     description:
       "Start a fresh company setup flow and extend the organizational structure from SA control.",
   },
+  SA_ORG_BOOTSTRAP: {
+    badge: "Bootstrap",
+    description:
+      "Run the org skeleton setup flow for companies, groups, projects, and departments in one place.",
+  },
   SA_PROJECT_MASTER: {
     badge: "Master",
     description:

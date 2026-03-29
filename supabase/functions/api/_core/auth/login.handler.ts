@@ -15,8 +15,11 @@ import { resolveIdentifier } from "./identifierResolver.ts";
 import { log } from "../../_lib/logger.ts";
 import { authClient } from "./authClient.ts";
 import { recordSessionTimeline } from "../session/session_timeline.ts";
+import {
+  listCanonicalCompanyIds,
+  resolveCanonicalAccessProfile,
+} from "../../_shared/canonical_access.ts";
 
-/* ---------------- DEVICE ---------------- */
 function extractDeviceInfo(_ctx: LoginContext) {
   return {
     device_id: "unknown",
@@ -24,17 +27,16 @@ function extractDeviceInfo(_ctx: LoginContext) {
   };
 }
 
-/* ---------------- SNAPSHOT BUILDER ---------------- */
 async function buildAndStoreMenuSnapshot(
   sessionId: string,
   authUserId: string,
-  requestId: string
+  requestId: string,
 ) {
   const start = Date.now();
 
   const supabase = createClient(
     ENV.SUPABASE_URL,
-    ENV.SUPABASE_SERVICE_ROLE_KEY
+    ENV.SUPABASE_SERVICE_ROLE_KEY,
   );
 
   log({
@@ -45,69 +47,24 @@ async function buildAndStoreMenuSnapshot(
   });
 
   try {
-    /* =====================================================
-     * 1️⃣ ROLE DETECTION (WITH SA FALLBACK)
-     * ===================================================== */
+    const { userCode, roleCode, isAdmin } =
+      await resolveCanonicalAccessProfile(supabase, authUserId);
 
-    const { data: roleRow } = await supabase
-      .schema("erp_map")
-      .from("user_company_roles")
-      .select("role_code")
-      .eq("auth_user_id", authUserId)
-      .maybeSingle(); // 🔥 SAFE
-
-    // 🔹 Get user_code
-const { data: userRow, error: userError } = await supabase
-  .schema("erp_core")
-  .from("users")
-  .select("user_code")
-  .eq("auth_user_id", authUserId)
-  .single();
-
-if (userError || !userRow) {
-  log({
-    level: "ERROR",
-    request_id: requestId,
-    event: "USER_FETCH_FAILED_SNAPSHOT",
-    meta: { userError },
-  });
-
-  return;
-}
-
-const userCode = userRow.user_code;
-
-let roleCode = roleRow?.role_code ?? null;
-
-// 🟢 Admin allow
-if (userCode.startsWith("SA")) {
-  roleCode = "SA";
-} else if (userCode.startsWith("GA")) {
-  roleCode = "GA";
-} else {
-  // 🔴 ACL strict
-  if (!roleCode) {
-    log({
-      level: "ERROR",
-      request_id: requestId,
-      event: "ROLE_MISSING_SNAPSHOT_DENY",
-    });
-    return;
-  }
-}
-
-const isAdmin = roleCode === "SA" || roleCode === "GA";
+    if (!isAdmin && !roleCode) {
+      log({
+        level: "ERROR",
+        request_id: requestId,
+        event: "ROLE_MISSING_SNAPSHOT_DENY",
+      });
+      return;
+    }
 
     log({
       level: "INFO",
       request_id: requestId,
       event: "ROLE_DETECTED",
-      meta: { roleCode, isAdmin },
+      meta: { roleCode, isAdmin, userCode },
     });
-
-    /* =====================================================
-     * 2️⃣ SA FLOW
-     * ===================================================== */
 
     if (isAdmin) {
       const { error: rebuildError } = await supabase
@@ -142,7 +99,7 @@ const isAdmin = roleCode === "SA" || roleCode === "GA";
         request_id: requestId,
         event: "SA_MENU_FETCH",
         meta: {
-          count: (menuRows as any)?.length ?? 0,
+          count: menuRows?.length ?? 0,
           error: menuError?.message ?? null,
         },
       });
@@ -178,7 +135,7 @@ const isAdmin = roleCode === "SA" || roleCode === "GA";
             snapshot_version: menuRows[0]?.snapshot_version ?? 0,
             menu_json: menuRows,
           },
-          { onConflict: "session_id,universe,company_id" }
+          { onConflict: "session_id,universe,company_id" },
         );
 
       if (upsertError) {
@@ -200,27 +157,21 @@ const isAdmin = roleCode === "SA" || roleCode === "GA";
       return;
     }
 
-    /* =====================================================
-     * 3️⃣ ACL FLOW
-     * ===================================================== */
+    let companyIds: string[] = [];
 
-    const { data: companyRows, error: companyError } = await supabase
-      .schema("erp_map")
-      .from("user_company_roles")
-      .select("company_id")
-      .eq("auth_user_id", authUserId);
-
-    if (companyError) {
+    try {
+      companyIds = await listCanonicalCompanyIds(supabase, authUserId);
+    } catch (error) {
       log({
         level: "ERROR",
         request_id: requestId,
         event: "COMPANY_FETCH_FAILED",
-        meta: { companyError },
+        meta: { error: String(error) },
       });
       return;
     }
 
-    if (!companyRows || companyRows.length === 0) {
+    if (companyIds.length === 0) {
       log({
         level: "WARN",
         request_id: requestId,
@@ -229,9 +180,7 @@ const isAdmin = roleCode === "SA" || roleCode === "GA";
       return;
     }
 
-    for (const row of companyRows) {
-      const companyId = row.company_id;
-
+    for (const companyId of companyIds) {
       const { data: menuRows, error: menuError } = await supabase
         .schema("erp_menu")
         .from("menu_snapshot")
@@ -252,7 +201,9 @@ const isAdmin = roleCode === "SA" || roleCode === "GA";
         continue;
       }
 
-      if (!menuRows || menuRows.length === 0) continue;
+      if (!menuRows || menuRows.length === 0) {
+        continue;
+      }
 
       const { error: upsertError } = await supabase
         .schema("erp_cache")
@@ -266,7 +217,7 @@ const isAdmin = roleCode === "SA" || roleCode === "GA";
             snapshot_version: menuRows[0]?.snapshot_version ?? 0,
             menu_json: menuRows,
           },
-          { onConflict: "session_id,universe,company_id" }
+          { onConflict: "session_id,universe,company_id" },
         );
 
       if (upsertError) {
@@ -305,7 +256,6 @@ const isAdmin = roleCode === "SA" || roleCode === "GA";
   });
 }
 
-/* ---------------- LOGIN ---------------- */
 interface LoginContext {
   body: {
     identifier?: string;
@@ -340,14 +290,14 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
     authUserId = result.user.id;
   } else {
     const { data, error } = await authClient.auth.admin.getUserById(
-  resolved.authUserId
-);
+      resolved.authUserId,
+    );
 
-if (error || !data?.user?.email) {
-  return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
-}
+    if (error || !data?.user?.email) {
+      return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
+    }
 
-const result = await verifyPassword(data.user.email, password);
+    const result = await verifyPassword(data.user.email, password);
     if (!result.ok || !result.session) {
       return errorResponse("AUTH_FAIL", "Invalid", requestId, "NONE", 403);
     }
@@ -359,76 +309,53 @@ const result = await verifyPassword(data.user.email, password);
   if (state !== "ACTIVE") {
     return errorResponse("AUTH_FAIL", "Inactive", requestId, "NONE", 403);
   }
-  /* =====================================================
- * 🔥 ROLE DETECT FOR SESSION CACHE
- * ===================================================== */
 
-const supabase = createClient(
-  ENV.SUPABASE_URL,
-  ENV.SUPABASE_SERVICE_ROLE_KEY
-);
+  const supabase = createClient(
+    ENV.SUPABASE_URL,
+    ENV.SUPABASE_SERVICE_ROLE_KEY,
+  );
 
-const { data: roleRow } = await supabase
-  .schema("erp_map")
-  .from("user_company_roles")
-  .select("role_code")
-  .eq("auth_user_id", authUserId)
-  .maybeSingle();
+  let roleCode: string | null = null;
+  let userCode = "";
 
-// 🔹 Get user_code
-const { data: userRow, error: userError } = await supabase
-  .schema("erp_core")
-  .from("users")
-  .select("user_code")
-  .eq("auth_user_id", authUserId)
-  .single();
+  try {
+    const resolvedProfile = await resolveCanonicalAccessProfile(supabase, authUserId);
+    roleCode = resolvedProfile.roleCode;
+    userCode = resolvedProfile.userCode;
+  } catch (error) {
+    log({
+      level: "ERROR",
+      request_id: requestId,
+      event: "USER_FETCH_FAILED",
+      meta: { error: String(error) },
+    });
 
-if (userError || !userRow) {
-  log({
-    level: "ERROR",
-    request_id: requestId,
-    event: "USER_FETCH_FAILED",
-    meta: { userError },
-  });
+    return errorResponse("AUTH_FAIL", "Invalid user", requestId, "NONE", 403);
+  }
 
-  return errorResponse("AUTH_FAIL", "Invalid user", requestId, "NONE", 403);
-}
-
-const userCode = userRow.user_code;
-
-let roleCode = roleRow?.role_code ?? null;
-
-// 🟢 Admin allow (code-based)
-if (userCode.startsWith("SA")) {
-  roleCode = "SA";
-} else if (userCode.startsWith("GA")) {
-  roleCode = "GA";
-} else {
-  // 🔴 ACL strict
   if (!roleCode) {
+    log({
+      level: "SECURITY",
+      request_id: requestId,
+      event: "LOGIN_ROLE_MISSING_DENY",
+      meta: { authUserId },
+    });
+
+    return errorResponse("AUTH_FAIL", "Role not assigned", requestId, "NONE", 403);
+  }
+
   log({
-    level: "SECURITY",
+    level: "INFO",
     request_id: requestId,
-    event: "LOGIN_ROLE_MISSING_DENY",
-    meta: { authUserId }
+    event: "LOGIN_ROLE_RESOLVED",
+    meta: { roleCode, userCode },
   });
-
-  return errorResponse("AUTH_FAIL", "Role not assigned", requestId, "NONE", 403);
-}
-}
-
-log({
-  level: "INFO",
-  request_id: requestId,
-  event: "LOGIN_ROLE_RESOLVED",
-  meta: { roleCode, userCode },
-});
 
   const { sessionId } = await createSession(
-  authUserId,
-  roleCode,                    // 🔥 ADD
-  extractDeviceInfo(ctx)
-);
+    authUserId,
+    roleCode,
+    extractDeviceInfo(ctx),
+  );
 
   await buildAndStoreMenuSnapshot(sessionId, authUserId, requestId);
 
@@ -449,6 +376,6 @@ log({
         "Set-Cookie": cookie,
         "Content-Type": "application/json",
       },
-    }
+    },
   );
 }

@@ -21,6 +21,11 @@ const SA_HOME_ACTION_META = Object.freeze({
     description:
       "Launch the company setup workspace for a fresh operational entity.",
   },
+  SA_ORG_BOOTSTRAP: {
+    badge: "Bootstrap",
+    description:
+      "Stand up company, group, project, and department skeletons from one SA orchestration workspace.",
+  },
   SA_PROJECT_MASTER: {
     badge: "Master",
     description:

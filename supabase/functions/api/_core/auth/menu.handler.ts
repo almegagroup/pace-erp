@@ -11,6 +11,10 @@
 import { okResponse, errorResponse } from "../response.ts";
 import { getServiceRoleClientWithContext } from "../../_shared/serviceRoleClient.ts";
 import type { ContextResolution } from "../../_pipeline/context.ts";
+import {
+  resolveCanonicalAccessProfile,
+  resolveCanonicalPrimaryCompanyId,
+} from "../../_shared/canonical_access.ts";
 
 /* =========================================================
  * Types
@@ -667,37 +671,44 @@ export async function previewUserHandler(
    * 1️⃣ Resolve company of target user
    * -------------------------------------------------- */
 
-  const { data: companyIdRaw } = await db
-  .schema("erp_map")
-  .rpc("get_primary_company", {
-    p_auth_user_id: targetUserId
-  });
+  const profile = await resolveCanonicalAccessProfile(db, targetUserId)
+    .catch(() => null);
 
-const companyId = companyIdRaw as string | null;
-  if (!companyId) {
+  if (!profile) {
     return errorResponse(
       "PREVIEW_USER_NOT_FOUND",
-      "Target user has no company binding",
+      "Target user not found",
       ctx.request_id,
       "NONE",
       404,
-       undefined,
-  req
+      undefined,
+      req
     );
+  }
+
+  let companyId: string | null = null;
+  if (!profile.isAdmin) {
+    companyId = await resolveCanonicalPrimaryCompanyId(db, targetUserId)
+      .catch(() => null);
+
+    if (!companyId) {
+      return errorResponse(
+        "PREVIEW_USER_NOT_FOUND",
+        "Target user has no company binding",
+        ctx.request_id,
+        "NONE",
+        404,
+        undefined,
+        req
+      );
+    }
   }
 
   /* --------------------------------------------------
  * 2️⃣ Resolve role of target user
  * -------------------------------------------------- */
 
-const { data: roleRow } = await db
-  .schema("erp_map").from("user_company_roles")
-  .select("role_code")
-  .eq("auth_user_id", targetUserId)
-  .eq("company_id", companyId)
-  .single();
-
-if (!roleRow?.role_code) {
+if (!profile.roleCode) {
   return errorResponse(
     "PREVIEW_ROLE_NOT_FOUND",
     "Target user role not found",
@@ -707,17 +718,13 @@ if (!roleRow?.role_code) {
   );
 }
 
-const roleCode = roleRow.role_code;
+const roleCode = profile.roleCode;
 
 /* --------------------------------------------------
  * 3️⃣ Determine universe from role
  * -------------------------------------------------- */
 
-let universe = "ACL";
-
-if (roleCode === "SA" || roleCode === "GA") {
-  universe = "SA";
-}
+let universe = profile.isAdmin ? "SA" : "ACL";
 
 /* --------------------------------------------------
  * 4️⃣ Generate menu snapshot
@@ -755,7 +762,7 @@ if (snapshotError) {
    * 5️⃣ Read snapshot
    * -------------------------------------------------- */
 
-  const { data, error } = await db
+  let snapshotQuery = db
     .schema("erp_menu").from("menu_snapshot")
     .select(`
       menu_code,
@@ -766,10 +773,15 @@ if (snapshotError) {
       display_order
     `)
     .eq("user_id", targetUserId)
-    .eq("company_id", companyId)
     .eq("universe", universe)
     .eq("is_visible", true)
     .order("display_order");
+
+  snapshotQuery = companyId
+    ? snapshotQuery.eq("company_id", companyId)
+    : snapshotQuery.is("company_id", null);
+
+  const { data, error } = await snapshotQuery;
 
   if (error) {
     return errorResponse(
@@ -786,6 +798,7 @@ if (snapshotError) {
     {
       preview_user: targetUserId,
       universe,
+      company_id: companyId,
       menu: data
     },
     ctx.request_id,

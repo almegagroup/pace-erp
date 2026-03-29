@@ -61,6 +61,7 @@ type CreateCompanyInput = {
 
 function shapeCompanyPayload(data: Record<string, unknown>) {
   return {
+    id: data.id as string,
     company_code: data.company_code as string,
     company_name: data.company_name as string,
     gst_number: (data.gst_number as string | null) ?? null,
@@ -93,7 +94,7 @@ export async function createCompanyHandler(
     if (gst) {
       const { data: existingCompanyByGst } = await db
         .schema("erp_master").from("companies")
-        .select("company_code, company_name, gst_number, state_name, full_address, pin_code")
+        .select("id, company_code, company_name, gst_number, state_name, full_address, pin_code")
         .eq("gst_number", gst)
         .maybeSingle();
 
@@ -153,7 +154,7 @@ export async function createCompanyHandler(
       if (gst) {
         const { data: existingCompanyAfterConflict } = await db
           .schema("erp_master").from("companies")
-          .select("company_code, company_name, gst_number, state_name, full_address, pin_code")
+          .select("id, company_code, company_name, gst_number, state_name, full_address, pin_code")
           .eq("gst_number", gst)
           .maybeSingle();
 

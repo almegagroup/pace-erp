@@ -68,7 +68,7 @@ export async function controlPanelHandler(
    * ----------------------------- */
 
   const { count: mappedUserCount } = await db
-    .schema("erp_map").from("user_company_roles")
+    .schema("erp_acl").from("user_roles")
     .select("*", { count: "exact", head: true });
 
   /* -----------------------------

@@ -32,6 +32,7 @@ import GADashboardShell from "../admin/ga/GADashboardShell.jsx";
 import SAControlPanel from "../admin/sa/screens/SAControlPanel.jsx";
 import SAAudit from "../admin/sa/screens/SAAudit.jsx";
 import SACompanyCreate from "../admin/sa/screens/SACompanyCreate.jsx";
+import SAOrgBootstrap from "../admin/sa/screens/SAOrgBootstrap.jsx";
 import SASessions from "../admin/sa/screens/SASessions.jsx";
 import SASystemHealth from "../admin/sa/screens/SASystemHealth.jsx";
 import SAUsers from "../admin/sa/screens/SAUsers.jsx";
@@ -102,6 +103,7 @@ export default function AppRouter() {
                       path="company/create"
                       element={<SACompanyCreate />}
                     />
+                    <Route path="org-bootstrap" element={<SAOrgBootstrap />} />
                     <Route path="users" element={<SAUsers />} />
                     <Route path="users/roles" element={<SAUserRoles />} />
                     <Route path="users/scope" element={<SAUserScope />} />
