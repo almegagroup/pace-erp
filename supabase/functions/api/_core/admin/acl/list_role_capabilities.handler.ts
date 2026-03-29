@@ -65,7 +65,7 @@ export async function listRoleCapabilitiesHandler(
       .schema("acl").from("role_capabilities")
       .select(`
         capability_code,
-        acl.capabilities (
+        capability:capability_code!inner (
           capability_name,
           description,
           is_system
@@ -94,7 +94,12 @@ export async function listRoleCapabilitiesHandler(
     return okResponse(
       {
         role_code: roleCode,
-        capabilities: data ?? [],
+        capabilities: (data ?? []).map((row) => ({
+          capability_code: row.capability_code,
+          capability_name: row.capability?.capability_name ?? null,
+          description: row.capability?.description ?? null,
+          is_system: row.capability?.is_system ?? false,
+        })),
       },
       requestId
     );

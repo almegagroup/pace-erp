@@ -22,11 +22,12 @@ type RevokeInput = {
 
 type AdminContext = {
   context: ContextResolution;
+  auth_user_id: string;
 };
 
 function assertAdmin(
   ctx: AdminContext
-): asserts ctx is { context: ContextResolution & { status: "RESOLVED"; authUserId: string; isAdmin: true } } {
+): asserts ctx is { context: ContextResolution & { status: "RESOLVED"; isAdmin: true }; auth_user_id: string } {
   if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
     throw new Error("ADMIN_ONLY");
   }
@@ -57,7 +58,7 @@ export async function revokeUserOverrideHandler(
       .schema("acl").from("user_overrides")
       .update({
         revoked_at: new Date().toISOString(),
-        revoked_by: ctx.context.authUserId,
+        revoked_by: ctx.auth_user_id,
       })
       .eq("override_id", body.override_id);
 

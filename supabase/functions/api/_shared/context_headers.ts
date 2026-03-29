@@ -20,6 +20,7 @@ export function buildRlsContextHeaders(ctx: ContextResolution): Record<string, s
   return {
     "x-erp-is-admin": isAdmin ? "true" : "false",
     ...(ctx.companyId ? { "x-erp-company-id": String(ctx.companyId) } : {}),
+    ...(ctx.workContextId ? { "x-erp-work-context-id": String(ctx.workContextId) } : {}),
     ...(ctx.projectId ? { "x-erp-project-id": String(ctx.projectId) } : {}),
     ...(ctx.departmentId ? { "x-erp-department-id": String(ctx.departmentId) } : {}),
   };

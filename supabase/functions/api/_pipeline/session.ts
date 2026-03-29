@@ -21,6 +21,8 @@ export type SessionResolution =
       sessionId: string;
       authUserId: string;
       roleCode: string;
+      selectedCompanyId: string | null;
+      selectedWorkContextId: string | null;
       clusterId: string | null;
       clusterWindowToken: string | null;
       created_at: string;
@@ -76,7 +78,7 @@ export async function stepSession(
     .schema("erp_core")
     .from("sessions")
     .select(
-      "session_id, auth_user_id, role_code, status, cluster_id, created_at, last_seen_at, expires_at"
+      "session_id, auth_user_id, role_code, selected_company_id, selected_work_context_id, status, cluster_id, created_at, last_seen_at, expires_at"
     )
     .eq("session_id", sessionId)
     .single();
@@ -159,6 +161,8 @@ export async function stepSession(
     sessionId,
     authUserId: data.auth_user_id,
     roleCode,
+    selectedCompanyId: data.selected_company_id ?? null,
+    selectedWorkContextId: data.selected_work_context_id ?? null,
     clusterId: data.cluster_id ?? null,
     clusterWindowToken,
     created_at: data.created_at,

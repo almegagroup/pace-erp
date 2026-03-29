@@ -33,6 +33,7 @@ export async function dispatchWorkflowRoutes(
         auth_user_id: session.authUserId,
         roleCode: context.roleCode,
         companyId: context.companyId,
+        workContextId: context.workContextId ?? "",
         request_id: requestId,
       });
 

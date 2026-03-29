@@ -14,24 +14,15 @@ export function buildRouteIndex(menuSnapshot) {
   if (!Array.isArray(menuSnapshot)) return routes;
 
   for (const item of menuSnapshot) {
-  if (item?.route_path) {
-    routes.add(item.route_path);
+    if (item?.route_path) {
+      routes.add(item.route_path);
+    }
   }
-}
 
-// 🔥 IMPORTANT fallback routes
-routes.add("/sa/home");
-routes.add("/sa/control-panel");
-routes.add("/sa/audit");
-routes.add("/sa/sessions");
-routes.add("/sa/system-health");
-routes.add("/sa/users");
-routes.add("/sa/users/roles");
-routes.add("/sa/users/scope");
-routes.add("/sa/signup-requests");
-routes.add("/ga/home");
-routes.add("/dashboard");
-routes.add("/app");
+  // Minimal shell anchors only. Real admin/user routes must come from snapshot.
+  routes.add("/ga/home");
+  routes.add("/dashboard");
+  routes.add("/app");
 
-return routes;
+  return routes;
 }

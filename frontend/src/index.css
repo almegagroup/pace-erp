@@ -36,13 +36,13 @@ Purpose: Soft industrial boot animation for landing screen
   animation: fadeIn 0.8s ease-out;
 }
 
-body{
-font-family:'Sora',sans-serif;
+body {
+  font-family: "Sora", sans-serif;
 }
 
 body[data-workspace-mode="protected"] {
-  font-family: "Segoe UI", "Noto Sans", sans-serif;
-  background: #dfe7ec;
+  font-family: "Bahnschrift", "Aptos", "Noto Sans", sans-serif;
+  background: #dfe7ef;
   color: #0f172a;
   overflow: hidden;
 }
@@ -55,17 +55,17 @@ body[data-workspace-mode="protected"] :is(
   textarea,
   [tabindex]:not([tabindex="-1"])
 ):focus-visible {
-  outline: 3px solid #0f766e;
+  outline: 3px solid rgba(37, 99, 235, 0.78);
   outline-offset: 2px;
-  box-shadow: 0 0 0 1px rgba(15, 118, 110, 0.18);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.16);
 }
 
 body[data-workspace-mode="protected"] ::selection {
-  background: rgba(14, 116, 144, 0.18);
+  background: rgba(59, 130, 246, 0.18);
 }
 
 body[data-workspace-mode="protected"] .font-mono {
-  font-family: Consolas, "Courier New", monospace;
+  font-family: "IBM Plex Mono", Consolas, "Courier New", monospace;
 }
 
 @keyframes loader {

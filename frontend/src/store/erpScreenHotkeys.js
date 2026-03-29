@@ -9,6 +9,7 @@
  */
 
 const screenHotkeyRegistry = new Map();
+const hotkeyListeners = new Set();
 
 function normalizeAction(action) {
   if (!action || typeof action.perform !== "function") {
@@ -34,15 +35,22 @@ function normalizeHotkeys(hotkeys) {
   };
 }
 
+function emitHotkeys() {
+  const snapshot = getRegisteredScreenHotkeys();
+  hotkeyListeners.forEach((listener) => listener(snapshot));
+}
+
 export function registerErpScreenHotkeys(ownerId, hotkeys) {
   if (!ownerId) {
     return () => {};
   }
 
   screenHotkeyRegistry.set(ownerId, normalizeHotkeys(hotkeys));
+  emitHotkeys();
 
   return () => {
     screenHotkeyRegistry.delete(ownerId);
+    emitHotkeys();
   };
 }
 
@@ -60,4 +68,17 @@ export function executeErpScreenHotkey(type, route = globalThis.location?.pathna
 
   action.perform();
   return true;
+}
+
+export function getRegisteredScreenHotkeys() {
+  return new Map(screenHotkeyRegistry);
+}
+
+export function subscribeRegisteredScreenHotkeys(listener) {
+  hotkeyListeners.add(listener);
+  listener(getRegisteredScreenHotkeys());
+
+  return () => {
+    hotkeyListeners.delete(listener);
+  };
 }

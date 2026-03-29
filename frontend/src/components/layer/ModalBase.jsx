@@ -48,7 +48,7 @@ export default function ModalBase({
 const overlayStyle = {
   position: "fixed",
   inset: 0,
-  background: "rgba(2, 8, 23, 0.56)",
+  background: "rgba(15, 23, 42, 0.34)",
   zIndex: 999998,
   display: "flex",
   alignItems: "center",
@@ -57,24 +57,25 @@ const overlayStyle = {
 };
 
 const boxStyle = {
-  background: "#ffffff",
-  borderRadius: "18px",
+  background: "#f8fbfd",
+  border: "1px solid #94a3b8",
+  borderRadius: "0",
   padding: "24px",
-  boxShadow: "0 24px 80px rgba(15, 23, 42, 0.28)",
+  boxShadow: "0 28px 72px rgba(15, 23, 42, 0.18)",
 };
 
 const eyebrowStyle = {
   margin: 0,
-  fontSize: "12px",
+  fontSize: "10px",
   fontWeight: 700,
-  letterSpacing: "0.12em",
+  letterSpacing: "0.22em",
   textTransform: "uppercase",
   color: "#0369a1",
 };
 
 const titleStyle = {
   margin: "8px 0 0",
-  fontSize: "18px",
+  fontSize: "20px",
   fontWeight: 700,
   color: "#0f172a",
 };
@@ -83,7 +84,7 @@ const messageStyle = {
   margin: "14px 0 0",
   fontSize: "15px",
   lineHeight: 1.6,
-  color: "#334155",
+  color: "#475569",
 };
 
 const actionsStyle = {

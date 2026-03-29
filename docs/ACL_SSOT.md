@@ -538,3 +538,221 @@ Therefore:
 - inbox visibility must follow approver assignment exactly
 - role approver and specific-user approver both remain valid,
   but neither grants blanket approval access
+
+## 16. Runtime Scope Clarification
+
+This section formally clarifies the runtime ACL scope model for a scalable,
+sellable ERP product.
+
+Locked interpretation:
+
+- `Parent Company` = HR truth
+- `Work Company` = selected operational company
+- `Department` = HR / organizational label
+- `Work Context` = selected runtime functional responsibility
+- `Role` = authority ladder / rank class
+- `Capability Pack` = reusable permission bundle
+- `Menu` = projection only
+
+This section supersedes any loose interpretation where `Department`
+alone acts as the full ACL brain.
+
+## 17. Company Definition
+
+Locked interpretation:
+
+- `Company` is the legal / operating business entity
+- one user may have exactly one Parent Company
+- one user may have one or multiple Work Companies
+- all runtime operational access must be evaluated inside one selected Work Company
+
+Therefore:
+
+- multi-company behavior is valid
+- cross-company access must always be explicit
+- menu / action truth must be company-contextual at runtime
+
+## 18. Project Definition
+
+Locked interpretation:
+
+- `Project` is the higher business container
+- `Project` is not duplicated per company by default
+- the same Project may be assigned to multiple companies
+- modules live under Project
+
+Therefore:
+
+- Project is reusable
+- company-specific rollout happens by assignment, not by cloning Project truth
+
+## 19. Module Definition
+
+Locked interpretation:
+
+- `Module` is the functional business unit
+- examples: HR, Stores, Production, Payroll, Finance
+- `Module` is global truth
+- company-specific behavior comes from company-module assignment,
+  not from duplicate Module creation
+
+Therefore:
+
+- one Module truth may be enabled in many companies
+- module enablement is company-scoped
+- module absence must behave as deny
+
+## 20. Page Definition
+
+Locked interpretation:
+
+- `Page` is the actual governed workspace / screen
+- coder declares page existence
+- SA decides whether and where that page is published into the menu tree
+- page does not define its own permission
+
+Therefore:
+
+- page existence is coder-owned
+- page visibility is ACL + menu projection owned
+- page route typing by SA is not acceptable as primary governance flow
+
+## 21. Role Definition
+
+Locked interpretation:
+
+- `Role` defines authority class and rank
+- role alone is not the final access answer
+- the same role may behave differently in different companies
+- role should normally inherit reusable capability packs
+
+Therefore:
+
+- role is stable identity
+- final permission remains contextual
+
+## 22. Department Definition
+
+Locked interpretation:
+
+- `Department` is primarily HR / organizational identity
+- examples: Production, HR, Stores, Finance
+- Department may inform defaults or reporting,
+  but must not be overloaded as the only runtime ACL selector
+
+Therefore:
+
+- changing Department may influence menu only when Department is part of the selected Work Context
+- Department alone must not be forced to carry all functional responsibility logic
+
+## 23. Work Context Definition
+
+Locked interpretation:
+
+- `Work Context` is the runtime functional responsibility chosen inside a selected Work Company
+- Work Context is the missing runtime unit needed to handle real ERP life safely
+- examples:
+  - Production Operator
+  - HR Operations
+  - Plant Head
+  - Store Controller
+  - Audit Reviewer
+
+Work Context may be derived from:
+
+- Department
+- company-specific responsibility assignment
+- capability pack binding
+- approver scope
+
+But Work Context itself is the runtime selector.
+
+Therefore:
+
+- one user may hold different Work Contexts in different companies
+- one user may change menu by changing Work Company or Work Context
+- menu recompute must be automatic after context change
+
+## 24. Final Access Formula
+
+Locked interpretation:
+
+Final runtime access must be derived from:
+
+`User + Selected Work Company + Selected Work Context + Role + Enabled Modules + Overrides`
+
+Where:
+
+- Parent Company still governs HR truth
+- Work Company governs operational company boundary
+- Work Context governs functional runtime responsibility
+- Role governs authority ladder
+- Enabled Modules govern company rollout
+- Overrides remain explicit exception layer only
+
+## 25. Automatic Menu Change Rule
+
+Locked interpretation:
+
+- if user changes selected Work Company,
+  menu must recompute automatically
+- if user changes selected Work Context,
+  menu must recompute automatically
+- SA must not manually re-stitch the same user's menu every time the user's daily context changes
+
+Examples:
+
+- Ankan
+  - Company A + Production Context -> Production menu
+  - Company A + HR Context -> HR menu
+  - Company B + Store Context -> Store menu
+
+- Pradip
+  - ASCL + Plant Head Context -> Plant Head menu
+  - MCPL + Production Context -> Production governance menu
+
+Therefore:
+
+- runtime context switching is system behavior
+- manual menu flipping by SA is not valid steady-state ERP behavior
+
+## 26. Exception Rule
+
+Locked interpretation:
+
+- default access must be system-derived
+- per-user manual permission stitching must not be the primary model
+- `user_overrides` remain allowed as exception layer
+- exception is valid only for targeted special cases,
+  not as the day-to-day replacement for capability design
+
+Therefore:
+
+- `default pack + a few excludes/additions` is acceptable
+- `most users require many custom edits` means the core model is wrong
+
+## 27. Scalability Rule
+
+Locked interpretation:
+
+For a globally sellable ERP:
+
+- Department must not be the overloaded central ACL brain
+- Work Context + Capability Pack + Company Scope must drive access
+- Menu must remain projection only
+- SA must govern through UI
+- hidden SQL / code / hardcoded navigation must not be required for business growth
+
+## 28. Implementation Consequence
+
+This document locks the product direction as follows:
+
+- clarify truth first
+- build Work Context model
+- align ACL runtime to capability-driven derivation
+- align menu generation to runtime context
+- keep override as exception only
+
+If any current implementation behaves otherwise,
+the implementation must be realigned to this section,
+not the other way around.

@@ -1,18 +1,15 @@
 /*
- * File-ID: 5.6 (rewired in Gate-6 / G4)
+ * File-ID: 5.6
  * File-Path: supabase/functions/api/_pipeline/context.ts
  * Gate: 5
  * Phase: 5
  * Domain: SECURITY
- * Purpose: Deterministic backend-only context resolution using G4 mappings
+ * Purpose: Deterministic backend-only runtime context resolution
  * Authority: Backend
  */
+
 import { serviceRoleClient } from "../_shared/serviceRoleClient.ts";
 import { isSuperAdmin, isGlobalAdmin } from "../_shared/role_ladder.ts";
-
-/* =========================================================
- * Types
- * ========================================================= */
 
 export type ContextResolution =
   | {
@@ -21,62 +18,33 @@ export type ContextResolution =
       errorCode: "CONTEXT_UNRESOLVED";
     }
   | {
-    status: "RESOLVED";
-    source: "BACKEND";
-    companyId?: string; // ✅ optional
-    projectId?: string;
-    departmentId?: string;
-    roleCode: string;  
-    isAdmin: boolean;
-  }
+      status: "RESOLVED";
+      source: "BACKEND";
+      companyId?: string;
+      workContextId?: string;
+      workContextCode?: string;
+      projectId?: string;
+      departmentId?: string;
+      roleCode: string;
+      isAdmin: boolean;
+    };
 
 export type PipelineSession = {
   authUserId: string;
-  roleCode: string;   // 🔥 REQUIRED (session থেকে আসছে)
+  roleCode: string;
+  selectedCompanyId?: string | null;
+  selectedWorkContextId?: string | null;
 };
 
-/* =========================================================
- * 1️⃣ Ignore frontend hints (no-op by design)
- * ========================================================= */
 function sanitizeContextInput(): void {
   return;
 }
 
-/* =========================================================
- * 2️⃣ Admin universe detection
- * ========================================================= */
-function isAdminUniverse(
-  session: PipelineSession
-): boolean {
-  return (
-    isSuperAdmin(session.roleCode) ||
-    isGlobalAdmin(session.roleCode)
-  );
+function isAdminUniverse(session: PipelineSession): boolean {
+  return isSuperAdmin(session.roleCode) || isGlobalAdmin(session.roleCode);
 }
 
-/* =========================================================
- * 3️⃣ Resolve context from DB (G4 truth)
- * ========================================================= */
-async function resolveContextFromDb(
-  req: Request,
-  session: PipelineSession
-): Promise<ContextResolution> {
-  const authUserId = session.authUserId;
-  const db = serviceRoleClient;
-
-  /* ---- Primary company (ID-6.6 / 6.6A) ---- */
- type GetPrimaryCompanyRPC = {
-  p_auth_user_id: string;
-};
-
-const { data: companyId, error: rpcError } = await db
-  .schema("erp_map")
-  .rpc(
-  "get_primary_company",
-  { p_auth_user_id: authUserId } as GetPrimaryCompanyRPC
-) as { data: string | null; error: any };
-
-if (rpcError) {
+function unresolved(): ContextResolution {
   return {
     status: "UNRESOLVED",
     source: "BACKEND",
@@ -84,112 +52,250 @@ if (rpcError) {
   };
 }
 
-  if (!companyId) {
-    return {
-      status: "UNRESOLVED",
-      source: "BACKEND",
-      errorCode: "CONTEXT_UNRESOLVED",
-    };
+async function resolveCompanyId(
+  authUserId: string,
+  selectedCompanyId: string | null | undefined,
+): Promise<string | null> {
+  let companyId =
+    typeof selectedCompanyId === "string" && selectedCompanyId.trim().length > 0
+      ? selectedCompanyId.trim()
+      : null;
+
+  if (companyId) {
+    const { data: membership, error: membershipError } = await serviceRoleClient
+      .schema("erp_map")
+      .from("user_companies")
+      .select("company_id")
+      .eq("auth_user_id", authUserId)
+      .eq("company_id", companyId)
+      .maybeSingle();
+
+    if (membershipError) {
+      throw new Error("CONTEXT_UNRESOLVED");
+    }
+
+    if (!membership) {
+      companyId = null;
+    }
   }
-  /* ---- Optional project (ID-6.7 / 6.7A) ---- */
+
+  if (!companyId) {
+    const { data: fallbackCompany, error: fallbackError } = await serviceRoleClient
+      .schema("erp_map")
+      .from("user_companies")
+      .select("company_id, is_primary")
+      .eq("auth_user_id", authUserId)
+      .order("is_primary", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (fallbackError) {
+      throw new Error("CONTEXT_UNRESOLVED");
+    }
+
+    companyId = fallbackCompany?.company_id ?? null;
+  }
+
+  return companyId;
+}
+
+async function resolveContextFromDb(
+  req: Request,
+  session: PipelineSession,
+): Promise<ContextResolution> {
+  const authUserId = session.authUserId;
+  const companyId = await resolveCompanyId(authUserId, session.selectedCompanyId);
+
+  if (!companyId) {
+    return unresolved();
+  }
+
+  const { data: workContextRows, error: workContextError } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("user_work_contexts")
+    .select(`
+      is_primary,
+      work_context:work_context_id!inner (
+        work_context_id,
+        company_id,
+        work_context_code,
+        department_id,
+        is_active
+      )
+    `)
+    .eq("auth_user_id", authUserId)
+    .eq("company_id", companyId)
+    .order("is_primary", { ascending: false });
+
+  if (workContextError) {
+    return unresolved();
+  }
+
+  const flattenWorkContext = (
+    value: unknown,
+  ): {
+    work_context_id: string;
+    company_id: string;
+    work_context_code: string;
+    department_id: string | null;
+    is_active: boolean;
+  } | null => {
+    if (!value) {
+      return null;
+    }
+
+    const row = Array.isArray(value) ? value[0] : value;
+    if (!row || typeof row !== "object") {
+      return null;
+    }
+
+    return row as {
+      work_context_id: string;
+      company_id: string;
+      work_context_code: string;
+      department_id: string | null;
+      is_active: boolean;
+    };
+  };
+
+  const availableWorkContexts = (workContextRows ?? [])
+    .map((row) => flattenWorkContext(row.work_context))
+    .filter((
+      row,
+    ): row is {
+      work_context_id: string;
+      company_id: string;
+      work_context_code: string;
+      department_id: string | null;
+      is_active: boolean;
+    } => Boolean(row && row.is_active === true));
+
+  if (availableWorkContexts.length === 0) {
+    return unresolved();
+  }
+
+  const workContext =
+    availableWorkContexts.find(
+      (row) => row.work_context_id === session.selectedWorkContextId,
+    ) ?? availableWorkContexts[0] ?? null;
+
+  if (!workContext?.work_context_id) {
+    return unresolved();
+  }
+
   let projectId: string | undefined;
   const projectHeader = req.headers.get("x-project-id");
 
   if (projectHeader) {
-    const { data } = await db
-      .schema("erp_map").from("user_projects")
+    const { data: projectMembership } = await serviceRoleClient
+      .schema("erp_map")
+      .from("user_projects")
       .select("project_id")
       .eq("auth_user_id", authUserId)
       .eq("project_id", projectHeader)
       .maybeSingle();
 
-    if (!data) {
-      return {
-        status: "UNRESOLVED",
-        source: "BACKEND",
-        errorCode: "CONTEXT_UNRESOLVED",
-      };
+    if (!projectMembership) {
+      return unresolved();
+    }
+
+    const { data: projectScope } = await serviceRoleClient
+      .schema("erp_master")
+      .from("projects")
+      .select("id")
+      .eq("id", projectHeader)
+      .eq("company_id", companyId)
+      .maybeSingle();
+
+    if (!projectScope) {
+      return unresolved();
     }
 
     projectId = projectHeader;
   }
 
-  /* ---- Optional department (ID-6.8 / 6.8A) ---- */
-  let departmentId: string | undefined;
-  const deptHeader = req.headers.get("x-department-id");
+  let departmentId: string | undefined = workContext.department_id ?? undefined;
+  const departmentHeader = req.headers.get("x-department-id");
 
-  if (deptHeader) {
-    const { data } = await db
-      .schema("erp_map").from("user_departments")
-      .select("department_id")
-      .eq("auth_user_id", authUserId)
-      .eq("department_id", deptHeader)
-      .maybeSingle();
-
-    if (!data) {
-      return {
-        status: "UNRESOLVED",
-        source: "BACKEND",
-        errorCode: "CONTEXT_UNRESOLVED",
-      };
+  if (departmentHeader) {
+    if (departmentId && departmentId !== departmentHeader) {
+      return unresolved();
     }
 
-    departmentId = deptHeader;
+    const { data: departmentMembership } = await serviceRoleClient
+      .schema("erp_map")
+      .from("user_departments")
+      .select("department_id")
+      .eq("auth_user_id", authUserId)
+      .eq("department_id", departmentHeader)
+      .maybeSingle();
+
+    if (!departmentMembership) {
+      return unresolved();
+    }
+
+    const { data: departmentScope } = await serviceRoleClient
+      .schema("erp_master")
+      .from("departments")
+      .select("id")
+      .eq("id", departmentHeader)
+      .eq("company_id", companyId)
+      .maybeSingle();
+
+    if (!departmentScope) {
+      return unresolved();
+    }
+
+    departmentId = departmentHeader;
   }
 
- return {
-  status: "RESOLVED",
-  source: "BACKEND",
-  companyId,
-  projectId,
-  departmentId,
-  roleCode: session.roleCode,   // 🔥 FROM SESSION
-  isAdmin: false,
-};
-}
-
-
-/* =========================================================
- * 5️⃣ Context invariants
- * ========================================================= */
-function enforceContextInvariants(
-  ctx: ContextResolution
-): ContextResolution {
-  if (ctx.status === "UNRESOLVED") return ctx;
-
-  if (!ctx.companyId && !ctx.isAdmin) {
   return {
-    status: "UNRESOLVED",
+    status: "RESOLVED",
     source: "BACKEND",
-    errorCode: "CONTEXT_UNRESOLVED",
+    companyId,
+    workContextId: workContext.work_context_id,
+    workContextCode: workContext.work_context_code,
+    projectId,
+    departmentId,
+    roleCode: session.roleCode,
+    isAdmin: false,
   };
 }
+
+function enforceContextInvariants(ctx: ContextResolution): ContextResolution {
+  if (ctx.status === "UNRESOLVED") {
+    return ctx;
+  }
+
+  if (!ctx.companyId && !ctx.isAdmin) {
+    return unresolved();
+  }
+
+  if (!ctx.isAdmin && !ctx.workContextId) {
+    return unresolved();
+  }
 
   return ctx;
 }
 
-/* =========================================================
- * 6️⃣ Pipeline entry (CORRECT signature)
- * ========================================================= */
 export async function stepContext(
   req: Request,
-  session: PipelineSession
+  session: PipelineSession,
 ): Promise<ContextResolution> {
   sanitizeContextInput();
 
-  // 🔥 1️⃣ ADMIN FIRST — HARD BYPASS (NO DB CALL)
- if (isAdminUniverse(session)) {
-  return {
-    status: "RESOLVED",
-    source: "BACKEND",
-    roleCode: session.roleCode,
-    isAdmin: true,
-    companyId: undefined,   // 🔥 explicit
-  };
-}
+  if (isAdminUniverse(session)) {
+    return {
+      status: "RESOLVED",
+      source: "BACKEND",
+      roleCode: session.roleCode,
+      isAdmin: true,
+      companyId: undefined,
+      workContextId: undefined,
+      workContextCode: undefined,
+    };
+  }
 
-  // 🔹 2️⃣ ONLY NON-ADMIN → DB CONTEXT
-  const resolved = await resolveContextFromDb(req, session);
-
+  const resolved = await resolveContextFromDb(req, session).catch(() => unresolved());
   return enforceContextInvariants(resolved);
 }

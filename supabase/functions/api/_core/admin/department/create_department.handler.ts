@@ -11,93 +11,103 @@
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
+import { ensureDepartmentWorkContext } from "../../../_shared/work_context_governance.ts";
 
-/* --------------------------------------------------
- * Admin guard (type-narrowing, canonical)
- * -------------------------------------------------- */
 function assertAdmin(
-  ctx: { context: ContextResolution }
+  ctx: { context: ContextResolution },
 ): asserts ctx is {
   context: Extract<ContextResolution, { status: "RESOLVED" }> & {
     isAdmin: true;
   };
 } {
-  if (
-    ctx.context.status !== "RESOLVED" ||
-    ctx.context.isAdmin !== true
-  ) {
+  if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
     throw new Error("ADMIN_ONLY");
   }
 }
 
-/* --------------------------------------------------
- * Input contract
- * -------------------------------------------------- */
 type CreateDepartmentInput = {
   department_name?: string;
+  company_id?: string;
 };
 
-/* --------------------------------------------------
- * Handler
- * -------------------------------------------------- */
 export async function createDepartmentHandler(
   req: Request,
-  ctx: { context: ContextResolution; request_id: string }
+  ctx: { context: ContextResolution; request_id: string },
 ): Promise<Response> {
   try {
-    // 1️⃣ Admin-only
     assertAdmin(ctx);
 
-    // 2️⃣ Parse input
     const body = (await req.json()) as CreateDepartmentInput;
     const departmentName = body.department_name?.trim();
+    const targetCompanyId = body.company_id?.trim() || ctx.context.companyId;
 
     if (!departmentName || departmentName.length < 3) {
       return errorResponse(
         "DEPARTMENT_NAME_REQUIRED",
         "department name required",
-        ctx.request_id
+        ctx.request_id,
       );
     }
 
-    // 3️⃣ Insert (company strictly from context)
     const db = getServiceRoleClientWithContext(ctx.context);
+
+    const { data: company } = await db
+      .schema("erp_master").from("companies")
+      .select("id, status")
+      .eq("id", targetCompanyId)
+      .maybeSingle();
+
+    if (!company) {
+      return errorResponse(
+        "COMPANY_NOT_FOUND",
+        "company not found",
+        ctx.request_id,
+      );
+    }
 
     const { data, error } = await db
       .schema("erp_master").from("departments")
       .insert({
         department_name: departmentName,
-        company_id: ctx.context.companyId,
+        company_id: targetCompanyId,
         status: "ACTIVE",
       })
-      .select("id, department_code, department_name, status")
+      .select("id, company_id, department_code, department_name, status")
       .single();
 
-    if (error) {
+    if (error || !data) {
       return errorResponse(
         "DEPARTMENT_CREATE_FAILED",
         "department create failed",
-        ctx.request_id
+        ctx.request_id,
       );
     }
 
-    // 4️⃣ Success
+    await ensureDepartmentWorkContext(db, {
+      companyId: data.company_id,
+      departmentId: data.id,
+      departmentCode: data.department_code,
+      departmentName: data.department_name,
+      isActive: company.status === "ACTIVE" && data.status === "ACTIVE",
+    });
+
     return okResponse(
       {
         department: {
           id: data.id,
+          company_id: data.company_id,
           department_code: data.department_code,
           department_name: data.department_name,
           status: data.status,
         },
       },
-      ctx.request_id
+      ctx.request_id,
     );
   } catch (err) {
     return errorResponse(
       (err as Error).message || "DEPARTMENT_CREATE_EXCEPTION",
       "department create exception",
-      ctx.request_id
+      ctx.request_id,
     );
   }
 }

@@ -35,10 +35,12 @@ contextResult: Extract<ContextResolution, { status: "RESOLVED" }>
   if (admin) return admin;
 
   const acl = await dispatchAclRoutes(
-  routeKey,
-  req,
-  contextResult
-);
+    routeKey,
+    req,
+    requestId,
+    sessionResult,
+    contextResult
+  );
 if (acl) return acl;
 
 const workflow = await dispatchWorkflowRoutes(

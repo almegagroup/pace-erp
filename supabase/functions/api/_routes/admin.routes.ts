@@ -2,6 +2,10 @@
  * Admin Route Dispatcher
  */
 import { meHandler } from "../_core/auth/me.handler.ts";
+import {
+  meContextHandler,
+  updateMeContextHandler,
+} from "../_core/auth/me_context.handler.ts";
 import { meProfileHandler } from "../_core/auth/me_profile.handler.ts";
 import { unlockHandler } from "../_core/auth/unlock.handler.ts";
 import { listPendingSignupHandler } from "../_core/admin/signup/list_pending.handler.ts";
@@ -10,17 +14,21 @@ import { rejectSignupHandler } from "../_core/admin/signup/reject.handler.ts";
 
 import { createCompanyHandler } from "../_core/admin/company/create_company.handler.ts";
 import { getCompanyGstProfileHandler } from "../_core/admin/company/get_company_gst_profile.handler.ts";
+import { listCompaniesHandler } from "../_core/admin/company/list_companies.handler.ts";
+import { updateCompanyStateHandler } from "../_core/admin/company/update_company_state.handler.ts";
 
 import { createGroupHandler } from "../_core/admin/group/create_group.handler.ts";
 import { updateGroupStateHandler } from "../_core/admin/group/update_group_state.handler.ts";
 import { mapCompanyToGroupHandler } from "../_core/admin/group/map_company_to_group.handler.ts";
 import { unmapCompanyFromGroupHandler } from "../_core/admin/group/unmap_company_group.handler.ts";
+import { listGroupsHandler } from "../_core/admin/group/list_groups.handler.ts";
 
 import { createProjectHandler } from "../_core/admin/project/create_project.handler.ts";
 import { listProjectsHandler } from "../_core/admin/project/list_projects.handler.ts";
 import { updateProjectStateHandler } from "../_core/admin/project/update_project_state.handler.ts";
 
 import { createDepartmentHandler } from "../_core/admin/department/create_department.handler.ts";
+import { listDepartmentsHandler } from "../_core/admin/department/list_departments.handler.ts";
 import { listApproverRulesHandler } from "../_core/admin/approval/list_approver_rules.handler.ts";
 import { upsertApproverRuleHandler } from "../_core/admin/approval/upsert_approver_rule.handler.ts";
 import { deleteApproverRuleHandler } from "../_core/admin/approval/delete_approver_rule.handler.ts";
@@ -69,6 +77,22 @@ export async function dispatchAdminRoutes(
       });
       break;
 
+    case "GET:/api/me/context":
+      response = await meContextHandler({
+        session,
+        requestId,
+        req,
+      });
+      break;
+
+    case "POST:/api/me/context":
+      response = await updateMeContextHandler({
+        session,
+        requestId,
+        req,
+      });
+      break;
+
     case "POST:/api/unlock":
       response = await unlockHandler({
         session,
@@ -108,6 +132,13 @@ export async function dispatchAdminRoutes(
       });
       break;
 
+    case "GET:/api/admin/companies":
+      response = await listCompaniesHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
     case "GET:/api/admin/company/gst-profile":
       response = await getCompanyGstProfileHandler(req, {
         context,
@@ -115,8 +146,22 @@ export async function dispatchAdminRoutes(
       });
       break;
 
+    case "POST:/api/admin/company/state":
+      response = await updateCompanyStateHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
     case "POST:/api/admin/group":
       response = await createGroupHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/groups":
+      response = await listGroupsHandler(req, {
         context,
         request_id: requestId,
       });
@@ -166,6 +211,13 @@ export async function dispatchAdminRoutes(
 
     case "POST:/api/admin/department":
       response = await createDepartmentHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/departments":
+      response = await listDepartmentsHandler(req, {
         context,
         request_id: requestId,
       });

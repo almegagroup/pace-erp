@@ -112,6 +112,117 @@ new inconsistent formats.
 
 Use this section to append all future progress updates.
 
+## Entry
+
+Date:
+2026-03-29
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- made the protected function rail collapsible with `Alt+Left` and `Alt+Right`
+- removed the always-visible right-side shortcut and page-command blocks from the default workspace view
+- added shell branding logo from `frontend/public/lm.jpg`
+- moved keyboard tool/context blocks above entry worksheets so filters no longer live in side columns
+- reordered shared list and review templates so the main list/review surface appears before non-essential narrative blocks
+- added reusable pagination strip and applied it across major SA list/review surfaces
+- removed several narrative side/contract panels from SA user, role, approval, and permission screens to preserve work area
+- converted SA company-module governance from the old dark card style into the same light worksheet grammar
+- removed frontend navigation debug spam and improved backend project-create error metadata for blocked-request diagnosis
+
+What changed in repo:
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/components/templates/ErpMasterListTemplate.jsx
+- frontend/src/components/templates/ErpApprovalReviewTemplate.jsx
+- frontend/src/components/templates/ErpEntryFormTemplate.jsx
+- frontend/src/components/ErpPaginationStrip.jsx
+- frontend/src/hooks/useErpPagination.js
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- frontend/src/admin/sa/screens/SAApprovalRules.jsx
+- frontend/src/admin/sa/screens/SARolePermissions.jsx
+- frontend/src/admin/sa/screens/SACompanyModuleMap.jsx
+- frontend/src/admin/sa/screens/SAProjectMaster.jsx
+- frontend/src/admin/sa/screens/SAAudit.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SAUserScope.jsx
+- frontend/src/components/layer/DrawerBase.jsx
+- frontend/src/context/MenuProvider.jsx
+- frontend/src/navigation/navigationEventLogger.js
+- supabase/functions/api/index.ts
+- supabase/functions/api/_pipeline/runner.ts
+- supabase/functions/api/_core/admin/project/create_project.handler.ts
+
+What was verified:
+- frontend build completed successfully
+- frontend lint completed successfully
+- function rail can collapse without losing keyboard access to shell actions
+- top action buttons now expose underlined Alt-letter mnemonics through the shared scaffold
+- major SA list/review screens now keep filters above the list and paginate large result sets
+
+Problems or blockers:
+- the backend project-create/request-blocked issue is now easier to diagnose, but it still needs a live request trace with the new metadata to confirm the exact policy cause
+- some non-SA screens still need the same full-width worksheet migration
+
+Decision or note:
+The main work canvas must stay visually dominant.
+Context, help, and narrative blocks may exist,
+but they must never shrink the operator worksheet into a side-column experience.
+
+Next step:
+Carry the same canvas-first cleanup into the remaining non-SA and governance screens,
+then close the backend blocked-request diagnosis using the new structured error metadata.
+
+## Entry
+
+Date:
+2026-03-29
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- converted the ERP command bar from the old dark modal style into the same light operator worksheet grammar
+- fixed SA home launch-rail keyboard movement so `ArrowDown` and `ArrowUp` now move one item at a time instead of skipping rows
+- scanned post-hardening database additions for missed security sealing
+- identified the real unrestricted gap on `erp_map.user_parent_companies`
+- identified companion security gaps on `erp_audit.workflow_events` privilege wiring and `acl.module_resource_map` read policy
+- added one final security-seal migration to close those gaps together
+
+What changed in repo:
+- frontend/src/components/ErpCommandPalette.jsx
+- frontend/src/components/layer/ModalBase.jsx
+- frontend/src/admin/sa/screens/SAHome.jsx
+- supabase/migrations/20260410118000_gate6_6_19J_post_split_security_seal.sql
+
+What was verified:
+- frontend build completed successfully
+- frontend lint completed successfully
+- command bar now visually aligns much more closely with the rebuilt shell
+- SA dashboard launcher no longer skips items during arrow-key navigation
+
+Problems or blockers:
+- SA governance still needs another visible refinement pass before it can be called fully complete
+- a few remaining UI polish issues are still expected and will be handled in the next wave
+
+Decision or note:
+The UI direction is now clearly usable and understandable,
+but the finish line for SA governance should be treated as
+one more deliberate completion pass, not as a partial polish layer.
+
+Next step:
+Continue from this exact state in the next session,
+take the remaining SA governance issues one by one,
+and drive the SA governance surface to full completion.
+
 ## Entry Template
 
 Date:
@@ -1736,6 +1847,240 @@ but also practical for side-by-side report checking and cross-screen ERP workflo
 Next step:
 Continue from the next roadmap item outside protected session-cluster work unless a new production issue appears
 
+## Entry 030
+
+Date:
+2026-03-28
+
+Roadmap step:
+Keyboard-Native UI Phase - shell grammar rebuild, canonical templates, and first SA surface conversion
+
+Status:
+COMPLETED
+
+What was done:
+- rebuilt the protected frontend shell around fixed keyboard-owned zones:
+  menu,
+  action rail,
+  and work canvas
+- kept `Alt+M`,
+  `Alt+A`,
+  and `Alt+C` meaningful on task screens instead of only dashboard-like surfaces
+- replaced the old card-oriented screen scaffold with dense operator-work-canvas templates for:
+  entry form,
+  master list,
+  approval review,
+  and report filter screens
+- strengthened dense-form traversal so section jumps now work through reusable shared behavior
+- restyled the command bar and shared modal layer to match the new keyboard-native shell grammar
+- rebuilt `SA Company Create` as the first canonical entry-form surface on the new template
+- rebuilt `SA Users` as the first canonical master-list surface on the new template
+- preserved current protected/session/security/governance behavior while replacing the frontend interaction model
+
+What changed in repo:
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/components/templates/ErpScreenScaffold.jsx
+- frontend/src/components/templates/ErpEntryFormTemplate.jsx
+- frontend/src/components/templates/ErpMasterListTemplate.jsx
+- frontend/src/components/templates/ErpApprovalReviewTemplate.jsx
+- frontend/src/components/templates/ErpReportFilterTemplate.jsx
+- frontend/src/hooks/useErpDenseFormNavigation.js
+- frontend/src/components/ErpCommandPalette.jsx
+- frontend/src/components/layer/ModalBase.jsx
+- frontend/src/components/inputs/QuickFilterInput.jsx
+- frontend/src/admin/sa/screens/SACompanyCreate.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/index.css
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- the rebuild was applied without touching session-cluster,
+  lock,
+  logout,
+  idle,
+  or route/menu governance behavior
+
+Problems or blockers:
+- only the first canonical entry-form and master-list examples have been rebuilt so far;
+  the remaining SA governance screens still need migration into the same template system
+- shared picker behavior and deeper table-level roving patterns still need broader rollout across more screens
+
+Decision or note:
+The frontend interaction model is now being treated as replaceable structure,
+not as an admin UI to be lightly polished.
+Future org masters,
+governance surfaces,
+and HR modules must consume this shell and template grammar instead of reviving the old card/admin layout.
+
+Next step:
+Carry the same keyboard-native template system into the remaining SA governance screens,
+then start the org-master wave directly on these reusable templates
+
+## Entry 031
+
+Date:
+2026-03-28
+
+Roadmap step:
+Keyboard-Native UI Phase - universal shortcut visibility and current-screen help wiring
+
+Status:
+COMPLETED
+
+What was done:
+- added universal registry-backed shortcut visibility for protected screens
+- wired the shell to read current-route screen commands and screen hotkeys directly from the shared registries
+- exposed current-screen hotkeys visibly in:
+  shell help,
+  action rail,
+  and footer strip
+- exposed current-screen commands visibly in the stable action rail so operators no longer need to depend only on the command bar to discover available actions
+- kept the same protected-shell,
+  session-cluster,
+  lock,
+  logout,
+  and route/menu governance behavior unchanged while extending keyboard discoverability
+
+What changed in repo:
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/store/erpScreenHotkeys.js
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend lint completed successfully
+- frontend build completed successfully
+- registered screen hotkeys now have a reusable shell-level visibility path
+- registered screen commands now have a reusable shell-level visibility path
+
+Problems or blockers:
+- visible help can only show actions already registered by each screen;
+  any screen without route-level registrations will still show only shell defaults
+- repo state still records broader backend/runtime items as HALF-DONE or DEFERRED,
+  so the full ERP cannot yet be declared globally complete
+
+Decision or note:
+Keyboard help is now a platform feature of the protected shell,
+not a one-off overlay.
+From this point forward,
+every protected screen should register commands and hotkeys so the shell can expose them deterministically.
+
+Next step:
+Continue migrating remaining screens and missing workflow surfaces into the same registry-backed keyboard-native model,
+while closing the separately documented backend and DB state gaps gate-by-gate
+
+## Entry 032
+
+Date:
+2026-03-28
+
+Roadmap step:
+Keyboard-Native UI Phase - visible governance-surface rebuild pass
+
+Status:
+COMPLETED
+
+What was done:
+- rebuilt the inner working surfaces of key SA governance pages so they no longer read as leftover light admin cards inside the new shell
+- restyled:
+  approval rules,
+  role permissions,
+  company module map,
+  user scope,
+  and parent-company picker drawer
+  into the same dense operator-work-canvas grammar
+- moved row cards,
+  editors,
+  selection surfaces,
+  and destructive actions into the darker governed shell language so the governance pages now visibly match the rebuild direction
+- aligned the shared drawer layer with the same protected keyboard-native visual system as the command bar and modal overlays
+
+What changed in repo:
+- frontend/src/admin/sa/screens/SAApprovalRules.jsx
+- frontend/src/admin/sa/screens/SARolePermissions.jsx
+- frontend/src/admin/sa/screens/SACompanyModuleMap.jsx
+- frontend/src/admin/sa/screens/SAUserScope.jsx
+- frontend/src/components/layer/DrawerBase.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend build completed successfully
+- frontend lint completed successfully
+- governance pages now inherit visibly rebuilt inner surfaces instead of only the outer shell/template layer
+
+Problems or blockers:
+- other governance and master screens still need the same direct inner-surface rebuild pass
+- this is still frontend interaction work only;
+  broader backend and DB state-file gaps remain separately tracked
+
+Decision or note:
+This closes the most obvious mismatch the user reported:
+the governance pages should now visibly look rebuilt,
+not only technically wrapped by the new shell.
+
+Next step:
+Continue the same visible rebuild pass across the remaining SA and non-SA operational screens until the old admin-card grammar is fully eliminated
+
+## Entry 033
+
+Date:
+2026-03-29
+
+Roadmap step:
+Keyboard-Native UI Phase - SAP/Tally-style stacked workspace rollout across remaining SA list and diagnostics screens
+
+Status:
+COMPLETED
+
+What was done:
+- split the protected shell more aggressively into launcher mode and active-workspace mode so pushed pages now consume the main work area instead of visually competing with the dashboard
+- flattened the shared quick-filter, approval-review, and report/filter templates so search rails and secondary panels no longer read like leftover admin cards
+- migrated additional SA list and diagnostics surfaces into the lighter worksheet grammar:
+  audit,
+  sessions,
+  signup requests,
+  system health,
+  user directory,
+  role assignment,
+  and project master
+- replaced rounded card rows and soft pills with border-ledger tables,
+  thinner action controls,
+  flatter badges,
+  and denser full-width work surfaces
+
+What changed in repo:
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/components/inputs/QuickFilterInput.jsx
+- frontend/src/components/templates/ErpApprovalReviewTemplate.jsx
+- frontend/src/components/templates/ErpReportFilterTemplate.jsx
+- frontend/src/admin/sa/screens/SAAudit.jsx
+- frontend/src/admin/sa/screens/SASessions.jsx
+- frontend/src/admin/sa/screens/SASignupRequests.jsx
+- frontend/src/admin/sa/screens/SASystemHealth.jsx
+- frontend/src/admin/sa/screens/SAUsers.jsx
+- frontend/src/admin/sa/screens/SAUserRoles.jsx
+- frontend/src/admin/sa/screens/SAProjectMaster.jsx
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend build completed successfully
+- frontend lint completed successfully
+- active pages now enter a more SAP/Tally-like stacked work mode with stable side controls and broader central canvas
+
+Problems or blockers:
+- some remaining governance/editor surfaces still need the same flatter worksheet pass
+- non-SA universes have not yet been migrated through the same sequence
+
+Decision or note:
+The rebuild direction is now explicitly launcher-versus-workspace,
+not dashboard-plus-page at the same time.
+That stack behavior must remain the default as the rest of the ERP screens are migrated.
+
+Next step:
+Carry the same flattened full-workspace pass into the remaining governance/editor screens,
+then continue the sequence into non-SA modules on the same shared shell and template grammar
+
 # 6. Initial Program Entry
 
 Date:
@@ -1771,3 +2116,375 @@ and keep this file updated continuously.
 
 Next step:
 Step 2 - SA Dashboard Information Architecture
+
+## Entry 034
+
+Date:
+2026-03-29
+
+Roadmap step:
+Execution handoff consolidation for tomorrow's SA governance completion pass
+
+Status:
+COMPLETED
+
+What was done:
+- created one consolidated ERP handoff markdown that binds together constitution intent,
+  state-file reality,
+  gate direction,
+  backend route families,
+  handler-to-schema usage,
+  major migration bands,
+  known risks,
+  and missing work
+- documented current workflow spine across auth,
+  protected pipeline,
+  menu snapshot authority,
+  admin governance,
+  ACL,
+  workflow,
+  and session cluster behavior
+- captured current truth on what is correct,
+  what is risky,
+  and what remains incomplete so tomorrow's execution can resume without re-discovery
+
+What changed in repo:
+- docs/PACE_ERP_FULL_SYSTEM_HANDOFF_2026-03-29.md
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- the handoff file includes current handler families and their primary schema/table usage
+- the handoff file includes the latest post-split security seal migration
+- the handoff file includes tomorrow's recommended start sequence
+
+Problems or blockers:
+- this is a documentation and execution-anchor pass,
+  not a claim that all listed gaps are already closed
+
+Decision or note:
+This file should now be treated as the operational briefing for the next working session,
+while still remaining subordinate to the constitution and the state file.
+
+Next step:
+Use the handoff file to continue SA governance completion,
+then validate remaining backend/DB risks against live flows
+
+## Entry 035
+
+Date:
+2026-03-29
+
+Roadmap step:
+Step 8 direction pulled forward for SA Universe stabilization - snapshot-authoritative menu steering and Menu Governance control-plane foundation
+
+Status:
+COMPLETED
+
+What was done:
+- corrected the SA universe away from transitional route fallback behavior so SA route access now depends on published menu snapshot instead of hardcoded allowed-route bypass
+- updated SA home launch projection to consume snapshot-backed root menu rows instead of relying on a fixed hardcoded launch list
+- updated the protected shell navigation projection so sidebar focus follows root-level published menu rows while deeper SA routes continue to open as governed work surfaces
+- added automatic SA session snapshot rebuild after admin menu create, update, tree, and state-change operations so current SA steering changes publish immediately into the live admin session
+- added fresh SA snapshot rebuild during admin login so newly published deep SA routes such as role assignment and scope mapping become available without carrying stale session menu payloads
+- added the first real SA Menu Governance control-plane foundation:
+  registry read API,
+  richer create and tree update handling,
+  a dedicated `/sa/menu` screen,
+  and preview-as-user access from the same governance surface
+- kept the previously applied SA registry sync migration untouched after deployment realization,
+  then created a follow-up patch migration for the new Menu Governance route instead of mutating already-pushed migration history
+- reduced SA control-panel quick-launch hardcoding by projecting launch targets from published menu rows plus controlled local metadata
+
+What changed in repo:
+- frontend/src/router/routeIndex.js
+- frontend/src/layout/MenuShell.jsx
+- frontend/src/admin/sa/screens/SAHome.jsx
+- frontend/src/admin/sa/screens/SAControlPanel.jsx
+- frontend/src/admin/sa/screens/SAMenuGovernance.jsx
+- frontend/src/router/AppRouter.jsx
+- frontend/src/navigation/screens/adminScreens.js
+- supabase/functions/api/_core/auth/menu.handler.ts
+- supabase/functions/api/_core/auth/login.handler.ts
+- supabase/functions/api/_routes/menu.routes.ts
+- supabase/migrations/20260410119000_gate9_17C_sync_sa_menu_registry.sql
+- supabase/migrations/20260410120000_gate9_12B_add_sa_menu_governance.sql
+- bootstrap_sql/sa_menu_bootstrap.sql
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend build completed successfully after each major SA universe correction pass
+- deployed SA registry sync and fresh-login snapshot rebuild behavior resolved the earlier redirect-back-to-home problem on deep SA routes
+- SA sidebar and SA workspace launch surfaces now align off the same published menu truth for the currently available steering pages
+
+Problems or blockers:
+- the newly added `/sa/menu` route still depends on the follow-up patch migration `20260410120000_gate9_12B_add_sa_menu_governance.sql` being pushed to the remote database before it can appear in live SA snapshot payloads
+- ACL universe automation is still not finished;
+  the `precomputed_acl_view -> menu_snapshot -> session_menu_snapshot` path remains the next major system-steering completion task
+- the broader SA governance universe still has additional screens to automate before a fresh tenant can be fully bootstrapped from SA without hidden manual work
+
+Decision or note:
+SA universe is no longer being treated as a temporary shell with hardcoded escape hatches.
+It is now being actively converted into the real steering layer that must publish menu truth,
+consume snapshot truth,
+and prepare the later ACL universe without direct SQL edits.
+
+Next step:
+Push the follow-up Menu Governance patch migration,
+redeploy,
+validate `/sa/menu` live,
+then continue into ACL snapshot-chain correction so SA can fully prepare ACL user universes from governance instead of code
+
+## Entry 036
+
+Date:
+2026-03-29
+
+Roadmap step:
+SA self-side completion pass - organization bootstrap orchestration and target-company master governance
+
+Status:
+COMPLETED
+
+What was done:
+- added new admin list/read APIs for business companies,
+  groups,
+  and departments so SA bootstrap surfaces can load org-master truth without ad hoc SQL inspection
+- upgraded company creation response payload to include company `id`,
+  which allows newly created companies to be selected immediately inside orchestration flows
+- expanded project create/list handlers so SA can target an explicit company instead of being locked to only the current admin context company
+- expanded department create flow so SA can create departments for an explicit target company after a guarded existence check
+- added a new `SA_ORG_BOOTSTRAP` workspace at `/sa/org-bootstrap`
+  that lets SA:
+  create companies,
+  create groups,
+  map companies to groups,
+  create company-bound projects,
+  create company-bound departments,
+  and review current org skeleton state from one orchestration surface
+- wired the new org bootstrap workspace into the frontend route/screen registry
+- added a follow-up patch migration for the new SA org bootstrap menu route instead of mutating already-applied migration history
+- updated SA home and SA control-panel metadata so the new bootstrap workspace presents as a first-class steering surface
+- updated the local SA bootstrap SQL helper to include the new org bootstrap route for clean-slate local/bootstrap scenarios
+
+What changed in repo:
+- frontend/src/admin/sa/screens/SAOrgBootstrap.jsx
+- frontend/src/admin/sa/screens/SAHome.jsx
+- frontend/src/admin/sa/screens/SAControlPanel.jsx
+- frontend/src/navigation/screens/adminScreens.js
+- frontend/src/router/AppRouter.jsx
+- supabase/functions/api/_core/admin/company/create_company.handler.ts
+- supabase/functions/api/_core/admin/company/list_companies.handler.ts
+- supabase/functions/api/_core/admin/group/list_groups.handler.ts
+- supabase/functions/api/_core/admin/project/create_project.handler.ts
+- supabase/functions/api/_core/admin/project/list_projects.handler.ts
+- supabase/functions/api/_core/admin/department/create_department.handler.ts
+- supabase/functions/api/_core/admin/department/list_departments.handler.ts
+- supabase/functions/api/_routes/admin.routes.ts
+- supabase/migrations/20260410121000_gate9_12C_add_sa_org_bootstrap.sql
+- bootstrap_sql/sa_menu_bootstrap.sql
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend build completed successfully after the org bootstrap screen and routing changes
+- new frontend orchestration surface compiles against the new admin list/read endpoints and target-company create flows
+- no already-applied migration file was mutated for the new org bootstrap menu route;
+  a fresh patch migration was used instead
+
+Problems or blockers:
+- live visibility of `SA_ORG_BOOTSTRAP` still depends on pushing `20260410121000_gate9_12C_add_sa_org_bootstrap.sql`,
+  redeploying backend/frontend,
+  and taking a fresh SA login so the session snapshot picks up the new route
+- this pass completed SA self-side org bootstrap orchestration,
+  but it does not yet finish the separate ACL universe correction work around `precomputed_acl_view -> menu_snapshot`
+
+Decision or note:
+SA now has a more complete self-side steering shape:
+menu governance,
+module governance,
+approval governance,
+user governance,
+and org bootstrap orchestration are available as coordinated workspaces.
+The next major system-risk area remains ACL runtime truth,
+not SA shell steering.
+
+Next step:
+Push the new org-bootstrap patch migration,
+redeploy,
+validate `/sa/org-bootstrap`,
+then move into ACL snapshot-chain correction and ACL governance completion
+
+## Entry 037
+
+Date:
+2026-03-29
+
+Roadmap step:
+Canonical runtime authority correction - replace legacy user_company_roles usage in auth/menu runtime path
+
+Status:
+COMPLETED
+
+What was done:
+- introduced a shared canonical access resolver that reads runtime role/company truth from:
+  `erp_acl.user_roles`,
+  `erp_map.user_companies`,
+  and `erp_map.get_primary_company()`
+- rewired login/session role detection away from `erp_map.user_company_roles` and onto canonical role truth,
+  while preserving SA/GA code-based admin protection
+- rewired login-time session menu snapshot caching to enumerate ACL company scope from canonical `user_companies`
+- rewired preview-as-user logic away from legacy company-role bridge resolution and onto canonical role/primary-company lookup
+- updated SA control-panel mapped-user metric to count canonical role assignments instead of the old bridge table
+- added a follow-up patch migration replacing `acl.generate_acl_snapshot(...)` internals so future ACL snapshot generation also uses canonical role/company truth instead of `user_company_roles`
+
+What changed in repo:
+- supabase/functions/api/_shared/canonical_access.ts
+- supabase/functions/api/_core/auth/login.handler.ts
+- supabase/functions/api/_core/auth/menu.handler.ts
+- supabase/functions/api/_core/admin/diagnostics/control_panel.handler.ts
+- supabase/migrations/20260410122000_gate6_6_18F_acl_snapshot_canonical_role_company.sql
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- frontend build still completed successfully after the runtime authority shift
+- `supabase/functions/api` no longer contains live runtime references to `user_company_roles`
+- the canonical runtime path now resolves:
+  role from `erp_acl.user_roles`,
+  company scope from `erp_map.user_companies`,
+  and primary company from `erp_map.get_primary_company()`
+
+Problems or blockers:
+- the broader ACL menu projection function still needs its separate final correction pass so `menu_snapshot` is rebuilt from the intended ACL truth path consistently in every case
+- live effect of the new ACL snapshot SQL correction depends on pushing `20260410122000_gate6_6_18F_acl_snapshot_canonical_role_company.sql`
+
+Decision or note:
+`erp_map.user_company_roles` is no longer treated as runtime authority in the application layer.
+It remains historical/legacy schema surface,
+but canonical runtime truth is now moving through `erp_acl.user_roles` + `erp_map.user_companies` + snapshot layers.
+
+Next step:
+Push the canonical ACL snapshot patch migration,
+redeploy,
+fresh-login test role/company/menu behavior,
+then continue into the remaining ACL menu snapshot projection correction
+
+## Entry 038
+
+Date:
+2026-03-29
+
+Roadmap step:
+ACL menu projection completion - restore menu_snapshot generation from precomputed ACL truth
+
+Status:
+COMPLETED
+
+What was done:
+- added a follow-up patch migration replacing `erp_menu.generate_menu_snapshot(...)`
+  so the ACL branch no longer copies every active ACL menu row into snapshots
+- restored the ACL projection contract so visible ACL menus are generated from `acl.precomputed_acl_view`
+  using:
+  `decision = 'ALLOW'`
+  and `action_code = 'VIEW'`
+- extended the ACL projection to include ancestor group nodes through the `menu_tree`
+  so the current sidebar/root-group navigation model remains intact after permissions are tightened
+- preserved the current SA snapshot behavior,
+  title copying,
+  and parent-menu resolution while correcting only the ACL truth path
+
+What changed in repo:
+- supabase/migrations/20260410123000_gate7_7_3G_restore_acl_snapshot_projection.sql
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- the new patch migration leaves already-applied migrations untouched
+- the corrected function now aligns with the original SSOT intent:
+  ACL menu visibility projects from `precomputed_acl_view`,
+  not from raw menu registry truth
+- the ACL projection now carries parent group rows needed by the current frontend navigation projection
+
+Problems or blockers:
+- live effect still depends on pushing the new migration and redeploying
+- full end-to-end validation still needs a fresh ACL user login after migration push so session snapshots rebuild under the corrected function
+
+Decision or note:
+The application runtime and the ACL menu projection function now point in the same architectural direction:
+canonical role/company truth feeds ACL precompute,
+and ACL precompute feeds visible menu snapshots.
+
+Next step:
+Push the remaining patch migrations,
+redeploy,
+fresh-login as SA and ACL users,
+then validate role/company/menu visibility against real governed scenarios
+
+## Entry 039
+
+Date:
+2026-03-29
+
+Roadmap step:
+Legacy schema retirement - remove unused user_company_roles bridge table
+
+Status:
+COMPLETED
+
+What was done:
+- confirmed the live application/runtime layer no longer depends on `erp_map.user_company_roles`
+- added a retirement migration that:
+  best-effort backfills any null `erp_core.sessions.role_code` values from canonical `erp_acl.user_roles`,
+  drops legacy policies on `erp_map.user_company_roles`,
+  and then drops the legacy bridge table itself
+- kept the original historical create migration untouched,
+  using only a forward patch migration for retirement
+
+What changed in repo:
+- supabase/migrations/20260410124000_gate6_6_6C_drop_user_company_roles.sql
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- runtime code under `supabase/functions/api` no longer references `user_company_roles`
+- retirement is expressed as a forward migration,
+  so already-applied migration history is not mutated
+
+Problems or blockers:
+- historical docs and audit artifacts still mention `user_company_roles` as part of earlier repo state;
+  those mentions are documentary,
+  not runtime dependencies
+- live removal depends on pushing the new migration and redeploying
+
+Decision or note:
+`erp_map.user_company_roles` is now formally retired from the product path.
+Canonical authority remains:
+`erp_acl.user_roles`
+- `erp_map.user_companies`
+- `erp_map.user_parent_companies`
+- snapshot layers
+
+Next step:
+Push the pending patch migrations,
+redeploy,
+fresh-login,
+then validate that SA and ACL paths work cleanly after the legacy bridge table is removed
+040. Completed company management lifecycle surface with new manage workspace and admin-only enable/disable route wiring.
+    - frontend/src/admin/sa/screens/SACompanyManage.jsx
+    - frontend/src/admin/sa/screens/SAControlPanel.jsx
+    - frontend/src/navigation/screens/adminScreens.js
+    - frontend/src/router/AppRouter.jsx
+    - supabase/functions/api/_core/admin/company/update_company_state.handler.ts
+    - supabase/functions/api/_routes/admin.routes.ts
+041. Removed menu-specific launch hardcodes from SA navigation surfaces and moved launch copy into DB-driven menu description projection.
+    - frontend/src/navigation/menuProjection.js
+    - frontend/src/layout/MenuShell.jsx
+    - frontend/src/admin/sa/screens/SAHome.jsx
+    - frontend/src/admin/sa/screens/SAControlPanel.jsx
+    - frontend/src/admin/sa/screens/SAMenuGovernance.jsx
+    - supabase/functions/api/_core/auth/menu.handler.ts
+    - supabase/migrations/20260410126000_gate7_7_3H_menu_snapshot_description_projection.sql
+042. Clarified ACL SSOT runtime scope model for scalable product direction.
+    - locked Parent Company vs Work Company vs Department vs Work Context responsibilities
+    - defined Project / Module / Page / Role / Capability Pack / Menu boundaries
+    - locked final access formula as:
+      User + Selected Work Company + Selected Work Context + Role + Enabled Modules + Overrides
+    - explicitly declared automatic menu recompute on company or work-context switch
+    - explicitly declared user overrides as exception layer, not default permission stitching
+    - docs/ACL_SSOT.md

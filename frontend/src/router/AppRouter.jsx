@@ -32,12 +32,20 @@ import GADashboardShell from "../admin/ga/GADashboardShell.jsx";
 import SAControlPanel from "../admin/sa/screens/SAControlPanel.jsx";
 import SAAudit from "../admin/sa/screens/SAAudit.jsx";
 import SACompanyCreate from "../admin/sa/screens/SACompanyCreate.jsx";
+import SACompanyManage from "../admin/sa/screens/SACompanyManage.jsx";
+import SAOrgBootstrap from "../admin/sa/screens/SAOrgBootstrap.jsx";
 import SASessions from "../admin/sa/screens/SASessions.jsx";
 import SASystemHealth from "../admin/sa/screens/SASystemHealth.jsx";
 import SAUsers from "../admin/sa/screens/SAUsers.jsx";
 import SAUserRoles from "../admin/sa/screens/SAUserRoles.jsx";
 import SAUserScope from "../admin/sa/screens/SAUserScope.jsx";
 import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
+import SAProjectMaster from "../admin/sa/screens/SAProjectMaster.jsx";
+import SARolePermissions from "../admin/sa/screens/SARolePermissions.jsx";
+import SACapabilityGovernance from "../admin/sa/screens/SACapabilityGovernance.jsx";
+import SAApprovalRules from "../admin/sa/screens/SAApprovalRules.jsx";
+import SACompanyModuleMap from "../admin/sa/screens/SACompanyModuleMap.jsx";
+import SAMenuGovernance from "../admin/sa/screens/SAMenuGovernance.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
 import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
@@ -97,9 +105,35 @@ export default function AppRouter() {
                       path="company/create"
                       element={<SACompanyCreate />}
                     />
+                    <Route
+                      path="company/manage"
+                      element={<SACompanyManage />}
+                    />
+                    <Route
+                      path="org-bootstrap"
+                      element={<SAOrgBootstrap />}
+                    />
                     <Route path="users" element={<SAUsers />} />
                     <Route path="users/roles" element={<SAUserRoles />} />
                     <Route path="users/scope" element={<SAUserScope />} />
+                    <Route path="project-master" element={<SAProjectMaster />} />
+                    <Route
+                      path="acl/role-permissions"
+                      element={<SARolePermissions />}
+                    />
+                    <Route
+                      path="acl/capabilities"
+                      element={<SACapabilityGovernance />}
+                    />
+                    <Route
+                      path="approval-rules"
+                      element={<SAApprovalRules />}
+                    />
+                    <Route
+                      path="acl/company-modules"
+                      element={<SACompanyModuleMap />}
+                    />
+                    <Route path="menu" element={<SAMenuGovernance />} />
                     <Route
                       path="signup-requests"
                       element={<SASignupRequests />}

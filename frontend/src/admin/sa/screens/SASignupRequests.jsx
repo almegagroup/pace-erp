@@ -16,9 +16,12 @@ import {
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
+import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
 async function readJsonSafe(response) {
   try {
@@ -68,33 +71,6 @@ function shortId(value) {
 function formatLifecycleState(value) {
   if (!value) return "UNKNOWN";
   return String(value).replaceAll("_", " ");
-}
-
-function SummaryCard({ label, value, caption, tone = "sky" }) {
-  const toneClassMap = {
-    sky: "bg-sky-50 text-sky-700",
-    emerald: "bg-emerald-50 text-emerald-700",
-    rose: "bg-rose-50 text-rose-700",
-    amber: "bg-amber-50 text-amber-700",
-    slate: "bg-slate-100 text-slate-700",
-  };
-
-  return (
-    <article className="rounded-3xl border border-slate-200 bg-white px-5 py-5 shadow-[0_12px_34px_rgba(15,23,42,0.06)]">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-        {label}
-      </p>
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <h3 className="text-2xl font-semibold text-slate-900">{value}</h3>
-        <span
-          className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${toneClassMap[tone] ?? toneClassMap.sky}`}
-        >
-          Live
-        </span>
-      </div>
-      <p className="mt-3 text-sm leading-6 text-slate-500">{caption}</p>
-    </article>
-  );
 }
 
 export default function SASignupRequests() {
@@ -254,8 +230,9 @@ export default function SASignupRequests() {
         "phone_number",
         "user_state",
       ]),
-    [requests, searchQuery],
+    [requests, searchQuery]
   );
+  const signupPagination = useErpPagination(filteredRequests, 10);
 
   const totalRequests = requests.length;
   const withCompanyHintCount = requests.filter((row) => row.parent_company_name).length;
@@ -306,294 +283,289 @@ export default function SASignupRequests() {
     focusSearch: {
       perform: () => searchInputRef.current?.focus(),
     },
+    focusPrimary: {
+      perform: () => searchInputRef.current?.focus(),
+    },
   });
 
-  return (
-    <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
-      <div className="mx-auto max-w-7xl">
-        <div className="sticky top-4 z-20 rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.12)]">
-          <div className="flex flex-wrap items-start justify-between gap-5">
-            <div className="max-w-3xl">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
-                SA Onboarding Queue
-              </p>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">
-                Pending Signup Requests
-              </h1>
-              <p className="mt-3 text-sm leading-7 text-slate-500">
-                Review new ERP access requests, inspect intake details, and
-                approve or reject onboarding from the Super Admin queue.
-              </p>
-            </div>
+  const topActions = [
+    {
+      key: "control-panel",
+      label: "Control Panel",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionBarRefs.current[0] = element;
+      },
+      onClick: () => openScreen("SA_CONTROL_PANEL", { mode: "reset" }),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 0,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
+      key: "user-directory",
+      label: "User Directory",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionBarRefs.current[1] = element;
+      },
+      onClick: () => openScreen("SA_USERS"),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 1,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
+      key: "refresh-queue",
+      label: loading ? "Refreshing..." : "Refresh Queue",
+      hint: "Alt+R",
+      tone: "primary",
+      buttonRef: (element) => {
+        actionBarRefs.current[2] = element;
+      },
+      onClick: () => void handleRefresh(),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 2,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+  ];
 
-            <div className="flex flex-wrap gap-3">
-              <button
-                ref={(element) => {
-                  actionBarRefs.current[0] = element;
-                }}
-                type="button"
-                onClick={() => openScreen("SA_CONTROL_PANEL", { mode: "reset" })}
-                onKeyDown={(event) =>
-                  handleLinearNavigation(event, {
-                    index: 0,
-                    refs: actionBarRefs.current,
-                    orientation: "horizontal",
-                  })
-                }
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
-              >
-                Control Panel
-              </button>
-              <button
-                ref={(element) => {
-                  actionBarRefs.current[1] = element;
-                }}
-                type="button"
-                onClick={() => openScreen("SA_USERS")}
-                onKeyDown={(event) =>
-                  handleLinearNavigation(event, {
-                    index: 1,
-                    refs: actionBarRefs.current,
-                    orientation: "horizontal",
-                  })
-                }
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
-              >
-                User Directory
-              </button>
-              <button
-                ref={(element) => {
-                  actionBarRefs.current[2] = element;
-                }}
-                data-workspace-primary-focus="true"
-                type="button"
-                onClick={() => void handleRefresh()}
-                onKeyDown={(event) =>
-                  handleLinearNavigation(event, {
-                    index: 2,
-                    refs: actionBarRefs.current,
-                    orientation: "horizontal",
-                  })
-                }
-                className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 shadow-[0_10px_24px_rgba(14,116,144,0.08)]"
-              >
-                {loading ? "Refreshing..." : "Refresh Queue"}
-              </button>
-            </div>
-          </div>
-        </div>
+  const metrics = [
+    {
+      key: "pending-queue",
+      label: "Pending Queue",
+      value: loading ? "..." : String(totalRequests),
+      tone: "sky",
+      caption:
+        "Current pending ERP access requests awaiting Super Admin review.",
+    },
+    {
+      key: "company-hint",
+      label: "Company Hint",
+      value: loading ? "..." : String(withCompanyHintCount),
+      tone: "amber",
+      caption:
+        "Requests that already include a parent company hint for onboarding context.",
+    },
+    {
+      key: "phone-ready",
+      label: "Phone Ready",
+      value: loading ? "..." : String(withPhoneCount),
+      tone: "emerald",
+      caption:
+        "Requests with contact number present for quick follow-up if needed.",
+    },
+    {
+      key: "designation-hint",
+      label: "Designation Hint",
+      value: loading ? "..." : String(withDesignationCount),
+      tone: "slate",
+      caption:
+        "Requests that already include a designation hint for role review.",
+    },
+  ];
 
-        {error ? (
-          <div className="mt-6 rounded-[28px] border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700 shadow-[0_12px_30px_rgba(190,24,93,0.08)]">
-            {error}
-          </div>
-        ) : null}
+  const summarySection = {
+    eyebrow: "Onboarding Contract",
+    title: "Approval And Rejection Remain DB-Owned Atomic Actions",
+    description:
+      "This screen consumes the pending queue and sends decisions to the existing atomic backend authority. Approval creates the ERP user lifecycle through the DB-owned function, while rejection closes the request without frontend-owned mutation logic.",
+    aside: (
+      <span className="border border-sky-200 bg-sky-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+        Gate 4 Intake
+      </span>
+    ),
+  };
 
-        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard
-            label="Pending Queue"
-            value={loading ? "..." : String(totalRequests)}
-            tone="sky"
-            caption="Current pending ERP access requests awaiting Super Admin review."
-          />
-          <SummaryCard
-            label="Company Hint"
-            value={loading ? "..." : String(withCompanyHintCount)}
-            tone="amber"
-            caption="Requests that already include a parent company hint for onboarding context."
-          />
-          <SummaryCard
-            label="Phone Ready"
-            value={loading ? "..." : String(withPhoneCount)}
-            tone="emerald"
-            caption="Requests with contact number present for quick follow-up if needed."
-          />
-          <SummaryCard
-            label="Designation Hint"
-            value={loading ? "..." : String(withDesignationCount)}
-            tone="slate"
-            caption="Requests that already include a designation hint for role review."
-          />
-        </div>
+  const filterSection = {
+    eyebrow: "Review Queue",
+    title: "Pending ERP Onboarding Intake",
+    aside: (
+      <span className="border border-slate-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-600">
+        {loading ? "Loading" : `${filteredRequests.length} Visible`}
+      </span>
+    ),
+    children: (
+      <QuickFilterInput
+        inputRef={searchInputRef}
+        className=""
+        label="Quick Search"
+        value={searchQuery}
+        onChange={setSearchQuery}
+        placeholder="Search by requester, auth, company, designation, phone, or lifecycle"
+        hint="Visible quick filter for the onboarding queue. Alt+Shift+F jumps here."
+        primaryFocus
+      />
+    ),
+  };
 
-        <section className="mt-6 rounded-[30px] border border-slate-200 bg-white p-6 shadow-[0_14px_40px_rgba(15,23,42,0.08)]">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
-                Onboarding Contract
-              </p>
-              <h2 className="mt-3 text-xl font-semibold text-slate-900">
-                Approval And Rejection Remain DB-Owned Atomic Actions
-              </h2>
-            </div>
-            <span className="rounded-full bg-sky-100 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-              Gate 4 Intake
-            </span>
-          </div>
-
-          <p className="mt-4 text-sm leading-7 text-slate-600">
-            This screen consumes the pending queue and sends decisions to the
-            existing atomic backend authority. Approval creates the ERP user
-            lifecycle through the DB-owned function, while rejection closes the
-            request without frontend-owned mutation logic.
-          </p>
-        </section>
-
-        <section className="mt-6 rounded-[30px] border border-slate-200 bg-white p-6 shadow-[0_14px_40px_rgba(15,23,42,0.08)]">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
-                Review Queue
-              </p>
-              <h2 className="mt-3 text-xl font-semibold text-slate-900">
-                Pending ERP Onboarding Intake
-              </h2>
-            </div>
-
-            <span className="rounded-full bg-slate-100 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-600">
-              {loading ? "Loading" : `${filteredRequests.length} Visible`}
-            </span>
-          </div>
-
-          <QuickFilterInput
-            inputRef={searchInputRef}
-            className="mt-5"
-            label="Quick Search"
-            value={searchQuery}
-            onChange={setSearchQuery}
-            placeholder="Search by requester, auth, company, designation, phone, or lifecycle"
-            hint="Visible quick filter for the onboarding queue."
-          />
-
-          {loading ? (
-            <div className="mt-6 rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
-              Loading pending signup requests from the onboarding queue.
-            </div>
-          ) : filteredRequests.length === 0 ? (
-            <div className="mt-6 rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-500">
-              There are no pending signup requests matching the current filter right now.
-            </div>
-          ) : (
-            <div className="mt-6 overflow-x-auto">
-              <table className="min-w-full border-separate border-spacing-y-3">
-                <thead>
-                  <tr>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Requester
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Company
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Designation
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Contact
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Submitted
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Lifecycle
-                    </th>
-                    <th className="px-4 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRequests.map((request, index) => {
-                    const isActing = actingUserId === request.auth_user_id;
-
-                    return (
-                      <tr
-                        key={request.auth_user_id}
-                        className="bg-slate-50 align-top"
-                      >
-                        <td className="rounded-none px-4 py-4 text-sm text-slate-700 first:rounded-l-2xl">
-                          <div className="font-semibold text-slate-900">
-                            {request.name ?? "Unnamed Request"}
-                          </div>
-                          <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
-                            Auth {shortId(request.auth_user_id)}
-                          </div>
-                        </td>
-                        <td className="px-4 py-4 text-sm text-slate-700">
-                          {request.parent_company_name ?? "Not Provided"}
-                        </td>
-                        <td className="px-4 py-4 text-sm text-slate-700">
-                          {request.designation_hint ?? "Not Provided"}
-                        </td>
-                        <td className="px-4 py-4 text-sm text-slate-700">
-                          {request.phone_number ?? "Not Provided"}
-                        </td>
-                        <td className="px-4 py-4 text-sm text-slate-700">
-                          {formatDateTime(request.submitted_at)}
-                        </td>
-                        <td className="px-4 py-4 text-sm text-slate-700">
-                          <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-700">
-                            {formatLifecycleState(request.user_state)}
-                          </span>
-                        </td>
-                        <td className="rounded-none px-4 py-4 text-sm text-slate-700 last:rounded-r-2xl">
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              ref={(element) => {
-                                rowActionRefs.current[index] ??= [];
-                                rowActionRefs.current[index][0] = element;
-                              }}
-                              type="button"
-                              disabled={isActing}
-                              onClick={() =>
-                                void handleDecision(request.auth_user_id, "APPROVE")
-                              }
-                              onKeyDown={(event) =>
-                                handleGridNavigation(event, {
-                                  rowIndex: index,
-                                  columnIndex: 0,
-                                  gridRefs: rowActionRefs.current,
-                                })
-                              }
-                              className={`rounded-2xl bg-emerald-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700 ${
-                                isActing ? "cursor-not-allowed opacity-60" : ""
-                              }`}
-                            >
-                              {isActing ? "Updating..." : "Approve"}
-                            </button>
-                            <button
-                              ref={(element) => {
-                                rowActionRefs.current[index] ??= [];
-                                rowActionRefs.current[index][1] = element;
-                              }}
-                              type="button"
-                              disabled={isActing}
-                              onClick={() =>
-                                void handleDecision(request.auth_user_id, "REJECT")
-                              }
-                              onKeyDown={(event) =>
-                                handleGridNavigation(event, {
-                                  rowIndex: index,
-                                  columnIndex: 1,
-                                  gridRefs: rowActionRefs.current,
-                                })
-                              }
-                              className={`rounded-2xl bg-rose-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-700 ${
-                                isActing ? "cursor-not-allowed opacity-60" : ""
-                              }`}
-                            >
-                              {isActing ? "Updating..." : "Reject"}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+  const listSection = {
+    eyebrow: "Decision Rows",
+    title: loading
+      ? "Refreshing onboarding queue"
+      : `${filteredRequests.length} visible request${filteredRequests.length === 1 ? "" : "s"}`,
+    children: loading ? (
+      <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+        Loading pending signup requests from the onboarding queue.
       </div>
-    </section>
+    ) : filteredRequests.length === 0 ? (
+      <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
+        There are no pending signup requests matching the current filter right now.
+      </div>
+    ) : (
+      <div className="overflow-x-auto">
+        <ErpPaginationStrip
+          page={signupPagination.page}
+          setPage={signupPagination.setPage}
+          totalPages={signupPagination.totalPages}
+          startIndex={signupPagination.startIndex}
+          endIndex={signupPagination.endIndex}
+          totalItems={filteredRequests.length}
+        />
+        <table className="min-w-full border-collapse">
+          <thead>
+            <tr>
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Requester
+              </th>
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Company
+              </th>
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Designation
+              </th>
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Contact
+              </th>
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Submitted
+              </th>
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Lifecycle
+              </th>
+              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {signupPagination.pageItems.map((request, index) => {
+              const isActing = actingUserId === request.auth_user_id;
+
+              return (
+                <tr key={request.auth_user_id} className="border-b border-slate-200 bg-white align-top">
+                  <td className="px-3 py-3 text-sm text-slate-700">
+                    <div className="font-semibold text-slate-900">
+                      {request.name ?? "Unnamed Request"}
+                    </div>
+                    <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                      Auth {shortId(request.auth_user_id)}
+                    </div>
+                  </td>
+                  <td className="px-3 py-3 text-sm text-slate-700">
+                    {request.parent_company_name ?? "Not Provided"}
+                  </td>
+                  <td className="px-3 py-3 text-sm text-slate-700">
+                    {request.designation_hint ?? "Not Provided"}
+                  </td>
+                  <td className="px-3 py-3 text-sm text-slate-700">
+                    {request.phone_number ?? "Not Provided"}
+                  </td>
+                  <td className="px-3 py-3 text-sm text-slate-700">
+                    {formatDateTime(request.submitted_at)}
+                  </td>
+                  <td className="px-3 py-3 text-sm text-slate-700">
+                    <span className="inline-flex border border-slate-300 bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700">
+                      {formatLifecycleState(request.user_state)}
+                    </span>
+                  </td>
+                  <td className="px-3 py-3 text-sm text-slate-700">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        ref={(element) => {
+                          rowActionRefs.current[index] ??= [];
+                          rowActionRefs.current[index][0] = element;
+                        }}
+                        type="button"
+                        disabled={isActing}
+                        onClick={() =>
+                          void handleDecision(request.auth_user_id, "APPROVE")
+                        }
+                        onKeyDown={(event) =>
+                          handleGridNavigation(event, {
+                            rowIndex: index,
+                            columnIndex: 0,
+                            gridRefs: rowActionRefs.current,
+                          })
+                        }
+                        className={`border border-emerald-300 bg-emerald-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700 ${
+                          isActing ? "cursor-not-allowed opacity-60" : ""
+                        }`}
+                      >
+                        {isActing ? "Updating..." : "Approve"}
+                      </button>
+                      <button
+                        ref={(element) => {
+                          rowActionRefs.current[index] ??= [];
+                          rowActionRefs.current[index][1] = element;
+                        }}
+                        type="button"
+                        disabled={isActing}
+                        onClick={() =>
+                          void handleDecision(request.auth_user_id, "REJECT")
+                        }
+                        onKeyDown={(event) =>
+                          handleGridNavigation(event, {
+                            rowIndex: index,
+                            columnIndex: 1,
+                            gridRefs: rowActionRefs.current,
+                          })
+                        }
+                        className={`border border-rose-300 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700 ${
+                          isActing ? "cursor-not-allowed opacity-60" : ""
+                        }`}
+                      >
+                        {isActing ? "Updating..." : "Reject"}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    ),
+  };
+
+  return (
+    <ErpMasterListTemplate
+      eyebrow="SA Onboarding Queue"
+      title="Pending Signup Requests"
+      description="This keyboard-native list keeps the onboarding queue, quick search, and approve/reject decisions in one deterministic operating surface."
+      actions={topActions}
+      notices={
+        error
+          ? [
+              {
+                key: "error",
+                tone: "error",
+                message: error,
+              },
+            ]
+          : []
+      }
+      metrics={metrics}
+      summarySection={summarySection}
+      filterSection={filterSection}
+      listSection={listSection}
+    />
   );
 }

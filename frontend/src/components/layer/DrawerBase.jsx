@@ -59,7 +59,7 @@ export default function DrawerBase({
 const overlayStyle = {
   position: "fixed",
   inset: 0,
-  background: "rgba(2, 8, 23, 0.48)",
+  background: "rgba(15, 23, 42, 0.28)",
   zIndex: 999997,
   display: "flex",
   alignItems: "stretch",
@@ -70,10 +70,11 @@ const overlayStyle = {
 
 const panelStyle = {
   height: "100%",
-  background: "#ffffff",
-  borderRadius: "24px",
-  boxShadow: "0 24px 80px rgba(15, 23, 42, 0.24)",
-  padding: "24px",
+  background: "#f7f9fc",
+  border: "1px solid #94a3b8",
+  borderRadius: "0",
+  boxShadow: "0 18px 48px rgba(15, 23, 42, 0.2)",
+  padding: "20px",
   overflow: "hidden",
   display: "flex",
   flexDirection: "column",

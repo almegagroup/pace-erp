@@ -27,6 +27,7 @@ const INTENT_HANDLERS = Object.freeze({
   INTENT_GLOBAL_SEARCH: handleGlobalSearch,
   INTENT_SCREEN_SAVE: handleScreenSave,
   INTENT_SCREEN_REFRESH: handleScreenRefresh,
+  INTENT_OPEN_NEW_WINDOW: handleOpenNewWindow,
   INTENT_SCREEN_FOCUS_SEARCH: handleScreenFocusSearch,
   INTENT_SCREEN_FOCUS_PRIMARY: handleScreenFocusPrimary,
   INTENT_SIDEBAR_HIDE: handleSidebarHide,
@@ -112,6 +113,15 @@ function handleScreenRefresh() {
     intent: "INTENT_SCREEN_REFRESH",
     action: "SCREEN_REFRESH",
   });
+}
+
+function handleOpenNewWindow() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_OPEN_NEW_WINDOW",
+    action: "OPEN_NEW_WINDOW",
+  });
+  dispatchWorkspaceFocusCommand("OPEN_NEW_WINDOW");
 }
 
 function handleScreenFocusSearch() {

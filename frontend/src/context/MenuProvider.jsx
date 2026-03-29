@@ -6,10 +6,6 @@
  * Domain: FRONT
  * Purpose: Provide menu snapshot and route authority state
  * Authority: Frontend
- *
- * FINAL RULE:
- * ❌ NO API CALL HERE
- * ✅ Menu আসে AuthBootstrap / AuthResolver থেকে (single source of truth)
  */
 
 import { useState, useCallback } from "react";
@@ -17,7 +13,6 @@ import { MenuContext } from "./MenuContext.js";
 import { buildRouteIndex } from "../router/routeIndex.js";
 
 export function MenuProvider({ children }) {
-  //console.log("🏗️ MenuProvider MOUNTED");
   const [menu, setMenu] = useState([]);
   const [allowedRoutes, setAllowedRoutes] = useState(new Set());
   const [loading, setLoading] = useState(true);
@@ -26,17 +21,20 @@ export function MenuProvider({ children }) {
     roleCode: "",
     tagline: "Process Automation & Control Environment",
   });
-  
+  const [runtimeContext, setRuntimeContextState] = useState({
+    isAdmin: false,
+    selectedCompanyId: "",
+    currentCompany: null,
+    availableCompanies: [],
+    availableWorkContexts: [],
+    selectedWorkContext: null,
+  });
 
-  // 🔵 START LOADING (stable)
   const startMenuLoading = useCallback(() => {
-    //console.log("⏳ startMenuLoading CALLED");
     setLoading(true);
   }, []);
 
-  // 🔴 CLEAR (stable)
   const clearMenuSnapshot = useCallback(() => {
-    //console.log("🧹 clearMenuSnapshot CALLED");
     setMenu([]);
     setAllowedRoutes(new Set());
     setShellProfileState({
@@ -44,14 +42,18 @@ export function MenuProvider({ children }) {
       roleCode: "",
       tagline: "Process Automation & Control Environment",
     });
-    console.log("✅ loading → false (clear)");
+    setRuntimeContextState({
+      isAdmin: false,
+      selectedCompanyId: "",
+      currentCompany: null,
+      availableCompanies: [],
+      availableWorkContexts: [],
+      selectedWorkContext: null,
+    });
     setLoading(false);
   }, []);
 
-  // 🟢 SET MENU (stable)
   const setMenuSnapshot = useCallback((snapshot) => {
-    //console.log("📥 setMenuSnapshot CALLED");
-  //console.log("📦 snapshot:", snapshot);
     if (!Array.isArray(snapshot)) {
       console.error("Invalid menu snapshot:", snapshot);
       setMenu([]);
@@ -59,13 +61,6 @@ export function MenuProvider({ children }) {
       setLoading(false);
       return;
     }
-    //console.log("💾 Setting menu...");
-  setMenu(snapshot);
-
-  console.log("🧭 Building route index...");
-  setAllowedRoutes(buildRouteIndex(snapshot));
-
-  //console.log("✅ loading → false");
 
     setMenu(snapshot);
     setAllowedRoutes(buildRouteIndex(snapshot));
@@ -80,6 +75,21 @@ export function MenuProvider({ children }) {
     });
   }, []);
 
+  const setRuntimeContext = useCallback((context) => {
+    setRuntimeContextState({
+      isAdmin: context?.isAdmin === true,
+      selectedCompanyId: context?.selectedCompanyId ?? "",
+      currentCompany: context?.currentCompany ?? null,
+      availableCompanies: Array.isArray(context?.availableCompanies)
+        ? context.availableCompanies
+        : [],
+      availableWorkContexts: Array.isArray(context?.availableWorkContexts)
+        ? context.availableWorkContexts
+        : [],
+      selectedWorkContext: context?.selectedWorkContext ?? null,
+    });
+  }, []);
+
   return (
     <MenuContext.Provider
       value={{
@@ -87,10 +97,12 @@ export function MenuProvider({ children }) {
         allowedRoutes,
         loading,
         shellProfile,
+        runtimeContext,
         startMenuLoading,
         clearMenuSnapshot,
         setMenuSnapshot,
         setShellProfile,
+        setRuntimeContext,
       }}
     >
       {children}

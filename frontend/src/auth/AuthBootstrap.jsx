@@ -23,6 +23,7 @@ export default function AuthBootstrap({ children }) {
     startMenuLoading,
     setMenuSnapshot,
     setShellProfile,
+    setRuntimeContext,
     clearMenuSnapshot,
   } = useMenu();
 
@@ -113,8 +114,11 @@ export default function AuthBootstrap({ children }) {
           }
         }
 
-        const [profileRes, menuRes] = await Promise.all([
+        const [profileRes, contextRes, menuRes] = await Promise.all([
           fetch(`${import.meta.env.VITE_API_BASE}/api/me/profile`, {
+            credentials: "include",
+          }),
+          fetch(`${import.meta.env.VITE_API_BASE}/api/me/context`, {
             credentials: "include",
           }),
           fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
@@ -122,12 +126,13 @@ export default function AuthBootstrap({ children }) {
           }),
         ]);
 
-        if (!profileRes.ok || !menuRes.ok) {
+        if (!profileRes.ok || !contextRes.ok || !menuRes.ok) {
           throw new Error("AUTH_BOOTSTRAP_FETCH_FAILED");
         }
 
-        const [profileData, data] = await Promise.all([
+        const [profileData, contextData, data] = await Promise.all([
           profileRes.json(),
+          contextRes.json(),
           menuRes.json(),
         ]);
 
@@ -139,6 +144,14 @@ export default function AuthBootstrap({ children }) {
           userCode: profileData?.data?.user_code ?? "",
           roleCode: profileData?.data?.role_code ?? "",
           tagline: "Process Automation & Control Environment",
+        });
+        setRuntimeContext({
+          isAdmin: contextData?.data?.is_admin === true,
+          selectedCompanyId: contextData?.data?.selected_company_id ?? "",
+          currentCompany: contextData?.data?.current_company ?? null,
+          availableCompanies: contextData?.data?.available_companies ?? [],
+          availableWorkContexts: contextData?.data?.available_work_contexts ?? [],
+          selectedWorkContext: contextData?.data?.selected_work_context ?? null,
         });
 
         const menuData = data?.data?.menu ?? [];
@@ -197,6 +210,7 @@ export default function AuthBootstrap({ children }) {
     navigate,
     setMenuSnapshot,
     setShellProfile,
+    setRuntimeContext,
     startMenuLoading,
   ]);
 

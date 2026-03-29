@@ -22,6 +22,7 @@ import { errorResponse } from "./_core/response.ts";
 export default async function handler(req: Request): Promise<Response> {
   const requestId = generateRequestId();
   const url = new URL(req.url);
+  const routeKey = `${req.method}:${url.pathname.replace(/^\/functions\/v1\/api/, "")}`;
 
   // ---- HEALTH (ID 0.7A) ----
   const path = url.pathname.replace(/^\/functions\/v1\/api/, "");
@@ -92,7 +93,13 @@ try {
         code,
         "Request blocked by security policy",
         requestId,
-        action
+        action,
+        403,
+        {
+          gateId: "1A",
+          routeKey,
+          decisionTrace: code,
+        }
       )
     ),
     requestId

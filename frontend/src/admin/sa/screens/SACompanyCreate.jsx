@@ -8,13 +8,19 @@
  * Authority: Frontend
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
+import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
+import {
+  ErpFieldPreview,
+  ErpSectionCard,
+} from "../../../components/templates/ErpScreenScaffold.jsx";
 
 async function readJsonSafe(response) {
   try {
@@ -29,7 +35,7 @@ async function lookupGstProfile(gstNumber) {
     `${import.meta.env.VITE_API_BASE}/api/admin/company/gst-profile?gst_number=${encodeURIComponent(gstNumber)}`,
     {
       credentials: "include",
-    },
+    }
   );
 
   const json = await readJsonSafe(response);
@@ -64,39 +70,10 @@ async function createCompany(payload) {
   return json.data;
 }
 
-function SummaryCard({ label, value, caption }) {
-  return (
-    <article className="rounded-3xl border border-slate-200 bg-white px-5 py-5 shadow-[0_12px_34px_rgba(15,23,42,0.06)]">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-        {label}
-      </p>
-      <h3 className="mt-3 text-2xl font-semibold text-slate-900">{value}</h3>
-      <p className="mt-3 text-sm leading-6 text-slate-500">{caption}</p>
-    </article>
-  );
-}
-
-function FieldCard({ label, value, caption, multiline = false }) {
-  const content = value || "Not available yet";
-
-  return (
-    <article className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_12px_34px_rgba(15,23,42,0.06)]">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-        {label}
-      </p>
-      {multiline ? (
-        <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-900">{content}</p>
-      ) : (
-        <p className="mt-3 text-base font-semibold text-slate-900">{content}</p>
-      )}
-      <p className="mt-3 text-sm leading-6 text-slate-500">{caption}</p>
-    </article>
-  );
-}
-
 export default function SACompanyCreate() {
   const navigate = useNavigate();
   const actionBarRefs = useRef([]);
+  const formContainerRef = useRef(null);
   const gstInputRef = useRef(null);
   const companyNameInputRef = useRef(null);
   const [gstNumber, setGstNumber] = useState("");
@@ -112,6 +89,11 @@ export default function SACompanyCreate() {
   const hasExistingCompany =
     Boolean(createdCompany?.company_code) &&
     (!normalizedGst || createdCompany?.gst_number === normalizedGst);
+
+  useErpDenseFormNavigation(formContainerRef, {
+    submitOnFinalField: true,
+    onSubmit: () => handleCreate(),
+  });
 
   useErpScreenHotkeys({
     save: {
@@ -132,10 +114,7 @@ export default function SACompanyCreate() {
       group: "Current Screen",
       label: "Go to SA control panel",
       keywords: ["control panel", "sa admin"],
-      perform: () => {
-        openScreen("SA_CONTROL_PANEL", { mode: "replace" });
-        navigate("/sa/control-panel");
-      },
+      perform: handleOpenControlPanel,
       order: 10,
     },
     {
@@ -143,10 +122,7 @@ export default function SACompanyCreate() {
       group: "Current Screen",
       label: "Go to SA home",
       keywords: ["sa home", "dashboard"],
-      perform: () => {
-        openScreen("SA_HOME", { mode: "reset" });
-        navigate("/sa/home");
-      },
+      perform: handleOpenHome,
       order: 20,
     },
     {
@@ -191,6 +167,16 @@ export default function SACompanyCreate() {
     },
   ]);
 
+  function handleOpenControlPanel() {
+    openScreen("SA_CONTROL_PANEL", { mode: "replace" });
+    navigate("/sa/control-panel");
+  }
+
+  function handleOpenHome() {
+    openScreen("SA_HOME", { mode: "reset" });
+    navigate("/sa/home");
+  }
+
   async function handleLookup() {
     if (!normalizedGst) {
       setError("Enter a GST number before lookup.");
@@ -212,16 +198,17 @@ export default function SACompanyCreate() {
       setNotice(
         existingCompany
           ? `Company already exists in master as ${existingCompany.company_code}. Review the saved record instead of creating it again.`
-          : "",
+          : "GST profile resolved. Review the company identity block and continue with Ctrl+S when ready."
       );
-    } catch (error) {
+      companyNameInputRef.current?.focus();
+    } catch (lookupError) {
       setGstProfile(null);
       setCreatedCompany(null);
       setNotice("");
       setError(
-        error?.status >= 500
+        lookupError?.status >= 500
           ? "GST service is unavailable right now. Check Applyflow/backend configuration."
-          : "Unable to resolve GST right now. Check the GST number or backend integration.",
+          : "Unable to resolve GST right now. Check the GST number or backend integration."
       );
     } finally {
       setLookingUp(false);
@@ -269,163 +256,239 @@ export default function SACompanyCreate() {
       setNotice(
         result.already_exists
           ? `Company already existed as ${result.company.company_code}.`
-          : `Company ${result.company.company_code} created successfully.`,
+          : `Company ${result.company.company_code} created successfully.`
       );
-    } catch (error) {
+    } catch (createError) {
       setError(
-        error?.message === "COMPANY_ALREADY_EXISTS"
+        createError?.message === "COMPANY_ALREADY_EXISTS"
           ? "This GST is already present in company master."
-          : "Company creation was not finalized by the backend.",
+          : "Company creation was not finalized by the backend."
       );
     } finally {
       setCreating(false);
     }
   }
 
+  const topActions = [
+    {
+      key: "control-panel",
+      label: "Control Panel",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionBarRefs.current[0] = element;
+      },
+      onClick: handleOpenControlPanel,
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 0,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
+      key: "sa-home",
+      label: "SA Home",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionBarRefs.current[1] = element;
+      },
+      onClick: handleOpenHome,
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 1,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
+      key: "create-company",
+      label: creating
+        ? "Creating..."
+        : hasExistingCompany
+          ? "Already Created"
+          : "Create Company",
+      hint: "Ctrl+S",
+      tone: "primary",
+      disabled: creating || hasExistingCompany,
+      buttonRef: (element) => {
+        actionBarRefs.current[2] = element;
+      },
+      onClick: () => void handleCreate(),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 2,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+  ];
+
+  const metrics = [
+    {
+      key: "gst-source",
+      label: "GST Source",
+      value: gstProfile?.source ?? "Pending",
+      caption: "GST lookup checks cache first. A miss falls through to Applyflow.",
+      tone: "sky",
+    },
+    {
+      key: "resolved-state",
+      label: "Resolved State",
+      value: gstProfile?.state_name ?? "Pending",
+      caption: "Geographic company state derived from the GST profile.",
+      tone: "amber",
+    },
+    {
+      key: "pin-code",
+      label: "PIN Code",
+      value: gstProfile?.pin_code ?? "Pending",
+      caption: "Postal code captured separately for the company master.",
+      tone: "slate",
+    },
+    {
+      key: "created-company",
+      label: "Created Company",
+      value: createdCompany?.company_code ?? "Not Created",
+      caption: createdCompany
+        ? `${createdCompany.company_name}${createdCompany.state_name ? ` | ${createdCompany.state_name}` : ""}`
+        : "The company code appears here after a successful create.",
+      tone: createdCompany ? "emerald" : "sky",
+      badge: createdCompany ? "Ready" : "Pending",
+    },
+  ];
+
+  const notices = [
+    notice
+      ? {
+          key: "notice",
+          tone: "success",
+          message: notice,
+        }
+      : null,
+    error
+      ? {
+          key: "error",
+          tone: "error",
+          message: error,
+        }
+      : null,
+  ].filter(Boolean);
+
+  const sideContent = (
+    <>
+      <ErpFieldPreview
+        label="Legal Name"
+        value={gstProfile?.legal_name ?? companyName}
+        caption="GST legal name is preferred and also becomes the default company name."
+      />
+      <ErpFieldPreview
+        label="Trade Name"
+        value={gstProfile?.trade_name}
+        caption="Visible for review, but company master still uses the legal name as the canonical title."
+      />
+      <ErpFieldPreview
+        label="Company State"
+        value={gstProfile?.state_name}
+        caption="Derived from the GST address payload and stored as a dedicated company field."
+      />
+      <ErpFieldPreview
+        label="PIN Code"
+        value={gstProfile?.pin_code}
+        caption="Captured separately so postal filters and reporting can use a clean field."
+      />
+      <ErpFieldPreview
+        label="Full Address"
+        value={gstProfile?.full_address}
+        caption="Stored as a single human-readable address field on company master."
+        multiline
+      />
+    </>
+  );
+
+  const bottomContent = createdCompany ? (
+    <ErpSectionCard
+      eyebrow={hasExistingCompany ? "Existing Company" : "Created"}
+      title={
+        hasExistingCompany
+          ? "Company master row already exists for this GST"
+          : "Company master row created successfully"
+      }
+      tone="success"
+    >
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <ErpFieldPreview
+          label="Company Code"
+          value={createdCompany.company_code}
+          caption="Auto-generated canonical company code."
+          tone="success"
+        />
+        <ErpFieldPreview
+          label="Company Name"
+          value={createdCompany.company_name}
+          caption="Canonical legal company name saved in ERP master."
+          tone="success"
+        />
+        <ErpFieldPreview
+          label="State"
+          value={createdCompany.state_name}
+          caption="Saved from GST-derived company state."
+          tone="success"
+        />
+        <ErpFieldPreview
+          label="PIN Code"
+          value={createdCompany.pin_code}
+          caption="Saved as a dedicated postal field."
+          tone="success"
+        />
+      </div>
+      <div className="mt-4">
+        <ErpFieldPreview
+          label="Saved Address"
+          value={createdCompany.full_address}
+          caption="The single-field address stored on company master."
+          multiline
+          tone="success"
+        />
+      </div>
+    </ErpSectionCard>
+  ) : null;
+
   return (
-    <section className="min-h-full bg-[#e6edf2] px-4 py-4 text-slate-900">
-      <div className="mx-auto max-w-7xl">
-        <div className="sticky top-4 z-20 rounded-[30px] border border-slate-200 bg-white px-6 py-6 shadow-[0_16px_44px_rgba(15,23,42,0.12)]">
-          <div className="flex flex-wrap items-start justify-between gap-5">
-            <div className="max-w-3xl">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
-                SA Company Governance
+    <ErpEntryFormTemplate
+      eyebrow="SA Company Governance"
+      title="Create Business Company"
+      description="This worksheet keeps GST lookup, company identity review, and final create action in one direct keyboard path."
+      actions={topActions}
+      notices={notices}
+      metrics={metrics}
+      formEyebrow="Entry Form"
+      formTitle="GST-driven company setup"
+      formDescription="Start at GST, confirm the canonical company name, then save directly without leaving the worksheet flow."
+      formContent={(
+        <div ref={formContainerRef} className="grid gap-3">
+          <div
+            data-erp-form-section="true"
+            className="border border-slate-300 bg-white"
+          >
+            <div className="border-b border-slate-300 bg-[#eef4fb] px-4 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+                Section 1
               </p>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-900">
-                Create Business Company
-              </h1>
-              <p className="mt-3 text-sm leading-7 text-slate-500">
-                Enter a GST number, resolve the GST profile from cache or Applyflow,
-                and review the legal name, state, address, and PIN code before
-                creating the business company master record.
+              <h3 className="mt-1 text-base font-semibold text-slate-900">
+                Resolve GST identity
+              </h3>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                Start with GST. The backend reads cache first, then calls Applyflow only when the cache misses.
               </p>
             </div>
 
-            <div className="flex flex-wrap gap-3">
-              <button
-                ref={(element) => {
-                  actionBarRefs.current[0] = element;
-                }}
-                type="button"
-                onClick={() => {
-                  openScreen("SA_CONTROL_PANEL", { mode: "replace" });
-                  navigate("/sa/control-panel");
-                }}
-                onKeyDown={(event) =>
-                  handleLinearNavigation(event, {
-                    index: 0,
-                    refs: actionBarRefs.current,
-                    orientation: "horizontal",
-                  })
-                }
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
-              >
-                Control Panel
-              </button>
-              <button
-                ref={(element) => {
-                  actionBarRefs.current[1] = element;
-                }}
-                type="button"
-                onClick={() => {
-                  openScreen("SA_HOME", { mode: "reset" });
-                  navigate("/sa/home");
-                }}
-                onKeyDown={(event) =>
-                  handleLinearNavigation(event, {
-                    index: 1,
-                    refs: actionBarRefs.current,
-                    orientation: "horizontal",
-                  })
-                }
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
-              >
-                SA Home
-              </button>
-              <button
-                ref={(element) => {
-                  actionBarRefs.current[2] = element;
-                }}
-                type="button"
-                disabled={creating || hasExistingCompany}
-                onClick={() => void handleCreate()}
-                onKeyDown={(event) =>
-                  handleLinearNavigation(event, {
-                    index: 2,
-                    refs: actionBarRefs.current,
-                    orientation: "horizontal",
-                  })
-                }
-                className={`rounded-2xl px-4 py-3 text-sm font-semibold shadow-[0_10px_24px_rgba(14,116,144,0.08)] ${
-                  creating || hasExistingCompany
-                    ? "cursor-not-allowed bg-slate-200 text-slate-500"
-                    : "border border-sky-200 bg-sky-50 text-sky-700"
-                }`}
-              >
-                {creating ? "Creating..." : hasExistingCompany ? "Already Created" : "Create Company"}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {notice ? (
-          <div className="mt-4 rounded-[28px] border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-700 shadow-[0_12px_30px_rgba(16,185,129,0.08)]">
-            {notice}
-          </div>
-        ) : null}
-
-        {error ? (
-          <div className="mt-6 rounded-[28px] border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700 shadow-[0_12px_30px_rgba(190,24,93,0.08)]">
-            {error}
-          </div>
-        ) : null}
-
-        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard
-            label="GST Source"
-            value={gstProfile?.source ?? "Pending"}
-            caption="GST lookup checks cache first. A miss falls through to Applyflow."
-          />
-          <SummaryCard
-            label="Resolved State"
-            value={gstProfile?.state_name ?? "Pending"}
-            caption="Geographic company state derived from the GST profile."
-          />
-          <SummaryCard
-            label="PIN Code"
-            value={gstProfile?.pin_code ?? "Pending"}
-            caption="Postal code captured separately for the company master."
-          />
-          <SummaryCard
-            label="Created Company"
-            value={createdCompany?.company_code ?? "Not Created"}
-            caption={
-              createdCompany
-                ? `${createdCompany.company_name}${createdCompany.state_name ? ` | ${createdCompany.state_name}` : ""}`
-                : "The company code appears here after a successful create."
-            }
-          />
-        </div>
-
-        <section className="mt-6 grid gap-6 xl:grid-cols-[0.95fr,1.05fr]">
-          <article className="rounded-[30px] border border-slate-200 bg-white p-6 shadow-[0_14px_40px_rgba(15,23,42,0.08)]">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
-              Input
-            </p>
-            <h2 className="mt-3 text-xl font-semibold text-slate-900">
-              GST-driven company setup
-            </h2>
-            <p className="mt-3 text-sm leading-7 text-slate-600">
-              Provide GST first. The backend will read cache, call Applyflow only
-              when the cache misses, and fill the company profile preview.
-            </p>
-
-            <label className="mt-5 block">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <label className="grid gap-2 bg-white px-4 py-3">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                 GST Number
               </span>
               <input
                 ref={gstInputRef}
+                data-erp-form-field="true"
                 data-workspace-primary-focus="true"
                 value={gstNumber}
                 onChange={(event) => {
@@ -436,127 +499,81 @@ export default function SACompanyCreate() {
                   setCreatedCompany(null);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") {
+                  if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
                     void handleLookup();
                   }
                 }}
                 placeholder="29ABCDE1234F1Z5"
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none focus:border-sky-300 focus:bg-white"
+                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
               />
             </label>
 
-            <div className="mt-4 flex flex-wrap gap-3">
+            <div className="flex flex-wrap items-center gap-3 border-t border-slate-300 bg-slate-50 px-4 py-2">
               <button
                 type="button"
                 disabled={lookingUp}
                 onClick={() => void handleLookup()}
-                className={`rounded-2xl px-4 py-3 text-sm font-semibold ${
+                className={`border px-3 py-2 text-sm font-semibold ${
                   lookingUp
-                    ? "cursor-not-allowed bg-slate-200 text-slate-500"
-                    : "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                    ? "cursor-not-allowed border-slate-300 bg-slate-100 text-slate-400"
+                    : "border-sky-300 bg-sky-50 text-sky-900 hover:bg-sky-100"
                 }`}
               >
                 {lookingUp ? "Checking GST..." : "Check GST Profile"}
               </button>
-              <span className="self-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                Enter = Check GST | Ctrl+S = Create
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Enter Check GST | Alt+PageDown Next Section
               </span>
             </div>
+          </div>
 
-            <label className="mt-5 block">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+          <div
+            data-erp-form-section="true"
+            className="border border-slate-300 bg-white"
+          >
+            <div className="border-b border-slate-300 bg-[#eef4fb] px-4 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+                Section 2
+              </p>
+              <h3 className="mt-1 text-base font-semibold text-slate-900">
+                Confirm the ERP company name
+              </h3>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                After GST resolution, adjust the canonical company name if needed and save with Ctrl+S.
+              </p>
+            </div>
+
+            <label className="grid gap-2 bg-white px-4 py-3">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                 Company Name
               </span>
               <input
                 ref={companyNameInputRef}
+                data-erp-form-field="true"
                 value={companyName}
                 onChange={(event) => setCompanyName(event.target.value)}
                 placeholder="Company legal name"
-                className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none focus:border-sky-300 focus:bg-white"
+                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
               />
             </label>
 
-            <div className="mt-5 rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-5 py-5 text-sm leading-7 text-slate-600">
-              Created company records will now store:
-              company code, legal name, GST number, state name, full address,
-              pin code, active status, and business company classification.
+            <div className="grid gap-2 border-t border-slate-300 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Dense-form rules on this screen:
+              </p>
+              <p>
+                Enter and Shift+Enter move between primary inputs. The last primary field can trigger create confirmation, and Alt+PageDown or Alt+PageUp jumps sections.
+              </p>
+              <p>
+                Created company records store company code, legal name, GST number, state name, full address, PIN code, active status, and business company classification.
+              </p>
             </div>
-          </article>
-
-          <div className="grid gap-6">
-            <FieldCard
-              label="Legal Name"
-              value={gstProfile?.legal_name ?? companyName}
-              caption="GST legal name is preferred and also becomes the default company name."
-            />
-            <FieldCard
-              label="Trade Name"
-              value={gstProfile?.trade_name}
-              caption="Visible for review, but company master still uses the legal name as the canonical title."
-            />
-            <FieldCard
-              label="Company State"
-              value={gstProfile?.state_name}
-              caption="Derived from the GST address payload and stored as a dedicated company field."
-            />
-            <FieldCard
-              label="PIN Code"
-              value={gstProfile?.pin_code}
-              caption="Captured separately so postal filters and reporting can use a clean field."
-            />
-            <FieldCard
-              label="Full Address"
-              value={gstProfile?.full_address}
-              caption="Stored as a single human-readable address field on company master."
-              multiline
-            />
           </div>
-        </section>
-
-        {createdCompany ? (
-          <section className="mt-6 rounded-[30px] border border-emerald-200 bg-emerald-50 p-6 shadow-[0_14px_40px_rgba(16,185,129,0.08)]">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-700">
-              {hasExistingCompany ? "Existing Company" : "Created"}
-            </p>
-            <h2 className="mt-3 text-xl font-semibold text-slate-900">
-              {hasExistingCompany
-                ? "Company master row already exists for this GST"
-                : "Company master row created successfully"}
-            </h2>
-            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <FieldCard
-                label="Company Code"
-                value={createdCompany.company_code}
-                caption="Auto-generated canonical company code."
-              />
-              <FieldCard
-                label="Company Name"
-                value={createdCompany.company_name}
-                caption="Canonical legal company name saved in ERP master."
-              />
-              <FieldCard
-                label="State"
-                value={createdCompany.state_name}
-                caption="Saved from GST-derived company state."
-              />
-              <FieldCard
-                label="PIN Code"
-                value={createdCompany.pin_code}
-                caption="Saved as a dedicated postal field."
-              />
-            </div>
-            <div className="mt-4">
-              <FieldCard
-                label="Saved Address"
-                value={createdCompany.full_address}
-                caption="The single-field address stored on company master."
-                multiline
-              />
-            </div>
-          </section>
-        ) : null}
-      </div>
-    </section>
+        </div>
+      )}
+      sideContent={sideContent}
+      bottomContent={bottomContent}
+    />
   );
 }

@@ -40,15 +40,16 @@ export async function listAclVersionsHandler(
 
     const db = getServiceRoleClientWithContext(ctx.context);
 
-    if (ctx.context.status !== "RESOLVED") {
-  return errorResponse(
-    "CONTEXT_UNRESOLVED",
-    "Context unresolved",
-    requestId
-  );
-}
+    const url = new URL(req.url);
+    const companyId = url.searchParams.get("company_id")?.trim() ?? "";
 
-const companyId = ctx.context.companyId;
+    if (!companyId) {
+      return errorResponse(
+        "INVALID_INPUT",
+        "company_id required",
+        requestId
+      );
+    }
 
     const { data, error } = await db
       .schema("acl").from("acl_versions")
@@ -58,7 +59,9 @@ const companyId = ctx.context.companyId;
         description,
         is_active,
         created_at,
-        created_by
+        created_by,
+        source_captured_at,
+        source_captured_by
       `)
       .eq("company_id", companyId)
       .order("version_number", { ascending: false });
