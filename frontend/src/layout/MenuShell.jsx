@@ -128,24 +128,6 @@ function zoneBorder(activeZone, zone) {
   return activeZone === zone ? "border-sky-500" : "border-slate-300";
 }
 
-function findMenuNodeByCode(nodes, menuCode) {
-  for (const node of nodes) {
-    if (node.item?.menu_code === menuCode) {
-      return node;
-    }
-
-    if (node.children?.length) {
-      const match = findMenuNodeByCode(node.children, menuCode);
-
-      if (match) {
-        return match;
-      }
-    }
-  }
-
-  return null;
-}
-
 function resolveDrawerTrail(nodes, drawerPath) {
   const trail = [];
   let branch = Array.isArray(nodes) ? nodes : [];
@@ -333,6 +315,24 @@ export default function MenuShell() {
     setDrawerPath(getAncestorMenuCodes(sidebarRoots, location.pathname));
     setDrawerFocusIndex(0);
   }, [location.pathname, sidebarRoots]);
+
+  useEffect(() => {
+    if (!drawerVisible) {
+      return undefined;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const target =
+        drawerButtonRefs.current[resolvedDrawerFocusIndex] ??
+        drawerButtonRefs.current.find((item) => item instanceof HTMLElement);
+
+      if (focusElement(target)) {
+        setActiveZone("menu");
+      }
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [drawerVisible, drawerPath, resolvedDrawerFocusIndex]);
 
   useEffect(() => {
     if (!clusterWindowMessage) {

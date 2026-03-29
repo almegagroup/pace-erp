@@ -178,8 +178,9 @@ function resolveGovernanceUniverse(screen) {
 
 export default function SAMenuGovernance() {
   const topActionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const createCodeRef = useRef(null);
+  const pageTitleRef = useRef(null);
+  const groupPickerRefs = useRef([]);
   const [universe, setUniverse] = useState("SA");
   const [menus, setMenus] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -187,11 +188,9 @@ export default function SAMenuGovernance() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [selectedMenuCode, setSelectedMenuCode] = useState("");
-  const [previewTarget, setPreviewTarget] = useState("");
-  const [previewResult, setPreviewResult] = useState(null);
   const [catalogSearch, setCatalogSearch] = useState("");
-  const [catalogParentMenuCode, setCatalogParentMenuCode] = useState("");
-  const [catalogDisplayOrder, setCatalogDisplayOrder] = useState("0");
+  const [pageEditor, setPageEditor] = useState(null);
+  const [groupPickerOpen, setGroupPickerOpen] = useState(false);
   const [createForm, setCreateForm] = useState({
     menu_code: "",
     resource_code: "",
@@ -254,6 +253,18 @@ export default function SAMenuGovernance() {
     });
   }, [selectedMenu]);
 
+  useEffect(() => {
+    if (!groupPickerOpen) {
+      return undefined;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      groupPickerRefs.current[0]?.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [groupPickerOpen]);
+
   const parentOptions = useMemo(
     () =>
       menus.filter(
@@ -277,6 +288,11 @@ export default function SAMenuGovernance() {
     [menus, universe]
   );
 
+  const groupRows = useMemo(
+    () => registryRows.filter((item) => item.menu_type === "GROUP"),
+    [registryRows]
+  );
+
   const availablePages = useMemo(() => {
     const searchTerm = catalogSearch.trim().toLowerCase();
 
@@ -295,6 +311,12 @@ export default function SAMenuGovernance() {
           title: formatScreenTitle(screen.screen_code),
           route_path: screen.route,
           registeredMenu,
+          is_active: registeredMenu?.is_active ?? false,
+          parent_menu_code: registeredMenu?.parent_menu_code ?? "",
+          display_order:
+            registeredMenu?.tree_display_order ??
+            registeredMenu?.display_order ??
+            null,
         };
       })
       .filter((page) => {
@@ -386,56 +408,6 @@ export default function SAMenuGovernance() {
     }
   }
 
-  async function handleAssignAvailablePage(page) {
-    const targetMenuCode = page.registeredMenu?.menu_code ?? page.screen_code;
-    const targetOrder = Number(
-      catalogDisplayOrder || page.registeredMenu?.tree_display_order || page.registeredMenu?.display_order || 0
-    );
-
-    setSaving(true);
-    setError("");
-    setNotice("");
-
-    try {
-      if (page.registeredMenu) {
-        await updateMenu({
-          menu_code: targetMenuCode,
-          title: page.registeredMenu.title ?? page.title,
-          description: page.registeredMenu.description ?? null,
-          route_path: page.route_path,
-          display_order: Number(page.registeredMenu.display_order ?? targetOrder),
-        });
-
-        await updateMenuTree({
-          child_menu_code: targetMenuCode,
-          parent_menu_code: catalogParentMenuCode || page.registeredMenu.parent_menu_code || null,
-          display_order: targetOrder,
-        });
-      } else {
-        await createMenu({
-          menu_code: page.screen_code,
-          resource_code: page.screen_code,
-          title: page.title,
-          description: null,
-          route_path: page.route_path,
-          menu_type: "PAGE",
-          universe,
-          display_order: targetOrder,
-          parent_menu_code: catalogParentMenuCode || null,
-          tree_display_order: targetOrder,
-        });
-      }
-
-      await loadRegistry(universe);
-      setSelectedMenuCode(targetMenuCode);
-      setNotice(`${page.screen_code} is now published from the available page catalog.`);
-    } catch {
-      setError("That page could not be assigned into the menu tree right now.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function handleToggleSelectedMenuState() {
     if (!selectedMenu) {
       return;
@@ -457,29 +429,6 @@ export default function SAMenuGovernance() {
       );
     } catch {
       setError("Menu state could not be updated right now.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handlePreviewUser() {
-    const target = previewTarget.trim();
-
-    if (!target) {
-      setError("Enter an auth user id before previewing.");
-      return;
-    }
-
-    setSaving(true);
-    setError("");
-    setNotice("");
-
-    try {
-      const data = await previewUser(target);
-      setPreviewResult(data);
-      setNotice(`Preview rebuilt for user ${target}.`);
-    } catch {
-      setError("Preview-as-user could not be generated right now.");
     } finally {
       setSaving(false);
     }
@@ -557,29 +506,140 @@ export default function SAMenuGovernance() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "visible-rows",
-      label: `${universe} Menus`,
-      value: String(registryRows.length),
-      caption: "Registry rows currently visible to the governance surface.",
-      tone: "sky",
-    },
-    {
-      key: "active-rows",
-      label: "Active Rows",
-      value: String(registryRows.filter((item) => item.is_active).length),
-      caption: "Menus currently publishable into snapshot generation.",
-      tone: "emerald",
-    },
-    {
-      key: "group-rows",
-      label: "Groups",
-      value: String(registryRows.filter((item) => item.menu_type === "GROUP").length),
-      caption: "Hierarchy anchors available for steering and projection.",
-      tone: "amber",
-    },
-  ];
+  function getNextAvailableOrder(parentMenuCode = "", excludeMenuCode = "") {
+    const takenOrders = menus
+      .filter((item) => (item.parent_menu_code ?? "") === parentMenuCode)
+      .filter((item) => item.menu_code !== excludeMenuCode)
+      .map((item) => Number(item.tree_display_order ?? item.display_order ?? 0))
+      .filter((value) => Number.isFinite(value));
+
+    if (takenOrders.length === 0) {
+      return 0;
+    }
+
+    return Math.max(...takenOrders) + 1;
+  }
+
+  function openPageEditor(page) {
+    const defaultParent = page.parent_menu_code ?? "";
+    const defaultOrder =
+      page.display_order ?? getNextAvailableOrder(defaultParent, page.registeredMenu?.menu_code ?? "");
+
+    setPageEditor({
+      screen_code: page.screen_code,
+      menu_code: page.registeredMenu?.menu_code ?? page.screen_code,
+      title: page.registeredMenu?.title ?? page.title,
+      resource_code: page.registeredMenu?.resource_code ?? page.screen_code,
+      description: page.registeredMenu?.description ?? "",
+      parent_menu_code: defaultParent,
+      display_order: String(defaultOrder),
+      route_path: page.route_path,
+      is_registered: Boolean(page.registeredMenu),
+      is_active: page.is_active,
+    });
+    setGroupPickerOpen(false);
+
+    window.requestAnimationFrame(() => {
+      pageTitleRef.current?.focus();
+    });
+  }
+
+  async function handleSavePageEditor() {
+    if (!pageEditor) {
+      return;
+    }
+
+    const targetMenuCode = pageEditor.menu_code;
+    const targetParent = pageEditor.parent_menu_code || null;
+    const parsedOrder = Number(pageEditor.display_order || 0);
+
+    if (!Number.isFinite(parsedOrder) || parsedOrder < 0) {
+      setError("Enter a valid order number.");
+      return;
+    }
+
+    const orderConflict = menus.find(
+      (item) =>
+        item.menu_code !== targetMenuCode &&
+        (item.parent_menu_code ?? "") === (targetParent ?? "") &&
+        Number(item.tree_display_order ?? item.display_order ?? 0) === parsedOrder
+    );
+
+    if (orderConflict) {
+      setError(
+        `Order ${parsedOrder} is already used under ${targetParent || "root"} by ${orderConflict.title}.`
+      );
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      if (pageEditor.is_registered) {
+        await updateMenu({
+          menu_code: targetMenuCode,
+          title: pageEditor.title.trim(),
+          description: pageEditor.description.trim() || null,
+          route_path: pageEditor.route_path,
+          display_order: parsedOrder,
+        });
+
+        await updateMenuTree({
+          child_menu_code: targetMenuCode,
+          parent_menu_code: targetParent,
+          display_order: parsedOrder,
+        });
+      } else {
+        await createMenu({
+          menu_code: pageEditor.menu_code,
+          resource_code:
+            pageEditor.resource_code.trim() || pageEditor.menu_code,
+          title: pageEditor.title.trim(),
+          description: pageEditor.description.trim() || null,
+          route_path: pageEditor.route_path,
+          menu_type: "PAGE",
+          universe,
+          display_order: parsedOrder,
+          parent_menu_code: targetParent,
+          tree_display_order: parsedOrder,
+        });
+      }
+
+      await loadRegistry(universe);
+      setGroupPickerOpen(false);
+      setPageEditor(null);
+      setNotice(`${pageEditor.title} has been saved into the menu registry and tree.`);
+    } catch {
+      setError("That page could not be saved right now.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleTogglePageState(page) {
+    if (!page.registeredMenu) {
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      await updateMenuState({
+        menu_code: page.registeredMenu.menu_code,
+        is_active: !page.is_active,
+      });
+      await loadRegistry(universe);
+      setNotice(`${page.title} is now ${page.is_active ? "disabled" : "active"}.`);
+    } catch {
+      setError("Page state could not be updated right now.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <ErpScreenScaffold
@@ -607,12 +667,11 @@ export default function SAMenuGovernance() {
             ]
           : []),
       ]}
-      metrics={metrics}
     >
       <ErpSectionCard
         eyebrow="Universe"
-        title="Govern The Published Menu Registry"
-        description="Switch between SA and ACL registry views. SA uses this surface to prepare the visible universe before ACL users consume it."
+        title="Choose Universe"
+        description="Switch between SA and ACL menu governance."
         aside={
           <div className="flex gap-2">
             {["SA", "ACL"].map((value) => (
@@ -631,46 +690,32 @@ export default function SAMenuGovernance() {
             ))}
           </div>
         }
-      >
-        <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-          <div className="grid gap-2">
-            {registryRows.map((item, index) => {
-              const isSelected = item.menu_code === selectedMenuCode;
+      />
 
-              return (
+      <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+        <ErpSectionCard
+          eyebrow="Groups"
+          title="Group Create & Manage"
+          description="Create menu groups and manage existing group title, order, parent, and active state."
+        >
+          <div className="grid gap-6">
+            <div className="grid gap-3">
+              {groupRows.map((item) => (
                 <button
                   key={item.menu_code}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
                   type="button"
                   onClick={() => setSelectedMenuCode(item.menu_code)}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: rowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
-                  className={`grid w-full grid-cols-[120px_1fr_120px] items-center gap-3 border px-3 py-3 text-left ${
-                    isSelected
+                  className={`grid w-full grid-cols-[1fr_120px] gap-3 border px-3 py-3 text-left ${
+                    item.menu_code === selectedMenuCode
                       ? "border-sky-300 bg-sky-50"
                       : "border-slate-300 bg-white hover:bg-slate-50"
                   }`}
                 >
-                  <div>
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
-                      {item.menu_type}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">{item.menu_code}</div>
-                  </div>
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-slate-900">{item.title}</div>
-                    <div className="mt-1 truncate text-xs text-slate-500">
-                      {buildTreeLabel(item)}
-                    </div>
-                    <div className="mt-1 truncate text-[11px] text-slate-500">
-                      {item.route_path || "Group node"}
+                    <div className="mt-1 text-xs text-slate-500">{item.menu_code}</div>
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      Parent {item.parent_menu_code || "root"} | Order {item.tree_display_order ?? item.display_order ?? 0}
                     </div>
                   </div>
                   <div className="justify-self-end text-right text-xs">
@@ -683,123 +728,23 @@ export default function SAMenuGovernance() {
                     >
                       {item.is_active ? "Active" : "Disabled"}
                     </div>
-                    <div className="mt-2 text-slate-500">
-                      Order {item.tree_display_order ?? item.display_order ?? 0}
-                    </div>
                   </div>
                 </button>
-              );
-            })}
+              ))}
 
-            {!loading && registryRows.length === 0 ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                No menu rows are currently visible for the selected universe.
-              </div>
-            ) : null}
-          </div>
-
-          <div className="grid gap-6">
-            <ErpSectionCard
-              eyebrow="Available Pages"
-              title="Assign Ready-Made Pages"
-              description="Coder-registered pages appear here automatically. SA picks from this catalog and places pages into the menu tree without typing raw routes."
-            >
-              <div className="grid gap-3">
-                <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_220px_140px]">
-                  <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Search Pages</span>
-                    <input
-                      value={catalogSearch}
-                      onChange={(event) => setCatalogSearch(event.target.value)}
-                      className={inputClassName()}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Assign Under</span>
-                    <select
-                      value={catalogParentMenuCode}
-                      onChange={(event) => setCatalogParentMenuCode(event.target.value)}
-                      className={inputClassName()}
-                    >
-                      <option value="">No parent</option>
-                      {parentOptions.map((option) => (
-                        <option key={option.menu_code} value={option.menu_code}>
-                          {option.title} ({option.menu_code})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Display Order</span>
-                    <input
-                      type="number"
-                      value={catalogDisplayOrder}
-                      onChange={(event) => setCatalogDisplayOrder(event.target.value)}
-                      className={inputClassName()}
-                    />
-                  </label>
+              {!loading && groupRows.length === 0 ? (
+                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                  No groups found in this universe.
                 </div>
-
-                <div className="grid gap-2">
-                  {availablePages.map((page) => (
-                    <div
-                      key={page.screen_code}
-                      className="grid gap-3 border border-slate-300 bg-white px-3 py-3 md:grid-cols-[minmax(0,1fr)_140px]"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-slate-900">
-                          {page.title}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          {page.screen_code}
-                        </div>
-                        <div className="mt-1 truncate text-[11px] text-slate-500">
-                          {page.route_path}
-                        </div>
-                        <div className="mt-2 text-[11px] text-slate-500">
-                          {page.registeredMenu
-                            ? `Registered as ${page.registeredMenu.title} under ${page.registeredMenu.parent_menu_code || "root"}`
-                            : "Not yet published in the menu registry"}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-col items-stretch justify-between gap-2">
-                        <div
-                          className={`inline-flex w-fit border px-2 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${
-                            page.registeredMenu
-                              ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                              : "border-amber-300 bg-amber-50 text-amber-700"
-                          }`}
-                        >
-                          {page.registeredMenu ? "Registered" : "Available"}
-                        </div>
-                        <button
-                          type="button"
-                          disabled={saving}
-                          onClick={() => void handleAssignAvailablePage(page)}
-                          className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
-                        >
-                          {page.registeredMenu ? "Reassign In Menu" : "Publish Page"}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-
-                  {availablePages.length === 0 ? (
-                    <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                      No coder-registered pages match the current universe and search filter.
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </ErpSectionCard>
+              ) : null}
+            </div>
 
             <ErpSectionCard
               eyebrow="Selected Menu"
-              title={selectedMenu ? selectedMenu.title : "Choose a menu row"}
-              description="Edit the currently selected menu row, then publish immediately into the current SA session snapshot."
+              title={selectedMenu ? selectedMenu.title : "Choose a group"}
+              description="Edit only the selected group from here."
             >
-              {selectedMenu ? (
+              {selectedMenu && selectedMenu.menu_type === "GROUP" ? (
                 <div className="grid gap-3">
                   <div className="grid gap-2 md:grid-cols-2">
                     <label className="grid gap-1 text-sm text-slate-700">
@@ -816,15 +761,6 @@ export default function SAMenuGovernance() {
                       />
                     </label>
                     <label className="grid gap-1 text-sm text-slate-700">
-                      <span className="font-semibold">Route Path</span>
-                      <input
-                        value={editForm.route_path}
-                        disabled
-                        readOnly
-                        className={inputClassName()}
-                      />
-                    </label>
-                    <label className="grid gap-1 text-sm text-slate-700 md:col-span-2">
                       <span className="font-semibold">Description</span>
                       <textarea
                         value={editForm.description}
@@ -897,7 +833,7 @@ export default function SAMenuGovernance() {
                     <ErpFieldPreview
                       label="Resource Code"
                       value={selectedMenu.resource_code}
-                      caption="ACL identity linked to this menu row."
+                      caption="ACL identity linked to this group."
                     />
                     <ErpFieldPreview
                       label="Parent Binding"
@@ -908,7 +844,7 @@ export default function SAMenuGovernance() {
                 </div>
               ) : (
                 <div className="text-sm text-slate-500">
-                  Select a menu row from the registry to edit its publishing state.
+                  Select a group to edit its settings.
                 </div>
               )}
             </ErpSectionCard>
@@ -1024,54 +960,308 @@ export default function SAMenuGovernance() {
                 </button>
               </div>
             </ErpSectionCard>
+          </div>
+        </ErpSectionCard>
 
-            <ErpSectionCard
-              eyebrow="Preview As User"
-              title="Preview Published Menu"
-              description="Generate a user-facing menu snapshot preview before you continue into ACL rollout."
-            >
-              <div className="grid gap-3">
-                <label className="grid gap-1 text-sm text-slate-700">
-                  <span className="font-semibold">Target Auth User ID</span>
-                  <input
-                    value={previewTarget}
-                    onChange={(event) => setPreviewTarget(event.target.value)}
-                    className={inputClassName()}
-                  />
-                </label>
-                <button
-                  type="button"
-                  disabled={saving}
-                  onClick={() => void handlePreviewUser()}
-                  className="w-fit border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+        <ErpSectionCard
+          eyebrow="Pages"
+          title="All Pages And Status"
+          description="See all pages, their current status, and open per-page assign or reassign settings."
+        >
+          <div className="grid gap-3">
+            <label className="grid gap-1 text-sm text-slate-700">
+              <span className="font-semibold">Search Pages</span>
+              <input
+                value={catalogSearch}
+                onChange={(event) => setCatalogSearch(event.target.value)}
+                className={inputClassName()}
+              />
+            </label>
+
+            <div className="grid gap-2">
+              {availablePages.map((page) => (
+                <div
+                  key={page.screen_code}
+                  className="border border-slate-300 bg-white px-3 py-3"
                 >
-                  Preview User Menu
-                </button>
+                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900">
+                        {page.title}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {page.screen_code}
+                      </div>
+                      <div className="mt-1 truncate text-[11px] text-slate-500">
+                        {page.route_path}
+                      </div>
+                      <div className="mt-2 text-[11px] text-slate-500">
+                        Group {page.parent_menu_code || "not assigned"} | Order {page.display_order ?? "-"}
+                      </div>
+                    </div>
 
-                {previewResult ? (
-                  <div className="grid gap-2">
-                    <ErpFieldPreview
-                      label="Preview Universe"
-                      value={previewResult.universe}
-                      caption="Universe resolved by preview-as-user."
-                    />
-                    <ErpFieldPreview
-                      label="Visible Menu Count"
-                      value={String(previewResult.menu?.length ?? 0)}
-                      caption="Rows currently visible after preview snapshot generation."
-                    />
-                    <div className="border border-slate-200 bg-white px-3 py-3 text-sm text-slate-700">
-                      {(previewResult.menu ?? [])
-                        .map((item) => `${item.title} (${item.menu_code})`)
-                        .join(", ") || "No visible menu rows returned."}
+                    <div className="flex flex-col items-stretch gap-2">
+                      <div className="flex items-center justify-end gap-2">
+                        <div
+                          className={`inline-flex border px-2 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${
+                            page.is_active
+                              ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                              : "border-rose-300 bg-rose-50 text-rose-700"
+                          }`}
+                        >
+                          {page.registeredMenu ? (page.is_active ? "Active" : "Disabled") : "Not In Menu"}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {page.registeredMenu ? (
+                          <button
+                            type="button"
+                            disabled={saving}
+                            onClick={() => void handleTogglePageState(page)}
+                            className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                          >
+                            {page.is_active ? "Disable" : "Enable"}
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          disabled={saving}
+                          onClick={() => openPageEditor(page)}
+                          className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+                        >
+                          {page.registeredMenu ? "Open Settings" : "Add To Registry"}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                ) : null}
+                </div>
+              ))}
+
+              {availablePages.length === 0 ? (
+                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                  No pages match the current filter.
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </ErpSectionCard>
+      </div>
+
+      {pageEditor ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 px-6 py-8">
+          <div className="grid max-h-[88vh] w-full max-w-5xl overflow-hidden border border-slate-300 bg-white shadow-2xl md:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="min-w-0 overflow-y-auto p-6">
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+                    Page Registry
+                  </div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">
+                    {pageEditor.title}
+                  </div>
+                  <div className="mt-1 text-sm text-slate-500">
+                    {pageEditor.screen_code} | {pageEditor.route_path}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGroupPickerOpen(false);
+                    setPageEditor(null);
+                  }}
+                  className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                >
+                  Close
+                </button>
               </div>
-            </ErpSectionCard>
+
+              <div className="mt-4 grid gap-4">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="grid gap-1 text-sm text-slate-700">
+                    <span className="font-semibold">Title</span>
+                    <input
+                      ref={pageTitleRef}
+                      value={pageEditor.title}
+                      onChange={(event) =>
+                        setPageEditor((current) => ({
+                          ...current,
+                          title: event.target.value,
+                        }))
+                      }
+                      className={inputClassName()}
+                    />
+                  </label>
+
+                  <label className="grid gap-1 text-sm text-slate-700">
+                    <span className="font-semibold">Resource Code</span>
+                    <input
+                      value={pageEditor.resource_code}
+                      disabled={pageEditor.is_registered}
+                      onChange={(event) =>
+                        setPageEditor((current) => ({
+                          ...current,
+                          resource_code: event.target.value,
+                        }))
+                      }
+                      className={inputClassName()}
+                    />
+                  </label>
+
+                  <label className="grid gap-1 text-sm text-slate-700 md:col-span-2">
+                    <span className="font-semibold">Description</span>
+                    <textarea
+                      value={pageEditor.description}
+                      onChange={(event) =>
+                        setPageEditor((current) => ({
+                          ...current,
+                          description: event.target.value,
+                        }))
+                      }
+                      rows={3}
+                      className={inputClassName()}
+                    />
+                  </label>
+
+                  <label className="grid gap-1 text-sm text-slate-700">
+                    <span className="font-semibold">Group</span>
+                    <button
+                      type="button"
+                      onClick={() => setGroupPickerOpen((current) => !current)}
+                      className="border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-900"
+                    >
+                      {pageEditor.parent_menu_code || "Choose group"}
+                    </button>
+                  </label>
+
+                  <label className="grid gap-1 text-sm text-slate-700">
+                    <span className="font-semibold">Order</span>
+                    <input
+                      type="number"
+                      value={pageEditor.display_order}
+                      onChange={(event) =>
+                        setPageEditor((current) => ({
+                          ...current,
+                          display_order: event.target.value,
+                        }))
+                      }
+                      className={inputClassName()}
+                    />
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void handleSavePageEditor()}
+                    className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => {
+                      setGroupPickerOpen(false);
+                      setPageEditor(null);
+                    }}
+                    className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <aside className="border-l border-slate-200 bg-[#eef4fb]">
+              <div className="border-b border-slate-200 px-4 py-4">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+                  Group Drawer
+                </div>
+                <div className="mt-1 text-sm text-slate-600">
+                  {groupPickerOpen
+                    ? "Arrow keys and Enter দিয়ে group select করো."
+                    : "Group field থেকে drawer open করো."}
+                </div>
+              </div>
+
+              <div className="max-h-[72vh] overflow-y-auto px-3 py-3">
+                {groupPickerOpen ? (
+                  <div className="grid gap-2">
+                    {groupRows.map((group, index) => (
+                      <button
+                        key={group.menu_code}
+                        ref={(element) => {
+                          groupPickerRefs.current[index] = element;
+                        }}
+                        type="button"
+                        onClick={() => {
+                          setPageEditor((current) => ({
+                            ...current,
+                            parent_menu_code: group.menu_code,
+                            display_order: String(
+                              getNextAvailableOrder(
+                                group.menu_code,
+                                pageEditor.menu_code
+                              )
+                            ),
+                          }));
+                          setGroupPickerOpen(false);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "ArrowDown") {
+                            event.preventDefault();
+                            handleLinearNavigation(event, {
+                              index,
+                              refs: groupPickerRefs.current,
+                              orientation: "vertical",
+                            });
+                          }
+
+                          if (event.key === "ArrowUp") {
+                            event.preventDefault();
+                            handleLinearNavigation(event, {
+                              index,
+                              refs: groupPickerRefs.current,
+                              orientation: "vertical",
+                            });
+                          }
+
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            event.currentTarget.click();
+                          }
+
+                          if (event.key === "Escape" || event.key === "ArrowLeft") {
+                            event.preventDefault();
+                            setGroupPickerOpen(false);
+                            pageTitleRef.current?.focus();
+                          }
+                        }}
+                        className={`border px-3 py-2 text-left text-sm ${
+                          pageEditor.parent_menu_code === group.menu_code
+                            ? "border-sky-300 bg-sky-50 text-sky-900"
+                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        <div className="font-semibold">{group.title}</div>
+                        <div className="mt-1 text-[11px] text-slate-500">
+                          {group.menu_code}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-500">
+                    Drawer closed.
+                  </div>
+                )}
+              </div>
+            </aside>
           </div>
         </div>
-      </ErpSectionCard>
+      ) : null}
     </ErpScreenScaffold>
   );
 }
