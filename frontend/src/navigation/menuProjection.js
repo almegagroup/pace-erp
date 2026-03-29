@@ -56,6 +56,24 @@ export function buildMenuTree(menu) {
   return walk("__ROOT__");
 }
 
+export function getSidebarRoots(tree) {
+  const roots = Array.isArray(tree) ? tree : [];
+
+  if (
+    roots.length === 1 &&
+    roots[0]?.item?.menu_type === "GROUP" &&
+    !roots[0]?.item?.route_path
+  ) {
+    const rootCode = String(roots[0].item.menu_code ?? "");
+
+    if (rootCode.endsWith("_ROOT")) {
+      return roots[0].children ?? [];
+    }
+  }
+
+  return roots;
+}
+
 export function flattenRouteableMenu(tree) {
   const pages = [];
 
@@ -73,18 +91,6 @@ export function flattenRouteableMenu(tree) {
 
   visit(tree);
   return pages;
-}
-
-export function branchContainsRoute(node, routePath) {
-  if (!node) {
-    return false;
-  }
-
-  if (node.item?.route_path === routePath) {
-    return true;
-  }
-
-  return (node.children ?? []).some((child) => branchContainsRoute(child, routePath));
 }
 
 export function getAncestorMenuCodes(tree, routePath) {
@@ -113,60 +119,8 @@ export function getAncestorMenuCodes(tree, routePath) {
   return ancestors;
 }
 
-export function flattenDrawerEntries(tree, expandedMenuCodes = new Set()) {
-  const entries = [];
-
-  function visit(nodes, depth = 0) {
-    for (const node of nodes) {
-      const hasChildren = (node.children ?? []).length > 0;
-      const isExpanded = expandedMenuCodes.has(node.item.menu_code);
-
-      if (hasChildren) {
-        entries.push({
-          key: node.item.menu_code,
-          kind: "drawer",
-          item: node.item,
-          depth,
-          children: node.children,
-          isExpanded,
-        });
-
-        if (isExpanded) {
-          if (node.item.route_path) {
-            entries.push({
-              key: `${node.item.menu_code}__page`,
-              kind: "page",
-              item: {
-                ...node.item,
-                title: `Open ${node.item.title}`,
-              },
-              depth: depth + 1,
-            });
-          }
-
-          visit(node.children, depth + 1);
-        }
-
-        continue;
-      }
-
-      if (node.item.route_path) {
-        entries.push({
-          key: node.item.menu_code,
-          kind: "page",
-          item: node.item,
-          depth,
-        });
-      }
-    }
-  }
-
-  visit(tree);
-  return entries;
-}
-
 export function getTopLevelRoutePages(tree) {
-  return (Array.isArray(tree) ? tree : [])
+  return getSidebarRoots(tree)
     .map((node) => node?.item)
     .filter((item) => item?.route_path);
 }

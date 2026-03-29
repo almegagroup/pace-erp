@@ -13,6 +13,7 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { SCREEN_REGISTRY } from "../../../navigation/screenRegistry.js";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
@@ -152,6 +153,29 @@ function buildTreeLabel(item) {
   return `${parent}${item.title} (${item.menu_code})`;
 }
 
+function formatScreenTitle(screenCode) {
+  return String(screenCode ?? "")
+    .replace(/^(SA|GA|ACL|DASHBOARD)_/i, "")
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0) + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function resolveGovernanceUniverse(screen) {
+  const route = String(screen?.route ?? "");
+
+  if (route.startsWith("/sa") || route.startsWith("/ga")) {
+    return "SA";
+  }
+
+  if (route.startsWith("/dashboard")) {
+    return "ACL";
+  }
+
+  return null;
+}
+
 export default function SAMenuGovernance() {
   const topActionRefs = useRef([]);
   const rowRefs = useRef([]);
@@ -165,13 +189,15 @@ export default function SAMenuGovernance() {
   const [selectedMenuCode, setSelectedMenuCode] = useState("");
   const [previewTarget, setPreviewTarget] = useState("");
   const [previewResult, setPreviewResult] = useState(null);
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [catalogParentMenuCode, setCatalogParentMenuCode] = useState("");
+  const [catalogDisplayOrder, setCatalogDisplayOrder] = useState("0");
   const [createForm, setCreateForm] = useState({
     menu_code: "",
     resource_code: "",
     title: "",
     description: "",
-    route_path: "",
-    menu_type: "PAGE",
+    menu_type: "GROUP",
     parent_menu_code: "",
     display_order: "0",
   });
@@ -251,6 +277,38 @@ export default function SAMenuGovernance() {
     [menus, universe]
   );
 
+  const availablePages = useMemo(() => {
+    const searchTerm = catalogSearch.trim().toLowerCase();
+
+    return Object.values(SCREEN_REGISTRY)
+      .filter((screen) => resolveGovernanceUniverse(screen) === universe)
+      .filter((screen) => screen.publishableInMenu !== false)
+      .filter((screen) => Boolean(screen?.screen_code) && Boolean(screen?.route))
+      .map((screen) => {
+        const registeredMenu =
+          menus.find((item) => item.menu_code === screen.screen_code) ??
+          menus.find((item) => item.route_path === screen.route) ??
+          null;
+
+        return {
+          screen_code: screen.screen_code,
+          title: formatScreenTitle(screen.screen_code),
+          route_path: screen.route,
+          registeredMenu,
+        };
+      })
+      .filter((page) => {
+        if (!searchTerm) {
+          return true;
+        }
+
+        return [page.screen_code, page.title, page.route_path]
+          .filter(Boolean)
+          .some((value) => value.toLowerCase().includes(searchTerm));
+      })
+      .sort((left, right) => left.title.localeCompare(right.title));
+  }, [catalogSearch, menus, universe]);
+
   async function handleCreateMenu() {
     const payload = {
       menu_code: createForm.menu_code.trim().toUpperCase(),
@@ -258,9 +316,8 @@ export default function SAMenuGovernance() {
         (createForm.resource_code.trim() || createForm.menu_code.trim()).toUpperCase(),
       title: createForm.title.trim(),
       description: createForm.description.trim() || null,
-      route_path:
-        createForm.menu_type === "GROUP" ? null : createForm.route_path.trim() || null,
-      menu_type: createForm.menu_type,
+      route_path: null,
+      menu_type: "GROUP",
       universe,
       display_order: Number(createForm.display_order || 0),
       parent_menu_code: createForm.parent_menu_code || null,
@@ -286,7 +343,6 @@ export default function SAMenuGovernance() {
         resource_code: "",
         title: "",
         description: "",
-        route_path: "",
       }));
       setNotice(`Menu ${payload.menu_code} created and published to the current SA session snapshot.`);
       createCodeRef.current?.focus();
@@ -311,10 +367,7 @@ export default function SAMenuGovernance() {
         menu_code: selectedMenu.menu_code,
         title: editForm.title.trim(),
         description: editForm.description.trim() || null,
-        route_path:
-          selectedMenu.menu_type === "GROUP"
-            ? null
-            : editForm.route_path.trim() || null,
+        route_path: selectedMenu.route_path ?? null,
         display_order: Number(editForm.display_order || 0),
       });
 
@@ -328,6 +381,56 @@ export default function SAMenuGovernance() {
       setNotice(`Menu ${selectedMenu.menu_code} updated and republished.`);
     } catch {
       setError("Selected menu could not be updated right now.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleAssignAvailablePage(page) {
+    const targetMenuCode = page.registeredMenu?.menu_code ?? page.screen_code;
+    const targetOrder = Number(
+      catalogDisplayOrder || page.registeredMenu?.tree_display_order || page.registeredMenu?.display_order || 0
+    );
+
+    setSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      if (page.registeredMenu) {
+        await updateMenu({
+          menu_code: targetMenuCode,
+          title: page.registeredMenu.title ?? page.title,
+          description: page.registeredMenu.description ?? null,
+          route_path: page.route_path,
+          display_order: Number(page.registeredMenu.display_order ?? targetOrder),
+        });
+
+        await updateMenuTree({
+          child_menu_code: targetMenuCode,
+          parent_menu_code: catalogParentMenuCode || page.registeredMenu.parent_menu_code || null,
+          display_order: targetOrder,
+        });
+      } else {
+        await createMenu({
+          menu_code: page.screen_code,
+          resource_code: page.screen_code,
+          title: page.title,
+          description: null,
+          route_path: page.route_path,
+          menu_type: "PAGE",
+          universe,
+          display_order: targetOrder,
+          parent_menu_code: catalogParentMenuCode || null,
+          tree_display_order: targetOrder,
+        });
+      }
+
+      await loadRegistry(universe);
+      setSelectedMenuCode(targetMenuCode);
+      setNotice(`${page.screen_code} is now published from the available page catalog.`);
+    } catch {
+      setError("That page could not be assigned into the menu tree right now.");
     } finally {
       setSaving(false);
     }
@@ -597,6 +700,101 @@ export default function SAMenuGovernance() {
 
           <div className="grid gap-6">
             <ErpSectionCard
+              eyebrow="Available Pages"
+              title="Assign Ready-Made Pages"
+              description="Coder-registered pages appear here automatically. SA picks from this catalog and places pages into the menu tree without typing raw routes."
+            >
+              <div className="grid gap-3">
+                <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_220px_140px]">
+                  <label className="grid gap-1 text-sm text-slate-700">
+                    <span className="font-semibold">Search Pages</span>
+                    <input
+                      value={catalogSearch}
+                      onChange={(event) => setCatalogSearch(event.target.value)}
+                      className={inputClassName()}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm text-slate-700">
+                    <span className="font-semibold">Assign Under</span>
+                    <select
+                      value={catalogParentMenuCode}
+                      onChange={(event) => setCatalogParentMenuCode(event.target.value)}
+                      className={inputClassName()}
+                    >
+                      <option value="">No parent</option>
+                      {parentOptions.map((option) => (
+                        <option key={option.menu_code} value={option.menu_code}>
+                          {option.title} ({option.menu_code})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-sm text-slate-700">
+                    <span className="font-semibold">Display Order</span>
+                    <input
+                      type="number"
+                      value={catalogDisplayOrder}
+                      onChange={(event) => setCatalogDisplayOrder(event.target.value)}
+                      className={inputClassName()}
+                    />
+                  </label>
+                </div>
+
+                <div className="grid gap-2">
+                  {availablePages.map((page) => (
+                    <div
+                      key={page.screen_code}
+                      className="grid gap-3 border border-slate-300 bg-white px-3 py-3 md:grid-cols-[minmax(0,1fr)_140px]"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-slate-900">
+                          {page.title}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {page.screen_code}
+                        </div>
+                        <div className="mt-1 truncate text-[11px] text-slate-500">
+                          {page.route_path}
+                        </div>
+                        <div className="mt-2 text-[11px] text-slate-500">
+                          {page.registeredMenu
+                            ? `Registered as ${page.registeredMenu.title} under ${page.registeredMenu.parent_menu_code || "root"}`
+                            : "Not yet published in the menu registry"}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col items-stretch justify-between gap-2">
+                        <div
+                          className={`inline-flex w-fit border px-2 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${
+                            page.registeredMenu
+                              ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                              : "border-amber-300 bg-amber-50 text-amber-700"
+                          }`}
+                        >
+                          {page.registeredMenu ? "Registered" : "Available"}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={saving}
+                          onClick={() => void handleAssignAvailablePage(page)}
+                          className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+                        >
+                          {page.registeredMenu ? "Reassign In Menu" : "Publish Page"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {availablePages.length === 0 ? (
+                    <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                      No coder-registered pages match the current universe and search filter.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </ErpSectionCard>
+
+            <ErpSectionCard
               eyebrow="Selected Menu"
               title={selectedMenu ? selectedMenu.title : "Choose a menu row"}
               description="Edit the currently selected menu row, then publish immediately into the current SA session snapshot."
@@ -621,13 +819,8 @@ export default function SAMenuGovernance() {
                       <span className="font-semibold">Route Path</span>
                       <input
                         value={editForm.route_path}
-                        disabled={selectedMenu.menu_type === "GROUP"}
-                        onChange={(event) =>
-                          setEditForm((current) => ({
-                            ...current,
-                            route_path: event.target.value,
-                          }))
-                        }
+                        disabled
+                        readOnly
                         className={inputClassName()}
                       />
                     </label>
@@ -721,9 +914,9 @@ export default function SAMenuGovernance() {
             </ErpSectionCard>
 
             <ErpSectionCard
-              eyebrow="Create Menu"
-              title="Add New Menu Row"
-              description="Create a new menu registry row and place it under the selected universe tree without touching SQL."
+              eyebrow="Create Group"
+              title="Add Group Or Anchor"
+              description="Create hierarchy groups and custom anchors here. Coder-made pages should be published from the Available Pages catalog above."
             >
               <div className="grid gap-3">
                 <div className="grid gap-2 md:grid-cols-2">
@@ -778,36 +971,6 @@ export default function SAMenuGovernance() {
                         }))
                       }
                       rows={3}
-                      className={inputClassName()}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Menu Type</span>
-                    <select
-                      value={createForm.menu_type}
-                      onChange={(event) =>
-                        setCreateForm((current) => ({
-                          ...current,
-                          menu_type: event.target.value,
-                        }))
-                      }
-                      className={inputClassName()}
-                    >
-                      <option value="PAGE">PAGE</option>
-                      <option value="GROUP">GROUP</option>
-                    </select>
-                  </label>
-                  <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Route Path</span>
-                    <input
-                      value={createForm.route_path}
-                      disabled={createForm.menu_type === "GROUP"}
-                      onChange={(event) =>
-                        setCreateForm((current) => ({
-                          ...current,
-                          route_path: event.target.value,
-                        }))
-                      }
                       className={inputClassName()}
                     />
                   </label>

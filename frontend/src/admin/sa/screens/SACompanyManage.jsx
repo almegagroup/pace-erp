@@ -173,17 +173,6 @@ export default function SACompanyManage() {
       },
       order: 30,
     },
-    {
-      id: "sa-company-manage-org-bootstrap",
-      group: "Current Screen",
-      label: "Open organization bootstrap",
-      keywords: ["bootstrap", "org", "company"],
-      perform: () => {
-        openScreen("SA_ORG_BOOTSTRAP", { mode: "replace" });
-        navigate("/sa/org-bootstrap");
-      },
-      order: 40,
-    },
   ]);
 
   async function handleStateChange(company, nextStatus) {
@@ -254,21 +243,6 @@ export default function SACompanyManage() {
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 1,
-          refs: actionRefs.current,
-          orientation: "horizontal",
-        }),
-    },
-    {
-      key: "bootstrap",
-      label: "Org Bootstrap",
-      tone: "neutral",
-      buttonRef: (element) => {
-        actionRefs.current[2] = element;
-      },
-      onClick: () => openRoute("/sa/org-bootstrap"),
-      onKeyDown: (event) =>
-        handleLinearNavigation(event, {
-          index: 2,
           refs: actionRefs.current,
           orientation: "horizontal",
         }),

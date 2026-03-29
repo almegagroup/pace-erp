@@ -13,9 +13,9 @@ import { Outlet, useLocation } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import {
   buildMenuTree,
-  flattenDrawerEntries,
   flattenRouteableMenu,
   getAncestorMenuCodes,
+  getSidebarRoots,
 } from "../navigation/menuProjection.js";
 import {
   getScreenForRoute,
@@ -128,6 +128,52 @@ function zoneBorder(activeZone, zone) {
   return activeZone === zone ? "border-sky-500" : "border-slate-300";
 }
 
+function findMenuNodeByCode(nodes, menuCode) {
+  for (const node of nodes) {
+    if (node.item?.menu_code === menuCode) {
+      return node;
+    }
+
+    if (node.children?.length) {
+      const match = findMenuNodeByCode(node.children, menuCode);
+
+      if (match) {
+        return match;
+      }
+    }
+  }
+
+  return null;
+}
+
+function resolveDrawerTrail(nodes, drawerPath) {
+  const trail = [];
+  let branch = Array.isArray(nodes) ? nodes : [];
+
+  for (const menuCode of drawerPath) {
+    const match = branch.find((node) => node.item?.menu_code === menuCode) ?? null;
+
+    if (!match) {
+      break;
+    }
+
+    trail.push(match);
+    branch = match.children ?? [];
+  }
+
+  return trail;
+}
+
+function resolveTopLevelIndex(nodes, routePath) {
+  return nodes.findIndex((node) => {
+    if (node.item?.route_path === routePath) {
+      return true;
+    }
+
+    return getAncestorMenuCodes([node], routePath).length > 0;
+  });
+}
+
 export default function MenuShell() {
   const location = useLocation();
   const { menu, loading, shellProfile } = useMenu();
@@ -136,7 +182,8 @@ export default function MenuShell() {
   const [actionRailCollapsed, setActionRailCollapsed] = useState(false);
   const [activeZone, setActiveZone] = useState("content");
   const [menuFocusIndex, setMenuFocusIndex] = useState(0);
-  const [expandedMenuCodes, setExpandedMenuCodes] = useState(() => new Set());
+  const [drawerPath, setDrawerPath] = useState([]);
+  const [drawerFocusIndex, setDrawerFocusIndex] = useState(0);
   const [clusterAdmission, setClusterAdmission] = useState(() =>
     getClusterAdmission()
   );
@@ -145,34 +192,44 @@ export default function MenuShell() {
   const [screenHotkeyRegistry, setScreenHotkeyRegistry] = useState(() => new Map());
 
   const menuButtonRefs = useRef([]);
+  const drawerButtonRefs = useRef([]);
   const actionButtonRefs = useRef([]);
   const contentRegionRef = useRef(null);
   const stackDepth = getStackDepth();
 
   const navigationTree = useMemo(() => buildMenuTree(menu), [menu]);
-  const navigationMenu = useMemo(
-    () => flattenDrawerEntries(navigationTree, expandedMenuCodes),
-    [navigationTree, expandedMenuCodes]
+  const sidebarRoots = useMemo(
+    () => getSidebarRoots(navigationTree),
+    [navigationTree]
   );
-  const menuIndexByCode = useMemo(
-    () => new Map(navigationMenu.map((entry, index) => [entry.key, index])),
-    [navigationMenu]
+  const navigationMenu = useMemo(
+    () => flattenRouteableMenu(navigationTree),
+    [navigationTree]
   );
 
   const activeMenuIndex = useMemo(
-    () =>
-      navigationMenu.findIndex(
-        (entry) => entry.kind === "page" && entry.item.route_path === location.pathname
-      ),
-    [location.pathname, navigationMenu]
+    () => resolveTopLevelIndex(sidebarRoots, location.pathname),
+    [location.pathname, sidebarRoots]
   );
 
   const resolvedMenuFocusIndex =
-    menuFocusIndex >= 0 && menuFocusIndex < navigationMenu.length
+    menuFocusIndex >= 0 && menuFocusIndex < sidebarRoots.length
       ? menuFocusIndex
       : activeMenuIndex >= 0
         ? activeMenuIndex
         : 0;
+  const drawerTrail = useMemo(
+    () => resolveDrawerTrail(sidebarRoots, drawerPath),
+    [drawerPath, sidebarRoots]
+  );
+  const activeDrawerNode = drawerTrail[drawerTrail.length - 1] ?? null;
+  const drawerEntries = activeDrawerNode?.children ?? [];
+  const drawerVisible =
+    !workspaceMode && drawerTrail.length > 0 && drawerEntries.length > 0;
+  const resolvedDrawerFocusIndex =
+    drawerFocusIndex >= 0 && drawerFocusIndex < drawerEntries.length
+      ? drawerFocusIndex
+      : 0;
 
   const activeTitle = useMemo(() => {
     const menuMatch = menu.find((item) => item.route_path === location.pathname);
@@ -274,26 +331,9 @@ export default function MenuShell() {
   }, [workspaceMode]);
 
   useEffect(() => {
-    const requiredOpenCodes = getAncestorMenuCodes(navigationTree, location.pathname);
-
-    if (requiredOpenCodes.length === 0) {
-      return;
-    }
-
-    setExpandedMenuCodes((current) => {
-      const next = new Set(current);
-      let changed = false;
-
-      for (const code of requiredOpenCodes) {
-        if (!next.has(code)) {
-          next.add(code);
-          changed = true;
-        }
-      }
-
-      return changed ? next : current;
-    });
-  }, [location.pathname, navigationTree]);
+    setDrawerPath(getAncestorMenuCodes(sidebarRoots, location.pathname));
+    setDrawerFocusIndex(0);
+  }, [location.pathname, sidebarRoots]);
 
   useEffect(() => {
     if (!clusterWindowMessage) {
@@ -393,18 +433,42 @@ export default function MenuShell() {
     openRoute(routePath);
   }
 
-  function toggleDrawer(menuCode) {
-    setExpandedMenuCodes((current) => {
-      const next = new Set(current);
+  function handleSidebarSelection(node) {
+    if (!node) {
+      return;
+    }
 
-      if (next.has(menuCode)) {
-        next.delete(menuCode);
-      } else {
-        next.add(menuCode);
-      }
+    if (node.children?.length) {
+      setDrawerPath([node.item.menu_code]);
+      setDrawerFocusIndex(0);
+      return;
+    }
 
-      return next;
-    });
+    if (node.item?.route_path) {
+      setDrawerPath([]);
+      handleMenuRoute(node.item.route_path);
+    }
+  }
+
+  function handleDrawerSelection(node) {
+    if (!node) {
+      return;
+    }
+
+    if (node.children?.length) {
+      setDrawerPath((current) => [...current, node.item.menu_code]);
+      setDrawerFocusIndex(0);
+      return;
+    }
+
+    if (node.item?.route_path) {
+      handleMenuRoute(node.item.route_path);
+    }
+  }
+
+  function handleDrawerBack() {
+    setDrawerPath((current) => current.slice(0, -1));
+    setDrawerFocusIndex(0);
   }
 
   async function handleLogout() {
@@ -493,50 +557,82 @@ export default function MenuShell() {
   }, []);
 
   function handleMenuKeyDown(event, index) {
-    if (navigationMenu.length === 0) {
+    if (sidebarRoots.length === 0) {
       return;
     }
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      const nextIndex = (index + 1) % navigationMenu.length;
+      const nextIndex = (index + 1) % sidebarRoots.length;
       setMenuFocusIndex(nextIndex);
       moveFocus(menuButtonRefs.current, nextIndex);
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      const nextIndex = (index - 1 + navigationMenu.length) % navigationMenu.length;
+      const nextIndex = (index - 1 + sidebarRoots.length) % sidebarRoots.length;
       setMenuFocusIndex(nextIndex);
       moveFocus(menuButtonRefs.current, nextIndex);
     }
 
     if (event.key === "Enter" || event.key === "ArrowRight") {
-      const entry = navigationMenu[index];
+      const entry = sidebarRoots[index];
 
       if (!entry) {
         return;
       }
 
-      if (entry.kind === "drawer") {
-        event.preventDefault();
-        toggleDrawer(entry.item.menu_code);
-        return;
-      }
-
-      if (entry.kind === "page" && entry.item.route_path) {
-        event.preventDefault();
-        handleMenuRoute(entry.item.route_path);
-      }
+      event.preventDefault();
+      handleSidebarSelection(entry);
     }
 
     if (event.key === "ArrowLeft") {
-      const entry = navigationMenu[index];
-
-      if (entry?.kind === "drawer" && entry.isExpanded) {
+      if (drawerPath.length > 0) {
         event.preventDefault();
-        toggleDrawer(entry.item.menu_code);
+        setDrawerPath([]);
       }
+    }
+  }
+
+  function handleDrawerKeyDown(event, index) {
+    if (drawerEntries.length === 0) {
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const nextIndex = (index + 1) % drawerEntries.length;
+      setDrawerFocusIndex(nextIndex);
+      moveFocus(drawerButtonRefs.current, nextIndex);
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      const nextIndex = (index - 1 + drawerEntries.length) % drawerEntries.length;
+      setDrawerFocusIndex(nextIndex);
+      moveFocus(drawerButtonRefs.current, nextIndex);
+    }
+
+    if (event.key === "Enter" || event.key === "ArrowRight") {
+      event.preventDefault();
+      handleDrawerSelection(drawerEntries[index]);
+    }
+
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+
+      if (drawerPath.length > 1) {
+        handleDrawerBack();
+        return;
+      }
+
+      setDrawerPath([]);
+      window.requestAnimationFrame(() => {
+        const target =
+          menuButtonRefs.current[activeMenuIndex >= 0 ? activeMenuIndex : 0] ??
+          menuButtonRefs.current[0];
+        focusElement(target);
+      });
     }
   }
 
@@ -664,7 +760,7 @@ export default function MenuShell() {
     },
   ];
 
-  const menuCommands = menu
+  const menuCommands = navigationMenu
     .filter((item) => item.route_path)
     .map((item, index) => ({
       id: `menu-${item.menu_code}`,
@@ -771,12 +867,12 @@ export default function MenuShell() {
           ) : (
             <nav>
               <ul className="space-y-1">
-                {navigationMenu.map((entry, index) => {
-                  const isDrawer = entry.kind === "drawer";
-                  const isActive = entry.item.route_path === location.pathname;
+                {sidebarRoots.map((node, index) => {
+                  const hasChildren = node.children?.length > 0;
+                  const isActive = index === activeMenuIndex;
 
                   return (
-                    <li key={entry.key}>
+                    <li key={node.item.menu_code}>
                       <button
                         ref={(element) => {
                           menuButtonRefs.current[index] = element;
@@ -787,17 +883,8 @@ export default function MenuShell() {
                           setMenuFocusIndex(index);
                         }}
                         onKeyDown={(event) => handleMenuKeyDown(event, index)}
-                        onClick={() => {
-                          if (isDrawer) {
-                            toggleDrawer(entry.item.menu_code);
-                            return;
-                          }
-
-                          if (entry.item.route_path) {
-                            handleMenuRoute(entry.item.route_path);
-                          }
-                        }}
-                        aria-current={!isDrawer && isActive ? "page" : undefined}
+                        onClick={() => handleSidebarSelection(node)}
+                        aria-current={!hasChildren && isActive ? "page" : undefined}
                         className={`grid w-full items-center gap-2 border px-2 py-2 text-left text-sm ${
                           collapsed ? "grid-cols-1 justify-items-center" : "grid-cols-[32px_minmax(0,1fr)_20px]"
                         } ${
@@ -805,15 +892,14 @@ export default function MenuShell() {
                             ? "border-sky-400 bg-sky-50 font-semibold text-sky-900"
                             : "border-transparent bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
                         }`}
-                        style={collapsed ? undefined : { paddingLeft: `${entry.depth * 14 + 8}px` }}
                       >
                         <span className="font-mono text-[11px] text-slate-500">
                           {(index + 1).toString().padStart(2, "0")}
                         </span>
-                        {!collapsed ? <span className="truncate">{entry.item.title}</span> : null}
+                        {!collapsed ? <span className="truncate">{node.item.title}</span> : null}
                         {!collapsed ? (
                           <span className="justify-self-end text-[11px] text-slate-400">
-                            {isDrawer ? (entry.isExpanded ? "-" : "+") : ""}
+                            {hasChildren ? "+" : ""}
                           </span>
                         ) : null}
                       </button>
@@ -836,6 +922,71 @@ export default function MenuShell() {
           )}
         </div>
       </aside>
+
+      {drawerVisible ? (
+        <aside
+          aria-label="Menu drawer"
+          className="flex w-[280px] shrink-0 flex-col border-r border-slate-300 bg-[#eef4fb]"
+        >
+          <div className="border-b bg-white px-3 py-3">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+              Menu Drawer
+            </div>
+            <div className="mt-1 text-sm font-semibold text-slate-900">
+              {drawerTrail.map((node) => node.item.title).join(" / ")}
+            </div>
+            <button
+              type="button"
+              onClick={handleDrawerBack}
+              className="mt-2 border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700"
+            >
+              Left Back
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-3 py-3">
+            <nav>
+              <ul className="space-y-2">
+                {drawerEntries.map((node, index) => {
+                  const hasChildren = node.children?.length > 0;
+                  const isActive = node.item.route_path === location.pathname;
+
+                  return (
+                    <li key={node.item.menu_code}>
+                      <button
+                        ref={(element) => {
+                          drawerButtonRefs.current[index] = element;
+                        }}
+                        type="button"
+                        onFocus={() => {
+                          setActiveZone("menu");
+                          setDrawerFocusIndex(index);
+                        }}
+                        onKeyDown={(event) => handleDrawerKeyDown(event, index)}
+                        onClick={() => handleDrawerSelection(node)}
+                        aria-current={!hasChildren && isActive ? "page" : undefined}
+                        className={`grid w-full grid-cols-[32px_minmax(0,1fr)_20px] items-center gap-2 border px-2 py-2 text-left text-sm ${
+                          isActive
+                            ? "border-sky-400 bg-sky-50 font-semibold text-sky-900"
+                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        <span className="font-mono text-[11px] text-slate-500">
+                          {(index + 1).toString().padStart(2, "0")}
+                        </span>
+                        <span className="truncate">{node.item.title}</span>
+                        <span className="justify-self-end text-[11px] text-slate-400">
+                          {hasChildren ? "+" : ""}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
+          </div>
+        </aside>
+      ) : null}
 
       <main className={`flex min-w-0 flex-1 flex-col border-r bg-white ${zoneBorder(activeZone, "content")}`}>
         <header className="border-b bg-[#1c5aa6] px-4 py-2 text-white">

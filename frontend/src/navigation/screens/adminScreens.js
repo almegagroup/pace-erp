@@ -40,6 +40,7 @@ export const ADMIN_SCREENS = Object.freeze({
     universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
+    publishableInMenu: false,
   },
 
   SA_USERS: {
