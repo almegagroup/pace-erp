@@ -142,13 +142,39 @@ export default function MenuShell() {
   const contentRegionRef = useRef(null);
   const stackDepth = getStackDepth();
 
+  const rootGroupCodes = useMemo(
+    () =>
+      new Set(
+        menu
+          .filter((item) => item.menu_type === "GROUP" && !item.parent_menu_code)
+          .map((item) => item.menu_code)
+      ),
+    [menu]
+  );
+
+  const navigationMenu = useMemo(
+    () =>
+      menu.filter((item) => {
+        if (item.menu_type === "GROUP") {
+          return rootGroupCodes.has(item.menu_code);
+        }
+
+        if (!item.route_path) {
+          return false;
+        }
+
+        return !item.parent_menu_code || rootGroupCodes.has(item.parent_menu_code);
+      }),
+    [menu, rootGroupCodes]
+  );
+
   const activeMenuIndex = useMemo(
-    () => menu.findIndex((item) => item.route_path === location.pathname),
-    [location.pathname, menu]
+    () => navigationMenu.findIndex((item) => item.route_path === location.pathname),
+    [location.pathname, navigationMenu]
   );
 
   const resolvedMenuFocusIndex =
-    menuFocusIndex >= 0 && menuFocusIndex < menu.length
+    menuFocusIndex >= 0 && menuFocusIndex < navigationMenu.length
       ? menuFocusIndex
       : activeMenuIndex >= 0
         ? activeMenuIndex
@@ -437,16 +463,20 @@ export default function MenuShell() {
   }, []);
 
   function handleMenuKeyDown(event, index) {
+    if (navigationMenu.length === 0) {
+      return;
+    }
+
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      const nextIndex = (index + 1) % menu.length;
+      const nextIndex = (index + 1) % navigationMenu.length;
       setMenuFocusIndex(nextIndex);
       moveFocus(menuButtonRefs.current, nextIndex);
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      const nextIndex = (index - 1 + menu.length) % menu.length;
+      const nextIndex = (index - 1 + navigationMenu.length) % navigationMenu.length;
       setMenuFocusIndex(nextIndex);
       moveFocus(menuButtonRefs.current, nextIndex);
     }
@@ -683,7 +713,7 @@ export default function MenuShell() {
           ) : (
             <nav>
               <ul className="space-y-1">
-                {menu.map((item, index) => {
+                {navigationMenu.map((item, index) => {
                   const isActive = location.pathname === item.route_path;
 
                   return (

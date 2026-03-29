@@ -235,6 +235,73 @@ interface MenuAdminCtx {
   context: ContextResolution;
   auth_user_id: string;
   request_id: string;
+  session_id?: string;
+}
+
+async function refreshAdminSessionMenuSnapshot(
+  ctx: MenuAdminCtx
+): Promise<{ ok: boolean; reason?: string }> {
+  if (!ctx.session_id) {
+    return { ok: false, reason: "SESSION_ID_MISSING" };
+  }
+
+  const db = getServiceRoleClientWithContext(ctx.context);
+
+  const { error: snapshotError } = await db
+    .schema("erp_menu")
+    .rpc("generate_menu_snapshot", {
+      p_user_id: ctx.auth_user_id,
+      p_company_id: null,
+      p_universe: "SA",
+    });
+
+  if (snapshotError) {
+    console.error("ADMIN_MENU_SNAPSHOT_REBUILD_FAILED", snapshotError);
+    return { ok: false, reason: "SNAPSHOT_REBUILD_FAILED" };
+  }
+
+  const { data: menuRows, error: menuReadError } = await db
+    .schema("erp_menu")
+    .from("menu_snapshot")
+    .select("*")
+    .eq("user_id", ctx.auth_user_id)
+    .eq("universe", "SA")
+    .eq("is_visible", true)
+    .order("display_order", { ascending: true });
+
+  if (menuReadError) {
+    console.error("ADMIN_MENU_SNAPSHOT_READ_FAILED", menuReadError);
+    return { ok: false, reason: "SNAPSHOT_READ_FAILED" };
+  }
+
+  if (!menuRows || menuRows.length === 0) {
+    return { ok: false, reason: "SNAPSHOT_EMPTY" };
+  }
+
+  const { error: sessionSnapshotError } = await db
+    .schema("erp_cache")
+    .from("session_menu_snapshot")
+    .upsert(
+      {
+        session_id: ctx.session_id,
+        auth_user_id: ctx.auth_user_id,
+        universe: "SA",
+        company_id: null,
+        snapshot_version: menuRows[0]?.snapshot_version ?? 0,
+        menu_json: menuRows,
+      },
+      { onConflict: "session_id,universe,company_id" }
+    );
+
+  if (sessionSnapshotError) {
+    console.error(
+      "ADMIN_SESSION_MENU_SNAPSHOT_UPSERT_FAILED",
+      sessionSnapshotError
+    );
+    return { ok: false, reason: "SESSION_SNAPSHOT_UPSERT_FAILED" };
+  }
+
+  return { ok: true };
 }
 
 /* =========================================================
@@ -275,7 +342,17 @@ export async function createMenuHandler(
     );
   }
 
-  return okResponse({ created: true }, ctx.request_id,req);
+  const refresh = await refreshAdminSessionMenuSnapshot(ctx);
+
+  return okResponse(
+    {
+      created: true,
+      snapshot_refreshed: refresh.ok,
+      snapshot_refresh_reason: refresh.reason ?? null,
+    },
+    ctx.request_id,
+    req
+  );
 }
 
 export async function updateMenuHandler(
@@ -308,7 +385,17 @@ export async function updateMenuHandler(
     );
   }
 
-  return okResponse({ updated: true }, ctx.request_id,req);
+  const refresh = await refreshAdminSessionMenuSnapshot(ctx);
+
+  return okResponse(
+    {
+      updated: true,
+      snapshot_refreshed: refresh.ok,
+      snapshot_refresh_reason: refresh.reason ?? null,
+    },
+    ctx.request_id,
+    req
+  );
 }
 
 export async function updateMenuTreeHandler(
@@ -338,7 +425,17 @@ export async function updateMenuTreeHandler(
     );
   }
 
-  return okResponse({ updated: true }, ctx.request_id,req);
+  const refresh = await refreshAdminSessionMenuSnapshot(ctx);
+
+  return okResponse(
+    {
+      updated: true,
+      snapshot_refreshed: refresh.ok,
+      snapshot_refresh_reason: refresh.reason ?? null,
+    },
+    ctx.request_id,
+    req
+  );
 }
 
 export async function updateMenuStateHandler(
@@ -369,7 +466,17 @@ export async function updateMenuStateHandler(
     );
   }
 
-  return okResponse({ updated: true }, ctx.request_id,req);
+  const refresh = await refreshAdminSessionMenuSnapshot(ctx);
+
+  return okResponse(
+    {
+      updated: true,
+      snapshot_refreshed: refresh.ok,
+      snapshot_refresh_reason: refresh.reason ?? null,
+    },
+    ctx.request_id,
+    req
+  );
 }
 
 /* =========================================================

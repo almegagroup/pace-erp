@@ -178,6 +178,51 @@ Next step:
 Carry the same canvas-first cleanup into the remaining non-SA and governance screens,
 then close the backend blocked-request diagnosis using the new structured error metadata.
 
+## Entry
+
+Date:
+2026-03-29
+
+Roadmap step:
+Step 2 - SA Dashboard Information Architecture
+
+Status:
+IN PROGRESS
+
+What was done:
+- converted the ERP command bar from the old dark modal style into the same light operator worksheet grammar
+- fixed SA home launch-rail keyboard movement so `ArrowDown` and `ArrowUp` now move one item at a time instead of skipping rows
+- scanned post-hardening database additions for missed security sealing
+- identified the real unrestricted gap on `erp_map.user_parent_companies`
+- identified companion security gaps on `erp_audit.workflow_events` privilege wiring and `acl.module_resource_map` read policy
+- added one final security-seal migration to close those gaps together
+
+What changed in repo:
+- frontend/src/components/ErpCommandPalette.jsx
+- frontend/src/components/layer/ModalBase.jsx
+- frontend/src/admin/sa/screens/SAHome.jsx
+- supabase/migrations/20260410118000_gate6_6_19J_post_split_security_seal.sql
+
+What was verified:
+- frontend build completed successfully
+- frontend lint completed successfully
+- command bar now visually aligns much more closely with the rebuilt shell
+- SA dashboard launcher no longer skips items during arrow-key navigation
+
+Problems or blockers:
+- SA governance still needs another visible refinement pass before it can be called fully complete
+- a few remaining UI polish issues are still expected and will be handled in the next wave
+
+Decision or note:
+The UI direction is now clearly usable and understandable,
+but the finish line for SA governance should be treated as
+one more deliberate completion pass, not as a partial polish layer.
+
+Next step:
+Continue from this exact state in the next session,
+take the remaining SA governance issues one by one,
+and drive the SA governance surface to full completion.
+
 ## Entry Template
 
 Date:
@@ -2071,3 +2116,55 @@ and keep this file updated continuously.
 
 Next step:
 Step 2 - SA Dashboard Information Architecture
+
+## Entry 034
+
+Date:
+2026-03-29
+
+Roadmap step:
+Execution handoff consolidation for tomorrow's SA governance completion pass
+
+Status:
+COMPLETED
+
+What was done:
+- created one consolidated ERP handoff markdown that binds together constitution intent,
+  state-file reality,
+  gate direction,
+  backend route families,
+  handler-to-schema usage,
+  major migration bands,
+  known risks,
+  and missing work
+- documented current workflow spine across auth,
+  protected pipeline,
+  menu snapshot authority,
+  admin governance,
+  ACL,
+  workflow,
+  and session cluster behavior
+- captured current truth on what is correct,
+  what is risky,
+  and what remains incomplete so tomorrow's execution can resume without re-discovery
+
+What changed in repo:
+- docs/PACE_ERP_FULL_SYSTEM_HANDOFF_2026-03-29.md
+- docs/ERP build roadmap/ERP_BUILD_PROGRESS_LOG.md
+
+What was verified:
+- the handoff file includes current handler families and their primary schema/table usage
+- the handoff file includes the latest post-split security seal migration
+- the handoff file includes tomorrow's recommended start sequence
+
+Problems or blockers:
+- this is a documentation and execution-anchor pass,
+  not a claim that all listed gaps are already closed
+
+Decision or note:
+This file should now be treated as the operational briefing for the next working session,
+while still remaining subordinate to the constitution and the state file.
+
+Next step:
+Use the handoff file to continue SA governance completion,
+then validate remaining backend/DB risks against live flows

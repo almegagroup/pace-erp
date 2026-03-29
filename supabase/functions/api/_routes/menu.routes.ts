@@ -43,7 +43,8 @@ export async function dispatchMenuRoutes(
     return await createMenuHandler(req, {
       context,
       auth_user_id: session.authUserId,
-      request_id: requestId
+      request_id: requestId,
+      session_id: session.sessionId
     });
 
   case "PATCH:/api/admin/menu":
@@ -53,7 +54,8 @@ export async function dispatchMenuRoutes(
     return await updateMenuHandler(req, {
       context,
       auth_user_id: session.authUserId,
-      request_id: requestId
+      request_id: requestId,
+      session_id: session.sessionId
     });
 
   case "PATCH:/api/admin/menu/tree":
@@ -63,7 +65,8 @@ export async function dispatchMenuRoutes(
     return await updateMenuTreeHandler(req, {
       context,
       auth_user_id: session.authUserId,
-      request_id: requestId
+      request_id: requestId,
+      session_id: session.sessionId
     });
 
   case "PATCH:/api/admin/menu/state":
@@ -73,7 +76,8 @@ export async function dispatchMenuRoutes(
     return await updateMenuStateHandler(req, {
       context,
       auth_user_id: session.authUserId,
-      request_id: requestId
+      request_id: requestId,
+      session_id: session.sessionId
     });
 
     case "POST:/api/admin/preview-user":

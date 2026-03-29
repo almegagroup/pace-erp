@@ -5,9 +5,53 @@ import ErpScreenScaffold, {
 import {
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
-import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useMenu } from "../../../context/useMenu.js";
+
+const SA_HOME_ACTION_META = Object.freeze({
+  SA_CONTROL_PANEL: {
+    badge: "Command",
+    description:
+      "Open the SA command center to review runtime health, recent sessions, and admin activity.",
+  },
+  SA_COMPANY_CREATE: {
+    badge: "Provision",
+    description:
+      "Launch the company setup workspace for a fresh operational entity.",
+  },
+  SA_PROJECT_MASTER: {
+    badge: "Master",
+    description:
+      "Open project master manage for the current company-bound project wave.",
+  },
+  SA_USERS: {
+    badge: "Govern",
+    description:
+      "Review users, role posture, and lifecycle state from the admin control surface.",
+  },
+  SA_ROLE_PERMISSIONS: {
+    badge: "ACL",
+    description:
+      "Review role-resource VWED permissions from the ACL governance surface.",
+  },
+  SA_APPROVAL_RULES: {
+    badge: "Route",
+    description:
+      "Maintain approver routing stages and exact governed scope for approval flow.",
+  },
+  SA_COMPANY_MODULE_MAP: {
+    badge: "Module",
+    description:
+      "Enable or disable module exposure for a governed company by company ID.",
+  },
+  SA_SIGNUP_REQUESTS: {
+    badge: "Approve",
+    description:
+      "Process incoming signup approvals with a clear enterprise review queue.",
+  },
+});
 
 async function readJsonSafe(response) {
   try {
@@ -106,6 +150,7 @@ function HomeActionCard({
 }
 
 export default function SAHome() {
+  const { menu } = useMenu();
   const [controlPanel, setControlPanel] = useState(null);
   const [systemHealth, setSystemHealth] = useState(null);
   const [error, setError] = useState("");
@@ -138,64 +183,30 @@ export default function SAHome() {
     void refreshDashboardSnapshot();
   }, []);
 
-  const launchActions = [
-    {
-      badge: "Command",
-      title: "Control Panel",
-      description:
-        "Open the SA command center to review runtime health, recent sessions, and admin activity.",
-      onClick: () => openScreen("SA_CONTROL_PANEL"),
-    },
-    {
-      badge: "Provision",
-      title: "Create Company",
-      description:
-        "Launch the company setup workspace for a fresh operational entity.",
-      onClick: () => openScreen("SA_COMPANY_CREATE"),
-    },
-    {
-      badge: "Master",
-      title: "Project Master",
-      description:
-        "Open project master manage for the current company-bound project wave.",
-      onClick: () => openScreen("SA_PROJECT_MASTER"),
-    },
-    {
-      badge: "Govern",
-      title: "User Control",
-      description:
-        "Review users, role posture, and lifecycle state from the admin control surface.",
-      onClick: () => openScreen("SA_USERS"),
-    },
-    {
-      badge: "ACL",
-      title: "Role Permissions",
-      description:
-        "Review role-resource VWED permissions from the ACL governance surface.",
-      onClick: () => openScreen("SA_ROLE_PERMISSIONS"),
-    },
-    {
-      badge: "Route",
-      title: "Approval Rules",
-      description:
-        "Maintain approver routing stages and exact governed scope for approval flow.",
-      onClick: () => openScreen("SA_APPROVAL_RULES"),
-    },
-    {
-      badge: "Module",
-      title: "Company Modules",
-      description:
-        "Enable or disable module exposure for a governed company by company ID.",
-      onClick: () => openScreen("SA_COMPANY_MODULE_MAP"),
-    },
-    {
-      badge: "Approve",
-      title: "Signup Requests",
-      description:
-        "Process incoming signup approvals with a clear enterprise review queue.",
-      onClick: () => openScreen("SA_SIGNUP_REQUESTS"),
-    },
-  ];
+  const launchActions = useMemo(
+    () =>
+      menu
+        .filter(
+          (item) =>
+            item.menu_type === "PAGE" &&
+            item.parent_menu_code === "SA_ROOT" &&
+            item.menu_code !== "SA_HOME" &&
+            item.route_path
+        )
+        .sort((left, right) => (left.display_order ?? 0) - (right.display_order ?? 0))
+        .map((item) => {
+          const meta = SA_HOME_ACTION_META[item.menu_code] ?? {};
+
+          return {
+            badge: meta.badge ?? "Open",
+            title: item.title,
+            description:
+              meta.description ?? "Open the selected Super Admin workspace.",
+            onClick: () => openRoute(item.route_path),
+          };
+        }),
+    [menu]
+  );
 
   const topActions = [
     {
