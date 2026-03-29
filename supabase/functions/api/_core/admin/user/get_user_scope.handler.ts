@@ -137,18 +137,43 @@ export async function getUserScopeHandler(
 
     const projectIds = [...new Set((projectRows ?? []).map((row) => row.project_id))];
 
+    const { data: workContextRows } = await db
+      .schema("erp_acl").from("user_work_contexts")
+      .select(`
+        work_context_id,
+        work_context:work_context_id (
+          department_id
+        )
+      `)
+      .eq("auth_user_id", authUserId);
+
+    const workContextIds = [...new Set((workContextRows ?? []).map((row) => row.work_context_id))];
+    const departmentIdsFromWorkContexts = (workContextRows ?? []).flatMap((row) => {
+      const relation = row.work_context;
+
+      if (!relation) {
+        return [];
+      }
+
+      if (Array.isArray(relation)) {
+        return relation
+          .map((item) => item.department_id ?? null)
+          .filter(Boolean);
+      }
+
+      const singleRelation = relation as { department_id?: string | null };
+      return singleRelation.department_id ? [singleRelation.department_id] : [];
+    });
+
     const { data: departmentRows } = await db
       .schema("erp_map").from("user_departments")
       .select("department_id")
       .eq("auth_user_id", authUserId);
 
-    const departmentIds = [...new Set((departmentRows ?? []).map((row) => row.department_id))];
-    const { data: workContextRows } = await db
-      .schema("erp_acl").from("user_work_contexts")
-      .select("work_context_id")
-      .eq("auth_user_id", authUserId);
-
-    const workContextIds = [...new Set((workContextRows ?? []).map((row) => row.work_context_id))];
+    const departmentIds = [...new Set([
+      ...(departmentRows ?? []).map((row) => row.department_id),
+      ...departmentIdsFromWorkContexts,
+    ])];
 
     const companyIdsToResolve = [...new Set([
       ...(parentCompanyId ? [parentCompanyId] : []),

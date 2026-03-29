@@ -131,9 +131,44 @@ async function resolveContextFromDb(
     return unresolved();
   }
 
+  const flattenWorkContext = (
+    value: unknown,
+  ): {
+    work_context_id: string;
+    company_id: string;
+    work_context_code: string;
+    department_id: string | null;
+    is_active: boolean;
+  } | null => {
+    if (!value) {
+      return null;
+    }
+
+    const row = Array.isArray(value) ? value[0] : value;
+    if (!row || typeof row !== "object") {
+      return null;
+    }
+
+    return row as {
+      work_context_id: string;
+      company_id: string;
+      work_context_code: string;
+      department_id: string | null;
+      is_active: boolean;
+    };
+  };
+
   const availableWorkContexts = (workContextRows ?? [])
-    .map((row) => row.work_context)
-    .filter((row) => row && row.is_active === true);
+    .map((row) => flattenWorkContext(row.work_context))
+    .filter((
+      row,
+    ): row is {
+      work_context_id: string;
+      company_id: string;
+      work_context_code: string;
+      department_id: string | null;
+      is_active: boolean;
+    } => Boolean(row && row.is_active === true));
 
   if (availableWorkContexts.length === 0) {
     return unresolved();

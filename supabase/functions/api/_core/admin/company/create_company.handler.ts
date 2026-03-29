@@ -14,6 +14,7 @@ import { resolveGstProfile } from "../../../_shared/gst_resolver.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
 import { deriveCompanyFieldsFromGstProfile } from "../../../_shared/gst_company_fields.ts";
 import { log } from "../../../_lib/logger.ts";
+import { ensureCompanyOperationalWorkContexts } from "../../../_shared/work_context_governance.ts";
 
 // ------------------------------------------------------------------
 // Minimal admin context (Gate-6 contract)
@@ -177,6 +178,8 @@ export async function createCompanyHandler(
     }
 
     // 6️⃣ Success
+    await ensureCompanyOperationalWorkContexts(db, data.id);
+
     return okResponse(
       {
         company: {

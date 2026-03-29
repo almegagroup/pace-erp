@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
+import { ensureDepartmentWorkContext } from "../../../_shared/work_context_governance.ts";
 
 function assertAdmin(
   ctx: { context: ContextResolution },
@@ -52,7 +53,7 @@ export async function createDepartmentHandler(
 
     const { data: company } = await db
       .schema("erp_master").from("companies")
-      .select("id")
+      .select("id, status")
       .eq("id", targetCompanyId)
       .maybeSingle();
 
@@ -81,6 +82,14 @@ export async function createDepartmentHandler(
         ctx.request_id,
       );
     }
+
+    await ensureDepartmentWorkContext(db, {
+      companyId: data.company_id,
+      departmentId: data.id,
+      departmentCode: data.department_code,
+      departmentName: data.department_name,
+      isActive: company.status === "ACTIVE" && data.status === "ACTIVE",
+    });
 
     return okResponse(
       {

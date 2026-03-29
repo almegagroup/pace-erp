@@ -33,7 +33,7 @@ import SAControlPanel from "../admin/sa/screens/SAControlPanel.jsx";
 import SAAudit from "../admin/sa/screens/SAAudit.jsx";
 import SACompanyCreate from "../admin/sa/screens/SACompanyCreate.jsx";
 import SACompanyManage from "../admin/sa/screens/SACompanyManage.jsx";
-import SAOrgBootstrapRetired from "../admin/sa/screens/SAOrgBootstrapRetired.jsx";
+import SAOrgBootstrap from "../admin/sa/screens/SAOrgBootstrap.jsx";
 import SASessions from "../admin/sa/screens/SASessions.jsx";
 import SASystemHealth from "../admin/sa/screens/SASystemHealth.jsx";
 import SAUsers from "../admin/sa/screens/SAUsers.jsx";
@@ -111,7 +111,7 @@ export default function AppRouter() {
                     />
                     <Route
                       path="org-bootstrap"
-                      element={<SAOrgBootstrapRetired />}
+                      element={<SAOrgBootstrap />}
                     />
                     <Route path="users" element={<SAUsers />} />
                     <Route path="users/roles" element={<SAUserRoles />} />

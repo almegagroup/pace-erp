@@ -61,6 +61,17 @@ export async function updateUserScopeHandler(
       );
     }
 
+    if (
+      workCompanyIds.length === 0 &&
+      (projectIds.length > 0 || departmentIds.length > 0 || explicitWorkContextIds.length > 0)
+    ) {
+      return errorResponse(
+        "USER_SCOPE_WORK_COMPANY_REQUIRED",
+        "work company required before assigning project, department, or work context scope",
+        ctx.request_id,
+      );
+    }
+
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data: activeBusinessCompanies } = await db
@@ -120,9 +131,11 @@ export async function updateUserScopeHandler(
         .schema("erp_master").from("projects")
         .select("id, company_id")
         .in("id", projectIds)
+        .in("company_id", workCompanyIds)
         .eq("status", "ACTIVE");
 
     const validProjectCount = (validProjects ?? []).filter((project) =>
+      workCompanyIds.includes(project.company_id) &&
       activeBusinessCompanyIds.has(project.company_id)
     ).length;
 
@@ -140,9 +153,11 @@ export async function updateUserScopeHandler(
         .schema("erp_master").from("departments")
         .select("id, company_id")
         .in("id", departmentIds)
+        .in("company_id", workCompanyIds)
         .eq("status", "ACTIVE");
 
     const validDepartmentCount = (validDepartments ?? []).filter((department) =>
+      workCompanyIds.includes(department.company_id) &&
       activeBusinessCompanyIds.has(department.company_id)
     ).length;
 
@@ -158,7 +173,7 @@ export async function updateUserScopeHandler(
       ? { data: [] }
       : await db
         .schema("erp_acl").from("work_contexts")
-        .select("work_context_id, company_id, work_context_code")
+        .select("work_context_id, company_id, work_context_code, department_id")
         .eq("is_active", true)
         .in("company_id", workCompanyIds);
 
@@ -184,8 +199,32 @@ export async function updateUserScopeHandler(
       )
       .filter(Boolean) as string[];
 
+    const departmentWorkContextIds = departmentIds
+      .map((departmentId) =>
+        (validWorkContexts ?? []).find((row) => row.department_id === departmentId)?.work_context_id ??
+          null
+      );
+
+    if (departmentWorkContextIds.some((workContextId) => !workContextId)) {
+      return errorResponse(
+        "USER_SCOPE_DEPARTMENT_WORK_CONTEXT_MISSING",
+        "one or more departments are missing a governed department work context",
+        ctx.request_id,
+      );
+    }
+
+    const persistedDepartmentIds = [...new Set([
+      ...departmentIds,
+      ...(
+        explicitWorkContextIds
+          .map((workContextId) => validWorkContextMap.get(workContextId)?.department_id ?? null)
+          .filter(Boolean) as string[]
+      ),
+    ])];
+
     const workContextIds = [...new Set([
       ...defaultWorkContextIds,
+      ...((departmentWorkContextIds.filter(Boolean)) as string[]),
       ...explicitWorkContextIds,
     ])];
 
@@ -286,11 +325,11 @@ export async function updateUserScopeHandler(
       );
     }
 
-    if (departmentIds.length > 0) {
+    if (persistedDepartmentIds.length > 0) {
       const { error: departmentInsertError } = await db
         .schema("erp_map").from("user_departments")
         .insert(
-          departmentIds.map((departmentId) => ({
+          persistedDepartmentIds.map((departmentId) => ({
             auth_user_id: targetAuthUserId,
             department_id: departmentId,
           })),
@@ -346,7 +385,7 @@ export async function updateUserScopeHandler(
         parent_company_id: parentCompanyId,
         work_company_ids: workCompanyIds,
         project_ids: projectIds,
-        department_ids: departmentIds,
+        department_ids: persistedDepartmentIds,
         work_context_ids: workContextIds,
         updated_by: ctx.auth_user_id,
       },

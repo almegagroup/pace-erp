@@ -12,6 +12,10 @@ import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleCli
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
 import { log } from "../../../_lib/logger.ts";
+import {
+  ensureCompanyOperationalWorkContexts,
+  setSystemWorkContextsActiveState,
+} from "../../../_shared/work_context_governance.ts";
 
 type RequestPayload = {
   company_id: string;
@@ -112,6 +116,16 @@ export async function updateCompanyStateHandler(
         ctx.request_id,
       );
     }
+
+    if (body.next_status === "ACTIVE") {
+      await ensureCompanyOperationalWorkContexts(db, body.company_id);
+    }
+
+    await setSystemWorkContextsActiveState(
+      db,
+      body.company_id,
+      body.next_status === "ACTIVE",
+    );
 
     log({
       level: "SECURITY",
