@@ -238,6 +238,24 @@ interface MenuAdminCtx {
   session_id?: string;
 }
 
+async function resolveMenuIdByCode(
+  db: ReturnType<typeof getServiceRoleClientWithContext>,
+  menuCode?: string | null
+): Promise<string | null> {
+  if (!menuCode) {
+    return null;
+  }
+
+  const { data } = await db
+    .schema("erp_menu")
+    .from("menu_master")
+    .select("id")
+    .eq("menu_code", menuCode)
+    .maybeSingle();
+
+  return data?.id ?? null;
+}
+
 async function refreshAdminSessionMenuSnapshot(
   ctx: MenuAdminCtx
 ): Promise<{ ok: boolean; reason?: string }> {
@@ -319,7 +337,11 @@ export async function createMenuHandler(
 
   const db = getServiceRoleClientWithContext(ctx.context);
 
-  const { error } = await db
+  const parentMenuId =
+    body.parent_menu_id ??
+    (await resolveMenuIdByCode(db, body.parent_menu_code ?? null));
+
+  const { data: createdMenu, error } = await db
     .schema("erp_menu").from("menu_master")
     .insert({
       menu_code: body.menu_code,
@@ -330,7 +352,19 @@ export async function createMenuHandler(
       universe: body.universe,
       display_order: body.display_order ?? 0,
       created_by: ctx.auth_user_id
-    });
+    })
+    .select(`
+      id,
+      menu_code,
+      resource_code,
+      title,
+      route_path,
+      menu_type,
+      universe,
+      display_order,
+      is_active
+    `)
+    .single();
 
   if (error) {
     return errorResponse(
@@ -342,11 +376,37 @@ export async function createMenuHandler(
     );
   }
 
+  if (parentMenuId && createdMenu?.id) {
+    const { error: treeError } = await db
+      .schema("erp_menu")
+      .from("menu_tree")
+      .upsert(
+        {
+          parent_menu_id: parentMenuId,
+          child_menu_id: createdMenu.id,
+          display_order: body.tree_display_order ?? body.display_order ?? 0,
+          created_by: ctx.auth_user_id,
+        },
+        { onConflict: "child_menu_id" }
+      );
+
+    if (treeError) {
+      return errorResponse(
+        "MENU_TREE_CREATE_FAILED",
+        treeError.message,
+        ctx.request_id,
+        "NONE",
+        500
+      );
+    }
+  }
+
   const refresh = await refreshAdminSessionMenuSnapshot(ctx);
 
   return okResponse(
     {
       created: true,
+      menu: createdMenu,
       snapshot_refreshed: refresh.ok,
       snapshot_refresh_reason: refresh.reason ?? null,
     },
@@ -407,13 +467,34 @@ export async function updateMenuTreeHandler(
 
   const db = getServiceRoleClientWithContext(ctx.context);
 
+  const childMenuId =
+    body.child_menu_id ??
+    (await resolveMenuIdByCode(db, body.child_menu_code ?? null));
+  const parentMenuId =
+    body.parent_menu_id ??
+    (await resolveMenuIdByCode(db, body.parent_menu_code ?? null));
+
+  if (!childMenuId) {
+    return errorResponse(
+      "MENU_TREE_CHILD_REQUIRED",
+      "child_menu_id or child_menu_code is required",
+      ctx.request_id,
+      "NONE",
+      400
+    );
+  }
+
   const { error } = await db
     .schema("erp_menu").from("menu_tree")
-    .update({
-      parent_menu_id: body.parent_menu_id,
-      display_order: body.display_order ?? 0
-    })
-    .eq("child_menu_id", body.child_menu_id);
+    .upsert(
+      {
+        parent_menu_id: parentMenuId,
+        child_menu_id: childMenuId,
+        display_order: body.display_order ?? 0,
+        created_by: ctx.auth_user_id,
+      },
+      { onConflict: "child_menu_id" }
+    );
 
   if (error) {
     return errorResponse(
@@ -432,6 +513,95 @@ export async function updateMenuTreeHandler(
       updated: true,
       snapshot_refreshed: refresh.ok,
       snapshot_refresh_reason: refresh.reason ?? null,
+    },
+    ctx.request_id,
+    req
+  );
+}
+
+export async function listMenuRegistryHandler(
+  req: Request,
+  ctx: MenuAdminCtx
+): Promise<Response> {
+  const url = new URL(req.url);
+  const universe = url.searchParams.get("universe");
+  const db = getServiceRoleClientWithContext(ctx.context);
+
+  let masterQuery = db
+    .schema("erp_menu")
+    .from("menu_master")
+    .select(`
+      id,
+      menu_code,
+      resource_code,
+      title,
+      description,
+      route_path,
+      menu_type,
+      universe,
+      is_system,
+      display_order,
+      is_active,
+      created_at
+    `)
+    .order("universe")
+    .order("display_order")
+    .order("title");
+
+  if (universe === "SA" || universe === "ACL") {
+    masterQuery = masterQuery.eq("universe", universe);
+  }
+
+  const [{ data: menuRows, error: menuError }, { data: treeRows, error: treeError }] =
+    await Promise.all([
+      masterQuery,
+      db
+        .schema("erp_menu")
+        .from("menu_tree")
+        .select("parent_menu_id, child_menu_id, display_order"),
+    ]);
+
+  if (menuError) {
+    return errorResponse(
+      "MENU_REGISTRY_READ_FAILED",
+      menuError.message,
+      ctx.request_id,
+      "NONE",
+      500
+    );
+  }
+
+  if (treeError) {
+    return errorResponse(
+      "MENU_TREE_READ_FAILED",
+      treeError.message,
+      ctx.request_id,
+      "NONE",
+      500
+    );
+  }
+
+  const menuById = new Map((menuRows ?? []).map((row) => [row.id, row]));
+  const treeByChildId = new Map(
+    (treeRows ?? []).map((row) => [row.child_menu_id, row])
+  );
+
+  const payload = (menuRows ?? []).map((row) => {
+    const tree = treeByChildId.get(row.id);
+    const parent = tree?.parent_menu_id ? menuById.get(tree.parent_menu_id) : null;
+
+    return {
+      ...row,
+      parent_menu_id: tree?.parent_menu_id ?? null,
+      parent_menu_code: parent?.menu_code ?? null,
+      parent_title: parent?.title ?? null,
+      tree_display_order: tree?.display_order ?? null,
+    };
+  });
+
+  return okResponse(
+    {
+      menus: payload,
     },
     ctx.request_id,
     req

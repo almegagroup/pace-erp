@@ -42,6 +42,7 @@ import SAProjectMaster from "../admin/sa/screens/SAProjectMaster.jsx";
 import SARolePermissions from "../admin/sa/screens/SARolePermissions.jsx";
 import SAApprovalRules from "../admin/sa/screens/SAApprovalRules.jsx";
 import SACompanyModuleMap from "../admin/sa/screens/SACompanyModuleMap.jsx";
+import SAMenuGovernance from "../admin/sa/screens/SAMenuGovernance.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
 import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
@@ -117,6 +118,7 @@ export default function AppRouter() {
                       path="acl/company-modules"
                       element={<SACompanyModuleMap />}
                     />
+                    <Route path="menu" element={<SAMenuGovernance />} />
                     <Route
                       path="signup-requests"
                       element={<SASignupRequests />}

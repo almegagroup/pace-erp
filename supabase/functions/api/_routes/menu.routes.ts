@@ -4,6 +4,7 @@
 
 import {
   meMenuHandler,
+  listMenuRegistryHandler,
   createMenuHandler,
   updateMenuHandler,
   updateMenuTreeHandler,
@@ -35,6 +36,17 @@ export async function dispatchMenuRoutes(
   /* =========================================
    * ID-9.12 — Menu Admin Panel
    * ========================================= */
+
+  case "GET:/api/admin/menu":
+
+    if (!context.isAdmin) return null;
+
+    return await listMenuRegistryHandler(req, {
+      context,
+      auth_user_id: session.authUserId,
+      request_id: requestId,
+      session_id: session.sessionId
+    });
 
   case "POST:/api/admin/menu":
 

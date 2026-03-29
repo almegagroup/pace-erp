@@ -114,6 +114,14 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_MENU_GOVERNANCE: {
+    screen_code: "SA_MENU_GOVERNANCE",
+    route: "/sa/menu",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   GA_HOME: {
     screen_code: "GA_HOME",
     route: "/ga/home",
