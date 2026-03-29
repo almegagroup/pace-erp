@@ -2465,3 +2465,18 @@ Push the pending patch migrations,
 redeploy,
 fresh-login,
 then validate that SA and ACL paths work cleanly after the legacy bridge table is removed
+040. Completed company management lifecycle surface with new manage workspace and admin-only enable/disable route wiring.
+    - frontend/src/admin/sa/screens/SACompanyManage.jsx
+    - frontend/src/admin/sa/screens/SAControlPanel.jsx
+    - frontend/src/navigation/screens/adminScreens.js
+    - frontend/src/router/AppRouter.jsx
+    - supabase/functions/api/_core/admin/company/update_company_state.handler.ts
+    - supabase/functions/api/_routes/admin.routes.ts
+041. Removed menu-specific launch hardcodes from SA navigation surfaces and moved launch copy into DB-driven menu description projection.
+    - frontend/src/navigation/menuProjection.js
+    - frontend/src/layout/MenuShell.jsx
+    - frontend/src/admin/sa/screens/SAHome.jsx
+    - frontend/src/admin/sa/screens/SAControlPanel.jsx
+    - frontend/src/admin/sa/screens/SAMenuGovernance.jsx
+    - supabase/functions/api/_core/auth/menu.handler.ts
+    - supabase/migrations/20260410126000_gate7_7_3H_menu_snapshot_description_projection.sql

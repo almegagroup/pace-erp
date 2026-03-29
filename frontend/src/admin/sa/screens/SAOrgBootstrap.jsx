@@ -686,7 +686,7 @@ export default function SAOrgBootstrap() {
         <ErpSectionCard
           eyebrow="Step 3"
           title="Project Bootstrap"
-          description="Projects are company-bound. Create them against the selected company context."
+          description="Create project rows from this bootstrap workspace using the current backend project flow."
         >
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
             <label className="grid gap-2">

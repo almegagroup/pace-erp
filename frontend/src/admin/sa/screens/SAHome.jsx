@@ -9,54 +9,7 @@ import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js"
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../context/useMenu.js";
-
-const SA_HOME_ACTION_META = Object.freeze({
-  SA_CONTROL_PANEL: {
-    badge: "Command",
-    description:
-      "Open the SA command center to review runtime health, recent sessions, and admin activity.",
-  },
-  SA_COMPANY_CREATE: {
-    badge: "Provision",
-    description:
-      "Launch the company setup workspace for a fresh operational entity.",
-  },
-  SA_ORG_BOOTSTRAP: {
-    badge: "Bootstrap",
-    description:
-      "Stand up company, group, project, and department skeletons from one SA orchestration workspace.",
-  },
-  SA_PROJECT_MASTER: {
-    badge: "Master",
-    description:
-      "Open project master manage for the current company-bound project wave.",
-  },
-  SA_USERS: {
-    badge: "Govern",
-    description:
-      "Review users, role posture, and lifecycle state from the admin control surface.",
-  },
-  SA_ROLE_PERMISSIONS: {
-    badge: "ACL",
-    description:
-      "Review role-resource VWED permissions from the ACL governance surface.",
-  },
-  SA_APPROVAL_RULES: {
-    badge: "Route",
-    description:
-      "Maintain approver routing stages and exact governed scope for approval flow.",
-  },
-  SA_COMPANY_MODULE_MAP: {
-    badge: "Module",
-    description:
-      "Enable or disable module exposure for a governed company by company ID.",
-  },
-  SA_SIGNUP_REQUESTS: {
-    badge: "Approve",
-    description:
-      "Process incoming signup approvals with a clear enterprise review queue.",
-  },
-});
+import { buildMenuTree, flattenRouteableMenu } from "../../../navigation/menuProjection.js";
 
 async function readJsonSafe(response) {
   try {
@@ -189,27 +142,19 @@ export default function SAHome() {
   }, []);
 
   const launchActions = useMemo(
-    () =>
-      menu
-        .filter(
-          (item) =>
-            item.menu_type === "PAGE" &&
-            item.parent_menu_code === "SA_ROOT" &&
-            item.menu_code !== "SA_HOME" &&
-            item.route_path
-        )
-        .sort((left, right) => (left.display_order ?? 0) - (right.display_order ?? 0))
-        .map((item) => {
-          const meta = SA_HOME_ACTION_META[item.menu_code] ?? {};
+    () => {
+      const pages = flattenRouteableMenu(buildMenuTree(menu));
 
-          return {
-            badge: meta.badge ?? "Open",
-            title: item.title,
-            description:
-              meta.description ?? "Open the selected Super Admin workspace.",
-            onClick: () => openRoute(item.route_path),
-          };
-        }),
+      return pages
+        .filter((item) => item.menu_code !== "SA_HOME")
+        .map((item) => ({
+          badge: "Open",
+          title: item.title,
+          description:
+            item.description ?? "Open the selected Super Admin workspace.",
+          onClick: () => openRoute(item.route_path),
+        }));
+    },
     [menu]
   );
 

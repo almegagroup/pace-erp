@@ -138,7 +138,7 @@ export default function SAProjectMaster() {
       setProjects(sortProjects(refreshed));
       setRecentProject(created);
       setProjectName("");
-      setNotice(`Project ${created.project_code} created and mapped to the current company context.`);
+      setNotice(`Project ${created.project_code} created successfully.`);
       projectNameRef.current?.focus();
     } catch {
       setError("Project master could not be created right now.");
@@ -291,7 +291,7 @@ export default function SAProjectMaster() {
       label: "Projects",
       value: loading ? "..." : String(projects.length),
       tone: "sky",
-      caption: "Project rows visible in the current company context.",
+      caption: "Project rows currently returned by the master list flow.",
     },
     {
       key: "active",
@@ -320,7 +320,7 @@ export default function SAProjectMaster() {
     <ErpEntryFormTemplate
       eyebrow="Project Master"
       title="Project Master Manage"
-      description="Create and review company-bound project masters in the same keyboard-native working surface."
+      description="Create and review project master rows from the same keyboard-native working surface."
       actions={topActions}
       notices={[
         ...(error
@@ -345,7 +345,7 @@ export default function SAProjectMaster() {
       metrics={metrics}
       formEyebrow="Create"
       formTitle="Create a new project"
-      formDescription="The backend binds the new project to the current company context automatically."
+      formDescription="Create a new project row through the current backend governance flow."
       formContent={
         <div ref={formContainerRef} className="grid gap-3">
           <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">

@@ -1,55 +1,52 @@
 /*
  * File-ID: ID-6.2A
  * File-Path: supabase/functions/api/_core/admin/company/update_company_state.handler.ts
- * gate_id: 6
+ * Gate: 6
  * Phase: 6
  * Domain: MASTER
  * Purpose: Change company state (ACTIVE / INACTIVE) in a controlled, SA-only manner
  * Authority: Backend
  */
 
-import {
-  getServiceRoleClientWithContext,
-  assertServiceRole,
-} from "../../../_shared/serviceRoleClient.ts";
-
+import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import type { ContextResolution } from "../../../_pipeline/context.ts";
-
-import {
-  okResponse,
-  errorResponse,
-} from "../../../_core/response.ts";
-
+import { okResponse, errorResponse } from "../../../_core/response.ts";
 import { log } from "../../../_lib/logger.ts";
-import { generateRequestId } from "../../../_lib/request_id.ts";
 
 type RequestPayload = {
   company_id: string;
   next_status: "ACTIVE" | "INACTIVE";
 };
 
-export async function handler(
+type HandlerContext = {
+  context: ContextResolution;
+  request_id: string;
+};
+
+function assertAdmin(
+  ctx: HandlerContext,
+): asserts ctx is {
+  context: Extract<ContextResolution, { status: "RESOLVED" }> & { isAdmin: true };
+  request_id: string;
+} {
+  if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
+    throw new Error("ADMIN_ONLY");
+  }
+}
+
+export async function updateCompanyStateHandler(
   req: Request,
-  ctx: { context: ContextResolution }
+  ctx: HandlerContext,
 ): Promise<Response> {
-  // 🔒 No assumption about pipeline headers
-  const requestId = generateRequestId();
-
   try {
-    /* --------------------------------------------------
-     * 1️⃣ Authority assertion (SA / service-role only)
-     * -------------------------------------------------- */
-    assertServiceRole();
+    assertAdmin(ctx);
 
-    /* --------------------------------------------------
-     * 2️⃣ Parse + validate payload
-     * -------------------------------------------------- */
     const body = (await req.json()) as Partial<RequestPayload>;
 
     if (!body.company_id || !body.next_status) {
       log({
         level: "SECURITY",
-        request_id: requestId,
+        request_id: ctx.request_id,
         gate_id: "6.2A",
         event: "COMPANY_STATE_INVALID_INPUT",
         meta: body,
@@ -58,7 +55,7 @@ export async function handler(
       return errorResponse(
         "INVALID_INPUT",
         "Invalid request",
-        requestId
+        ctx.request_id,
       );
     }
 
@@ -66,17 +63,15 @@ export async function handler(
       return errorResponse(
         "INVALID_COMPANY_STATE",
         "Invalid state",
-        requestId
+        ctx.request_id,
       );
     }
 
     const db = getServiceRoleClientWithContext(ctx.context);
 
-    /* --------------------------------------------------
-     * 3️⃣ Fetch current company
-     * -------------------------------------------------- */
     const { data: company, error: fetchError } = await db
-      .schema("erp_master").from("companies")
+      .schema("erp_master")
+      .from("companies")
       .select("id, status")
       .eq("id", body.company_id)
       .single();
@@ -85,32 +80,27 @@ export async function handler(
       return errorResponse(
         "COMPANY_NOT_FOUND",
         "Company not found",
-        requestId
+        ctx.request_id,
       );
     }
 
-    /* --------------------------------------------------
-     * 4️⃣ No-op guard (idempotent)
-     * -------------------------------------------------- */
     if (company.status === body.next_status) {
       return okResponse(
         { status: "NO_CHANGE" },
-        requestId
+        ctx.request_id,
       );
     }
 
-    /* --------------------------------------------------
-     * 5️⃣ Update state
-     * -------------------------------------------------- */
     const { error: updateError } = await db
-      .schema("erp_master").from("companies")
+      .schema("erp_master")
+      .from("companies")
       .update({ status: body.next_status })
       .eq("id", body.company_id);
 
     if (updateError) {
       log({
         level: "ERROR",
-        request_id: requestId,
+        request_id: ctx.request_id,
         gate_id: "6.2A",
         event: "COMPANY_STATE_UPDATE_FAILED",
         meta: { error: updateError.message },
@@ -119,16 +109,13 @@ export async function handler(
       return errorResponse(
         "COMPANY_STATE_UPDATE_FAILED",
         "Update failed",
-        requestId
+        ctx.request_id,
       );
     }
 
-    /* --------------------------------------------------
-     * 6️⃣ Audit log + success
-     * -------------------------------------------------- */
     log({
       level: "SECURITY",
-      request_id: requestId,
+      request_id: ctx.request_id,
       gate_id: "6.2A",
       event: "COMPANY_STATE_CHANGED",
       meta: {
@@ -142,21 +129,21 @@ export async function handler(
         company_id: body.company_id,
         new_status: body.next_status,
       },
-      requestId
+      ctx.request_id,
     );
   } catch (err) {
     log({
       level: "ERROR",
-      request_id: requestId,
+      request_id: ctx.request_id,
       gate_id: "6.2A",
       event: "COMPANY_STATE_HANDLER_EXCEPTION",
       meta: { error: String(err) },
     });
 
     return errorResponse(
-      "REQUEST_BLOCKED",
+      (err as Error).message || "REQUEST_BLOCKED",
       "Unhandled error",
-      requestId
+      ctx.request_id,
     );
   }
 }

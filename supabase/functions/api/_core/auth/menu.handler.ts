@@ -351,6 +351,7 @@ export async function createMenuHandler(
       menu_code: body.menu_code,
       resource_code: body.resource_code,
       title: body.title,
+      description: body.description ?? null,
       route_path: body.route_path ?? null,
       menu_type: body.menu_type,
       universe: body.universe,
@@ -362,6 +363,7 @@ export async function createMenuHandler(
       menu_code,
       resource_code,
       title,
+      description,
       route_path,
       menu_type,
       universe,
@@ -432,6 +434,7 @@ export async function updateMenuHandler(
     .schema("erp_menu").from("menu_master")
     .update({
       title: body.title,
+      description: body.description ?? null,
       route_path: body.route_path ?? null,
       display_order: body.display_order ?? 0,
       updated_at: new Date().toISOString(),
@@ -767,6 +770,7 @@ if (snapshotError) {
     .select(`
       menu_code,
       title,
+      description,
       route_path,
       menu_type,
       parent_menu_code,

@@ -169,13 +169,15 @@ export default function SAMenuGovernance() {
     menu_code: "",
     resource_code: "",
     title: "",
+    description: "",
     route_path: "",
     menu_type: "PAGE",
-    parent_menu_code: "SA_ROOT",
-    display_order: "11",
+    parent_menu_code: "",
+    display_order: "0",
   });
   const [editForm, setEditForm] = useState({
     title: "",
+    description: "",
     route_path: "",
     display_order: "0",
     parent_menu_code: "",
@@ -219,19 +221,12 @@ export default function SAMenuGovernance() {
 
     setEditForm({
       title: selectedMenu.title ?? "",
+      description: selectedMenu.description ?? "",
       route_path: selectedMenu.route_path ?? "",
       display_order: String(selectedMenu.display_order ?? selectedMenu.tree_display_order ?? 0),
       parent_menu_code: selectedMenu.parent_menu_code ?? "",
     });
   }, [selectedMenu]);
-
-  useEffect(() => {
-    setCreateForm((current) => ({
-      ...current,
-      parent_menu_code:
-        universe === "SA" ? "SA_ROOT" : current.parent_menu_code,
-    }));
-  }, [universe]);
 
   const parentOptions = useMemo(
     () =>
@@ -262,6 +257,7 @@ export default function SAMenuGovernance() {
       resource_code:
         (createForm.resource_code.trim() || createForm.menu_code.trim()).toUpperCase(),
       title: createForm.title.trim(),
+      description: createForm.description.trim() || null,
       route_path:
         createForm.menu_type === "GROUP" ? null : createForm.route_path.trim() || null,
       menu_type: createForm.menu_type,
@@ -289,6 +285,7 @@ export default function SAMenuGovernance() {
         menu_code: "",
         resource_code: "",
         title: "",
+        description: "",
         route_path: "",
       }));
       setNotice(`Menu ${payload.menu_code} created and published to the current SA session snapshot.`);
@@ -313,6 +310,7 @@ export default function SAMenuGovernance() {
       await updateMenu({
         menu_code: selectedMenu.menu_code,
         title: editForm.title.trim(),
+        description: editForm.description.trim() || null,
         route_path:
           selectedMenu.menu_type === "GROUP"
             ? null
@@ -633,6 +631,20 @@ export default function SAMenuGovernance() {
                         className={inputClassName()}
                       />
                     </label>
+                    <label className="grid gap-1 text-sm text-slate-700 md:col-span-2">
+                      <span className="font-semibold">Description</span>
+                      <textarea
+                        value={editForm.description}
+                        onChange={(event) =>
+                          setEditForm((current) => ({
+                            ...current,
+                            description: event.target.value,
+                          }))
+                        }
+                        rows={3}
+                        className={inputClassName()}
+                      />
+                    </label>
                     <label className="grid gap-1 text-sm text-slate-700">
                       <span className="font-semibold">Display Order</span>
                       <input
@@ -752,6 +764,20 @@ export default function SAMenuGovernance() {
                           title: event.target.value,
                         }))
                       }
+                      className={inputClassName()}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm text-slate-700 md:col-span-2">
+                    <span className="font-semibold">Description</span>
+                    <textarea
+                      value={createForm.description}
+                      onChange={(event) =>
+                        setCreateForm((current) => ({
+                          ...current,
+                          description: event.target.value,
+                        }))
+                      }
+                      rows={3}
                       className={inputClassName()}
                     />
                   </label>

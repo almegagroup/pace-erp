@@ -26,6 +26,14 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_COMPANY_MANAGE: {
+    screen_code: "SA_COMPANY_MANAGE",
+    route: "/sa/company/manage",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_ORG_BOOTSTRAP: {
     screen_code: "SA_ORG_BOOTSTRAP",
     route: "/sa/org-bootstrap",

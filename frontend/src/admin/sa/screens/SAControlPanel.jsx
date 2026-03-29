@@ -20,69 +20,7 @@ import {
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../context/useMenu.js";
-
-const QUICK_LAUNCH_META = Object.freeze({
-  SA_SYSTEM_HEALTH: {
-    badge: "Health",
-    description:
-      "Open diagnostics to review database availability, ACL snapshot readiness, and menu snapshot readiness.",
-  },
-  SA_AUDIT: {
-    badge: "Trace",
-    description:
-      "Inspect recent administrative actions and review which governance operations succeeded or failed.",
-  },
-  SA_SESSIONS: {
-    badge: "Secure",
-    description:
-      "Review the full ERP session inventory and revoke active access when governance requires it.",
-  },
-  SA_SIGNUP_REQUESTS: {
-    badge: "Approve",
-    description:
-      "Review incoming onboarding requests and move approved users into the ERP lifecycle.",
-  },
-  SA_COMPANY_CREATE: {
-    badge: "Provision",
-    description:
-      "Start a fresh company setup flow and extend the organizational structure from SA control.",
-  },
-  SA_ORG_BOOTSTRAP: {
-    badge: "Bootstrap",
-    description:
-      "Run the org skeleton setup flow for companies, groups, projects, and departments in one place.",
-  },
-  SA_PROJECT_MASTER: {
-    badge: "Master",
-    description:
-      "Create and review project masters directly inside the keyboard-native org-governance wave.",
-  },
-  SA_ROLE_PERMISSIONS: {
-    badge: "ACL",
-    description:
-      "Review and update role-resource VWED permission rows from the ACL governance surface.",
-  },
-  SA_APPROVAL_RULES: {
-    badge: "Route",
-    description:
-      "Maintain approver routing stages, exact scope, and target identity without leaving the control plane.",
-  },
-  SA_COMPANY_MODULE_MAP: {
-    badge: "Module",
-    description:
-      "Enable or disable module exposure for a governed company through the ACL company-module map.",
-  },
-  SA_USERS: {
-    badge: "Govern",
-    description:
-      "Open user governance to review user posture, lifecycle state, and operational readiness.",
-  },
-  SA_MENU_GOVERNANCE: {
-    badge: "Menu",
-    description:
-      "Govern registry rows, hierarchy, and publish state without direct SQL edits.",
-  },
-});
+import { buildMenuTree, flattenRouteableMenu } from "../../../navigation/menuProjection.js";
 
 async function readJsonSafe(response) {
   try {
@@ -310,34 +248,19 @@ export default function SAControlPanel() {
   ].filter(Boolean);
 
   const quickLaunch = useMemo(() => {
-    const rootAndDeepLaunches = menu
+    const rootAndDeepLaunches = flattenRouteableMenu(buildMenuTree(menu))
       .filter(
         (item) =>
-          item.menu_type === "PAGE" &&
-          item.route_path &&
           item.menu_code !== "SA_HOME" &&
-          [
-            "SA_ROOT",
-            "SA_CONTROL_PANEL",
-            "SA_USERS",
-          ].includes(item.parent_menu_code ?? "")
+          item.menu_code !== "SA_CONTROL_PANEL"
       )
-      .sort((left, right) => {
-        const leftOrder = left.tree_display_order ?? left.display_order ?? 0;
-        const rightOrder = right.tree_display_order ?? right.display_order ?? 0;
-        return leftOrder - rightOrder || left.title.localeCompare(right.title);
-      })
-      .map((item) => {
-        const meta = QUICK_LAUNCH_META[item.menu_code] ?? {};
-
-        return {
-          badge: meta.badge ?? "Open",
-          title: item.title,
-          description:
-            meta.description ?? "Open the selected Super Admin governance workspace.",
-          onClick: () => openRoute(item.route_path),
-        };
-      });
+      .map((item) => ({
+        badge: "Open",
+        title: item.title,
+        description:
+          item.description ?? "Open the selected Super Admin governance workspace.",
+        onClick: () => openRoute(item.route_path),
+      }));
 
     return [
       ...rootAndDeepLaunches,

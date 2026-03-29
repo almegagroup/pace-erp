@@ -12,6 +12,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import {
+  branchContainsRoute,
+  buildMenuTree,
+  flattenRouteableMenu,
+} from "../navigation/menuProjection.js";
+import {
   getScreenForRoute,
   getPreviousScreen,
   getStackDepth,
@@ -142,30 +147,14 @@ export default function MenuShell() {
   const contentRegionRef = useRef(null);
   const stackDepth = getStackDepth();
 
-  const rootGroupCodes = useMemo(
-    () =>
-      new Set(
-        menu
-          .filter((item) => item.menu_type === "GROUP" && !item.parent_menu_code)
-          .map((item) => item.menu_code)
-      ),
-    [menu]
-  );
-
+  const navigationTree = useMemo(() => buildMenuTree(menu), [menu]);
   const navigationMenu = useMemo(
-    () =>
-      menu.filter((item) => {
-        if (item.menu_type === "GROUP") {
-          return rootGroupCodes.has(item.menu_code);
-        }
-
-        if (!item.route_path) {
-          return false;
-        }
-
-        return !item.parent_menu_code || rootGroupCodes.has(item.parent_menu_code);
-      }),
-    [menu, rootGroupCodes]
+    () => flattenRouteableMenu(navigationTree),
+    [navigationTree]
+  );
+  const menuIndexByCode = useMemo(
+    () => new Map(navigationMenu.map((item, index) => [item.menu_code, index])),
+    [navigationMenu]
   );
 
   const activeMenuIndex = useMemo(
@@ -375,6 +364,68 @@ export default function MenuShell() {
     }
 
     openRoute(routePath);
+  }
+
+  function renderNavigationNodes(nodes, depth = 0) {
+    return (
+      <ul className={depth === 0 ? "space-y-1" : "mt-1 space-y-1"}>
+        {nodes.map((node) => {
+          const { item, children } = node;
+          const isGroup = item.menu_type === "GROUP";
+          const isActive = item.route_path === location.pathname;
+          const isBranchActive = branchContainsRoute(node, location.pathname);
+          const buttonIndex = menuIndexByCode.get(item.menu_code) ?? -1;
+
+          return (
+            <li key={item.menu_code}>
+              {isGroup ? (
+                <div
+                  className={`px-2 py-2 text-[11px] uppercase tracking-[0.14em] ${
+                    isBranchActive ? "text-sky-700" : "text-slate-400"
+                  }`}
+                  style={collapsed ? undefined : { paddingLeft: `${depth * 14 + 8}px` }}
+                >
+                  {collapsed ? item.title.slice(0, 2).toUpperCase() : item.title}
+                </div>
+              ) : item.route_path ? (
+                <button
+                  ref={(element) => {
+                    if (buttonIndex >= 0) {
+                      menuButtonRefs.current[buttonIndex] = element;
+                    }
+                  }}
+                  type="button"
+                  onFocus={() => {
+                    setActiveZone("menu");
+                    if (buttonIndex >= 0) {
+                      setMenuFocusIndex(buttonIndex);
+                    }
+                  }}
+                  onKeyDown={(event) => handleMenuKeyDown(event, buttonIndex)}
+                  onClick={() => handleMenuRoute(item.route_path)}
+                  aria-current={isActive ? "page" : undefined}
+                  className={`grid w-full items-center gap-2 border px-2 py-2 text-left text-sm ${
+                    collapsed ? "grid-cols-1 justify-items-center" : "grid-cols-[32px_minmax(0,1fr)]"
+                  } ${
+                    isActive
+                      ? "border-sky-400 bg-sky-50 font-semibold text-sky-900"
+                      : "border-transparent bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                  }`}
+                  style={collapsed ? undefined : { paddingLeft: `${depth * 14 + 8}px` }}
+                >
+                  <span className="font-mono text-[11px] text-slate-500">
+                    {(buttonIndex + 1).toString().padStart(2, "0")}
+                  </span>
+                  {!collapsed ? <span className="truncate">{item.title}</span> : null}
+                </button>
+              ) : null}
+
+              {children.length > 0 ? renderNavigationNodes(children, depth + 1) : null}
+            </li>
+          );
+        })}
+      </ul>
+    );
   }
 
   async function handleLogout() {
@@ -712,45 +763,7 @@ export default function MenuShell() {
             </div>
           ) : (
             <nav>
-              <ul className="space-y-1">
-                {navigationMenu.map((item, index) => {
-                  const isActive = location.pathname === item.route_path;
-
-                  return (
-                    <li key={item.menu_code}>
-                      {item.route_path ? (
-                        <button
-                          ref={(element) => {
-                            menuButtonRefs.current[index] = element;
-                          }}
-                          type="button"
-                          onFocus={() => {
-                            setActiveZone("menu");
-                            setMenuFocusIndex(index);
-                          }}
-                          onKeyDown={(event) => handleMenuKeyDown(event, index)}
-                          onClick={() => handleMenuRoute(item.route_path)}
-                          aria-current={isActive ? "page" : undefined}
-                          className={`grid w-full items-center gap-2 border px-2 py-2 text-left text-sm ${collapsed ? "grid-cols-1 justify-items-center" : "grid-cols-[32px_minmax(0,1fr)]"} ${
-                            isActive
-                              ? "border-sky-400 bg-sky-50 font-semibold text-sky-900"
-                              : "border-transparent bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
-                          }`}
-                        >
-                          <span className="font-mono text-[11px] text-slate-500">
-                            {(index + 1).toString().padStart(2, "0")}
-                          </span>
-                          {!collapsed ? <span className="truncate">{item.title}</span> : null}
-                        </button>
-                      ) : (
-                        <span className="block px-2 py-2 text-[11px] uppercase tracking-[0.14em] text-slate-400">
-                          {collapsed ? item.title.slice(0, 2).toUpperCase() : item.title}
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+              {renderNavigationNodes(navigationTree)}
             </nav>
           )}
         </div>
