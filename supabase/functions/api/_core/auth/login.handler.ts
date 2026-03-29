@@ -110,6 +110,24 @@ const isAdmin = roleCode === "SA" || roleCode === "GA";
      * ===================================================== */
 
     if (isAdmin) {
+      const { error: rebuildError } = await supabase
+        .schema("erp_menu")
+        .rpc("generate_menu_snapshot", {
+          p_user_id: authUserId,
+          p_company_id: null,
+          p_universe: "SA",
+        });
+
+      if (rebuildError) {
+        log({
+          level: "ERROR",
+          request_id: requestId,
+          event: "SA_MENU_REBUILD_FAILED",
+          meta: { rebuildError },
+        });
+        return;
+      }
+
       const { data: menuRows, error: menuError } = await supabase
         .schema("erp_menu")
         .from("menu_snapshot")
