@@ -206,6 +206,8 @@ export default function MenuShell() {
     () => flattenRouteableMenu(navigationTree),
     [navigationTree]
   );
+  const previousScreen = getPreviousScreen();
+  const workspaceMode = stackDepth > 1;
 
   const activeMenuIndex = useMemo(
     () => resolveTopLevelIndex(sidebarRoots, location.pathname),
@@ -272,9 +274,6 @@ export default function MenuShell() {
       })
       .filter(Boolean);
   }, [location.pathname, screenHotkeyRegistry]);
-
-  const previousScreen = getPreviousScreen();
-  const workspaceMode = stackDepth > 1;
 
   useEffect(() => {
     document.body.dataset.workspaceMode = "protected";
