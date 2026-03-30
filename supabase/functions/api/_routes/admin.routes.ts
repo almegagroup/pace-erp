@@ -29,6 +29,7 @@ import { updateProjectStateHandler } from "../_core/admin/project/update_project
 
 import { createDepartmentHandler } from "../_core/admin/department/create_department.handler.ts";
 import { listDepartmentsHandler } from "../_core/admin/department/list_departments.handler.ts";
+import { updateDepartmentStateHandler } from "../_core/admin/department/update_department_state.handler.ts";
 import { listApproverRulesHandler } from "../_core/admin/approval/list_approver_rules.handler.ts";
 import { upsertApproverRuleHandler } from "../_core/admin/approval/upsert_approver_rule.handler.ts";
 import { deleteApproverRuleHandler } from "../_core/admin/approval/delete_approver_rule.handler.ts";
@@ -218,6 +219,13 @@ export async function dispatchAdminRoutes(
 
     case "GET:/api/admin/departments":
       response = await listDepartmentsHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/department/state":
+      response = await updateDepartmentStateHandler(req, {
         context,
         request_id: requestId,
       });
