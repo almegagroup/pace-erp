@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
@@ -101,7 +101,7 @@ export default function SAOrgBootstrap() {
     };
   }, [companies, groups, projects, departments]);
 
-  async function loadCompanyScopedRows(companyId) {
+  const loadCompanyScopedRows = useCallback(async (companyId) => {
     if (!compact(companyId)) {
       setProjects([]);
       setDepartments([]);
@@ -117,9 +117,9 @@ export default function SAOrgBootstrap() {
     setDepartments(
       sortByLabel(departmentData?.departments ?? [], "department_code", "department_name")
     );
-  }
+  }, []);
 
-  async function loadBootstrap(preferredCompanyId = "") {
+  const loadBootstrap = useCallback(async (preferredCompanyId = "") => {
     setLoading(true);
     setError("");
 
@@ -152,11 +152,11 @@ export default function SAOrgBootstrap() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [loadCompanyScopedRows, selectedCompanyId]);
 
   useEffect(() => {
     void loadBootstrap();
-  }, []);
+  }, [loadBootstrap]);
 
   useEffect(() => {
     if (!compact(selectedCompanyId)) {
@@ -164,7 +164,7 @@ export default function SAOrgBootstrap() {
     }
 
     void loadCompanyScopedRows(selectedCompanyId);
-  }, [selectedCompanyId]);
+  }, [loadCompanyScopedRows, selectedCompanyId]);
 
   useErpScreenHotkeys({
     refresh: {
@@ -200,6 +200,17 @@ export default function SAOrgBootstrap() {
       order: 20,
     },
     {
+      id: "sa-org-bootstrap-groups",
+      group: "Current Screen",
+      label: "Open Group Governance",
+      keywords: ["groups", "group governance", "company mapping"],
+      perform: () => {
+        openScreen("SA_GROUP_GOVERNANCE", { mode: "replace" });
+        navigate("/sa/groups");
+      },
+      order: 30,
+    },
+    {
       id: "sa-org-bootstrap-modules",
       group: "Current Screen",
       label: "Open Module Governance",
@@ -208,7 +219,7 @@ export default function SAOrgBootstrap() {
         openScreen("SA_COMPANY_MODULE_MAP", { mode: "replace" });
         navigate("/sa/acl/company-modules");
       },
-      order: 30,
+      order: 40,
     },
     {
       id: "sa-org-bootstrap-approval",
@@ -219,7 +230,7 @@ export default function SAOrgBootstrap() {
         openScreen("SA_APPROVAL_RULES", { mode: "replace" });
         navigate("/sa/approval-rules");
       },
-      order: 40,
+      order: 50,
     },
     {
       id: "sa-org-bootstrap-menu",
@@ -230,7 +241,7 @@ export default function SAOrgBootstrap() {
         openScreen("SA_MENU_GOVERNANCE", { mode: "replace" });
         navigate("/sa/menu");
       },
-      order: 50,
+      order: 60,
     },
   ]);
 
@@ -461,6 +472,15 @@ export default function SAOrgBootstrap() {
           onClick: () => {
             openScreen("SA_USERS", { mode: "replace" });
             navigate("/sa/users");
+          },
+        },
+        {
+          key: "groups",
+          label: "Groups",
+          tone: "neutral",
+          onClick: () => {
+            openScreen("SA_GROUP_GOVERNANCE", { mode: "replace" });
+            navigate("/sa/groups");
           },
         },
         {

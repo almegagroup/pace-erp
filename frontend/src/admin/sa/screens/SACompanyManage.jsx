@@ -173,6 +173,17 @@ export default function SACompanyManage() {
       },
       order: 30,
     },
+    {
+      id: "sa-company-manage-groups",
+      group: "Current Screen",
+      label: "Open group governance",
+      keywords: ["group governance", "company mapping", "groups"],
+      perform: () => {
+        openScreen("SA_GROUP_GOVERNANCE", { mode: "replace" });
+        navigate("/sa/groups");
+      },
+      order: 40,
+    },
   ]);
 
   async function handleStateChange(company, nextStatus) {
@@ -243,6 +254,21 @@ export default function SACompanyManage() {
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 1,
+          refs: actionRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
+      key: "groups",
+      label: "Group Governance",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionRefs.current[2] = element;
+      },
+      onClick: () => openRoute("/sa/groups"),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 2,
           refs: actionRefs.current,
           orientation: "horizontal",
         }),

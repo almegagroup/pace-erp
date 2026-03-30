@@ -34,6 +34,14 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_GROUP_GOVERNANCE: {
+    screen_code: "SA_GROUP_GOVERNANCE",
+    route: "/sa/groups",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_ORG_BOOTSTRAP: {
     screen_code: "SA_ORG_BOOTSTRAP",
     route: "/sa/org-bootstrap",
