@@ -176,13 +176,13 @@ export default function SAHome() {
         }),
     },
     {
-      key: "open-control-panel",
-      label: "Control Panel",
+      key: "open-menu-governance",
+      label: "Menu Governance",
       tone: "neutral",
       buttonRef: (element) => {
         topActionRefs.current[1] = element;
       },
-      onClick: () => openScreen("SA_CONTROL_PANEL"),
+      onClick: () => openRoute("/sa/menu"),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 1,

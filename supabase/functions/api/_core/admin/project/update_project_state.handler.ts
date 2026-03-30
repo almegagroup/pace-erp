@@ -44,6 +44,7 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
 type UpdateProjectStateInput = {
   project_id?: string;
   next_state?: "ACTIVE" | "INACTIVE";
+  company_id?: string;
 };
 
 /* --------------------------------------------------
@@ -62,6 +63,7 @@ export async function updateProjectStateHandler(
 
     const projectId = body.project_id;
     const nextState = body.next_state;
+    const targetCompanyId = body.company_id?.trim() || ctx.context.companyId;
 
     if (!projectId || !nextState) {
       return errorResponse(
@@ -75,19 +77,21 @@ export async function updateProjectStateHandler(
     const db = getServiceRoleClientWithContext(ctx.context);
 
     // 4️⃣ Verify project belongs to this company
-    const { data: mapping, error: mapError } = await db
-      .schema("erp_map").from("company_projects")
-      .select("project_id")
-      .eq("project_id", projectId)
-      .eq("company_id", ctx.context.companyId)
-      .maybeSingle();
+    if (targetCompanyId) {
+      const { data: mapping, error: mapError } = await db
+        .schema("erp_map").from("company_projects")
+        .select("project_id")
+        .eq("project_id", projectId)
+        .eq("company_id", targetCompanyId)
+        .maybeSingle();
 
-    if (mapError || !mapping) {
-      return errorResponse(
-        "PROJECT_NOT_FOUND",
-        "project not found",
-        ctx.request_id
-      );
+      if (mapError || !mapping) {
+        return errorResponse(
+          "PROJECT_NOT_FOUND",
+          "project not found",
+          ctx.request_id
+        );
+      }
     }
 
     // 5️⃣ Load current project state

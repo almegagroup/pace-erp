@@ -379,17 +379,6 @@ export default function SAGroupGovernance() {
       },
       order: 30,
     },
-    {
-      id: "sa-group-governance-org-bootstrap",
-      group: "Current Screen",
-      label: "Open org bootstrap",
-      keywords: ["org bootstrap", "departments", "projects"],
-      perform: () => {
-        openScreen("SA_ORG_BOOTSTRAP", { mode: "replace" });
-        navigate("/sa/org-bootstrap");
-      },
-      order: 40,
-    },
   ]);
 
   useErpScreenHotkeys({
@@ -446,24 +435,6 @@ export default function SAGroupGovernance() {
           onKeyDown: (event) =>
             handleLinearNavigation(event, {
               index: 1,
-              refs: topActionRefs.current,
-              orientation: "horizontal",
-            }),
-        },
-        {
-          key: "org-bootstrap",
-          label: "Org Bootstrap",
-          tone: "neutral",
-          buttonRef: (element) => {
-            topActionRefs.current[2] = element;
-          },
-          onClick: () => {
-            openScreen("SA_ORG_BOOTSTRAP", { mode: "replace" });
-            navigate("/sa/org-bootstrap");
-          },
-          onKeyDown: (event) =>
-            handleLinearNavigation(event, {
-              index: 2,
               refs: topActionRefs.current,
               orientation: "horizontal",
             }),

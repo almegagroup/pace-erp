@@ -291,14 +291,14 @@ export default function SAProjectMaster() {
       label: "Projects",
       value: loading ? "..." : String(projects.length),
       tone: "sky",
-      caption: "Project rows currently returned by the master list flow.",
+      caption: "Project rows currently returned by the global master list flow.",
     },
     {
       key: "active",
       label: "Active",
       value: loading ? "..." : String(projects.filter((row) => row.status === "ACTIVE").length),
       tone: "emerald",
-      caption: "Active project masters from the backend list endpoint.",
+      caption: "Active project masters from the global backend list endpoint.",
     },
     {
       key: "filtered",
@@ -320,7 +320,7 @@ export default function SAProjectMaster() {
     <ErpEntryFormTemplate
       eyebrow="Project Master"
       title="Project Master Manage"
-      description="Create and review project master rows from the same keyboard-native working surface."
+      description="Create and review reusable global project rows from the same keyboard-native working surface."
       actions={topActions}
       notices={[
         ...(error
@@ -345,7 +345,7 @@ export default function SAProjectMaster() {
       metrics={metrics}
       formEyebrow="Create"
       formTitle="Create a new project"
-      formDescription="Create a new project row through the current backend governance flow."
+      formDescription="Create a reusable global project row. Company mapping happens from org bootstrap and related governance flows."
       formContent={
         <div ref={formContainerRef} className="grid gap-3">
           <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
@@ -373,7 +373,7 @@ export default function SAProjectMaster() {
           <ErpSectionCard
             eyebrow="Search"
             title="Project quick filter"
-            description="Filter the current company project list without leaving the create form."
+            description="Filter the current global project list without leaving the create form."
           >
             <QuickFilterInput
               label="Find Project"
@@ -415,7 +415,7 @@ export default function SAProjectMaster() {
               ? "Loading project rows"
               : `${filteredProjects.length} visible project${filteredProjects.length === 1 ? "" : "s"}`
           }
-          description="The list below comes from the current company-scoped project master endpoint."
+          description="The list below comes from the global project master endpoint."
         >
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">

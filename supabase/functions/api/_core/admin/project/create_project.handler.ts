@@ -4,7 +4,7 @@
  * Gate: 9
  * Phase: 9
  * Domain: MASTER
- * Purpose: Create a project and map it to a target company (Admin Universe only)
+ * Purpose: Create a global project and optionally map it to a target company (Admin Universe only)
  * Authority: Backend
  */
 
@@ -53,18 +53,20 @@ export async function createProjectHandler(
 
     const db = getServiceRoleClientWithContext(ctx.context);
 
-    const { data: company } = await db
-      .schema("erp_master").from("companies")
-      .select("id")
-      .eq("id", targetCompanyId)
-      .maybeSingle();
+    if (targetCompanyId) {
+      const { data: company } = await db
+        .schema("erp_master").from("companies")
+        .select("id")
+        .eq("id", targetCompanyId)
+        .maybeSingle();
 
-    if (!company) {
-      return errorResponse(
-        "COMPANY_NOT_FOUND",
-        "company not found",
-        ctx.request_id,
-      );
+      if (!company) {
+        return errorResponse(
+          "COMPANY_NOT_FOUND",
+          "company not found",
+          ctx.request_id,
+        );
+      }
     }
 
     const { data, error } = await db
@@ -91,26 +93,28 @@ export async function createProjectHandler(
       );
     }
 
-    const { error: mapError } = await db
-      .schema("erp_map").from("company_projects")
-      .insert({
-        company_id: targetCompanyId,
-        project_id: data.id,
-      });
+    if (targetCompanyId) {
+      const { error: mapError } = await db
+        .schema("erp_map").from("company_projects")
+        .insert({
+          company_id: targetCompanyId,
+          project_id: data.id,
+        });
 
-    if (mapError) {
-      return errorResponse(
-        "PROJECT_COMPANY_MAPPING_FAILED",
-        "project company mapping failed",
-        ctx.request_id,
-        "NONE",
-        403,
-        {
-          gateId: "9.4",
-          routeKey,
-          decisionTrace: "PROJECT_COMPANY_MAPPING_FAILED",
-        },
-      );
+      if (mapError) {
+        return errorResponse(
+          "PROJECT_COMPANY_MAPPING_FAILED",
+          "project company mapping failed",
+          ctx.request_id,
+          "NONE",
+          403,
+          {
+            gateId: "9.4",
+            routeKey,
+            decisionTrace: "PROJECT_COMPANY_MAPPING_FAILED",
+          },
+        );
+      }
     }
 
     return okResponse(
@@ -120,6 +124,7 @@ export async function createProjectHandler(
           project_code: data.project_code,
           project_name: data.project_name,
           status: data.status,
+          company_id: targetCompanyId ?? null,
         },
       },
       ctx.request_id,
