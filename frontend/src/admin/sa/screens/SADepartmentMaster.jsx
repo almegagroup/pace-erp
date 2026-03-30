@@ -293,8 +293,12 @@ export default function SADepartmentMaster() {
       );
       await loadDepartmentsForCompany(selectedCompanyId, createdDepartment.id);
       createInputRef.current?.focus();
-    } catch {
-      setError("Department could not be created right now.");
+    } catch (createError) {
+      setError(
+        createError?.message === "REQUEST_BLOCKED" && normalizedName.length < 2
+          ? "Department name must be at least 2 characters."
+          : "Department could not be created right now."
+      );
     } finally {
       setSaving(false);
     }
@@ -559,7 +563,7 @@ export default function SADepartmentMaster() {
                   value={departmentName}
                   onChange={(event) => setDepartmentName(event.target.value)}
                   className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
-                  placeholder="Accounts, Human Resources, Purchase"
+                  placeholder="QA, HR, Accounts, Purchase"
                 />
               </label>
 
