@@ -24,6 +24,17 @@ async function readJsonSafe(response) {
   }
 }
 
+function createDebugError(json, fallbackCode) {
+  return {
+    code: json?.code ?? fallbackCode,
+    requestId: json?.request_id ?? null,
+    gateId: json?.gate_id ?? null,
+    routeKey: json?.route_key ?? null,
+    decisionTrace: json?.decision_trace ?? null,
+    message: json?.message ?? "Request blocked by security policy",
+  };
+}
+
 async function fetchProjects() {
   const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/projects`, {
     credentials: "include",
@@ -31,7 +42,7 @@ async function fetchProjects() {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !Array.isArray(json?.data?.projects)) {
-    throw new Error(json?.code ?? "PROJECT_LIST_FAILED");
+    throw createDebugError(json, "PROJECT_LIST_FAILED");
   }
 
   return json.data.projects;
@@ -45,7 +56,7 @@ async function fetchModules(projectId = "") {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !Array.isArray(json?.data?.modules)) {
-    throw new Error(json?.code ?? "MODULE_LIST_FAILED");
+    throw createDebugError(json, "MODULE_LIST_FAILED");
   }
 
   return json.data.modules;
@@ -63,7 +74,7 @@ async function createModule(payload) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !json?.data?.module) {
-    throw new Error(json?.code ?? "MODULE_CREATE_FAILED");
+    throw createDebugError(json, "MODULE_CREATE_FAILED");
   }
 
   return json.data.module;
@@ -81,7 +92,7 @@ async function updateModuleState(payload) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    throw new Error(json?.code ?? "MODULE_STATE_UPDATE_FAILED");
+    throw createDebugError(json, "MODULE_STATE_UPDATE_FAILED");
   }
 
   return json.data;
@@ -254,8 +265,18 @@ export default function SAModuleMaster() {
       setMaxApprovers("3");
       setNotice(`Module ${created.module_code} created under ${project.project_code}.`);
       moduleCodeRef.current?.focus();
-    } catch {
-      setError("Module could not be created right now.");
+    } catch (err) {
+      const detail = err && typeof err === "object" ? err : null;
+      const decisionTrace =
+        typeof detail?.decisionTrace === "string" ? detail.decisionTrace : null;
+      const requestId = typeof detail?.requestId === "string" ? detail.requestId : null;
+      const gateId = typeof detail?.gateId === "string" ? detail.gateId : null;
+
+      setError(
+        detail
+          ? `Module create blocked. ${decisionTrace ?? detail.code ?? "REQUEST_BLOCKED"}${gateId ? ` | Gate ${gateId}` : ""}${requestId ? ` | Req ${requestId}` : ""}`
+          : "Module could not be created right now.",
+      );
     } finally {
       setSaving(false);
     }
@@ -296,8 +317,13 @@ export default function SAModuleMaster() {
       });
       await loadWorkspace(selectedProjectId, selectedModule.module_id);
       setNotice(`Module ${selectedModule.module_code} is now ${nextState}.`);
-    } catch {
-      setError("Module state could not be updated right now.");
+    } catch (err) {
+      const detail = err && typeof err === "object" ? err : null;
+      setError(
+        detail
+          ? `Module state blocked. ${detail.decisionTrace ?? detail.code ?? "REQUEST_BLOCKED"}`
+          : "Module state could not be updated right now.",
+      );
     } finally {
       setSaving(false);
     }

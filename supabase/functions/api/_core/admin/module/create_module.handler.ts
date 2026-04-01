@@ -1,6 +1,7 @@
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
+import { log } from "../../../_lib/logger.ts";
 
 function assertAdmin(
   ctx: { context: ContextResolution },
@@ -44,6 +45,8 @@ export async function createModuleHandler(
   req: Request,
   ctx: { context: ContextResolution; request_id: string },
 ): Promise<Response> {
+  const routeKey = "POST:/api/admin/module";
+
   try {
     assertAdmin(ctx);
 
@@ -56,18 +59,43 @@ export async function createModuleHandler(
     const maxApprovers = Number(body.max_approvers ?? 3);
 
     if (!moduleName || !projectId) {
+      log({
+        level: "SECURITY",
+        request_id: ctx.request_id,
+        gate_id: "9.module",
+        route_key: routeKey,
+        event: "MODULE_CREATE_INVALID_INPUT",
+        meta: {
+          has_module_name: Boolean(moduleName),
+          has_project_id: Boolean(projectId),
+        },
+      });
       return errorResponse(
         "INVALID_INPUT",
         "module_name and project_id required",
         ctx.request_id,
+        "NONE",
+        403,
+        {
+          gateId: "9.module",
+          routeKey,
+          decisionTrace: "MODULE_CREATE_INVALID_INPUT",
+        },
       );
     }
 
-    if (moduleName.length < 3) {
+    if (moduleName.length < 2) {
       return errorResponse(
         "MODULE_NAME_REQUIRED",
-        "module_name must be at least 3 characters",
+        "module_name must be at least 2 characters",
         ctx.request_id,
+        "NONE",
+        403,
+        {
+          gateId: "9.module",
+          routeKey,
+          decisionTrace: "MODULE_NAME_TOO_SHORT",
+        },
       );
     }
 
@@ -76,6 +104,13 @@ export async function createModuleHandler(
         "MODULE_APPROVER_BOUNDS_INVALID",
         "min_approvers and max_approvers must be numeric",
         ctx.request_id,
+        "NONE",
+        403,
+        {
+          gateId: "9.module",
+          routeKey,
+          decisionTrace: "MODULE_APPROVER_BOUNDS_NON_NUMERIC",
+        },
       );
     }
 
@@ -84,6 +119,13 @@ export async function createModuleHandler(
         "MODULE_APPROVAL_TYPE_REQUIRED",
         "approval_type required when approval_required = true",
         ctx.request_id,
+        "NONE",
+        403,
+        {
+          gateId: "9.module",
+          routeKey,
+          decisionTrace: "MODULE_APPROVAL_TYPE_REQUIRED",
+        },
       );
     }
 
@@ -92,6 +134,13 @@ export async function createModuleHandler(
         "MODULE_APPROVER_BOUNDS_INVALID",
         "approver bounds must stay within 1 to 3 and min <= max",
         ctx.request_id,
+        "NONE",
+        403,
+        {
+          gateId: "9.module",
+          routeKey,
+          decisionTrace: "MODULE_APPROVER_BOUNDS_INVALID",
+        },
       );
     }
 
@@ -109,6 +158,13 @@ export async function createModuleHandler(
         "PROJECT_NOT_FOUND",
         "project not found",
         ctx.request_id,
+        "NONE",
+        403,
+        {
+          gateId: "9.module",
+          routeKey,
+          decisionTrace: "MODULE_PROJECT_NOT_FOUND",
+        },
       );
     }
 
@@ -117,6 +173,13 @@ export async function createModuleHandler(
         "PROJECT_INACTIVE",
         "inactive project cannot receive active modules",
         ctx.request_id,
+        "NONE",
+        403,
+        {
+          gateId: "9.module",
+          routeKey,
+          decisionTrace: "MODULE_PROJECT_INACTIVE",
+        },
       );
     }
 
@@ -129,6 +192,13 @@ export async function createModuleHandler(
         "MODULE_CODE_GENERATION_FAILED",
         "module code could not be generated",
         ctx.request_id,
+        "NONE",
+        403,
+        {
+          gateId: "9.module",
+          routeKey,
+          decisionTrace: "MODULE_CODE_GENERATION_FAILED",
+        },
       );
     }
 
@@ -144,6 +214,13 @@ export async function createModuleHandler(
         "MODULE_CODE_GENERATION_FAILED",
         existingCodeError.message,
         ctx.request_id,
+        "NONE",
+        403,
+        {
+          gateId: "9.module",
+          routeKey,
+          decisionTrace: "MODULE_CODE_LOOKUP_FAILED",
+        },
       );
     }
 
@@ -158,6 +235,24 @@ export async function createModuleHandler(
       moduleCode = `${moduleCodeBase}_${sequence}`;
       sequence += 1;
     }
+
+    log({
+      level: "INFO",
+      request_id: ctx.request_id,
+      gate_id: "9.module",
+      route_key: routeKey,
+      event: "MODULE_CREATE_ATTEMPT",
+      meta: {
+        project_id: projectId,
+        project_code: project.project_code,
+        module_name: moduleName,
+        module_code: moduleCode,
+        approval_required: approvalRequired,
+        approval_type: approvalType,
+        min_approvers: minApprovers,
+        max_approvers: maxApprovers,
+      },
+    });
 
     const { data, error } = await db
       .schema("acl")
@@ -178,12 +273,44 @@ export async function createModuleHandler(
       .single();
 
     if (error || !data) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "9.module",
+        route_key: routeKey,
+        event: "MODULE_CREATE_FAILED",
+        meta: {
+          error: error?.message ?? "module create failed",
+          project_id: projectId,
+          module_code: moduleCode,
+        },
+      });
       return errorResponse(
         "MODULE_CREATE_FAILED",
         error?.message ?? "module create failed",
         ctx.request_id,
+        "NONE",
+        403,
+        {
+          gateId: "9.module",
+          routeKey,
+          decisionTrace: error?.message ?? "MODULE_CREATE_FAILED",
+        },
       );
     }
+
+    log({
+      level: "SECURITY",
+      request_id: ctx.request_id,
+      gate_id: "9.module",
+      route_key: routeKey,
+      event: "MODULE_CREATED",
+      meta: {
+        module_id: data.module_id,
+        module_code: data.module_code,
+        project_id: projectId,
+      },
+    });
 
     return okResponse(
       {
@@ -192,10 +319,27 @@ export async function createModuleHandler(
       ctx.request_id,
     );
   } catch (err) {
+    log({
+      level: "ERROR",
+      request_id: ctx.request_id,
+      gate_id: "9.module",
+      route_key: routeKey,
+      event: "MODULE_CREATE_EXCEPTION",
+      meta: {
+        error: (err as Error).message || "MODULE_CREATE_EXCEPTION",
+      },
+    });
     return errorResponse(
       (err as Error).message || "MODULE_CREATE_EXCEPTION",
       "module create exception",
       ctx.request_id,
+      "NONE",
+      403,
+      {
+        gateId: "9.module",
+        routeKey,
+        decisionTrace: (err as Error).message || "MODULE_CREATE_EXCEPTION",
+      },
     );
   }
 }
