@@ -114,6 +114,22 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_PROJECT_MANAGE: {
+    screen_code: "SA_PROJECT_MANAGE",
+    route: "/sa/projects/manage",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_COMPANY_PROJECT_MAP: {
+    screen_code: "SA_COMPANY_PROJECT_MAP",
+    route: "/sa/projects/map",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_ROLE_PERMISSIONS: {
     screen_code: "SA_ROLE_PERMISSIONS",
     route: "/sa/acl/role-permissions",

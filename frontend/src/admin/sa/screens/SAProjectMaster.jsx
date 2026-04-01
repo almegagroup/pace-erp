@@ -211,6 +211,17 @@ export default function SAProjectMaster() {
       order: 30,
     },
     {
+      id: "sa-project-master-manage",
+      group: "Current Screen",
+      label: "Open project manage",
+      keywords: ["project manage", "project lifecycle", "mapping"],
+      perform: () => {
+        openScreen("SA_PROJECT_MANAGE", { mode: "replace" });
+        navigate("/sa/projects/manage");
+      },
+      order: 35,
+    },
+    {
       id: "sa-project-master-refresh",
       group: "Current Screen",
       label: loading ? "Refreshing projects..." : "Refresh projects",
@@ -251,17 +262,35 @@ export default function SAProjectMaster() {
         }),
     },
     {
+      key: "manage",
+      label: "Project Manage",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionBarRefs.current[1] = element;
+      },
+      onClick: () => {
+        openScreen("SA_PROJECT_MANAGE", { mode: "replace" });
+        navigate("/sa/projects/manage");
+      },
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 1,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
       key: "refresh",
       label: loading ? "Refreshing..." : "Refresh Projects",
       hint: "Alt+R",
       tone: "neutral",
       buttonRef: (element) => {
-        actionBarRefs.current[1] = element;
+        actionBarRefs.current[2] = element;
       },
       onClick: () => void loadProjects(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 1,
+          index: 2,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
@@ -273,12 +302,12 @@ export default function SAProjectMaster() {
       tone: "primary",
       disabled: saving,
       buttonRef: (element) => {
-        actionBarRefs.current[2] = element;
+        actionBarRefs.current[3] = element;
       },
       onClick: () => void handleCreate(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 2,
+          index: 3,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
@@ -320,7 +349,7 @@ export default function SAProjectMaster() {
     <ErpEntryFormTemplate
       eyebrow="Project Master"
       title="Project Master Manage"
-      description="Create and review reusable global project rows from the same keyboard-native working surface."
+      description="Create reusable global project rows here, then move into dedicated lifecycle and company mapping surfaces when the project is ready."
       actions={topActions}
       notices={[
         ...(error
@@ -345,7 +374,7 @@ export default function SAProjectMaster() {
       metrics={metrics}
       formEyebrow="Create"
       formTitle="Create a new project"
-      formDescription="Create a reusable global project row. Company mapping happens from org bootstrap and related governance flows."
+      formDescription="Create a reusable global project row here. Company rollout now happens from the dedicated company project map screen."
       formContent={
         <div ref={formContainerRef} className="grid gap-3">
           <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">

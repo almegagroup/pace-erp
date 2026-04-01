@@ -26,6 +26,9 @@ import { listGroupsHandler } from "../_core/admin/group/list_groups.handler.ts";
 import { createProjectHandler } from "../_core/admin/project/create_project.handler.ts";
 import { listProjectsHandler } from "../_core/admin/project/list_projects.handler.ts";
 import { updateProjectStateHandler } from "../_core/admin/project/update_project_state.handler.ts";
+import { listProjectCompanyMapHandler } from "../_core/admin/project/list_project_company_map.handler.ts";
+import { mapCompanyToProjectHandler } from "../_core/admin/project/map_company_to_project.handler.ts";
+import { unmapCompanyProjectHandler } from "../_core/admin/project/unmap_company_project.handler.ts";
 
 import { createDepartmentHandler } from "../_core/admin/department/create_department.handler.ts";
 import { listDepartmentsHandler } from "../_core/admin/department/list_departments.handler.ts";
@@ -205,6 +208,27 @@ export async function dispatchAdminRoutes(
 
     case "POST:/api/admin/project/state":
       response = await updateProjectStateHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/project/company-map":
+      response = await listProjectCompanyMapHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/project/map-company":
+      response = await mapCompanyToProjectHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/project/unmap-company":
+      response = await unmapCompanyProjectHandler(req, {
         context,
         request_id: requestId,
       });
