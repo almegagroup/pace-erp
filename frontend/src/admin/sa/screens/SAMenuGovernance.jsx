@@ -23,6 +23,13 @@ function inputClassName() {
   return "w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500";
 }
 
+function normalizeMenuCode(value) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "_");
+}
+
 async function readJsonSafe(response) {
   try {
     return await response.clone().json();
@@ -212,6 +219,31 @@ function pickDefaultGroup(menus, universe, selectedMenuCode) {
   );
 }
 
+function findReservedScreenByCode(screenCode, universe) {
+  const normalizedCode = normalizeMenuCode(screenCode);
+
+  return Object.values(SCREEN_REGISTRY).find(
+    (screen) =>
+      resolveGovernanceUniverse(screen) === universe &&
+      normalizeMenuCode(screen?.screen_code) === normalizedCode
+  ) ?? null;
+}
+
+function resolveMenuGovernanceErrorMessage(code, fallbackMessage) {
+  switch (code) {
+    case "MENU_CODE_CONFLICT":
+      return "This code is already used. Group codes and page codes cannot collide.";
+    case "MENU_RESOURCE_CONFLICT":
+      return "This resource code is already used by another row.";
+    case "MENU_ROUTE_CONFLICT":
+      return "This route is already published by another page.";
+    case "MENU_PAGE_ROUTE_REQUIRED":
+      return "A page must keep a route path.";
+    default:
+      return fallbackMessage;
+  }
+}
+
 export default function SAMenuGovernance() {
   const topActionRefs = useRef([]);
   const createCodeRef = useRef(null);
@@ -289,6 +321,126 @@ export default function SAMenuGovernance() {
     });
   }, [selectedMenu]);
 
+  const normalizedCreateMenuCode = useMemo(
+    () => normalizeMenuCode(createForm.menu_code),
+    [createForm.menu_code]
+  );
+
+  const normalizedCreateResourceCode = useMemo(
+    () => normalizeMenuCode(createForm.resource_code || createForm.menu_code),
+    [createForm.resource_code, createForm.menu_code]
+  );
+
+  const createReservedScreenByMenuCode = useMemo(
+    () => findReservedScreenByCode(normalizedCreateMenuCode, universe),
+    [normalizedCreateMenuCode, universe]
+  );
+
+  const createReservedScreenByResourceCode = useMemo(
+    () => findReservedScreenByCode(normalizedCreateResourceCode, universe),
+    [normalizedCreateResourceCode, universe]
+  );
+
+  const createCodeConflict = useMemo(
+    () =>
+      menus.find(
+        (item) => item.universe === universe && item.menu_code === normalizedCreateMenuCode
+      ) ?? null,
+    [menus, normalizedCreateMenuCode, universe]
+  );
+
+  const createResourceConflict = useMemo(
+    () =>
+      menus.find(
+        (item) =>
+          item.universe === universe &&
+          item.resource_code === normalizedCreateResourceCode
+      ) ?? null,
+    [menus, normalizedCreateResourceCode, universe]
+  );
+
+  const suggestedCreateOrder = useMemo(
+    () => getNextAvailableOrder(createForm.parent_menu_code || ""),
+    [createForm.parent_menu_code, menus]
+  );
+
+  const selectedGroupSuggestedOrder = useMemo(
+    () => getNextAvailableOrder(editForm.parent_menu_code || "", selectedMenuCode),
+    [editForm.parent_menu_code, menus, selectedMenuCode]
+  );
+
+  const selectedGroupOrderConflict = useMemo(() => {
+    if (!selectedMenu || selectedMenu.menu_type !== "GROUP") {
+      return null;
+    }
+
+    const parsedOrder = Number(editForm.display_order || 0);
+    if (!Number.isFinite(parsedOrder)) {
+      return null;
+    }
+
+    return (
+      menus.find(
+        (item) =>
+          item.menu_code !== selectedMenu.menu_code &&
+          (item.parent_menu_code ?? "") === (editForm.parent_menu_code ?? "") &&
+          Number(item.tree_display_order ?? item.display_order ?? 0) === parsedOrder
+      ) ?? null
+    );
+  }, [editForm.display_order, editForm.parent_menu_code, menus, selectedMenu]);
+
+  const pageEditorSuggestedOrder = useMemo(
+    () =>
+      pageEditor
+        ? getNextAvailableOrder(pageEditor.parent_menu_code || "", pageEditor.menu_code)
+        : 0,
+    [menus, pageEditor]
+  );
+
+  const pageEditorBlockingGroupConflict = useMemo(() => {
+    if (!pageEditor || pageEditor.is_registered) {
+      return null;
+    }
+
+    return (
+      menus.find(
+        (item) =>
+          item.menu_code === pageEditor.menu_code &&
+          item.menu_type !== "PAGE"
+      ) ?? null
+    );
+  }, [menus, pageEditor]);
+
+  const pageEditorResourceConflict = useMemo(() => {
+    if (!pageEditor) {
+      return null;
+    }
+
+    const targetResourceCode = pageEditor.resource_code.trim() || pageEditor.menu_code;
+
+    return (
+      menus.find(
+        (item) =>
+          item.resource_code === targetResourceCode &&
+          item.menu_code !== pageEditor.menu_code
+      ) ?? null
+    );
+  }, [menus, pageEditor]);
+
+  const pageEditorRouteConflict = useMemo(() => {
+    if (!pageEditor) {
+      return null;
+    }
+
+    return (
+      menus.find(
+        (item) =>
+          item.route_path === pageEditor.route_path &&
+          item.menu_code !== pageEditor.menu_code
+      ) ?? null
+    );
+  }, [menus, pageEditor]);
+
   useEffect(() => {
     if (!groupPickerOpen) {
       return undefined;
@@ -365,10 +517,22 @@ export default function SAMenuGovernance() {
   }, [catalogSearch, menus, universe]);
 
   async function handleCreateMenu() {
+    const normalizedMenuCode = normalizeMenuCode(createForm.menu_code);
+    const normalizedResourceCode = normalizeMenuCode(
+      createForm.resource_code || createForm.menu_code
+    );
+    const reservedScreenByMenuCode = findReservedScreenByCode(
+      normalizedMenuCode,
+      universe
+    );
+    const reservedScreenByResourceCode = findReservedScreenByCode(
+      normalizedResourceCode,
+      universe
+    );
+
     const payload = {
-      menu_code: createForm.menu_code.trim().toUpperCase(),
-      resource_code:
-        (createForm.resource_code.trim() || createForm.menu_code.trim()).toUpperCase(),
+      menu_code: normalizedMenuCode,
+      resource_code: normalizedResourceCode,
       title: createForm.title.trim(),
       description: createForm.description.trim() || null,
       route_path: null,
@@ -378,9 +542,35 @@ export default function SAMenuGovernance() {
       parent_menu_code: createForm.parent_menu_code || null,
       tree_display_order: Number(createForm.display_order || 0),
     };
+    const createOrderConflict = menus.find(
+      (item) =>
+        (item.parent_menu_code ?? "") === (payload.parent_menu_code ?? "") &&
+        Number(item.tree_display_order ?? item.display_order ?? 0) === payload.display_order
+    );
 
     if (!payload.menu_code || !payload.title) {
-      setError("Menu code and title are required.");
+      setError("Group code and title are required.");
+      return;
+    }
+
+    if (reservedScreenByMenuCode) {
+      setError(
+        `${normalizedMenuCode} is reserved for page ${reservedScreenByMenuCode.route}. Use a group code like ${normalizedMenuCode}_GROUP or ${normalizedMenuCode}_GOVERNANCE.`
+      );
+      return;
+    }
+
+    if (reservedScreenByResourceCode) {
+      setError(
+        `${normalizedResourceCode} is reserved for page ${reservedScreenByResourceCode.route}. Use a different group resource code.`
+      );
+      return;
+    }
+
+    if (createOrderConflict) {
+      setError(
+        `Order ${payload.display_order} is already used under ${payload.parent_menu_code || "root"} by ${createOrderConflict.title}. Suggested next order is ${suggestedCreateOrder}.`
+      );
       return;
     }
 
@@ -401,8 +591,13 @@ export default function SAMenuGovernance() {
       }));
       setNotice(`Group ${payload.menu_code} created.`);
       createCodeRef.current?.focus();
-    } catch {
-      setError("Group could not be created right now.");
+    } catch (error) {
+      setError(
+        resolveMenuGovernanceErrorMessage(
+          error instanceof Error ? error.message : "",
+          "Group could not be created right now."
+        )
+      );
     } finally {
       setSaving(false);
     }
@@ -417,25 +612,46 @@ export default function SAMenuGovernance() {
     setError("");
     setNotice("");
 
+    const parsedOrder = Number(editForm.display_order || 0);
+
+    if (!Number.isFinite(parsedOrder) || parsedOrder < 0) {
+      setError("Enter a valid order number.");
+      setSaving(false);
+      return;
+    }
+
+    if (selectedGroupOrderConflict) {
+      setError(
+        `Order ${parsedOrder} is already used under ${editForm.parent_menu_code || "root"} by ${selectedGroupOrderConflict.title}. Suggested next order is ${selectedGroupSuggestedOrder}.`
+      );
+      setSaving(false);
+      return;
+    }
+
     try {
       await updateMenu({
         menu_code: selectedMenu.menu_code,
         title: editForm.title.trim(),
         description: editForm.description.trim() || null,
         route_path: selectedMenu.route_path ?? null,
-        display_order: Number(editForm.display_order || 0),
+        display_order: parsedOrder,
       });
 
       await updateMenuTree({
         child_menu_code: selectedMenu.menu_code,
         parent_menu_code: editForm.parent_menu_code || null,
-        display_order: Number(editForm.display_order || 0),
+        display_order: parsedOrder,
       });
 
       await loadRegistry(universe);
       setNotice(`Group ${selectedMenu.menu_code} updated.`);
-    } catch {
-      setError("Selected group could not be updated right now.");
+    } catch (error) {
+      setError(
+        resolveMenuGovernanceErrorMessage(
+          error instanceof Error ? error.message : "",
+          "Selected group could not be updated right now."
+        )
+      );
     } finally {
       setSaving(false);
     }
@@ -586,6 +802,7 @@ export default function SAMenuGovernance() {
     }
 
     const targetMenuCode = pageEditor.menu_code;
+    const targetResourceCode = pageEditor.resource_code.trim() || targetMenuCode;
     const targetParent = pageEditor.parent_menu_code || null;
     const parsedOrder = Number(pageEditor.display_order || 0);
 
@@ -613,6 +830,43 @@ export default function SAMenuGovernance() {
       return;
     }
 
+    const blockingCodeConflict = menus.find(
+      (item) => item.menu_code === targetMenuCode && item.menu_type !== "PAGE"
+    );
+
+    if (!pageEditor.is_registered && blockingCodeConflict) {
+      setError(
+        `${targetMenuCode} is already used by group ${blockingCodeConflict.title}. Page codes are reserved for pages. Rename or remove that group first.`
+      );
+      return;
+    }
+
+    const blockingResourceConflict = menus.find(
+      (item) =>
+        item.resource_code === targetResourceCode &&
+        item.menu_code !== targetMenuCode
+    );
+
+    if (blockingResourceConflict) {
+      setError(
+        `${targetResourceCode} is already used by ${blockingResourceConflict.title}. A page needs its own unique resource code.`
+      );
+      return;
+    }
+
+    const blockingRouteConflict = menus.find(
+      (item) =>
+        item.route_path === pageEditor.route_path &&
+        item.menu_code !== targetMenuCode
+    );
+
+    if (blockingRouteConflict) {
+      setError(
+        `${pageEditor.route_path} is already published by ${blockingRouteConflict.title}.`
+      );
+      return;
+    }
+
     setSaving(true);
     setError("");
     setNotice("");
@@ -621,7 +875,7 @@ export default function SAMenuGovernance() {
       if (pageEditor.is_registered) {
         await updateMenu({
           menu_code: targetMenuCode,
-          resource_code: pageEditor.resource_code.trim() || targetMenuCode,
+          resource_code: targetResourceCode,
           menu_type: "PAGE",
           title: pageEditor.title.trim(),
           description: pageEditor.description.trim() || null,
@@ -637,8 +891,7 @@ export default function SAMenuGovernance() {
       } else {
         await createMenu({
           menu_code: pageEditor.menu_code,
-          resource_code:
-            pageEditor.resource_code.trim() || pageEditor.menu_code,
+          resource_code: targetResourceCode,
           title: pageEditor.title.trim(),
           description: pageEditor.description.trim() || null,
           route_path: pageEditor.route_path,
@@ -654,8 +907,13 @@ export default function SAMenuGovernance() {
       setGroupPickerOpen(false);
       setPageEditor(null);
       setNotice(`${pageEditor.title} has been saved into the menu registry and tree.`);
-    } catch {
-      setError("That page could not be saved right now.");
+    } catch (error) {
+      setError(
+        resolveMenuGovernanceErrorMessage(
+          error instanceof Error ? error.message : "",
+          "That page could not be saved right now."
+        )
+      );
     } finally {
       setSaving(false);
     }
@@ -844,6 +1102,9 @@ export default function SAMenuGovernance() {
                           setEditForm((current) => ({
                             ...current,
                             parent_menu_code: event.target.value,
+                            display_order: String(
+                              getNextAvailableOrder(event.target.value, selectedMenu?.menu_code ?? "")
+                            ),
                           }))
                         }
                         className={inputClassName()}
@@ -875,6 +1136,16 @@ export default function SAMenuGovernance() {
                     >
                       {selectedMenu.is_active ? "Disable Group" : "Enable Group"}
                     </button>
+                  </div>
+
+                  <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    Suggested next free order under {editForm.parent_menu_code || "root"}:{" "}
+                    <span className="font-semibold text-slate-900">{selectedGroupSuggestedOrder}</span>
+                    {selectedGroupOrderConflict ? (
+                      <span className="ml-2 text-rose-700">
+                        Current order collides with {selectedGroupOrderConflict.title}.
+                      </span>
+                    ) : null}
                   </div>
 
                   <div className="grid gap-2 md:grid-cols-2">
@@ -966,6 +1237,7 @@ export default function SAMenuGovernance() {
                         setCreateForm((current) => ({
                           ...current,
                           parent_menu_code: event.target.value,
+                          display_order: String(getNextAvailableOrder(event.target.value)),
                         }))
                       }
                       className={inputClassName()}
@@ -996,6 +1268,37 @@ export default function SAMenuGovernance() {
                       className={inputClassName()}
                     />
                   </label>
+                </div>
+
+                <div className="grid gap-2 border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+                  <div>
+                    Suggested next free order under {createForm.parent_menu_code || "root"}:{" "}
+                    <span className="font-semibold text-slate-900">{suggestedCreateOrder}</span>
+                  </div>
+                  {createReservedScreenByMenuCode ? (
+                    <div className="text-amber-800">
+                      `{normalizedCreateMenuCode}` is reserved for page {createReservedScreenByMenuCode.route}. Suggested group code:
+                      {" "}
+                      <span className="font-semibold">{normalizedCreateMenuCode}_GROUP</span>
+                    </div>
+                  ) : null}
+                  {createReservedScreenByResourceCode ? (
+                    <div className="text-amber-800">
+                      Resource `{normalizedCreateResourceCode}` is reserved for page {createReservedScreenByResourceCode.route}. Suggested resource:
+                      {" "}
+                      <span className="font-semibold">{normalizedCreateResourceCode}_GROUP</span>
+                    </div>
+                  ) : null}
+                  {createCodeConflict ? (
+                    <div className="text-rose-700">
+                      Group code `{normalizedCreateMenuCode}` is already used by {createCodeConflict.title}.
+                    </div>
+                  ) : null}
+                  {createResourceConflict ? (
+                    <div className="text-rose-700">
+                      Resource `{normalizedCreateResourceCode}` is already used by {createResourceConflict.title}.
+                    </div>
+                  ) : null}
                 </div>
 
                 <button
@@ -1203,6 +1506,28 @@ export default function SAMenuGovernance() {
                   </label>
                 </div>
 
+                <div className="grid gap-2 border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+                  <div>
+                    Suggested next free order under {pageEditor.parent_menu_code || "root"}:{" "}
+                    <span className="font-semibold text-slate-900">{pageEditorSuggestedOrder}</span>
+                  </div>
+                  {pageEditorBlockingGroupConflict ? (
+                    <div className="text-rose-700">
+                      `{pageEditor.menu_code}` is already used by group {pageEditorBlockingGroupConflict.title}. Rename or remove that group first.
+                    </div>
+                  ) : null}
+                  {pageEditorResourceConflict ? (
+                    <div className="text-rose-700">
+                      Resource `{pageEditor.resource_code.trim() || pageEditor.menu_code}` is already used by {pageEditorResourceConflict.title}.
+                    </div>
+                  ) : null}
+                  {pageEditorRouteConflict ? (
+                    <div className="text-rose-700">
+                      Route `{pageEditor.route_path}` is already published by {pageEditorRouteConflict.title}.
+                    </div>
+                  ) : null}
+                </div>
+
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -1234,8 +1559,8 @@ export default function SAMenuGovernance() {
                 </div>
                 <div className="mt-1 text-sm text-slate-600">
                   {groupPickerOpen
-                    ? "Arrow keys and Enter দিয়ে group select করো."
-                    : "Group field থেকে drawer open করো."}
+                    ? "Arrow keys and Enter দিয়ে parent group select করো."
+                    : "Parent Group field থেকে drawer open করো."}
                 </div>
               </div>
 
@@ -1307,7 +1632,7 @@ export default function SAMenuGovernance() {
                   </div>
                 ) : (
                   <div className="text-sm text-slate-500">
-                    Drawer closed.
+                    Drawer closed. Parent group choose করতে field-এ click করো.
                   </div>
                 )}
               </div>

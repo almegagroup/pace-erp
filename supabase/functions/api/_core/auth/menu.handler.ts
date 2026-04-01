@@ -264,6 +264,50 @@ interface MenuAdminCtx {
   session_id?: string;
 }
 
+function mapMenuMutationErrorCode(error: { code?: string; message?: string; details?: string | null }) {
+  const combined = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
+
+  if (error.code === "23505") {
+    if (combined.includes("ux_menu_master_menu_code")) {
+      return {
+        code: "MENU_CODE_CONFLICT",
+        status: 409,
+        message: "menu_code is already used by another menu row",
+      };
+    }
+
+    if (combined.includes("ux_menu_master_resource_code")) {
+      return {
+        code: "MENU_RESOURCE_CONFLICT",
+        status: 409,
+        message: "resource_code is already used by another menu row",
+      };
+    }
+
+    if (combined.includes("ux_menu_master_route_path")) {
+      return {
+        code: "MENU_ROUTE_CONFLICT",
+        status: 409,
+        message: "route_path is already published by another page",
+      };
+    }
+  }
+
+  if (error.code === "23514" && combined.includes("chk_page_requires_route")) {
+    return {
+      code: "MENU_PAGE_ROUTE_REQUIRED",
+      status: 400,
+      message: "PAGE rows must keep a route_path and GROUP rows must not have one",
+    };
+  }
+
+  return {
+    code: null,
+    status: 500,
+    message: error.message ?? "Menu mutation failed",
+  };
+}
+
 async function resolveMenuIdByCode(
   db: ReturnType<typeof getServiceRoleClientWithContext>,
   menuCode?: string | null
@@ -355,12 +399,13 @@ export async function createMenuHandler(
     .single();
 
   if (error) {
+    const mapped = mapMenuMutationErrorCode(error);
     return errorResponse(
-      "MENU_CREATE_FAILED",
-      error.message,
+      mapped.code ?? "MENU_CREATE_FAILED",
+      mapped.message,
       ctx.request_id,
       "NONE",
-      500
+      mapped.status
     );
   }
 
@@ -437,12 +482,13 @@ export async function updateMenuHandler(
     .eq("menu_code", body.menu_code);
 
   if (error) {
+    const mapped = mapMenuMutationErrorCode(error);
     return errorResponse(
-      "MENU_UPDATE_FAILED",
-      error.message,
+      mapped.code ?? "MENU_UPDATE_FAILED",
+      mapped.message,
       ctx.request_id,
       "NONE",
-      500
+      mapped.status
     );
   }
 
