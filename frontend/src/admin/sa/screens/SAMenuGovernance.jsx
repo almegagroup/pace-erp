@@ -176,6 +176,25 @@ function resolveGovernanceUniverse(screen) {
   return null;
 }
 
+function resolveRegisteredPageMenu(menus, screen) {
+  const route = String(screen?.route ?? "");
+  const screenCode = String(screen?.screen_code ?? "");
+
+  return (
+    menus.find(
+      (item) =>
+        item.menu_type === "PAGE" &&
+        item.route_path === route
+    ) ??
+    menus.find(
+      (item) =>
+        item.menu_type === "PAGE" &&
+        item.menu_code === screenCode
+    ) ??
+    null
+  );
+}
+
 export default function SAMenuGovernance() {
   const topActionRefs = useRef([]);
   const createCodeRef = useRef(null);
@@ -301,10 +320,7 @@ export default function SAMenuGovernance() {
       .filter((screen) => screen.publishableInMenu !== false)
       .filter((screen) => Boolean(screen?.screen_code) && Boolean(screen?.route))
       .map((screen) => {
-        const registeredMenu =
-          menus.find((item) => item.menu_code === screen.screen_code) ??
-          menus.find((item) => item.route_path === screen.route) ??
-          null;
+        const registeredMenu = resolveRegisteredPageMenu(menus, screen);
 
         return {
           screen_code: screen.screen_code,
@@ -521,9 +537,12 @@ export default function SAMenuGovernance() {
   }
 
   function openPageEditor(page) {
-    const defaultParent = page.parent_menu_code ?? "";
+    const safeParent =
+      page.parent_menu_code && page.parent_menu_code !== page.screen_code
+        ? page.parent_menu_code
+        : "";
     const defaultOrder =
-      page.display_order ?? getNextAvailableOrder(defaultParent, page.registeredMenu?.menu_code ?? "");
+      page.display_order ?? getNextAvailableOrder(safeParent, page.registeredMenu?.menu_code ?? "");
 
     setPageEditor({
       screen_code: page.screen_code,
@@ -531,7 +550,7 @@ export default function SAMenuGovernance() {
       title: page.registeredMenu?.title ?? page.title,
       resource_code: page.registeredMenu?.resource_code ?? page.screen_code,
       description: page.registeredMenu?.description ?? "",
-      parent_menu_code: defaultParent,
+      parent_menu_code: safeParent,
       display_order: String(defaultOrder),
       route_path: page.route_path,
       is_registered: Boolean(page.registeredMenu),
@@ -552,6 +571,11 @@ export default function SAMenuGovernance() {
     const targetMenuCode = pageEditor.menu_code;
     const targetParent = pageEditor.parent_menu_code || null;
     const parsedOrder = Number(pageEditor.display_order || 0);
+
+    if (targetParent === targetMenuCode) {
+      setError("A page cannot be its own group. Choose another group or leave it unassigned.");
+      return;
+    }
 
     if (!Number.isFinite(parsedOrder) || parsedOrder < 0) {
       setError("Enter a valid order number.");
@@ -580,6 +604,8 @@ export default function SAMenuGovernance() {
       if (pageEditor.is_registered) {
         await updateMenu({
           menu_code: targetMenuCode,
+          resource_code: pageEditor.resource_code.trim() || targetMenuCode,
+          menu_type: "PAGE",
           title: pageEditor.title.trim(),
           description: pageEditor.description.trim() || null,
           route_path: pageEditor.route_path,

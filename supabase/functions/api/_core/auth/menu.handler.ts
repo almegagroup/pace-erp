@@ -412,12 +412,24 @@ export async function updateMenuHandler(
 
   const db = getServiceRoleClientWithContext(ctx.context);
 
+  if (!body.menu_code) {
+    return errorResponse(
+      "MENU_CODE_REQUIRED",
+      "menu_code is required",
+      ctx.request_id,
+      "NONE",
+      400
+    );
+  }
+
   const { error } = await db
     .schema("erp_menu").from("menu_master")
     .update({
+      resource_code: body.resource_code ?? undefined,
       title: body.title,
       description: body.description ?? null,
       route_path: body.route_path ?? null,
+      menu_type: body.menu_type ?? undefined,
       display_order: body.display_order ?? 0,
       updated_at: new Date().toISOString(),
       updated_by: ctx.auth_user_id
