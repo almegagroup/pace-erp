@@ -69,6 +69,41 @@ export async function unmapCompanyProjectHandler(
       );
     }
 
+    const { data: projectModules, error: projectModulesError } = await db
+      .schema("acl")
+      .from("module_registry")
+      .select("module_code")
+      .eq("project_id", projectId);
+
+    if (projectModulesError) {
+      return errorResponse(
+        "PROJECT_MODULE_LIST_FAILED",
+        "project module list failed",
+        ctx.request_id,
+      );
+    }
+
+    const moduleCodes = (projectModules ?? [])
+      .map((row) => row.module_code)
+      .filter(Boolean);
+
+    if (moduleCodes.length > 0) {
+      const { error: moduleCleanupError } = await db
+        .schema("acl")
+        .from("company_module_map")
+        .delete()
+        .eq("company_id", companyId)
+        .in("module_code", moduleCodes);
+
+      if (moduleCleanupError) {
+        return errorResponse(
+          "PROJECT_MODULE_CLEANUP_FAILED",
+          "project module cleanup failed",
+          ctx.request_id,
+        );
+      }
+    }
+
     const { error } = await db
       .schema("erp_map")
       .from("company_projects")

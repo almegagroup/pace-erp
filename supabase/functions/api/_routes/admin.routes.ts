@@ -29,6 +29,9 @@ import { updateProjectStateHandler } from "../_core/admin/project/update_project
 import { listProjectCompanyMapHandler } from "../_core/admin/project/list_project_company_map.handler.ts";
 import { mapCompanyToProjectHandler } from "../_core/admin/project/map_company_to_project.handler.ts";
 import { unmapCompanyProjectHandler } from "../_core/admin/project/unmap_company_project.handler.ts";
+import { createModuleHandler } from "../_core/admin/module/create_module.handler.ts";
+import { listModulesHandler } from "../_core/admin/module/list_modules.handler.ts";
+import { updateModuleStateHandler } from "../_core/admin/module/update_module_state.handler.ts";
 
 import { createDepartmentHandler } from "../_core/admin/department/create_department.handler.ts";
 import { listDepartmentsHandler } from "../_core/admin/department/list_departments.handler.ts";
@@ -229,6 +232,27 @@ export async function dispatchAdminRoutes(
 
     case "POST:/api/admin/project/unmap-company":
       response = await unmapCompanyProjectHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/module":
+      response = await createModuleHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/modules":
+      response = await listModulesHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/module/state":
+      response = await updateModuleStateHandler(req, {
         context,
         request_id: requestId,
       });

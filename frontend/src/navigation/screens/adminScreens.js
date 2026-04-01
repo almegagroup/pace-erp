@@ -130,6 +130,14 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_MODULE_MASTER: {
+    screen_code: "SA_MODULE_MASTER",
+    route: "/sa/module-master",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_ROLE_PERMISSIONS: {
     screen_code: "SA_ROLE_PERMISSIONS",
     route: "/sa/acl/role-permissions",

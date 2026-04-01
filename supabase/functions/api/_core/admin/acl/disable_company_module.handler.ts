@@ -79,10 +79,29 @@ export async function disableCompanyModuleHandler(
     const moduleCode = body.module_code.trim();
 
     /* --------------------------------------------------
-     * 3️⃣ Upsert disabled=false? No — set enabled=false
-     *     (keeps row as governance truth; no delete)
+     * 3️⃣ Validate module exists
      * -------------------------------------------------- */
     const db = getServiceRoleClientWithContext(ctx.context);
+
+    const { data: module } = await db
+      .schema("acl")
+      .from("module_registry")
+      .select("module_code")
+      .eq("module_code", moduleCode)
+      .maybeSingle();
+
+    if (!module) {
+      return errorResponse(
+        "MODULE_NOT_FOUND",
+        "module not found",
+        requestId
+      );
+    }
+
+    /* --------------------------------------------------
+     * 4️⃣ Upsert disabled=false? No — set enabled=false
+     *     (keeps row as governance truth; no delete)
+     * -------------------------------------------------- */
 
     const { error } = await db
       .schema("acl").from("company_module_map")
@@ -112,7 +131,7 @@ export async function disableCompanyModuleHandler(
     }
 
     /* --------------------------------------------------
-     * 4️⃣ Success
+     * 5️⃣ Success
      * -------------------------------------------------- */
     log({
       level: "SECURITY",
