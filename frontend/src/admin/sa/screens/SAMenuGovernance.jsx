@@ -195,6 +195,23 @@ function resolveRegisteredPageMenu(menus, screen) {
   );
 }
 
+function pickDefaultGroup(menus, universe, selectedMenuCode) {
+  const universeMenus = menus.filter((item) => item.universe === universe);
+  const selectedGroup = universeMenus.find(
+    (item) => item.menu_code === selectedMenuCode && item.menu_type === "GROUP"
+  );
+
+  if (selectedGroup) {
+    return selectedGroup;
+  }
+
+  return (
+    universeMenus.find((item) => item.menu_type === "GROUP") ??
+    universeMenus[0] ??
+    null
+  );
+}
+
 export default function SAMenuGovernance() {
   const topActionRefs = useRef([]);
   const createCodeRef = useRef(null);
@@ -235,11 +252,11 @@ export default function SAMenuGovernance() {
       const data = await fetchMenuRegistry(nextUniverse);
       setMenus(data);
 
-      const nextSelected =
-        data.find((item) => item.menu_code === selectedMenuCode) ??
-        data.find((item) => item.route_path) ??
-        data[0] ??
-        null;
+      const nextSelected = pickDefaultGroup(
+        data,
+        nextUniverse,
+        selectedMenuCode
+      );
 
       setSelectedMenuCode(nextSelected?.menu_code ?? "");
     } catch {
@@ -382,10 +399,10 @@ export default function SAMenuGovernance() {
         title: "",
         description: "",
       }));
-      setNotice(`Menu ${payload.menu_code} created and published to the current SA session snapshot.`);
+      setNotice(`Group ${payload.menu_code} created.`);
       createCodeRef.current?.focus();
     } catch {
-      setError("Menu could not be created right now.");
+      setError("Group could not be created right now.");
     } finally {
       setSaving(false);
     }
@@ -416,9 +433,9 @@ export default function SAMenuGovernance() {
       });
 
       await loadRegistry(universe);
-      setNotice(`Menu ${selectedMenu.menu_code} updated and republished.`);
+      setNotice(`Group ${selectedMenu.menu_code} updated.`);
     } catch {
-      setError("Selected menu could not be updated right now.");
+      setError("Selected group could not be updated right now.");
     } finally {
       setSaving(false);
     }
@@ -441,10 +458,10 @@ export default function SAMenuGovernance() {
       });
       await loadRegistry(universe);
       setNotice(
-        `${selectedMenu.menu_code} is now ${nextState ? "active" : "disabled"} in the published registry.`
+        `Group ${selectedMenu.menu_code} is now ${nextState ? "active" : "disabled"}.`
       );
     } catch {
-      setError("Menu state could not be updated right now.");
+      setError("Group state could not be updated right now.");
     } finally {
       setSaving(false);
     }
@@ -721,8 +738,8 @@ export default function SAMenuGovernance() {
       <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
         <ErpSectionCard
           eyebrow="Groups"
-          title="Group Create & Manage"
-          description="Create menu groups and manage existing group title, order, parent, and active state."
+          title="1. Groups: Create, Select, Manage"
+          description="Group means drawer bucket. Left side only creates and edits groups. Pages are handled on the right."
         >
           <div className="grid gap-6">
             <div className="grid gap-3">
@@ -738,7 +755,12 @@ export default function SAMenuGovernance() {
                   }`}
                 >
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-900">{item.title}</div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-semibold text-slate-900">{item.title}</div>
+                      <span className="border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-600">
+                        Group
+                      </span>
+                    </div>
                     <div className="mt-1 text-xs text-slate-500">{item.menu_code}</div>
                     <div className="mt-1 text-[11px] text-slate-500">
                       Parent {item.parent_menu_code || "root"} | Order {item.tree_display_order ?? item.display_order ?? 0}
@@ -766,9 +788,9 @@ export default function SAMenuGovernance() {
             </div>
 
             <ErpSectionCard
-              eyebrow="Selected Menu"
+              eyebrow="Selected Group"
               title={selectedMenu ? selectedMenu.title : "Choose a group"}
-              description="Edit only the selected group from here."
+              description="Only group settings change from this card. Page publish/reassign happens from the right-side page catalog."
             >
               {selectedMenu && selectedMenu.menu_type === "GROUP" ? (
                 <div className="grid gap-3">
@@ -815,7 +837,7 @@ export default function SAMenuGovernance() {
                       />
                     </label>
                     <label className="grid gap-1 text-sm text-slate-700">
-                      <span className="font-semibold">Parent Menu</span>
+                      <span className="font-semibold">Parent Group</span>
                       <select
                         value={editForm.parent_menu_code}
                         onChange={(event) =>
@@ -843,7 +865,7 @@ export default function SAMenuGovernance() {
                       onClick={() => void handleSaveSelectedMenu()}
                       className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
                     >
-                      Save Menu
+                      Save Group
                     </button>
                     <button
                       type="button"
@@ -851,7 +873,7 @@ export default function SAMenuGovernance() {
                       onClick={() => void handleToggleSelectedMenuState()}
                       className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
                     >
-                      {selectedMenu.is_active ? "Disable Menu" : "Enable Menu"}
+                      {selectedMenu.is_active ? "Disable Group" : "Enable Group"}
                     </button>
                   </div>
 
@@ -877,13 +899,13 @@ export default function SAMenuGovernance() {
 
             <ErpSectionCard
               eyebrow="Create Group"
-              title="Add Group Or Anchor"
-              description="Create hierarchy groups and custom anchors here. Coder-made pages should be published from the Available Pages catalog above."
+              title="Create New Group"
+              description="Use this only for drawer groups. Do not create actual screens here; publish screens from the right side."
             >
               <div className="grid gap-3">
                 <div className="grid gap-2 md:grid-cols-2">
                   <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Menu Code</span>
+                    <span className="font-semibold">Group Code</span>
                     <input
                       ref={createCodeRef}
                       value={createForm.menu_code}
@@ -897,7 +919,7 @@ export default function SAMenuGovernance() {
                     />
                   </label>
                   <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Resource Code</span>
+                    <span className="font-semibold">ACL Resource Code</span>
                     <input
                       value={createForm.resource_code}
                       onChange={(event) =>
@@ -937,7 +959,7 @@ export default function SAMenuGovernance() {
                     />
                   </label>
                   <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Parent Menu</span>
+                    <span className="font-semibold">Parent Group</span>
                     <select
                       value={createForm.parent_menu_code}
                       onChange={(event) =>
@@ -982,7 +1004,7 @@ export default function SAMenuGovernance() {
                   onClick={() => void handleCreateMenu()}
                   className="w-fit border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
                 >
-                  Create Menu
+                  Create Group
                 </button>
               </div>
             </ErpSectionCard>
@@ -991,8 +1013,8 @@ export default function SAMenuGovernance() {
 
         <ErpSectionCard
           eyebrow="Pages"
-          title="All Pages And Status"
-          description="See all pages, their current status, and open per-page assign or reassign settings."
+          title="2. Pages: Publish, Move, Enable"
+          description="Right side is only for actual screen pages. Publish a page into a group, move it, or enable/disable it."
         >
           <div className="grid gap-3">
             <label className="grid gap-1 text-sm text-slate-700">
@@ -1012,8 +1034,13 @@ export default function SAMenuGovernance() {
                 >
                   <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold text-slate-900">
-                        {page.title}
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm font-semibold text-slate-900">
+                          {page.title}
+                        </div>
+                        <span className="border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+                          Page
+                        </span>
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
                         {page.screen_code}
@@ -1022,7 +1049,7 @@ export default function SAMenuGovernance() {
                         {page.route_path}
                       </div>
                       <div className="mt-2 text-[11px] text-slate-500">
-                        Group {page.parent_menu_code || "not assigned"} | Order {page.display_order ?? "-"}
+                        Group {page.parent_menu_code || "unassigned"} | Order {page.display_order ?? "-"}
                       </div>
                     </div>
 
@@ -1056,7 +1083,7 @@ export default function SAMenuGovernance() {
                           onClick={() => openPageEditor(page)}
                           className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
                         >
-                          {page.registeredMenu ? "Open Settings" : "Add To Registry"}
+                          {page.registeredMenu ? "Page Settings" : "Publish Page"}
                         </button>
                       </div>
                     </div>
@@ -1150,13 +1177,13 @@ export default function SAMenuGovernance() {
                   </label>
 
                   <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Group</span>
+                    <span className="font-semibold">Parent Group</span>
                     <button
                       type="button"
                       onClick={() => setGroupPickerOpen((current) => !current)}
                       className="border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-900"
                     >
-                      {pageEditor.parent_menu_code || "Choose group"}
+                      {pageEditor.parent_menu_code || "Choose parent group"}
                     </button>
                   </label>
 
@@ -1183,7 +1210,7 @@ export default function SAMenuGovernance() {
                     onClick={() => void handleSavePageEditor()}
                     className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
                   >
-                    Save
+                    Save Page Placement
                   </button>
                   <button
                     type="button"

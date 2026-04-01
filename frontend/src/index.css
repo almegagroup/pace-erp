@@ -47,6 +47,26 @@ body[data-workspace-mode="protected"] {
   overflow: hidden;
 }
 
+body[data-workspace-mode="protected"] button:not(:disabled),
+body[data-workspace-mode="protected"] [role="button"]:not([aria-disabled="true"]),
+body[data-workspace-mode="protected"] a[href],
+body[data-workspace-mode="protected"] select:not(:disabled),
+body[data-workspace-mode="protected"] summary {
+  cursor: pointer;
+}
+
+body[data-workspace-mode="protected"] button:disabled,
+body[data-workspace-mode="protected"] select:disabled,
+body[data-workspace-mode="protected"] input:disabled,
+body[data-workspace-mode="protected"] textarea:disabled {
+  cursor: not-allowed;
+}
+
+body[data-workspace-mode="protected"] input,
+body[data-workspace-mode="protected"] textarea {
+  cursor: text;
+}
+
 body[data-workspace-mode="protected"] :is(
   button,
   a,
