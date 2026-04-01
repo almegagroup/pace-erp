@@ -156,6 +156,42 @@ function resolveTopLevelIndex(nodes, routePath) {
   });
 }
 
+async function fetchLiveRuntimeSnapshot() {
+  const [contextResponse, menuResponse] = await Promise.all([
+    fetch(`${import.meta.env.VITE_API_BASE}/api/me/context`, {
+      credentials: "include",
+    }),
+    fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+      credentials: "include",
+    }),
+  ]);
+
+  const [contextJson, menuJson] = await Promise.all([
+    contextResponse.json().catch(() => null),
+    menuResponse.json().catch(() => null),
+  ]);
+
+  if (!contextResponse.ok || !contextJson?.ok || !contextJson?.data) {
+    throw new Error(contextJson?.code ?? "RUNTIME_CONTEXT_REFRESH_FAILED");
+  }
+
+  if (!menuResponse.ok || !menuJson?.ok) {
+    throw new Error(menuJson?.code ?? "MENU_REFRESH_FAILED");
+  }
+
+  return {
+    runtimeContext: {
+      isAdmin: contextJson.data.is_admin === true,
+      selectedCompanyId: contextJson.data.selected_company_id ?? "",
+      currentCompany: contextJson.data.current_company ?? null,
+      availableCompanies: contextJson.data.available_companies ?? [],
+      availableWorkContexts: contextJson.data.available_work_contexts ?? [],
+      selectedWorkContext: contextJson.data.selected_work_context ?? null,
+    },
+    menu: menuJson?.data?.menu ?? [],
+  };
+}
+
 export default function MenuShell() {
   const location = useLocation();
   const {
@@ -315,6 +351,19 @@ export default function MenuShell() {
     ]
   );
 
+  const refreshLiveMenuAndContext = useCallback(async () => {
+    setRuntimeContextError("");
+
+    try {
+      const snapshot = await fetchLiveRuntimeSnapshot();
+      setRuntimeContext(snapshot.runtimeContext);
+      setMenuSnapshot(snapshot.menu);
+    } catch (error) {
+      console.error("LIVE_MENU_REFRESH_FAILED", error);
+      setRuntimeContextError("Latest menu changes could not be refreshed.");
+    }
+  }, [setMenuSnapshot, setRuntimeContext]);
+
   const handleWorkContextChange = useCallback(
     async (nextWorkContextId) => {
       const currentWorkContextId =
@@ -381,6 +430,18 @@ export default function MenuShell() {
       setRuntimeContext,
     ]
   );
+
+  useEffect(() => {
+    const handleMenuRefreshRequest = () => {
+      void refreshLiveMenuAndContext();
+    };
+
+    window.addEventListener("erp:menu-refresh-request", handleMenuRefreshRequest);
+
+    return () => {
+      window.removeEventListener("erp:menu-refresh-request", handleMenuRefreshRequest);
+    };
+  }, [refreshLiveMenuAndContext]);
 
   const activeScreenCommands = useMemo(
     () =>

@@ -263,6 +263,14 @@ function resolveMenuGovernanceErrorMessage(code, fallbackMessage) {
   }
 }
 
+function requestLiveMenuRefresh(reason = "menu-governance") {
+  window.dispatchEvent(
+    new CustomEvent("erp:menu-refresh-request", {
+      detail: { reason },
+    })
+  );
+}
+
 export default function SAMenuGovernance() {
   const topActionRefs = useRef([]);
   const createCodeRef = useRef(null);
@@ -666,6 +674,7 @@ export default function SAMenuGovernance() {
     try {
       const created = await createMenu(payload);
       await loadRegistry(universe);
+      requestLiveMenuRefresh("group-created");
       setSelectedMenuCode(created?.menu?.menu_code ?? payload.menu_code);
       setCreateForm((current) => ({
         ...current,
@@ -773,6 +782,7 @@ export default function SAMenuGovernance() {
       });
 
       await loadRegistry(universe);
+      requestLiveMenuRefresh("group-updated");
       setNotice(`Group ${selectedMenu.menu_code} updated.`);
     } catch (error) {
       setError(
@@ -810,6 +820,7 @@ export default function SAMenuGovernance() {
     try {
       await deleteMenu({ menu_code: selectedMenu.menu_code });
       await loadRegistry(universe);
+      requestLiveMenuRefresh("group-deleted");
       setNotice(`Group ${selectedMenu.menu_code} removed.`);
     } catch (error) {
       setError(
@@ -839,6 +850,7 @@ export default function SAMenuGovernance() {
         is_active: nextState,
       });
       await loadRegistry(universe);
+      requestLiveMenuRefresh("group-state-updated");
       setNotice(
         `Group ${selectedMenu.menu_code} is now ${nextState ? "active" : "disabled"}.`
       );
@@ -1070,6 +1082,7 @@ export default function SAMenuGovernance() {
       }
 
       await loadRegistry(universe);
+      requestLiveMenuRefresh("page-saved");
       setGroupPickerOpen(false);
       setPageEditor(null);
       setNotice(`${pageEditor.title} has been saved into the menu registry and tree.`);
@@ -1100,6 +1113,7 @@ export default function SAMenuGovernance() {
         is_active: !page.is_active,
       });
       await loadRegistry(universe);
+      requestLiveMenuRefresh("page-state-updated");
       setNotice(`${page.title} is now ${page.is_active ? "disabled" : "active"}.`);
     } catch {
       setError("Page state could not be updated right now.");
