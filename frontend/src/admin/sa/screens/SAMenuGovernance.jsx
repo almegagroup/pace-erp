@@ -131,6 +131,25 @@ async function updateMenuState(payload) {
   return json.data;
 }
 
+async function deleteMenu(payload) {
+  const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/menu`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const json = await readJsonSafe(response);
+
+  if (!response.ok || !json?.ok) {
+    throw new Error(json?.code ?? "MENU_DELETE_FAILED");
+  }
+
+  return json.data;
+}
+
 async function previewUser(targetUserId) {
   const response = await fetch(
     `${import.meta.env.VITE_API_BASE}/api/admin/preview-user`,
@@ -269,6 +288,8 @@ export default function SAMenuGovernance() {
     display_order: "0",
   });
   const [editForm, setEditForm] = useState({
+    menu_code: "",
+    resource_code: "",
     title: "",
     description: "",
     route_path: "",
@@ -313,6 +334,8 @@ export default function SAMenuGovernance() {
     }
 
     setEditForm({
+      menu_code: selectedMenu.menu_code ?? "",
+      resource_code: selectedMenu.resource_code ?? "",
       title: selectedMenu.title ?? "",
       description: selectedMenu.description ?? "",
       route_path: selectedMenu.route_path ?? "",
@@ -388,6 +411,68 @@ export default function SAMenuGovernance() {
       ) ?? null
     );
   }, [editForm.display_order, editForm.parent_menu_code, menus, selectedMenu]);
+
+  const selectedGroupCodeConflict = useMemo(() => {
+    if (!selectedMenu || selectedMenu.menu_type !== "GROUP") {
+      return null;
+    }
+
+    const normalizedCode = normalizeMenuCode(editForm.menu_code);
+    return (
+      menus.find(
+        (item) =>
+          item.menu_code === normalizedCode &&
+          item.menu_code !== selectedMenu.menu_code
+      ) ?? null
+    );
+  }, [editForm.menu_code, menus, selectedMenu]);
+
+  const selectedGroupResourceConflict = useMemo(() => {
+    if (!selectedMenu || selectedMenu.menu_type !== "GROUP") {
+      return null;
+    }
+
+    const normalizedResourceCode = normalizeMenuCode(
+      editForm.resource_code || editForm.menu_code
+    );
+
+    return (
+      menus.find(
+        (item) =>
+          item.resource_code === normalizedResourceCode &&
+          item.menu_code !== selectedMenu.menu_code
+      ) ?? null
+    );
+  }, [editForm.menu_code, editForm.resource_code, menus, selectedMenu]);
+
+  const selectedGroupReservedScreenByCode = useMemo(() => {
+    if (!selectedMenu || selectedMenu.menu_type !== "GROUP") {
+      return null;
+    }
+
+    return findReservedScreenByCode(normalizeMenuCode(editForm.menu_code), universe);
+  }, [editForm.menu_code, selectedMenu, universe]);
+
+  const selectedGroupReservedScreenByResource = useMemo(() => {
+    if (!selectedMenu || selectedMenu.menu_type !== "GROUP") {
+      return null;
+    }
+
+    return findReservedScreenByCode(
+      normalizeMenuCode(editForm.resource_code || editForm.menu_code),
+      universe
+    );
+  }, [editForm.menu_code, editForm.resource_code, selectedMenu, universe]);
+
+  const selectedGroupChildren = useMemo(() => {
+    if (!selectedMenu || selectedMenu.menu_type !== "GROUP") {
+      return [];
+    }
+
+    return menus.filter(
+      (item) => (item.parent_menu_code ?? "") === selectedMenu.menu_code
+    );
+  }, [menus, selectedMenu]);
 
   const pageEditorSuggestedOrder = useMemo(
     () =>
@@ -613,6 +698,10 @@ export default function SAMenuGovernance() {
     setNotice("");
 
     const parsedOrder = Number(editForm.display_order || 0);
+    const nextMenuCode = normalizeMenuCode(editForm.menu_code);
+    const nextResourceCode = normalizeMenuCode(
+      editForm.resource_code || editForm.menu_code
+    );
 
     if (!Number.isFinite(parsedOrder) || parsedOrder < 0) {
       setError("Enter a valid order number.");
@@ -628,9 +717,49 @@ export default function SAMenuGovernance() {
       return;
     }
 
+    if (!nextMenuCode || !editForm.title.trim()) {
+      setError("Group code and title are required.");
+      setSaving(false);
+      return;
+    }
+
+    if (selectedGroupReservedScreenByCode) {
+      setError(
+        `${nextMenuCode} is reserved for page ${selectedGroupReservedScreenByCode.route}. Use a group code like ${nextMenuCode}_GROUP.`
+      );
+      setSaving(false);
+      return;
+    }
+
+    if (selectedGroupReservedScreenByResource) {
+      setError(
+        `${nextResourceCode} is reserved for page ${selectedGroupReservedScreenByResource.route}. Use another group resource code.`
+      );
+      setSaving(false);
+      return;
+    }
+
+    if (selectedGroupCodeConflict) {
+      setError(
+        `${nextMenuCode} is already used by ${selectedGroupCodeConflict.title}.`
+      );
+      setSaving(false);
+      return;
+    }
+
+    if (selectedGroupResourceConflict) {
+      setError(
+        `${nextResourceCode} is already used by ${selectedGroupResourceConflict.title}.`
+      );
+      setSaving(false);
+      return;
+    }
+
     try {
       await updateMenu({
         menu_code: selectedMenu.menu_code,
+        next_menu_code: nextMenuCode,
+        resource_code: nextResourceCode,
         title: editForm.title.trim(),
         description: editForm.description.trim() || null,
         route_path: selectedMenu.route_path ?? null,
@@ -650,6 +779,43 @@ export default function SAMenuGovernance() {
         resolveMenuGovernanceErrorMessage(
           error instanceof Error ? error.message : "",
           "Selected group could not be updated right now."
+        )
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteSelectedMenu() {
+    if (!selectedMenu || selectedMenu.menu_type !== "GROUP") {
+      return;
+    }
+
+    if (selectedMenu.is_system) {
+      setError("System groups cannot be removed.");
+      return;
+    }
+
+    if (selectedGroupChildren.length > 0) {
+      setError(
+        `This group still contains ${selectedGroupChildren.length} child item(s). Move or remove them first.`
+      );
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      await deleteMenu({ menu_code: selectedMenu.menu_code });
+      await loadRegistry(universe);
+      setNotice(`Group ${selectedMenu.menu_code} removed.`);
+    } catch (error) {
+      setError(
+        resolveMenuGovernanceErrorMessage(
+          error instanceof Error ? error.message : "",
+          "Selected group could not be removed right now."
         )
       );
     } finally {
@@ -1054,6 +1220,32 @@ export default function SAMenuGovernance() {
                 <div className="grid gap-3">
                   <div className="grid gap-2 md:grid-cols-2">
                     <label className="grid gap-1 text-sm text-slate-700">
+                      <span className="font-semibold">Group Code</span>
+                      <input
+                        value={editForm.menu_code}
+                        onChange={(event) =>
+                          setEditForm((current) => ({
+                            ...current,
+                            menu_code: event.target.value,
+                          }))
+                        }
+                        className={inputClassName()}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-sm text-slate-700">
+                      <span className="font-semibold">ACL Resource Code</span>
+                      <input
+                        value={editForm.resource_code}
+                        onChange={(event) =>
+                          setEditForm((current) => ({
+                            ...current,
+                            resource_code: event.target.value,
+                          }))
+                        }
+                        className={inputClassName()}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-sm text-slate-700">
                       <span className="font-semibold">Title</span>
                       <input
                         value={editForm.title}
@@ -1136,6 +1328,16 @@ export default function SAMenuGovernance() {
                     >
                       {selectedMenu.is_active ? "Disable Group" : "Enable Group"}
                     </button>
+                    {!selectedMenu.is_system ? (
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => void handleDeleteSelectedMenu()}
+                        className="border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700"
+                      >
+                        Remove Group
+                      </button>
+                    ) : null}
                   </div>
 
                   <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
@@ -1148,16 +1350,50 @@ export default function SAMenuGovernance() {
                     ) : null}
                   </div>
 
+                  {(selectedGroupReservedScreenByCode ||
+                    selectedGroupReservedScreenByResource ||
+                    selectedGroupCodeConflict ||
+                    selectedGroupResourceConflict ||
+                    selectedGroupChildren.length > 0) ? (
+                    <div className="grid gap-1 border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                      {selectedGroupReservedScreenByCode ? (
+                        <div className="text-amber-800">
+                          Group code `{normalizeMenuCode(editForm.menu_code)}` is reserved for page {selectedGroupReservedScreenByCode.route}.
+                        </div>
+                      ) : null}
+                      {selectedGroupReservedScreenByResource ? (
+                        <div className="text-amber-800">
+                          Resource `{normalizeMenuCode(editForm.resource_code || editForm.menu_code)}` is reserved for page {selectedGroupReservedScreenByResource.route}.
+                        </div>
+                      ) : null}
+                      {selectedGroupCodeConflict ? (
+                        <div className="text-rose-700">
+                          Group code conflict with {selectedGroupCodeConflict.title}.
+                        </div>
+                      ) : null}
+                      {selectedGroupResourceConflict ? (
+                        <div className="text-rose-700">
+                          Resource conflict with {selectedGroupResourceConflict.title}.
+                        </div>
+                      ) : null}
+                      {selectedGroupChildren.length > 0 ? (
+                        <div>
+                          This group currently has {selectedGroupChildren.length} child item(s), so remove is blocked until those items are moved out.
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   <div className="grid gap-2 md:grid-cols-2">
-                    <ErpFieldPreview
-                      label="Resource Code"
-                      value={selectedMenu.resource_code}
-                      caption="ACL identity linked to this group."
-                    />
                     <ErpFieldPreview
                       label="Parent Binding"
                       value={selectedMenu.parent_menu_code || "No parent"}
                       caption="Tree location currently driving menu projection."
+                    />
+                    <ErpFieldPreview
+                      label="Child Count"
+                      value={String(selectedGroupChildren.length)}
+                      caption="Move these out before removing this group."
                     />
                   </div>
                 </div>
@@ -1512,8 +1748,21 @@ export default function SAMenuGovernance() {
                     <span className="font-semibold text-slate-900">{pageEditorSuggestedOrder}</span>
                   </div>
                   {pageEditorBlockingGroupConflict ? (
-                    <div className="text-rose-700">
-                      `{pageEditor.menu_code}` is already used by group {pageEditorBlockingGroupConflict.title}. Rename or remove that group first.
+                    <div className="flex flex-wrap items-center gap-2 text-rose-700">
+                      <span>
+                        `{pageEditor.menu_code}` is already used by group {pageEditorBlockingGroupConflict.title}. Rename or remove that group first.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedMenuCode(pageEditorBlockingGroupConflict.menu_code);
+                          setGroupPickerOpen(false);
+                          setPageEditor(null);
+                        }}
+                        className="border border-rose-300 bg-white px-2 py-1 text-xs font-semibold text-rose-700"
+                      >
+                        Open Conflicting Group
+                      </button>
                     </div>
                   ) : null}
                   {pageEditorResourceConflict ? (

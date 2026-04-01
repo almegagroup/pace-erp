@@ -467,9 +467,12 @@ export async function updateMenuHandler(
     );
   }
 
+  const nextMenuCode = body.next_menu_code ?? body.menu_code;
+
   const { error } = await db
     .schema("erp_menu").from("menu_master")
     .update({
+      menu_code: nextMenuCode,
       resource_code: body.resource_code ?? undefined,
       title: body.title,
       description: body.description ?? null,
@@ -497,6 +500,115 @@ export async function updateMenuHandler(
   return okResponse(
     {
       updated: true,
+      snapshot_refreshed: refresh.ok,
+      snapshot_refresh_reason: refresh.reason ?? null,
+    },
+    ctx.request_id,
+    req
+  );
+}
+
+export async function deleteMenuHandler(
+  req: Request,
+  ctx: MenuAdminCtx
+): Promise<Response> {
+  const body = await req.json();
+  const db = getServiceRoleClientWithContext(ctx.context);
+
+  if (!body.menu_code) {
+    return errorResponse(
+      "MENU_CODE_REQUIRED",
+      "menu_code is required",
+      ctx.request_id,
+      "NONE",
+      400
+    );
+  }
+
+  const { data: target, error: readError } = await db
+    .schema("erp_menu")
+    .from("menu_master")
+    .select("id, menu_code, is_system, menu_type")
+    .eq("menu_code", body.menu_code)
+    .maybeSingle();
+
+  if (readError) {
+    return errorResponse(
+      "MENU_DELETE_READ_FAILED",
+      readError.message,
+      ctx.request_id,
+      "NONE",
+      500
+    );
+  }
+
+  if (!target) {
+    return errorResponse(
+      "MENU_NOT_FOUND",
+      "Target menu not found",
+      ctx.request_id,
+      "NONE",
+      404
+    );
+  }
+
+  if (target.is_system === true) {
+    return errorResponse(
+      "MENU_DELETE_FORBIDDEN",
+      "System menu cannot be deleted",
+      ctx.request_id,
+      "NONE",
+      409
+    );
+  }
+
+  const { count: childCount, error: childCountError } = await db
+    .schema("erp_menu")
+    .from("menu_tree")
+    .select("id", { count: "exact", head: true })
+    .eq("parent_menu_id", target.id);
+
+  if (childCountError) {
+    return errorResponse(
+      "MENU_DELETE_CHILD_READ_FAILED",
+      childCountError.message,
+      ctx.request_id,
+      "NONE",
+      500
+    );
+  }
+
+  if ((childCount ?? 0) > 0) {
+    return errorResponse(
+      "MENU_DELETE_HAS_CHILDREN",
+      "Move child rows out before deleting this group",
+      ctx.request_id,
+      "NONE",
+      409
+    );
+  }
+
+  const { error: deleteError } = await db
+    .schema("erp_menu")
+    .from("menu_master")
+    .delete()
+    .eq("menu_code", body.menu_code);
+
+  if (deleteError) {
+    return errorResponse(
+      "MENU_DELETE_FAILED",
+      deleteError.message,
+      ctx.request_id,
+      "NONE",
+      500
+    );
+  }
+
+  const refresh = await refreshAdminSessionMenuSnapshot(ctx);
+
+  return okResponse(
+    {
+      deleted: true,
       snapshot_refreshed: refresh.ok,
       snapshot_refresh_reason: refresh.reason ?? null,
     },
