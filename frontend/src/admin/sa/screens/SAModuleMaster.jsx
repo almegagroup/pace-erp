@@ -114,6 +114,22 @@ function formatApprovalCaption(row) {
   return `${row.approval_type ?? "UNKNOWN"} | ${row.min_approvers}-${row.max_approvers} approver slot`;
 }
 
+function generateModuleCodePreview(projects, projectId, moduleName) {
+  const project = projects.find((row) => row.id === projectId) ?? null;
+  const normalizedName = String(moduleName ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+
+  if (!project?.project_code || !normalizedName) {
+    return "Will auto-generate after project + module name";
+  }
+
+  return `${project.project_code}_${normalizedName}`;
+}
+
 export default function SAModuleMaster() {
   const navigate = useNavigate();
   const actionBarRefs = useRef([]);
@@ -125,11 +141,10 @@ export default function SAModuleMaster() {
   const [projects, setProjects] = useState([]);
   const [modules, setModules] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [moduleCode, setModuleCode] = useState("");
   const [moduleName, setModuleName] = useState("");
   const [approvalRequired, setApprovalRequired] = useState(false);
   const [approvalType, setApprovalType] = useState("SEQUENTIAL");
-  const [minApprovers, setMinApprovers] = useState("2");
+  const [minApprovers, setMinApprovers] = useState("1");
   const [maxApprovers, setMaxApprovers] = useState("3");
   const [selectedModuleId, setSelectedModuleId] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -192,11 +207,10 @@ export default function SAModuleMaster() {
 
   async function handleCreate() {
     const normalizedProjectId = selectedProjectId.trim();
-    const normalizedModuleCode = moduleCode.trim().toUpperCase().replace(/\s+/g, "_");
     const normalizedModuleName = moduleName.trim();
 
-    if (!normalizedProjectId || !normalizedModuleCode || !normalizedModuleName) {
-      setError("Project, module code, and module name are required.");
+    if (!normalizedProjectId || !normalizedModuleName) {
+      setError("Project and module name are required.");
       return;
     }
 
@@ -209,7 +223,7 @@ export default function SAModuleMaster() {
     const approved = await openActionConfirm({
       eyebrow: "Module Master",
       title: "Create Module",
-      message: `Create module ${normalizedModuleCode} under project ${project.project_code}?`,
+      message: `Create module ${generateModuleCodePreview(projects, normalizedProjectId, normalizedModuleName)} under project ${project.project_code}?`,
       confirmLabel: "Create Module",
       cancelLabel: "Cancel",
     });
@@ -225,7 +239,6 @@ export default function SAModuleMaster() {
     try {
       const created = await createModule({
         project_id: normalizedProjectId,
-        module_code: normalizedModuleCode,
         module_name: normalizedModuleName,
         approval_required: approvalRequired,
         approval_type: approvalRequired ? approvalType : null,
@@ -234,11 +247,10 @@ export default function SAModuleMaster() {
       });
 
       await loadWorkspace(normalizedProjectId, created.module_id);
-      setModuleCode("");
       setModuleName("");
       setApprovalRequired(false);
       setApprovalType("SEQUENTIAL");
-      setMinApprovers("2");
+      setMinApprovers("1");
       setMaxApprovers("3");
       setNotice(`Module ${created.module_code} created under ${project.project_code}.`);
       moduleCodeRef.current?.focus();
@@ -505,7 +517,7 @@ export default function SAModuleMaster() {
         <div ref={formContainerRef} className="grid gap-3">
           <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
             <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Project
+                  Project
             </span>
             <select
               ref={projectRef}
@@ -524,33 +536,31 @@ export default function SAModuleMaster() {
             </select>
           </label>
 
-          <div className="grid gap-3 md:grid-cols-2">
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Module Code
-              </span>
-              <input
-                ref={moduleCodeRef}
-                data-erp-form-field="true"
-                type="text"
-                value={moduleCode}
-                onChange={(event) => setModuleCode(event.target.value.toUpperCase())}
-                placeholder="PROCUREMENT"
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
-              />
-            </label>
-
+            <div className="grid gap-3 md:grid-cols-2">
             <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Module Name
               </span>
               <input
+                ref={moduleCodeRef}
                 data-erp-form-field="true"
                 type="text"
                 value={moduleName}
                 onChange={(event) => setModuleName(event.target.value)}
                 placeholder="Procurement"
                 className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+              />
+            </label>
+
+            <label className="grid gap-2 border border-slate-300 bg-slate-50 px-4 py-3">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Auto Module Code
+              </span>
+              <input
+                type="text"
+                readOnly
+                value={generateModuleCodePreview(projects, selectedProjectId, moduleName)}
+                className="w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
               />
             </label>
           </div>
@@ -595,6 +605,7 @@ export default function SAModuleMaster() {
                 disabled={!approvalRequired}
                 className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
               >
+                <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
               </select>
@@ -611,6 +622,7 @@ export default function SAModuleMaster() {
                 disabled={!approvalRequired}
                 className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
               >
+                <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
               </select>

@@ -21,6 +21,15 @@ function normalizeModuleCode(value?: string | null): string {
     .replace(/\s+/g, "_");
 }
 
+function slugifyModuleName(value?: string | null): string {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+}
+
 type CreateModuleInput = {
   module_code?: string;
   module_name?: string;
@@ -39,18 +48,17 @@ export async function createModuleHandler(
     assertAdmin(ctx);
 
     const body = (await req.json()) as CreateModuleInput;
-    const moduleCode = normalizeModuleCode(body.module_code);
     const moduleName = body.module_name?.trim();
     const projectId = body.project_id?.trim();
     const approvalRequired = body.approval_required === true;
     const approvalType = approvalRequired ? body.approval_type ?? null : null;
-    const minApprovers = Number(body.min_approvers ?? 2);
+    const minApprovers = Number(body.min_approvers ?? 1);
     const maxApprovers = Number(body.max_approvers ?? 3);
 
-    if (!moduleCode || !moduleName || !projectId) {
+    if (!moduleName || !projectId) {
       return errorResponse(
         "INVALID_INPUT",
-        "module_code, module_name and project_id required",
+        "module_name and project_id required",
         ctx.request_id,
       );
     }
@@ -79,10 +87,10 @@ export async function createModuleHandler(
       );
     }
 
-    if (minApprovers < 2 || minApprovers > 3 || maxApprovers < 2 || maxApprovers > 3 || minApprovers > maxApprovers) {
+    if (minApprovers < 1 || minApprovers > 3 || maxApprovers < 1 || maxApprovers > 3 || minApprovers > maxApprovers) {
       return errorResponse(
         "MODULE_APPROVER_BOUNDS_INVALID",
-        "approver bounds must stay within 2 to 3 and min <= max",
+        "approver bounds must stay within 1 to 3 and min <= max",
         ctx.request_id,
       );
     }
@@ -92,7 +100,7 @@ export async function createModuleHandler(
     const { data: project } = await db
       .schema("erp_master")
       .from("projects")
-      .select("id, status")
+      .select("id, project_code, status")
       .eq("id", projectId)
       .maybeSingle();
 
@@ -110,6 +118,45 @@ export async function createModuleHandler(
         "inactive project cannot receive active modules",
         ctx.request_id,
       );
+    }
+
+    const explicitModuleCode = normalizeModuleCode(body.module_code);
+    const moduleSlug = slugifyModuleName(moduleName);
+    const moduleCodeBase = explicitModuleCode || `${project.project_code}_${moduleSlug}`;
+
+    if (!moduleCodeBase) {
+      return errorResponse(
+        "MODULE_CODE_GENERATION_FAILED",
+        "module code could not be generated",
+        ctx.request_id,
+      );
+    }
+
+    const codePattern = `${moduleCodeBase}%`;
+    const { data: existingCodes, error: existingCodeError } = await db
+      .schema("acl")
+      .from("module_registry")
+      .select("module_code")
+      .like("module_code", codePattern);
+
+    if (existingCodeError) {
+      return errorResponse(
+        "MODULE_CODE_GENERATION_FAILED",
+        existingCodeError.message,
+        ctx.request_id,
+      );
+    }
+
+    const existingCodeSet = new Set(
+      (existingCodes ?? []).map((row) => row.module_code),
+    );
+
+    let moduleCode = moduleCodeBase;
+    let sequence = 2;
+
+    while (existingCodeSet.has(moduleCode)) {
+      moduleCode = `${moduleCodeBase}_${sequence}`;
+      sequence += 1;
     }
 
     const { data, error } = await db
