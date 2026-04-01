@@ -35,10 +35,28 @@ function createDebugError(json, fallbackCode) {
   };
 }
 
+function createNetworkError(error, fallbackCode) {
+  return {
+    code: fallbackCode,
+    requestId: null,
+    gateId: null,
+    routeKey: null,
+    decisionTrace: fallbackCode,
+    message: error instanceof Error ? error.message : "Network request failed",
+  };
+}
+
 async function fetchProjects() {
-  const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/projects`, {
-    credentials: "include",
-  });
+  let response;
+
+  try {
+    response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/projects`, {
+      credentials: "include",
+    });
+  } catch (error) {
+    throw createNetworkError(error, "NETWORK_ERROR_PROJECT_LIST");
+  }
+
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !Array.isArray(json?.data?.projects)) {
@@ -50,9 +68,16 @@ async function fetchProjects() {
 
 async function fetchModules(projectId = "") {
   const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
-  const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/modules${query}`, {
-    credentials: "include",
-  });
+  let response;
+
+  try {
+    response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/modules${query}`, {
+      credentials: "include",
+    });
+  } catch (error) {
+    throw createNetworkError(error, "NETWORK_ERROR_MODULE_LIST");
+  }
+
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !Array.isArray(json?.data?.modules)) {
@@ -63,14 +88,21 @@ async function fetchModules(projectId = "") {
 }
 
 async function createModule(payload) {
-  const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/module`, {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  let response;
+
+  try {
+    response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/module`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    throw createNetworkError(error, "NETWORK_ERROR_MODULE_CREATE");
+  }
+
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !json?.data?.module) {
@@ -80,15 +112,47 @@ async function createModule(payload) {
   return json.data.module;
 }
 
+async function updateModule(payload) {
+  let response;
+
+  try {
+    response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/module/update`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    throw createNetworkError(error, "NETWORK_ERROR_MODULE_UPDATE");
+  }
+
+  const json = await readJsonSafe(response);
+
+  if (!response.ok || !json?.ok || !json?.data?.module) {
+    throw createDebugError(json, "MODULE_UPDATE_FAILED");
+  }
+
+  return json.data.module;
+}
+
 async function updateModuleState(payload) {
-  const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/module/state`, {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  let response;
+
+  try {
+    response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/module/state`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    throw createNetworkError(error, "NETWORK_ERROR_MODULE_STATE");
+  }
+
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
@@ -163,11 +227,37 @@ export default function SAModuleMaster() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [editorMode, setEditorMode] = useState("create");
 
   const activeProjects = useMemo(
     () => projects.filter((row) => row.status === "ACTIVE"),
     [projects],
   );
+
+  function resetEditor(preferredProjectId = selectedProjectId) {
+    setEditorMode("create");
+    setSelectedProjectId(preferredProjectId);
+    setModuleName("");
+    setApprovalRequired(false);
+    setApprovalType("SEQUENTIAL");
+    setMinApprovers("1");
+    setMaxApprovers("3");
+  }
+
+  function loadSelectedModuleIntoEditor(moduleRow) {
+    if (!moduleRow) {
+      return;
+    }
+
+    setEditorMode("edit");
+    setSelectedModuleId(moduleRow.module_id);
+    setSelectedProjectId(moduleRow.project_id);
+    setModuleName(moduleRow.module_name ?? "");
+    setApprovalRequired(moduleRow.approval_required === true);
+    setApprovalType(moduleRow.approval_type ?? "SEQUENTIAL");
+    setMinApprovers(String(moduleRow.min_approvers ?? 1));
+    setMaxApprovers(String(moduleRow.max_approvers ?? 3));
+  }
 
   async function loadWorkspace(preferredProjectId = selectedProjectId, preferredModuleId = selectedModuleId) {
     setLoading(true);
@@ -216,7 +306,7 @@ export default function SAModuleMaster() {
     void loadWorkspace();
   }, []);
 
-  async function handleCreate() {
+  async function handleSave() {
     const normalizedProjectId = selectedProjectId.trim();
     const normalizedModuleName = moduleName.trim();
 
@@ -233,9 +323,12 @@ export default function SAModuleMaster() {
 
     const approved = await openActionConfirm({
       eyebrow: "Module Master",
-      title: "Create Module",
-      message: `Create module ${generateModuleCodePreview(projects, normalizedProjectId, normalizedModuleName)} under project ${project.project_code}?`,
-      confirmLabel: "Create Module",
+      title: editorMode === "edit" ? "Update Module" : "Create Module",
+      message:
+        editorMode === "edit"
+          ? `Update module ${selectedModule?.module_code ?? "selected module"} under project ${project.project_code}?`
+          : `Create module ${generateModuleCodePreview(projects, normalizedProjectId, normalizedModuleName)} under project ${project.project_code}?`,
+      confirmLabel: editorMode === "edit" ? "Update Module" : "Create Module",
       cancelLabel: "Cancel",
     });
 
@@ -248,22 +341,33 @@ export default function SAModuleMaster() {
     setNotice("");
 
     try {
-      const created = await createModule({
-        project_id: normalizedProjectId,
-        module_name: normalizedModuleName,
-        approval_required: approvalRequired,
-        approval_type: approvalRequired ? approvalType : null,
-        min_approvers: Number(minApprovers),
-        max_approvers: Number(maxApprovers),
-      });
+      if (editorMode === "edit" && selectedModule?.module_id) {
+        const updated = await updateModule({
+          module_id: selectedModule.module_id,
+          module_name: normalizedModuleName,
+          approval_required: approvalRequired,
+          approval_type: approvalRequired ? approvalType : null,
+          min_approvers: Number(minApprovers),
+          max_approvers: Number(maxApprovers),
+        });
 
-      await loadWorkspace(normalizedProjectId, created.module_id);
-      setModuleName("");
-      setApprovalRequired(false);
-      setApprovalType("SEQUENTIAL");
-      setMinApprovers("1");
-      setMaxApprovers("3");
-      setNotice(`Module ${created.module_code} created under ${project.project_code}.`);
+        await loadWorkspace(normalizedProjectId, updated.module_id);
+        setNotice(`Module ${updated.module_code} updated successfully.`);
+      } else {
+        const created = await createModule({
+          project_id: normalizedProjectId,
+          module_name: normalizedModuleName,
+          approval_required: approvalRequired,
+          approval_type: approvalRequired ? approvalType : null,
+          min_approvers: Number(minApprovers),
+          max_approvers: Number(maxApprovers),
+        });
+
+        await loadWorkspace(normalizedProjectId, created.module_id);
+        setNotice(`Module ${created.module_code} created under ${project.project_code}.`);
+      }
+
+      resetEditor(normalizedProjectId);
       moduleCodeRef.current?.focus();
     } catch (err) {
       const detail = err && typeof err === "object" ? err : null;
@@ -274,8 +378,8 @@ export default function SAModuleMaster() {
 
       setError(
         detail
-          ? `Module create blocked. ${decisionTrace ?? detail.code ?? "REQUEST_BLOCKED"}${gateId ? ` | Gate ${gateId}` : ""}${requestId ? ` | Req ${requestId}` : ""}`
-          : "Module could not be created right now.",
+          ? `Module ${editorMode === "edit" ? "update" : "create"} blocked. ${(detail.message && String(detail.message).includes("Failed to fetch")) ? detail.code ?? "NETWORK_ERROR" : decisionTrace ?? detail.code ?? "REQUEST_BLOCKED"}${gateId ? ` | Gate ${gateId}` : ""}${requestId ? ` | Req ${requestId}` : ""}`
+          : `Module could not be ${editorMode === "edit" ? "updated" : "created"} right now.`,
       );
     } finally {
       setSaving(false);
@@ -358,13 +462,13 @@ export default function SAModuleMaster() {
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
     submitOnFinalField: true,
-    onSubmit: () => handleCreate(),
+    onSubmit: () => handleSave(),
   });
 
   useErpScreenHotkeys({
     save: {
       disabled: saving,
-      perform: () => void handleCreate(),
+      perform: () => void handleSave(),
     },
     refresh: {
       disabled: loading,
@@ -413,11 +517,17 @@ export default function SAModuleMaster() {
     {
       id: "sa-module-master-save",
       group: "Current Screen",
-      label: saving ? "Creating module..." : "Create module",
+      label: saving
+        ? editorMode === "edit"
+          ? "Updating module..."
+          : "Creating module..."
+        : editorMode === "edit"
+          ? "Update module"
+          : "Create module",
       hint: "Ctrl+S",
-      keywords: ["create", "module", "project"],
+      keywords: ["create", "update", "module", "project"],
       disabled: saving,
-      perform: () => void handleCreate(),
+      perform: () => void handleSave(),
       order: 40,
     },
   ]);
@@ -477,14 +587,20 @@ export default function SAModuleMaster() {
     },
     {
       key: "create",
-      label: saving ? "Creating..." : "Create Module",
+      label: saving
+        ? editorMode === "edit"
+          ? "Updating..."
+          : "Creating..."
+        : editorMode === "edit"
+          ? "Update Module"
+          : "Create Module",
       hint: "Ctrl+S",
       tone: "primary",
       disabled: saving,
       buttonRef: (element) => {
         actionBarRefs.current[3] = element;
       },
-      onClick: () => void handleCreate(),
+      onClick: () => void handleSave(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 3,
@@ -536,9 +652,13 @@ export default function SAModuleMaster() {
             : "Select a module to inspect rollout count.",
         },
       ]}
-      formEyebrow="Create"
-      formTitle="Create a new project module"
-      formDescription="Each module belongs to one project. Companies can only receive this module after the project itself has been mapped to them."
+      formEyebrow={editorMode === "edit" ? "Edit" : "Create"}
+      formTitle={editorMode === "edit" ? "Edit selected module" : "Create a new project module"}
+      formDescription={
+        editorMode === "edit"
+          ? "Module code stays fixed after creation. You can change the display name and intrinsic approval law here."
+          : "Each module belongs to one project. Companies can only receive this module after the project itself has been mapped to them."
+      }
       formContent={
         <div ref={formContainerRef} className="grid gap-3">
           <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
@@ -551,6 +671,7 @@ export default function SAModuleMaster() {
               data-erp-form-field="true"
               value={selectedProjectId}
               onChange={(event) => setSelectedProjectId(event.target.value)}
+              disabled={editorMode === "edit"}
               className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
             >
               <option value="">Choose active project</option>
@@ -580,16 +701,32 @@ export default function SAModuleMaster() {
 
             <label className="grid gap-2 border border-slate-300 bg-slate-50 px-4 py-3">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Auto Module Code
+                {editorMode === "edit" ? "Locked Module Code" : "Auto Module Code"}
               </span>
               <input
                 type="text"
                 readOnly
-                value={generateModuleCodePreview(projects, selectedProjectId, moduleName)}
+                value={
+                  editorMode === "edit" && selectedModule
+                    ? selectedModule.module_code
+                    : generateModuleCodePreview(projects, selectedProjectId, moduleName)
+                }
                 className="w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
               />
             </label>
           </div>
+
+          {editorMode === "edit" ? (
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => resetEditor(selectedProjectId)}
+                className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+              >
+                Switch To Create
+              </button>
+            </div>
+          ) : null}
 
           <label className="flex items-center gap-3 border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
             <input
@@ -706,11 +843,20 @@ export default function SAModuleMaster() {
               />
               <ErpFieldPreview
                 label="Mapped Companies"
-                value={selectedModule ? String(selectedModule.mapped_company_count ?? 0) : "0"}
-                caption="Rollout count across company-module map."
+                  value={selectedModule ? String(selectedModule.mapped_company_count ?? 0) : "0"}
+                  caption="Rollout count across company-module map."
               />
               {selectedModule ? (
                 <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => loadSelectedModuleIntoEditor(selectedModule)}
+                    className="border border-cyan-300 bg-white px-4 py-2 text-sm font-semibold text-cyan-700"
+                  >
+                    Edit Selected Module
+                  </button>
+
                   {selectedModule.is_active ? (
                     <button
                       type="button"
@@ -804,6 +950,9 @@ export default function SAModuleMaster() {
                   </span>
                   <span className="mt-1 block text-xs text-slate-500">
                     {formatApprovalCaption(row)} | {row.mapped_company_count ?? 0} company mapped
+                  </span>
+                  <span className="mt-2 block text-[10px] uppercase tracking-[0.14em] text-cyan-700">
+                    Open the selected preview pane to edit this module.
                   </span>
                 </button>
               ))}

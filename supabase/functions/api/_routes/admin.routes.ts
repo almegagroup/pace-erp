@@ -32,6 +32,7 @@ import { unmapCompanyProjectHandler } from "../_core/admin/project/unmap_company
 import { createModuleHandler } from "../_core/admin/module/create_module.handler.ts";
 import { listModulesHandler } from "../_core/admin/module/list_modules.handler.ts";
 import { updateModuleStateHandler } from "../_core/admin/module/update_module_state.handler.ts";
+import { updateModuleHandler } from "../_core/admin/module/update_module.handler.ts";
 
 import { createDepartmentHandler } from "../_core/admin/department/create_department.handler.ts";
 import { listDepartmentsHandler } from "../_core/admin/department/list_departments.handler.ts";
@@ -239,6 +240,13 @@ export async function dispatchAdminRoutes(
 
     case "POST:/api/admin/module":
       response = await createModuleHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/module/update":
+      response = await updateModuleHandler(req, {
         context,
         request_id: requestId,
       });
