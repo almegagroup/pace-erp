@@ -754,28 +754,67 @@ export default function SARolePermissions() {
             <div className="grid gap-4">
               <label className="block">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Pick Resource
+                  Selected Resource
                 </span>
-                <select
+                <input
                   ref={resourceInputRef}
                   data-workspace-primary-focus="true"
-                  data-erp-form-field="true"
                   value={draft.resource_code}
-                  onChange={(event) => selectCatalogResource(event.target.value)}
-                  className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
-                >
-                  <option value="">
-                    {catalogLoading ? "Loading mapped resources..." : "Choose mapped business resource"}
-                  </option>
-                  {filteredCatalogResources.map((row) => (
-                    <option key={row.resource_code} value={row.resource_code}>
-                      {[row.project_code, row.module_code, row.title, row.resource_code]
-                        .filter(Boolean)
-                        .join(" | ")}
-                    </option>
-                  ))}
-                </select>
+                  readOnly
+                  placeholder={
+                    catalogLoading
+                      ? "Loading mapped resources..."
+                      : "Search filtered results below and click one resource"
+                  }
+                  className="mt-2 w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-900 outline-none"
+                />
               </label>
+
+              <div className="border border-slate-300 bg-white">
+                <div className="border-b border-slate-300 bg-slate-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  Search Results
+                </div>
+                {catalogLoading ? (
+                  <div className="px-4 py-4 text-sm text-slate-500">
+                    Loading mapped business resources...
+                  </div>
+                ) : filteredCatalogResources.length === 0 ? (
+                  <div className="px-4 py-4 text-sm text-slate-500">
+                    No mapped resource matches the current project/module/search filter.
+                  </div>
+                ) : (
+                  <div className="max-h-[18rem] overflow-y-auto">
+                    {filteredCatalogResources.map((row) => {
+                      const selected = draft.resource_code === row.resource_code;
+
+                      return (
+                        <button
+                          key={row.resource_code}
+                          type="button"
+                          onClick={() => selectCatalogResource(row.resource_code)}
+                          className={`w-full border-b border-slate-200 px-4 py-3 text-left last:border-b-0 ${
+                            selected
+                              ? "bg-sky-50 text-sky-900"
+                              : "bg-white text-slate-700 hover:bg-slate-50"
+                          }`}
+                        >
+                          <div className="text-sm font-semibold">
+                            {row.title}
+                          </div>
+                          <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                            {[row.project_code, row.module_code, row.resource_code]
+                              .filter(Boolean)
+                              .join(" | ")}
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {row.route_path || "No route"}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 
               {draft.resource_code ? (
                 <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600">
