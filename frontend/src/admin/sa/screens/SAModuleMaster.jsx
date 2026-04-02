@@ -570,17 +570,53 @@ export default function SAModuleMaster() {
         }),
     },
     {
+      key: "page-registry",
+      label: "Page Registry",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionBarRefs.current[2] = element;
+      },
+      onClick: () => {
+        openScreen("SA_PAGE_RESOURCE_REGISTRY", { mode: "replace" });
+        navigate("/sa/page-registry");
+      },
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 2,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
+      key: "module-page-map",
+      label: "Module Page Map",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionBarRefs.current[3] = element;
+      },
+      onClick: () => {
+        openScreen("SA_MODULE_RESOURCE_MAP", { mode: "replace" });
+        navigate("/sa/module-pages");
+      },
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 3,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
       key: "refresh",
       label: loading ? "Refreshing..." : "Refresh Modules",
       hint: "Alt+R",
       tone: "neutral",
       buttonRef: (element) => {
-        actionBarRefs.current[2] = element;
+        actionBarRefs.current[4] = element;
       },
       onClick: () => void loadWorkspace(selectedProjectId, selectedModuleId),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 2,
+          index: 4,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
@@ -598,12 +634,12 @@ export default function SAModuleMaster() {
       tone: "primary",
       disabled: saving,
       buttonRef: (element) => {
-        actionBarRefs.current[3] = element;
+        actionBarRefs.current[5] = element;
       },
       onClick: () => void handleSave(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 3,
+          index: 5,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),

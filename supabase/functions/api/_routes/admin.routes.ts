@@ -31,8 +31,11 @@ import { mapCompanyToProjectHandler } from "../_core/admin/project/map_company_t
 import { unmapCompanyProjectHandler } from "../_core/admin/project/unmap_company_project.handler.ts";
 import { createModuleHandler } from "../_core/admin/module/create_module.handler.ts";
 import { listModulesHandler } from "../_core/admin/module/list_modules.handler.ts";
+import { listModuleResourceMapHandler } from "../_core/admin/module/list_module_resource_map.handler.ts";
+import { removeModuleResourceMapHandler } from "../_core/admin/module/remove_module_resource_map.handler.ts";
 import { updateModuleStateHandler } from "../_core/admin/module/update_module_state.handler.ts";
 import { updateModuleHandler } from "../_core/admin/module/update_module.handler.ts";
+import { upsertModuleResourceMapHandler } from "../_core/admin/module/upsert_module_resource_map.handler.ts";
 
 import { createDepartmentHandler } from "../_core/admin/department/create_department.handler.ts";
 import { listDepartmentsHandler } from "../_core/admin/department/list_departments.handler.ts";
@@ -254,6 +257,27 @@ export async function dispatchAdminRoutes(
 
     case "GET:/api/admin/modules":
       response = await listModulesHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/module-resource-map":
+      response = await listModuleResourceMapHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/module-resource-map":
+      response = await upsertModuleResourceMapHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/module-resource-map/remove":
+      response = await removeModuleResourceMapHandler(req, {
         context,
         request_id: requestId,
       });

@@ -138,6 +138,22 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_PAGE_RESOURCE_REGISTRY: {
+    screen_code: "SA_PAGE_RESOURCE_REGISTRY",
+    route: "/sa/page-registry",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_MODULE_RESOURCE_MAP: {
+    screen_code: "SA_MODULE_RESOURCE_MAP",
+    route: "/sa/module-pages",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_ROLE_PERMISSIONS: {
     screen_code: "SA_ROLE_PERMISSIONS",
     route: "/sa/acl/role-permissions",

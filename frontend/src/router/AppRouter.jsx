@@ -45,6 +45,8 @@ import SAProjectMaster from "../admin/sa/screens/SAProjectMaster.jsx";
 import SAProjectManage from "../admin/sa/screens/SAProjectManage.jsx";
 import SACompanyProjectMap from "../admin/sa/screens/SACompanyProjectMap.jsx";
 import SAModuleMaster from "../admin/sa/screens/SAModuleMaster.jsx";
+import SAPageResourceRegistry from "../admin/sa/screens/SAPageResourceRegistry.jsx";
+import SAModuleResourceMap from "../admin/sa/screens/SAModuleResourceMap.jsx";
 import SARolePermissions from "../admin/sa/screens/SARolePermissions.jsx";
 import SACapabilityGovernance from "../admin/sa/screens/SACapabilityGovernance.jsx";
 import SAApprovalRules from "../admin/sa/screens/SAApprovalRules.jsx";
@@ -125,6 +127,8 @@ export default function AppRouter() {
                     <Route path="projects/manage" element={<SAProjectManage />} />
                     <Route path="projects/map" element={<SACompanyProjectMap />} />
                     <Route path="module-master" element={<SAModuleMaster />} />
+                    <Route path="page-registry" element={<SAPageResourceRegistry />} />
+                    <Route path="module-pages" element={<SAModuleResourceMap />} />
                     <Route
                       path="acl/role-permissions"
                       element={<SARolePermissions />}
