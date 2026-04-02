@@ -221,7 +221,7 @@ export async function upsertApproverRuleHandler(
 
       return errorResponse(
         "APPROVER_RULE_UPSERT_FAILED",
-        "Upsert failed",
+        error.message,
         requestId
       );
     }
