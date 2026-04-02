@@ -45,6 +45,10 @@ import { updateDepartmentStateHandler } from "../_core/admin/department/update_d
 import { listApproverRulesHandler } from "../_core/admin/approval/list_approver_rules.handler.ts";
 import { upsertApproverRuleHandler } from "../_core/admin/approval/upsert_approver_rule.handler.ts";
 import { deleteApproverRuleHandler } from "../_core/admin/approval/delete_approver_rule.handler.ts";
+import { listApprovalWorkspaceHandler } from "../_core/admin/approval/approval_workspace.handler.ts";
+import { listReportViewerRulesHandler } from "../_core/admin/approval/list_report_viewer_rules.handler.ts";
+import { upsertReportViewerRuleHandler } from "../_core/admin/approval/upsert_report_viewer_rule.handler.ts";
+import { deleteReportViewerRuleHandler } from "../_core/admin/approval/delete_report_viewer_rule.handler.ts";
 import { listResourceApprovalPolicyHandler } from "../_core/admin/approval/list_resource_approval_policy.handler.ts";
 import { upsertResourceApprovalPolicyHandler } from "../_core/admin/approval/upsert_resource_approval_policy.handler.ts";
 
@@ -339,6 +343,13 @@ export async function dispatchAdminRoutes(
       });
       break;
 
+    case "GET:/api/admin/approval/workspace":
+      response = await listApprovalWorkspaceHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
     case "GET:/api/admin/approval/resource-policy":
       response = await listResourceApprovalPolicyHandler(req, {
         context,
@@ -365,6 +376,36 @@ export async function dispatchAdminRoutes(
 
     case "POST:/api/admin/approval/approvers/delete":
       response = await deleteApproverRuleHandler(req, {
+        context,
+        session: {
+          authUserId: session.authUserId,
+          roleCode: context.roleCode,
+        },
+      });
+      break;
+
+    case "GET:/api/admin/approval/viewers":
+      response = await listReportViewerRulesHandler(req, {
+        context,
+        session: {
+          authUserId: session.authUserId,
+          roleCode: context.roleCode,
+        },
+      });
+      break;
+
+    case "POST:/api/admin/approval/viewers":
+      response = await upsertReportViewerRuleHandler(req, {
+        context,
+        session: {
+          authUserId: session.authUserId,
+          roleCode: context.roleCode,
+        },
+      });
+      break;
+
+    case "POST:/api/admin/approval/viewers/delete":
+      response = await deleteReportViewerRuleHandler(req, {
         context,
         session: {
           authUserId: session.authUserId,

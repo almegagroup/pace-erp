@@ -7,9 +7,9 @@ import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 import {
-  deleteApproverRule,
+  deleteViewerRule,
   fetchApprovalWorkspace,
-  saveApproverRule,
+  saveViewerRule,
 } from "./approvalWorkspaceApi.js";
 
 function normalizeText(value) {
@@ -35,21 +35,20 @@ function buildUserLabel(row) {
 
 function createEmptyDraft() {
   return {
-    approver_id: null,
+    viewer_id: null,
     company_id: "",
     project_code: "",
     module_code: "",
     resource_code: "",
-    action_code: "APPROVE",
+    action_code: "VIEW",
     subject_work_context_id: "",
-    approval_stage: "1",
     target_mode: "user",
-    approver_user_id: "",
-    approver_role_code: ERP_ROLE_OPTIONS[0]?.code ?? "DIRECTOR",
+    viewer_user_id: "",
+    viewer_role_code: ERP_ROLE_OPTIONS[0]?.code ?? "DIRECTOR",
   };
 }
 
-export default function SAApprovalRules() {
+export default function SAReportVisibility() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
   const rowRefs = useRef([]);
@@ -61,7 +60,7 @@ export default function SAApprovalRules() {
     resources: [],
     work_contexts: [],
     users: [],
-    approver_rules: [],
+    viewer_rules: [],
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -83,17 +82,14 @@ export default function SAApprovalRules() {
         resources: data?.resources ?? [],
         work_contexts: data?.work_contexts ?? [],
         users: data?.users ?? [],
-        approver_rules: data?.approver_rules ?? [],
+        viewer_rules: data?.viewer_rules ?? [],
       });
-      setDraft((current) => ({
-        ...current,
-        ...preferred,
-      }));
+      setDraft((current) => ({ ...current, ...preferred }));
     } catch (err) {
       setError(
         err instanceof Error
-          ? `Approval workspace could not be loaded. ${err.message}`
-          : "Approval workspace could not be loaded right now.",
+          ? `Report visibility workspace could not be loaded. ${err.message}`
+          : "Report visibility workspace could not be loaded right now.",
       );
     } finally {
       setLoading(false);
@@ -114,114 +110,92 @@ export default function SAApprovalRules() {
   );
 
   const projectOptions = useMemo(() => {
-    const moduleProjectCodes = new Set(
-      workspace.modules
-        .filter((row) => !draft.company_id || row.is_active)
-        .map((row) => row.project_code)
-        .filter(Boolean),
-    );
-
+    const moduleProjectCodes = new Set(workspace.modules.map((row) => row.project_code).filter(Boolean));
     return sortByLabel(
       workspace.projects.filter((row) => moduleProjectCodes.has(row.project_code)),
       (row) => `${row.project_code ?? ""} ${row.project_name ?? ""}`.trim(),
     );
-  }, [workspace.projects, workspace.modules, draft.company_id]);
+  }, [workspace.projects, workspace.modules]);
 
-  const moduleOptions = useMemo(() => {
-    return sortByLabel(
-      workspace.modules.filter((row) =>
-        (!draft.project_code || row.project_code === draft.project_code) &&
-        row.is_active === true
-      ),
-      (row) => `${row.project_code ?? ""} ${row.module_code ?? ""} ${row.module_name ?? ""}`.trim(),
-    );
-  }, [workspace.modules, draft.project_code]);
-
-  const resourceOptions = useMemo(() => {
-    return sortByLabel(
-      workspace.resources.filter((row) =>
-        (!draft.project_code || row.project_code === draft.project_code) &&
-        (!draft.module_code || row.module_code === draft.module_code),
-      ),
-      (row) => `${row.project_code ?? ""} ${row.module_code ?? ""} ${row.title ?? ""}`.trim(),
-    );
-  }, [workspace.resources, draft.project_code, draft.module_code]);
-
-  const selectedResource = useMemo(
+  const moduleOptions = useMemo(
     () =>
-      resourceOptions.find((row) => row.resource_code === draft.resource_code) ?? null,
-    [resourceOptions, draft.resource_code],
+      sortByLabel(
+        workspace.modules.filter((row) => !draft.project_code || row.project_code === draft.project_code),
+        (row) => `${row.project_code ?? ""} ${row.module_code ?? ""} ${row.module_name ?? ""}`.trim(),
+      ),
+    [workspace.modules, draft.project_code],
   );
 
-  const actionOptions = selectedResource?.available_actions?.includes("APPROVE")
-    ? selectedResource.available_actions
-    : ["APPROVE"];
+  const resourceOptions = useMemo(
+    () =>
+      sortByLabel(
+        workspace.resources.filter((row) =>
+          (!draft.project_code || row.project_code === draft.project_code) &&
+          (!draft.module_code || row.module_code === draft.module_code) &&
+          row.available_actions?.some((action) => ["VIEW", "EXPORT"].includes(action)),
+        ),
+        (row) => `${row.project_code ?? ""} ${row.module_code ?? ""} ${row.title ?? ""}`.trim(),
+      ),
+    [workspace.resources, draft.project_code, draft.module_code],
+  );
 
-  useEffect(() => {
-    if (draft.resource_code && !resourceOptions.some((row) => row.resource_code === draft.resource_code)) {
-      setDraft((current) => ({ ...current, resource_code: "", action_code: "APPROVE" }));
-    }
+  const actionOptions = useMemo(() => {
+    const resource = resourceOptions.find((row) => row.resource_code === draft.resource_code) ?? null;
+    const actions = (resource?.available_actions ?? []).filter((action) => ["VIEW", "EXPORT"].includes(action));
+    return actions.length > 0 ? actions : ["VIEW"];
   }, [resourceOptions, draft.resource_code]);
 
   useEffect(() => {
-    if (draft.module_code && !moduleOptions.some((row) => row.module_code === draft.module_code)) {
-      setDraft((current) => ({ ...current, module_code: "", resource_code: "", action_code: "APPROVE" }));
-    }
-  }, [moduleOptions, draft.module_code]);
-
-  useEffect(() => {
-    if (draft.project_code && !projectOptions.some((row) => row.project_code === draft.project_code)) {
-      setDraft((current) => ({ ...current, project_code: "", module_code: "", resource_code: "", action_code: "APPROVE" }));
-    }
-  }, [projectOptions, draft.project_code]);
-
-  useEffect(() => {
     if (!actionOptions.includes(draft.action_code)) {
-      setDraft((current) => ({ ...current, action_code: actionOptions[0] ?? "APPROVE" }));
+      setDraft((current) => ({ ...current, action_code: actionOptions[0] ?? "VIEW" }));
     }
   }, [actionOptions, draft.action_code]);
 
-  const subjectScopeOptions = useMemo(() => {
-    return sortByLabel(
-      workspace.work_contexts.filter((row) => !draft.company_id || row.company_id === draft.company_id),
-      (row) =>
-        `${row.company_code ?? ""} ${row.work_context_code ?? ""} ${row.department_code ?? ""} ${row.department_name ?? ""}`.trim(),
-    );
-  }, [workspace.work_contexts, draft.company_id]);
+  const subjectScopeOptions = useMemo(
+    () =>
+      sortByLabel(
+        workspace.work_contexts.filter((row) => !draft.company_id || row.company_id === draft.company_id),
+        (row) =>
+          `${row.company_code ?? ""} ${row.work_context_code ?? ""} ${row.department_code ?? ""} ${row.department_name ?? ""}`.trim(),
+      ),
+    [workspace.work_contexts, draft.company_id],
+  );
 
   const userOptions = useMemo(() => {
     return sortByLabel(
       workspace.users.filter((row) => {
         const needle = normalizeText(searchQuery).toLowerCase();
-        if (!needle) return true;
+        if (!needle) {
+          return true;
+        }
         return buildUserLabel(row).toLowerCase().includes(needle);
       }),
       (row) => buildUserLabel(row),
     );
-  }, [workspace.users, draft.company_id, searchQuery]);
+  }, [workspace.users, searchQuery]);
 
   const filteredRules = useMemo(() => {
     const needle = normalizeText(searchQuery).toLowerCase();
-    return workspace.approver_rules.filter((row) => {
+
+    return workspace.viewer_rules.filter((row) => {
       if (draft.company_id && row.company_id !== draft.company_id) return false;
       if (draft.module_code && row.module_code !== draft.module_code) return false;
       if (draft.resource_code && row.resource_code !== draft.resource_code) return false;
       if (draft.subject_work_context_id && row.subject_work_context_id !== draft.subject_work_context_id) return false;
+
       if (!needle) return true;
 
-      const targetUser = workspace.users.find((user) => user.auth_user_id === row.approver_user_id);
-      const targetScope = workspace.work_contexts.find(
-        (scope) => scope.work_context_id === row.subject_work_context_id,
-      );
+      const targetUser = workspace.users.find((user) => user.auth_user_id === row.viewer_user_id);
+      const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id);
       const haystack = [
         row.company_id,
         row.module_code,
         row.resource_code,
         row.action_code,
-        row.approver_role_code,
+        row.viewer_role_code,
         targetUser ? buildUserLabel(targetUser) : "",
-        targetScope?.work_context_code,
-        targetScope?.department_name,
+        scope?.work_context_code,
+        scope?.department_name,
       ]
         .filter(Boolean)
         .join(" ")
@@ -230,7 +204,7 @@ export default function SAApprovalRules() {
       return haystack.includes(needle);
     });
   }, [
-    workspace.approver_rules,
+    workspace.viewer_rules,
     workspace.users,
     workspace.work_contexts,
     draft.company_id,
@@ -242,17 +216,17 @@ export default function SAApprovalRules() {
 
   async function handleSave() {
     if (!draft.company_id || !draft.module_code || !draft.resource_code) {
-      setError("Company, module, and exact approval resource are required.");
+      setError("Company, module, and exact report resource are required.");
       return;
     }
 
-    if (draft.target_mode === "user" && !draft.approver_user_id) {
-      setError("Choose an approver user.");
+    if (draft.target_mode === "user" && !draft.viewer_user_id) {
+      setError("Choose a viewer user.");
       return;
     }
 
-    if (draft.target_mode === "role" && !draft.approver_role_code) {
-      setError("Choose an approver role.");
+    if (draft.target_mode === "role" && !draft.viewer_role_code) {
+      setError("Choose a viewer role.");
       return;
     }
 
@@ -261,25 +235,24 @@ export default function SAApprovalRules() {
     setNotice("");
 
     try {
-      await saveApproverRule({
-        approver_id: draft.approver_id ?? undefined,
+      await saveViewerRule({
+        viewer_id: draft.viewer_id ?? undefined,
         company_id: draft.company_id,
         module_code: draft.module_code,
         resource_code: draft.resource_code,
         action_code: draft.action_code,
         subject_work_context_id: draft.subject_work_context_id || undefined,
-        approval_stage: Number(draft.approval_stage || "1"),
-        approver_user_id: draft.target_mode === "user" ? draft.approver_user_id : undefined,
-        approver_role_code: draft.target_mode === "role" ? draft.approver_role_code : undefined,
+        viewer_user_id: draft.target_mode === "user" ? draft.viewer_user_id : undefined,
+        viewer_role_code: draft.target_mode === "role" ? draft.viewer_role_code : undefined,
       });
-      await loadWorkspace({ ...draft, approver_id: null });
-      setNotice("Scoped approver rule saved.");
-      setDraft((current) => ({ ...current, approver_id: null }));
+      await loadWorkspace({ ...draft, viewer_id: null });
+      setDraft((current) => ({ ...current, viewer_id: null }));
+      setNotice("Report visibility rule saved.");
     } catch (err) {
       setError(
         err instanceof Error
-          ? `Approver rule could not be saved. ${err.message}`
-          : "Approver rule could not be saved right now.",
+          ? `Report visibility rule could not be saved. ${err.message}`
+          : "Report visibility rule could not be saved right now.",
       );
     } finally {
       setSaving(false);
@@ -289,8 +262,8 @@ export default function SAApprovalRules() {
   async function handleDelete(rule) {
     const approved = await openActionConfirm({
       eyebrow: "Approval Governance",
-      title: "Delete Approver Rule",
-      message: `Delete stage ${rule.approval_stage} approver rule for ${rule.resource_code ?? rule.module_code}?`,
+      title: "Delete Report Visibility Rule",
+      message: `Delete report visibility rule for ${rule.resource_code}?`,
       confirmLabel: "Delete Rule",
       cancelLabel: "Cancel",
     });
@@ -302,14 +275,14 @@ export default function SAApprovalRules() {
     setNotice("");
 
     try {
-      await deleteApproverRule(rule.approver_id);
+      await deleteViewerRule(rule.viewer_id);
       await loadWorkspace(draft);
-      setNotice("Approver rule deleted.");
+      setNotice("Report visibility rule deleted.");
     } catch (err) {
       setError(
         err instanceof Error
-          ? `Approver rule could not be deleted. ${err.message}`
-          : "Approver rule could not be deleted right now.",
+          ? `Report visibility rule could not be deleted. ${err.message}`
+          : "Report visibility rule could not be deleted right now.",
       );
     } finally {
       setSaving(false);
@@ -320,42 +293,32 @@ export default function SAApprovalRules() {
     const resource = workspace.resources.find((row) => row.resource_code === rule.resource_code) ?? null;
     const module = workspace.modules.find((row) => row.module_code === rule.module_code) ?? null;
     setDraft({
-      approver_id: rule.approver_id,
+      viewer_id: rule.viewer_id,
       company_id: rule.company_id,
       project_code: resource?.project_code ?? module?.project_code ?? "",
       module_code: rule.module_code,
-      resource_code: rule.resource_code ?? "",
-      action_code: rule.action_code ?? "APPROVE",
+      resource_code: rule.resource_code,
+      action_code: rule.action_code ?? "VIEW",
       subject_work_context_id: rule.subject_work_context_id ?? "",
-      approval_stage: String(rule.approval_stage ?? 1),
-      target_mode: rule.approver_user_id ? "user" : "role",
-      approver_user_id: rule.approver_user_id ?? "",
-      approver_role_code: rule.approver_role_code ?? ERP_ROLE_OPTIONS[0]?.code ?? "DIRECTOR",
+      target_mode: rule.viewer_user_id ? "user" : "role",
+      viewer_user_id: rule.viewer_user_id ?? "",
+      viewer_role_code: rule.viewer_role_code ?? ERP_ROLE_OPTIONS[0]?.code ?? "DIRECTOR",
     });
   }
 
   return (
     <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
-      title="Scoped Approver Rules"
-      description="Bind exact approvers to exact company, module, resource, action, and requester subject scope. This prevents Arka-like overreach across unrelated departments."
+      title="Report Visibility Rules"
+      description="Separate report visibility from approver authority. Meeta can view all leave registers without becoming every department's approver."
       actions={[
         {
-          key: "policy",
-          label: "Approval Policy",
+          key: "approver",
+          label: "Approver Rules",
           tone: "neutral",
           onClick: () => {
-            openScreen("SA_APPROVAL_POLICY", { mode: "replace" });
-            navigate("/sa/approval-policy");
-          },
-        },
-        {
-          key: "viewer",
-          label: "Report Visibility",
-          tone: "neutral",
-          onClick: () => {
-            openScreen("SA_REPORT_VISIBILITY", { mode: "replace" });
-            navigate("/sa/report-visibility");
+            openScreen("SA_APPROVAL_RULES", { mode: "replace" });
+            navigate("/sa/approval-rules");
           },
         },
         {
@@ -375,7 +338,7 @@ export default function SAApprovalRules() {
         },
         {
           key: "save",
-          label: saving ? "Saving..." : draft.approver_id ? "Update Rule" : "Save Rule",
+          label: saving ? "Saving..." : draft.viewer_id ? "Update Rule" : "Save Rule",
           tone: "primary",
           disabled: saving,
           buttonRef: (element) => {
@@ -396,39 +359,37 @@ export default function SAApprovalRules() {
       ]}
       metrics={[
         {
-          key: "rules",
-          label: "Approver Rules",
-          value: loading ? "..." : String(workspace.approver_rules.length),
+          key: "viewerRules",
+          label: "Viewer Rules",
+          value: loading ? "..." : String(workspace.viewer_rules.length),
           tone: "sky",
-          caption: "All saved scoped approver rows.",
+          caption: "All saved report visibility rows.",
         },
         {
           key: "visible",
           label: "Visible",
           value: loading ? "..." : String(filteredRules.length),
           tone: "emerald",
-          caption: "Rules matching the current filters.",
+          caption: "Rules matching the current filter.",
         },
         {
           key: "scope",
-          label: "Requester Scope",
+          label: "Visibility Scope",
           value: draft.subject_work_context_id ? "Scoped" : "Company-wide",
           tone: draft.subject_work_context_id ? "amber" : "slate",
-          caption: "Leave blank only if every requester in this company-module should share the same approver pool.",
+          caption: "Leave blank to allow full company-level reporting access for the selected report resource.",
         },
         {
-          key: "target",
-          label: "Target",
-          value: draft.target_mode === "user" ? "Specific User" : "Role",
+          key: "action",
+          label: "Action",
+          value: draft.action_code,
           tone: "slate",
-          caption: draft.target_mode === "user"
-            ? buildUserLabel(workspace.users.find((row) => row.auth_user_id === draft.approver_user_id) ?? null)
-            : ERP_ROLE_LABELS[draft.approver_role_code] ?? draft.approver_role_code,
+          caption: draft.resource_code || "Choose a report resource",
         },
       ]}
       filterSection={{
-        eyebrow: "Scope Filters",
-        title: "Choose exact approval scope",
+        eyebrow: "Visibility Filters",
+        title: "Choose report scope",
         children: (
           <div className="grid gap-3">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -504,7 +465,7 @@ export default function SAApprovalRules() {
               </label>
               <label className="grid gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Exact Approval Resource
+                  Report Resource
                 </span>
                 <select
                   value={draft.resource_code}
@@ -526,37 +487,37 @@ export default function SAApprovalRules() {
               </label>
             </div>
             <QuickFilterInput
-              label="Search rules or users"
+              label="Search rules or viewers"
               value={searchQuery}
               onChange={setSearchQuery}
               inputRef={searchRef}
-              placeholder="Search by approver, scope, company, module, or resource"
+              placeholder="Search by viewer, scope, company, module, or resource"
             />
           </div>
         ),
       }}
       reviewSection={{
-        eyebrow: "Existing Rules",
-        title: loading ? "Loading approver rules" : `${filteredRules.length} visible approver rule${filteredRules.length === 1 ? "" : "s"}`,
-        description: "Pick a row to edit it, or delete rows that should no longer route approvals.",
+        eyebrow: "Existing Viewer Rules",
+        title: loading ? "Loading visibility rules" : `${filteredRules.length} visible viewer rule${filteredRules.length === 1 ? "" : "s"}`,
+        description: "Use these rows to control who can see company-wide or department-scoped register and report pages.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-            Loading scoped approver rules.
+            Loading report visibility rules.
           </div>
         ) : filteredRules.length === 0 ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-            No approver rule matches the current filter.
+            No report visibility rule matches the current filter.
           </div>
         ) : (
           <div className="grid gap-3">
             {filteredRules.map((row, index) => {
-              const user = workspace.users.find((item) => item.auth_user_id === row.approver_user_id) ?? null;
+              const user = workspace.users.find((item) => item.auth_user_id === row.viewer_user_id) ?? null;
               const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id) ?? null;
               const resource = workspace.resources.find((item) => item.resource_code === row.resource_code) ?? null;
 
               return (
                 <button
-                  key={row.approver_id}
+                  key={row.viewer_id}
                   ref={(element) => {
                     rowRefs.current[index] = element;
                   }}
@@ -570,24 +531,24 @@ export default function SAApprovalRules() {
                     })
                   }
                   className={`border px-4 py-4 text-left ${
-                    draft.approver_id === row.approver_id ? "border-sky-400 bg-sky-50" : "border-slate-300 bg-white"
+                    draft.viewer_id === row.viewer_id ? "border-sky-400 bg-sky-50" : "border-slate-300 bg-white"
                   }`}
                 >
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <div className="text-sm font-semibold text-slate-900">
-                        {resource?.title ?? row.resource_code ?? row.module_code}
+                        {resource?.title ?? row.resource_code}
                       </div>
                       <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
-                        {row.module_code} | {row.resource_code ?? "MODULE_SCOPE"} | {row.action_code ?? "ALL"}
+                        {row.module_code} | {row.resource_code} | {row.action_code}
                       </div>
                       <div className="mt-2 text-xs text-slate-600">
-                        Stage {row.approval_stage} | {user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.approver_role_code] ?? row.approver_role_code}
+                        {user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.viewer_role_code] ?? row.viewer_role_code}
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
                         {scope
                           ? `${scope.company_code} | ${scope.work_context_code}${scope.department_name ? ` | ${scope.department_name}` : ""}`
-                          : "Requester scope: company-wide"}
+                          : "Viewer scope: company-wide"}
                       </div>
                     </div>
                     <button
@@ -608,9 +569,9 @@ export default function SAApprovalRules() {
         ),
       }}
       sideSection={{
-        eyebrow: "Rule Editor",
-        title: draft.approver_id ? "Edit approver rule" : "Create approver rule",
-        description: "Use requester subject scope to keep approvers narrow. Example: Accounts requests -> Arka, Engineering requests -> Bikash.",
+        eyebrow: "Viewer Rule Editor",
+        title: draft.viewer_id ? "Edit visibility rule" : "Create visibility rule",
+        description: "Use company-wide rows for Meeta/Pradeep-style reporting access. Use scoped rows when only one requester context should be visible.",
         children: (
           <div className="grid gap-4">
             <label className="grid gap-2">
@@ -659,26 +620,6 @@ export default function SAApprovalRules() {
               </select>
             </label>
 
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Approval Stage
-              </span>
-              <select
-                value={draft.approval_stage}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    approval_stage: event.target.value,
-                  }))
-                }
-                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-              >
-                <option value="1">Stage 1</option>
-                <option value="2">Stage 2</option>
-                <option value="3">Stage 3</option>
-              </select>
-            </label>
-
             <div className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Target Mode
@@ -708,14 +649,14 @@ export default function SAApprovalRules() {
             {draft.target_mode === "user" ? (
               <label className="grid gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Approver User
+                  Viewer User
                 </span>
                 <select
-                  value={draft.approver_user_id}
+                  value={draft.viewer_user_id}
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...current,
-                      approver_user_id: event.target.value,
+                      viewer_user_id: event.target.value,
                     }))
                   }
                   className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
@@ -731,14 +672,14 @@ export default function SAApprovalRules() {
             ) : (
               <label className="grid gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Approver Role
+                  Viewer Role
                 </span>
                 <select
-                  value={draft.approver_role_code}
+                  value={draft.viewer_role_code}
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...current,
-                      approver_role_code: event.target.value,
+                      viewer_role_code: event.target.value,
                     }))
                   }
                   className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
@@ -753,8 +694,7 @@ export default function SAApprovalRules() {
             )}
 
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-xs text-slate-600">
-              Use exact resource `*_APPROVAL_INBOX` with action `APPROVE` for approver routing.
-              Keep requester scope empty only when the same approver pool should work for every requester in the company.
+              Use company-wide viewer rows for HR-wide salary/report visibility. Use subject-scoped viewer rows when only one department or requester context should be visible.
             </div>
           </div>
         ),

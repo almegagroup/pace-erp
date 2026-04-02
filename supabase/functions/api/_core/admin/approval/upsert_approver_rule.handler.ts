@@ -20,10 +20,12 @@ import { generateRequestId } from "../../../_lib/request_id.ts";
  * ========================================================= */
 
 type UpsertApproverInput = {
+  approver_id?: string;
   company_id: string;
   module_code: string;
   resource_code?: string;
   action_code?: string;
+  subject_work_context_id?: string;
   approval_stage: number;
   approver_role_code?: string;
   approver_user_id?: string;
@@ -126,6 +128,7 @@ export async function upsertApproverRuleHandler(
       module_code: body.module_code,
       resource_code: body.resource_code ?? null,
       action_code: body.action_code ?? null,
+      subject_work_context_id: body.subject_work_context_id?.trim() || null,
       approval_stage: body.approval_stage,
       approver_role_code: roleCode,
       approver_user_id: body.approver_user_id ?? null,
@@ -149,8 +152,33 @@ export async function upsertApproverRuleHandler(
         .is("action_code", null);
     }
 
+    if (payload.subject_work_context_id) {
+      existingQuery = existingQuery.eq(
+        "subject_work_context_id",
+        payload.subject_work_context_id,
+      );
+    } else {
+      existingQuery = existingQuery.is("subject_work_context_id", null);
+    }
+
+    if (payload.approver_user_id) {
+      existingQuery = existingQuery
+        .eq("approver_user_id", payload.approver_user_id)
+        .is("approver_role_code", null);
+    } else {
+      existingQuery = existingQuery
+        .eq("approver_role_code", payload.approver_role_code)
+        .is("approver_user_id", null);
+    }
+
     const { data: existingRule, error: lookupError } =
-      await existingQuery.maybeSingle();
+      body.approver_id
+        ? await db
+            .schema("acl").from("approver_map")
+            .select("approver_id")
+            .eq("approver_id", body.approver_id)
+            .maybeSingle()
+        : await existingQuery.maybeSingle();
 
     if (lookupError) {
       return errorResponse(
@@ -160,14 +188,26 @@ export async function upsertApproverRuleHandler(
       );
     }
 
+    const insertPayload = { ...payload };
+    const updatePayload = {
+      company_id: payload.company_id,
+      module_code: payload.module_code,
+      resource_code: payload.resource_code,
+      action_code: payload.action_code,
+      subject_work_context_id: payload.subject_work_context_id,
+      approval_stage: payload.approval_stage,
+      approver_role_code: payload.approver_role_code,
+      approver_user_id: payload.approver_user_id,
+    };
+
     const { error } = existingRule
       ? await db
           .schema("acl").from("approver_map")
-          .update(payload)
+          .update(updatePayload)
           .eq("approver_id", existingRule.approver_id)
       : await db
           .schema("acl").from("approver_map")
-          .insert(payload);
+          .insert(insertPayload);
 
     if (error) {
 

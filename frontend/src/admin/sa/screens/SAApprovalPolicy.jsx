@@ -205,6 +205,15 @@ export default function SAApprovalPolicy() {
           },
         },
         {
+          key: "report-visibility",
+          label: "Report Visibility",
+          tone: "neutral",
+          onClick: () => {
+            openScreen("SA_REPORT_VISIBILITY", { mode: "replace" });
+            navigate("/sa/report-visibility");
+          },
+        },
+        {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",

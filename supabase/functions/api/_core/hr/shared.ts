@@ -64,9 +64,21 @@ export type ApproverRuleRow = {
   module_code: string;
   resource_code: string | null;
   action_code: string | null;
+  subject_work_context_id: string | null;
   approval_stage: number;
   approver_role_code: string | null;
   approver_user_id: string | null;
+};
+
+export type ViewerRuleRow = {
+  viewer_id: string;
+  company_id: string;
+  module_code: string;
+  resource_code: string;
+  action_code: "VIEW" | "EXPORT";
+  subject_work_context_id: string | null;
+  viewer_role_code: string | null;
+  viewer_user_id: string | null;
 };
 
 export type UserIdentity = {
@@ -235,6 +247,7 @@ export async function createWorkflowRequest(
   approvalRequired: boolean,
   approvalType: "ANYONE" | "SEQUENTIAL" | "MUST_ALL",
   approvalResourceCode: string,
+  requesterWorkContextId: string | null,
 ): Promise<{
   request_id: string;
   current_state: "PENDING" | "APPROVED";
@@ -257,6 +270,8 @@ export async function createWorkflowRequest(
       current_state: approvalRequired ? "PENDING" : "APPROVED",
       resource_code: approvalResourceCode,
       action_code: "APPROVE",
+      requester_work_context_id: requesterWorkContextId,
+      requester_subject_company_id: companyId,
       created_by: requesterAuthUserId,
     })
     .select("request_id, current_state")
@@ -340,12 +355,27 @@ export async function loadApproverRulesForCompanyModule(
   const { data } = await serviceRoleClient
     .schema("acl")
     .from("approver_map")
-    .select("approver_id, company_id, module_code, resource_code, action_code, approval_stage, approver_role_code, approver_user_id")
+    .select("approver_id, company_id, module_code, resource_code, action_code, subject_work_context_id, approval_stage, approver_role_code, approver_user_id")
     .eq("company_id", companyId)
     .eq("module_code", moduleCode)
     .order("approval_stage", { ascending: true });
 
   return (data ?? []) as ApproverRuleRow[];
+}
+
+export async function loadViewerRulesForCompanyModule(
+  companyId: string,
+  moduleCode: string,
+): Promise<ViewerRuleRow[]> {
+  const { data } = await serviceRoleClient
+    .schema("acl")
+    .from("report_viewer_map")
+    .select("viewer_id, company_id, module_code, resource_code, action_code, subject_work_context_id, viewer_role_code, viewer_user_id")
+    .eq("company_id", companyId)
+    .eq("module_code", moduleCode)
+    .order("resource_code", { ascending: true });
+
+  return (data ?? []) as ViewerRuleRow[];
 }
 
 export async function loadUserIdentityMap(
@@ -410,18 +440,27 @@ export function pickScopedApprovers(
   workflow: {
     resource_code?: string | null;
     action_code?: string | null;
+    requester_work_context_id?: string | null;
   },
   approverRows: ApproverRuleRow[],
 ): ApproverRuleRow[] {
+  const scopeMatchedRows = approverRows.filter((row) => {
+    if (row.subject_work_context_id === null) {
+      return true;
+    }
+
+    return row.subject_work_context_id === (workflow.requester_work_context_id ?? null);
+  });
+
   if (workflow.resource_code && workflow.action_code) {
-    return approverRows.filter(
+    return scopeMatchedRows.filter(
       (row) =>
         row.resource_code === workflow.resource_code &&
         row.action_code === workflow.action_code,
     );
   }
 
-  return approverRows.filter(
+  return scopeMatchedRows.filter(
     (row) => row.resource_code === null && row.action_code === null,
   );
 }
@@ -437,6 +476,44 @@ export function isApproverMatch(
 
   if (row.approver_role_code) {
     return row.approver_role_code === roleCode;
+  }
+
+  return false;
+}
+
+export function pickScopedViewerRules(
+  workflow: {
+    resource_code?: string | null;
+    action_code?: string | null;
+    requester_work_context_id?: string | null;
+  },
+  viewerRows: ViewerRuleRow[],
+  targetAction: "VIEW" | "EXPORT" = "VIEW",
+): ViewerRuleRow[] {
+  return viewerRows.filter((row) => {
+    const subjectMatched = row.subject_work_context_id === null ||
+      row.subject_work_context_id === (workflow.requester_work_context_id ?? null);
+
+    if (!subjectMatched) {
+      return false;
+    }
+
+    return row.resource_code === workflow.resource_code &&
+      row.action_code === targetAction;
+  });
+}
+
+export function isViewerMatch(
+  row: ViewerRuleRow,
+  authUserId: string,
+  roleCode: string,
+): boolean {
+  if (row.viewer_user_id) {
+    return row.viewer_user_id === authUserId;
+  }
+
+  if (row.viewer_role_code) {
+    return row.viewer_role_code === roleCode;
   }
 
   return false;
@@ -498,4 +575,69 @@ export function isActionableForApprover(input: {
   }
 
   return true;
+}
+
+type UserScopeWorkContextRow = {
+  work_context_id: string;
+  company_id: string;
+  work_context_code: string;
+  work_context_name: string;
+  department_id: string | null;
+};
+
+type UserScopeWorkContextLookupRow = UserScopeWorkContextRow & {
+  is_active: boolean;
+};
+
+export async function resolveRequesterSubjectWorkContext(input: {
+  authUserId: string;
+  parentCompanyId: string;
+  preferredWorkContextId?: string | null;
+}): Promise<UserScopeWorkContextRow | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("user_work_contexts")
+    .select(`
+      work_context_id,
+      work_context:work_context_id (
+        work_context_id,
+        company_id,
+        work_context_code,
+        work_context_name,
+        department_id,
+        is_active
+      )
+    `)
+    .eq("auth_user_id", input.authUserId)
+    .eq("company_id", input.parentCompanyId);
+
+  if (error) {
+    throw new Error("HR_REQUESTER_SCOPE_LOOKUP_FAILED");
+  }
+
+  const rows = (data ?? [])
+    .map((row) => Array.isArray(row.work_context) ? row.work_context[0] : row.work_context)
+    .filter((row): row is UserScopeWorkContextLookupRow =>
+      Boolean(row?.work_context_id && row?.company_id && row?.work_context_code && row?.is_active === true)
+    );
+
+  const departmentContexts = rows.filter((row) => row.department_id);
+  const generalOps = rows.find((row) => row.work_context_code === "GENERAL_OPS") ?? null;
+
+  if (input.preferredWorkContextId) {
+    const matchedPreferred = rows.find((row) => row.work_context_id === input.preferredWorkContextId) ?? null;
+    if (matchedPreferred) {
+      return matchedPreferred;
+    }
+  }
+
+  if (departmentContexts.length === 1) {
+    return departmentContexts[0];
+  }
+
+  if (departmentContexts.length === 0) {
+    return generalOps;
+  }
+
+  throw new Error("HR_REQUESTER_SCOPE_SELECTION_REQUIRED");
 }

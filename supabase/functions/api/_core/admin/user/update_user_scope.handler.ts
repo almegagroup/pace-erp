@@ -61,17 +61,6 @@ export async function updateUserScopeHandler(
       );
     }
 
-    if (
-      workCompanyIds.length === 0 &&
-      (projectIds.length > 0 || departmentIds.length > 0 || explicitWorkContextIds.length > 0)
-    ) {
-      return errorResponse(
-        "USER_SCOPE_WORK_COMPANY_REQUIRED",
-        "work company required before assigning project, department, or work context scope",
-        ctx.request_id,
-      );
-    }
-
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data: activeBusinessCompanies } = await db
@@ -113,6 +102,7 @@ export async function updateUserScopeHandler(
     }
 
     const companyIdsToValidate = [...new Set([parentCompanyId, ...workCompanyIds])];
+    const eligibleCompanyIds = [...companyIdsToValidate];
     const validCompanyCount = companyIdsToValidate.filter((companyId) =>
       activeBusinessCompanyIds.has(companyId)
     ).length;
@@ -128,21 +118,33 @@ export async function updateUserScopeHandler(
     const { data: validProjects } = projectIds.length === 0
       ? { data: [] }
       : await db
-        .schema("erp_master").from("projects")
-        .select("id, company_id")
-        .in("id", projectIds)
-        .in("company_id", workCompanyIds)
-        .eq("status", "ACTIVE");
+        .schema("erp_map")
+        .from("company_projects")
+        .select(`
+          project_id,
+          company_id,
+          project:project_id (
+            id,
+            status
+          )
+        `)
+        .in("project_id", projectIds)
+        .in("company_id", eligibleCompanyIds);
 
-    const validProjectCount = (validProjects ?? []).filter((project) =>
-      workCompanyIds.includes(project.company_id) &&
-      activeBusinessCompanyIds.has(project.company_id)
-    ).length;
+    const validProjectCount = (validProjects ?? []).filter((row) => {
+      const project = Array.isArray(row.project) ? row.project[0] : row.project;
+      return (
+        eligibleCompanyIds.includes(row.company_id) &&
+        activeBusinessCompanyIds.has(row.company_id) &&
+        project?.id === row.project_id &&
+        project?.status === "ACTIVE"
+      );
+    }).length;
 
     if (validProjectCount !== projectIds.length) {
       return errorResponse(
         "USER_SCOPE_PROJECT_INVALID",
-        "one or more projects are invalid or not mapped to a business company",
+        "one or more projects are invalid or not mapped inside the eligible company universe",
         ctx.request_id,
       );
     }
@@ -153,11 +155,11 @@ export async function updateUserScopeHandler(
         .schema("erp_master").from("departments")
         .select("id, company_id")
         .in("id", departmentIds)
-        .in("company_id", workCompanyIds)
+        .in("company_id", eligibleCompanyIds)
         .eq("status", "ACTIVE");
 
     const validDepartmentCount = (validDepartments ?? []).filter((department) =>
-      workCompanyIds.includes(department.company_id) &&
+      eligibleCompanyIds.includes(department.company_id) &&
       activeBusinessCompanyIds.has(department.company_id)
     ).length;
 
@@ -170,12 +172,16 @@ export async function updateUserScopeHandler(
     }
 
     const { data: validWorkContexts } = workCompanyIds.length === 0
-      ? { data: [] }
+      ? await db
+        .schema("erp_acl").from("work_contexts")
+        .select("work_context_id, company_id, work_context_code, department_id")
+        .eq("is_active", true)
+        .in("company_id", eligibleCompanyIds)
       : await db
         .schema("erp_acl").from("work_contexts")
         .select("work_context_id, company_id, work_context_code, department_id")
         .eq("is_active", true)
-        .in("company_id", workCompanyIds);
+        .in("company_id", eligibleCompanyIds);
 
     const validWorkContextMap = new Map(
       (validWorkContexts ?? []).map((row) => [row.work_context_id, row]),
@@ -191,7 +197,7 @@ export async function updateUserScopeHandler(
       );
     }
 
-    const defaultWorkContextIds = workCompanyIds
+    const defaultWorkContextIds = eligibleCompanyIds
       .map((companyId) =>
         (validWorkContexts ?? []).find((row) =>
           row.company_id === companyId && row.work_context_code === "GENERAL_OPS"

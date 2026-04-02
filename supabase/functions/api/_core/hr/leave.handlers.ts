@@ -15,15 +15,19 @@ import {
   isActionableForApprover,
   isApproverMatch,
   loadApproverRulesForCompanyModule,
+  loadViewerRulesForCompanyModule,
   loadUserIdentityMap,
   loadWorkflowDecisionMap,
   normalizeIsoDate,
   pickScopedApprovers,
+  pickScopedViewerRules,
   resolveApprovalConfig,
+  resolveRequesterSubjectWorkContext,
   shiftIsoDate,
   todayIsoInKolkata,
   type HrHandlerContext,
   type WorkflowDecisionRow,
+  isViewerMatch,
 } from "./shared.ts";
 
 type LeaveRequestRow = {
@@ -44,6 +48,7 @@ type WorkflowRequestRow = {
   request_id: string;
   company_id: string;
   requester_auth_user_id: string;
+  requester_work_context_id: string | null;
   module_code: string;
   approval_type: "ANYONE" | "SEQUENTIAL" | "MUST_ALL";
   current_state: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
@@ -107,7 +112,7 @@ async function loadWorkflowMap(
   const { data, error } = await serviceRoleClient
     .schema("acl")
     .from("workflow_requests")
-    .select("request_id, company_id, requester_auth_user_id, module_code, approval_type, current_state, resource_code, action_code, created_at")
+    .select("request_id, company_id, requester_auth_user_id, requester_work_context_id, module_code, approval_type, current_state, resource_code, action_code, created_at")
     .in("request_id", requestIds);
 
   if (error) {
@@ -155,6 +160,7 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
       requester_display: buildUserDisplay(
         userIdentityMap.get(row.requester_auth_user_id) ?? null,
       ),
+      requester_work_context_id: workflow.requester_work_context_id ?? null,
       parent_company_id: row.parent_company_id,
       from_date: row.from_date,
       to_date: row.to_date,
@@ -243,6 +249,13 @@ export async function createLeaveRequestHandler(
 
     const totalDays = calculateInclusiveDays(fromDate, toDate);
     const parentCompany = await getParentCompanyScope(ctx.auth_user_id);
+    const requesterWorkContext = await resolveRequesterSubjectWorkContext({
+      authUserId: ctx.auth_user_id,
+      parentCompanyId: parentCompany.company_id,
+      preferredWorkContextId:
+        String(body?.requester_work_context_id ?? "").trim() ||
+        (ctx.context.companyId === parentCompany.company_id ? ctx.context.workContextId : null),
+    });
     const approvalConfig = await resolveApprovalConfig(
       LEAVE_RESOURCE_CODES.apply,
       "WRITE",
@@ -256,6 +269,7 @@ export async function createLeaveRequestHandler(
       approvalConfig.approval_required,
       approvalConfig.approval_type,
       LEAVE_RESOURCE_CODES.approvalInbox,
+      requesterWorkContext?.work_context_id ?? null,
     );
 
     const { data: leaveRow, error: leaveError } = await serviceRoleClient
@@ -265,6 +279,7 @@ export async function createLeaveRequestHandler(
         workflow_request_id: workflow.request_id,
         requester_auth_user_id: ctx.auth_user_id,
         parent_company_id: parentCompany.company_id,
+        requester_work_context_id: requesterWorkContext?.work_context_id ?? null,
         from_date: fromDate,
         to_date: toDate,
         total_days: totalDays,
@@ -313,6 +328,9 @@ export async function createLeaveRequestHandler(
           approval_type: approvalConfig.approval_type,
           parent_company_code: parentCompany.company_code,
           parent_company_name: parentCompany.company_name,
+          requester_work_context_id: requesterWorkContext?.work_context_id ?? null,
+          requester_work_context_code: requesterWorkContext?.work_context_code ?? null,
+          requester_work_context_name: requesterWorkContext?.work_context_name ?? null,
         },
       },
       ctx.request_id,
@@ -527,6 +545,7 @@ export async function listLeaveApprovalInboxHandler(
         {
           resource_code: row.resource_code,
           action_code: row.action_code,
+          requester_work_context_id: row.requester_work_context_id,
         },
         approverRows,
       );
@@ -589,6 +608,7 @@ export async function listLeaveApprovalScopeHistoryHandler(
         {
           resource_code: row.resource_code,
           action_code: row.action_code,
+          requester_work_context_id: row.requester_work_context_id,
         },
         approverRows,
       );
@@ -628,10 +648,27 @@ export async function listLeaveRegisterHandler(
       requesterAuthUserId,
     });
     const cases = await buildLeaveCases(rows);
+    const moduleBinding = await getModuleBindingForResource(LEAVE_RESOURCE_CODES.apply);
+    const viewerRows = await loadViewerRulesForCompanyModule(
+      ctx.context.companyId,
+      moduleBinding.module_code,
+    );
+
+    const visibleCases = cases.filter((row) =>
+      pickScopedViewerRules(
+        {
+          resource_code: LEAVE_RESOURCE_CODES.register,
+          action_code: "VIEW",
+          requester_work_context_id: row.requester_work_context_id,
+        },
+        viewerRows,
+        "VIEW",
+      ).some((viewer) => isViewerMatch(viewer, ctx.auth_user_id, ctx.roleCode))
+    );
 
     return okResponse(
       {
-        requests: cases,
+        requests: visibleCases,
       },
       ctx.request_id,
     );

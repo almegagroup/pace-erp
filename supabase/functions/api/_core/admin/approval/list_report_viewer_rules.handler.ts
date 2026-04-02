@@ -1,13 +1,3 @@
-/*
- * File-ID: ID-9.10
- * File-Path: supabase/functions/api/_core/admin/approval/list_approver_rules.handler.ts
- * Gate: 9
- * Phase: 9
- * Domain: APPROVAL
- * Purpose: List configured approver routing rules.
- * Authority: Backend
- */
-
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import type { ContextResolution, PipelineSession } from "../../../_pipeline/context.ts";
 import { okResponse, errorResponse } from "../../response.ts";
@@ -24,61 +14,51 @@ function assertAdmin(ctx: AdminContext): void {
   }
 }
 
-export async function listApproverRulesHandler(
+export async function listReportViewerRulesHandler(
   req: Request,
-  ctx: AdminContext
+  ctx: AdminContext,
 ): Promise<Response> {
-
   const requestId = generateRequestId();
-
-  // harmless read to avoid unused parameter warning
   req.headers;
 
   try {
-
     assertAdmin(ctx);
 
     const db = getServiceRoleClientWithContext(ctx.context);
 
     const { data, error } = await db
-      .schema("acl").from("approver_map")
+      .schema("acl")
+      .from("report_viewer_map")
       .select(`
-        approver_id,
+        viewer_id,
         company_id,
         module_code,
         resource_code,
         action_code,
         subject_work_context_id,
-        approval_stage,
-        approver_role_code,
-        approver_user_id,
+        viewer_role_code,
+        viewer_user_id,
         created_at
       `)
+      .order("company_id", { ascending: true })
       .order("module_code", { ascending: true })
       .order("resource_code", { ascending: true })
-      .order("action_code", { ascending: true })
-      .order("approval_stage", { ascending: true });
+      .order("action_code", { ascending: true });
 
     if (error) {
-
       return errorResponse(
-        "APPROVER_RULE_LIST_FAILED",
+        "REPORT_VIEWER_RULE_LIST_FAILED",
         "List failed",
-        requestId
+        requestId,
       );
     }
 
-    return okResponse(
-      data ?? [],
-      requestId
-    );
-
+    return okResponse(data ?? [], requestId);
   } catch (err) {
-
     return errorResponse(
       (err as Error).message || "REQUEST_BLOCKED",
       "Unhandled error",
-      requestId
+      requestId,
     );
   }
 }

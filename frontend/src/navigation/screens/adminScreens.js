@@ -186,6 +186,14 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_REPORT_VISIBILITY: {
+    screen_code: "SA_REPORT_VISIBILITY",
+    route: "/sa/report-visibility",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_COMPANY_MODULE_MAP: {
     screen_code: "SA_COMPANY_MODULE_MAP",
     route: "/sa/acl/company-modules",

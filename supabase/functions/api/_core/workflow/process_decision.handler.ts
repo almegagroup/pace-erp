@@ -27,6 +27,7 @@ interface ApproverMapRow {
   module_code: string;
   resource_code: string | null;
   action_code: string | null;
+  subject_work_context_id: string | null;
   approval_stage: number;
   approver_role_code: string | null;
   approver_user_id: string | null;
@@ -133,6 +134,14 @@ if (approverError || !approvers || approvers.length === 0) {
 }
 
 const scopedApprovers = approvers.filter((approver) => {
+  const subjectMatched =
+    approver.subject_work_context_id === null ||
+    approver.subject_work_context_id === (workflow.requester_work_context_id ?? null);
+
+  if (!subjectMatched) {
+    return false;
+  }
+
   if (workflow.resource_code && workflow.action_code) {
     return (
       approver.resource_code === workflow.resource_code &&
