@@ -271,6 +271,14 @@ function requestLiveMenuRefresh(reason = "menu-governance") {
   );
 }
 
+function pageFilterButtonClass(isActive) {
+  return `border px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] ${
+    isActive
+      ? "border-sky-300 bg-sky-50 text-sky-900"
+      : "border-slate-300 bg-white text-slate-600"
+  }`;
+}
+
 export default function SAMenuGovernance() {
   const topActionRefs = useRef([]);
   const createCodeRef = useRef(null);
@@ -284,6 +292,7 @@ export default function SAMenuGovernance() {
   const [notice, setNotice] = useState("");
   const [selectedMenuCode, setSelectedMenuCode] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
+  const [pageCatalogFilter, setPageCatalogFilter] = useState("ALL");
   const [pageEditor, setPageEditor] = useState(null);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
   const [createForm, setCreateForm] = useState({
@@ -574,9 +583,7 @@ export default function SAMenuGovernance() {
     [registryRows]
   );
 
-  const availablePages = useMemo(() => {
-    const searchTerm = catalogSearch.trim().toLowerCase();
-
+  const catalogBasePages = useMemo(() => {
     return Object.values(SCREEN_REGISTRY)
       .filter((screen) => resolveGovernanceUniverse(screen) === universe)
       .filter((screen) => screen.publishableInMenu !== false)
@@ -596,7 +603,27 @@ export default function SAMenuGovernance() {
             registeredMenu?.display_order ??
             null,
         };
-      })
+      });
+  }, [menus, universe]);
+
+  const pageCatalogCounts = useMemo(() => {
+    const inMenu = catalogBasePages.filter((page) => page.registeredMenu).length;
+    const disabled = catalogBasePages.filter(
+      (page) => page.registeredMenu && !page.is_active
+    ).length;
+
+    return {
+      all: catalogBasePages.length,
+      inMenu,
+      notInMenu: catalogBasePages.length - inMenu,
+      disabled,
+    };
+  }, [catalogBasePages]);
+
+  const availablePages = useMemo(() => {
+    const searchTerm = catalogSearch.trim().toLowerCase();
+
+    return catalogBasePages
       .filter((page) => {
         if (!searchTerm) {
           return true;
@@ -606,8 +633,20 @@ export default function SAMenuGovernance() {
           .filter(Boolean)
           .some((value) => value.toLowerCase().includes(searchTerm));
       })
+      .filter((page) => {
+        switch (pageCatalogFilter) {
+          case "IN_MENU":
+            return Boolean(page.registeredMenu);
+          case "NOT_IN_MENU":
+            return !page.registeredMenu;
+          case "DISABLED":
+            return Boolean(page.registeredMenu) && !page.is_active;
+          default:
+            return true;
+        }
+      })
       .sort((left, right) => left.title.localeCompare(right.title));
-  }, [catalogSearch, menus, universe]);
+  }, [catalogBasePages, catalogSearch, pageCatalogFilter]);
 
   async function handleCreateMenu() {
     const normalizedMenuCode = normalizeMenuCode(createForm.menu_code);
@@ -1578,6 +1617,37 @@ export default function SAMenuGovernance() {
                 className={inputClassName()}
               />
             </label>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setPageCatalogFilter("ALL")}
+                className={pageFilterButtonClass(pageCatalogFilter === "ALL")}
+              >
+                All ({pageCatalogCounts.all})
+              </button>
+              <button
+                type="button"
+                onClick={() => setPageCatalogFilter("IN_MENU")}
+                className={pageFilterButtonClass(pageCatalogFilter === "IN_MENU")}
+              >
+                In Menu ({pageCatalogCounts.inMenu})
+              </button>
+              <button
+                type="button"
+                onClick={() => setPageCatalogFilter("NOT_IN_MENU")}
+                className={pageFilterButtonClass(pageCatalogFilter === "NOT_IN_MENU")}
+              >
+                Not In Menu ({pageCatalogCounts.notInMenu})
+              </button>
+              <button
+                type="button"
+                onClick={() => setPageCatalogFilter("DISABLED")}
+                className={pageFilterButtonClass(pageCatalogFilter === "DISABLED")}
+              >
+                Disabled ({pageCatalogCounts.disabled})
+              </button>
+            </div>
 
             <div className="grid gap-2">
               {availablePages.map((page) => (
