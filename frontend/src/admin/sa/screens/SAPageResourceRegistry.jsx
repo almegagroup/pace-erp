@@ -4,7 +4,11 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
-import { SCREEN_REGISTRY } from "../../../navigation/screenRegistry.js";
+import { PROJECT_SCREENS } from "../../../navigation/screens/projects/projectScreens.js";
+import { HR_SCREENS } from "../../../navigation/screens/projects/hrModule/hrScreens.js";
+import { OPERATION_SCREENS } from "../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { WORKFLOW_SCREENS } from "../../../navigation/screens/workflowScreens.js";
+import { REPORTING_SCREENS } from "../../../navigation/screens/reportingScreens.js";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
@@ -17,6 +21,14 @@ async function readJsonSafe(response) {
     return null;
   }
 }
+
+const ACL_SCREEN_REGISTRY = Object.freeze({
+  ...PROJECT_SCREENS,
+  ...HR_SCREENS,
+  ...OPERATION_SCREENS,
+  ...WORKFLOW_SCREENS,
+  ...REPORTING_SCREENS,
+});
 
 async function fetchMenuRegistry(universe) {
   const response = await fetch(
@@ -33,20 +45,6 @@ async function fetchMenuRegistry(universe) {
   }
 
   return json.data.menus;
-}
-
-function resolveGovernanceUniverse(screen) {
-  const route = String(screen?.route ?? "");
-
-  if (route.startsWith("/sa") || route.startsWith("/ga")) {
-    return "SA";
-  }
-
-  if (route.startsWith("/dashboard")) {
-    return "ACL";
-  }
-
-  return null;
 }
 
 function resolveRegisteredPageMenu(menus, screen) {
@@ -77,9 +75,8 @@ function formatScreenTitle(screenCode) {
     .join(" ");
 }
 
-function createPageRows(menus, universe) {
-  return Object.values(SCREEN_REGISTRY)
-    .filter((screen) => resolveGovernanceUniverse(screen) === universe)
+function createPageRows(menus) {
+  return Object.values(ACL_SCREEN_REGISTRY)
     .filter((screen) => screen.publishableInMenu !== false)
     .filter((screen) => Boolean(screen?.screen_code) && Boolean(screen?.route))
     .map((screen) => {
@@ -139,7 +136,7 @@ export default function SAPageResourceRegistry() {
     void loadRegistry();
   }, []);
 
-  const pageRows = useMemo(() => createPageRows(menus, "SA"), [menus]);
+  const pageRows = useMemo(() => createPageRows(menus), [menus]);
 
   const filteredRows = useMemo(() => {
     const needle = String(searchQuery ?? "").trim().toLowerCase();
@@ -243,8 +240,8 @@ export default function SAPageResourceRegistry() {
   return (
     <ErpScreenScaffold
       eyebrow="Page Registry"
-      title="Page And Resource Registry"
-      description="Use this screen to see which codemade pages exist, which ones are published into menu, and which resource code each page is carrying before module ownership mapping begins."
+      title="ACL Page And Resource Registry"
+      description="Only future ACL/business pages belong here. Admin governance pages are intentionally excluded from project and module ownership."
       notices={error ? [{ tone: "error", message: error }] : []}
       actions={[
         {
@@ -321,7 +318,7 @@ export default function SAPageResourceRegistry() {
         {
           label: "Total Pages",
           value: loading ? "..." : metrics.total,
-          caption: "Codemade SA pages available for governance.",
+          caption: "Codemade ACL/business pages available for governance.",
           tone: "sky",
         },
         {
@@ -353,8 +350,8 @@ export default function SAPageResourceRegistry() {
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
         <ErpSectionCard
           eyebrow="Inventory"
-          title="Registered SA Pages"
-          description="This is the source list of publishable SA screens. Menu placement happens from Menu Governance, not here."
+          title="Registered ACL Pages"
+          description="This is the source list of publishable ACL/business screens only. Menu placement still happens from Menu Governance, not here."
         >
           <label className="grid gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -372,11 +369,11 @@ export default function SAPageResourceRegistry() {
           <div className="mt-4 grid gap-2">
             {loading ? (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                Loading page registry.
+                Loading ACL page registry.
               </div>
             ) : filteredRows.length === 0 ? (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                No page matches the current filter.
+                No ACL/business page exists yet. Build the real business screens first, then they will appear here.
               </div>
             ) : (
               filteredRows.map((row, index) => {

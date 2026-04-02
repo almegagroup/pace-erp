@@ -20,7 +20,7 @@ async function readJsonSafe(response) {
 
 async function fetchWorkspace() {
   const response = await fetch(
-    `${import.meta.env.VITE_API_BASE}/api/admin/module-resource-map?universe=SA`,
+    `${import.meta.env.VITE_API_BASE}/api/admin/module-resource-map?universe=ACL`,
     {
       credentials: "include",
     },
@@ -312,7 +312,7 @@ export default function SAModuleResourceMap() {
     <ErpScreenScaffold
       eyebrow="Module Page Map"
       title="Module To Page Resource Ownership"
-      description="Only menu-published pages appear here. Assign each published resource to exactly one owning module so project, approval, and ACL hierarchy stay clean."
+      description="Only ACL/business pages belong here. Admin governance pages are intentionally excluded from module ownership."
       notices={[
         ...(error ? [{ tone: "error", message: error }] : []),
         ...(notice ? [{ tone: "success", message: notice }] : []),
@@ -374,7 +374,7 @@ export default function SAModuleResourceMap() {
         {
           label: "Published Pages",
           value: loading ? "..." : metrics.resources,
-          caption: "Only these pages are eligible for module ownership.",
+          caption: "Only ACL/business pages are eligible for module ownership.",
           tone: "sky",
         },
         {
@@ -406,8 +406,8 @@ export default function SAModuleResourceMap() {
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)]">
         <ErpSectionCard
           eyebrow="Published Resources"
-          title="Page Resource Inventory"
-          description="If a page is not yet published into menu, it will not appear here. Publish first, then assign ownership."
+          title="ACL Page Resource Inventory"
+          description="If an ACL/business page is not yet published into menu, it will not appear here. Publish first, then assign ownership."
         >
           <label className="grid gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -425,11 +425,11 @@ export default function SAModuleResourceMap() {
           <div className="mt-4 grid gap-2">
             {loading ? (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                Loading module/page ownership rows.
+                Loading ACL module/page ownership rows.
               </div>
             ) : filteredResources.length === 0 ? (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                No published page matches the current filter.
+                No ACL/business page is published yet. Build real business pages first, then publish and assign them.
               </div>
             ) : (
               filteredResources.map((row, index) => {
