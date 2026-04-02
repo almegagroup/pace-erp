@@ -45,6 +45,8 @@ import { updateDepartmentStateHandler } from "../_core/admin/department/update_d
 import { listApproverRulesHandler } from "../_core/admin/approval/list_approver_rules.handler.ts";
 import { upsertApproverRuleHandler } from "../_core/admin/approval/upsert_approver_rule.handler.ts";
 import { deleteApproverRuleHandler } from "../_core/admin/approval/delete_approver_rule.handler.ts";
+import { listResourceApprovalPolicyHandler } from "../_core/admin/approval/list_resource_approval_policy.handler.ts";
+import { upsertResourceApprovalPolicyHandler } from "../_core/admin/approval/upsert_resource_approval_policy.handler.ts";
 
 import { listUsersHandler } from "../_core/admin/user/list_users.handler.ts";
 import { getUserScopeHandler } from "../_core/admin/user/get_user_scope.handler.ts";
@@ -334,6 +336,20 @@ export async function dispatchAdminRoutes(
           authUserId: session.authUserId,
           roleCode: context.roleCode,
         },
+      });
+      break;
+
+    case "GET:/api/admin/approval/resource-policy":
+      response = await listResourceApprovalPolicyHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/approval/resource-policy":
+      response = await upsertResourceApprovalPolicyHandler(req, {
+        context,
+        request_id: requestId,
       });
       break;
 

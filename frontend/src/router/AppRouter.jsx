@@ -50,6 +50,7 @@ import SAModuleResourceMap from "../admin/sa/screens/SAModuleResourceMap.jsx";
 import SARolePermissions from "../admin/sa/screens/SARolePermissions.jsx";
 import SACapabilityGovernance from "../admin/sa/screens/SACapabilityGovernance.jsx";
 import SAApprovalRules from "../admin/sa/screens/SAApprovalRules.jsx";
+import SAApprovalPolicy from "../admin/sa/screens/SAApprovalPolicy.jsx";
 import SACompanyModuleMap from "../admin/sa/screens/SACompanyModuleMap.jsx";
 import SAMenuGovernance from "../admin/sa/screens/SAMenuGovernance.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
@@ -150,6 +151,10 @@ export default function AppRouter() {
                     <Route
                       path="approval-rules"
                       element={<SAApprovalRules />}
+                    />
+                    <Route
+                      path="approval-policy"
+                      element={<SAApprovalPolicy />}
                     />
                     <Route
                       path="acl/company-modules"
