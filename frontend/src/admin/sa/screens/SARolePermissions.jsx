@@ -38,6 +38,23 @@ async function fetchRolePermissions(roleCode) {
   return json.data.permissions;
 }
 
+async function fetchResourceCatalog() {
+  const response = await fetch(
+    `${import.meta.env.VITE_API_BASE}/api/admin/approval/resource-policy`,
+    {
+      credentials: "include",
+    }
+  );
+
+  const json = await readJsonSafe(response);
+
+  if (!response.ok || !json?.ok || !Array.isArray(json?.data?.resources)) {
+    throw new Error(json?.code ?? "ROLE_PERMISSION_RESOURCE_CATALOG_FAILED");
+  }
+
+  return json.data.resources;
+}
+
 async function saveRolePermission(payload) {
   const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/acl/role-permissions`, {
     method: "POST",
@@ -114,6 +131,20 @@ const ACTION_MATRIX = [
   ["EXPORT", "can_export", "Export"],
 ];
 
+function createDraftFromRow(roleCode, row) {
+  return {
+    role_code: roleCode,
+    resource_code: row.resource_code,
+    can_view: Boolean(row.can_view),
+    can_write: Boolean(row.can_write),
+    can_edit: Boolean(row.can_edit),
+    can_delete: Boolean(row.can_delete),
+    can_approve: Boolean(row.can_approve),
+    can_export: Boolean(row.can_export),
+    denied_actions: Array.isArray(row.denied_actions) ? row.denied_actions : [],
+  };
+}
+
 export default function SARolePermissions() {
   const navigate = useNavigate();
   const actionBarRefs = useRef([]);
@@ -123,9 +154,14 @@ export default function SARolePermissions() {
   const rowActionRefs = useRef([]);
   const [selectedRoleCode, setSelectedRoleCode] = useState(ERP_ROLE_OPTIONS[0]?.code ?? "SA");
   const [permissions, setPermissions] = useState([]);
+  const [resourceCatalog, setResourceCatalog] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [catalogSearchQuery, setCatalogSearchQuery] = useState("");
+  const [selectedProjectCode, setSelectedProjectCode] = useState("");
+  const [selectedModuleCode, setSelectedModuleCode] = useState("");
   const [draft, setDraft] = useState(() => createEmptyDraft(ERP_ROLE_OPTIONS[0]?.code ?? "SA"));
   const [loading, setLoading] = useState(true);
+  const [catalogLoading, setCatalogLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -145,19 +181,148 @@ export default function SARolePermissions() {
     }
   }
 
+  async function loadResourceCatalog(preferredResourceCode = draft.resource_code) {
+    setCatalogLoading(true);
+
+    try {
+      const resources = await fetchResourceCatalog();
+      setResourceCatalog(resources);
+
+      const hasPreferred = resources.some((row) => row.resource_code === preferredResourceCode);
+      if (!hasPreferred && resources.length > 0 && !preferredResourceCode) {
+        setDraft((current) => ({
+          ...current,
+          role_code: selectedRoleCode,
+        }));
+      }
+    } catch {
+      setResourceCatalog([]);
+      setError("Mapped business resources could not be loaded right now.");
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
   useEffect(() => {
     setDraft(createEmptyDraft(selectedRoleCode));
     void loadPermissions(selectedRoleCode);
+    void loadResourceCatalog("");
   }, [selectedRoleCode]);
+
+  const catalogProjectOptions = useMemo(
+    () =>
+      [...new Set(
+        resourceCatalog
+          .map((row) => row.project_code)
+          .filter(Boolean)
+      )].sort((left, right) =>
+        String(left).localeCompare(String(right), "en", {
+          numeric: true,
+          sensitivity: "base",
+        })
+      ),
+    [resourceCatalog]
+  );
+
+  const catalogModuleOptions = useMemo(
+    () =>
+      [...new Set(
+        resourceCatalog
+          .filter((row) => !selectedProjectCode || row.project_code === selectedProjectCode)
+          .map((row) => row.module_code)
+          .filter(Boolean)
+      )].sort((left, right) =>
+        String(left).localeCompare(String(right), "en", {
+          numeric: true,
+          sensitivity: "base",
+        })
+      ),
+    [resourceCatalog, selectedProjectCode]
+  );
+
+  const filteredCatalogResources = useMemo(() => {
+    const needle = String(catalogSearchQuery ?? "").trim().toLowerCase();
+
+    return resourceCatalog.filter((row) => {
+      if (selectedProjectCode && row.project_code !== selectedProjectCode) {
+        return false;
+      }
+      if (selectedModuleCode && row.module_code !== selectedModuleCode) {
+        return false;
+      }
+      if (!needle) {
+        return true;
+      }
+
+      return [
+        row.title,
+        row.resource_code,
+        row.route_path,
+        row.project_code,
+        row.module_code,
+        row.module_name,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(needle));
+    });
+  }, [catalogSearchQuery, resourceCatalog, selectedModuleCode, selectedProjectCode]);
+
+  const enrichedPermissions = useMemo(
+    () =>
+      permissions.map((row) => {
+        const catalogRow = resourceCatalog.find(
+          (resource) => resource.resource_code === row.resource_code
+        );
+
+        return {
+          ...row,
+          title: catalogRow?.title ?? row.resource_code,
+          module_code: catalogRow?.module_code ?? null,
+          project_code: catalogRow?.project_code ?? null,
+          route_path: catalogRow?.route_path ?? null,
+        };
+      }),
+    [permissions, resourceCatalog]
+  );
 
   const filteredPermissions = useMemo(
     () =>
-      applyQuickFilter(permissions, searchQuery, [
+      applyQuickFilter(enrichedPermissions, searchQuery, [
         "resource_code",
+        "title",
+        "module_code",
+        "project_code",
+        "route_path",
       ]),
-    [permissions, searchQuery]
+    [enrichedPermissions, searchQuery]
   );
   const permissionPagination = useErpPagination(filteredPermissions, 10);
+
+  useEffect(() => {
+    if (
+      selectedModuleCode &&
+      !catalogModuleOptions.includes(selectedModuleCode)
+    ) {
+      setSelectedModuleCode("");
+    }
+  }, [catalogModuleOptions, selectedModuleCode]);
+
+  useEffect(() => {
+    if (
+      draft.resource_code &&
+      !filteredCatalogResources.some((row) => row.resource_code === draft.resource_code)
+    ) {
+      return;
+    }
+
+    if (!draft.resource_code && filteredCatalogResources.length > 0) {
+      const firstResource = filteredCatalogResources[0];
+      setDraft((current) => ({
+        ...createEmptyDraft(selectedRoleCode),
+        resource_code: firstResource.resource_code,
+      }));
+    }
+  }, [draft.resource_code, filteredCatalogResources, selectedRoleCode]);
 
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
@@ -189,6 +354,20 @@ export default function SARolePermissions() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function selectCatalogResource(resourceCode) {
+    const existing = permissions.find((row) => row.resource_code === resourceCode);
+
+    if (existing) {
+      setDraft(createDraftFromRow(selectedRoleCode, existing));
+      return;
+    }
+
+    setDraft({
+      ...createEmptyDraft(selectedRoleCode),
+      resource_code: resourceCode,
+    });
   }
 
   async function handleDisable(row) {
@@ -413,8 +592,54 @@ export default function SARolePermissions() {
               value={searchQuery}
               onChange={setSearchQuery}
               inputRef={searchInputRef}
-              placeholder="Filter by resource code"
-              hint="Alt+Shift+F focuses this resource filter."
+              placeholder="Filter saved rows by resource, page, module, or project"
+              hint="Alt+Shift+F focuses this saved-row filter."
+            />
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Project Picker
+                </span>
+                <select
+                  value={selectedProjectCode}
+                  onChange={(event) => setSelectedProjectCode(event.target.value)}
+                  className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+                >
+                  <option value="">All mapped projects</option>
+                  {catalogProjectOptions.map((projectCode) => (
+                    <option key={projectCode} value={projectCode}>
+                      {projectCode}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Module Picker
+                </span>
+                <select
+                  value={selectedModuleCode}
+                  onChange={(event) => setSelectedModuleCode(event.target.value)}
+                  className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+                >
+                  <option value="">All mapped modules</option>
+                  {catalogModuleOptions.map((moduleCode) => (
+                    <option key={moduleCode} value={moduleCode}>
+                      {moduleCode}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <QuickFilterInput
+              label="Mapped Business Resources"
+              value={catalogSearchQuery}
+              onChange={setCatalogSearchQuery}
+              placeholder="Search mapped business resources"
+              hint="Choose Project -> Module -> Resource instead of typing manual code."
             />
           </div>
         ),
@@ -451,7 +676,10 @@ export default function SARolePermissions() {
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
                     <p className="text-sm font-semibold text-slate-900">
-                      {row.resource_code}
+                      {row.title ?? row.resource_code}
+                    </p>
+                    <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                      {[row.project_code, row.module_code].filter(Boolean).join(" | ")}
                     </p>
                     <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
                       {[
@@ -479,21 +707,7 @@ export default function SARolePermissions() {
                         rowActionRefs.current[index][0] = element;
                       }}
                       type="button"
-                      onClick={() =>
-                        setDraft({
-                          role_code: selectedRoleCode,
-                          resource_code: row.resource_code,
-                          can_view: Boolean(row.can_view),
-                          can_write: Boolean(row.can_write),
-                          can_edit: Boolean(row.can_edit),
-                          can_delete: Boolean(row.can_delete),
-                          can_approve: Boolean(row.can_approve),
-                          can_export: Boolean(row.can_export),
-                          denied_actions: Array.isArray(row.denied_actions)
-                            ? row.denied_actions
-                            : [],
-                        })
-                      }
+                      onClick={() => setDraft(createDraftFromRow(selectedRoleCode, row))}
                       onKeyDown={(event) =>
                         handleLinearNavigation(event, {
                           index: 0,
@@ -534,27 +748,68 @@ export default function SARolePermissions() {
       sideSection={{
         eyebrow: "Editor",
         title: "Role permission editor",
-        description: "Select a row to edit, or type a new resource code to create a new permission row.",
+        description: "Pick a mapped business resource from project/module/resource selectors, then set action flags for the selected role.",
         children: (
           <div ref={formContainerRef} className="space-y-4">
+            <div className="grid gap-4">
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Pick Resource
+                </span>
+                <select
+                  ref={resourceInputRef}
+                  data-workspace-primary-focus="true"
+                  data-erp-form-field="true"
+                  value={draft.resource_code}
+                  onChange={(event) => selectCatalogResource(event.target.value)}
+                  className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+                >
+                  <option value="">
+                    {catalogLoading ? "Loading mapped resources..." : "Choose mapped business resource"}
+                  </option>
+                  {filteredCatalogResources.map((row) => (
+                    <option key={row.resource_code} value={row.resource_code}>
+                      {[row.project_code, row.module_code, row.title, row.resource_code]
+                        .filter(Boolean)
+                        .join(" | ")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {draft.resource_code ? (
+                <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                  {(() => {
+                    const selectedResource = resourceCatalog.find(
+                      (row) => row.resource_code === draft.resource_code
+                    );
+
+                    if (!selectedResource) {
+                      return `Selected resource: ${draft.resource_code}`;
+                    }
+
+                    return [
+                      selectedResource.project_code,
+                      selectedResource.module_code,
+                      selectedResource.route_path,
+                    ]
+                      .filter(Boolean)
+                      .join(" | ");
+                  })()}
+                </div>
+              ) : null}
+            </div>
+
             <label className="block">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Resource Code
                 </span>
               <input
-                ref={resourceInputRef}
-                data-workspace-primary-focus="true"
-                data-erp-form-field="true"
                 type="text"
                 value={draft.resource_code}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    resource_code: event.target.value,
-                  }))
-                }
+                readOnly
                 placeholder="RESOURCE_CODE"
-                className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
+                className="mt-2 w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-900 outline-none"
               />
             </label>
 
