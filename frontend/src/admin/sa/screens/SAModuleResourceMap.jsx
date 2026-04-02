@@ -18,6 +18,13 @@ async function readJsonSafe(response) {
   }
 }
 
+function describeApiError(json, fallbackCode) {
+  const code = json?.code ?? fallbackCode ?? "REQUEST_FAILED";
+  const trace = json?.decision_trace ? ` | Trace ${json.decision_trace}` : "";
+  const requestId = json?.request_id ? ` | Req ${json.request_id}` : "";
+  return `${code}${trace}${requestId}`;
+}
+
 async function fetchWorkspace() {
   const response = await fetch(
     `${import.meta.env.VITE_API_BASE}/api/admin/module-resource-map?universe=ACL`,
@@ -28,7 +35,7 @@ async function fetchWorkspace() {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    throw new Error(json?.code ?? "MODULE_RESOURCE_WORKSPACE_READ_FAILED");
+    throw new Error(describeApiError(json, "MODULE_RESOURCE_WORKSPACE_READ_FAILED"));
   }
 
   return json.data;
@@ -47,7 +54,7 @@ async function postJson(path, payload) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    throw new Error(json?.code ?? "REQUEST_FAILED");
+    throw new Error(describeApiError(json, "REQUEST_FAILED"));
   }
 
   return json.data;

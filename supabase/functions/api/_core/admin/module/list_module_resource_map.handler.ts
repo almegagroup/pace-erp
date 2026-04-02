@@ -1,6 +1,7 @@
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
+import { log } from "../../../_lib/logger.ts";
 
 function assertAdmin(
   ctx: { context: ContextResolution },
@@ -30,20 +31,30 @@ type ModuleRow = {
 };
 
 type ResourceRow = {
+  id: string;
   menu_code: string;
   resource_code: string;
   title: string;
   route_path: string | null;
   description: string | null;
-  parent_menu_code: string | null;
   display_order: number | null;
-  tree_display_order: number | null;
   is_active: boolean | null;
 };
 
 type OwnershipRow = {
   module_code: string;
   resource_code: string;
+};
+
+type MenuTreeRow = {
+  child_menu_id: string;
+  parent_menu_id: string | null;
+  display_order: number | null;
+};
+
+type ParentMenuRow = {
+  id: string;
+  menu_code: string;
 };
 
 export async function listModuleResourceMapHandler(
@@ -62,6 +73,7 @@ export async function listModuleResourceMapHandler(
       { data: modules, error: moduleError },
       { data: projects, error: projectError },
       { data: resources, error: resourceError },
+      { data: menuTreeRows, error: menuTreeError },
       { data: ownershipRows, error: ownershipError },
     ] = await Promise.all([
       db
@@ -77,11 +89,15 @@ export async function listModuleResourceMapHandler(
         .schema("erp_menu")
         .from("menu_master")
         .select(
-          "menu_code, resource_code, title, route_path, description, parent_menu_code, display_order, tree_display_order, is_active",
+          "id, menu_code, resource_code, title, route_path, description, display_order, is_active",
         )
         .eq("menu_type", "PAGE")
         .eq("universe", universe)
         .order("title", { ascending: true }),
+      db
+        .schema("erp_menu")
+        .from("menu_tree")
+        .select("child_menu_id, parent_menu_id, display_order"),
       db
         .schema("acl")
         .from("module_resource_map")
@@ -97,11 +113,69 @@ export async function listModuleResourceMapHandler(
     }
 
     if (resourceError) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "9.module.map",
+        event: "MODULE_RESOURCE_MAP_RESOURCE_QUERY_FAILED",
+        meta: { error: resourceError.message, universe },
+      });
       return errorResponse("RESOURCE_LIST_FAILED", resourceError.message, ctx.request_id);
     }
 
+    if (menuTreeError) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "9.module.map",
+        event: "MODULE_RESOURCE_MAP_TREE_QUERY_FAILED",
+        meta: { error: menuTreeError.message, universe },
+      });
+      return errorResponse("MENU_TREE_LIST_FAILED", menuTreeError.message, ctx.request_id);
+    }
+
     if (ownershipError) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "9.module.map",
+        event: "MODULE_RESOURCE_MAP_OWNERSHIP_QUERY_FAILED",
+        meta: { error: ownershipError.message, universe },
+      });
       return errorResponse("MODULE_RESOURCE_MAP_LIST_FAILED", ownershipError.message, ctx.request_id);
+    }
+
+    const parentIds = Array.from(
+      new Set(
+        ((menuTreeRows ?? []) as MenuTreeRow[])
+          .map((row) => row.parent_menu_id)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+
+    let parentMenuMap = new Map<string, string>();
+
+    if (parentIds.length > 0) {
+      const { data: parentMenus, error: parentMenuError } = await db
+        .schema("erp_menu")
+        .from("menu_master")
+        .select("id, menu_code")
+        .in("id", parentIds);
+
+      if (parentMenuError) {
+        log({
+          level: "ERROR",
+          request_id: ctx.request_id,
+          gate_id: "9.module.map",
+          event: "MODULE_RESOURCE_MAP_PARENT_QUERY_FAILED",
+          meta: { error: parentMenuError.message, universe },
+        });
+        return errorResponse("PARENT_MENU_LIST_FAILED", parentMenuError.message, ctx.request_id);
+      }
+
+      parentMenuMap = new Map(
+        ((parentMenus ?? []) as ParentMenuRow[]).map((row) => [row.id, row.menu_code]),
+      );
     }
 
     const projectMap = new Map(
@@ -112,6 +186,9 @@ export async function listModuleResourceMapHandler(
     );
     const ownershipMap = new Map(
       ((ownershipRows ?? []) as OwnershipRow[]).map((row) => [row.resource_code, row.module_code]),
+    );
+    const treeMap = new Map(
+      ((menuTreeRows ?? []) as MenuTreeRow[]).map((row) => [row.child_menu_id, row]),
     );
 
     const modulePayload = ((modules ?? []) as ModuleRow[]).map((row) => {
@@ -133,6 +210,10 @@ export async function listModuleResourceMapHandler(
       const ownerModuleCode = ownershipMap.get(row.resource_code) ?? null;
       const ownerModule = ownerModuleCode ? moduleMap.get(ownerModuleCode) ?? null : null;
       const ownerProject = ownerModule ? projectMap.get(ownerModule.project_id) ?? null : null;
+      const treeRow = treeMap.get(row.id) ?? null;
+      const parentMenuCode = treeRow?.parent_menu_id
+        ? parentMenuMap.get(treeRow.parent_menu_id) ?? ""
+        : "";
 
       return {
         menu_code: row.menu_code,
@@ -140,8 +221,8 @@ export async function listModuleResourceMapHandler(
         title: row.title,
         route_path: row.route_path ?? "",
         description: row.description ?? null,
-        parent_menu_code: row.parent_menu_code ?? "",
-        display_order: row.tree_display_order ?? row.display_order ?? null,
+        parent_menu_code: parentMenuCode,
+        display_order: treeRow?.display_order ?? row.display_order ?? null,
         page_active: row.is_active === true,
         owner_module_code: ownerModule?.module_code ?? null,
         owner_module_name: ownerModule?.module_name ?? null,
@@ -160,6 +241,13 @@ export async function listModuleResourceMapHandler(
       ctx.request_id,
     );
   } catch (err) {
+    log({
+      level: "ERROR",
+      request_id: ctx.request_id,
+      gate_id: "9.module.map",
+      event: "MODULE_RESOURCE_MAP_LIST_EXCEPTION",
+      meta: { error: err instanceof Error ? err.message : String(err) },
+    });
     return errorResponse(
       (err as Error).message || "MODULE_RESOURCE_MAP_LIST_EXCEPTION",
       "module resource map list exception",
