@@ -18,7 +18,9 @@ import { listCompaniesHandler } from "../_core/admin/company/list_companies.hand
 import { updateCompanyStateHandler } from "../_core/admin/company/update_company_state.handler.ts";
 
 import { createGroupHandler } from "../_core/admin/group/create_group.handler.ts";
+import { deleteGroupHandler } from "../_core/admin/group/delete_group.handler.ts";
 import { updateGroupStateHandler } from "../_core/admin/group/update_group_state.handler.ts";
+import { updateGroupHandler } from "../_core/admin/group/update_group.handler.ts";
 import { mapCompanyToGroupHandler } from "../_core/admin/group/map_company_to_group.handler.ts";
 import { unmapCompanyFromGroupHandler } from "../_core/admin/group/unmap_company_group.handler.ts";
 import { listGroupsHandler } from "../_core/admin/group/list_groups.handler.ts";
@@ -166,6 +168,20 @@ export async function dispatchAdminRoutes(
 
     case "POST:/api/admin/group":
       response = await createGroupHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "PATCH:/api/admin/group":
+      response = await updateGroupHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "DELETE:/api/admin/group":
+      response = await deleteGroupHandler(req, {
         context,
         request_id: requestId,
       });

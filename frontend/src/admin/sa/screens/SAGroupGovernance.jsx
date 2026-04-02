@@ -49,6 +49,42 @@ async function postJson(path, payload) {
   return json.data;
 }
 
+async function patchJson(path, payload) {
+  const response = await fetch(`${import.meta.env.VITE_API_BASE}${path}`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const json = await readJsonSafe(response);
+
+  if (!response.ok || !json?.ok) {
+    throw new Error(json?.message ?? json?.code ?? "REQUEST_FAILED");
+  }
+
+  return json.data;
+}
+
+async function deleteJson(path, payload) {
+  const response = await fetch(`${import.meta.env.VITE_API_BASE}${path}`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const json = await readJsonSafe(response);
+
+  if (!response.ok || !json?.ok) {
+    throw new Error(json?.message ?? json?.code ?? "REQUEST_FAILED");
+  }
+
+  return json.data;
+}
+
 function normalize(value) {
   return String(value ?? "").trim();
 }
@@ -107,6 +143,7 @@ export default function SAGroupGovernance() {
   const [companies, setCompanies] = useState([]);
   const [selectedGroupId, setSelectedGroupId] = useState(null);
   const [groupDraft, setGroupDraft] = useState("");
+  const [selectedGroupNameDraft, setSelectedGroupNameDraft] = useState("");
   const [groupSearch, setGroupSearch] = useState("");
   const [companySearch, setCompanySearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -174,6 +211,10 @@ export default function SAGroupGovernance() {
     () => groups.find((row) => String(row.id) === String(selectedGroupId)) ?? null,
     [groups, selectedGroupId]
   );
+
+  useEffect(() => {
+    setSelectedGroupNameDraft(selectedGroup?.name ?? "");
+  }, [selectedGroup]);
 
   const filteredCompanies = useMemo(() => {
     const needle = normalize(companySearch).toLowerCase();
@@ -273,6 +314,97 @@ export default function SAGroupGovernance() {
       await loadGovernance();
     } catch {
       setError("Group state could not be updated right now.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleUpdateGroup() {
+    if (!selectedGroup) {
+      setError("Select a group before saving changes.");
+      return;
+    }
+
+    const nextName = normalize(selectedGroupNameDraft);
+
+    if (!nextName || nextName.length < 2) {
+      setError("Group name must be at least 2 characters.");
+      return;
+    }
+
+    if (nextName === selectedGroup.name) {
+      setNotice("No group name change to save.");
+      return;
+    }
+
+    const approved = await openActionConfirm({
+      eyebrow: "SA Group Governance",
+      title: "Rename Group",
+      message: `Rename ${selectedGroup.group_code} to ${nextName}?`,
+      confirmLabel: "Save Name",
+      cancelLabel: "Cancel",
+    });
+
+    if (!approved) {
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      await patchJson("/api/admin/group", {
+        group_id: selectedGroup.id,
+        name: nextName,
+      });
+      setNotice(`Group ${selectedGroup.group_code} renamed successfully.`);
+      await loadGovernance();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Group rename failed. ${err.message}`
+          : "Group rename failed right now.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteGroup() {
+    if (!selectedGroup) {
+      setError("Select a group before removing it.");
+      return;
+    }
+
+    const approved = await openActionConfirm({
+      eyebrow: "SA Group Governance",
+      title: "Remove Group",
+      message: `Delete ${selectedGroup.group_code}? This only works when no company is still mapped.`,
+      confirmLabel: "Delete Group",
+      cancelLabel: "Cancel",
+    });
+
+    if (!approved) {
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      await deleteJson("/api/admin/group", {
+        group_id: selectedGroup.id,
+      });
+      setNotice(`Group ${selectedGroup.group_code} deleted successfully.`);
+      await loadGovernance();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Group delete failed. ${err.message}`
+          : "Group delete failed right now.",
+      );
     } finally {
       setSaving(false);
     }
@@ -571,7 +703,7 @@ export default function SAGroupGovernance() {
           <ErpSectionCard
             eyebrow="Selected Group"
             title={selectedGroup ? `${selectedGroup.group_code} | ${selectedGroup.name}` : "Choose A Group"}
-            description="State management is handled here. Rename is intentionally not exposed yet because the backend contract does not currently support it."
+            description="State, rename, and safe removal all happen here. Remove only works when no company is still mapped."
           >
             {selectedGroup ? (
               <>
@@ -593,7 +725,27 @@ export default function SAGroupGovernance() {
                   />
                 </div>
 
+                <label className="mt-4 grid gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Group Name
+                  </span>
+                  <input
+                    value={selectedGroupNameDraft}
+                    onChange={(event) => setSelectedGroupNameDraft(event.target.value)}
+                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
+                    placeholder="Edit group name"
+                  />
+                </label>
+
                 <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void handleUpdateGroup()}
+                    className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    Save Name
+                  </button>
                   <button
                     type="button"
                     disabled={saving || selectedGroup.state === "ACTIVE"}
@@ -609,6 +761,14 @@ export default function SAGroupGovernance() {
                     className="border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Inactivate
+                  </button>
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void handleDeleteGroup()}
+                    className="border border-slate-400 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    Remove Group
                   </button>
                 </div>
               </>
