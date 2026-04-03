@@ -3,12 +3,31 @@ import EnterpriseDashboard from "../../components/dashboard/EnterpriseDashboard.
 import { useErpScreenCommands } from "../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../hooks/useErpScreenHotkeys.js";
 import { handleLinearNavigation } from "../../navigation/erpRovingFocus.js";
+import { useMenu } from "../../context/useMenu.js";
 import {
   listLeaveApprovalInbox,
   listOutWorkApprovalInbox,
 } from "./hr/hrApi.js";
 
-async function loadApprovalSummary() {
+function canOpenApprovalInbox(menuSnapshot) {
+  const rows = Array.isArray(menuSnapshot) ? menuSnapshot : [];
+
+  return rows.some(
+    (row) =>
+      row?.resource_code === "HR_LEAVE_APPROVAL_INBOX" ||
+      row?.resource_code === "HR_OUT_WORK_APPROVAL_INBOX" ||
+      row?.route_path === "/dashboard/hr/leave/approval-inbox" ||
+      row?.route_path === "/dashboard/hr/out-work/approval-inbox",
+  );
+}
+
+async function loadApprovalSummary(canViewApprovalInbox) {
+  if (!canViewApprovalInbox) {
+    return {
+      approvalsToday: 0,
+    };
+  }
+
   const [leaveRows, outWorkRows] = await Promise.allSettled([
     listLeaveApprovalInbox(),
     listOutWorkApprovalInbox(),
@@ -26,16 +45,18 @@ async function loadApprovalSummary() {
 
 export default function UserDashboardHome() {
   const topActionRefs = useRef([]);
+  const { menu } = useMenu();
   const [approvalSummary, setApprovalSummary] = useState({
     approvalsToday: 0,
   });
+  const canViewApprovalInbox = useMemo(() => canOpenApprovalInbox(menu), [menu]);
 
   useEffect(() => {
     let alive = true;
 
     async function refreshApprovalSummary() {
       try {
-        const nextSummary = await loadApprovalSummary();
+        const nextSummary = await loadApprovalSummary(canViewApprovalInbox);
         if (alive) {
           setApprovalSummary(nextSummary);
         }
@@ -66,7 +87,7 @@ export default function UserDashboardHome() {
       window.removeEventListener("erp:workflow-changed", handleWorkflowChange);
       document.removeEventListener("visibilitychange", handleFocus);
     };
-  }, []);
+  }, [canViewApprovalInbox]);
 
   const stats = useMemo(
     () => [

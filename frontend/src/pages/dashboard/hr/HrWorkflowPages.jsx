@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { useMenu } from "../../../context/useMenu.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
@@ -59,6 +60,14 @@ function formatError(error, fallbackMessage) {
     typeof error.requestId === "string" ? ` | Req ${error.requestId}` : "";
 
   return `${error.message ?? fallbackMessage} (${decisionTrace ?? code}${gateId}${requestId})`;
+}
+
+function canOpenHrResource(menuSnapshot, resourceCode, routePath) {
+  const rows = Array.isArray(menuSnapshot) ? menuSnapshot : [];
+
+  return rows.some(
+    (row) => row?.resource_code === resourceCode || row?.route_path === routePath,
+  );
 }
 
 export function RequestStatusBadge({ state }) {
@@ -542,6 +551,7 @@ export function HrRequestCard({
 
 export function LeaveApplyWorkspace() {
   const navigate = useNavigate();
+  const { menu } = useMenu();
   const [fromDate, setFromDate] = useState(todayDefault());
   const [toDate, setToDate] = useState(todayDefault());
   const [reason, setReason] = useState("");
@@ -552,6 +562,48 @@ export function LeaveApplyWorkspace() {
 
   const totalDays = calculateInclusiveDays(fromDate, toDate);
   const earliestBackdate = getHrEarliestBackdate();
+  const canViewApprovalInbox = useMemo(
+    () =>
+      canOpenHrResource(
+        menu,
+        "HR_LEAVE_APPROVAL_INBOX",
+        "/dashboard/hr/leave/approval-inbox",
+      ),
+    [menu],
+  );
+
+  const actions = [
+    {
+      key: "my-requests",
+      label: "My Requests",
+      tone: "neutral",
+      onClick: () => {
+        openScreen("HR_LEAVE_MY_REQUESTS", { mode: "replace" });
+        navigate("/dashboard/hr/leave/my-requests");
+      },
+    },
+    ...(canViewApprovalInbox
+      ? [
+          {
+            key: "approval-inbox",
+            label: "Approval Inbox",
+            tone: "neutral",
+            onClick: () => {
+              openScreen("HR_LEAVE_APPROVAL_INBOX", { mode: "replace" });
+              navigate("/dashboard/hr/leave/approval-inbox");
+            },
+          },
+        ]
+      : []),
+    {
+      key: "submit",
+      label: saving ? "Submitting..." : "Send Request",
+      hint: "Ctrl+S",
+      tone: "primary",
+      disabled: saving,
+      onClick: () => void handleSubmit(),
+    },
+  ];
 
   async function handleSubmit() {
     if (!fromDate || !toDate || !reason.trim()) {
@@ -587,34 +639,7 @@ export function LeaveApplyWorkspace() {
       eyebrow="HR Management"
       title="Leave Apply"
       description="Users submit leave requests in the parent-company HR universe. Current date theke maximum 3 days back apply allowed."
-      actions={[
-        {
-          key: "my-requests",
-          label: "My Requests",
-          tone: "neutral",
-          onClick: () => {
-            openScreen("HR_LEAVE_MY_REQUESTS", { mode: "replace" });
-            navigate("/dashboard/hr/leave/my-requests");
-          },
-        },
-        {
-          key: "approval-inbox",
-          label: "Approval Inbox",
-          tone: "neutral",
-          onClick: () => {
-            openScreen("HR_LEAVE_APPROVAL_INBOX", { mode: "replace" });
-            navigate("/dashboard/hr/leave/approval-inbox");
-          },
-        },
-        {
-          key: "submit",
-          label: saving ? "Submitting..." : "Send Request",
-          hint: "Ctrl+S",
-          tone: "primary",
-          disabled: saving,
-          onClick: () => void handleSubmit(),
-        },
-      ]}
+      actions={actions}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
@@ -758,6 +783,7 @@ export function LeaveApplyWorkspace() {
 
 export function OutWorkApplyWorkspace() {
   const navigate = useNavigate();
+  const { menu } = useMenu();
   const [fromDate, setFromDate] = useState(todayDefault());
   const [toDate, setToDate] = useState(todayDefault());
   const [reason, setReason] = useState("");
@@ -775,6 +801,48 @@ export function OutWorkApplyWorkspace() {
 
   const totalDays = calculateInclusiveDays(fromDate, toDate);
   const earliestBackdate = getHrEarliestBackdate();
+  const canViewApprovalInbox = useMemo(
+    () =>
+      canOpenHrResource(
+        menu,
+        "HR_OUT_WORK_APPROVAL_INBOX",
+        "/dashboard/hr/out-work/approval-inbox",
+      ),
+    [menu],
+  );
+
+  const actions = [
+    {
+      key: "my-requests",
+      label: "My Requests",
+      tone: "neutral",
+      onClick: () => {
+        openScreen("HR_OUT_WORK_MY_REQUESTS", { mode: "replace" });
+        navigate("/dashboard/hr/out-work/my-requests");
+      },
+    },
+    ...(canViewApprovalInbox
+      ? [
+          {
+            key: "approval-inbox",
+            label: "Approval Inbox",
+            tone: "neutral",
+            onClick: () => {
+              openScreen("HR_OUT_WORK_APPROVAL_INBOX", { mode: "replace" });
+              navigate("/dashboard/hr/out-work/approval-inbox");
+            },
+          },
+        ]
+      : []),
+    {
+      key: "submit",
+      label: saving ? "Submitting..." : "Send Request",
+      hint: "Ctrl+S",
+      tone: "primary",
+      disabled: saving,
+      onClick: () => void handleSubmit(),
+    },
+  ];
 
   async function refreshDestinations(preferredDestinationId = "") {
     setLoadingDestinations(true);
@@ -862,34 +930,7 @@ export function OutWorkApplyWorkspace() {
         eyebrow="HR Management"
         title="Out Work Apply"
         description="Use this flow when the user is outside office for company work. Destination stays company-reusable for later observation and reporting."
-        actions={[
-          {
-            key: "my-requests",
-            label: "My Requests",
-            tone: "neutral",
-            onClick: () => {
-              openScreen("HR_OUT_WORK_MY_REQUESTS", { mode: "replace" });
-              navigate("/dashboard/hr/out-work/my-requests");
-            },
-          },
-          {
-            key: "approval-inbox",
-            label: "Approval Inbox",
-            tone: "neutral",
-            onClick: () => {
-              openScreen("HR_OUT_WORK_APPROVAL_INBOX", { mode: "replace" });
-              navigate("/dashboard/hr/out-work/approval-inbox");
-            },
-          },
-          {
-            key: "submit",
-            label: saving ? "Submitting..." : "Send Request",
-            hint: "Ctrl+S",
-            tone: "primary",
-            disabled: saving,
-            onClick: () => void handleSubmit(),
-          },
-        ]}
+        actions={actions}
         notices={[
           ...(error ? [{ key: "error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
@@ -1197,12 +1238,21 @@ function HrRequestListWorkspace({
   openInbox,
 }) {
   const navigate = useNavigate();
+  const { menu } = useMenu();
   const searchRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.myRequests`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
+  const approvalInboxRoute =
+    kind === "leave"
+      ? "/dashboard/hr/leave/approval-inbox"
+      : "/dashboard/hr/out-work/approval-inbox";
+  const canViewApprovalInbox = useMemo(
+    () => canOpenHrResource(menu, openInbox, approvalInboxRoute),
+    [approvalInboxRoute, menu, openInbox],
+  );
 
   const filteredRows = useMemo(
     () =>
@@ -1258,19 +1308,19 @@ function HrRequestListWorkspace({
             navigate(kind === "leave" ? "/dashboard/hr/leave/apply" : "/dashboard/hr/out-work/apply");
           },
         },
-        {
-          key: "inbox",
-          label: "Approval Inbox",
-          tone: "neutral",
-          onClick: () => {
-            openScreen(openInbox, { mode: "replace" });
-            navigate(
-              kind === "leave"
-                ? "/dashboard/hr/leave/approval-inbox"
-                : "/dashboard/hr/out-work/approval-inbox",
-            );
-          },
-        },
+        ...(canViewApprovalInbox
+          ? [
+              {
+                key: "inbox",
+                label: "Approval Inbox",
+                tone: "neutral",
+                onClick: () => {
+                  openScreen(openInbox, { mode: "replace" });
+                  navigate(approvalInboxRoute);
+                },
+              },
+            ]
+          : []),
         {
           key: "columns",
           label: "Columns",
