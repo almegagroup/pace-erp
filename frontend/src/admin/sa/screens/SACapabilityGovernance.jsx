@@ -58,6 +58,14 @@ function createDraft(capabilityCode = "") {
   };
 }
 
+function createCapabilityDraft() {
+  return {
+    capability_code: "",
+    capability_name: "",
+    description: "",
+  };
+}
+
 export default function SACapabilityGovernance() {
   const navigate = useNavigate();
   const topActionRefs = useRef([]);
@@ -74,6 +82,7 @@ export default function SACapabilityGovernance() {
   const [selectedWorkContextId, setSelectedWorkContextId] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [draft, setDraft] = useState(() => createDraft());
+  const [capabilityDraft, setCapabilityDraft] = useState(() => createCapabilityDraft());
   const [workContextDraft, setWorkContextDraft] = useState({
     work_context_code: "",
     work_context_name: "",
@@ -219,6 +228,42 @@ export default function SACapabilityGovernance() {
     }
   }
 
+  async function saveCapabilityPack() {
+    const capabilityCode = capabilityDraft.capability_code.trim().toUpperCase();
+    const capabilityName = capabilityDraft.capability_name.trim();
+
+    if (!capabilityCode || !capabilityName) {
+      setError("Capability code and capability name are required.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      await fetchApi("/api/admin/acl/capabilities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          capability_code: capabilityCode,
+          capability_name: capabilityName,
+          description: capabilityDraft.description.trim(),
+        }),
+      });
+
+      await loadBootstrap();
+      setSelectedCapabilityCode(capabilityCode);
+      setDraft(createDraft(capabilityCode));
+      setCapabilityDraft(createCapabilityDraft());
+      setNotice(`Capability ${capabilityCode} saved successfully.`);
+    } catch (err) {
+      setError(`Capability pack could not be saved. ${(err).message ?? "REQUEST_FAILED"}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   useErpScreenCommands([
     {
       id: "sa-capability-governance-control-panel",
@@ -277,10 +322,107 @@ export default function SACapabilityGovernance() {
     >
       <div className="grid gap-6 xl:grid-cols-[1.1fr,0.9fr]">
         <ErpSectionCard eyebrow="Capability Actions" title="Resource matrix" description="Select a capability pack, then govern its exact resource-action rows.">
+          <div className="mb-6 grid gap-3 border border-slate-300 bg-slate-50 px-4 py-4">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Create Capability Pack</p>
+              <p className="mt-1 text-xs text-slate-600">Start by creating packs like `CAP_HR_REQUESTER`, `CAP_HR_APPROVER`, or `CAP_HR_REPORT_VIEWER`.</p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <input
+                type="text"
+                value={capabilityDraft.capability_code}
+                onChange={(event) =>
+                  setCapabilityDraft((current) => ({
+                    ...current,
+                    capability_code: event.target.value.toUpperCase(),
+                  }))
+                }
+                placeholder="CAPABILITY_CODE"
+                className="w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+              />
+              <input
+                type="text"
+                value={capabilityDraft.capability_name}
+                onChange={(event) =>
+                  setCapabilityDraft((current) => ({
+                    ...current,
+                    capability_name: event.target.value,
+                  }))
+                }
+                placeholder="Capability Name"
+                className="w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+              />
+            </div>
+            <textarea
+              value={capabilityDraft.description}
+              onChange={(event) =>
+                setCapabilityDraft((current) => ({
+                  ...current,
+                  description: event.target.value,
+                }))
+              }
+              rows={2}
+              placeholder="Description"
+              className="w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void saveCapabilityPack()}
+                className="border border-sky-300 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-900"
+              >
+                Save Capability Pack
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  setCapabilityDraft({
+                    capability_code: "CAP_HR_REQUESTER",
+                    capability_name: "HR Requester",
+                    description: "Requester access for leave and out work apply/my-request pages.",
+                  })
+                }
+                className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              >
+                Use Requester Template
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  setCapabilityDraft({
+                    capability_code: "CAP_HR_APPROVER",
+                    capability_name: "HR Approver",
+                    description: "Approver inbox and approval-history access for HR workflows.",
+                  })
+                }
+                className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              >
+                Use Approver Template
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  setCapabilityDraft({
+                    capability_code: "CAP_HR_REPORT_VIEWER",
+                    capability_name: "HR Report Viewer",
+                    description: "Register and reporting visibility without approval authority.",
+                  })
+                }
+                className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              >
+                Use Report Template
+              </button>
+            </div>
+          </div>
           <div className="grid gap-4 md:grid-cols-2">
             <label className="block">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Capability</span>
               <select value={selectedCapabilityCode} onChange={(event) => setSelectedCapabilityCode(event.target.value)} className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none">
+                {capabilities.length === 0 ? <option value="">No capability pack yet</option> : null}
                 {capabilities.map((capability) => (
                   <option key={capability.capability_code} value={capability.capability_code}>
                     {capability.capability_code} | {capability.capability_name}
