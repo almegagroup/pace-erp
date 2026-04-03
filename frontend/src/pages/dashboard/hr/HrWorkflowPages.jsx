@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { useMenu } from "../../../context/useMenu.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
@@ -434,53 +435,16 @@ function HrRequestColumnPickerModal({
   onResetColumns,
 }) {
   return (
-    <ModalBase
+    <ErpColumnVisibilityDrawer
       visible={visible}
-      eyebrow="HR Matrix"
       title="Choose Visible Columns"
-      message="Show only the fields the user needs. Hidden columns can be restored anytime."
-      onEscape={onClose}
-      width="min(680px, calc(100vw - 32px))"
-      actions={
-        <>
-          <button
-            type="button"
-            onClick={onResetColumns}
-            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
-          >
-            Reset Default
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900"
-          >
-            Done
-          </button>
-        </>
-      }
-    >
-      <div className="grid gap-3 sm:grid-cols-2">
-        {HR_REQUEST_COLUMN_DEFS.map((column) => {
-          const checked = visibleColumnKeys.includes(column.key);
-
-          return (
-            <label
-              key={column.key}
-              className="flex items-center gap-3 border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700"
-            >
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={() => onToggleColumn(column.key)}
-                disabled={checked && visibleColumnKeys.length === 1}
-              />
-              <span>{column.label}</span>
-            </label>
-          );
-        })}
-      </div>
-    </ModalBase>
+      description="Show only the request fields needed for this HR sheet. Hidden columns can be restored anytime."
+      columns={HR_REQUEST_COLUMN_DEFS}
+      visibleColumnKeys={visibleColumnKeys}
+      onToggleColumn={onToggleColumn}
+      onResetColumns={onResetColumns}
+      onClose={onClose}
+    />
   );
 }
 

@@ -5,7 +5,7 @@ import ErpScreenScaffold, {
 import {
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
-import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
+import { openRoute } from "../../../navigation/screenStackEngine.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../context/useMenu.js";
@@ -73,12 +73,11 @@ function HomeActionCard({
   action,
   index,
   refs,
+  registerRef,
 }) {
   return (
     <button
-      ref={(element) => {
-        refs.current[index] = element;
-      }}
+      ref={registerRef}
       data-workspace-primary-focus={index === 0 ? "true" : undefined}
       type="button"
       onClick={action.onClick}
@@ -299,6 +298,9 @@ export default function SAHome() {
               action={action}
               index={index}
               refs={cardRefs}
+              registerRef={(element) => {
+                cardRefs.current[index] = element;
+              }}
             />
           ))}
         </div>

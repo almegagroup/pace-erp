@@ -1,18 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 export function useErpPagination(items, pageSize = 12) {
-  const [page, setPage] = useState(1);
+  const [requestedPage, setRequestedPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
-
-  useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages);
-    }
-  }, [page, totalPages]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [items.length]);
+  const page = Math.min(requestedPage, totalPages);
 
   const startIndex = items.length === 0 ? 0 : (page - 1) * pageSize + 1;
   const endIndex = Math.min(page * pageSize, items.length);
@@ -24,7 +15,7 @@ export function useErpPagination(items, pageSize = 12) {
 
   return {
     page,
-    setPage,
+    setPage: setRequestedPage,
     totalPages,
     pageItems,
     startIndex,

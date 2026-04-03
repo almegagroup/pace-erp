@@ -19,16 +19,32 @@ import {
 } from "../../../navigation/erpRovingFocus.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
+import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import { applyQuickFilter, sortUsers } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
+import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Users" },
   { key: "ACTIVE", label: "Active" },
   { key: "DISABLED", label: "Disabled" },
+]);
+
+const USER_COLUMN_DEFS = Object.freeze([
+  { key: "user", label: "User" },
+  { key: "role", label: "Role" },
+  { key: "state", label: "State" },
+  { key: "created", label: "Created" },
+]);
+
+const DEFAULT_VISIBLE_USER_COLUMNS = Object.freeze([
+  "user",
+  "role",
+  "state",
+  "created",
 ]);
 
 async function readJsonSafe(response) {
@@ -128,10 +144,17 @@ export default function SAUsers() {
   const [filter, setFilter] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [updatingUserId, setUpdatingUserId] = useState("");
+  const [showColumnDrawer, setShowColumnDrawer] = useState(false);
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
   const rowActionRefs = useRef([]);
   const searchInputRef = useRef(null);
+  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
+    useErpVisibleColumns({
+      storageKey: "erp.sa.users.columns",
+      columnDefs: USER_COLUMN_DEFS,
+      defaultColumnKeys: DEFAULT_VISIBLE_USER_COLUMNS,
+    });
 
   useEffect(() => {
     let alive = true;
@@ -300,7 +323,6 @@ export default function SAUsers() {
 
   const activeCount = governableUsers.filter((user) => user.state === "ACTIVE").length;
   const disabledCount = governableUsers.filter((user) => user.state === "DISABLED").length;
-  const missingRoleCount = governableUsers.filter((user) => !user.role_code).length;
   const privilegedCount = governableUsers.filter(
     (user) => user.role_code === "SA" || user.role_code === "GA"
   ).length;
@@ -322,6 +344,14 @@ export default function SAUsers() {
       keywords: ["search", "filter", "users"],
       perform: () => searchInputRef.current?.focus(),
       order: 20,
+    },
+    {
+      id: "sa-users-columns",
+      group: "Current Screen",
+      label: "Choose visible columns",
+      keywords: ["columns", "table", "show hide"],
+      perform: () => setShowColumnDrawer(true),
+      order: 25,
     },
     {
       id: "sa-users-open-roles",
@@ -368,16 +398,31 @@ export default function SAUsers() {
 
   const topActions = [
     {
-      key: "control-panel",
-      label: "Control Panel",
+      key: "columns",
+      label: "Columns",
       tone: "neutral",
       buttonRef: (element) => {
         actionBarRefs.current[0] = element;
       },
-      onClick: () => openScreen("SA_CONTROL_PANEL", { mode: "reset" }),
+      onClick: () => setShowColumnDrawer(true),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 0,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
+      key: "control-panel",
+      label: "Control Panel",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionBarRefs.current[1] = element;
+      },
+      onClick: () => openScreen("SA_CONTROL_PANEL", { mode: "reset" }),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 1,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
@@ -387,12 +432,12 @@ export default function SAUsers() {
       label: "Signup Queue",
       tone: "neutral",
       buttonRef: (element) => {
-        actionBarRefs.current[1] = element;
+        actionBarRefs.current[2] = element;
       },
       onClick: () => openScreen("SA_SIGNUP_REQUESTS"),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 1,
+          index: 2,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
@@ -402,12 +447,12 @@ export default function SAUsers() {
       label: "Role Assignment",
       tone: "neutral",
       buttonRef: (element) => {
-        actionBarRefs.current[2] = element;
+        actionBarRefs.current[3] = element;
       },
       onClick: () => openScreen("SA_USER_ROLES"),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 2,
+          index: 3,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
@@ -417,7 +462,7 @@ export default function SAUsers() {
       label: "Scope Mapping",
       tone: "neutral",
       buttonRef: (element) => {
-        actionBarRefs.current[3] = element;
+        actionBarRefs.current[4] = element;
       },
       onClick: () => {
         openScreen("SA_USER_SCOPE");
@@ -425,7 +470,7 @@ export default function SAUsers() {
       },
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 3,
+          index: 4,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
@@ -436,12 +481,12 @@ export default function SAUsers() {
       hint: "Alt+R",
       tone: "primary",
       buttonRef: (element) => {
-        actionBarRefs.current[4] = element;
+        actionBarRefs.current[5] = element;
       },
       onClick: () => void handleRefresh(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 4,
+          index: 5,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
@@ -484,7 +529,7 @@ export default function SAUsers() {
     eyebrow: "User Filter",
     title: "Governable User Inventory",
     aside: (
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {FILTERS.map((option, index) => (
           <button
             key={option.key}
@@ -510,6 +555,9 @@ export default function SAUsers() {
             {option.label}
           </button>
         ))}
+        <span className="ml-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+          {visibleColumnKeys.length}/{USER_COLUMN_DEFS.length} visible columns
+        </span>
       </div>
     ),
     children: (
@@ -547,22 +595,18 @@ export default function SAUsers() {
           endIndex={userPagination.endIndex}
           totalItems={filteredUsers.length}
         />
-        <table className="min-w-full border-collapse">
+        <table className="erp-grid-table min-w-full">
           <thead>
             <tr>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                User
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Role
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                State
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Created
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              {visibleColumns.map((column) => (
+                <th
+                  key={column.key}
+                  className="border-b border-slate-300 bg-[#e8eef4] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
+                >
+                  {column.label}
+                </th>
+              ))}
+              <th className="border-b border-slate-300 bg-[#e8eef4] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Actions
               </th>
             </tr>
@@ -578,47 +622,51 @@ export default function SAUsers() {
 
               return (
                 <tr key={user.auth_user_id} className="border-b border-slate-200 bg-white align-top">
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <div className="font-semibold text-slate-900">
-                      {user.user_code ?? "Uncoded User"}{" "}
-                      <span className="text-slate-600">
-                        {formatIdentityName(user)}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                      {user.parent_company_name ?? "Company Not Captured"}
-                    </div>
-                    <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                      {user.designation_hint ?? "Designation Not Captured"}
-                    </div>
-                    <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                      Auth {shortId(user.auth_user_id)}
-                    </div>
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getRoleTone(user.role_code)}`}
-                      >
-                        {user.role_code ?? "UNASSIGNED"}
-                      </span>
-                      {typeof user.role_rank === "number" ? (
-                        <span className="text-[10px] text-slate-500">
-                          Rank {user.role_rank}
+                  {visibleColumns.map((column) => (
+                    <td key={column.key} className="px-3 py-3 text-sm text-slate-700">
+                      {column.key === "user" ? (
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            {user.user_code ?? "Uncoded User"}{" "}
+                            <span className="text-slate-600">
+                              {formatIdentityName(user)}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                            {user.parent_company_name ?? "Company Not Captured"}
+                          </div>
+                          <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                            {user.designation_hint ?? "Designation Not Captured"}
+                          </div>
+                          <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                            Auth {shortId(user.auth_user_id)}
+                          </div>
+                        </div>
+                      ) : null}
+                      {column.key === "role" ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getRoleTone(user.role_code)}`}
+                          >
+                            {user.role_code ?? "UNASSIGNED"}
+                          </span>
+                          {typeof user.role_rank === "number" ? (
+                            <span className="text-[10px] text-slate-500">
+                              Rank {user.role_rank}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {column.key === "state" ? (
+                        <span
+                          className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}
+                        >
+                          {user.state ?? "UNKNOWN"}
                         </span>
                       ) : null}
-                    </div>
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <span
-                      className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}
-                    >
-                      {user.state ?? "UNKNOWN"}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    {formatDateTime(user.created_at)}
-                  </td>
+                      {column.key === "created" ? formatDateTime(user.created_at) : null}
+                    </td>
+                  ))}
                   <td className="px-3 py-3 text-sm text-slate-700">
                     <div className="flex flex-wrap gap-2">
                       {scopeEnabled ? (
@@ -680,25 +728,38 @@ export default function SAUsers() {
   };
 
   return (
-    <ErpMasterListTemplate
-      eyebrow="SA User Governance"
-      title="ERP User Directory"
-      description="This keyboard-native list screen keeps search, filter, row actions, and related governance jumps in one structured operating surface."
-      actions={topActions}
-      notices={
-        error
-          ? [
-              {
-                key: "error",
-                tone: "error",
-                message: error,
-              },
-            ]
-          : []
-      }
-      metrics={metrics}
-      filterSection={filterSection}
-      listSection={listSection}
-    />
+    <>
+      <ErpMasterListTemplate
+        eyebrow="SA User Governance"
+        title="ERP User Directory"
+        description="Search, filter, hide noise, and execute role or lifecycle actions from one dense user register."
+        actions={topActions}
+        notices={
+          error
+            ? [
+                {
+                  key: "error",
+                  tone: "error",
+                  message: error,
+                },
+              ]
+            : []
+        }
+        metrics={metrics}
+        filterSection={filterSection}
+        listSection={listSection}
+      />
+
+      <ErpColumnVisibilityDrawer
+        visible={showColumnDrawer}
+        title="User Directory Columns"
+        description="Hide low-value fields and keep the user register aligned with the current review task."
+        columns={USER_COLUMN_DEFS}
+        visibleColumnKeys={visibleColumnKeys}
+        onToggleColumn={toggleColumn}
+        onResetColumns={resetColumns}
+        onClose={() => setShowColumnDrawer(false)}
+      />
+    </>
   );
 }

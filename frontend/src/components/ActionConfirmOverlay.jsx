@@ -63,22 +63,25 @@ export default function ActionConfirmOverlay() {
 }
 
 const baseButtonStyle = {
-  border: "none",
-  borderRadius: "12px",
+  border: "1px solid #8d9baa",
+  borderRadius: "0",
   padding: "10px 18px",
-  fontSize: "14px",
-  fontWeight: 600,
+  fontSize: "13px",
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
   cursor: "pointer",
 };
 
 const secondaryButtonStyle = {
   ...baseButtonStyle,
-  background: "#e2e8f0",
+  background: "#ffffff",
   color: "#0f172a",
 };
 
 const primaryButtonStyle = {
   ...baseButtonStyle,
-  background: "linear-gradient(90deg, #0ea5e9 0%, #2563eb 100%)",
-  color: "#ffffff",
+  borderColor: "#0f5ca8",
+  background: "#dceaf8",
+  color: "#0f355d",
 };

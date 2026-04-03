@@ -34,19 +34,33 @@ export default function ErpReportFilterTemplate({
       notices={notices}
       metrics={metrics}
       footerHints={[
-        "Alt+Shift+F Filter Target",
+        "Alt+Shift+F Or F3 Filter Target",
         "Arrow Keys Traverse Reports",
-        "Alt+R Refresh Report",
-        "Ctrl+K Command Bar",
+        "Alt+R Or F4 Refresh Report",
+        "Ctrl+K Or F9 Command Bar",
       ]}
     >
-      <div className="grid gap-3">
+      <div className="grid gap-4">
         {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
-        {summarySection ? <ErpSectionCard {...summarySection} /> : null}
-        {sideSection ? <ErpSectionCard {...sideSection} /> : null}
-        {reportSection ? (
-          <ErpSectionCard {...reportSection} className="min-h-[560px]" />
-        ) : null}
+        <div
+          className={`grid gap-4 ${
+            summarySection || sideSection
+              ? "xl:grid-cols-[minmax(0,1.45fr)_360px]"
+              : "grid-cols-1"
+          }`}
+        >
+          <div className="min-w-0">
+            {reportSection ? (
+              <ErpSectionCard {...reportSection} className="min-h-[560px]" />
+            ) : null}
+          </div>
+          {summarySection || sideSection ? (
+            <div className="grid gap-4">
+              {summarySection ? <ErpSectionCard {...summarySection} /> : null}
+              {sideSection ? <ErpSectionCard {...sideSection} /> : null}
+            </div>
+          ) : null}
+        </div>
         {bottomSection ? <div>{bottomSection}</div> : null}
       </div>
     </ErpScreenScaffold>

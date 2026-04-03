@@ -24,10 +24,22 @@ export default function ModalBase({
         width,
       }}
     >
-      {eyebrow ? <p style={eyebrowStyle}>{eyebrow}</p> : null}
-      {title ? <p style={titleStyle}>{title}</p> : null}
-      {message ? <p style={messageStyle}>{message}</p> : null}
-      {children ? <div {...contentProps}>{children}</div> : null}
+      <div style={headerStyle}>
+        {eyebrow ? <p style={eyebrowStyle}>{eyebrow}</p> : null}
+        {title ? <p style={titleStyle}>{title}</p> : null}
+        {message ? <p style={messageStyle}>{message}</p> : null}
+      </div>
+      {children ? (
+        <div
+          {...contentProps}
+          style={{
+            ...contentStyle,
+            ...(contentProps?.style || {}),
+          }}
+        >
+          {children}
+        </div>
+      ) : null}
       {actions ? (
         <div
           data-erp-nav-group="true"
@@ -48,7 +60,8 @@ export default function ModalBase({
 const overlayStyle = {
   position: "fixed",
   inset: 0,
-  background: "rgba(15, 23, 42, 0.34)",
+  background:
+    "linear-gradient(180deg, rgba(15, 23, 42, 0.42) 0%, rgba(15, 23, 42, 0.3) 100%)",
   zIndex: 999998,
   display: "flex",
   alignItems: "center",
@@ -57,11 +70,17 @@ const overlayStyle = {
 };
 
 const boxStyle = {
-  background: "#f8fbfd",
-  border: "1px solid #94a3b8",
+  background: "#f8fafc",
+  border: "1px solid #8d9baa",
   borderRadius: "0",
-  padding: "24px",
-  boxShadow: "0 28px 72px rgba(15, 23, 42, 0.18)",
+  padding: "0",
+  boxShadow: "0 28px 72px rgba(15, 23, 42, 0.24)",
+};
+
+const headerStyle = {
+  borderBottom: "1px solid #cbd5e1",
+  background: "linear-gradient(180deg, #f7fafc 0%, #eef3f7 100%)",
+  padding: "18px 22px 16px",
 };
 
 const eyebrowStyle = {
@@ -75,22 +94,31 @@ const eyebrowStyle = {
 
 const titleStyle = {
   margin: "8px 0 0",
-  fontSize: "20px",
+  fontSize: "18px",
   fontWeight: 700,
   color: "#0f172a",
 };
 
 const messageStyle = {
-  margin: "14px 0 0",
-  fontSize: "15px",
-  lineHeight: 1.6,
+  margin: "10px 0 0",
+  fontSize: "14px",
+  lineHeight: 1.55,
   color: "#475569",
 };
 
+const contentStyle = {
+  maxHeight: "min(70vh, 760px)",
+  overflow: "auto",
+  padding: "18px 22px",
+};
+
 const actionsStyle = {
-  marginTop: "22px",
+  marginTop: 0,
+  borderTop: "1px solid #cbd5e1",
+  background: "#eef3f7",
   display: "flex",
   justifyContent: "flex-end",
   gap: "10px",
   flexWrap: "wrap",
+  padding: "16px 22px",
 };

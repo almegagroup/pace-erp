@@ -23,6 +23,10 @@ import {
   requestWorkspaceLockLogout,
 } from "./store/workspaceLock.js";
 import { getClusterFetchHeaders } from "./store/sessionCluster.js";
+import {
+  beginNetworkActivity,
+  finishNetworkActivity,
+} from "./store/networkActivity.js";
 
 // 🔒 Gate-8 / G1 — Screen Registry Validation
 import { validateScreenRegistry } from "./navigation/screenRules.js";
@@ -156,45 +160,55 @@ globalThis.fetch = async (...args) => {
     isApiRequest && url.includes(SESSION_WARNING_ACK_QUERY);
   const shouldAttachClusterHeaders =
     isApiRequest && !url.includes("/api/session/cluster/admit");
+  const activityToken = isApiRequest ? beginNetworkActivity(url) : null;
 
   const finalArgs = shouldAttachClusterHeaders ? withClusterHeaders(args) : args;
-  const res = await __originalFetch(...finalArgs);
-
-  let json;
+  let ok = false;
 
   try {
-    json = await res.clone().json();
-  } catch {
+    const res = await __originalFetch(...finalArgs);
+    ok = res.ok;
+
+    let json;
+
+    try {
+      json = await res.clone().json();
+    } catch {
+      return res;
+    }
+
+    /* -------------------------------------------------------
+     * WARNING (BACKEND AUTHORITY)
+     * ------------------------------------------------------- */
+    if (!isWarningAcknowledgeRefresh && json?.warning?.type === "IDLE_WARNING") {
+      showWarning("IDLE_WARNING", refreshSessionAfterWarning);
+    }
+
+    if (
+      !isWarningAcknowledgeRefresh &&
+      json?.warning?.type === "ABSOLUTE_WARNING"
+    ) {
+      showWarning("ABSOLUTE_WARNING", refreshSessionAfterWarning);
+    }
+
+    /* -------------------------------------------------------
+     * LOGOUT (BACKEND AUTHORITY)
+     * ------------------------------------------------------- */
+    if (json?.action === "LOGOUT") {
+      hardLogout();
+      return res;
+    }
+
+    if (isApiRequest && !isPassiveProbe && res.ok) {
+      recordBackendActivity();
+    }
+
     return res;
+  } finally {
+    if (activityToken) {
+      finishNetworkActivity(activityToken, { ok });
+    }
   }
-
-  /* -------------------------------------------------------
-   * WARNING (BACKEND AUTHORITY)
-   * ------------------------------------------------------- */
-  if (!isWarningAcknowledgeRefresh && json?.warning?.type === "IDLE_WARNING") {
-    showWarning("IDLE_WARNING", refreshSessionAfterWarning);
-  }
-
-  if (
-    !isWarningAcknowledgeRefresh &&
-    json?.warning?.type === "ABSOLUTE_WARNING"
-  ) {
-    showWarning("ABSOLUTE_WARNING", refreshSessionAfterWarning);
-  }
-
-  /* -------------------------------------------------------
-   * LOGOUT (BACKEND AUTHORITY)
-   * ------------------------------------------------------- */
-  if (json?.action === "LOGOUT") {
-    hardLogout();
-    return res;
-  }
-
-  if (isApiRequest && !isPassiveProbe && res.ok) {
-    recordBackendActivity();
-  }
-
-  return res;
 };
 
 const restored = restoreNavigationStack();

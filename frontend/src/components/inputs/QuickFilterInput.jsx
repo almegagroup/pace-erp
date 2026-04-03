@@ -20,21 +20,26 @@ export default function QuickFilterInput({
   inputProps = {},
 }) {
   return (
-    <label className={`block ${className}`.trim()}>
-      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-        {label}
-      </span>
+    <label className={`block border border-slate-300 bg-slate-50 ${className}`.trim()}>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+          {label}
+        </span>
+        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+          Filter
+        </span>
+      </div>
       <input
         ref={inputRef}
         data-workspace-primary-focus={primaryFocus ? "true" : undefined}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
+        className="w-full border-0 bg-white px-3 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:bg-[#f8fbff]"
         {...inputProps}
       />
       {hint ? (
-        <p className="mt-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+        <p className="border-t border-slate-200 bg-slate-50 px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">
           {hint}
         </p>
       ) : null}

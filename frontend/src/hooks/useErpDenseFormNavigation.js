@@ -105,7 +105,7 @@ function findSectionJumpTarget(container, currentTarget, step) {
   return null;
 }
 
-function shouldIgnoreEnter(target, event) {
+function shouldIgnoreEnter(target) {
   if (!(target instanceof HTMLElement)) {
     return true;
   }
@@ -185,7 +185,7 @@ export function useErpDenseFormNavigation(
         return;
       }
 
-      if (event.key !== "Enter" || shouldIgnoreEnter(target, event)) {
+      if (event.key !== "Enter" || shouldIgnoreEnter(target)) {
         return;
       }
 

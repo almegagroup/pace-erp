@@ -3,6 +3,8 @@ import EnterpriseDashboard from "../../../components/dashboard/EnterpriseDashboa
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { dispatchWorkspaceFocusCommand } from "../../../navigation/workspaceFocusBus.js";
+import { openErpCommandPalette } from "../../../store/erpCommandPalette.js";
 
 export default function GAHome() {
   const topActionRefs = useRef([]);
@@ -41,24 +43,24 @@ export default function GAHome() {
   const actions = [
     {
       badge: "Observe",
-      title: "Portfolio Overview",
-      description: "Track cross-company readiness and operational posture.",
-      hint: "Primary",
-      onClick: () => {},
+      title: "Workspace Focus",
+      description: "Jump straight into the active work area and continue operating without pointer travel.",
+      hint: "Enter Focus",
+      onClick: () => dispatchWorkspaceFocusCommand("FOCUS_CONTENT_ZONE"),
     },
     {
       badge: "Align",
-      title: "Shared Standards",
-      description: "Review the shared standards used across the group.",
-      hint: "Policy",
-      onClick: () => {},
+      title: "Command Routing",
+      description: "Open the command palette to reach the next allowed GA or shell action immediately.",
+      hint: "Ctrl+K / F9",
+      onClick: () => openErpCommandPalette(),
     },
     {
       badge: "Escalate",
-      title: "Exception Desk",
-      description: "Surface the items that still need follow-up and coordination.",
-      hint: "Follow-up",
-      onClick: () => {},
+      title: "New Workspace Window",
+      description: "Open another ERP window when portfolio review needs side-by-side monitoring.",
+      hint: "Shift+F8",
+      onClick: () => dispatchWorkspaceFocusCommand("OPEN_NEW_WINDOW"),
     },
   ];
 
@@ -114,6 +116,22 @@ export default function GAHome() {
       },
       order: 10,
     },
+    {
+      id: "ga-home-open-command-routing",
+      group: "Current Screen",
+      label: "Open command routing",
+      keywords: ["ga home", "command palette", "routing"],
+      perform: () => openErpCommandPalette(),
+      order: 20,
+    },
+    {
+      id: "ga-home-open-new-window",
+      group: "Current Screen",
+      label: "Open another workspace window",
+      keywords: ["ga home", "new window", "multi window"],
+      perform: () => dispatchWorkspaceFocusCommand("OPEN_NEW_WINDOW"),
+      order: 30,
+    },
   ]);
 
   useErpScreenHotkeys({
@@ -139,7 +157,7 @@ export default function GAHome() {
       noteItems={[
         "Alt+Shift+P returns focus to the first GA action card.",
         "Arrow keys move across the dashboard action grid without pointer recovery.",
-        "Ctrl+K stays available for cross-screen command routing inside the protected shell.",
+        "Ctrl+K or F9 opens cross-screen command routing inside the protected shell.",
       ]}
       summaryTitle="Group Oversight Snapshot"
       summaryItems={[

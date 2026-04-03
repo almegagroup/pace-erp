@@ -42,14 +42,18 @@ import {
 import { subscribeWorkspaceFocusCommands } from "../navigation/workspaceFocusBus.js";
 import { subscribeRegisteredScreenCommands } from "../store/erpCommandPalette.js";
 import { subscribeRegisteredScreenHotkeys } from "../store/erpScreenHotkeys.js";
+import {
+  getNetworkActivitySnapshot,
+  subscribeNetworkActivity,
+} from "../store/networkActivity.js";
 import ErpCommandPalette from "../components/ErpCommandPalette.jsx";
 
 const WORKSPACE_ZONES = Object.freeze(["menu", "actions", "content"]);
 const SCREEN_HOTKEY_LABELS = Object.freeze({
-  save: { key: "Ctrl+S", label: "Save" },
-  refresh: { key: "Alt+R", label: "Refresh" },
-  focusSearch: { key: "Alt+Shift+F", label: "Search" },
-  focusPrimary: { key: "Alt+Shift+P", label: "Primary" },
+  save: { key: "Ctrl+S / F2", label: "Save" },
+  refresh: { key: "Alt+R / F4", label: "Refresh" },
+  focusSearch: { key: "Alt+Shift+F / F3", label: "Search" },
+  focusPrimary: { key: "Alt+Shift+P / F7", label: "Primary" },
 });
 
 function focusElement(element) {
@@ -234,6 +238,9 @@ export default function MenuShell() {
   const [runtimeContextError, setRuntimeContextError] = useState("");
   const [screenCommandRegistry, setScreenCommandRegistry] = useState(() => new Map());
   const [screenHotkeyRegistry, setScreenHotkeyRegistry] = useState(() => new Map());
+  const [networkActivity, setNetworkActivity] = useState(() =>
+    getNetworkActivitySnapshot()
+  );
 
   const menuButtonRefs = useRef([]);
   const drawerButtonRefs = useRef([]);
@@ -310,6 +317,20 @@ export default function MenuShell() {
   const currentWorkContextLabel = runtimeContext?.selectedWorkContext
     ? `${runtimeContext.selectedWorkContext.work_context_code} | ${runtimeContext.selectedWorkContext.work_context_name}`
     : "No work context selected";
+  const networkStatusLabel =
+    networkActivity.inFlightCount > 0
+      ? `Syncing ${networkActivity.inFlightCount} request${networkActivity.inFlightCount === 1 ? "" : "s"}`
+      : networkActivity.lastOutcome === "error"
+        ? "Last sync failed"
+        : networkActivity.lastCompletedAt > 0
+          ? "System ready"
+          : "Waiting";
+  const networkStatusTone =
+    networkActivity.inFlightCount > 0
+      ? "border-amber-300 bg-amber-50 text-amber-900"
+      : networkActivity.lastOutcome === "error"
+        ? "border-rose-300 bg-rose-50 text-rose-900"
+        : "border-emerald-300 bg-emerald-50 text-emerald-900";
 
   const handleWorkCompanyChange = useCallback(
     async (nextCompanyId) => {
@@ -555,6 +576,12 @@ export default function MenuShell() {
       unsubscribeCommands();
       unsubscribeHotkeys();
     };
+  }, []);
+
+  useEffect(() => {
+    return subscribeNetworkActivity((snapshot) => {
+      setNetworkActivity(snapshot);
+    });
   }, []);
 
   useEffect(() => {
@@ -1054,12 +1081,12 @@ export default function MenuShell() {
   ];
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#dfe7ef] text-slate-900">
+    <div className="erp-app-shell flex h-screen overflow-hidden text-slate-900">
       <aside
         aria-label="Workspace navigation"
-        className={`flex shrink-0 flex-col border-r bg-[#f7f9fc] ${workspaceMode ? "w-[88px]" : collapsed ? "w-[88px]" : "w-[260px]"} ${zoneBorder(activeZone, "menu")}`}
+        className={`flex shrink-0 flex-col border-r bg-[#f4f7fa] ${workspaceMode ? "w-[92px]" : collapsed ? "w-[92px]" : "w-[272px]"} ${zoneBorder(activeZone, "menu")}`}
       >
-        <div className="border-b bg-[#1c5aa6] px-3 py-3 text-white">
+        <div className="border-b border-slate-500 bg-[linear-gradient(180deg,#0d4f90_0%,#13426f_100%)] px-3 py-3 text-white">
           <div className="flex items-center gap-2">
             <img
               src="/lm.jpg"
@@ -1126,7 +1153,7 @@ export default function MenuShell() {
           ) : null}
         </div>
 
-        <div className="border-b bg-[#eef4fb] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+        <div className="border-b border-slate-300 bg-[#e6edf4] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
           {workspaceMode ? "Rail" : collapsed ? "Menu" : "Menu Zone"}
         </div>
 
@@ -1192,8 +1219,8 @@ export default function MenuShell() {
                           collapsed ? "grid-cols-1 justify-items-center" : "grid-cols-[32px_minmax(0,1fr)_20px]"
                         } ${
                           isActive
-                            ? "border-sky-400 bg-sky-50 font-semibold text-sky-900"
-                            : "border-transparent bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                            ? "border-sky-500 bg-sky-100 font-semibold text-sky-950"
+                            : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
                         }`}
                       >
                         <span className="font-mono text-[11px] text-slate-500">
@@ -1214,7 +1241,7 @@ export default function MenuShell() {
           )}
         </div>
 
-        <div className="border-t bg-white px-2 py-2 text-center text-[11px] text-slate-500">
+        <div className="border-t border-slate-300 bg-[#eef3f7] px-2 py-2 text-center text-[11px] text-slate-500">
           {workspaceMode ? (
             <>
               <div className="font-semibold text-slate-700">{shellProfile?.roleCode || "ERP"}</div>
@@ -1229,9 +1256,9 @@ export default function MenuShell() {
       {drawerVisible ? (
         <aside
           aria-label="Menu drawer"
-          className="flex w-[280px] shrink-0 flex-col border-r border-slate-300 bg-[#eef4fb]"
+          className="flex w-[296px] shrink-0 flex-col border-r border-slate-300 bg-[#e8eef4]"
         >
-          <div className="border-b bg-white px-3 py-3">
+          <div className="border-b border-slate-300 bg-white px-3 py-3">
             <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
               Menu Drawer
             </div>
@@ -1241,7 +1268,7 @@ export default function MenuShell() {
             <button
               type="button"
               onClick={handleDrawerBack}
-              className="mt-2 border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700"
+              className="mt-2 border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-slate-700"
             >
               Left Back
             </button>
@@ -1270,7 +1297,7 @@ export default function MenuShell() {
                         aria-current={!hasChildren && isActive ? "page" : undefined}
                         className={`grid w-full grid-cols-[32px_minmax(0,1fr)_20px] items-center gap-2 border px-2 py-2 text-left text-sm ${
                           isActive
-                            ? "border-sky-400 bg-sky-50 font-semibold text-sky-900"
+                            ? "border-sky-500 bg-sky-100 font-semibold text-sky-950"
                             : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                         }`}
                       >
@@ -1291,39 +1318,56 @@ export default function MenuShell() {
         </aside>
       ) : null}
 
-      <main className={`flex min-w-0 flex-1 flex-col border-r bg-white ${zoneBorder(activeZone, "content")}`}>
-        <header className="border-b bg-[#1c5aa6] px-4 py-2 text-white">
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-            <span className="font-semibold">
+      <main className={`flex min-w-0 flex-1 flex-col border-r bg-[#f7f9fb] ${zoneBorder(activeZone, "content")}`}>
+        <header className="border-b border-slate-400 bg-[linear-gradient(180deg,#f8fafc_0%,#e9eef4_100%)] px-4 py-3 text-slate-900">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-sky-700">
+                {workspaceMode ? "Focused workspace" : "Protected ERP"}
+              </div>
+              <div className="mt-1 text-lg font-semibold">
               {workspaceMode && previousScreen?.screen_code
                 ? `${formatScreenTitle(previousScreen.screen_code)} / ${activeTitle}`
                 : activeTitle}
-            </span>
-            <span>{shellProfile?.roleCode || "Role"}</span>
-            <span>{shellProfile?.userCode || "User"}</span>
-            {!runtimeContext?.isAdmin && runtimeContext?.currentCompany ? (
-              <span>{runtimeContext.currentCompany.company_code}</span>
-            ) : null}
-            {!runtimeContext?.isAdmin && runtimeContext?.selectedWorkContext ? (
-              <span>{runtimeContext.selectedWorkContext.work_context_code}</span>
-            ) : null}
-            <span>{workspaceMode ? `Stack ${stackDepth}` : `Zone ${WORKSPACE_ZONES.indexOf(activeZone) + 1}`}</span>
-            {clusterAdmission?.windowSlot ? (
-              <span>
-                Window {clusterAdmission.windowSlot}/{clusterAdmission.maxWindowCount ?? 3}
-              </span>
-            ) : null}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                <span>{shellProfile?.roleCode || "Role"}</span>
+                <span>{shellProfile?.userCode || "User"}</span>
+                {!runtimeContext?.isAdmin && runtimeContext?.currentCompany ? (
+                  <span>{runtimeContext.currentCompany.company_code}</span>
+                ) : null}
+                {!runtimeContext?.isAdmin && runtimeContext?.selectedWorkContext ? (
+                  <span>{runtimeContext.selectedWorkContext.work_context_code}</span>
+                ) : null}
+                <span>{workspaceMode ? `Stack ${stackDepth}` : `Zone ${WORKSPACE_ZONES.indexOf(activeZone) + 1}`}</span>
+                {clusterAdmission?.windowSlot ? (
+                  <span>
+                    Window {clusterAdmission.windowSlot}/{clusterAdmission.maxWindowCount ?? 3}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+            <div className="grid gap-2 text-right">
+              <div
+                className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] ${networkStatusTone} ${
+                  networkActivity.inFlightCount > 0 ? "erp-status-marquee" : ""
+                }`}
+              >
+                {networkStatusLabel}
+                {networkActivity.lastLabel ? ` | ${networkActivity.lastLabel}` : ""}
+              </div>
+            </div>
           </div>
         </header>
 
-        <div className="border-b bg-[#eef4fb] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+        <div className="border-b border-slate-300 bg-[#eef3f7] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
           {workspaceMode
-            ? "Esc Back | Alt+H Home | Alt+Left Hide Rail | Alt+Right Show Rail | Ctrl+K Command Bar"
-            : "Alt+M Menu | Alt+A Function Rail | Alt+C Work Area | Ctrl+K Command Bar"}
+            ? "Esc Back | Alt+H Home | Alt+Left Hide Rail | Alt+Right Show Rail | Ctrl+K Or F9 Command Bar"
+            : "Alt+M Menu | Alt+A Function Rail | Alt+C Work Area | Ctrl+K Or F9 Command Bar"}
         </div>
 
         {showKeyboardHelp || clusterWindowMessage ? (
-          <div className="border-b bg-[#fffdf2] px-4 py-2 text-sm text-slate-700">
+          <div className="border-b border-slate-300 bg-[#fff8dc] px-4 py-2 text-sm text-slate-700">
             {clusterWindowMessage ? (
               <p>{clusterWindowMessage}</p>
             ) : (
@@ -1338,7 +1382,7 @@ export default function MenuShell() {
         ) : null}
 
         {runtimeContextError ? (
-          <div className="border-b bg-rose-50 px-4 py-2 text-sm text-rose-700">
+          <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
             <p>{runtimeContextError}</p>
           </div>
         ) : null}
@@ -1348,25 +1392,25 @@ export default function MenuShell() {
           tabIndex={-1}
           onFocus={() => setActiveZone("content")}
           aria-label="Active workspace content"
-          className={`min-h-0 flex-1 overflow-y-auto bg-[#f7f9fc] outline-none ${workspaceMode ? "px-1.5 py-1.5" : "px-3 py-3"}`}
+          className={`min-h-0 flex-1 overflow-y-auto bg-[#f2f5f8] outline-none ${workspaceMode ? "px-2 py-2" : "px-4 py-4"}`}
         >
           <Outlet />
         </div>
 
-        <footer className="border-t bg-[#eef4fb] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-          Esc Back | Alt+H Home | Ctrl+K Command Bar | Ctrl+S Save | Alt+R Refresh | Alt+Shift+F Search | Alt+Shift+P Primary
+        <footer className="border-t border-slate-300 bg-[#e8eef4] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+          Esc Back | Alt+H Home | Ctrl+K Or F9 Command Bar | Ctrl+S Or F2 Save | Alt+R Or F4 Refresh | Alt+Shift+F Or F3 Search | Alt+Shift+P Or F7 Primary
           {activeScreenHotkeys.length > 0
             ? ` | ${activeScreenHotkeys.map((item) => `${item.key} ${item.label}`).join(" | ")}`
             : ""}
         </footer>
       </main>
 
-      <div className={`border-l border-slate-300 bg-[#f7f9fc] transition-all ${actionRailCollapsed ? "w-[18px]" : "w-[176px]"}`}>
+      <div className={`border-l border-slate-300 bg-[#edf2f6] transition-all ${actionRailCollapsed ? "w-[18px]" : "w-[188px]"}`}>
         {actionRailCollapsed ? (
           <button
             type="button"
             onClick={() => setActionRailCollapsed(false)}
-            className="flex h-full w-full items-start justify-center bg-[#eef4fb] pt-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500"
+            className="flex h-full w-full items-start justify-center bg-[#e2eaf2] pt-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500"
           >
             &gt;
           </button>
@@ -1375,7 +1419,7 @@ export default function MenuShell() {
             aria-label="Workspace action rail"
             className={`flex h-full flex-col ${zoneBorder(activeZone, "actions")}`}
           >
-            <div className="border-b bg-[#d9e7f8] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-600">
+            <div className="border-b border-slate-300 bg-[#dde7f2] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-600">
               Function Rail
             </div>
 

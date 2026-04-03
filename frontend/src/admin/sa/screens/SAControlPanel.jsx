@@ -9,7 +9,9 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, {
+  ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
@@ -103,7 +105,15 @@ function LaunchCard({
   );
 }
 
-function DataTableCard({ eyebrow, title, rows, columns, emptyMessage, footer }) {
+function DataTableCard({
+  eyebrow,
+  title,
+  rows,
+  columns,
+  emptyMessage,
+  footer,
+  actions,
+}) {
   const rowRefs = useRef([]);
 
   return (
@@ -114,7 +124,7 @@ function DataTableCard({ eyebrow, title, rows, columns, emptyMessage, footer }) 
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-full border-collapse">
+          <table className="erp-grid-table min-w-full">
             <thead>
               <tr>
                 {columns.map((column) => (
@@ -159,7 +169,12 @@ function DataTableCard({ eyebrow, title, rows, columns, emptyMessage, footer }) 
         </div>
       )}
 
-      {footer ? <div className="mt-4 text-sm text-slate-500">{footer}</div> : null}
+      {footer || actions ? (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-500">
+          <span>{footer}</span>
+          {actions}
+        </div>
+      ) : null}
     </ErpSectionCard>
   );
 }
@@ -170,6 +185,7 @@ export default function SAControlPanel() {
   const [error, setError] = useState("");
   const [controlPanel, setControlPanel] = useState(null);
   const [health, setHealth] = useState(null);
+  const [detailDrawer, setDetailDrawer] = useState("");
   const topActionRefs = useRef([]);
   const quickLaunchRefs = useRef([]);
 
@@ -211,6 +227,11 @@ export default function SAControlPanel() {
 
   const recentSessions = controlPanel?.recent_sessions ?? [];
   const recentAudit = controlPanel?.recent_audit ?? [];
+  const sessionPreviewRows = recentSessions.slice(0, 5);
+  const auditPreviewRows = recentAudit.slice(0, 5);
+  const systemVersion = formatSystemVersion(
+    controlPanel?.system_version ?? health?.system_version ?? null
+  );
 
   const statusAlerts = [
     health?.db_status === "DOWN"
@@ -291,6 +312,24 @@ export default function SAControlPanel() {
       keywords: ["focus", "quick launch", "actions"],
       perform: () => quickLaunchRefs.current[0]?.[0]?.focus?.(),
       order: 20,
+    },
+    {
+      id: "sa-control-panel-open-sessions",
+      group: "Current Screen",
+      label: "Open recent sessions drawer",
+      keywords: ["sessions", "recent sessions", "drawer"],
+      disabled: recentSessions.length === 0,
+      perform: () => setDetailDrawer("sessions"),
+      order: 25,
+    },
+    {
+      id: "sa-control-panel-open-audit",
+      group: "Current Screen",
+      label: "Open recent audit drawer",
+      keywords: ["audit", "recent audit", "drawer"],
+      disabled: recentAudit.length === 0,
+      perform: () => setDetailDrawer("audit"),
+      order: 26,
     },
     ...quickLaunch.map((action, index) => ({
       id: `sa-control-panel-${action.title.toLowerCase().replaceAll(" ", "-")}`,
@@ -378,6 +417,13 @@ export default function SAControlPanel() {
       caption:
         "Most recent admin control-plane audit entries returned by backend.",
     },
+    {
+      key: "system-version",
+      label: "System Build",
+      value: loading ? "..." : systemVersion,
+      tone: "slate",
+      caption: "Current ERP build signature reported by diagnostics payload.",
+    },
   ];
 
   const notices = [
@@ -417,7 +463,7 @@ export default function SAControlPanel() {
         <DataTableCard
           eyebrow="Live Preview"
           title="Recent Sessions"
-          rows={recentSessions.map((session) => ({
+          rows={sessionPreviewRows.map((session) => ({
             id: session.session_id,
             ...session,
           }))}
@@ -451,14 +497,28 @@ export default function SAControlPanel() {
             },
           ]}
           emptyMessage="No recent active sessions are available in the current preview payload."
-          footer="Full session governance screen is now available from this same control rail."
+          footer={
+            recentSessions.length > sessionPreviewRows.length
+              ? `Showing ${sessionPreviewRows.length} of ${recentSessions.length} session rows.`
+              : "Session preview is already fully visible."
+          }
+          actions={(
+            <button
+              type="button"
+              disabled={recentSessions.length === 0}
+              onClick={() => setDetailDrawer("sessions")}
+              className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700"
+            >
+              Open Drawer
+            </button>
+          )}
         />
 
         <div className="grid gap-6">
           <DataTableCard
             eyebrow="Admin Trail"
             title="Recent Audit"
-            rows={recentAudit.map((audit) => ({
+            rows={auditPreviewRows.map((audit) => ({
               id: audit.audit_id,
               ...audit,
             }))}
@@ -487,30 +547,44 @@ export default function SAControlPanel() {
               },
             ]}
             emptyMessage="No recent admin audit entries are available in the current preview payload."
-            footer="Dedicated audit viewer provides broader filtering and trace depth."
+            footer={
+              recentAudit.length > auditPreviewRows.length
+                ? `Showing ${auditPreviewRows.length} of ${recentAudit.length} audit rows.`
+                : "Audit preview is already fully visible."
+            }
+            actions={(
+              <button
+                type="button"
+                disabled={recentAudit.length === 0}
+                onClick={() => setDetailDrawer("audit")}
+                className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700"
+              >
+                Open Drawer
+              </button>
+            )}
           />
 
           <ErpSectionCard
             eyebrow="Snapshot Readiness"
             title="Access Projection Status"
           >
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="border border-slate-200 bg-white px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  ACL Snapshot
-                </p>
-                <p className="mt-2 text-lg font-semibold text-slate-900">
-                  {loading ? "..." : health?.acl_snapshot_status ?? "N/A"}
-                </p>
-              </div>
-              <div className="border border-slate-200 bg-white px-4 py-3">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  Menu Snapshot
-                </p>
-                <p className="mt-2 text-lg font-semibold text-slate-900">
-                  {loading ? "..." : health?.menu_snapshot_status ?? "N/A"}
-                </p>
-              </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <ErpFieldPreview
+                label="ACL Snapshot"
+                value={loading ? "..." : health?.acl_snapshot_status ?? "N/A"}
+                caption="Permission projection readiness from the backend snapshot service."
+                tone={
+                  health?.acl_snapshot_status === "READY" ? "success" : "amber"
+                }
+              />
+              <ErpFieldPreview
+                label="Menu Snapshot"
+                value={loading ? "..." : health?.menu_snapshot_status ?? "N/A"}
+                caption="Navigation snapshot integrity for the protected ERP shell."
+                tone={
+                  health?.menu_snapshot_status === "READY" ? "success" : "amber"
+                }
+              />
             </div>
           </ErpSectionCard>
         </div>
@@ -547,24 +621,131 @@ export default function SAControlPanel() {
         </ErpSectionCard>
 
         <ErpSectionCard
-          eyebrow="Build Program"
-          title="Next governance waves"
+          eyebrow="System Snapshot"
+          title="Diagnostic context"
         >
-          <div className="space-y-2">
-            {launchSummary.map((item) => (
-              <div
-                key={item}
-                className="flex items-center justify-between gap-4 border border-slate-200 bg-white px-3 py-2"
-              >
-                <p className="text-sm font-medium text-slate-700">{item}</p>
-                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                  Live
-                </span>
-              </div>
-            ))}
+          <div className="grid gap-3">
+            <ErpFieldPreview
+              label="ERP Build"
+              value={loading ? "..." : systemVersion}
+              caption="Build signature shown in one place so operators do not need to scan raw payload data."
+              tone="sky"
+            />
+            <ErpFieldPreview
+              label="Launch Program"
+              value={launchSummary.join("\n")}
+              caption="Active governance workspaces available from the quick launch rail."
+              multiline
+              tone="default"
+            />
           </div>
         </ErpSectionCard>
       </div>
+
+      <DrawerBase
+        visible={detailDrawer === "sessions"}
+        title="Recent Sessions Detail"
+        onEscape={() => setDetailDrawer("")}
+        width="min(980px, calc(100vw - 24px))"
+        actions={(
+          <button
+            type="button"
+            onClick={() => setDetailDrawer("")}
+            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+          >
+            Close
+          </button>
+        )}
+      >
+        <DataTableCard
+          eyebrow="Full Session Preview"
+          title="Recent Sessions"
+          rows={recentSessions.map((session) => ({
+            id: session.session_id,
+            ...session,
+          }))}
+          columns={[
+            {
+              key: "session",
+              label: "Session",
+              render: (row) => (
+                <div>
+                  <p className="font-medium text-slate-900">{shortId(row.session_id)}</p>
+                  <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                    {row.status}
+                  </p>
+                </div>
+              ),
+            },
+            {
+              key: "user",
+              label: "Auth User",
+              render: (row) => shortId(row.auth_user_id),
+            },
+            {
+              key: "created",
+              label: "Created",
+              render: (row) => formatDateTime(row.created_at),
+            },
+            {
+              key: "seen",
+              label: "Last Seen",
+              render: (row) => formatDateTime(row.last_seen_at),
+            },
+          ]}
+          emptyMessage="No recent active sessions are available in the current preview payload."
+        />
+      </DrawerBase>
+
+      <DrawerBase
+        visible={detailDrawer === "audit"}
+        title="Recent Audit Detail"
+        onEscape={() => setDetailDrawer("")}
+        width="min(980px, calc(100vw - 24px))"
+        actions={(
+          <button
+            type="button"
+            onClick={() => setDetailDrawer("")}
+            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+          >
+            Close
+          </button>
+        )}
+      >
+        <DataTableCard
+          eyebrow="Full Audit Preview"
+          title="Recent Audit"
+          rows={recentAudit.map((audit) => ({
+            id: audit.audit_id,
+            ...audit,
+          }))}
+          columns={[
+            {
+              key: "action",
+              label: "Action",
+              render: (row) => (
+                <div>
+                  <p className="font-medium text-slate-900">{row.action_code ?? "N/A"}</p>
+                  <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                    {row.status ?? "UNKNOWN"}
+                  </p>
+                </div>
+              ),
+            },
+            {
+              key: "actor",
+              label: "Actor",
+              render: (row) => shortId(row.admin_user_id),
+            },
+            {
+              key: "when",
+              label: "Performed",
+              render: (row) => formatDateTime(row.performed_at),
+            },
+          ]}
+          emptyMessage="No recent admin audit entries are available in the current preview payload."
+        />
+      </DrawerBase>
     </ErpScreenScaffold>
   );
 }

@@ -9,6 +9,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import ModalBase from "../../../components/layer/ModalBase.jsx";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -150,35 +152,6 @@ async function deleteMenu(payload) {
   return json.data;
 }
 
-async function previewUser(targetUserId) {
-  const response = await fetch(
-    `${import.meta.env.VITE_API_BASE}/api/admin/preview-user`,
-    {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        target_user_id: targetUserId,
-      }),
-    }
-  );
-
-  const json = await readJsonSafe(response);
-
-  if (!response.ok || !json?.ok) {
-    throw new Error(json?.code ?? "MENU_PREVIEW_FAILED");
-  }
-
-  return json.data;
-}
-
-function buildTreeLabel(item) {
-  const parent = item.parent_menu_code ? `${item.parent_menu_code} / ` : "";
-  return `${parent}${item.title} (${item.menu_code})`;
-}
-
 function formatScreenTitle(screenCode) {
   return String(screenCode ?? "")
     .replace(/^(SA|GA|ACL|DASHBOARD)_/i, "")
@@ -293,6 +266,8 @@ export default function SAMenuGovernance() {
   const [selectedMenuCode, setSelectedMenuCode] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [pageCatalogFilter, setPageCatalogFilter] = useState("ALL");
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  const [showLegacyPageEditor] = useState(false);
   const [pageEditor, setPageEditor] = useState(null);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
   const [createForm, setCreateForm] = useState({
@@ -722,8 +697,9 @@ export default function SAMenuGovernance() {
         title: "",
         description: "",
       }));
+      closeCreateGroupModal();
       setNotice(`Group ${payload.menu_code} created.`);
-      createCodeRef.current?.focus();
+      topActionRefs.current[1]?.focus?.();
     } catch (error) {
       setError(
         resolveMenuGovernanceErrorMessage(
@@ -913,9 +889,9 @@ export default function SAMenuGovernance() {
     {
       id: "sa-menu-governance-focus-create",
       group: "Current Screen",
-      label: "Focus create menu code",
+      label: "Open create group modal",
       keywords: ["menu code", "create menu"],
-      perform: () => createCodeRef.current?.focus(),
+      perform: openCreateGroupModal,
       order: 20,
     },
     {
@@ -934,7 +910,7 @@ export default function SAMenuGovernance() {
       perform: () => void loadRegistry(universe),
     },
     focusPrimary: {
-      perform: () => createCodeRef.current?.focus(),
+      perform: openCreateGroupModal,
     },
   });
 
@@ -956,16 +932,32 @@ export default function SAMenuGovernance() {
         }),
     },
     {
-      key: "sa-control-panel",
-      label: "Control Panel",
+      key: "create-group",
+      label: "Create Group",
+      hint: "F3",
       tone: "neutral",
       buttonRef: (element) => {
         topActionRefs.current[1] = element;
       },
-      onClick: () => openScreen("SA_CONTROL_PANEL", { mode: "replace" }),
+      onClick: openCreateGroupModal,
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 1,
+          refs: topActionRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
+      key: "sa-control-panel",
+      label: "Control Panel",
+      tone: "neutral",
+      buttonRef: (element) => {
+        topActionRefs.current[2] = element;
+      },
+      onClick: () => openScreen("SA_CONTROL_PANEL", { mode: "replace" }),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 2,
           refs: topActionRefs.current,
           orientation: "horizontal",
         }),
@@ -1011,6 +1003,38 @@ export default function SAMenuGovernance() {
     window.requestAnimationFrame(() => {
       pageTitleRef.current?.focus();
     });
+  }
+
+  function openCreateGroupModal() {
+    setCreateGroupOpen(true);
+
+    window.requestAnimationFrame(() => {
+      createCodeRef.current?.focus();
+    });
+  }
+
+  function closeCreateGroupModal() {
+    setCreateGroupOpen(false);
+  }
+
+  function closePageEditor() {
+    setGroupPickerOpen(false);
+    setPageEditor(null);
+  }
+
+  function assignParentGroup(groupCode) {
+    setPageEditor((current) =>
+      current
+        ? {
+            ...current,
+            parent_menu_code: groupCode,
+            display_order: String(
+              getNextAvailableOrder(groupCode, current.menu_code)
+            ),
+          }
+        : current
+    );
+    setGroupPickerOpen(false);
   }
 
   async function handleSavePageEditor() {
@@ -1463,140 +1487,30 @@ export default function SAMenuGovernance() {
               description="Use this only for drawer groups. Do not create actual screens here; publish screens from the right side."
             >
               <div className="grid gap-3">
-                <div className="grid gap-2 md:grid-cols-2">
-                  <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Group Code</span>
-                    <input
-                      ref={createCodeRef}
-                      value={createForm.menu_code}
-                      onChange={(event) =>
-                        setCreateForm((current) => ({
-                          ...current,
-                          menu_code: event.target.value,
-                        }))
-                      }
-                      className={inputClassName()}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">ACL Resource Code</span>
-                    <input
-                      value={createForm.resource_code}
-                      onChange={(event) =>
-                        setCreateForm((current) => ({
-                          ...current,
-                          resource_code: event.target.value,
-                        }))
-                      }
-                      className={inputClassName()}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Title</span>
-                    <input
-                      value={createForm.title}
-                      onChange={(event) =>
-                        setCreateForm((current) => ({
-                          ...current,
-                          title: event.target.value,
-                        }))
-                      }
-                      className={inputClassName()}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-sm text-slate-700 md:col-span-2">
-                    <span className="font-semibold">Description</span>
-                    <textarea
-                      value={createForm.description}
-                      onChange={(event) =>
-                        setCreateForm((current) => ({
-                          ...current,
-                          description: event.target.value,
-                        }))
-                      }
-                      rows={3}
-                      className={inputClassName()}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Parent Group</span>
-                    <select
-                      value={createForm.parent_menu_code}
-                      onChange={(event) =>
-                        setCreateForm((current) => ({
-                          ...current,
-                          parent_menu_code: event.target.value,
-                          display_order: String(getNextAvailableOrder(event.target.value)),
-                        }))
-                      }
-                      className={inputClassName()}
-                    >
-                      <option value="">No parent</option>
-                      {menus
-                        .filter(
-                          (item) => item.universe === universe && item.menu_type === "GROUP"
-                        )
-                        .map((option) => (
-                          <option key={option.menu_code} value={option.menu_code}>
-                            {option.title} ({option.menu_code})
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  <label className="grid gap-1 text-sm text-slate-700">
-                    <span className="font-semibold">Display Order</span>
-                    <input
-                      type="number"
-                      value={createForm.display_order}
-                      onChange={(event) =>
-                        setCreateForm((current) => ({
-                          ...current,
-                          display_order: event.target.value,
-                        }))
-                      }
-                      className={inputClassName()}
-                    />
-                  </label>
+                <div className="border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                  Open the group-create modal only when you need a new drawer bucket.
+                  The main registry stays focused on selection and maintenance now.
                 </div>
-
-                <div className="grid gap-2 border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
-                  <div>
-                    Suggested next free order under {createForm.parent_menu_code || "root"}:{" "}
-                    <span className="font-semibold text-slate-900">{suggestedCreateOrder}</span>
-                  </div>
-                  {createReservedScreenByMenuCode ? (
-                    <div className="text-amber-800">
-                      `{normalizedCreateMenuCode}` is reserved for page {createReservedScreenByMenuCode.route}. Suggested group code:
-                      {" "}
-                      <span className="font-semibold">{normalizedCreateMenuCode}_GROUP</span>
-                    </div>
-                  ) : null}
-                  {createReservedScreenByResourceCode ? (
-                    <div className="text-amber-800">
-                      Resource `{normalizedCreateResourceCode}` is reserved for page {createReservedScreenByResourceCode.route}. Suggested resource:
-                      {" "}
-                      <span className="font-semibold">{normalizedCreateResourceCode}_GROUP</span>
-                    </div>
-                  ) : null}
-                  {createCodeConflict ? (
-                    <div className="text-rose-700">
-                      Group code `{normalizedCreateMenuCode}` is already used by {createCodeConflict.title}.
-                    </div>
-                  ) : null}
-                  {createResourceConflict ? (
-                    <div className="text-rose-700">
-                      Resource `{normalizedCreateResourceCode}` is already used by {createResourceConflict.title}.
-                    </div>
-                  ) : null}
+                <div className="grid gap-3 md:grid-cols-2">
+                  <ErpFieldPreview
+                    label="Prepared Code"
+                    value={normalizedCreateMenuCode || "Not started"}
+                    caption="Group codes stay separate from page screen codes."
+                    tone={normalizedCreateMenuCode ? "sky" : "default"}
+                  />
+                  <ErpFieldPreview
+                    label="Next Order"
+                    value={String(suggestedCreateOrder)}
+                    caption={`Suggested under ${createForm.parent_menu_code || "root"}.`}
+                    tone="default"
+                  />
                 </div>
-
                 <button
                   type="button"
-                  disabled={saving}
-                  onClick={() => void handleCreateMenu()}
+                  onClick={openCreateGroupModal}
                   className="w-fit border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
                 >
-                  Create Group
+                  Open Create Group Modal
                 </button>
               </div>
             </ErpSectionCard>
@@ -1724,7 +1638,7 @@ export default function SAMenuGovernance() {
         </ErpSectionCard>
       </div>
 
-      {pageEditor ? (
+      {showLegacyPageEditor && pageEditor ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 px-6 py-8">
           <div className="grid max-h-[88vh] w-full max-w-5xl overflow-hidden border border-slate-300 bg-white shadow-2xl md:grid-cols-[minmax(0,1fr)_280px]">
             <div className="min-w-0 overflow-y-auto p-6">
@@ -1973,6 +1887,395 @@ export default function SAMenuGovernance() {
           </div>
         </div>
       ) : null}
+
+      <ModalBase
+        visible={createGroupOpen}
+        eyebrow="Group Registry"
+        title="Create New Group"
+        message="Create drawer groups here. Publish actual screens from the page catalog."
+        onEscape={closeCreateGroupModal}
+        initialFocusRef={createCodeRef}
+        width="min(920px, calc(100vw - 32px))"
+        actions={
+          <>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={closeCreateGroupModal}
+              className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-slate-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void handleCreateMenu()}
+              className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-sky-950"
+            >
+              {saving ? "Creating..." : "Create Group"}
+            </button>
+          </>
+        }
+      >
+        <div className="grid gap-4">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="grid gap-1 text-sm text-slate-700">
+              <span className="font-semibold">Group Code</span>
+              <input
+                ref={createCodeRef}
+                value={createForm.menu_code}
+                onChange={(event) =>
+                  setCreateForm((current) => ({
+                    ...current,
+                    menu_code: event.target.value,
+                  }))
+                }
+                className={inputClassName()}
+              />
+            </label>
+            <label className="grid gap-1 text-sm text-slate-700">
+              <span className="font-semibold">ACL Resource Code</span>
+              <input
+                value={createForm.resource_code}
+                onChange={(event) =>
+                  setCreateForm((current) => ({
+                    ...current,
+                    resource_code: event.target.value,
+                  }))
+                }
+                className={inputClassName()}
+              />
+            </label>
+            <label className="grid gap-1 text-sm text-slate-700">
+              <span className="font-semibold">Title</span>
+              <input
+                value={createForm.title}
+                onChange={(event) =>
+                  setCreateForm((current) => ({
+                    ...current,
+                    title: event.target.value,
+                  }))
+                }
+                className={inputClassName()}
+              />
+            </label>
+            <label className="grid gap-1 text-sm text-slate-700 md:col-span-2">
+              <span className="font-semibold">Description</span>
+              <textarea
+                value={createForm.description}
+                onChange={(event) =>
+                  setCreateForm((current) => ({
+                    ...current,
+                    description: event.target.value,
+                  }))
+                }
+                rows={3}
+                className={inputClassName()}
+              />
+            </label>
+            <label className="grid gap-1 text-sm text-slate-700">
+              <span className="font-semibold">Parent Group</span>
+              <select
+                value={createForm.parent_menu_code}
+                onChange={(event) =>
+                  setCreateForm((current) => ({
+                    ...current,
+                    parent_menu_code: event.target.value,
+                    display_order: String(getNextAvailableOrder(event.target.value)),
+                  }))
+                }
+                className={inputClassName()}
+              >
+                <option value="">No parent</option>
+                {menus
+                  .filter(
+                    (item) => item.universe === universe && item.menu_type === "GROUP"
+                  )
+                  .map((option) => (
+                    <option key={option.menu_code} value={option.menu_code}>
+                      {option.title} ({option.menu_code})
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm text-slate-700">
+              <span className="font-semibold">Display Order</span>
+              <input
+                type="number"
+                value={createForm.display_order}
+                onChange={(event) =>
+                  setCreateForm((current) => ({
+                    ...current,
+                    display_order: event.target.value,
+                  }))
+                }
+                className={inputClassName()}
+              />
+            </label>
+          </div>
+
+          <div className="grid gap-2 border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+            <div>
+              Suggested next free order under {createForm.parent_menu_code || "root"}:{" "}
+              <span className="font-semibold text-slate-900">{suggestedCreateOrder}</span>
+            </div>
+            {createReservedScreenByMenuCode ? (
+              <div className="text-amber-800">
+                `{normalizedCreateMenuCode}` is reserved for page {createReservedScreenByMenuCode.route}. Suggested group code:{" "}
+                <span className="font-semibold">{normalizedCreateMenuCode}_GROUP</span>
+              </div>
+            ) : null}
+            {createReservedScreenByResourceCode ? (
+              <div className="text-amber-800">
+                Resource `{normalizedCreateResourceCode}` is reserved for page {createReservedScreenByResourceCode.route}. Suggested resource:{" "}
+                <span className="font-semibold">{normalizedCreateResourceCode}_GROUP</span>
+              </div>
+            ) : null}
+            {createCodeConflict ? (
+              <div className="text-rose-700">
+                Group code `{normalizedCreateMenuCode}` is already used by {createCodeConflict.title}.
+              </div>
+            ) : null}
+            {createResourceConflict ? (
+              <div className="text-rose-700">
+                Resource `{normalizedCreateResourceCode}` is already used by {createResourceConflict.title}.
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </ModalBase>
+
+      <ModalBase
+        visible={Boolean(pageEditor)}
+        eyebrow="Page Registry"
+        title={pageEditor?.title ?? "Page Settings"}
+        message={
+          pageEditor
+            ? `${pageEditor.screen_code} | ${pageEditor.route_path}`
+            : ""
+        }
+        onEscape={closePageEditor}
+        initialFocusRef={pageTitleRef}
+        width="min(920px, calc(100vw - 32px))"
+        actions={
+          <>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={closePageEditor}
+              className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-slate-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={saving || !pageEditor}
+              onClick={() => void handleSavePageEditor()}
+              className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-sky-950"
+            >
+              {saving ? "Saving..." : "Save Page Placement"}
+            </button>
+          </>
+        }
+      >
+        {pageEditor ? (
+          <div className="grid gap-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="grid gap-1 text-sm text-slate-700">
+                <span className="font-semibold">Title</span>
+                <input
+                  ref={pageTitleRef}
+                  value={pageEditor.title}
+                  onChange={(event) =>
+                    setPageEditor((current) =>
+                      current
+                        ? {
+                            ...current,
+                            title: event.target.value,
+                          }
+                        : current
+                    )
+                  }
+                  className={inputClassName()}
+                />
+              </label>
+
+              <label className="grid gap-1 text-sm text-slate-700">
+                <span className="font-semibold">Resource Code</span>
+                <input
+                  value={pageEditor.resource_code}
+                  disabled={pageEditor.is_registered}
+                  onChange={(event) =>
+                    setPageEditor((current) =>
+                      current
+                        ? {
+                            ...current,
+                            resource_code: event.target.value,
+                          }
+                        : current
+                    )
+                  }
+                  className={inputClassName()}
+                />
+              </label>
+
+              <label className="grid gap-1 text-sm text-slate-700 md:col-span-2">
+                <span className="font-semibold">Description</span>
+                <textarea
+                  value={pageEditor.description}
+                  onChange={(event) =>
+                    setPageEditor((current) =>
+                      current
+                        ? {
+                            ...current,
+                            description: event.target.value,
+                          }
+                        : current
+                    )
+                  }
+                  rows={3}
+                  className={inputClassName()}
+                />
+              </label>
+
+              <label className="grid gap-1 text-sm text-slate-700">
+                <span className="font-semibold">Parent Group</span>
+                <button
+                  type="button"
+                  onClick={() => setGroupPickerOpen((current) => !current)}
+                  className="border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-900"
+                >
+                  {pageEditor.parent_menu_code || "Choose parent group"}
+                </button>
+              </label>
+
+              <label className="grid gap-1 text-sm text-slate-700">
+                <span className="font-semibold">Order</span>
+                <input
+                  type="number"
+                  value={pageEditor.display_order}
+                  onChange={(event) =>
+                    setPageEditor((current) =>
+                      current
+                        ? {
+                            ...current,
+                            display_order: event.target.value,
+                          }
+                        : current
+                    )
+                  }
+                  className={inputClassName()}
+                />
+              </label>
+            </div>
+
+            <div className="grid gap-2 border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+              <div>
+                Suggested next free order under {pageEditor.parent_menu_code || "root"}:{" "}
+                <span className="font-semibold text-slate-900">
+                  {pageEditorSuggestedOrder}
+                </span>
+              </div>
+              {pageEditorBlockingGroupConflict ? (
+                <div className="flex flex-wrap items-center gap-2 text-rose-700">
+                  <span>
+                    `{pageEditor.menu_code}` is already used by group {pageEditorBlockingGroupConflict.title}. Rename or remove that group first.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedMenuCode(pageEditorBlockingGroupConflict.menu_code);
+                      closePageEditor();
+                    }}
+                    className="border border-rose-300 bg-white px-2 py-1 text-xs font-semibold text-rose-700"
+                  >
+                    Open Conflicting Group
+                  </button>
+                </div>
+              ) : null}
+              {pageEditorResourceConflict ? (
+                <div className="text-rose-700">
+                  Resource `{pageEditor.resource_code.trim() || pageEditor.menu_code}` is already used by {pageEditorResourceConflict.title}.
+                </div>
+              ) : null}
+              {pageEditorRouteConflict ? (
+                <div className="text-rose-700">
+                  Route `{pageEditor.route_path}` is already published by {pageEditorRouteConflict.title}.
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </ModalBase>
+
+      <DrawerBase
+        visible={Boolean(pageEditor) && groupPickerOpen}
+        title="Choose Parent Group"
+        onEscape={() => {
+          setGroupPickerOpen(false);
+          pageTitleRef.current?.focus();
+        }}
+        width="min(420px, calc(100vw - 24px))"
+        actions={
+          <button
+            type="button"
+            onClick={() => {
+              setGroupPickerOpen(false);
+              pageTitleRef.current?.focus();
+            }}
+            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-slate-700"
+          >
+            Close
+          </button>
+        }
+      >
+        <div className="grid gap-3">
+          <p className="text-sm text-slate-600">
+            Select the parent group where this page should appear. Keep grouping clean so users can find the page without scanning the whole tree.
+          </p>
+          <div className="grid gap-2">
+            {groupRows.map((group, index) => (
+              <button
+                key={group.menu_code}
+                ref={(element) => {
+                  groupPickerRefs.current[index] = element;
+                }}
+                type="button"
+                onClick={() => assignParentGroup(group.menu_code)}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                    event.preventDefault();
+                    handleLinearNavigation(event, {
+                      index,
+                      refs: groupPickerRefs.current,
+                      orientation: "vertical",
+                    });
+                  }
+
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    assignParentGroup(group.menu_code);
+                  }
+
+                  if (event.key === "Escape" || event.key === "ArrowLeft") {
+                    event.preventDefault();
+                    setGroupPickerOpen(false);
+                    pageTitleRef.current?.focus();
+                  }
+                }}
+                className={`border px-3 py-2 text-left text-sm ${
+                  pageEditor?.parent_menu_code === group.menu_code
+                    ? "border-sky-300 bg-sky-50 text-sky-900"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                <div className="font-semibold">{group.title}</div>
+                <div className="mt-1 text-[11px] text-slate-500">{group.menu_code}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </DrawerBase>
     </ErpScreenScaffold>
   );
 }

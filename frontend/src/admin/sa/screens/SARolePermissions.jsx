@@ -316,12 +316,12 @@ export default function SARolePermissions() {
 
   async function handleSaveMatrix() {
     if (!selectedModuleCode) {
-      setError("Project আর module select না করলে matrix save করা যাবে না.");
+      setError("Choose a project and one module before saving the permission matrix.");
       return;
     }
 
     if (!visibleMatrixRows.length) {
-      setError("Selected project/module-এর নিচে কোনো mapped business resource নেই.");
+      setError("No mapped business resources are available inside the selected project and module.");
       return;
     }
 
@@ -359,9 +359,9 @@ export default function SARolePermissions() {
       }
 
       await loadPermissions(selectedRoleCode);
-      setNotice(`${selectedRoleCode} role-er জন্য ${selectedModuleCode} module matrix save হয়েছে.`);
+      setNotice(`${selectedRoleCode} permissions were saved for the ${selectedModuleCode} module.`);
     } catch {
-      setError("Role permission matrix save করা গেল না.");
+      setError("The role permission matrix could not be saved right now.");
     } finally {
       setSaving(false);
     }
@@ -373,7 +373,7 @@ export default function SARolePermissions() {
     const approved = await openActionConfirm({
       eyebrow: "ACL Governance",
       title: "Clear Selected Resource Rule",
-      message: `${selectedMatrixRow.resource.title} resource-এর explicit rule clear করতে চাও?`,
+      message: `Clear the explicit rule for ${selectedMatrixRow.resource.title}?`,
       confirmLabel: "Clear",
       cancelLabel: "Cancel",
     });
@@ -626,11 +626,11 @@ export default function SARolePermissions() {
             </div>
           ) : !selectedModuleCode ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-              Project select করার পর exact module choose করো. তারপর ওই module-এর সব pages row হিসেবে আসবে।
+              Choose one exact module after selecting the project. Then every mapped page in that module will appear as a row in the matrix.
             </div>
           ) : visibleMatrixRows.length === 0 ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-              এই module-এর নিচে visible mapped business resource পাওয়া যায়নি।
+              No visible mapped business resources were found in this module.
             </div>
           ) : (
             <div className="overflow-x-auto border border-slate-300 bg-white">
@@ -764,7 +764,7 @@ export default function SARolePermissions() {
           </div>
         ) : (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-            Matrix থেকে একটা resource row select করো. তারপর চাইলে explicit deny advanced override set করতে পারবে।
+            Select one resource row from the matrix to edit advanced deny overrides.
           </div>
         ),
       }}

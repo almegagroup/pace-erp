@@ -17,8 +17,8 @@ const DEFAULT_FOOTER_HINTS = Object.freeze([
   "Shift+Enter Previous Field",
   "Alt+PageDown Next Section",
   "Alt+PageUp Previous Section",
-  "Ctrl+S Save Action",
-  "Alt+Shift+P Primary Target",
+  "Ctrl+S Or F2 Save Action",
+  "Alt+Shift+P Or F7 Primary Target",
 ]);
 
 export default function ErpEntryFormTemplate({
@@ -46,25 +46,31 @@ export default function ErpEntryFormTemplate({
       metrics={metrics}
       footerHints={footerHints}
     >
-      <div className="grid gap-3">
-        {sideContent ? (
-          <ErpSectionCard
-            eyebrow="Workspace Tools"
-            title="Search, context, and supporting references"
-            description="Keep quick filters and live context visible above the worksheet."
-          >
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">{sideContent}</div>
-          </ErpSectionCard>
-        ) : null}
-
-        <ErpSectionCard
-          eyebrow={formEyebrow}
-          title={formTitle}
-          description={formDescription}
-          tone="accent"
+      <div className="grid gap-4">
+        <div
+          className={`grid gap-4 ${
+            sideContent ? "xl:grid-cols-[minmax(0,1.5fr)_360px]" : "grid-cols-1"
+          }`}
         >
-          {formContent}
-        </ErpSectionCard>
+          <ErpSectionCard
+            eyebrow={formEyebrow}
+            title={formTitle}
+            description={formDescription}
+            tone="accent"
+          >
+            {formContent}
+          </ErpSectionCard>
+
+          {sideContent ? (
+            <ErpSectionCard
+              eyebrow="Workspace Tools"
+              title="Context Rail"
+              description="Keep helper data, search anchors, and last action context beside the worksheet."
+            >
+              <div className="grid gap-2">{sideContent}</div>
+            </ErpSectionCard>
+          ) : null}
+        </div>
 
         {bottomContent ? <div>{bottomContent}</div> : null}
       </div>

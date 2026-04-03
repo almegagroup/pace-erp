@@ -16,6 +16,30 @@ TEMP_UI_BOOT_LOG.md
 
 @import "tailwindcss";
 
+:root {
+  color-scheme: light;
+  --erp-shell-bg: #d4dce5;
+  --erp-panel: #eef2f6;
+  --erp-panel-strong: #e3e9f0;
+  --erp-surface: #fbfcfd;
+  --erp-surface-raised: #ffffff;
+  --erp-border: #b5c0cd;
+  --erp-border-strong: #8d9baa;
+  --erp-border-soft: #d3dae3;
+  --erp-text: #132033;
+  --erp-text-soft: #536173;
+  --erp-accent: #0f5ca8;
+  --erp-accent-soft: #dceaf8;
+  --erp-success: #116149;
+  --erp-success-soft: #def5ea;
+  --erp-warning: #8f5a10;
+  --erp-warning-soft: #fff0cf;
+  --erp-danger: #9f2433;
+  --erp-danger-soft: #fde7ea;
+  --erp-grid-stripe: #f4f7fa;
+  --erp-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+}
+
 /* ============================================================
 PACE ERP UI BOOT ANIMATION
 Purpose: Soft industrial boot animation for landing screen
@@ -38,13 +62,21 @@ Purpose: Soft industrial boot animation for landing screen
 
 body {
   font-family: "Sora", sans-serif;
+  background:
+    linear-gradient(180deg, #f4f6f8 0%, #e6ebf0 100%);
+  color: var(--erp-text);
 }
 
 body[data-workspace-mode="protected"] {
   font-family: "Bahnschrift", "Aptos", "Noto Sans", sans-serif;
-  background: #dfe7ef;
-  color: #0f172a;
+  background:
+    linear-gradient(180deg, #d9e0e8 0%, #cfd7e0 100%);
+  color: var(--erp-text);
   overflow: hidden;
+}
+
+body[data-workspace-mode="protected"] #root {
+  height: 100vh;
 }
 
 body[data-workspace-mode="protected"] button:not(:disabled),
@@ -75,17 +107,88 @@ body[data-workspace-mode="protected"] :is(
   textarea,
   [tabindex]:not([tabindex="-1"])
 ):focus-visible {
-  outline: 3px solid rgba(37, 99, 235, 0.78);
+  outline: 2px solid rgba(15, 92, 168, 0.85);
   outline-offset: 2px;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.16);
+  box-shadow: 0 0 0 1px rgba(15, 92, 168, 0.16);
 }
 
 body[data-workspace-mode="protected"] ::selection {
-  background: rgba(59, 130, 246, 0.18);
+  background: rgba(15, 92, 168, 0.18);
 }
 
 body[data-workspace-mode="protected"] .font-mono {
   font-family: "IBM Plex Mono", Consolas, "Courier New", monospace;
+}
+
+body[data-workspace-mode="protected"] * {
+  scrollbar-width: thin;
+  scrollbar-color: #93a4b8 #e7edf3;
+}
+
+body[data-workspace-mode="protected"] *::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+body[data-workspace-mode="protected"] *::-webkit-scrollbar-track {
+  background: #e7edf3;
+}
+
+body[data-workspace-mode="protected"] *::-webkit-scrollbar-thumb {
+  background: #93a4b8;
+  border: 2px solid #e7edf3;
+}
+
+.erp-app-shell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0) 18%),
+    linear-gradient(180deg, #d9e0e8 0%, #cfd7e0 100%);
+}
+
+.erp-status-marquee {
+  position: relative;
+  overflow: hidden;
+}
+
+.erp-status-marquee::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 -40%;
+  width: 38%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0));
+  animation: erpStatusSweep 1.4s linear infinite;
+}
+
+@keyframes erpStatusSweep {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(360%);
+  }
+}
+
+.erp-grid-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.erp-grid-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.erp-grid-table tbody tr:nth-child(even) {
+  background: var(--erp-grid-stripe);
+}
+
+.erp-grid-table tbody tr:hover {
+  background: #eaf2fb;
+}
+
+.erp-grid-table tbody tr:focus-within {
+  background: #e3edf9;
 }
 
 @keyframes loader {
