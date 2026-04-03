@@ -102,6 +102,108 @@ export function RequestDecisionHistory({ history = [] }) {
   );
 }
 
+function splitDisplay(displayValue, fallbackCode = "", fallbackName = "") {
+  const normalizedDisplay = String(displayValue ?? "").trim();
+
+  if (!normalizedDisplay) {
+    return {
+      name: fallbackName || "Unknown User",
+      code: fallbackCode || "-",
+    };
+  }
+
+  const parts = normalizedDisplay.split("|").map((part) => part.trim()).filter(Boolean);
+
+  if (parts.length >= 2) {
+    return {
+      name: parts[0] || fallbackName || "Unknown User",
+      code: parts[1] || fallbackCode || "-",
+    };
+  }
+
+  return {
+    name: fallbackName || normalizedDisplay,
+    code: fallbackCode || "-",
+  };
+}
+
+function buildApproverStatus(request) {
+  const history = Array.isArray(request?.decision_history) ? request.decision_history : [];
+
+  if (history.length === 0) {
+    return request?.current_state === "PENDING" ? "Awaiting decision" : "No approver action";
+  }
+
+  const latestDecision = history[history.length - 1];
+  const approverLabel = latestDecision?.approver_display ?? latestDecision?.approver_auth_user_id ?? "Unknown";
+  return `Stage ${latestDecision?.stage_number ?? "-"} ${latestDecision?.decision ?? "DECIDED"} | ${approverLabel}`;
+}
+
+function HrRequestRowActions({ mode, request, onCancel, onApprove, onReject }) {
+  if (mode === "myRequests" && request.can_cancel) {
+    return (
+      <button
+        type="button"
+        onClick={() => onCancel?.(request)}
+        className="border border-rose-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700"
+      >
+        Cancel
+      </button>
+    );
+  }
+
+  if (mode === "approvalInbox") {
+    return (
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => onApprove?.(request)}
+          className="border border-emerald-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700"
+        >
+          Approve
+        </button>
+        <button
+          type="button"
+          onClick={() => onReject?.(request)}
+          className="border border-rose-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700"
+        >
+          Reject
+        </button>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function HrRequestMatrixHeader() {
+  const columns = [
+    "Name",
+    "Code",
+    "From Date",
+    "To Date",
+    "Days",
+    "Reason",
+    "Status",
+    "Approver Status",
+    "Created At",
+    "Approval Type",
+  ];
+
+  return (
+    <div className="hidden border border-slate-300 bg-slate-100 px-3 py-2 lg:grid lg:grid-cols-[1.2fr_0.8fr_0.8fr_0.8fr_0.45fr_1.4fr_0.8fr_1.4fr_1fr_0.8fr] lg:gap-3">
+      {columns.map((column) => (
+        <div
+          key={column}
+          className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
+        >
+          {column}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function HrRequestCard({
   request,
   kind,
@@ -110,91 +212,123 @@ export function HrRequestCard({
   onApprove,
   onReject,
 }) {
-  const title =
-    kind === "leave"
-      ? `${formatIsoDate(request.from_date)} to ${formatIsoDate(request.to_date)}`
-      : `${request.destination_name} | ${formatIsoDate(request.from_date)} to ${formatIsoDate(request.to_date)}`;
+  const requesterParts = splitDisplay(
+    request.requester_display,
+    request.requester_auth_user_id,
+    request.requester_display,
+  );
+  const approverStatus = buildApproverStatus(request);
+  const latestDecisionCount = Number(request.decision_count ?? 0);
+  const actions = (
+    <HrRequestRowActions
+      mode={mode}
+      request={request}
+      onCancel={onCancel}
+      onApprove={onApprove}
+      onReject={onReject}
+    />
+  );
 
   return (
-    <div className="border border-slate-300 bg-white px-4 py-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-slate-900">{title}</div>
-          <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
-            {request.requester_display ? `${request.requester_display} | ` : ""}
-            {request.total_days} day{request.total_days === 1 ? "" : "s"}
+    <div className="border border-slate-300 bg-white">
+      <div className="grid gap-3 px-3 py-3 lg:grid-cols-[1.2fr_0.8fr_0.8fr_0.8fr_0.45fr_1.4fr_0.8fr_1.4fr_1fr_0.8fr]">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+            Name
           </div>
-          <div className="mt-2 text-sm text-slate-700">{request.reason}</div>
+          <div className="text-sm font-semibold text-slate-900">{requesterParts.name}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+            Code
+          </div>
+          <div className="text-sm text-slate-700">{requesterParts.code}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+            From Date
+          </div>
+          <div className="text-sm text-slate-700">{formatIsoDate(request.from_date)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+            To Date
+          </div>
+          <div className="text-sm text-slate-700">{formatIsoDate(request.to_date)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+            Days
+          </div>
+          <div className="text-sm text-slate-700">{request.total_days}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+            Reason
+          </div>
+          <div className="text-sm text-slate-700">{request.reason}</div>
           {kind === "outWork" ? (
-            <div className="mt-2 text-xs text-slate-600">{request.destination_address}</div>
+            <div className="mt-1 text-xs text-slate-500">
+              {request.destination_name} | {request.destination_address}
+            </div>
           ) : null}
         </div>
-        <RequestStatusBadge state={request.current_state} />
-      </div>
-
-      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-        <ErpFieldPreview
-          label="Created"
-          value={formatDateTime(request.created_at)}
-          caption="Request create time"
-        />
-        <ErpFieldPreview
-          label="Approval Type"
-          value={request.approval_type ?? "-"}
-          caption={`${request.decision_count ?? 0} decision logged`}
-        />
-        <ErpFieldPreview
-          label="Resource Scope"
-          value={request.resource_code ?? "-"}
-          caption={request.action_code ?? "-"}
-        />
-        <ErpFieldPreview
-          label="Workflow"
-          value={request.workflow_request_id ?? "-"}
-          caption={kind === "leave" ? request.leave_request_id : request.out_work_request_id}
-        />
-      </div>
-
-      <div className="mt-3">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-          Decision History
-        </p>
-        <div className="mt-2">
-          <RequestDecisionHistory history={request.decision_history} />
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+            Status
+          </div>
+          <div className="pt-1">
+            <RequestStatusBadge state={request.current_state} />
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+            Approver Status
+          </div>
+          <div className="text-sm text-slate-700">{approverStatus}</div>
+          <div className="mt-1 text-xs text-slate-500">
+            {latestDecisionCount} decision{latestDecisionCount === 1 ? "" : "s"} logged
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+            Created At
+          </div>
+          <div className="text-sm text-slate-700">{formatDateTime(request.created_at)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+            Approval Type
+          </div>
+          <div className="text-sm font-semibold text-slate-900">{request.approval_type ?? "-"}</div>
         </div>
       </div>
 
-      {(mode === "myRequests" || mode === "approvalInbox") && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {mode === "myRequests" && request.can_cancel ? (
-            <button
-              type="button"
-              onClick={() => onCancel?.(request)}
-              className="border border-rose-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-rose-700"
-            >
-              Cancel Request
-            </button>
-          ) : null}
-          {mode === "approvalInbox" ? (
-            <>
-              <button
-                type="button"
-                onClick={() => onApprove?.(request)}
-                className="border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700"
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                onClick={() => onReject?.(request)}
-                className="border border-rose-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-rose-700"
-              >
-                Reject
-              </button>
-            </>
-          ) : null}
+      <div className="border-t border-slate-200 bg-slate-50 px-3 py-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Workflow
+            </div>
+            <div className="mt-1 text-xs text-slate-700">
+              {request.workflow_request_id ?? "-"}
+              {kind === "leave" ? ` | ${request.leave_request_id ?? "-"}` : ` | ${request.out_work_request_id ?? "-"}`}
+            </div>
+          </div>
+          {actions}
         </div>
-      )}
+
+        {Array.isArray(request.decision_history) && request.decision_history.length > 0 ? (
+          <div className="mt-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Decision History
+            </p>
+            <div className="mt-2">
+              <RequestDecisionHistory history={request.decision_history} />
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -964,6 +1098,7 @@ function HrRequestListWorkspace({
           </div>
         ) : (
           <div className="grid gap-3">
+            <HrRequestMatrixHeader />
             {filteredRows.map((request) => (
               <HrRequestCard
                 key={request.workflow_request_id}
@@ -1120,6 +1255,7 @@ function HrApprovalInboxWorkspace({
           </div>
         ) : (
           <div className="grid gap-3">
+            <HrRequestMatrixHeader />
             {filteredRows.map((request) => (
               <HrRequestCard
                 key={request.workflow_request_id}
@@ -1226,6 +1362,7 @@ function HrApprovalHistoryWorkspace({
           </div>
         ) : (
           <div className="grid gap-3">
+            <HrRequestMatrixHeader />
             {filteredRows.map((request) => (
               <HrRequestCard
                 key={request.workflow_request_id}
@@ -1330,6 +1467,7 @@ function HrRegisterWorkspace({
           </div>
         ) : (
           <div className="grid gap-3">
+            <HrRequestMatrixHeader />
             {filteredRows.map((request) => (
               <HrRequestCard
                 key={request.workflow_request_id}
