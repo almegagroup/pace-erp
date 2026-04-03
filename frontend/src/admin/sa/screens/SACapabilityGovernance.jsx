@@ -35,7 +35,10 @@ async function fetchApi(path, options) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    throw new Error(json?.code ?? "REQUEST_FAILED");
+    const code = json?.code ?? "REQUEST_FAILED";
+    const requestId = json?.request_id ? ` | Req ${json.request_id}` : "";
+    const trace = json?.decision_trace ? ` | ${json.decision_trace}` : "";
+    throw new Error(`${code}${trace}${requestId}`);
   }
 
   return json.data ?? {};
@@ -105,8 +108,8 @@ export default function SACapabilityGovernance() {
         setSelectedCapabilityCode(capabilityCode);
         setDraft(createDraft(capabilityCode));
       }
-    } catch {
-      setError("Capability governance bootstrap could not be loaded.");
+    } catch (err) {
+      setError(`Capability governance bootstrap could not be loaded. ${(err).message ?? "REQUEST_FAILED"}`);
     } finally {
       setLoading(false);
     }
@@ -123,9 +126,9 @@ export default function SACapabilityGovernance() {
         `/api/admin/acl/capability-actions?capability_code=${encodeURIComponent(capabilityCode)}`
       );
       setCapabilityRows(data.permissions ?? []);
-    } catch {
+    } catch (err) {
       setCapabilityRows([]);
-      setError("Capability action rows could not be loaded.");
+      setError(`Capability action rows could not be loaded. ${(err).message ?? "REQUEST_FAILED"}`);
     }
   }
 
@@ -149,10 +152,10 @@ export default function SACapabilityGovernance() {
           ? current
           : nextWorkContexts[0]?.work_context_id ?? ""
       );
-    } catch {
+    } catch (err) {
       setWorkContexts([]);
       setVersions([]);
-      setError("Company capability state could not be loaded.");
+      setError(`Company capability state could not be loaded. ${(err).message ?? "REQUEST_FAILED"}`);
     }
   }
 
@@ -167,9 +170,9 @@ export default function SACapabilityGovernance() {
         `/api/admin/acl/work-context-capabilities?work_context_id=${encodeURIComponent(workContextId)}`
       );
       setWorkContextCapabilities(data.capabilities ?? []);
-    } catch {
+    } catch (err) {
       setWorkContextCapabilities([]);
-      setError("Work-context capability bindings could not be loaded.");
+      setError(`Work-context capability bindings could not be loaded. ${(err).message ?? "REQUEST_FAILED"}`);
     }
   }
 
@@ -209,8 +212,8 @@ export default function SACapabilityGovernance() {
       });
       await refreshFn();
       setNotice(successMessage);
-    } catch {
-      setError("Governance request could not be completed.");
+    } catch (err) {
+      setError(`Governance request could not be completed. ${(err).message ?? "REQUEST_FAILED"}`);
     } finally {
       setSaving(false);
     }
