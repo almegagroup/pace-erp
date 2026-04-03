@@ -24,7 +24,7 @@ const hasRule=(d)=>ACTIONS.some(([,k])=>Boolean(d[k]))||d.denied_actions.length>
 
 export default function SACapabilityGovernance(){
   const navigate=useNavigate();
-  const topRefs=useRef([]), searchRef=useRef(null);
+  const topRefs=useRef([]), matrixRowRefs=useRef([]), searchRef=useRef(null);
   const [companies,setCompanies]=useState([]),[caps,setCaps]=useState([]),[catalog,setCatalog]=useState([]),[contexts,setContexts]=useState([]),[versions,setVersions]=useState([]),[capRows,setCapRows]=useState([]),[ctxCaps,setCtxCaps]=useState([]);
   const [companyId,setCompanyId]=useState(""),[capCode,setCapCode]=useState(""),[ctxId,setCtxId]=useState(""),[projectCode,setProjectCode]=useState(""),[moduleCode,setModuleCode]=useState(""),[selectedResourceCode,setSelectedResourceCode]=useState("");
   const [search,setSearch]=useState(""),[drafts,setDrafts]=useState({}),[capDraft,setCapDraft]=useState(newCap()),[ctxDraft,setCtxDraft]=useState({work_context_code:"",work_context_name:"",description:""}),[versionDescription,setVersionDescription]=useState("");
