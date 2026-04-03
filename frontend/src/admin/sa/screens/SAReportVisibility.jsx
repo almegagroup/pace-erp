@@ -8,7 +8,7 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 import {
   deleteViewerRule,
-  fetchApprovalWorkspace,
+  fetchReportVisibilityWorkspace,
   saveViewerRule,
 } from "./approvalWorkspaceApi.js";
 
@@ -74,7 +74,7 @@ export default function SAReportVisibility() {
     setError("");
 
     try {
-      const data = await fetchApprovalWorkspace();
+      const data = await fetchReportVisibilityWorkspace();
       setWorkspace({
         companies: data?.companies ?? [],
         projects: data?.projects ?? [],

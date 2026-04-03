@@ -46,6 +46,7 @@ import { listApproverRulesHandler } from "../_core/admin/approval/list_approver_
 import { upsertApproverRuleHandler } from "../_core/admin/approval/upsert_approver_rule.handler.ts";
 import { deleteApproverRuleHandler } from "../_core/admin/approval/delete_approver_rule.handler.ts";
 import { listApprovalWorkspaceHandler } from "../_core/admin/approval/approval_workspace.handler.ts";
+import { listReportVisibilityWorkspaceHandler } from "../_core/admin/approval/report_visibility_workspace.handler.ts";
 import { listReportViewerRulesHandler } from "../_core/admin/approval/list_report_viewer_rules.handler.ts";
 import { upsertReportViewerRuleHandler } from "../_core/admin/approval/upsert_report_viewer_rule.handler.ts";
 import { deleteReportViewerRuleHandler } from "../_core/admin/approval/delete_report_viewer_rule.handler.ts";
@@ -345,6 +346,13 @@ export async function dispatchAdminRoutes(
 
     case "GET:/api/admin/approval/workspace":
       response = await listApprovalWorkspaceHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/report-visibility/workspace":
+      response = await listReportVisibilityWorkspaceHandler(req, {
         context,
         request_id: requestId,
       });

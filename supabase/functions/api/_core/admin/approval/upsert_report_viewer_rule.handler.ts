@@ -158,7 +158,7 @@ export async function upsertReportViewerRuleHandler(
 
       return errorResponse(
         "REPORT_VIEWER_RULE_UPSERT_FAILED",
-        "Upsert failed",
+        error.message,
         requestId,
       );
     }

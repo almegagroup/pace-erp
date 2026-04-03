@@ -32,6 +32,14 @@ export function fetchApprovalWorkspace() {
   return fetchJson("/api/admin/approval/workspace", {}, "APPROVAL_WORKSPACE_LIST_FAILED");
 }
 
+export function fetchReportVisibilityWorkspace() {
+  return fetchJson(
+    "/api/admin/report-visibility/workspace",
+    {},
+    "REPORT_VISIBILITY_WORKSPACE_LIST_FAILED",
+  );
+}
+
 export function saveApproverRule(payload) {
   return fetchJson(
     "/api/admin/approval/approvers",
