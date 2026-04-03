@@ -87,6 +87,12 @@ export type UserIdentity = {
   name: string | null;
 };
 
+export type CompanyIdentity = {
+  company_id: string;
+  company_code: string | null;
+  company_name: string | null;
+};
+
 function pickDisplayName(
   rawMetadata: unknown,
   email: string | null | undefined,
@@ -471,6 +477,37 @@ export async function loadUserIdentityMap(
   }
 
   return identityMap;
+}
+
+export async function loadCompanyIdentityMap(
+  companyIds: string[],
+): Promise<Map<string, CompanyIdentity>> {
+  const companyIdentityMap = new Map<string, CompanyIdentity>();
+
+  const uniqueCompanyIds = [...new Set(companyIds.filter(Boolean))];
+  if (uniqueCompanyIds.length === 0) {
+    return companyIdentityMap;
+  }
+
+  const { data: companyRows } = await serviceRoleClient
+    .schema("erp_master")
+    .from("companies")
+    .select("id, company_code, company_name")
+    .in("id", uniqueCompanyIds);
+
+  for (const row of (companyRows ?? []) as Array<{
+    id: string;
+    company_code: string | null;
+    company_name: string | null;
+  }>) {
+    companyIdentityMap.set(row.id, {
+      company_id: row.id,
+      company_code: row.company_code ?? null,
+      company_name: row.company_name ?? null,
+    });
+  }
+
+  return companyIdentityMap;
 }
 
 export function buildUserDisplay(identity: UserIdentity | null | undefined): string {

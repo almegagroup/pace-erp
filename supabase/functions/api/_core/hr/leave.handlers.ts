@@ -15,6 +15,7 @@ import {
   isActionableForApprover,
   isApproverMatch,
   loadApproverRulesForCompanyModule,
+  loadCompanyIdentityMap,
   loadViewerRulesForCompanyModule,
   loadUserIdentityMap,
   loadWorkflowDecisionMap,
@@ -142,6 +143,9 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
   }
 
   const userIdentityMap = await loadUserIdentityMap([...actorIds]);
+  const companyIdentityMap = await loadCompanyIdentityMap(
+    rows.map((row) => row.parent_company_id),
+  );
 
   const cases = [];
 
@@ -152,6 +156,7 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
     }
 
     const decisions = decisionMap.get(row.workflow_request_id) ?? [];
+    const companyIdentity = companyIdentityMap.get(row.parent_company_id) ?? null;
 
     cases.push({
       leave_request_id: row.leave_request_id,
@@ -162,6 +167,8 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
       ),
       requester_work_context_id: workflow.requester_work_context_id ?? null,
       parent_company_id: row.parent_company_id,
+      parent_company_code: companyIdentity?.company_code ?? null,
+      parent_company_name: companyIdentity?.company_name ?? null,
       from_date: row.from_date,
       to_date: row.to_date,
       total_days: row.total_days,

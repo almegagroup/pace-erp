@@ -15,6 +15,7 @@ import {
   isActionableForApprover,
   isApproverMatch,
   loadApproverRulesForCompanyModule,
+  loadCompanyIdentityMap,
   loadViewerRulesForCompanyModule,
   loadUserIdentityMap,
   loadWorkflowDecisionMap,
@@ -169,6 +170,9 @@ async function buildOutWorkCases(rows: OutWorkRequestRow[]) {
   }
 
   const userIdentityMap = await loadUserIdentityMap([...actorIds]);
+  const companyIdentityMap = await loadCompanyIdentityMap(
+    rows.map((row) => row.parent_company_id),
+  );
 
   const requests = [];
 
@@ -179,6 +183,7 @@ async function buildOutWorkCases(rows: OutWorkRequestRow[]) {
     }
 
     const decisions = decisionMap.get(row.workflow_request_id) ?? [];
+    const companyIdentity = companyIdentityMap.get(row.parent_company_id) ?? null;
 
     requests.push({
       out_work_request_id: row.out_work_request_id,
@@ -189,6 +194,8 @@ async function buildOutWorkCases(rows: OutWorkRequestRow[]) {
       ),
       requester_work_context_id: workflow.requester_work_context_id ?? null,
       parent_company_id: row.parent_company_id,
+      parent_company_code: companyIdentity?.company_code ?? null,
+      parent_company_name: companyIdentity?.company_name ?? null,
       destination_id: row.destination_id,
       destination_name: row.destination_name,
       destination_address: row.destination_address,

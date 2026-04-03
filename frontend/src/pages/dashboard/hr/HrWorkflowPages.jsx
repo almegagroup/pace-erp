@@ -139,6 +139,166 @@ function buildApproverStatus(request) {
   return `Stage ${latestDecision?.stage_number ?? "-"} ${latestDecision?.decision ?? "DECIDED"} | ${approverLabel}`;
 }
 
+const HR_REQUEST_COLUMN_DEFS = Object.freeze([
+  {
+    key: "name",
+    label: "Name",
+    width: "minmax(180px, 1.1fr)",
+  },
+  {
+    key: "code",
+    label: "Code",
+    width: "minmax(110px, 0.7fr)",
+  },
+  {
+    key: "company",
+    label: "Company",
+    width: "minmax(190px, 1fr)",
+  },
+  {
+    key: "fromDate",
+    label: "From Date",
+    width: "minmax(120px, 0.7fr)",
+  },
+  {
+    key: "toDate",
+    label: "To Date",
+    width: "minmax(120px, 0.7fr)",
+  },
+  {
+    key: "days",
+    label: "Days",
+    width: "minmax(80px, 0.45fr)",
+  },
+  {
+    key: "reason",
+    label: "Reason",
+    width: "minmax(220px, 1.4fr)",
+  },
+  {
+    key: "status",
+    label: "Status",
+    width: "minmax(120px, 0.7fr)",
+  },
+  {
+    key: "approverStatus",
+    label: "Approver Status",
+    width: "minmax(220px, 1.35fr)",
+  },
+  {
+    key: "createdAt",
+    label: "Created At",
+    width: "minmax(170px, 0.9fr)",
+  },
+  {
+    key: "approvalType",
+    label: "Approval Type",
+    width: "minmax(120px, 0.7fr)",
+  },
+  {
+    key: "workflow",
+    label: "Workflow ID",
+    width: "minmax(220px, 1fr)",
+  },
+]);
+
+const HR_DEFAULT_VISIBLE_COLUMN_KEYS = Object.freeze([
+  "name",
+  "code",
+  "company",
+  "fromDate",
+  "toDate",
+  "days",
+  "reason",
+  "status",
+  "approverStatus",
+  "createdAt",
+  "approvalType",
+]);
+
+function getHrRequestColumn(key) {
+  return HR_REQUEST_COLUMN_DEFS.find((column) => column.key === key) ?? null;
+}
+
+function loadHrVisibleColumnKeys(storageKey) {
+  if (typeof window === "undefined") {
+    return [...HR_DEFAULT_VISIBLE_COLUMN_KEYS];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) {
+      return [...HR_DEFAULT_VISIBLE_COLUMN_KEYS];
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [...HR_DEFAULT_VISIBLE_COLUMN_KEYS];
+    }
+
+    const allowedKeys = parsed.filter((key) => getHrRequestColumn(key));
+    return allowedKeys.length > 0 ? allowedKeys : [...HR_DEFAULT_VISIBLE_COLUMN_KEYS];
+  } catch {
+    return [...HR_DEFAULT_VISIBLE_COLUMN_KEYS];
+  }
+}
+
+function saveHrVisibleColumnKeys(storageKey, columnKeys) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(storageKey, JSON.stringify(columnKeys));
+}
+
+function buildHrRequestGridTemplate(columns) {
+  return columns.map((column) => column.width).join(" ");
+}
+
+function useHrVisibleColumns(storageKey) {
+  const [visibleColumnKeys, setVisibleColumnKeys] = useState(() =>
+    loadHrVisibleColumnKeys(storageKey),
+  );
+
+  const visibleColumns = useMemo(
+    () =>
+      visibleColumnKeys
+        .map((key) => getHrRequestColumn(key))
+        .filter(Boolean),
+    [visibleColumnKeys],
+  );
+
+  useEffect(() => {
+    saveHrVisibleColumnKeys(storageKey, visibleColumnKeys);
+  }, [storageKey, visibleColumnKeys]);
+
+  function toggleColumn(columnKey) {
+    setVisibleColumnKeys((current) => {
+      if (current.includes(columnKey)) {
+        if (current.length === 1) {
+          return current;
+        }
+        return current.filter((key) => key !== columnKey);
+      }
+
+      return HR_REQUEST_COLUMN_DEFS
+        .map((column) => column.key)
+        .filter((key) => current.includes(key) || key === columnKey);
+    });
+  }
+
+  function resetColumns() {
+    setVisibleColumnKeys([...HR_DEFAULT_VISIBLE_COLUMN_KEYS]);
+  }
+
+  return {
+    visibleColumns,
+    visibleColumnKeys,
+    toggleColumn,
+    resetColumns,
+  };
+}
+
 function HrRequestRowActions({ mode, request, onCancel, onApprove, onReject }) {
   if (mode === "myRequests" && request.can_cancel) {
     return (
@@ -176,42 +336,7 @@ function HrRequestRowActions({ mode, request, onCancel, onApprove, onReject }) {
   return null;
 }
 
-function HrRequestMatrixHeader() {
-  const columns = [
-    "Name",
-    "Code",
-    "From Date",
-    "To Date",
-    "Days",
-    "Reason",
-    "Status",
-    "Approver Status",
-    "Created At",
-    "Approval Type",
-  ];
-
-  return (
-    <div className="hidden border border-slate-300 bg-slate-100 px-3 py-2 lg:grid lg:grid-cols-[1.2fr_0.8fr_0.8fr_0.8fr_0.45fr_1.4fr_0.8fr_1.4fr_1fr_0.8fr] lg:gap-3">
-      {columns.map((column) => (
-        <div
-          key={column}
-          className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-        >
-          {column}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export function HrRequestCard({
-  request,
-  kind,
-  mode,
-  onCancel,
-  onApprove,
-  onReject,
-}) {
+function HrRequestColumnCell({ request, kind, column }) {
   const requesterParts = splitDisplay(
     request.requester_display,
     request.requester_auth_user_id,
@@ -219,6 +344,147 @@ export function HrRequestCard({
   );
   const approverStatus = buildApproverStatus(request);
   const latestDecisionCount = Number(request.decision_count ?? 0);
+  const companyDisplay =
+    request.parent_company_name ??
+    request.parent_company_code ??
+    request.parent_company_id ??
+    "-";
+
+  const contentByColumn = {
+    name: <div className="text-sm font-semibold text-slate-900">{requesterParts.name}</div>,
+    code: <div className="text-sm text-slate-700">{requesterParts.code}</div>,
+    company: <div className="text-sm text-slate-700">{companyDisplay}</div>,
+    fromDate: <div className="text-sm text-slate-700">{formatIsoDate(request.from_date)}</div>,
+    toDate: <div className="text-sm text-slate-700">{formatIsoDate(request.to_date)}</div>,
+    days: <div className="text-sm text-slate-700">{request.total_days}</div>,
+    reason: (
+      <div>
+        <div className="text-sm text-slate-700">{request.reason}</div>
+        {kind === "outWork" ? (
+          <div className="mt-1 text-xs text-slate-500">
+            {request.destination_name} | {request.destination_address}
+          </div>
+        ) : null}
+      </div>
+    ),
+    status: (
+      <div className="pt-1">
+        <RequestStatusBadge state={request.current_state} />
+      </div>
+    ),
+    approverStatus: (
+      <div>
+        <div className="text-sm text-slate-700">{approverStatus}</div>
+        <div className="mt-1 text-xs text-slate-500">
+          {latestDecisionCount} decision{latestDecisionCount === 1 ? "" : "s"} logged
+        </div>
+      </div>
+    ),
+    createdAt: <div className="text-sm text-slate-700">{formatDateTime(request.created_at)}</div>,
+    approvalType: (
+      <div className="text-sm font-semibold text-slate-900">{request.approval_type ?? "-"}</div>
+    ),
+    workflow: <div className="text-xs text-slate-700">{request.workflow_request_id ?? "-"}</div>,
+  };
+
+  return (
+    <div>
+      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+        {column.label}
+      </div>
+      {contentByColumn[column.key] ?? <div className="text-sm text-slate-700">-</div>}
+    </div>
+  );
+}
+
+function HrRequestMatrixHeader({ columns }) {
+  const templateColumns = buildHrRequestGridTemplate(columns);
+
+  return (
+    <div
+      className="hidden min-w-max border border-slate-300 bg-slate-100 px-3 py-2 lg:grid lg:gap-3"
+      style={{ gridTemplateColumns: templateColumns }}
+    >
+      {columns.map((column) => (
+        <div
+          key={column.key}
+          className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
+        >
+          {column.label}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HrRequestColumnPickerModal({
+  visible,
+  visibleColumnKeys,
+  onClose,
+  onToggleColumn,
+  onResetColumns,
+}) {
+  return (
+    <ModalBase
+      visible={visible}
+      eyebrow="HR Matrix"
+      title="Choose Visible Columns"
+      message="Show only the fields the user needs. Hidden columns can be restored anytime."
+      onEscape={onClose}
+      width="min(680px, calc(100vw - 32px))"
+      actions={
+        <>
+          <button
+            type="button"
+            onClick={onResetColumns}
+            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+          >
+            Reset Default
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900"
+          >
+            Done
+          </button>
+        </>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        {HR_REQUEST_COLUMN_DEFS.map((column) => {
+          const checked = visibleColumnKeys.includes(column.key);
+
+          return (
+            <label
+              key={column.key}
+              className="flex items-center gap-3 border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700"
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => onToggleColumn(column.key)}
+                disabled={checked && visibleColumnKeys.length === 1}
+              />
+              <span>{column.label}</span>
+            </label>
+          );
+        })}
+      </div>
+    </ModalBase>
+  );
+}
+
+export function HrRequestCard({
+  request,
+  kind,
+  mode,
+  visibleColumns,
+  onCancel,
+  onApprove,
+  onReject,
+}) {
+  const templateColumns = buildHrRequestGridTemplate(visibleColumns);
   const actions = (
     <HrRequestRowActions
       mode={mode}
@@ -231,77 +497,18 @@ export function HrRequestCard({
 
   return (
     <div className="border border-slate-300 bg-white">
-      <div className="grid gap-3 px-3 py-3 lg:grid-cols-[1.2fr_0.8fr_0.8fr_0.8fr_0.45fr_1.4fr_0.8fr_1.4fr_1fr_0.8fr]">
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
-            Name
-          </div>
-          <div className="text-sm font-semibold text-slate-900">{requesterParts.name}</div>
-        </div>
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
-            Code
-          </div>
-          <div className="text-sm text-slate-700">{requesterParts.code}</div>
-        </div>
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
-            From Date
-          </div>
-          <div className="text-sm text-slate-700">{formatIsoDate(request.from_date)}</div>
-        </div>
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
-            To Date
-          </div>
-          <div className="text-sm text-slate-700">{formatIsoDate(request.to_date)}</div>
-        </div>
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
-            Days
-          </div>
-          <div className="text-sm text-slate-700">{request.total_days}</div>
-        </div>
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
-            Reason
-          </div>
-          <div className="text-sm text-slate-700">{request.reason}</div>
-          {kind === "outWork" ? (
-            <div className="mt-1 text-xs text-slate-500">
-              {request.destination_name} | {request.destination_address}
-            </div>
-          ) : null}
-        </div>
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
-            Status
-          </div>
-          <div className="pt-1">
-            <RequestStatusBadge state={request.current_state} />
-          </div>
-        </div>
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
-            Approver Status
-          </div>
-          <div className="text-sm text-slate-700">{approverStatus}</div>
-          <div className="mt-1 text-xs text-slate-500">
-            {latestDecisionCount} decision{latestDecisionCount === 1 ? "" : "s"} logged
-          </div>
-        </div>
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
-            Created At
-          </div>
-          <div className="text-sm text-slate-700">{formatDateTime(request.created_at)}</div>
-        </div>
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
-            Approval Type
-          </div>
-          <div className="text-sm font-semibold text-slate-900">{request.approval_type ?? "-"}</div>
-        </div>
+      <div
+        className="grid gap-3 px-3 py-3 lg:min-w-max lg:gap-3"
+        style={{ gridTemplateColumns: templateColumns }}
+      >
+        {visibleColumns.map((column) => (
+          <HrRequestColumnCell
+            key={column.key}
+            request={request}
+            kind={kind}
+            column={column}
+          />
+        ))}
       </div>
 
       <div className="border-t border-slate-200 bg-slate-50 px-3 py-3">
@@ -992,6 +1199,9 @@ function HrRequestListWorkspace({
   const navigate = useNavigate();
   const searchRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
+    useHrVisibleColumns(`erp.hr.requestColumns.${kind}.myRequests`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
 
   const filteredRows = useMemo(
@@ -1000,6 +1210,8 @@ function HrRequestListWorkspace({
         "requester_display",
         "reason",
         "current_state",
+        "parent_company_name",
+        "parent_company_code",
         "destination_name",
         "destination_address",
         "workflow_request_id",
@@ -1060,6 +1272,12 @@ function HrRequestListWorkspace({
           },
         },
         {
+          key: "columns",
+          label: "Columns",
+          tone: "neutral",
+          onClick: () => setShowColumnPicker(true),
+        },
+        {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           hint: "Alt+R",
@@ -1098,19 +1316,33 @@ function HrRequestListWorkspace({
           </div>
         ) : (
           <div className="grid gap-3">
-            <HrRequestMatrixHeader />
-            {filteredRows.map((request) => (
-              <HrRequestCard
-                key={request.workflow_request_id}
-                request={request}
-                kind={kind}
-                mode="myRequests"
-                onCancel={handleCancel}
-              />
-            ))}
+            <div className="overflow-x-auto pb-2">
+              <div className="grid min-w-max gap-3">
+                <HrRequestMatrixHeader columns={visibleColumns} />
+                {filteredRows.map((request) => (
+                  <HrRequestCard
+                    key={request.workflow_request_id}
+                    request={request}
+                    kind={kind}
+                    mode="myRequests"
+                    visibleColumns={visibleColumns}
+                    onCancel={handleCancel}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
         ),
       }}
+      bottomSection={
+        <HrRequestColumnPickerModal
+          visible={showColumnPicker}
+          visibleColumnKeys={visibleColumnKeys}
+          onClose={() => setShowColumnPicker(false)}
+          onToggleColumn={toggleColumn}
+          onResetColumns={resetColumns}
+        />
+      }
     />
   );
 }
@@ -1125,10 +1357,13 @@ function HrApprovalInboxWorkspace({
   const navigate = useNavigate();
   const searchRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [decisionTally, setDecisionTally] = useState({
     approved: 0,
     rejected: 0,
   });
+  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
+    useHrVisibleColumns(`erp.hr.requestColumns.${kind}.approvalInbox`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
 
   const filteredRows = useMemo(
@@ -1137,6 +1372,8 @@ function HrApprovalInboxWorkspace({
         "requester_display",
         "reason",
         "current_state",
+        "parent_company_name",
+        "parent_company_code",
         "destination_name",
         "destination_address",
         "workflow_request_id",
@@ -1186,6 +1423,12 @@ function HrApprovalInboxWorkspace({
                 : "/dashboard/hr/out-work/approval-history",
             );
           },
+        },
+        {
+          key: "columns",
+          label: "Columns",
+          tone: "neutral",
+          onClick: () => setShowColumnPicker(true),
         },
         {
           key: "refresh",
@@ -1255,20 +1498,34 @@ function HrApprovalInboxWorkspace({
           </div>
         ) : (
           <div className="grid gap-3">
-            <HrRequestMatrixHeader />
-            {filteredRows.map((request) => (
-              <HrRequestCard
-                key={request.workflow_request_id}
-                request={request}
-                kind={kind}
-                mode="approvalInbox"
-                onApprove={(row) => void handleDecision(row, "APPROVED")}
-                onReject={(row) => void handleDecision(row, "REJECTED")}
-              />
-            ))}
+            <div className="overflow-x-auto pb-2">
+              <div className="grid min-w-max gap-3">
+                <HrRequestMatrixHeader columns={visibleColumns} />
+                {filteredRows.map((request) => (
+                  <HrRequestCard
+                    key={request.workflow_request_id}
+                    request={request}
+                    kind={kind}
+                    mode="approvalInbox"
+                    visibleColumns={visibleColumns}
+                    onApprove={(row) => void handleDecision(row, "APPROVED")}
+                    onReject={(row) => void handleDecision(row, "REJECTED")}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
         ),
       }}
+      bottomSection={
+        <HrRequestColumnPickerModal
+          visible={showColumnPicker}
+          visibleColumnKeys={visibleColumnKeys}
+          onClose={() => setShowColumnPicker(false)}
+          onToggleColumn={toggleColumn}
+          onResetColumns={resetColumns}
+        />
+      }
     />
   );
 }
@@ -1283,6 +1540,9 @@ function HrApprovalHistoryWorkspace({
   const requesterRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [requesterAuthUserId, setRequesterAuthUserId] = useState("");
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
+    useHrVisibleColumns(`erp.hr.requestColumns.${kind}.approvalHistory`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader, [
     requesterAuthUserId,
   ]);
@@ -1293,6 +1553,8 @@ function HrApprovalHistoryWorkspace({
         "requester_display",
         "reason",
         "current_state",
+        "parent_company_name",
+        "parent_company_code",
         "destination_name",
         "destination_address",
         "workflow_request_id",
@@ -1314,6 +1576,12 @@ function HrApprovalHistoryWorkspace({
       title={title}
       description={description}
       actions={[
+        {
+          key: "columns",
+          label: "Columns",
+          tone: "neutral",
+          onClick: () => setShowColumnPicker(true),
+        },
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
@@ -1362,18 +1630,32 @@ function HrApprovalHistoryWorkspace({
           </div>
         ) : (
           <div className="grid gap-3">
-            <HrRequestMatrixHeader />
-            {filteredRows.map((request) => (
-              <HrRequestCard
-                key={request.workflow_request_id}
-                request={request}
-                kind={kind}
-                mode="approvalHistory"
-              />
-            ))}
+            <div className="overflow-x-auto pb-2">
+              <div className="grid min-w-max gap-3">
+                <HrRequestMatrixHeader columns={visibleColumns} />
+                {filteredRows.map((request) => (
+                  <HrRequestCard
+                    key={request.workflow_request_id}
+                    request={request}
+                    kind={kind}
+                    mode="approvalHistory"
+                    visibleColumns={visibleColumns}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
         ),
       }}
+      bottomSection={
+        <HrRequestColumnPickerModal
+          visible={showColumnPicker}
+          visibleColumnKeys={visibleColumnKeys}
+          onClose={() => setShowColumnPicker(false)}
+          onToggleColumn={toggleColumn}
+          onResetColumns={resetColumns}
+        />
+      }
     />
   );
 }
@@ -1388,6 +1670,9 @@ function HrRegisterWorkspace({
   const requesterRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [requesterAuthUserId, setRequesterAuthUserId] = useState("");
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
+    useHrVisibleColumns(`erp.hr.requestColumns.${kind}.register`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader, [
     requesterAuthUserId,
   ]);
@@ -1398,6 +1683,8 @@ function HrRegisterWorkspace({
         "requester_display",
         "reason",
         "current_state",
+        "parent_company_name",
+        "parent_company_code",
         "destination_name",
         "destination_address",
         "workflow_request_id",
@@ -1419,6 +1706,12 @@ function HrRegisterWorkspace({
       title={title}
       description={description}
       actions={[
+        {
+          key: "columns",
+          label: "Columns",
+          tone: "neutral",
+          onClick: () => setShowColumnPicker(true),
+        },
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
@@ -1467,18 +1760,32 @@ function HrRegisterWorkspace({
           </div>
         ) : (
           <div className="grid gap-3">
-            <HrRequestMatrixHeader />
-            {filteredRows.map((request) => (
-              <HrRequestCard
-                key={request.workflow_request_id}
-                request={request}
-                kind={kind}
-                mode="register"
-              />
-            ))}
+            <div className="overflow-x-auto pb-2">
+              <div className="grid min-w-max gap-3">
+                <HrRequestMatrixHeader columns={visibleColumns} />
+                {filteredRows.map((request) => (
+                  <HrRequestCard
+                    key={request.workflow_request_id}
+                    request={request}
+                    kind={kind}
+                    mode="register"
+                    visibleColumns={visibleColumns}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
         ),
       }}
+      bottomSection={
+        <HrRequestColumnPickerModal
+          visible={showColumnPicker}
+          visibleColumnKeys={visibleColumnKeys}
+          onClose={() => setShowColumnPicker(false)}
+          onToggleColumn={toggleColumn}
+          onResetColumns={resetColumns}
+        />
+      }
     />
   );
 }
