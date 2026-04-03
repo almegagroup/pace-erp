@@ -124,6 +124,24 @@ function formatScreenTitle(screenCode) {
     .join(" ");
 }
 
+async function readJsonSafe(response) {
+  try {
+    return await response.clone().json();
+  } catch {
+    return null;
+  }
+}
+
+function buildRuntimeContextError(json, fallbackCode, fallbackMessage) {
+  const code = json?.code ?? fallbackCode;
+  const decisionTrace = json?.decision_trace ?? json?.decisionTrace ?? null;
+  const requestId = json?.request_id ?? json?.requestId ?? null;
+
+  return [code, decisionTrace, requestId ? `Req ${requestId}` : null]
+    .filter(Boolean)
+    .join(" | ") || fallbackMessage;
+}
+
 function zoneBorder(activeZone, zone) {
   return activeZone === zone ? "border-sky-500" : "border-slate-300";
 }
@@ -315,19 +333,31 @@ export default function MenuShell() {
             }),
           }
         );
-        const contextJson = await contextResponse.json().catch(() => null);
+        const contextJson = await readJsonSafe(contextResponse);
 
         if (!contextResponse.ok || !contextJson?.ok || !contextJson?.data) {
-          throw new Error(contextJson?.code ?? "WORK_COMPANY_SWITCH_FAILED");
+          throw new Error(
+            buildRuntimeContextError(
+              contextJson,
+              "WORK_COMPANY_SWITCH_FAILED",
+              "Work company could not be switched."
+            )
+          );
         }
 
         const menuResponse = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
           credentials: "include",
         });
-        const menuJson = await menuResponse.json().catch(() => null);
+        const menuJson = await readJsonSafe(menuResponse);
 
         if (!menuResponse.ok || !menuJson?.ok) {
-          throw new Error(menuJson?.code ?? "MENU_REFRESH_FAILED");
+          throw new Error(
+            buildRuntimeContextError(
+              menuJson,
+              "MENU_REFRESH_FAILED",
+              "Menu could not be refreshed."
+            )
+          );
         }
 
         setRuntimeContext({
@@ -341,7 +371,9 @@ export default function MenuShell() {
         setMenuSnapshot(menuJson?.data?.menu ?? []);
       } catch (error) {
         console.error("WORK_COMPANY_SWITCH_FAILED", error);
-        setRuntimeContextError("Work company could not be switched.");
+        setRuntimeContextError(
+          error instanceof Error ? error.message : "Work company could not be switched."
+        );
       }
     },
     [
@@ -394,19 +426,31 @@ export default function MenuShell() {
             }),
           }
         );
-        const contextJson = await contextResponse.json().catch(() => null);
+        const contextJson = await readJsonSafe(contextResponse);
 
         if (!contextResponse.ok || !contextJson?.ok || !contextJson?.data) {
-          throw new Error(contextJson?.code ?? "WORK_CONTEXT_SWITCH_FAILED");
+          throw new Error(
+            buildRuntimeContextError(
+              contextJson,
+              "WORK_CONTEXT_SWITCH_FAILED",
+              "Work context could not be switched."
+            )
+          );
         }
 
         const menuResponse = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
           credentials: "include",
         });
-        const menuJson = await menuResponse.json().catch(() => null);
+        const menuJson = await readJsonSafe(menuResponse);
 
         if (!menuResponse.ok || !menuJson?.ok) {
-          throw new Error(menuJson?.code ?? "MENU_REFRESH_FAILED");
+          throw new Error(
+            buildRuntimeContextError(
+              menuJson,
+              "MENU_REFRESH_FAILED",
+              "Menu could not be refreshed."
+            )
+          );
         }
 
         setRuntimeContext({
@@ -420,7 +464,9 @@ export default function MenuShell() {
         setMenuSnapshot(menuJson?.data?.menu ?? []);
       } catch (error) {
         console.error("WORK_CONTEXT_SWITCH_FAILED", error);
-        setRuntimeContextError("Work context could not be switched.");
+        setRuntimeContextError(
+          error instanceof Error ? error.message : "Work context could not be switched."
+        );
       }
     },
     [

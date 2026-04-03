@@ -1,42 +1,106 @@
-import { useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import EnterpriseDashboard from "../../components/dashboard/EnterpriseDashboard.jsx";
 import { useErpScreenCommands } from "../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../hooks/useErpScreenHotkeys.js";
 import { handleLinearNavigation } from "../../navigation/erpRovingFocus.js";
+import {
+  listLeaveApprovalInbox,
+  listOutWorkApprovalInbox,
+} from "./hr/hrApi.js";
+
+async function loadApprovalSummary() {
+  const [leaveRows, outWorkRows] = await Promise.allSettled([
+    listLeaveApprovalInbox(),
+    listOutWorkApprovalInbox(),
+  ]);
+
+  const leaveCount =
+    leaveRows.status === "fulfilled" ? (leaveRows.value?.length ?? 0) : 0;
+  const outWorkCount =
+    outWorkRows.status === "fulfilled" ? (outWorkRows.value?.length ?? 0) : 0;
+
+  return {
+    approvalsToday: leaveCount + outWorkCount,
+  };
+}
 
 export default function UserDashboardHome() {
   const topActionRefs = useRef([]);
+  const [approvalSummary, setApprovalSummary] = useState({
+    approvalsToday: 0,
+  });
 
-  const stats = [
-    {
-      label: "My Tasks",
-      value: "14",
-      tag: "Queue",
-      tone: "sky",
-      caption: "Work items currently sitting in the user-owned execution lane.",
-    },
-    {
-      label: "Approvals Today",
-      value: "06",
-      tag: "Flow",
-      tone: "emerald",
-      caption: "Approval decisions likely to need attention during this shift.",
-    },
-    {
-      label: "Module Access",
-      value: "09",
-      tag: "Scope",
-      tone: "amber",
-      caption: "Modules currently reachable through ACL and menu projection.",
-    },
-    {
-      label: "Execution Pace",
-      value: "91%",
-      tag: "Trend",
-      tone: "slate",
-      caption: "Current pace indicator for the user's operating session.",
-    },
-  ];
+  useEffect(() => {
+    let alive = true;
+
+    async function refreshApprovalSummary() {
+      try {
+        const nextSummary = await loadApprovalSummary();
+        if (alive) {
+          setApprovalSummary(nextSummary);
+        }
+      } catch {
+        if (alive) {
+          setApprovalSummary({ approvalsToday: 0 });
+        }
+      }
+    }
+
+    void refreshApprovalSummary();
+
+    function handleFocus() {
+      void refreshApprovalSummary();
+    }
+
+    function handleWorkflowChange() {
+      void refreshApprovalSummary();
+    }
+
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("erp:workflow-changed", handleWorkflowChange);
+    document.addEventListener("visibilitychange", handleFocus);
+
+    return () => {
+      alive = false;
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("erp:workflow-changed", handleWorkflowChange);
+      document.removeEventListener("visibilitychange", handleFocus);
+    };
+  }, []);
+
+  const stats = useMemo(
+    () => [
+      {
+        label: "My Tasks",
+        value: "14",
+        tag: "Queue",
+        tone: "sky",
+        caption: "Work items currently sitting in the user-owned execution lane.",
+      },
+      {
+        label: "Approvals Today",
+        value: String(approvalSummary.approvalsToday).padStart(2, "0"),
+        tag: "Flow",
+        tone: "emerald",
+        caption: "Approval decisions likely to need attention during this shift.",
+      },
+      {
+        label: "Module Access",
+        value: "09",
+        tag: "Scope",
+        tone: "amber",
+        caption: "Modules currently reachable through ACL and menu projection.",
+      },
+      {
+        label: "Execution Pace",
+        value: "91%",
+        tag: "Trend",
+        tone: "slate",
+        caption: "Current pace indicator for the user's operating session.",
+      },
+    ],
+    [approvalSummary.approvalsToday]
+  );
 
   const actions = [
     {

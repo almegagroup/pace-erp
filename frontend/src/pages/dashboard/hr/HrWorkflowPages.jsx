@@ -228,6 +228,7 @@ export function LeaveApplyWorkspace() {
         to_date: toDate,
         reason: reason.trim(),
       });
+      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       setLastCreated(data.leave_request ?? null);
       setNotice("Leave request submitted.");
       setReason("");
@@ -501,6 +502,7 @@ export function OutWorkApplyWorkspace() {
         destination_id: destinationId,
         reason: reason.trim(),
       });
+      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       setLastCreated(data.request ?? null);
       setNotice("Out work request submitted.");
       setReason("");
@@ -888,6 +890,7 @@ function HrRequestListWorkspace({
       } else {
         await cancelOutWorkRequest(request.out_work_request_id);
       }
+      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       await refresh();
     } catch (err) {
       setError(formatError(err, "Request could not be cancelled."));
@@ -987,6 +990,10 @@ function HrApprovalInboxWorkspace({
   const navigate = useNavigate();
   const searchRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [decisionTally, setDecisionTally] = useState({
+    approved: 0,
+    rejected: 0,
+  });
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
 
   const filteredRows = useMemo(
@@ -1015,6 +1022,11 @@ function HrApprovalInboxWorkspace({
 
     try {
       await submitWorkflowDecision(request.workflow_request_id, decision);
+      setDecisionTally((current) => ({
+        approved: current.approved + (decision === "APPROVED" ? 1 : 0),
+        rejected: current.rejected + (decision === "REJECTED" ? 1 : 0),
+      }));
+      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       await refresh();
     } catch (err) {
       setError(formatError(err, "Decision could not be submitted."));
@@ -1049,7 +1061,36 @@ function HrApprovalInboxWorkspace({
         },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
-      metrics={buildListMetrics(rows)}
+      metrics={[
+        {
+          key: "queue",
+          label: "Queue",
+          value: String(rows.length),
+          tone: "sky",
+          caption: "Rows still actionable for the current approver.",
+        },
+        {
+          key: "pending",
+          label: "Pending",
+          value: String(rows.filter((row) => row.current_state === "PENDING").length),
+          tone: "amber",
+          caption: "Still waiting for your decision.",
+        },
+        {
+          key: "approved",
+          label: "Approved",
+          value: String(decisionTally.approved),
+          tone: "emerald",
+          caption: "Approved from this inbox during the current session.",
+        },
+        {
+          key: "rejected",
+          label: "Rejected",
+          value: String(decisionTally.rejected),
+          tone: "slate",
+          caption: "Rejected from this inbox during the current session.",
+        },
+      ]}
       filterSection={{
         eyebrow: "Queue Search",
         title: "Filter approval inbox",
