@@ -13,6 +13,7 @@ import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { okResponse, errorResponse } from "../../response.ts";
 import { log } from "../../../_lib/logger.ts";
 import { generateRequestId } from "../../../_lib/request_id.ts";
+import { ensureAclVersionSourceCaptured } from "../../../_shared/acl_runtime.ts";
 
 type ActivateInput = {
   acl_version_id: string;
@@ -61,7 +62,7 @@ export async function activateAclVersionHandler(
     const { data: targetVersion, error: targetVersionError } = await db
       .schema("acl")
       .from("acl_versions")
-      .select("acl_version_id, company_id, is_active, version_number, description")
+      .select("acl_version_id, company_id, is_active, version_number, description, source_captured_at")
       .eq("acl_version_id", body.acl_version_id)
       .eq("company_id", companyId)
       .maybeSingle();
@@ -104,6 +105,28 @@ export async function activateAclVersionHandler(
           reused_existing_snapshot: true,
         },
         requestId,
+      );
+    }
+
+    try {
+      await ensureAclVersionSourceCaptured(
+        db,
+        body.acl_version_id,
+        companyId,
+        null,
+      );
+    } catch (captureErr) {
+      return errorResponse(
+        "ACL_VERSION_CAPTURE_FAILED",
+        String(captureErr),
+        requestId,
+        "NONE",
+        403,
+        {
+          gateId: "9.11",
+          routeKey: "POST:/api/admin/acl/versions/activate",
+          decisionTrace: "SOURCE_CAPTURE_FAILED",
+        },
       );
     }
 
