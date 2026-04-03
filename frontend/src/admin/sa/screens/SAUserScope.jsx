@@ -35,6 +35,20 @@ async function readJsonSafe(response) {
   }
 }
 
+function buildApiError(json, fallbackCode) {
+  const code = json?.code ?? fallbackCode;
+  const requestId = json?.request_id ?? json?.requestId ?? null;
+  const decisionTrace = json?.decision_trace ?? json?.decisionTrace ?? null;
+  const message = [code, decisionTrace, requestId ? `Req ${requestId}` : null]
+    .filter(Boolean)
+    .join(" | ");
+  const error = new Error(message || fallbackCode);
+  error.code = code;
+  error.requestId = requestId;
+  error.decisionTrace = decisionTrace;
+  return error;
+}
+
 async function fetchUserScope(authUserId) {
   const response = await fetch(
     `${import.meta.env.VITE_API_BASE}/api/admin/users/scope?auth_user_id=${encodeURIComponent(authUserId)}`,
@@ -46,8 +60,7 @@ async function fetchUserScope(authUserId) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !json?.data) {
-    const error = new Error(json?.code ?? "USER_SCOPE_READ_FAILED");
-    throw error;
+    throw buildApiError(json, "USER_SCOPE_READ_FAILED");
   }
 
   return json.data;
@@ -66,8 +79,7 @@ async function saveUserScope(payload) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    const error = new Error(json?.code ?? "USER_SCOPE_SAVE_FAILED");
-    throw error;
+    throw buildApiError(json, "USER_SCOPE_SAVE_FAILED");
   }
 
   return json.data;
@@ -160,9 +172,10 @@ export default function SAUserScope() {
       } catch (caughtError) {
         if (!alive) return;
         setError(
-          caughtError?.message === "USER_SCOPE_ACL_USER_REQUIRED"
+          caughtError?.code === "USER_SCOPE_ACL_USER_REQUIRED" ||
+            caughtError?.message === "USER_SCOPE_ACL_USER_REQUIRED"
             ? "Scope mapping is available only after the user receives an ACL role."
-            : "Unable to load user scope right now."
+            : caughtError?.message || "Unable to load user scope right now."
         );
       } finally {
         if (alive) {
@@ -343,9 +356,10 @@ export default function SAUserScope() {
       setNotice("User scope saved successfully.");
     } catch (caughtError) {
       setError(
-        caughtError?.message === "USER_SCOPE_ACL_USER_REQUIRED"
+        caughtError?.code === "USER_SCOPE_ACL_USER_REQUIRED" ||
+          caughtError?.message === "USER_SCOPE_ACL_USER_REQUIRED"
           ? "Scope mapping is available only for ACL users with an assigned role."
-          : "User scope was not finalized by the backend."
+          : caughtError?.message || "User scope was not finalized by the backend."
       );
     } finally {
       setSaving(false);

@@ -145,29 +145,32 @@ export function calculateInclusiveDays(fromDate: string, toDate: string): number
 export async function getParentCompanyScope(
   authUserId: string,
 ): Promise<ParentCompanyScope> {
-  const { data, error } = await serviceRoleClient
+  const { data: parentRow, error: parentError } = await serviceRoleClient
     .schema("erp_map")
     .from("user_parent_companies")
-    .select(`
-      company_id,
-      company:company_id (
-        company_code,
-        company_name
-      )
-    `)
+    .select("company_id")
     .eq("auth_user_id", authUserId)
     .maybeSingle();
 
-  if (error || !data?.company_id) {
+  if (parentError || !parentRow?.company_id) {
     throw new Error("HR_PARENT_COMPANY_NOT_FOUND");
   }
 
-  const relation = Array.isArray(data.company) ? data.company[0] : data.company;
+  const { data: companyRow, error: companyError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("companies")
+    .select("company_code, company_name")
+    .eq("id", parentRow.company_id)
+    .maybeSingle();
+
+  if (companyError) {
+    throw new Error("HR_PARENT_COMPANY_LOOKUP_FAILED");
+  }
 
   return {
-    company_id: data.company_id,
-    company_code: relation?.company_code ?? null,
-    company_name: relation?.company_name ?? null,
+    company_id: parentRow.company_id,
+    company_code: companyRow?.company_code ?? null,
+    company_name: companyRow?.company_name ?? null,
   };
 }
 
@@ -594,20 +597,10 @@ export async function resolveRequesterSubjectWorkContext(input: {
   parentCompanyId: string;
   preferredWorkContextId?: string | null;
 }): Promise<UserScopeWorkContextRow | null> {
-  const { data, error } = await serviceRoleClient
+  const { data: userRows, error } = await serviceRoleClient
     .schema("erp_acl")
     .from("user_work_contexts")
-    .select(`
-      work_context_id,
-      work_context:work_context_id (
-        work_context_id,
-        company_id,
-        work_context_code,
-        work_context_name,
-        department_id,
-        is_active
-      )
-    `)
+    .select("work_context_id")
     .eq("auth_user_id", input.authUserId)
     .eq("company_id", input.parentCompanyId);
 
@@ -615,11 +608,27 @@ export async function resolveRequesterSubjectWorkContext(input: {
     throw new Error("HR_REQUESTER_SCOPE_LOOKUP_FAILED");
   }
 
-  const rows = (data ?? [])
-    .map((row) => Array.isArray(row.work_context) ? row.work_context[0] : row.work_context)
-    .filter((row): row is UserScopeWorkContextLookupRow =>
-      Boolean(row?.work_context_id && row?.company_id && row?.work_context_code && row?.is_active === true)
-    );
+  const workContextIds = [...new Set((userRows ?? []).map((row) => row.work_context_id).filter(Boolean))];
+
+  if (workContextIds.length === 0) {
+    return null;
+  }
+
+  const { data: workContextRows, error: workContextError } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("work_contexts")
+    .select("work_context_id, company_id, work_context_code, work_context_name, department_id, is_active")
+    .in("work_context_id", workContextIds)
+    .eq("company_id", input.parentCompanyId)
+    .eq("is_active", true);
+
+  if (workContextError) {
+    throw new Error("HR_REQUESTER_SCOPE_WORK_CONTEXT_READ_FAILED");
+  }
+
+  const rows = (workContextRows ?? []).filter((row): row is UserScopeWorkContextLookupRow =>
+    Boolean(row?.work_context_id && row?.company_id && row?.work_context_code && row?.is_active === true)
+  );
 
   const departmentContexts = rows.filter((row) => row.department_id);
   const generalOps = rows.find((row) => row.work_context_code === "GENERAL_OPS") ?? null;
