@@ -65,6 +65,19 @@ import { listSessionsHandler } from "../_core/admin/session/list_sessions.handle
 import { revokeSessionHandler } from "../_core/admin/session/revoke_session.handler.ts";
 import { systemHealthHandler } from "../_core/admin/diagnostics/system_health.handler.ts";
 import { controlPanelHandler } from "../_core/admin/diagnostics/control_panel.handler.ts";
+import { listCapabilitiesHandler } from "../_core/admin/acl/list_capabilities.handler.ts";
+import { upsertCapabilityHandler } from "../_core/admin/acl/upsert_capability.handler.ts";
+import { listCapabilityActionsHandler } from "../_core/admin/acl/list_capability_actions.handler.ts";
+import { upsertCapabilityActionHandler } from "../_core/admin/acl/upsert_capability_action.handler.ts";
+import { disableCapabilityActionHandler } from "../_core/admin/acl/disable_capability_action.handler.ts";
+import { listWorkContextsHandler } from "../_core/admin/acl/list_work_contexts.handler.ts";
+import { upsertWorkContextHandler } from "../_core/admin/acl/upsert_work_context.handler.ts";
+import { listWorkContextCapabilitiesHandler } from "../_core/admin/acl/list_work_context_capabilities.handler.ts";
+import { assignWorkContextCapabilityHandler } from "../_core/admin/acl/assign_work_context_capability.handler.ts";
+import { unassignWorkContextCapabilityHandler } from "../_core/admin/acl/unassign_work_context_capability.handler.ts";
+import { listAclVersionsHandler } from "../_core/admin/acl/list_acl_versions.handler.ts";
+import { createAclVersionHandler } from "../_core/admin/acl/create_acl_version.handler.ts";
+import { activateAclVersionHandler } from "../_core/admin/acl/activate_acl_version.handler.ts";
 
 import type { SessionResolution } from "../_pipeline/session.ts";
 import type { ContextResolution } from "../_pipeline/context.ts";
@@ -419,6 +432,85 @@ export async function dispatchAdminRoutes(
           authUserId: session.authUserId,
           roleCode: context.roleCode,
         },
+      });
+      break;
+
+    case "GET:/api/admin/acl/capabilities":
+      response = await listCapabilitiesHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/capabilities":
+      response = await upsertCapabilityHandler(req, {
+        context,
+      });
+      break;
+
+    case "GET:/api/admin/acl/capability-actions":
+      response = await listCapabilityActionsHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/capability-actions":
+      response = await upsertCapabilityActionHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/capability-actions/disable":
+      response = await disableCapabilityActionHandler(req, {
+        context,
+      });
+      break;
+
+    case "GET:/api/admin/acl/work-contexts":
+      response = await listWorkContextsHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/work-contexts":
+      response = await upsertWorkContextHandler(req, {
+        context,
+      });
+      break;
+
+    case "GET:/api/admin/acl/work-context-capabilities":
+      response = await listWorkContextCapabilitiesHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/work-context-capabilities/assign":
+      response = await assignWorkContextCapabilityHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/work-context-capabilities/unassign":
+      response = await unassignWorkContextCapabilityHandler(req, {
+        context,
+      });
+      break;
+
+    case "GET:/api/admin/acl/versions":
+      response = await listAclVersionsHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/versions":
+      response = await createAclVersionHandler(req, {
+        context,
+        auth_user_id: session.authUserId,
+      });
+      break;
+
+    case "POST:/api/admin/acl/versions/activate":
+      response = await activateAclVersionHandler(req, {
+        context,
       });
       break;
 
