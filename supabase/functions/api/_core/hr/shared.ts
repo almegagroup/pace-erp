@@ -87,6 +87,30 @@ export type UserIdentity = {
   name: string | null;
 };
 
+function pickDisplayName(
+  rawMetadata: unknown,
+  email: string | null | undefined,
+): string | null {
+  if (rawMetadata && typeof rawMetadata === "object") {
+    const metadata = rawMetadata as Record<string, unknown>;
+    const candidates = [
+      metadata.name,
+      metadata.full_name,
+      metadata.display_name,
+    ];
+
+    for (const candidate of candidates) {
+      const normalized = String(candidate ?? "").trim();
+      if (normalized) {
+        return normalized;
+      }
+    }
+  }
+
+  const normalizedEmail = String(email ?? "").trim();
+  return normalizedEmail || null;
+}
+
 export function assertHrBusinessContext(
   ctx: HrHandlerContext,
 ): asserts ctx is HrHandlerContext & {
@@ -402,15 +426,27 @@ export async function loadUserIdentityMap(
     .select("auth_user_id, name")
     .in("auth_user_id", authUserIds);
 
+  const { data: authRows } = await serviceRoleClient
+    .schema("auth")
+    .from("users")
+    .select("id, email, raw_user_meta_data")
+    .in("id", authUserIds);
+
   const signupNameMap = new Map(
     (signupRows ?? []).map((row) => [row.auth_user_id, row.name ?? null]),
+  );
+  const authNameMap = new Map(
+    (authRows ?? []).map((row) => [
+      row.id,
+      pickDisplayName(row.raw_user_meta_data, row.email ?? null),
+    ]),
   );
 
   for (const row of (users ?? []) as Array<{ auth_user_id: string; user_code: string | null }>) {
     identityMap.set(row.auth_user_id, {
       auth_user_id: row.auth_user_id,
       user_code: row.user_code ?? null,
-      name: signupNameMap.get(row.auth_user_id) ?? null,
+      name: signupNameMap.get(row.auth_user_id) ?? authNameMap.get(row.auth_user_id) ?? null,
     });
   }
 
@@ -419,7 +455,17 @@ export async function loadUserIdentityMap(
       identityMap.set(row.auth_user_id, {
         auth_user_id: row.auth_user_id,
         user_code: null,
-        name: row.name ?? null,
+        name: row.name ?? authNameMap.get(row.auth_user_id) ?? null,
+      });
+    }
+  }
+
+  for (const [authUserId, authName] of authNameMap.entries()) {
+    if (!identityMap.has(authUserId)) {
+      identityMap.set(authUserId, {
+        auth_user_id: authUserId,
+        user_code: null,
+        name: authName ?? null,
       });
     }
   }
@@ -433,10 +479,10 @@ export function buildUserDisplay(identity: UserIdentity | null | undefined): str
   }
 
   if (identity.user_code && identity.name) {
-    return `${identity.user_code} | ${identity.name}`;
+    return `${identity.name} | ${identity.user_code}`;
   }
 
-  return identity.user_code ?? identity.name ?? identity.auth_user_id;
+  return identity.name ?? identity.user_code ?? identity.auth_user_id;
 }
 
 export function pickScopedApprovers(
