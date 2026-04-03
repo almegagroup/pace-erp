@@ -20,12 +20,94 @@ export default function AuthBootstrap({ children }) {
 
   const {
     menu,
+    shellProfile,
     startMenuLoading,
     setMenuSnapshot,
     setShellProfile,
     setRuntimeContext,
     clearMenuSnapshot,
   } = useMenu();
+
+  useEffect(() => {
+    if (isPublicRoute(location.pathname) || location.pathname === "/auth/callback") {
+      return undefined;
+    }
+
+    if (!Array.isArray(menu) || menu.length === 0) {
+      return undefined;
+    }
+
+    let disposed = false;
+
+    async function validateActiveSessionIdentity() {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/profile`, {
+          credentials: "include",
+        });
+
+        const json = await response.json().catch(() => null);
+
+        if (disposed) {
+          return;
+        }
+
+        if (!response.ok || !json?.ok || !json?.data?.user_code) {
+          clearMenuSnapshot();
+          clearClusterAdmission();
+          navigate("/login", { replace: true });
+          return;
+        }
+
+        const liveUserCode = json.data.user_code ?? "";
+        const liveRoleCode = json.data.role_code ?? "";
+        const cachedUserCode = shellProfile?.userCode ?? "";
+        const cachedRoleCode = shellProfile?.roleCode ?? "";
+
+        if (
+          (cachedUserCode && liveUserCode !== cachedUserCode) ||
+          (cachedRoleCode && liveRoleCode !== cachedRoleCode)
+        ) {
+          clearMenuSnapshot();
+          clearClusterAdmission();
+          navigate("/app", { replace: true });
+        }
+      } catch {
+        if (disposed) {
+          return;
+        }
+
+        clearMenuSnapshot();
+        clearClusterAdmission();
+        navigate("/login", { replace: true });
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void validateActiveSessionIdentity();
+      }
+    };
+
+    const handleFocus = () => {
+      void validateActiveSessionIdentity();
+    };
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [
+    clearMenuSnapshot,
+    location.pathname,
+    menu,
+    navigate,
+    shellProfile?.roleCode,
+    shellProfile?.userCode,
+  ]);
 
   useEffect(() => {
     let alive = true;
@@ -208,6 +290,7 @@ export default function AuthBootstrap({ children }) {
     location.pathname,
     menu,
     navigate,
+    shellProfile,
     setMenuSnapshot,
     setShellProfile,
     setRuntimeContext,

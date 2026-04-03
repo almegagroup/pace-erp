@@ -47,7 +47,9 @@ async function fetchUsers() {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !Array.isArray(json.data)) {
-    throw new Error("USER_LIST_READ_FAILED");
+    const code = json?.code ?? "USER_LIST_READ_FAILED";
+    const requestId = json?.request_id ? ` | Req ${json.request_id}` : "";
+    throw new Error(`${code}${requestId}`);
   }
 
   return json.data;
@@ -144,9 +146,13 @@ export default function SAUsers() {
         if (!alive) return;
 
         setUsers(data);
-      } catch {
+      } catch (fetchError) {
         if (!alive) return;
-        setError("Unable to load ERP users right now.");
+        setError(
+          fetchError instanceof Error
+            ? `Unable to load ERP users right now. ${fetchError.message}`
+            : "Unable to load ERP users right now."
+        );
       } finally {
         if (alive) {
           setLoading(false);
@@ -168,8 +174,12 @@ export default function SAUsers() {
     try {
       const data = await fetchUsers();
       setUsers(data);
-    } catch {
-      setError("Unable to refresh the ERP user list right now.");
+    } catch (refreshError) {
+      setError(
+        refreshError instanceof Error
+          ? `Unable to refresh the ERP user list right now. ${refreshError.message}`
+          : "Unable to refresh the ERP user list right now."
+      );
     } finally {
       setLoading(false);
     }
