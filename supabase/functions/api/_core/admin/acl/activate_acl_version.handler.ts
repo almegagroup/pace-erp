@@ -56,17 +56,81 @@ export async function activateAclVersionHandler(
 
     const db = getServiceRoleClientWithContext(ctx.context);
 
-const companyId = body.company_id;
+    const companyId = body.company_id;
+
+    const { data: targetVersion, error: targetVersionError } = await db
+      .schema("acl")
+      .from("acl_versions")
+      .select("acl_version_id, company_id, is_active, version_number, description")
+      .eq("acl_version_id", body.acl_version_id)
+      .eq("company_id", companyId)
+      .maybeSingle();
+
+    if (targetVersionError) {
+      return errorResponse(
+        "ACL_VERSION_READ_FAILED",
+        targetVersionError.message,
+        requestId,
+        "NONE",
+        403,
+        {
+          gateId: "9.11",
+          routeKey: "POST:/api/admin/acl/versions/activate",
+          decisionTrace: "TARGET_VERSION_READ_FAILED",
+        },
+      );
+    }
+
+    if (!targetVersion) {
+      return errorResponse(
+        "ACL_VERSION_NOT_FOUND",
+        "ACL version not found for this company",
+        requestId,
+        "NONE",
+        403,
+        {
+          gateId: "9.11",
+          routeKey: "POST:/api/admin/acl/versions/activate",
+          decisionTrace: "TARGET_VERSION_NOT_FOUND",
+        },
+      );
+    }
+
+    if (targetVersion.is_active) {
+      return okResponse(
+        {
+          acl_version_id: body.acl_version_id,
+          status: "ACTIVE",
+          reused_existing_snapshot: true,
+        },
+        requestId,
+      );
+    }
 
     /* -------------------------------------------------- */
     /* Deactivate current active version                  */
     /* -------------------------------------------------- */
 
-    await db
+    const { error: deactivateError } = await db
       .schema("acl").from("acl_versions")
       .update({ is_active: false })
       .eq("company_id", companyId)
       .eq("is_active", true);
+
+    if (deactivateError) {
+      return errorResponse(
+        "ACL_VERSION_DEACTIVATE_FAILED",
+        deactivateError.message,
+        requestId,
+        "NONE",
+        403,
+        {
+          gateId: "9.11",
+          routeKey: "POST:/api/admin/acl/versions/activate",
+          decisionTrace: "DEACTIVATE_FAILED",
+        },
+      );
+    }
 
     /* -------------------------------------------------- */
     /* Activate selected version                          */
@@ -81,8 +145,15 @@ const companyId = body.company_id;
     if (activateError) {
       return errorResponse(
         "ACL_VERSION_ACTIVATE_FAILED",
-        "Failed to activate ACL version",
-        requestId
+        activateError.message,
+        requestId,
+        "NONE",
+        403,
+        {
+          gateId: "9.11",
+          routeKey: "POST:/api/admin/acl/versions/activate",
+          decisionTrace: "ACTIVATE_FAILED",
+        },
       );
     }
 
@@ -104,7 +175,14 @@ const companyId = body.company_id;
       return errorResponse(
         "ACL_SNAPSHOT_LOOKUP_FAILED",
         snapshotLookupError.message,
-        requestId
+        requestId,
+        "NONE",
+        403,
+        {
+          gateId: "9.11",
+          routeKey: "POST:/api/admin/acl/versions/activate",
+          decisionTrace: "SNAPSHOT_LOOKUP_FAILED",
+        },
       );
     }
 
@@ -123,7 +201,14 @@ const companyId = body.company_id;
         return errorResponse(
           "ACL_SNAPSHOT_GENERATION_FAILED",
           snapshotError.message,
-          requestId
+          requestId,
+          "NONE",
+          403,
+          {
+            gateId: "9.11",
+            routeKey: "POST:/api/admin/acl/versions/activate",
+            decisionTrace: "SNAPSHOT_GENERATION_FAILED",
+          },
         );
       }
     }
@@ -132,6 +217,7 @@ const companyId = body.company_id;
       level: "SECURITY",
       request_id: requestId,
       gate_id:"9.11",
+      route_key: "POST:/api/admin/acl/versions/activate",
       event: "ACL_VERSION_ACTIVATED",
       meta: {
         company_id: companyId,
@@ -155,6 +241,7 @@ const companyId = body.company_id;
       level: "ERROR",
       request_id: requestId,
       gate_id:"9.11",
+      route_key: "POST:/api/admin/acl/versions/activate",
       event: "ACL_VERSION_ACTIVATE_EXCEPTION",
       meta: { error: String(err) },
     });
@@ -162,7 +249,14 @@ const companyId = body.company_id;
     return errorResponse(
       (err as Error).message || "REQUEST_BLOCKED",
       "Unhandled error",
-      requestId
+      requestId,
+      "NONE",
+      403,
+      {
+        gateId: "9.11",
+        routeKey: "POST:/api/admin/acl/versions/activate",
+        decisionTrace: "EXCEPTION",
+      },
     );
   }
 }

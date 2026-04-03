@@ -78,6 +78,7 @@ import { unassignWorkContextCapabilityHandler } from "../_core/admin/acl/unassig
 import { listAclVersionsHandler } from "../_core/admin/acl/list_acl_versions.handler.ts";
 import { createAclVersionHandler } from "../_core/admin/acl/create_acl_version.handler.ts";
 import { activateAclVersionHandler } from "../_core/admin/acl/activate_acl_version.handler.ts";
+import { deleteAclVersionHandler } from "../_core/admin/acl/delete_acl_version.handler.ts";
 
 import type { SessionResolution } from "../_pipeline/session.ts";
 import type { ContextResolution } from "../_pipeline/context.ts";
@@ -510,6 +511,12 @@ export async function dispatchAdminRoutes(
 
     case "POST:/api/admin/acl/versions/activate":
       response = await activateAclVersionHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/versions/delete":
+      response = await deleteAclVersionHandler(req, {
         context,
       });
       break;
