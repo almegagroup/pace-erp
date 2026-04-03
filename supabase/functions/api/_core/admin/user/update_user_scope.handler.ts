@@ -37,6 +37,26 @@ function normalizeIdArray(values: string[] | undefined): string[] {
   return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
 }
 
+function blocked(
+  code: string,
+  message: string,
+  ctx: HandlerContext,
+  routeKey = "POST:/api/admin/users/scope",
+): Response {
+  return errorResponse(
+    code,
+    message,
+    ctx.request_id,
+    "NONE",
+    403,
+    {
+      gateId: "SA.USER_SCOPE",
+      routeKey,
+      decisionTrace: code,
+    },
+  );
+}
+
 export async function updateUserScopeHandler(
   req: Request,
   ctx: HandlerContext,
@@ -54,10 +74,10 @@ export async function updateUserScopeHandler(
     const explicitWorkContextIds = normalizeIdArray(body.work_context_ids);
 
     if (!targetAuthUserId || !parentCompanyId) {
-      return errorResponse(
+      return blocked(
         "USER_SCOPE_INPUT_INVALID",
         "auth_user_id and parent_company_id required",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -80,10 +100,10 @@ export async function updateUserScopeHandler(
       .maybeSingle();
 
     if (!user) {
-      return errorResponse(
+      return blocked(
         "USER_SCOPE_USER_NOT_FOUND",
         "user not found",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -94,10 +114,10 @@ export async function updateUserScopeHandler(
       .maybeSingle();
 
     if (!roleRow?.role_code) {
-      return errorResponse(
+      return blocked(
         "USER_SCOPE_ACL_USER_REQUIRED",
         "scope mapping is allowed only for ACL users",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -108,10 +128,10 @@ export async function updateUserScopeHandler(
     ).length;
 
     if (validCompanyCount !== companyIdsToValidate.length) {
-      return errorResponse(
+      return blocked(
         "USER_SCOPE_COMPANY_INVALID",
         "one or more companies are invalid or non-business",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -142,10 +162,10 @@ export async function updateUserScopeHandler(
     }).length;
 
     if (validProjectCount !== projectIds.length) {
-      return errorResponse(
+      return blocked(
         "USER_SCOPE_PROJECT_INVALID",
         "one or more projects are invalid or not mapped inside the eligible company universe",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -164,10 +184,10 @@ export async function updateUserScopeHandler(
     ).length;
 
     if (validDepartmentCount !== departmentIds.length) {
-      return errorResponse(
+      return blocked(
         "USER_SCOPE_DEPARTMENT_INVALID",
         "one or more departments are invalid or not mapped to a business company",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -190,10 +210,10 @@ export async function updateUserScopeHandler(
     if (
       explicitWorkContextIds.some((workContextId) => !validWorkContextMap.has(workContextId))
     ) {
-      return errorResponse(
+      return blocked(
         "USER_SCOPE_WORK_CONTEXT_INVALID",
         "one or more work contexts are invalid or outside the selected work companies",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -212,10 +232,10 @@ export async function updateUserScopeHandler(
       );
 
     if (departmentWorkContextIds.some((workContextId) => !workContextId)) {
-      return errorResponse(
+      return blocked(
         "USER_SCOPE_DEPARTMENT_WORK_CONTEXT_MISSING",
         "one or more departments are missing a governed department work context",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -246,10 +266,10 @@ export async function updateUserScopeHandler(
       });
 
     if (parentError) {
-      return errorResponse(
-        "USER_SCOPE_PARENT_SAVE_FAILED",
+      return blocked(
+        `USER_SCOPE_PARENT_SAVE_FAILED:${parentError.message}`,
         "parent company save failed",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -259,10 +279,10 @@ export async function updateUserScopeHandler(
       .eq("auth_user_id", targetAuthUserId);
 
     if (workDeleteError) {
-      return errorResponse(
-        "USER_SCOPE_WORK_DELETE_FAILED",
+      return blocked(
+        `USER_SCOPE_WORK_DELETE_FAILED:${workDeleteError.message}`,
         "work company reset failed",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -278,10 +298,10 @@ export async function updateUserScopeHandler(
         );
 
       if (workInsertError) {
-        return errorResponse(
-          "USER_SCOPE_WORK_SAVE_FAILED",
+        return blocked(
+          `USER_SCOPE_WORK_SAVE_FAILED:${workInsertError.message}`,
           "work company save failed",
-          ctx.request_id,
+          ctx,
         );
       }
     }
@@ -292,10 +312,10 @@ export async function updateUserScopeHandler(
       .eq("auth_user_id", targetAuthUserId);
 
     if (projectDeleteError) {
-      return errorResponse(
-        "USER_SCOPE_PROJECT_DELETE_FAILED",
+      return blocked(
+        `USER_SCOPE_PROJECT_DELETE_FAILED:${projectDeleteError.message}`,
         "project scope reset failed",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -310,10 +330,10 @@ export async function updateUserScopeHandler(
         );
 
       if (projectInsertError) {
-        return errorResponse(
-          "USER_SCOPE_PROJECT_SAVE_FAILED",
+        return blocked(
+          `USER_SCOPE_PROJECT_SAVE_FAILED:${projectInsertError.message}`,
           "project scope save failed",
-          ctx.request_id,
+          ctx,
         );
       }
     }
@@ -324,10 +344,10 @@ export async function updateUserScopeHandler(
       .eq("auth_user_id", targetAuthUserId);
 
     if (departmentDeleteError) {
-      return errorResponse(
-        "USER_SCOPE_DEPARTMENT_DELETE_FAILED",
+      return blocked(
+        `USER_SCOPE_DEPARTMENT_DELETE_FAILED:${departmentDeleteError.message}`,
         "department scope reset failed",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -342,10 +362,10 @@ export async function updateUserScopeHandler(
         );
 
       if (departmentInsertError) {
-        return errorResponse(
-          "USER_SCOPE_DEPARTMENT_SAVE_FAILED",
+        return blocked(
+          `USER_SCOPE_DEPARTMENT_SAVE_FAILED:${departmentInsertError.message}`,
           "department scope save failed",
-          ctx.request_id,
+          ctx,
         );
       }
     }
@@ -356,10 +376,10 @@ export async function updateUserScopeHandler(
       .eq("auth_user_id", targetAuthUserId);
 
     if (workContextDeleteError) {
-      return errorResponse(
-        "USER_SCOPE_WORK_CONTEXT_DELETE_FAILED",
+      return blocked(
+        `USER_SCOPE_WORK_CONTEXT_DELETE_FAILED:${workContextDeleteError.message}`,
         "work context reset failed",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -377,10 +397,10 @@ export async function updateUserScopeHandler(
         );
 
       if (workContextInsertError) {
-        return errorResponse(
-          "USER_SCOPE_WORK_CONTEXT_SAVE_FAILED",
+        return blocked(
+          `USER_SCOPE_WORK_CONTEXT_SAVE_FAILED:${workContextInsertError.message}`,
           "work context save failed",
-          ctx.request_id,
+          ctx,
         );
       }
     }
@@ -398,10 +418,11 @@ export async function updateUserScopeHandler(
       ctx.request_id,
     );
   } catch (err) {
-    return errorResponse(
-      (err as Error).message || "USER_SCOPE_UPDATE_EXCEPTION",
+    const message = (err as Error).message || "USER_SCOPE_UPDATE_EXCEPTION";
+    return blocked(
+      message,
       "user scope update exception",
-      ctx.request_id,
+      ctx,
     );
   }
 }

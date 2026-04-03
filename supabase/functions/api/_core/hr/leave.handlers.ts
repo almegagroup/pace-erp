@@ -291,7 +291,9 @@ export async function createLeaveRequestHandler(
 
     if (leaveError || !leaveRow) {
       await deleteWorkflowRequest(workflow.request_id);
-      throw new Error("LEAVE_REQUEST_CREATE_FAILED");
+      throw new Error(
+        `LEAVE_REQUEST_CREATE_FAILED:${leaveError?.message ?? "unknown_insert_failure"}`,
+      );
     }
 
     await appendWorkflowEvent({

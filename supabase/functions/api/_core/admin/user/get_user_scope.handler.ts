@@ -62,6 +62,26 @@ function sortByCodeThenName(
   });
 }
 
+function blocked(
+  code: string,
+  message: string,
+  ctx: HandlerContext,
+  routeKey = "GET:/api/admin/users/scope",
+): Response {
+  return errorResponse(
+    code,
+    message,
+    ctx.request_id,
+    "NONE",
+    403,
+    {
+      gateId: "SA.USER_SCOPE",
+      routeKey,
+      decisionTrace: code,
+    },
+  );
+}
+
 export async function getUserScopeHandler(
   req: Request,
   ctx: HandlerContext,
@@ -73,10 +93,10 @@ export async function getUserScopeHandler(
     const authUserId = url.searchParams.get("auth_user_id")?.trim();
 
     if (!authUserId) {
-      return errorResponse(
+      return blocked(
         "USER_SCOPE_AUTH_USER_ID_REQUIRED",
         "auth_user_id required",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -89,10 +109,10 @@ export async function getUserScopeHandler(
       .maybeSingle();
 
     if (!user) {
-      return errorResponse(
+      return blocked(
         "USER_SCOPE_USER_NOT_FOUND",
         "user not found",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -103,10 +123,10 @@ export async function getUserScopeHandler(
       .maybeSingle();
 
     if (!roleRow?.role_code) {
-      return errorResponse(
+      return blocked(
         "USER_SCOPE_ACL_USER_REQUIRED",
         "scope mapping is allowed only for ACL users",
-        ctx.request_id,
+        ctx,
       );
     }
 
@@ -403,10 +423,11 @@ export async function getUserScopeHandler(
       ctx.request_id,
     );
   } catch (err) {
-    return errorResponse(
-      (err as Error).message || "USER_SCOPE_READ_EXCEPTION",
+    const message = (err as Error).message || "USER_SCOPE_READ_EXCEPTION";
+    return blocked(
+      message,
       "user scope read exception",
-      ctx.request_id,
+      ctx,
     );
   }
 }
