@@ -24,3 +24,5 @@ jobs:
 
       - name: Run DB Migrations
         run: supabase db push --linked --include-all
+
+        
