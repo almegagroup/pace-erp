@@ -17,26 +17,57 @@ function emit() {
   listeners.forEach((listener) => listener(nextSnapshot));
 }
 
-function extractLabel(url) {
+function extractLabel(url, method = "GET") {
   if (!url) {
     return "ERP request";
   }
 
   try {
     const parsed = new URL(url, globalThis.location?.origin);
+    const normalizedMethod = String(method || "GET").toUpperCase();
+    const pathname = parsed.pathname;
+
+    if (pathname.endsWith("/api/me/context")) {
+      return normalizedMethod === "POST"
+        ? "Switching work scope"
+        : "Loading work scope";
+    }
+
+    if (pathname.endsWith("/api/me/menu")) {
+      return "Refreshing menu";
+    }
+
+    if (pathname.endsWith("/api/admin/control-panel")) {
+      return "Refreshing control panel";
+    }
+
+    if (pathname.endsWith("/api/admin/system-health")) {
+      return "Refreshing system health";
+    }
+
     const parts = parsed.pathname.split("/").filter(Boolean);
     const leaf = parts.slice(-2).join(" / ") || parts.at(-1) || parsed.pathname;
-    return leaf.replaceAll("-", " ");
+    const prefix =
+      normalizedMethod === "POST"
+        ? "Saving"
+        : normalizedMethod === "PATCH"
+          ? "Updating"
+          : normalizedMethod === "DELETE"
+            ? "Removing"
+            : "Loading";
+
+    return `${prefix} ${leaf.replaceAll("-", " ")}`;
   } catch {
     return String(url);
   }
 }
 
-export function beginNetworkActivity(url) {
+export function beginNetworkActivity(url, method = "GET") {
   const token = `req_${Date.now()}_${sequence++}`;
+  const label = extractLabel(url, method);
 
   activeRequests.set(token, {
-    label: extractLabel(url),
+    label,
     startedAt: Date.now(),
   });
 
@@ -44,7 +75,7 @@ export function beginNetworkActivity(url) {
     ...snapshot,
     inFlightCount: activeRequests.size,
     startedAt: snapshot.startedAt || Date.now(),
-    lastLabel: extractLabel(url),
+    lastLabel: label,
     lastOutcome: "busy",
   };
 

@@ -46,6 +46,7 @@ import {
   getNetworkActivitySnapshot,
   subscribeNetworkActivity,
 } from "../store/networkActivity.js";
+import BlockingLayer from "../components/layer/BlockingLayer.jsx";
 import ErpCommandPalette from "../components/ErpCommandPalette.jsx";
 
 const WORKSPACE_ZONES = Object.freeze(["menu", "actions", "content"]);
@@ -178,6 +179,10 @@ function resolveTopLevelIndex(nodes, routePath) {
   });
 }
 
+function resolveTopLevelIndexByMenuCode(nodes, menuCode) {
+  return nodes.findIndex((node) => node.item?.menu_code === menuCode);
+}
+
 async function fetchLiveRuntimeSnapshot() {
   const [contextResponse, menuResponse] = await Promise.all([
     fetch(`${import.meta.env.VITE_API_BASE}/api/me/context`, {
@@ -241,6 +246,7 @@ export default function MenuShell() {
   const [networkActivity, setNetworkActivity] = useState(() =>
     getNetworkActivitySnapshot()
   );
+  const [busyElapsedSeconds, setBusyElapsedSeconds] = useState(0);
 
   const menuButtonRefs = useRef([]);
   const drawerButtonRefs = useRef([]);
@@ -331,6 +337,8 @@ export default function MenuShell() {
       : networkActivity.lastOutcome === "error"
         ? "border-rose-300 bg-rose-50 text-rose-900"
         : "border-emerald-300 bg-emerald-50 text-emerald-900";
+  const busyOverlayVisible = networkActivity.inFlightCount > 0;
+  const busyOverlayLabel = networkActivity.lastLabel || "Processing ERP action";
 
   const handleWorkCompanyChange = useCallback(
     async (nextCompanyId) => {
@@ -585,6 +593,24 @@ export default function MenuShell() {
   }, []);
 
   useEffect(() => {
+    if (networkActivity.inFlightCount <= 0 || !networkActivity.startedAt) {
+      setBusyElapsedSeconds(0);
+      return undefined;
+    }
+
+    const updateElapsed = () => {
+      setBusyElapsedSeconds(
+        Math.max(1, Math.ceil((Date.now() - networkActivity.startedAt) / 1000))
+      );
+    };
+
+    updateElapsed();
+    const intervalId = window.setInterval(updateElapsed, 250);
+
+    return () => window.clearInterval(intervalId);
+  }, [networkActivity.inFlightCount, networkActivity.startedAt]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       const target =
         findFirstFocusableWithin(contentRegionRef.current) ?? contentRegionRef.current;
@@ -753,8 +779,38 @@ export default function MenuShell() {
   }
 
   function handleDrawerBack() {
-    setDrawerPath((current) => current.slice(0, -1));
-    setDrawerFocusIndex(0);
+    const currentPath = [...drawerPath];
+
+    if (currentPath.length <= 1) {
+      const rootMenuCode = currentPath[0] ?? "";
+      const rootIndex = resolveTopLevelIndexByMenuCode(sidebarRoots, rootMenuCode);
+
+      setDrawerPath([]);
+      setDrawerFocusIndex(0);
+
+      window.requestAnimationFrame(() => {
+        const safeIndex = rootIndex >= 0 ? rootIndex : 0;
+        setMenuFocusIndex(safeIndex);
+        focusElement(menuButtonRefs.current[safeIndex] ?? menuButtonRefs.current[0]);
+      });
+      return;
+    }
+
+    const parentEntries = drawerTrail[drawerTrail.length - 2]?.children ?? [];
+    const returningMenuCode = currentPath[currentPath.length - 1];
+    const parentIndex = parentEntries.findIndex(
+      (node) => node.item?.menu_code === returningMenuCode
+    );
+
+    setDrawerPath(currentPath.slice(0, -1));
+    setDrawerFocusIndex(parentIndex >= 0 ? parentIndex : 0);
+
+    window.requestAnimationFrame(() => {
+      const safeIndex = parentIndex >= 0 ? parentIndex : 0;
+      focusElement(
+        drawerButtonRefs.current[safeIndex] ?? drawerButtonRefs.current[0]
+      );
+    });
   }
 
   async function handleLogout() {
@@ -762,6 +818,11 @@ export default function MenuShell() {
   }
 
   async function handleBack() {
+    if (drawerVisible) {
+      handleDrawerBack();
+      return;
+    }
+
     if (stackDepth <= 1) {
       await confirmAndRequestLogout();
       return;
@@ -821,6 +882,18 @@ export default function MenuShell() {
   }, [cycleZoneFocus, focusZone]);
 
   useEffect(() => {
+    function handleShellBackRequest(event) {
+      event.preventDefault();
+      void handleBack();
+    }
+
+    window.addEventListener("erp:shell-back-request", handleShellBackRequest);
+    return () => {
+      window.removeEventListener("erp:shell-back-request", handleShellBackRequest);
+    };
+  }, [drawerVisible, drawerPath, stackDepth]);
+
+  useEffect(() => {
     function handleRailToggle(event) {
       if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
         return;
@@ -875,7 +948,7 @@ export default function MenuShell() {
     if (event.key === "ArrowLeft") {
       if (drawerPath.length > 0) {
         event.preventDefault();
-        setDrawerPath([]);
+        handleDrawerBack();
       }
     }
   }
@@ -906,19 +979,7 @@ export default function MenuShell() {
 
     if (event.key === "ArrowLeft") {
       event.preventDefault();
-
-      if (drawerPath.length > 1) {
-        handleDrawerBack();
-        return;
-      }
-
-      setDrawerPath([]);
-      window.requestAnimationFrame(() => {
-        const target =
-          menuButtonRefs.current[activeMenuIndex >= 0 ? activeMenuIndex : 0] ??
-          menuButtonRefs.current[0];
-        focusElement(target);
-      });
+      handleDrawerBack();
     }
   }
 
@@ -1474,6 +1535,51 @@ export default function MenuShell() {
         shellCommands={shellCommands}
         menuCommands={menuCommands}
       />
+
+      <BlockingLayer
+        visible={busyOverlayVisible}
+        overlayStyle={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(15, 23, 42, 0.22)",
+          zIndex: 999998,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "24px",
+        }}
+        dialogStyle={{
+          width: "min(560px, calc(100vw - 40px))",
+          border: "1px solid #f59e0b",
+          background: "#fffef7",
+          boxShadow: "0 20px 44px rgba(15, 23, 42, 0.22)",
+          padding: "24px",
+        }}
+        dialogProps={{
+          "aria-label": "ERP action in progress",
+        }}
+      >
+        <div className="grid gap-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-700">
+              ERP Action In Progress
+            </div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              {busyElapsedSeconds}s elapsed
+            </div>
+          </div>
+          <div className="grid gap-2 border border-amber-200 bg-white px-4 py-4">
+            <p className="text-base font-semibold text-slate-900">{busyOverlayLabel}</p>
+            <p className="text-sm leading-6 text-slate-600">
+              Please wait until the current action completes. Menu clicks, form clicks,
+              and keyboard actions stay blocked so the ERP state does not drift mid-request.
+            </p>
+          </div>
+          <div className="text-xs uppercase tracking-[0.16em] text-slate-500">
+            Requests running: {networkActivity.inFlightCount}
+          </div>
+        </div>
+      </BlockingLayer>
     </div>
   );
 }

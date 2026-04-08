@@ -66,6 +66,24 @@ export function handleKeyboardIntent(intent) {
    ======================= */
 
 function handleBack() {
+  const shellBackEvent = new CustomEvent("erp:shell-back-request", {
+    cancelable: true,
+    detail: {
+      source: "keyboard",
+    },
+  });
+
+  globalThis.dispatchEvent(shellBackEvent);
+
+  if (shellBackEvent.defaultPrevented) {
+    logNavigationEvent({
+      source: "keyboard",
+      intent: "INTENT_BACK",
+      action: "SHELL_BACK",
+    });
+    return;
+  }
+
   const stack = getStackSnapshot();
   if (stack.length <= 1) {
     void confirmAndRequestLogout();

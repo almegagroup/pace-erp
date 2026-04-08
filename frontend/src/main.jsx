@@ -158,9 +158,17 @@ globalThis.fetch = async (...args) => {
     isApiRequest && url.includes("session_mode=passive");
   const isWarningAcknowledgeRefresh =
     isApiRequest && url.includes(SESSION_WARNING_ACK_QUERY);
+  const requestMethod =
+    args[0] instanceof Request
+      ? args[0].method
+      : args[1]?.method ?? "GET";
   const shouldAttachClusterHeaders =
     isApiRequest && !url.includes("/api/session/cluster/admit");
-  const activityToken = isApiRequest ? beginNetworkActivity(url) : null;
+  const shouldTrackActivity =
+    isApiRequest && !isPassiveProbe && !isWarningAcknowledgeRefresh;
+  const activityToken = shouldTrackActivity
+    ? beginNetworkActivity(url, requestMethod)
+    : null;
 
   const finalArgs = shouldAttachClusterHeaders ? withClusterHeaders(args) : args;
   let ok = false;
