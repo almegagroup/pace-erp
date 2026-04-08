@@ -43,14 +43,20 @@ function normalizeKeyEvent(event) {
   // Only normalized, symbolic intents
   if (key === "Escape") return "INTENT_BACK";
 
-  if (ctrl && key.toLowerCase() === "k") return "INTENT_GLOBAL_SEARCH";
-  if (ctrl && key.toLowerCase() === "s") return "INTENT_SCREEN_SAVE";
-  if (event.altKey && key.toLowerCase() === "r") return "INTENT_SCREEN_REFRESH";
+  if ((ctrl && key.toLowerCase() === "k") || key === "F9") {
+    return "INTENT_GLOBAL_SEARCH";
+  }
+  if ((ctrl && key.toLowerCase() === "s") || key === "F2") {
+    return "INTENT_SCREEN_SAVE";
+  }
+  if ((event.altKey && key.toLowerCase() === "r") || key === "F4") {
+    return "INTENT_SCREEN_REFRESH";
+  }
   if (shift && key === "F8") return "INTENT_OPEN_NEW_WINDOW";
-  if (event.altKey && shift && key.toLowerCase() === "f") {
+  if ((event.altKey && shift && key.toLowerCase() === "f") || key === "F3") {
     return "INTENT_SCREEN_FOCUS_SEARCH";
   }
-  if (event.altKey && shift && key.toLowerCase() === "p") {
+  if ((event.altKey && shift && key.toLowerCase() === "p") || key === "F7") {
     return "INTENT_SCREEN_FOCUS_PRIMARY";
   }
   if (isEditableTarget(event.target)) return null;

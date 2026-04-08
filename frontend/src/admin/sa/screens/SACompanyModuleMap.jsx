@@ -1,16 +1,16 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
-import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
-import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
-import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
+import ErpScreenScaffold, {
+  ErpFieldPreview,
+  ErpSectionCard,
+} from "../../../components/templates/ErpScreenScaffold.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
-import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
 async function readJsonSafe(response) {
   try {
@@ -20,25 +20,37 @@ async function readJsonSafe(response) {
   }
 }
 
+async function fetchCompanies() {
+  const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/companies`, {
+    credentials: "include",
+  });
+  const json = await readJsonSafe(response);
+
+  if (!response.ok || !json?.ok || !Array.isArray(json?.data?.companies)) {
+    throw new Error(json?.code ?? "COMPANY_LIST_FAILED");
+  }
+
+  return json.data.companies;
+}
+
 async function fetchCompanyModules(companyId) {
   const response = await fetch(
     `${import.meta.env.VITE_API_BASE}/api/admin/acl/company-modules?company_id=${encodeURIComponent(companyId)}`,
     {
       credentials: "include",
-    }
+    },
   );
-
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !Array.isArray(json?.data?.modules)) {
     throw new Error(json?.code ?? "COMPANY_MODULE_LIST_FAILED");
   }
 
-  return json.data.modules;
+  return json.data;
 }
 
-async function toggleCompanyModule(endpoint, payload) {
-  const response = await fetch(`${import.meta.env.VITE_API_BASE}${endpoint}`, {
+async function postJson(path, payload) {
+  const response = await fetch(`${import.meta.env.VITE_API_BASE}${path}`, {
     method: "POST",
     credentials: "include",
     headers: {
@@ -56,79 +68,213 @@ async function toggleCompanyModule(endpoint, payload) {
   return json.data;
 }
 
+function sortCompanies(rows) {
+  return [...rows].sort((left, right) =>
+    String(left.company_code ?? "").localeCompare(String(right.company_code ?? ""), "en", {
+      sensitivity: "base",
+    }),
+  );
+}
+
+function sortModules(rows) {
+  return [...rows].sort((left, right) => {
+    const projectCompare = String(left.project_code ?? "").localeCompare(
+      String(right.project_code ?? ""),
+      "en",
+      { sensitivity: "base" },
+    );
+
+    if (projectCompare !== 0) {
+      return projectCompare;
+    }
+
+    return String(left.module_code ?? "").localeCompare(String(right.module_code ?? ""), "en", {
+      sensitivity: "base",
+    });
+  });
+}
+
 export default function SACompanyModuleMap() {
   const navigate = useNavigate();
-  const actionBarRefs = useRef([]);
-  const formContainerRef = useRef(null);
-  const searchInputRef = useRef(null);
-  const companyIdRef = useRef(null);
-  const rowActionRefs = useRef([]);
+  const actionRefs = useRef([]);
+  const companyRefs = useRef([]);
+  const moduleRefs = useRef([]);
+  const companySearchRef = useRef(null);
+  const moduleSearchRef = useRef(null);
+  const [companies, setCompanies] = useState([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
-  const [moduleCode, setModuleCode] = useState("");
-  const [moduleRows, setModuleRows] = useState([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [modulePayload, setModulePayload] = useState(null);
+  const [selectedModuleCode, setSelectedModuleCode] = useState("");
+  const [companySearch, setCompanySearch] = useState("");
+  const [moduleSearch, setModuleSearch] = useState("");
+  const [loadingCompanies, setLoadingCompanies] = useState(true);
+  const [loadingModules, setLoadingModules] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  async function loadModules(companyId = selectedCompanyId) {
-    const normalizedCompanyId = companyId.trim();
-
-    if (!normalizedCompanyId) {
-      setError("Enter a company ID before loading module governance.");
-      return;
-    }
-
-    setLoading(true);
+  async function loadCompanies(preferredCompanyId = selectedCompanyId) {
+    setLoadingCompanies(true);
     setError("");
 
     try {
-      const data = await fetchCompanyModules(normalizedCompanyId);
-      setSelectedCompanyId(normalizedCompanyId);
-      setModuleRows(data);
+      const rows = sortCompanies(await fetchCompanies());
+      const nextCompanyId =
+        rows.find((row) => row.id === preferredCompanyId)?.id ??
+        rows[0]?.id ??
+        "";
+
+      setCompanies(rows);
+      setSelectedCompanyId(nextCompanyId);
     } catch {
-      setModuleRows([]);
-      setError("Unable to load company module governance rows.");
+      setCompanies([]);
+      setSelectedCompanyId("");
+      setModulePayload(null);
+      setSelectedModuleCode("");
+      setError("Company module workspace could not load company rows right now.");
     } finally {
-      setLoading(false);
+      setLoadingCompanies(false);
     }
   }
 
-  async function handleEnable() {
-    const normalizedCompanyId = selectedCompanyId.trim();
-    const normalizedModuleCode = moduleCode.trim().toUpperCase();
-
-    if (!normalizedCompanyId || !normalizedModuleCode) {
-      setError("Company ID and module code are required.");
+  async function loadModules(companyId = selectedCompanyId, preferredModuleCode = selectedModuleCode) {
+    if (!companyId) {
+      setModulePayload(null);
+      setSelectedModuleCode("");
       return;
     }
 
-    setSaving(true);
+    setLoadingModules(true);
     setError("");
-    setNotice("");
 
     try {
-      await toggleCompanyModule("/api/admin/acl/company-module/enable", {
-        company_id: normalizedCompanyId,
-        module_code: normalizedModuleCode,
+      const data = await fetchCompanyModules(companyId);
+      const nextModules = sortModules(data.modules ?? []);
+      const nextModuleCode =
+        nextModules.find((row) => row.module_code === preferredModuleCode)?.module_code ??
+        nextModules[0]?.module_code ??
+        "";
+
+      setModulePayload({
+        ...data,
+        modules: nextModules,
       });
-      await loadModules(normalizedCompanyId);
-      setModuleCode("");
-      setNotice(`Module ${normalizedModuleCode} enabled for the selected company.`);
+      setSelectedModuleCode(nextModuleCode);
     } catch {
-      setError("Company module could not be enabled.");
+      setModulePayload(null);
+      setSelectedModuleCode("");
+      setError("Company module rows could not be loaded right now.");
     } finally {
-      setSaving(false);
+      setLoadingModules(false);
     }
   }
 
-  async function handleDisable(row) {
+  useEffect(() => {
+    void loadCompanies();
+  }, []);
+
+  useEffect(() => {
+    void loadModules(selectedCompanyId);
+  }, [selectedCompanyId]);
+
+  const filteredCompanies = useMemo(
+    () =>
+      applyQuickFilter(companies, companySearch, [
+        "company_code",
+        "company_name",
+        "gst_number",
+        "status",
+        "group_code",
+        "group_name",
+      ]),
+    [companies, companySearch],
+  );
+
+  useEffect(() => {
+    if (!filteredCompanies.some((row) => row.id === selectedCompanyId)) {
+      setSelectedCompanyId(filteredCompanies[0]?.id ?? "");
+    }
+  }, [filteredCompanies, selectedCompanyId]);
+
+  const modules = modulePayload?.modules ?? [];
+
+  const filteredModules = useMemo(
+    () =>
+      applyQuickFilter(modules, moduleSearch, [
+        "module_code",
+        "module_name",
+        "project_code",
+        "project_name",
+        "approval_type",
+        "enabled",
+      ]),
+    [modules, moduleSearch],
+  );
+
+  useEffect(() => {
+    if (!filteredModules.some((row) => row.module_code === selectedModuleCode)) {
+      setSelectedModuleCode(filteredModules[0]?.module_code ?? "");
+    }
+  }, [filteredModules, selectedModuleCode]);
+
+  const selectedCompany = companies.find((row) => row.id === selectedCompanyId) ?? null;
+  const selectedModule =
+    filteredModules.find((row) => row.module_code === selectedModuleCode) ??
+    modules.find((row) => row.module_code === selectedModuleCode) ??
+    null;
+
+  const enabledModules = modules.filter((row) => row.enabled);
+  const uniqueProjects = new Set(modules.map((row) => row.project_code).filter(Boolean));
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loadingModules || loadingCompanies,
+      perform: () => void loadModules(selectedCompanyId, selectedModuleCode),
+    },
+    focusSearch: {
+      perform: () => moduleSearchRef.current?.focus(),
+    },
+    focusPrimary: {
+      perform: () => companySearchRef.current?.focus(),
+    },
+  });
+
+  useErpScreenCommands([
+    {
+      id: "sa-company-module-map-module-master",
+      group: "Current Screen",
+      label: "Open module master",
+      keywords: ["module master", "create module"],
+      perform: () => {
+        openScreen("SA_MODULE_MASTER", { mode: "replace" });
+        navigate("/sa/module-master");
+      },
+      order: 10,
+    },
+    {
+      id: "sa-company-module-map-project-map",
+      group: "Current Screen",
+      label: "Open company project map",
+      keywords: ["project map", "company project map"],
+      perform: () => {
+        openScreen("SA_COMPANY_PROJECT_MAP", { mode: "replace" });
+        navigate("/sa/projects/map");
+      },
+      order: 20,
+    },
+  ]);
+
+  async function handleToggle(row) {
+    if (!selectedCompany) {
+      return;
+    }
+
+    const nextAction = row.enabled ? "disable" : "enable";
     const approved = await openActionConfirm({
-      eyebrow: "ACL Company Modules",
-      title: "Disable Company Module",
-      message: `Disable ${row.module_code} for company ${selectedCompanyId}?`,
-      confirmLabel: "Disable Module",
+      eyebrow: "Company Module Map",
+      title: `${row.enabled ? "Disable" : "Enable"} Module`,
+      message: `${row.enabled ? "Disable" : "Enable"} ${row.module_code} for ${selectedCompany.company_code}?`,
+      confirmLabel: row.enabled ? "Disable" : "Enable",
       cancelLabel: "Cancel",
     });
 
@@ -141,325 +287,346 @@ export default function SACompanyModuleMap() {
     setNotice("");
 
     try {
-      await toggleCompanyModule("/api/admin/acl/company-module/disable", {
-        company_id: selectedCompanyId,
-        module_code: row.module_code,
-      });
-      await loadModules(selectedCompanyId);
-      setNotice(`Module ${row.module_code} disabled for the selected company.`);
+      await postJson(
+        nextAction === "enable"
+          ? "/api/admin/acl/company-module/enable"
+          : "/api/admin/acl/company-module/disable",
+        {
+          company_id: selectedCompany.id,
+          module_code: row.module_code,
+        },
+      );
+
+      await loadModules(selectedCompany.id, row.module_code);
+      setNotice(
+        `Module ${row.module_code} ${nextAction === "enable" ? "enabled for" : "disabled for"} ${selectedCompany.company_code}.`,
+      );
     } catch {
-      setError("Company module could not be disabled.");
+      setError("Company module mapping could not be saved right now.");
     } finally {
       setSaving(false);
     }
   }
 
-  const filteredRows = useMemo(
-    () =>
-      applyQuickFilter(moduleRows, searchQuery, [
-        "module_code",
-        "enabled",
-        "created_at",
-      ]),
-    [moduleRows, searchQuery]
-  );
-  const modulePagination = useErpPagination(filteredRows, 10);
-
-  useErpDenseFormNavigation(formContainerRef, {
-    disabled: saving,
-    submitOnFinalField: true,
-    onSubmit: () => handleEnable(),
-  });
-
-  useErpScreenHotkeys({
-    save: {
-      disabled: saving,
-      perform: () => void handleEnable(),
-    },
-    refresh: {
-      disabled: loading,
-      perform: () => void loadModules(),
-    },
-    focusSearch: {
-      perform: () => searchInputRef.current?.focus(),
-    },
-    focusPrimary: {
-      perform: () => companyIdRef.current?.focus(),
-    },
-  });
-
-  useErpScreenCommands([
-    {
-      id: "sa-company-modules-control-panel",
-      group: "Current Screen",
-      label: "Go to SA control panel",
-      keywords: ["control panel", "sa"],
-      perform: () => {
-        openScreen("SA_CONTROL_PANEL", { mode: "replace" });
-        navigate("/sa/control-panel");
-      },
-      order: 10,
-    },
-    {
-      id: "sa-company-modules-load",
-      group: "Current Screen",
-      label: loading ? "Loading company modules..." : "Load company modules",
-      keywords: ["load", "company modules", "acl"],
-      disabled: loading,
-      perform: () => void loadModules(),
-      order: 20,
-    },
-    {
-      id: "sa-company-modules-save",
-      group: "Current Screen",
-      label: saving ? "Enabling module..." : "Enable module",
-      hint: "Ctrl+S",
-      keywords: ["enable", "module", "company"],
-      disabled: saving,
-      perform: () => void handleEnable(),
-      order: 30,
-    },
-  ]);
-
-  const topActions = [
-    {
-      key: "control-panel",
-      label: "Control Panel",
-      tone: "neutral",
-      buttonRef: (element) => {
-        actionBarRefs.current[0] = element;
-      },
-      onClick: () => {
-        openScreen("SA_CONTROL_PANEL", { mode: "replace" });
-        navigate("/sa/control-panel");
-      },
-      onKeyDown: (event) =>
-        handleLinearNavigation(event, {
-          index: 0,
-          refs: actionBarRefs.current,
-          orientation: "horizontal",
-        }),
-    },
-    {
-      key: "load",
-      label: loading ? "Loading..." : "Load Modules",
-      hint: "Alt+R",
-      tone: "neutral",
-      buttonRef: (element) => {
-        actionBarRefs.current[1] = element;
-      },
-      onClick: () => void loadModules(),
-      onKeyDown: (event) =>
-        handleLinearNavigation(event, {
-          index: 1,
-          refs: actionBarRefs.current,
-          orientation: "horizontal",
-        }),
-    },
-    {
-      key: "enable",
-      label: saving ? "Applying..." : "Enable Module",
-      hint: "Ctrl+S",
-      tone: "primary",
-      disabled: saving,
-      buttonRef: (element) => {
-        actionBarRefs.current[2] = element;
-      },
-      onClick: () => void handleEnable(),
-      onKeyDown: (event) =>
-        handleLinearNavigation(event, {
-          index: 2,
-          refs: actionBarRefs.current,
-          orientation: "horizontal",
-        }),
-    },
-  ];
-
   return (
-    <ErpApprovalReviewTemplate
-      eyebrow="ACL Company Modules"
+    <ErpScreenScaffold
+      eyebrow="Company Module Rollout"
       title="Company Module Map"
-      description="Load a governed company by ID, then enable or disable module exposure from a keyboard-native ACL surface."
-      actions={topActions}
+      description="Modules stay under projects. A company only sees modules from projects already mapped to it, and SA decides module rollout one company at a time."
+      actions={[
+        {
+          key: "module-master",
+          label: "Module Master",
+          tone: "neutral",
+          buttonRef: (element) => {
+            actionRefs.current[0] = element;
+          },
+          onClick: () => {
+            openScreen("SA_MODULE_MASTER", { mode: "replace" });
+            navigate("/sa/module-master");
+          },
+          onKeyDown: (event) =>
+            handleLinearNavigation(event, {
+              index: 0,
+              refs: actionRefs.current,
+              orientation: "horizontal",
+            }),
+        },
+        {
+          key: "project-map",
+          label: "Company Project Map",
+          tone: "neutral",
+          buttonRef: (element) => {
+            actionRefs.current[1] = element;
+          },
+          onClick: () => {
+            openScreen("SA_COMPANY_PROJECT_MAP", { mode: "replace" });
+            navigate("/sa/projects/map");
+          },
+          onKeyDown: (event) =>
+            handleLinearNavigation(event, {
+              index: 1,
+              refs: actionRefs.current,
+              orientation: "horizontal",
+            }),
+        },
+        {
+          key: "refresh",
+          label: loadingModules ? "Refreshing..." : "Refresh",
+          hint: "Alt+R",
+          tone: "primary",
+          buttonRef: (element) => {
+            actionRefs.current[2] = element;
+          },
+          onClick: () => void loadModules(selectedCompanyId, selectedModuleCode),
+          onKeyDown: (event) =>
+            handleLinearNavigation(event, {
+              index: 2,
+              refs: actionRefs.current,
+              orientation: "horizontal",
+            }),
+        },
+      ]}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
       metrics={[
         {
-          key: "company",
-          label: "Company",
-          value: selectedCompanyId || "Unset",
+          key: "companies",
+          label: "Companies",
+          value: loadingCompanies ? "..." : String(companies.length),
           tone: "sky",
-          caption: "The currently loaded company governance target.",
+          caption: "Business companies available for module rollout governance.",
+        },
+        {
+          key: "projects",
+          label: "Mapped Projects",
+          value: loadingModules ? "..." : String(uniqueProjects.size),
+          tone: "emerald",
+          caption: selectedCompany
+            ? "Projects already attached to the selected company."
+            : "Choose a company to inspect project-backed module availability.",
         },
         {
           key: "modules",
-          label: "Rows",
-          value: loading ? "..." : String(moduleRows.length),
-          tone: "emerald",
-          caption: "Module rows returned by the ACL company-module endpoint.",
+          label: "Available Modules",
+          value: loadingModules ? "..." : String(modules.length),
+          tone: "amber",
+          caption: "Modules eligible for the selected company because their project is already mapped.",
         },
         {
           key: "enabled",
           label: "Enabled",
-          value: loading ? "..." : String(moduleRows.filter((row) => row.enabled).length),
-          tone: "amber",
-          caption: "Modules currently enabled for the selected company.",
-        },
-        {
-          key: "visible",
-          label: "Visible",
-          value: loading ? "..." : String(filteredRows.length),
+          value: loadingModules ? "..." : String(enabledModules.length),
           tone: "slate",
-          caption: "Module rows matching the current filter.",
+          caption: "Modules currently operational for the selected company.",
         },
       ]}
-      filterSection={{
-        eyebrow: "Filter",
-        title: "Find module rows",
-        children: (
-          <QuickFilterInput
-            label="Module Search"
-            value={searchQuery}
-            onChange={setSearchQuery}
-            inputRef={searchInputRef}
-            placeholder="Filter by module code or state"
-            hint="Alt+Shift+F focuses this filter."
-          />
-        ),
-      }}
-      reviewSection={{
-        eyebrow: "Current Module Rows",
-        title: loading
-          ? "Loading module rows"
-          : `${filteredRows.length} visible module row${filteredRows.length === 1 ? "" : "s"}`,
-        children: loading ? (
-          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-            Loading company module rows.
-          </div>
-        ) : filteredRows.length === 0 ? (
-          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-            No module row matches the current state.
-          </div>
-        ) : (
-          <div className="border border-slate-300">
-            <ErpPaginationStrip
-              page={modulePagination.page}
-              setPage={modulePagination.setPage}
-              totalPages={modulePagination.totalPages}
-              startIndex={modulePagination.startIndex}
-              endIndex={modulePagination.endIndex}
-              totalItems={filteredRows.length}
+    >
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+        <ErpSectionCard
+          eyebrow="Companies"
+          title="Choose business company"
+          description="Select one company first. This screen only shows modules from projects already mapped into that company."
+        >
+          <div className="grid gap-4">
+            <QuickFilterInput
+              label="Find company"
+              value={companySearch}
+              onChange={setCompanySearch}
+              inputRef={companySearchRef}
+              placeholder="Filter by company code, company name, or group"
             />
-            <div className="space-y-0">
-              {modulePagination.pageItems.map((row, index) => (
-                <div
-                  key={`${row.module_code}-${index}`}
-                  className="border-b border-slate-300 bg-white px-4 py-3 last:border-b-0"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">
-                        {row.module_code}
-                      </p>
-                      <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                        {row.enabled ? "Enabled" : "Disabled"}
-                      </p>
-                    </div>
 
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        ref={(element) => {
-                          rowActionRefs.current[index] ??= [];
-                          rowActionRefs.current[index][0] = element;
-                        }}
-                        type="button"
-                        onClick={() => setModuleCode(row.module_code)}
-                        onKeyDown={(event) =>
-                          handleLinearNavigation(event, {
-                            index: 0,
-                            refs: rowActionRefs.current[index] ?? [],
-                            orientation: "horizontal",
-                          })
-                        }
-                        className="border border-cyan-300 bg-cyan-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700"
-                      >
-                        Reuse Code
-                      </button>
-                      <button
-                        ref={(element) => {
-                          rowActionRefs.current[index] ??= [];
-                          rowActionRefs.current[index][1] = element;
-                        }}
-                        type="button"
-                        disabled={!row.enabled}
-                        onClick={() => void handleDisable(row)}
-                        onKeyDown={(event) =>
-                          handleLinearNavigation(event, {
-                            index: 1,
-                            refs: rowActionRefs.current[index] ?? [],
-                            orientation: "horizontal",
-                          })
-                        }
-                        className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                          row.enabled
-                            ? "border-rose-300 bg-rose-50 text-rose-700"
-                            : "border-slate-300 bg-slate-100 text-slate-400"
-                        }`}
-                      >
-                        Disable
-                      </button>
-                    </div>
-                  </div>
+            {loadingCompanies ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                Loading business companies.
+              </div>
+            ) : filteredCompanies.length === 0 ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                No company matches the current filter.
+              </div>
+            ) : (
+              <div className="space-y-0 border border-slate-300">
+                {filteredCompanies.map((row, index) => (
+                  <button
+                    key={row.id}
+                    ref={(element) => {
+                      companyRefs.current[index] = element;
+                    }}
+                    type="button"
+                    onClick={() => setSelectedCompanyId(row.id)}
+                    onKeyDown={(event) =>
+                      handleLinearNavigation(event, {
+                        index,
+                        refs: companyRefs.current,
+                        orientation: "vertical",
+                      })
+                    }
+                    className={`w-full border-b border-slate-300 px-4 py-3 text-left text-sm transition last:border-b-0 ${
+                      row.id === selectedCompanyId
+                        ? "bg-sky-50 text-slate-900"
+                        : "bg-white text-slate-700"
+                    }`}
+                  >
+                    <span className="block font-semibold">
+                      {row.company_code} - {row.company_name}
+                    </span>
+                    <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
+                      {row.status ?? "UNKNOWN"} | {row.group_code ?? "No group"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </ErpSectionCard>
+
+        <div className="grid gap-6">
+          <ErpSectionCard
+            eyebrow="Selected Company"
+            title={
+              selectedCompany
+                ? `${selectedCompany.company_code} | ${selectedCompany.company_name}`
+                : "No company selected"
+            }
+            description="Project mapping is the gate. If a project is removed from a company, its modules disappear from this rollout screen automatically."
+          >
+            {selectedCompany ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                <ErpFieldPreview
+                  label="Company State"
+                  value={selectedCompany.status ?? "UNKNOWN"}
+                  caption="Business company lifecycle."
+                />
+                <ErpFieldPreview
+                  label="Mapped Group"
+                  value={selectedCompany.group_code ?? "Not mapped"}
+                  caption={selectedCompany.group_name ?? "Group optional for module rollout."}
+                />
+                <ErpFieldPreview
+                  label="Available Projects"
+                  value={String(uniqueProjects.size)}
+                  caption="Project-backed module universes currently visible here."
+                />
+                <ErpFieldPreview
+                  label="Enabled Modules"
+                  value={String(enabledModules.length)}
+                  caption="Operational modules currently switched on for this company."
+                />
+              </div>
+            ) : (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                Select a company to inspect project-backed module rollout.
+              </div>
+            )}
+          </ErpSectionCard>
+
+          <ErpSectionCard
+            eyebrow="Modules"
+            title="Project-backed module rollout"
+            description="Modules shown here already belong to a mapped project. SA now decides whether each module becomes operational for the selected company."
+          >
+            <div className="grid gap-4">
+              <QuickFilterInput
+                label="Find module"
+                value={moduleSearch}
+                onChange={setModuleSearch}
+                inputRef={moduleSearchRef}
+                placeholder="Filter by module code, module name, or project"
+              />
+
+              {loadingModules ? (
+                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                  Loading company module rows.
                 </div>
-              ))}
-            </div>
-          </div>
-        ),
-      }}
-      sideSection={{
-        eyebrow: "Module Editor",
-        title: "Load company and enable module",
-        description: "Load a company once, then reuse the same context to toggle module codes.",
-        children: (
-          <div ref={formContainerRef} className="space-y-4">
-            <label className="block">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Company ID
-              </span>
-              <input
-                ref={companyIdRef}
-                data-workspace-primary-focus="true"
-                data-erp-form-field="true"
-                type="text"
-                value={selectedCompanyId}
-                onChange={(event) => setSelectedCompanyId(event.target.value)}
-                placeholder="Company UUID"
-                className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
-              />
-            </label>
+              ) : !selectedCompany ? (
+                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                  Select a company first.
+                </div>
+              ) : filteredModules.length === 0 ? (
+                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                  No module is currently available. First map a project to this company, then modules from that project will appear here.
+                </div>
+              ) : (
+                <div className="space-y-0 border border-slate-300">
+                  {filteredModules.map((row, index) => (
+                    <div
+                      key={row.module_code}
+                      ref={(element) => {
+                        moduleRefs.current[index] = element;
+                      }}
+                      onKeyDown={(event) =>
+                        handleLinearNavigation(event, {
+                          index,
+                          refs: moduleRefs.current,
+                          orientation: "vertical",
+                        })
+                      }
+                      className={`border-b border-slate-300 px-4 py-3 last:border-b-0 ${
+                        row.module_code === selectedModuleCode ? "bg-sky-50" : "bg-white"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedModuleCode(row.module_code)}
+                          className="min-w-0 flex-1 text-left"
+                        >
+                          <span className="block font-semibold text-slate-900">
+                            {row.module_code} - {row.module_name}
+                          </span>
+                          <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
+                            {row.project_code} | {row.module_active ? "MODULE ACTIVE" : "MODULE INACTIVE"} | {row.enabled ? "ENABLED" : "DISABLED"}
+                          </span>
+                          <span className="mt-1 block text-xs text-slate-500">
+                            {row.approval_required
+                              ? `${row.approval_type ?? "UNKNOWN"} | ${row.min_approvers}-${row.max_approvers} approver slot`
+                              : "No intrinsic approval required"}
+                          </span>
+                        </button>
 
-            <label className="block">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Module Code
-              </span>
-              <input
-                data-erp-form-field="true"
-                type="text"
-                value={moduleCode}
-                onChange={(event) => setModuleCode(event.target.value)}
-                placeholder="MODULE_CODE"
-                className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
-              />
-            </label>
-
-            <div className="border border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-600">
-              Load uses the current company ID. Save enables the typed module for that same company.
+                        <button
+                          type="button"
+                          disabled={saving || row.module_active !== true}
+                          className={`border px-3 py-2 text-sm font-semibold ${
+                            row.enabled
+                              ? "border-rose-300 bg-white text-rose-700"
+                              : "border-sky-300 bg-white text-sky-700"
+                          } disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-400`}
+                          onClick={() => void handleToggle(row)}
+                        >
+                          {row.enabled ? "Disable" : "Enable"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        ),
-      }}
-    />
+          </ErpSectionCard>
+
+          <ErpSectionCard
+            eyebrow="Selected Module"
+            title={selectedModule ? `${selectedModule.module_code} | ${selectedModule.module_name}` : "No module selected"}
+            description="This panel explains the rollout law for the currently selected module."
+          >
+            {selectedModule ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                <ErpFieldPreview
+                  label="Project"
+                  value={`${selectedModule.project_code} | ${selectedModule.project_name}`}
+                  caption="Module inherits this project universe."
+                />
+                <ErpFieldPreview
+                  label="Operational State"
+                  value={selectedModule.enabled ? "Enabled" : "Disabled"}
+                  caption="Company-specific rollout flag."
+                />
+                <ErpFieldPreview
+                  label="Module Lifecycle"
+                  value={selectedModule.module_active ? "ACTIVE" : "INACTIVE"}
+                  caption="Global module state from Module Master."
+                />
+                <ErpFieldPreview
+                  label="Approval Law"
+                  value={selectedModule.approval_required ? "Required" : "Not required"}
+                  caption={
+                    selectedModule.approval_required
+                      ? `${selectedModule.approval_type ?? "UNKNOWN"} | ${selectedModule.min_approvers}-${selectedModule.max_approvers} approver slot`
+                      : "Company cannot override this at rollout layer."
+                  }
+                />
+              </div>
+            ) : (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                Select a module row to inspect rollout details.
+              </div>
+            )}
+          </ErpSectionCard>
+        </div>
+      </div>
+    </ErpScreenScaffold>
   );
 }

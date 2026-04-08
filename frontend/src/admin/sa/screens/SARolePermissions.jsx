@@ -5,13 +5,9 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
-import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
-import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
-import { applyQuickFilter } from "../../../shared/erpCollections.js";
-import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
 async function readJsonSafe(response) {
   try {
@@ -36,6 +32,23 @@ async function fetchRolePermissions(roleCode) {
   }
 
   return json.data.permissions;
+}
+
+async function fetchResourceCatalog() {
+  const response = await fetch(
+    `${import.meta.env.VITE_API_BASE}/api/admin/approval/resource-policy`,
+    {
+      credentials: "include",
+    }
+  );
+
+  const json = await readJsonSafe(response);
+
+  if (!response.ok || !json?.ok || !Array.isArray(json?.data?.resources)) {
+    throw new Error(json?.code ?? "ROLE_PERMISSION_RESOURCE_CATALOG_FAILED");
+  }
+
+  return json.data.resources;
 }
 
 async function saveRolePermission(payload) {
@@ -79,32 +92,6 @@ async function disableRolePermission(payload) {
   return json.data;
 }
 
-function countEnabledFlags(row) {
-  return [
-    row.can_view,
-    row.can_write,
-    row.can_edit,
-    row.can_delete,
-    row.can_approve,
-    row.can_export,
-    Array.isArray(row.denied_actions) && row.denied_actions.length > 0,
-  ].filter(Boolean).length;
-}
-
-function createEmptyDraft(roleCode) {
-  return {
-    role_code: roleCode,
-    resource_code: "",
-    can_view: true,
-    can_write: false,
-    can_edit: false,
-    can_delete: false,
-    can_approve: false,
-    can_export: false,
-    denied_actions: [],
-  };
-}
-
 const ACTION_MATRIX = [
   ["VIEW", "can_view", "View"],
   ["WRITE", "can_write", "Write"],
@@ -114,18 +101,52 @@ const ACTION_MATRIX = [
   ["EXPORT", "can_export", "Export"],
 ];
 
+function createEmptyDraft(roleCode, resourceCode = "") {
+  return {
+    role_code: roleCode,
+    resource_code: resourceCode,
+    can_view: false,
+    can_write: false,
+    can_edit: false,
+    can_delete: false,
+    can_approve: false,
+    can_export: false,
+    denied_actions: [],
+  };
+}
+
+function createDraftFromRow(roleCode, row) {
+  return {
+    role_code: roleCode,
+    resource_code: row.resource_code,
+    can_view: Boolean(row.can_view),
+    can_write: Boolean(row.can_write),
+    can_edit: Boolean(row.can_edit),
+    can_delete: Boolean(row.can_delete),
+    can_approve: Boolean(row.can_approve),
+    can_export: Boolean(row.can_export),
+    denied_actions: Array.isArray(row.denied_actions) ? row.denied_actions : [],
+  };
+}
+
+function hasAnyExplicitRule(draft) {
+  return ACTION_MATRIX.some(([, key]) => Boolean(draft[key])) || draft.denied_actions.length > 0;
+}
+
 export default function SARolePermissions() {
   const navigate = useNavigate();
   const actionBarRefs = useRef([]);
-  const formContainerRef = useRef(null);
   const searchInputRef = useRef(null);
-  const resourceInputRef = useRef(null);
-  const rowActionRefs = useRef([]);
   const [selectedRoleCode, setSelectedRoleCode] = useState(ERP_ROLE_OPTIONS[0]?.code ?? "SA");
   const [permissions, setPermissions] = useState([]);
+  const [resourceCatalog, setResourceCatalog] = useState([]);
+  const [selectedProjectCode, setSelectedProjectCode] = useState("");
+  const [selectedModuleCode, setSelectedModuleCode] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [draft, setDraft] = useState(() => createEmptyDraft(ERP_ROLE_OPTIONS[0]?.code ?? "SA"));
+  const [selectedResourceCode, setSelectedResourceCode] = useState("");
+  const [matrixDrafts, setMatrixDrafts] = useState({});
   const [loading, setLoading] = useState(true);
+  const [catalogLoading, setCatalogLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -145,29 +166,162 @@ export default function SARolePermissions() {
     }
   }
 
+  async function loadResourceCatalog() {
+    setCatalogLoading(true);
+
+    try {
+      const resources = await fetchResourceCatalog();
+      setResourceCatalog(resources);
+    } catch {
+      setResourceCatalog([]);
+      setError("Mapped business resources could not be loaded right now.");
+    } finally {
+      setCatalogLoading(false);
+    }
+  }
+
   useEffect(() => {
-    setDraft(createEmptyDraft(selectedRoleCode));
     void loadPermissions(selectedRoleCode);
+    void loadResourceCatalog();
   }, [selectedRoleCode]);
 
-  const filteredPermissions = useMemo(
-    () =>
-      applyQuickFilter(permissions, searchQuery, [
-        "resource_code",
-      ]),
-    [permissions, searchQuery]
+  const permissionMap = useMemo(
+    () => new Map(permissions.map((row) => [row.resource_code, row])),
+    [permissions]
   );
-  const permissionPagination = useErpPagination(filteredPermissions, 10);
 
-  useErpDenseFormNavigation(formContainerRef, {
-    disabled: saving,
-    submitOnFinalField: true,
-    onSubmit: () => handleSave(),
-  });
+  const catalogProjectOptions = useMemo(
+    () =>
+      [...new Set(resourceCatalog.map((row) => row.project_code).filter(Boolean))].sort((a, b) =>
+        String(a).localeCompare(String(b), "en", { numeric: true, sensitivity: "base" })
+      ),
+    [resourceCatalog]
+  );
 
-  async function handleSave() {
-    if (!draft.resource_code.trim()) {
-      setError("Resource code is required.");
+  const catalogModuleOptions = useMemo(
+    () =>
+      [...new Set(
+        resourceCatalog
+          .filter((row) => !selectedProjectCode || row.project_code === selectedProjectCode)
+          .map((row) => row.module_code)
+          .filter(Boolean)
+      )].sort((a, b) =>
+        String(a).localeCompare(String(b), "en", { numeric: true, sensitivity: "base" })
+      ),
+    [resourceCatalog, selectedProjectCode]
+  );
+
+  useEffect(() => {
+    if (selectedModuleCode && !catalogModuleOptions.includes(selectedModuleCode)) {
+      setSelectedModuleCode("");
+    }
+  }, [catalogModuleOptions, selectedModuleCode]);
+
+  const filteredCatalogResources = useMemo(() => {
+    const needle = String(searchQuery ?? "").trim().toLowerCase();
+
+    return resourceCatalog.filter((row) => {
+      if (selectedProjectCode && row.project_code !== selectedProjectCode) return false;
+      if (selectedModuleCode && row.module_code !== selectedModuleCode) return false;
+      if (!needle) return true;
+
+      return [
+        row.title,
+        row.resource_code,
+        row.route_path,
+        row.project_code,
+        row.module_code,
+        row.module_name,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(needle));
+    });
+  }, [resourceCatalog, searchQuery, selectedProjectCode, selectedModuleCode]);
+
+  const visibleMatrixRows = useMemo(
+    () =>
+      filteredCatalogResources.map((resource) => ({
+        resource,
+        savedRow: permissionMap.get(resource.resource_code) ?? null,
+        draft:
+          matrixDrafts[resource.resource_code] ??
+          (permissionMap.has(resource.resource_code)
+            ? createDraftFromRow(selectedRoleCode, permissionMap.get(resource.resource_code))
+            : createEmptyDraft(selectedRoleCode, resource.resource_code)),
+      })),
+    [filteredCatalogResources, matrixDrafts, permissionMap, selectedRoleCode]
+  );
+
+  useEffect(() => {
+    if (!visibleMatrixRows.length) {
+      setSelectedResourceCode("");
+      return;
+    }
+
+    if (!selectedResourceCode || !visibleMatrixRows.some((row) => row.resource.resource_code === selectedResourceCode)) {
+      setSelectedResourceCode(visibleMatrixRows[0].resource.resource_code);
+    }
+  }, [selectedResourceCode, visibleMatrixRows]);
+
+  const selectedMatrixRow = useMemo(
+    () =>
+      visibleMatrixRows.find((row) => row.resource.resource_code === selectedResourceCode) ?? null,
+    [selectedResourceCode, visibleMatrixRows]
+  );
+
+  function updateDraft(resourceCode, updater) {
+    setMatrixDrafts((current) => {
+      const base =
+        current[resourceCode] ??
+        (permissionMap.has(resourceCode)
+          ? createDraftFromRow(selectedRoleCode, permissionMap.get(resourceCode))
+          : createEmptyDraft(selectedRoleCode, resourceCode));
+
+      return {
+        ...current,
+        [resourceCode]: updater(base),
+      };
+    });
+  }
+
+  function updateAllowFlag(resourceCode, key, checked, actionCode) {
+    updateDraft(resourceCode, (draft) => ({
+      ...draft,
+      [key]: checked,
+      denied_actions: (draft.denied_actions ?? []).filter((item) => item !== actionCode),
+    }));
+  }
+
+  function updateDenyFlag(resourceCode, actionCode, checked) {
+    updateDraft(resourceCode, (draft) => {
+      const deniedActions = new Set(draft.denied_actions ?? []);
+
+      if (checked) {
+        deniedActions.add(actionCode);
+      } else {
+        deniedActions.delete(actionCode);
+      }
+
+      const next = {
+        ...draft,
+        denied_actions: Array.from(deniedActions),
+      };
+      const actionEntry = ACTION_MATRIX.find(([code]) => code === actionCode);
+      if (actionEntry) {
+        next[actionEntry[1]] = false;
+      }
+      return next;
+    });
+  }
+
+  async function handleSaveMatrix() {
+    if (!selectedModuleCode) {
+      setError("Choose a project and one module before saving the permission matrix.");
+      return;
+    }
+
+    if (!visibleMatrixRows.length) {
+      setError("No mapped business resources are available inside the selected project and module.");
       return;
     }
 
@@ -176,66 +330,75 @@ export default function SARolePermissions() {
     setNotice("");
 
     try {
-      await saveRolePermission({
-        ...draft,
-        role_code: selectedRoleCode,
-        resource_code: draft.resource_code.trim(),
-        denied_actions: draft.denied_actions,
-      });
+      for (const row of visibleMatrixRows) {
+        const payload = row.draft;
+        const hadExisting = Boolean(row.savedRow);
+        const hasRule = hasAnyExplicitRule(payload);
+
+        if (!hasRule) {
+          if (hadExisting) {
+            await disableRolePermission({
+              role_code: selectedRoleCode,
+              resource_code: row.resource.resource_code,
+            });
+          }
+          continue;
+        }
+
+        await saveRolePermission({
+          role_code: selectedRoleCode,
+          resource_code: row.resource.resource_code,
+          can_view: payload.can_view,
+          can_write: payload.can_write,
+          can_edit: payload.can_edit,
+          can_delete: payload.can_delete,
+          can_approve: payload.can_approve,
+          can_export: payload.can_export,
+          denied_actions: payload.denied_actions,
+        });
+      }
+
       await loadPermissions(selectedRoleCode);
-      setNotice(`Permission updated for ${selectedRoleCode} on ${draft.resource_code.trim()}.`);
+      setNotice(`${selectedRoleCode} permissions were saved for the ${selectedModuleCode} module.`);
     } catch {
-      setError("Role permission could not be saved.");
+      setError("The role permission matrix could not be saved right now.");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleDisable(row) {
+  async function handleClearSelected() {
+    if (!selectedMatrixRow) return;
+
     const approved = await openActionConfirm({
       eyebrow: "ACL Governance",
-      title: "Disable Role Permission",
-      message: `Clear all permission flags for ${row.resource_code} on ${selectedRoleCode}?`,
-      confirmLabel: "Disable",
+      title: "Clear Selected Resource Rule",
+      message: `Clear the explicit rule for ${selectedMatrixRow.resource.title}?`,
+      confirmLabel: "Clear",
       cancelLabel: "Cancel",
     });
 
-    if (!approved) {
-      return;
-    }
+    if (!approved) return;
 
-    setSaving(true);
-    setError("");
-    setNotice("");
-
-    try {
-      await disableRolePermission({
-        role_code: selectedRoleCode,
-        resource_code: row.resource_code,
-      });
-      await loadPermissions(selectedRoleCode);
-      setNotice(`Permission cleared for ${row.resource_code}.`);
-    } catch {
-      setError("Role permission could not be disabled.");
-    } finally {
-      setSaving(false);
-    }
+    updateDraft(selectedMatrixRow.resource.resource_code, () =>
+      createEmptyDraft(selectedRoleCode, selectedMatrixRow.resource.resource_code)
+    );
   }
 
   useErpScreenHotkeys({
     save: {
       disabled: saving,
-      perform: () => void handleSave(),
+      perform: () => void handleSaveMatrix(),
     },
     refresh: {
-      disabled: loading,
-      perform: () => void loadPermissions(),
+      disabled: loading || catalogLoading,
+      perform: () => {
+        void loadPermissions();
+        void loadResourceCatalog();
+      },
     },
     focusSearch: {
       perform: () => searchInputRef.current?.focus(),
-    },
-    focusPrimary: {
-      perform: () => resourceInputRef.current?.focus(),
     },
   });
 
@@ -254,37 +417,32 @@ export default function SARolePermissions() {
     {
       id: "sa-role-permissions-focus-search",
       group: "Current Screen",
-      label: "Focus permission search",
-      keywords: ["search", "permission", "resource"],
+      label: "Focus matrix search",
+      keywords: ["search", "matrix", "resource"],
       perform: () => searchInputRef.current?.focus(),
       order: 20,
     },
     {
-      id: "sa-role-permissions-focus-editor",
-      group: "Current Screen",
-      label: "Focus permission editor",
-      keywords: ["editor", "resource code", "permission flags"],
-      perform: () => resourceInputRef.current?.focus(),
-      order: 30,
-    },
-    {
       id: "sa-role-permissions-refresh",
       group: "Current Screen",
-      label: loading ? "Refreshing permissions..." : "Refresh permissions",
+      label: loading || catalogLoading ? "Refreshing matrix..." : "Refresh matrix",
       keywords: ["refresh", "acl", "role permissions"],
-      disabled: loading,
-      perform: () => void loadPermissions(),
-      order: 40,
+      disabled: loading || catalogLoading,
+      perform: () => {
+        void loadPermissions();
+        void loadResourceCatalog();
+      },
+      order: 30,
     },
     {
       id: "sa-role-permissions-save",
       group: "Current Screen",
-      label: saving ? "Saving permission..." : "Save role permission",
+      label: saving ? "Saving matrix..." : "Save module matrix",
       hint: "Ctrl+S",
-      keywords: ["save", "upsert", "permission"],
+      keywords: ["save", "matrix", "permission"],
       disabled: saving,
-      perform: () => void handleSave(),
-      order: 50,
+      perform: () => void handleSaveMatrix(),
+      order: 40,
     },
   ]);
 
@@ -309,13 +467,16 @@ export default function SARolePermissions() {
     },
     {
       key: "refresh",
-      label: loading ? "Refreshing..." : "Refresh",
+      label: loading || catalogLoading ? "Refreshing..." : "Refresh",
       hint: "Alt+R",
       tone: "neutral",
       buttonRef: (element) => {
         actionBarRefs.current[1] = element;
       },
-      onClick: () => void loadPermissions(),
+      onClick: () => {
+        void loadPermissions();
+        void loadResourceCatalog();
+      },
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 1,
@@ -325,14 +486,14 @@ export default function SARolePermissions() {
     },
     {
       key: "save",
-      label: saving ? "Saving..." : "Save Permission",
+      label: saving ? "Saving..." : "Save Matrix",
       hint: "Ctrl+S",
       tone: "primary",
       disabled: saving,
       buttonRef: (element) => {
         actionBarRefs.current[2] = element;
       },
-      onClick: () => void handleSave(),
+      onClick: () => void handleSaveMatrix(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 2,
@@ -346,15 +507,11 @@ export default function SARolePermissions() {
     <ErpApprovalReviewTemplate
       eyebrow="ACL Governance"
       title="Role Permissions"
-      description="Review and maintain role-resource VWED permission rows without leaving a keyboard-native ACL surface."
+      description="Choose project and module once, then set the full page-action matrix for a role without typing manual resource codes."
       actions={topActions}
       notices={[
-        ...(error
-          ? [{ key: "error", tone: "error", message: error }]
-          : []),
-        ...(notice
-          ? [{ key: "notice", tone: "success", message: notice }]
-          : []),
+        ...(error ? [{ key: "error", tone: "error", message: error }] : []),
+        ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
       metrics={[
         {
@@ -365,30 +522,30 @@ export default function SARolePermissions() {
           caption: ERP_ROLE_LABELS[selectedRoleCode] ?? "Selected role under ACL review.",
         },
         {
-          key: "resources",
-          label: "Resources",
-          value: loading ? "..." : String(permissions.length),
+          key: "project",
+          label: "Project",
+          value: selectedProjectCode || "All",
           tone: "emerald",
-          caption: "Current resource rows returned by the backend for this role.",
+          caption: "Filter the business universe before touching the matrix.",
         },
         {
-          key: "active",
-          label: "Active Rows",
-          value: loading ? "..." : String(permissions.filter((row) => countEnabledFlags(row) > 0).length),
+          key: "module",
+          label: "Module",
+          value: selectedModuleCode || "Choose",
           tone: "amber",
-          caption: "Rows with at least one explicit allow or deny action.",
+          caption: "Matrix works best after choosing one module.",
         },
         {
-          key: "visible",
-          label: "Visible",
-          value: loading ? "..." : String(filteredPermissions.length),
+          key: "resources",
+          label: "Rows",
+          value: catalogLoading ? "..." : String(visibleMatrixRows.length),
           tone: "slate",
-          caption: "Rows matching the current resource search.",
+          caption: "Visible mapped resources in the current project/module filter.",
         },
       ]}
       filterSection={{
         eyebrow: "Role Filter",
-        title: "Select role and filter resources",
+        title: "Choose role, project, module, and search resources",
         children: (
           <div className="space-y-5">
             <label className="block">
@@ -408,217 +565,206 @@ export default function SARolePermissions() {
               </select>
             </label>
 
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Project
+                </span>
+                <select
+                  value={selectedProjectCode}
+                  onChange={(event) => setSelectedProjectCode(event.target.value)}
+                  className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+                >
+                  <option value="">All mapped projects</option>
+                  {catalogProjectOptions.map((projectCode) => (
+                    <option key={projectCode} value={projectCode}>
+                      {projectCode}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Module
+                </span>
+                <select
+                  value={selectedModuleCode}
+                  onChange={(event) => setSelectedModuleCode(event.target.value)}
+                  className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+                >
+                  <option value="">Choose module</option>
+                  {catalogModuleOptions.map((moduleCode) => (
+                    <option key={moduleCode} value={moduleCode}>
+                      {moduleCode}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
             <QuickFilterInput
-              label="Resource Search"
+              label="Search Resources"
               value={searchQuery}
               onChange={setSearchQuery}
               inputRef={searchInputRef}
-              placeholder="Filter by resource code"
-              hint="Alt+Shift+F focuses this resource filter."
+              placeholder="Search visible resources inside the selected module"
+              hint="First choose one module, then search inside that module."
             />
           </div>
         ),
       }}
       reviewSection={{
-        eyebrow: "Permission Rows",
-        title: loading
-          ? "Loading permission rows"
-          : `${filteredPermissions.length} visible resource row${filteredPermissions.length === 1 ? "" : "s"}`,
-        children: loading ? (
-          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-            Loading role permissions from ACL governance APIs.
-          </div>
-        ) : filteredPermissions.length === 0 ? (
-          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-            No resource row matches the current role filter.
-          </div>
-        ) : (
-          <div className="border border-slate-300">
-            <ErpPaginationStrip
-              page={permissionPagination.page}
-              setPage={permissionPagination.setPage}
-              totalPages={permissionPagination.totalPages}
-              startIndex={permissionPagination.startIndex}
-              endIndex={permissionPagination.endIndex}
-              totalItems={filteredPermissions.length}
-            />
-            <div className="space-y-0">
-            {permissionPagination.pageItems.map((row, index) => (
-              <div
-                key={`${row.resource_code}-${index}`}
-                className="border-b border-slate-300 bg-white px-4 py-3 last:border-b-0"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">
-                      {row.resource_code}
-                    </p>
-                    <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                      {[
-                        row.can_view ? "V" : null,
-                        row.can_write ? "W" : null,
-                        row.can_edit ? "E" : null,
-                        row.can_delete ? "D" : null,
-                        row.can_approve ? "A" : null,
-                        row.can_export ? "X" : null,
-                      ]
-                        .filter(Boolean)
-                        .join(" ") || "NO FLAGS"}
-                    </p>
-                    {Array.isArray(row.denied_actions) && row.denied_actions.length > 0 ? (
-                      <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-rose-600">
-                        Deny: {row.denied_actions.join(" ")}
-                      </p>
-                    ) : null}
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      ref={(element) => {
-                        rowActionRefs.current[index] ??= [];
-                        rowActionRefs.current[index][0] = element;
-                      }}
-                      type="button"
-                      onClick={() =>
-                        setDraft({
-                          role_code: selectedRoleCode,
-                          resource_code: row.resource_code,
-                          can_view: Boolean(row.can_view),
-                          can_write: Boolean(row.can_write),
-                          can_edit: Boolean(row.can_edit),
-                          can_delete: Boolean(row.can_delete),
-                          can_approve: Boolean(row.can_approve),
-                          can_export: Boolean(row.can_export),
-                          denied_actions: Array.isArray(row.denied_actions)
-                            ? row.denied_actions
-                            : [],
-                        })
-                      }
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index: 0,
-                          refs: rowActionRefs.current[index] ?? [],
-                          orientation: "horizontal",
-                        })
-                      }
-                      className="border border-cyan-300 bg-cyan-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      ref={(element) => {
-                        rowActionRefs.current[index] ??= [];
-                        rowActionRefs.current[index][1] = element;
-                      }}
-                      type="button"
-                      onClick={() => void handleDisable(row)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index: 1,
-                          refs: rowActionRefs.current[index] ?? [],
-                          orientation: "horizontal",
-                        })
-                      }
-                      className="border border-rose-300 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700"
-                    >
-                      Disable
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
+        eyebrow: "Module Matrix",
+        title: selectedModuleCode
+          ? `${selectedModuleCode} resource permission matrix`
+          : "Choose one module to open the permission matrix",
+        children:
+          loading || catalogLoading ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              Loading role permissions and mapped resources.
             </div>
-          </div>
-        ),
+          ) : !selectedModuleCode ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              Choose one exact module after selecting the project. Then every mapped page in that module will appear as a row in the matrix.
+            </div>
+          ) : visibleMatrixRows.length === 0 ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              No visible mapped business resources were found in this module.
+            </div>
+          ) : (
+            <div className="overflow-x-auto border border-slate-300 bg-white">
+              <table className="min-w-full border-collapse text-sm text-slate-700">
+                <thead className="bg-slate-50 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  <tr>
+                    <th className="border-b border-slate-300 px-4 py-3 text-left">Resource</th>
+                    {ACTION_MATRIX.map(([, , label]) => (
+                      <th
+                        key={label}
+                        className="border-b border-l border-slate-300 px-3 py-3 text-center"
+                      >
+                        {label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleMatrixRows.map(({ resource, draft }) => {
+                    const selected = resource.resource_code === selectedResourceCode;
+
+                    return (
+                      <tr
+                        key={resource.resource_code}
+                        className={selected ? "bg-sky-50" : "bg-white"}
+                      >
+                        <td
+                          className="border-b border-slate-200 px-4 py-3 align-top"
+                          onClick={() => setSelectedResourceCode(resource.resource_code)}
+                        >
+                          <button
+                            type="button"
+                            className="w-full cursor-pointer text-left"
+                          >
+                            <div className="font-semibold text-slate-900">{resource.title}</div>
+                            <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                              {resource.resource_code}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {resource.route_path || "No route"}
+                            </div>
+                            {draft.denied_actions.length > 0 ? (
+                              <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-rose-600">
+                                Explicit deny: {draft.denied_actions.join(", ")}
+                              </div>
+                            ) : null}
+                          </button>
+                        </td>
+                        {ACTION_MATRIX.map(([actionCode, key]) => (
+                          <td
+                            key={`${resource.resource_code}-${actionCode}`}
+                            className="border-b border-l border-slate-200 px-3 py-3 text-center"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={Boolean(draft[key])}
+                              onChange={(event) =>
+                                updateAllowFlag(
+                                  resource.resource_code,
+                                  key,
+                                  event.target.checked,
+                                  actionCode
+                                )
+                              }
+                              className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-emerald-600"
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ),
       }}
       sideSection={{
-        eyebrow: "Editor",
-        title: "Role permission editor",
-        description: "Select a row to edit, or type a new resource code to create a new permission row.",
-        children: (
-          <div ref={formContainerRef} className="space-y-4">
-            <label className="block">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Resource Code
-                </span>
-              <input
-                ref={resourceInputRef}
-                data-workspace-primary-focus="true"
-                data-erp-form-field="true"
-                type="text"
-                value={draft.resource_code}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    resource_code: event.target.value,
-                  }))
-                }
-                placeholder="RESOURCE_CODE"
-                className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
-              />
-            </label>
+        eyebrow: "Selected Resource",
+        title: selectedMatrixRow?.resource?.title ?? "Advanced deny editor",
+        description:
+          "Main matrix only handles allow flags. Explicit deny stays here as an advanced override for the selected resource.",
+        children: selectedMatrixRow ? (
+          <div className="space-y-4">
+            <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+              <div>{selectedMatrixRow.resource.resource_code}</div>
+              <div className="mt-1">
+                {[selectedMatrixRow.resource.project_code, selectedMatrixRow.resource.module_code, selectedMatrixRow.resource.route_path]
+                  .filter(Boolean)
+                  .join(" | ")}
+              </div>
+            </div>
 
             <div className="border border-slate-300 bg-white">
-              <div className="grid grid-cols-[minmax(0,1fr)_84px_84px] border-b border-slate-300 bg-slate-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                <span>Action</span>
-                <span className="text-center">Allow</span>
+              <div className="grid grid-cols-[minmax(0,1fr)_84px] border-b border-slate-300 bg-slate-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                <span>Advanced Explicit Deny</span>
                 <span className="text-center">Deny</span>
               </div>
-              {ACTION_MATRIX.map(([action, key, label]) => (
+              {ACTION_MATRIX.map(([actionCode, , label]) => (
                 <div
-                  key={action}
-                  className="grid grid-cols-[minmax(0,1fr)_84px_84px] items-center border-b border-slate-200 px-4 py-3 text-sm text-slate-700 last:border-b-0"
+                  key={`deny-${actionCode}`}
+                  className="grid grid-cols-[minmax(0,1fr)_84px] items-center border-b border-slate-200 px-4 py-3 text-sm text-slate-700 last:border-b-0"
                 >
                   <span>{label}</span>
                   <label className="flex justify-center">
                     <input
-                      data-erp-form-field="true"
                       type="checkbox"
-                      checked={Boolean(draft[key])}
+                      checked={selectedMatrixRow.draft.denied_actions.includes(actionCode)}
                       onChange={(event) =>
-                        setDraft((current) => {
-                          const deniedActions = (current.denied_actions ?? []).filter(
-                            (item) => item !== action
-                          );
-
-                          return {
-                            ...current,
-                            [key]: event.target.checked,
-                            denied_actions: deniedActions,
-                          };
-                        })
+                        updateDenyFlag(
+                          selectedMatrixRow.resource.resource_code,
+                          actionCode,
+                          event.target.checked
+                        )
                       }
-                      className="h-4 w-4 border-slate-300 bg-white text-emerald-600"
-                    />
-                  </label>
-                  <label className="flex justify-center">
-                    <input
-                      data-erp-form-field="true"
-                      type="checkbox"
-                      checked={(draft.denied_actions ?? []).includes(action)}
-                      onChange={(event) =>
-                        setDraft((current) => {
-                          const deniedActions = new Set(current.denied_actions ?? []);
-
-                          if (event.target.checked) {
-                            deniedActions.add(action);
-                          } else {
-                            deniedActions.delete(action);
-                          }
-
-                          return {
-                            ...current,
-                            [key]: false,
-                            denied_actions: Array.from(deniedActions),
-                          };
-                        })
-                      }
-                      className="h-4 w-4 border-slate-300 bg-white text-rose-600"
+                      className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-rose-600"
                     />
                   </label>
                 </div>
               ))}
             </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleClearSelected()}
+                className="border border-rose-300 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700"
+              >
+                Clear Selected Resource Rule
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            Select one resource row from the matrix to edit advanced deny overrides.
           </div>
         ),
       }}

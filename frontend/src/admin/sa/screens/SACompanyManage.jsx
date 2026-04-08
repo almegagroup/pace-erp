@@ -15,10 +15,10 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
+import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
 
 async function readJsonSafe(response) {
   try {
@@ -79,6 +79,20 @@ function companySearchValue(row) {
     .toLowerCase();
 }
 
+const COMPANY_COLUMN_DEFS = Object.freeze([
+  { key: "company", label: "Company" },
+  { key: "gst", label: "GST" },
+  { key: "group", label: "Group" },
+  { key: "status", label: "Status" },
+]);
+
+const DEFAULT_VISIBLE_COMPANY_COLUMNS = Object.freeze([
+  "company",
+  "gst",
+  "group",
+  "status",
+]);
+
 export default function SACompanyManage() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
@@ -90,6 +104,13 @@ export default function SACompanyManage() {
   const [savingCompanyId, setSavingCompanyId] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [showColumnDrawer, setShowColumnDrawer] = useState(false);
+  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
+    useErpVisibleColumns({
+      storageKey: "erp.sa.companyManage.columns",
+      columnDefs: COMPANY_COLUMN_DEFS,
+      defaultColumnKeys: DEFAULT_VISIBLE_COMPANY_COLUMNS,
+    });
 
   async function loadCompanies() {
     setLoading(true);
@@ -173,6 +194,25 @@ export default function SACompanyManage() {
       },
       order: 30,
     },
+    {
+      id: "sa-company-manage-groups",
+      group: "Current Screen",
+      label: "Open group governance",
+      keywords: ["group governance", "company mapping", "groups"],
+      perform: () => {
+        openScreen("SA_GROUP_GOVERNANCE", { mode: "replace" });
+        navigate("/sa/groups");
+      },
+      order: 40,
+    },
+    {
+      id: "sa-company-manage-columns",
+      group: "Current Screen",
+      label: "Choose visible columns",
+      keywords: ["columns", "show hide", "table"],
+      perform: () => setShowColumnDrawer(true),
+      order: 50,
+    },
   ]);
 
   async function handleStateChange(company, nextStatus) {
@@ -217,17 +257,32 @@ export default function SACompanyManage() {
 
   const topActions = [
     {
+      key: "columns",
+      label: "Columns",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionRefs.current[0] = element;
+      },
+      onClick: () => setShowColumnDrawer(true),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 0,
+          refs: actionRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
       key: "refresh",
       label: loading ? "Refreshing..." : "Refresh",
       hint: "Alt+R",
       tone: "primary",
       buttonRef: (element) => {
-        actionRefs.current[0] = element;
+        actionRefs.current[1] = element;
       },
       onClick: () => void loadCompanies(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 0,
+          index: 1,
           refs: actionRefs.current,
           orientation: "horizontal",
         }),
@@ -237,12 +292,27 @@ export default function SACompanyManage() {
       label: "Create Company",
       tone: "neutral",
       buttonRef: (element) => {
-        actionRefs.current[1] = element;
+        actionRefs.current[2] = element;
       },
       onClick: () => openRoute("/sa/company/create"),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 1,
+          index: 2,
+          refs: actionRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
+      key: "groups",
+      label: "Group Governance",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionRefs.current[3] = element;
+      },
+      onClick: () => openRoute("/sa/groups"),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 3,
           refs: actionRefs.current,
           orientation: "horizontal",
         }),
@@ -250,163 +320,208 @@ export default function SACompanyManage() {
   ];
 
   return (
-    <ErpScreenScaffold
-      eyebrow="Company Governance"
-      title="Manage Business Companies"
-      description="Review business companies, search the current registry, and enable or disable a company without touching database rows directly."
-      topActions={topActions}
-      error={error}
-      notice={notice}
-    >
-      <section className="grid gap-3 md:grid-cols-4">
-        <ErpFieldPreview
-          label="Total Companies"
-          value={String(metrics.total)}
-          caption="Business companies visible in company master."
-          tone="sky"
-          badge="Live"
-        />
-        <ErpFieldPreview
-          label="Active"
-          value={String(metrics.active)}
-          caption="Currently enabled companies."
-          tone="emerald"
-          badge="Ready"
-        />
-        <ErpFieldPreview
-          label="Inactive"
-          value={String(metrics.inactive)}
-          caption="Companies currently disabled."
-          tone="amber"
-          badge="Paused"
-        />
-        <ErpFieldPreview
-          label="Mapped To Group"
-          value={String(metrics.mapped)}
-          caption="Companies already linked to a group."
-          tone="sky"
-          badge="Map"
-        />
-      </section>
-
-      <ErpSectionCard
-        eyebrow="Registry Filter"
-        title="Search Company Inventory"
-        description="Filter by company code, company name, GST, group, or lifecycle state."
-      >
-        <label className="grid gap-2 text-sm text-slate-700">
-          <span className="font-medium text-slate-800">Search</span>
-          <input
-            ref={searchRef}
-            data-workspace-primary-focus="true"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search company code, name, GST, group, status"
-            className="w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-          />
-        </label>
-      </ErpSectionCard>
-
-      <ErpSectionCard
-        eyebrow="Lifecycle"
-        title="Company Manage Workspace"
-        description="Enable or disable a company from the current registry. No hard delete path is exposed here."
-      >
-        {loading ? (
-          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            Loading company inventory...
-          </div>
-        ) : filteredCompanies.length === 0 ? (
-          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            No company matched the current search.
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full border-collapse">
-              <thead>
-                <tr>
-                  {["Company", "GST", "Group", "Status", "Action"].map((label) => (
-                    <th
-                      key={label}
-                      className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-                    >
-                      {label}
+    <>
+      <ErpMasterListTemplate
+        eyebrow="Company Governance"
+        title="Manage Business Companies"
+        description="Business company lifecycle should behave like a compact operating register. Search fast, hide unnecessary columns, and change state without leaving the sheet."
+        actions={topActions}
+        notices={[
+          ...(error ? [{ key: "error", tone: "error", message: error }] : []),
+          ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
+        ]}
+        metrics={[
+          {
+            key: "total",
+            label: "Total Companies",
+            value: String(metrics.total),
+            caption: "Business companies visible in company master.",
+            tone: "sky",
+            badge: "Live",
+          },
+          {
+            key: "active",
+            label: "Active",
+            value: String(metrics.active),
+            caption: "Currently enabled companies.",
+            tone: "emerald",
+            badge: "Ready",
+          },
+          {
+            key: "inactive",
+            label: "Inactive",
+            value: String(metrics.inactive),
+            caption: "Companies currently disabled.",
+            tone: "amber",
+            badge: "Paused",
+          },
+          {
+            key: "mapped",
+            label: "Mapped To Group",
+            value: String(metrics.mapped),
+            caption: "Companies already linked to a group.",
+            tone: "slate",
+            badge: "Map",
+          },
+        ]}
+        filterSection={{
+          eyebrow: "Registry Filter",
+          title: "Search company inventory",
+          aside: (
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+              {visibleColumnKeys.length}/{COMPANY_COLUMN_DEFS.length} visible columns
+            </div>
+          ),
+          children: (
+            <QuickFilterInput
+              inputRef={searchRef}
+              primaryFocus
+              label="Quick Search"
+              value={search}
+              onChange={setSearch}
+              placeholder="Search company code, name, GST, group, status"
+              hint="Alt+Shift+F jumps here. Use Columns to hide noise and keep only the fields needed."
+            />
+          ),
+        }}
+        listSection={{
+          eyebrow: "Lifecycle",
+          title: loading
+            ? "Refreshing company register"
+            : `${filteredCompanies.length} visible compan${filteredCompanies.length === 1 ? "y" : "ies"}`,
+          description: "Action column stays visible so lifecycle change remains one move away.",
+          children: loading ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+              Loading company inventory...
+            </div>
+          ) : filteredCompanies.length === 0 ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+              No company matched the current search.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="erp-grid-table min-w-full">
+                <thead>
+                  <tr>
+                    {visibleColumns.map((column) => (
+                      <th
+                        key={column.key}
+                        className="border-b border-slate-300 bg-[#e8eef4] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
+                      >
+                        {column.label}
+                      </th>
+                    ))}
+                    <th className="border-b border-slate-300 bg-[#e8eef4] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      Action
                     </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredCompanies.map((row, index) => {
-                  const isSaving = savingCompanyId === row.id;
-                  const isActive = normalize(row.status).toUpperCase() === "ACTIVE";
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredCompanies.map((row, index) => {
+                    const isSaving = savingCompanyId === row.id;
+                    const isActive = normalize(row.status).toUpperCase() === "ACTIVE";
 
-                  return (
-                    <tr
-                      key={row.id}
-                      ref={(element) => {
-                        rowRefs.current[index] = element;
-                      }}
-                      tabIndex={0}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: rowRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className="border-b border-slate-200 bg-white"
-                    >
-                      <td className="px-3 py-2 text-sm text-slate-700">
-                        <div className="font-semibold text-slate-900">{row.company_code}</div>
-                        <div className="text-xs text-slate-500">{row.company_name}</div>
-                      </td>
-                      <td className="px-3 py-2 text-sm text-slate-700">
-                        {row.gst_number || "Not linked"}
-                      </td>
-                      <td className="px-3 py-2 text-sm text-slate-700">
-                        {row.group_code
-                          ? `${row.group_code}${row.group_name ? ` | ${row.group_name}` : ""}`
-                          : "Not mapped"}
-                      </td>
-                      <td className="px-3 py-2 text-sm text-slate-700">
-                        <span
-                          className={`inline-flex min-w-[84px] justify-center border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${
-                            isActive
-                              ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                              : "border-amber-300 bg-amber-50 text-amber-700"
-                          }`}
-                        >
-                          {row.status || "Unknown"}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-sm text-slate-700">
-                        <button
-                          type="button"
-                          disabled={isSaving}
-                          onClick={() =>
-                            void handleStateChange(row, isActive ? "INACTIVE" : "ACTIVE")
-                          }
-                          className={`border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] ${
-                            isActive
-                              ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
-                              : "border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                          } disabled:cursor-not-allowed disabled:opacity-60`}
-                        >
-                          {isSaving
-                            ? "Saving..."
-                            : isActive
-                              ? "Disable"
-                              : "Enable"}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </ErpSectionCard>
-    </ErpScreenScaffold>
+                    return (
+                      <tr
+                        key={row.id}
+                        ref={(element) => {
+                          rowRefs.current[index] = element;
+                        }}
+                        tabIndex={0}
+                        onKeyDown={(event) =>
+                          handleLinearNavigation(event, {
+                            index,
+                            refs: rowRefs.current,
+                            orientation: "vertical",
+                          })
+                        }
+                        className="border-b border-slate-200"
+                      >
+                        {visibleColumns.map((column) => (
+                          <td key={column.key} className="px-3 py-2 text-sm text-slate-700">
+                            {column.key === "company" ? (
+                              <div>
+                                <div className="font-semibold text-slate-900">
+                                  {row.company_code}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  {row.company_name}
+                                </div>
+                              </div>
+                            ) : null}
+                            {column.key === "gst" ? row.gst_number || "Not linked" : null}
+                            {column.key === "group"
+                              ? row.group_code
+                                ? `${row.group_code}${row.group_name ? ` | ${row.group_name}` : ""}`
+                                : "Not mapped"
+                              : null}
+                            {column.key === "status" ? (
+                              <span
+                                className={`inline-flex min-w-[92px] justify-center border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${
+                                  isActive
+                                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                                    : "border-amber-300 bg-amber-50 text-amber-700"
+                                }`}
+                              >
+                                {row.status || "Unknown"}
+                              </span>
+                            ) : null}
+                          </td>
+                        ))}
+                        <td className="px-3 py-2 text-sm text-slate-700">
+                          <button
+                            type="button"
+                            disabled={isSaving}
+                            onClick={() =>
+                              void handleStateChange(row, isActive ? "INACTIVE" : "ACTIVE")
+                            }
+                            className={`border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] ${
+                              isActive
+                                ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                                : "border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                            } disabled:cursor-not-allowed disabled:opacity-60`}
+                          >
+                            {isSaving ? "Saving..." : isActive ? "Disable" : "Enable"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ),
+        }}
+        sideSection={{
+          eyebrow: "View Control",
+          title: "Operator notes",
+          description: "Keep the sheet dense and task-focused like a real ERP register.",
+          children: (
+            <div className="grid gap-2 text-sm text-slate-700">
+              <div className="border border-slate-200 bg-white px-3 py-3">
+                Columns can be hidden without losing data or workflow actions.
+              </div>
+              <div className="border border-slate-200 bg-white px-3 py-3">
+                Lifecycle change stays explicit. No hard delete path exists on this screen.
+              </div>
+              <div className="border border-slate-200 bg-white px-3 py-3">
+                Search works across code, company, GST, group, and current state.
+              </div>
+            </div>
+          ),
+        }}
+      />
+
+      <ErpColumnVisibilityDrawer
+        visible={showColumnDrawer}
+        title="Company Register Columns"
+        description="Hide columns that are not needed for the current company review session."
+        columns={COMPANY_COLUMN_DEFS}
+        visibleColumnKeys={visibleColumnKeys}
+        onToggleColumn={toggleColumn}
+        onResetColumns={resetColumns}
+        onClose={() => setShowColumnDrawer(false)}
+      />
+    </>
   );
 }

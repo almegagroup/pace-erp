@@ -48,6 +48,7 @@ export async function listApproverRulesHandler(
         module_code,
         resource_code,
         action_code,
+        subject_work_context_id,
         approval_stage,
         approver_role_code,
         approver_user_id,

@@ -41,7 +41,7 @@ export async function createDepartmentHandler(
     const departmentName = body.department_name?.trim();
     const targetCompanyId = body.company_id?.trim() || ctx.context.companyId;
 
-    if (!departmentName || departmentName.length < 3) {
+    if (!departmentName || departmentName.length < 2) {
       return errorResponse(
         "DEPARTMENT_NAME_REQUIRED",
         "department name required",

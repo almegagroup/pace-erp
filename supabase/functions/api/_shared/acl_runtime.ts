@@ -40,6 +40,45 @@ export async function getActiveAclVersionIdForCompany(
   return data.acl_version_id;
 }
 
+export async function ensureAclVersionSourceCaptured(
+  db: SupabaseClient,
+  aclVersionId: string,
+  companyId: string,
+  actorUserId?: string | null,
+): Promise<void> {
+  const { data: versionRow, error: versionError } = await db
+    .schema("acl")
+    .from("acl_versions")
+    .select("acl_version_id, source_captured_at")
+    .eq("acl_version_id", aclVersionId)
+    .eq("company_id", companyId)
+    .maybeSingle();
+
+  if (versionError) {
+    throw new Error(`ACL_VERSION_READ_FAILED:${versionError.message}`);
+  }
+
+  if (!versionRow?.acl_version_id) {
+    throw new Error("ACL_VERSION_NOT_FOUND");
+  }
+
+  if (versionRow.source_captured_at) {
+    return;
+  }
+
+  const { error: captureError } = await db
+    .schema("acl")
+    .rpc("capture_acl_version_source", {
+      p_acl_version_id: aclVersionId,
+      p_company_id: companyId,
+      p_actor: actorUserId ?? null,
+    });
+
+  if (captureError) {
+    throw new Error(`ACL_VERSION_SOURCE_CAPTURE_FAILED:${captureError.message}`);
+  }
+}
+
 export async function rebuildAdminSessionMenuSnapshot(
   db: SupabaseClient,
   authUserId: string,
@@ -132,15 +171,24 @@ export async function rebuildAclSessionMenuSnapshot(
 
   const { error: aclError } = existingSnapshot
     ? { error: null }
-    : await db
-      .schema("acl")
-      .rpc("generate_acl_snapshot", {
-        p_acl_version_id: aclVersionId,
-        p_company_id: companyId,
-      });
+    : await (async () => {
+      await ensureAclVersionSourceCaptured(
+        db,
+        aclVersionId,
+        companyId,
+        authUserId,
+      );
+
+      return await db
+        .schema("acl")
+        .rpc("generate_acl_snapshot", {
+          p_acl_version_id: aclVersionId,
+          p_company_id: companyId,
+        });
+    })();
 
   if (aclError) {
-    throw new Error("ACL_SNAPSHOT_REBUILD_FAILED");
+    throw new Error(`ACL_SNAPSHOT_REBUILD_FAILED:${aclError.message}`);
   }
 
   const { error: menuBuildError } = await db
@@ -153,7 +201,7 @@ export async function rebuildAclSessionMenuSnapshot(
     });
 
   if (menuBuildError) {
-    throw new Error("ACL_MENU_SNAPSHOT_REBUILD_FAILED");
+    throw new Error(`ACL_MENU_SNAPSHOT_REBUILD_FAILED:${menuBuildError.message}`);
   }
 
   const { data: menuRows, error: menuReadError } = await db

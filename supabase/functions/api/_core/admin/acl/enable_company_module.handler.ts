@@ -79,9 +79,68 @@ export async function enableCompanyModuleHandler(
     const moduleCode = body.module_code.trim();
 
     /* --------------------------------------------------
-     * 3️⃣ Upsert enablement (idempotent)
+     * 3️⃣ Validate company + module + project mapping
      * -------------------------------------------------- */
     const db = getServiceRoleClientWithContext(ctx.context);
+
+    const { data: company } = await db
+      .schema("erp_master")
+      .from("companies")
+      .select("id")
+      .eq("id", companyId)
+      .eq("company_kind", "BUSINESS")
+      .maybeSingle();
+
+    if (!company) {
+      return errorResponse(
+        "COMPANY_NOT_FOUND",
+        "company not found",
+        requestId
+      );
+    }
+
+    const { data: module } = await db
+      .schema("acl")
+      .from("module_registry")
+      .select("module_code, project_id, is_active")
+      .eq("module_code", moduleCode)
+      .maybeSingle();
+
+    if (!module) {
+      return errorResponse(
+        "MODULE_NOT_FOUND",
+        "module not found",
+        requestId
+      );
+    }
+
+    if (module.is_active !== true) {
+      return errorResponse(
+        "MODULE_INACTIVE",
+        "inactive module cannot be enabled for company",
+        requestId
+      );
+    }
+
+    const { data: mapping } = await db
+      .schema("erp_map")
+      .from("company_projects")
+      .select("company_id, project_id")
+      .eq("company_id", companyId)
+      .eq("project_id", module.project_id)
+      .maybeSingle();
+
+    if (!mapping) {
+      return errorResponse(
+        "PROJECT_NOT_MAPPED_TO_COMPANY",
+        "project must be mapped to company before enabling module",
+        requestId
+      );
+    }
+
+    /* --------------------------------------------------
+     * 4️⃣ Upsert enablement (idempotent)
+     * -------------------------------------------------- */
 
     const { error } = await db
       .schema("acl").from("company_module_map")
@@ -111,7 +170,7 @@ export async function enableCompanyModuleHandler(
     }
 
     /* --------------------------------------------------
-     * 4️⃣ Success
+     * 5️⃣ Success
      * -------------------------------------------------- */
     log({
       level: "SECURITY",

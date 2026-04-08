@@ -5,11 +5,17 @@ import ErpScreenScaffold, {
 import {
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
-import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
+import { openRoute } from "../../../navigation/screenStackEngine.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { buildMenuTree, getTopLevelRoutePages } from "../../../navigation/menuProjection.js";
+import {
+  readViewSnapshotCache,
+  writeViewSnapshotCache,
+} from "../../../store/viewSnapshotCache.js";
+
+const SA_HOME_CACHE_KEY = "sa-home-dashboard";
 
 async function readJsonSafe(response) {
   try {
@@ -19,11 +25,13 @@ async function readJsonSafe(response) {
   }
 }
 
-async function fetchControlPanelSnapshot() {
+async function fetchControlPanelSnapshot({ uiMode = "background" } = {}) {
   const response = await fetch(
     `${import.meta.env.VITE_API_BASE}/api/admin/control-panel`,
     {
       credentials: "include",
+      erpUiMode: uiMode,
+      erpUiLabel: "Refreshing dashboard snapshot",
     }
   );
 
@@ -36,11 +44,13 @@ async function fetchControlPanelSnapshot() {
   return json.data;
 }
 
-async function fetchSystemHealthSnapshot() {
+async function fetchSystemHealthSnapshot({ uiMode = "background" } = {}) {
   const response = await fetch(
     `${import.meta.env.VITE_API_BASE}/api/admin/system-health`,
     {
       credentials: "include",
+      erpUiMode: uiMode,
+      erpUiLabel: "Refreshing dashboard snapshot",
     }
   );
 
@@ -73,12 +83,11 @@ function HomeActionCard({
   action,
   index,
   refs,
+  registerRef,
 }) {
   return (
     <button
-      ref={(element) => {
-        refs.current[index] = element;
-      }}
+      ref={registerRef}
       data-workspace-primary-focus={index === 0 ? "true" : undefined}
       type="button"
       onClick={action.onClick}
@@ -108,26 +117,38 @@ function HomeActionCard({
 }
 
 export default function SAHome() {
+  const cachedSnapshot = readViewSnapshotCache(SA_HOME_CACHE_KEY);
   const { menu } = useMenu();
-  const [controlPanel, setControlPanel] = useState(null);
-  const [systemHealth, setSystemHealth] = useState(null);
+  const [controlPanel, setControlPanel] = useState(
+    () => cachedSnapshot?.controlPanel ?? null
+  );
+  const [systemHealth, setSystemHealth] = useState(
+    () => cachedSnapshot?.systemHealth ?? null
+  );
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(
+    () => !cachedSnapshot?.controlPanel || !cachedSnapshot?.systemHealth
+  );
   const topActionRefs = useRef([]);
   const cardRefs = useRef([]);
 
-  async function refreshDashboardSnapshot() {
+  async function refreshDashboardSnapshot({ userInitiated = false } = {}) {
     setLoading(true);
     setError("");
 
     try {
+      const uiMode = userInitiated ? "blocking" : "background";
       const [controlPanelData, systemHealthData] = await Promise.all([
-        fetchControlPanelSnapshot(),
-        fetchSystemHealthSnapshot(),
+        fetchControlPanelSnapshot({ uiMode }),
+        fetchSystemHealthSnapshot({ uiMode }),
       ]);
 
       setControlPanel(controlPanelData);
       setSystemHealth(systemHealthData);
+      writeViewSnapshotCache(SA_HOME_CACHE_KEY, {
+        controlPanel: controlPanelData,
+        systemHealth: systemHealthData,
+      });
     } catch {
       setControlPanel(null);
       setSystemHealth(null);
@@ -167,7 +188,7 @@ export default function SAHome() {
       buttonRef: (element) => {
         topActionRefs.current[0] = element;
       },
-      onClick: () => void refreshDashboardSnapshot(),
+      onClick: () => void refreshDashboardSnapshot({ userInitiated: true }),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 0,
@@ -176,13 +197,13 @@ export default function SAHome() {
         }),
     },
     {
-      key: "open-control-panel",
-      label: "Control Panel",
+      key: "open-menu-governance",
+      label: "Menu Governance",
       tone: "neutral",
       buttonRef: (element) => {
         topActionRefs.current[1] = element;
       },
-      onClick: () => openScreen("SA_CONTROL_PANEL"),
+      onClick: () => openRoute("/sa/menu"),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 1,
@@ -234,7 +255,7 @@ export default function SAHome() {
         group: "Current Screen",
         label: "Refresh SA dashboard snapshot",
         keywords: ["refresh", "dashboard", "snapshot", "home"],
-        perform: () => void refreshDashboardSnapshot(),
+        perform: () => void refreshDashboardSnapshot({ userInitiated: true }),
         order: 10,
       },
       {
@@ -261,7 +282,7 @@ export default function SAHome() {
 
   useErpScreenHotkeys({
     refresh: {
-      perform: () => void refreshDashboardSnapshot(),
+      perform: () => void refreshDashboardSnapshot({ userInitiated: true }),
     },
     focusPrimary: {
       perform: () => cardRefs.current[0]?.focus?.(),
@@ -299,6 +320,9 @@ export default function SAHome() {
               action={action}
               index={index}
               refs={cardRefs}
+              registerRef={(element) => {
+                cardRefs.current[index] = element;
+              }}
             />
           ))}
         </div>

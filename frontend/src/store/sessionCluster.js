@@ -438,12 +438,19 @@ export function startClusterWindowOwnershipGuard(onOwnershipLost) {
   };
 }
 
-export async function requestSessionClusterAdmission(joinToken = null) {
+export async function requestSessionClusterAdmission(joinToken = null, options = {}) {
+  const {
+    uiMode,
+    uiLabel = "Validating workspace session",
+  } = options;
+
   const response = await globalThis.fetch(
     `${import.meta.env.VITE_API_BASE}/api/session/cluster/admit`,
     {
       method: "POST",
       credentials: "include",
+      erpUiMode: uiMode,
+      erpUiLabel: uiLabel,
       headers: {
         "Content-Type": "application/json",
       },

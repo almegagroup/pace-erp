@@ -274,9 +274,6 @@ export default function SAUserRoles() {
     [roleFilteredUsers, searchQuery]
   );
 
-  const privilegedCount = governableUsers.filter(
-    (user) => user.role_code === "SA" || user.role_code === "GA"
-  ).length;
   const assignedCount = governableUsers.filter((user) => user.role_code).length;
   const unassignedCount = governableUsers.filter((user) => !user.role_code).length;
   const managerCount = governableUsers.filter((user) =>

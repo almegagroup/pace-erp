@@ -18,7 +18,9 @@ import { listCompaniesHandler } from "../_core/admin/company/list_companies.hand
 import { updateCompanyStateHandler } from "../_core/admin/company/update_company_state.handler.ts";
 
 import { createGroupHandler } from "../_core/admin/group/create_group.handler.ts";
+import { deleteGroupHandler } from "../_core/admin/group/delete_group.handler.ts";
 import { updateGroupStateHandler } from "../_core/admin/group/update_group_state.handler.ts";
+import { updateGroupHandler } from "../_core/admin/group/update_group.handler.ts";
 import { mapCompanyToGroupHandler } from "../_core/admin/group/map_company_to_group.handler.ts";
 import { unmapCompanyFromGroupHandler } from "../_core/admin/group/unmap_company_group.handler.ts";
 import { listGroupsHandler } from "../_core/admin/group/list_groups.handler.ts";
@@ -26,12 +28,30 @@ import { listGroupsHandler } from "../_core/admin/group/list_groups.handler.ts";
 import { createProjectHandler } from "../_core/admin/project/create_project.handler.ts";
 import { listProjectsHandler } from "../_core/admin/project/list_projects.handler.ts";
 import { updateProjectStateHandler } from "../_core/admin/project/update_project_state.handler.ts";
+import { listProjectCompanyMapHandler } from "../_core/admin/project/list_project_company_map.handler.ts";
+import { mapCompanyToProjectHandler } from "../_core/admin/project/map_company_to_project.handler.ts";
+import { unmapCompanyProjectHandler } from "../_core/admin/project/unmap_company_project.handler.ts";
+import { createModuleHandler } from "../_core/admin/module/create_module.handler.ts";
+import { listModulesHandler } from "../_core/admin/module/list_modules.handler.ts";
+import { listModuleResourceMapHandler } from "../_core/admin/module/list_module_resource_map.handler.ts";
+import { removeModuleResourceMapHandler } from "../_core/admin/module/remove_module_resource_map.handler.ts";
+import { updateModuleStateHandler } from "../_core/admin/module/update_module_state.handler.ts";
+import { updateModuleHandler } from "../_core/admin/module/update_module.handler.ts";
+import { upsertModuleResourceMapHandler } from "../_core/admin/module/upsert_module_resource_map.handler.ts";
 
 import { createDepartmentHandler } from "../_core/admin/department/create_department.handler.ts";
 import { listDepartmentsHandler } from "../_core/admin/department/list_departments.handler.ts";
+import { updateDepartmentStateHandler } from "../_core/admin/department/update_department_state.handler.ts";
 import { listApproverRulesHandler } from "../_core/admin/approval/list_approver_rules.handler.ts";
 import { upsertApproverRuleHandler } from "../_core/admin/approval/upsert_approver_rule.handler.ts";
 import { deleteApproverRuleHandler } from "../_core/admin/approval/delete_approver_rule.handler.ts";
+import { listApprovalWorkspaceHandler } from "../_core/admin/approval/approval_workspace.handler.ts";
+import { listReportVisibilityWorkspaceHandler } from "../_core/admin/approval/report_visibility_workspace.handler.ts";
+import { listReportViewerRulesHandler } from "../_core/admin/approval/list_report_viewer_rules.handler.ts";
+import { upsertReportViewerRuleHandler } from "../_core/admin/approval/upsert_report_viewer_rule.handler.ts";
+import { deleteReportViewerRuleHandler } from "../_core/admin/approval/delete_report_viewer_rule.handler.ts";
+import { listResourceApprovalPolicyHandler } from "../_core/admin/approval/list_resource_approval_policy.handler.ts";
+import { upsertResourceApprovalPolicyHandler } from "../_core/admin/approval/upsert_resource_approval_policy.handler.ts";
 
 import { listUsersHandler } from "../_core/admin/user/list_users.handler.ts";
 import { getUserScopeHandler } from "../_core/admin/user/get_user_scope.handler.ts";
@@ -45,6 +65,20 @@ import { listSessionsHandler } from "../_core/admin/session/list_sessions.handle
 import { revokeSessionHandler } from "../_core/admin/session/revoke_session.handler.ts";
 import { systemHealthHandler } from "../_core/admin/diagnostics/system_health.handler.ts";
 import { controlPanelHandler } from "../_core/admin/diagnostics/control_panel.handler.ts";
+import { listCapabilitiesHandler } from "../_core/admin/acl/list_capabilities.handler.ts";
+import { upsertCapabilityHandler } from "../_core/admin/acl/upsert_capability.handler.ts";
+import { listCapabilityActionsHandler } from "../_core/admin/acl/list_capability_actions.handler.ts";
+import { upsertCapabilityActionHandler } from "../_core/admin/acl/upsert_capability_action.handler.ts";
+import { disableCapabilityActionHandler } from "../_core/admin/acl/disable_capability_action.handler.ts";
+import { listWorkContextsHandler } from "../_core/admin/acl/list_work_contexts.handler.ts";
+import { upsertWorkContextHandler } from "../_core/admin/acl/upsert_work_context.handler.ts";
+import { listWorkContextCapabilitiesHandler } from "../_core/admin/acl/list_work_context_capabilities.handler.ts";
+import { assignWorkContextCapabilityHandler } from "../_core/admin/acl/assign_work_context_capability.handler.ts";
+import { unassignWorkContextCapabilityHandler } from "../_core/admin/acl/unassign_work_context_capability.handler.ts";
+import { listAclVersionsHandler } from "../_core/admin/acl/list_acl_versions.handler.ts";
+import { createAclVersionHandler } from "../_core/admin/acl/create_acl_version.handler.ts";
+import { activateAclVersionHandler } from "../_core/admin/acl/activate_acl_version.handler.ts";
+import { deleteAclVersionHandler } from "../_core/admin/acl/delete_acl_version.handler.ts";
 
 import type { SessionResolution } from "../_pipeline/session.ts";
 import type { ContextResolution } from "../_pipeline/context.ts";
@@ -160,6 +194,20 @@ export async function dispatchAdminRoutes(
       });
       break;
 
+    case "PATCH:/api/admin/group":
+      response = await updateGroupHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "DELETE:/api/admin/group":
+      response = await deleteGroupHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
     case "GET:/api/admin/groups":
       response = await listGroupsHandler(req, {
         context,
@@ -209,6 +257,76 @@ export async function dispatchAdminRoutes(
       });
       break;
 
+    case "GET:/api/admin/project/company-map":
+      response = await listProjectCompanyMapHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/project/map-company":
+      response = await mapCompanyToProjectHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/project/unmap-company":
+      response = await unmapCompanyProjectHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/module":
+      response = await createModuleHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/module/update":
+      response = await updateModuleHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/modules":
+      response = await listModulesHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/module-resource-map":
+      response = await listModuleResourceMapHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/module-resource-map":
+      response = await upsertModuleResourceMapHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/module-resource-map/remove":
+      response = await removeModuleResourceMapHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/module/state":
+      response = await updateModuleStateHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
     case "POST:/api/admin/department":
       response = await createDepartmentHandler(req, {
         context,
@@ -223,6 +341,13 @@ export async function dispatchAdminRoutes(
       });
       break;
 
+    case "POST:/api/admin/department/state":
+      response = await updateDepartmentStateHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
     case "GET:/api/admin/approval/approvers":
       response = await listApproverRulesHandler(req, {
         context,
@@ -230,6 +355,34 @@ export async function dispatchAdminRoutes(
           authUserId: session.authUserId,
           roleCode: context.roleCode,
         },
+      });
+      break;
+
+    case "GET:/api/admin/approval/workspace":
+      response = await listApprovalWorkspaceHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/report-visibility/workspace":
+      response = await listReportVisibilityWorkspaceHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/approval/resource-policy":
+      response = await listResourceApprovalPolicyHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "POST:/api/admin/approval/resource-policy":
+      response = await upsertResourceApprovalPolicyHandler(req, {
+        context,
+        request_id: requestId,
       });
       break;
 
@@ -250,6 +403,121 @@ export async function dispatchAdminRoutes(
           authUserId: session.authUserId,
           roleCode: context.roleCode,
         },
+      });
+      break;
+
+    case "GET:/api/admin/approval/viewers":
+      response = await listReportViewerRulesHandler(req, {
+        context,
+        session: {
+          authUserId: session.authUserId,
+          roleCode: context.roleCode,
+        },
+      });
+      break;
+
+    case "POST:/api/admin/approval/viewers":
+      response = await upsertReportViewerRuleHandler(req, {
+        context,
+        session: {
+          authUserId: session.authUserId,
+          roleCode: context.roleCode,
+        },
+      });
+      break;
+
+    case "POST:/api/admin/approval/viewers/delete":
+      response = await deleteReportViewerRuleHandler(req, {
+        context,
+        session: {
+          authUserId: session.authUserId,
+          roleCode: context.roleCode,
+        },
+      });
+      break;
+
+    case "GET:/api/admin/acl/capabilities":
+      response = await listCapabilitiesHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/capabilities":
+      response = await upsertCapabilityHandler(req, {
+        context,
+      });
+      break;
+
+    case "GET:/api/admin/acl/capability-actions":
+      response = await listCapabilityActionsHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/capability-actions":
+      response = await upsertCapabilityActionHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/capability-actions/disable":
+      response = await disableCapabilityActionHandler(req, {
+        context,
+      });
+      break;
+
+    case "GET:/api/admin/acl/work-contexts":
+      response = await listWorkContextsHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/work-contexts":
+      response = await upsertWorkContextHandler(req, {
+        context,
+      });
+      break;
+
+    case "GET:/api/admin/acl/work-context-capabilities":
+      response = await listWorkContextCapabilitiesHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/work-context-capabilities/assign":
+      response = await assignWorkContextCapabilityHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/work-context-capabilities/unassign":
+      response = await unassignWorkContextCapabilityHandler(req, {
+        context,
+      });
+      break;
+
+    case "GET:/api/admin/acl/versions":
+      response = await listAclVersionsHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/versions":
+      response = await createAclVersionHandler(req, {
+        context,
+        auth_user_id: session.authUserId,
+      });
+      break;
+
+    case "POST:/api/admin/acl/versions/activate":
+      response = await activateAclVersionHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/versions/delete":
+      response = await deleteAclVersionHandler(req, {
+        context,
       });
       break;
 

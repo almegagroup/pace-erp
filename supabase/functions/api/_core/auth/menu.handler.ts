@@ -264,6 +264,50 @@ interface MenuAdminCtx {
   session_id?: string;
 }
 
+function mapMenuMutationErrorCode(error: { code?: string; message?: string; details?: string | null }) {
+  const combined = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
+
+  if (error.code === "23505") {
+    if (combined.includes("ux_menu_master_menu_code")) {
+      return {
+        code: "MENU_CODE_CONFLICT",
+        status: 409,
+        message: "menu_code is already used by another menu row",
+      };
+    }
+
+    if (combined.includes("ux_menu_master_resource_code")) {
+      return {
+        code: "MENU_RESOURCE_CONFLICT",
+        status: 409,
+        message: "resource_code is already used by another menu row",
+      };
+    }
+
+    if (combined.includes("ux_menu_master_route_path")) {
+      return {
+        code: "MENU_ROUTE_CONFLICT",
+        status: 409,
+        message: "route_path is already published by another page",
+      };
+    }
+  }
+
+  if (error.code === "23514" && combined.includes("chk_page_requires_route")) {
+    return {
+      code: "MENU_PAGE_ROUTE_REQUIRED",
+      status: 400,
+      message: "PAGE rows must keep a route_path and GROUP rows must not have one",
+    };
+  }
+
+  return {
+    code: null,
+    status: 500,
+    message: error.message ?? "Menu mutation failed",
+  };
+}
+
 async function resolveMenuIdByCode(
   db: ReturnType<typeof getServiceRoleClientWithContext>,
   menuCode?: string | null
@@ -355,12 +399,13 @@ export async function createMenuHandler(
     .single();
 
   if (error) {
+    const mapped = mapMenuMutationErrorCode(error);
     return errorResponse(
-      "MENU_CREATE_FAILED",
-      error.message,
+      mapped.code ?? "MENU_CREATE_FAILED",
+      mapped.message,
       ctx.request_id,
       "NONE",
-      500
+      mapped.status
     );
   }
 
@@ -412,12 +457,27 @@ export async function updateMenuHandler(
 
   const db = getServiceRoleClientWithContext(ctx.context);
 
+  if (!body.menu_code) {
+    return errorResponse(
+      "MENU_CODE_REQUIRED",
+      "menu_code is required",
+      ctx.request_id,
+      "NONE",
+      400
+    );
+  }
+
+  const nextMenuCode = body.next_menu_code ?? body.menu_code;
+
   const { error } = await db
     .schema("erp_menu").from("menu_master")
     .update({
+      menu_code: nextMenuCode,
+      resource_code: body.resource_code ?? undefined,
       title: body.title,
       description: body.description ?? null,
       route_path: body.route_path ?? null,
+      menu_type: body.menu_type ?? undefined,
       display_order: body.display_order ?? 0,
       updated_at: new Date().toISOString(),
       updated_by: ctx.auth_user_id
@@ -425,9 +485,119 @@ export async function updateMenuHandler(
     .eq("menu_code", body.menu_code);
 
   if (error) {
+    const mapped = mapMenuMutationErrorCode(error);
     return errorResponse(
-      "MENU_UPDATE_FAILED",
-      error.message,
+      mapped.code ?? "MENU_UPDATE_FAILED",
+      mapped.message,
+      ctx.request_id,
+      "NONE",
+      mapped.status
+    );
+  }
+
+  const refresh = await refreshAdminSessionMenuSnapshot(ctx);
+
+  return okResponse(
+    {
+      updated: true,
+      snapshot_refreshed: refresh.ok,
+      snapshot_refresh_reason: refresh.reason ?? null,
+    },
+    ctx.request_id,
+    req
+  );
+}
+
+export async function deleteMenuHandler(
+  req: Request,
+  ctx: MenuAdminCtx
+): Promise<Response> {
+  const body = await req.json();
+  const db = getServiceRoleClientWithContext(ctx.context);
+
+  if (!body.menu_code) {
+    return errorResponse(
+      "MENU_CODE_REQUIRED",
+      "menu_code is required",
+      ctx.request_id,
+      "NONE",
+      400
+    );
+  }
+
+  const { data: target, error: readError } = await db
+    .schema("erp_menu")
+    .from("menu_master")
+    .select("id, menu_code, is_system, menu_type")
+    .eq("menu_code", body.menu_code)
+    .maybeSingle();
+
+  if (readError) {
+    return errorResponse(
+      "MENU_DELETE_READ_FAILED",
+      readError.message,
+      ctx.request_id,
+      "NONE",
+      500
+    );
+  }
+
+  if (!target) {
+    return errorResponse(
+      "MENU_NOT_FOUND",
+      "Target menu not found",
+      ctx.request_id,
+      "NONE",
+      404
+    );
+  }
+
+  if (target.is_system === true) {
+    return errorResponse(
+      "MENU_DELETE_FORBIDDEN",
+      "System menu cannot be deleted",
+      ctx.request_id,
+      "NONE",
+      409
+    );
+  }
+
+  const { count: childCount, error: childCountError } = await db
+    .schema("erp_menu")
+    .from("menu_tree")
+    .select("id", { count: "exact", head: true })
+    .eq("parent_menu_id", target.id);
+
+  if (childCountError) {
+    return errorResponse(
+      "MENU_DELETE_CHILD_READ_FAILED",
+      childCountError.message,
+      ctx.request_id,
+      "NONE",
+      500
+    );
+  }
+
+  if ((childCount ?? 0) > 0) {
+    return errorResponse(
+      "MENU_DELETE_HAS_CHILDREN",
+      "Move child rows out before deleting this group",
+      ctx.request_id,
+      "NONE",
+      409
+    );
+  }
+
+  const { error: deleteError } = await db
+    .schema("erp_menu")
+    .from("menu_master")
+    .delete()
+    .eq("menu_code", body.menu_code);
+
+  if (deleteError) {
+    return errorResponse(
+      "MENU_DELETE_FAILED",
+      deleteError.message,
       ctx.request_id,
       "NONE",
       500
@@ -438,7 +608,7 @@ export async function updateMenuHandler(
 
   return okResponse(
     {
-      updated: true,
+      deleted: true,
       snapshot_refreshed: refresh.ok,
       snapshot_refresh_reason: refresh.reason ?? null,
     },

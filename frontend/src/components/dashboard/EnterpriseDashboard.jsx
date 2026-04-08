@@ -15,8 +15,8 @@ import ErpScreenScaffold, {
 import { handleGridNavigation } from "../../navigation/erpRovingFocus.js";
 
 function ActionCard({ action, index, gridRefs }) {
-  const rowIndex = Math.floor(index / 2);
-  const columnIndex = index % 2;
+  const rowIndex = index;
+  const columnIndex = 0;
 
   return (
     <button
@@ -27,6 +27,7 @@ function ActionCard({ action, index, gridRefs }) {
       data-workspace-primary-focus={index === 0 ? "true" : undefined}
       type="button"
       onClick={action.onClick}
+      disabled={action.disabled}
       onKeyDown={(event) =>
         handleGridNavigation(event, {
           rowIndex,
@@ -34,27 +35,26 @@ function ActionCard({ action, index, gridRefs }) {
           gridRefs: gridRefs.current,
         })
       }
-      className="group rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-[0_12px_34px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-[0_18px_42px_rgba(14,116,144,0.12)]"
+      className={`group grid w-full grid-cols-[100px_minmax(0,1fr)_110px] items-center border px-4 py-3 text-left transition ${
+        action.disabled
+          ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+          : "border-slate-300 bg-white hover:border-sky-300 hover:bg-sky-50"
+      }`}
     >
-      <div className="flex items-center justify-between gap-4">
-        <span className="rounded-full bg-sky-100 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-          {action.badge}
+      <span className={`text-[10px] font-semibold uppercase tracking-[0.18em] ${action.disabled ? "text-slate-400" : "text-sky-700"}`}>
+        {action.badge}
+      </span>
+      <span className="min-w-0">
+        <span className={`block text-sm font-semibold ${action.disabled ? "text-slate-500" : "text-slate-900"}`}>
+          {action.title}
         </span>
-        <span className="text-slate-300 transition group-hover:text-sky-600">
-          {"->"}
+        <span className={`mt-1 block truncate text-xs ${action.disabled ? "text-slate-400" : "text-slate-500"}`}>
+          {action.description}
         </span>
-      </div>
-      <h3 className="mt-4 text-lg font-semibold text-slate-900">
-        {action.title}
-      </h3>
-      <p className="mt-2 text-sm leading-6 text-slate-600">
-        {action.description}
-      </p>
-      {action.hint ? (
-        <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-          {action.hint}
-        </p>
-      ) : null}
+      </span>
+      <span className={`justify-self-end text-[10px] font-semibold uppercase tracking-[0.16em] transition ${action.disabled ? "text-slate-400" : "text-slate-500 group-hover:text-sky-700"}`}>
+        {action.hint || "Enter"}
+      </span>
     </button>
   );
 }
@@ -94,13 +94,13 @@ export default function EnterpriseDashboard({
       notices={notices}
       metrics={metrics}
     >
-      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+      <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
         <ErpSectionCard
           eyebrow="Action Workspace"
           title={workspaceTitle}
           description={workspaceDescription}
         >
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-2">
             {actions.map((action, index) => (
               <ActionCard
                 key={action.title}
@@ -112,13 +112,13 @@ export default function EnterpriseDashboard({
           </div>
         </ErpSectionCard>
 
-        <div className="grid gap-6">
+        <div className="grid gap-4">
           <ErpSectionCard eyebrow="Keyboard Mode" title={noteTitle}>
-            <div className="space-y-3">
+            <div className="grid gap-2">
               {noteItems.map((item) => (
                 <div
                   key={item}
-                  className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700"
+                  className="border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700"
                 >
                   {item}
                 </div>
@@ -127,11 +127,11 @@ export default function EnterpriseDashboard({
           </ErpSectionCard>
 
           <ErpSectionCard eyebrow="Live Summary" title={summaryTitle}>
-            <div className="space-y-3">
+            <div className="grid gap-2">
               {summaryItems.map((item) => (
                 <div
                   key={item}
-                  className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700"
+                  className="border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700"
                 >
                   {item}
                 </div>

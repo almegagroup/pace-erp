@@ -27,6 +27,29 @@ interface MeContextReadInput {
 
 interface MeContextUpdateInput extends MeContextReadInput {}
 
+function contextError(
+  code: string,
+  message: string,
+  requestId: string,
+  req: Request,
+  status = 403,
+  routeKey = "POST:/api/me/context",
+): Response {
+  return errorResponse(
+    code,
+    message,
+    requestId,
+    "NONE",
+    status,
+    {
+      gateId: "ME.CONTEXT",
+      routeKey,
+      decisionTrace: code,
+    },
+    req,
+  );
+}
+
 async function readRuntimeContext(
   activeSession: Extract<SessionResolution, { status: "ACTIVE" }>,
 ) {
@@ -113,14 +136,13 @@ export async function meContextHandler(
   const { session, requestId, req } = ctx;
 
   if (session.status !== "ACTIVE") {
-    return errorResponse(
+    return contextError(
       "AUTH_NOT_AUTHENTICATED",
       "Not authenticated",
       requestId,
-      "LOGOUT",
-      401,
-      undefined,
       req,
+      401,
+      "GET:/api/me/context",
     );
   }
 
@@ -128,14 +150,13 @@ export async function meContextHandler(
     const runtimeContext = await readRuntimeContext(session);
     return okResponse(runtimeContext, requestId, req);
   } catch (error) {
-    return errorResponse(
+    return contextError(
       error instanceof Error ? error.message : "ME_CONTEXT_READ_FAILED",
       "Runtime context read failed",
       requestId,
-      "NONE",
-      403,
-      undefined,
       req,
+      403,
+      "GET:/api/me/context",
     );
   }
 }
@@ -146,26 +167,22 @@ export async function updateMeContextHandler(
   const { session, requestId, req } = ctx;
 
   if (session.status !== "ACTIVE") {
-    return errorResponse(
+    return contextError(
       "AUTH_NOT_AUTHENTICATED",
       "Not authenticated",
       requestId,
-      "LOGOUT",
-      401,
-      undefined,
       req,
+      401,
     );
   }
 
   if (session.roleCode === "SA" || session.roleCode === "GA") {
-    return errorResponse(
+    return contextError(
       "ME_CONTEXT_ADMIN_FIXED",
       "Admin universe does not switch work company",
       requestId,
-      "NONE",
-      400,
-      undefined,
       req,
+      400,
     );
   }
 
@@ -180,14 +197,12 @@ export async function updateMeContextHandler(
       : "";
 
   if (!selectedCompanyId) {
-    return errorResponse(
+    return contextError(
       "ME_CONTEXT_COMPANY_REQUIRED",
       "selected_company_id required",
       requestId,
-      "NONE",
-      400,
-      undefined,
       req,
+      400,
     );
   }
 
@@ -197,13 +212,10 @@ export async function updateMeContextHandler(
   );
 
   if (!availableCompanyIds.includes(selectedCompanyId)) {
-    return errorResponse(
+    return contextError(
       "ME_CONTEXT_COMPANY_FORBIDDEN",
       "Selected company is not available to this user",
       requestId,
-      "NONE",
-      403,
-      undefined,
       req,
     );
   }
@@ -215,13 +227,10 @@ export async function updateMeContextHandler(
   );
 
   if (availableWorkContexts.length === 0) {
-    return errorResponse(
+    return contextError(
       "ME_CONTEXT_WORK_CONTEXT_UNAVAILABLE",
       "Selected company has no available work context for this user",
       requestId,
-      "NONE",
-      403,
-      undefined,
       req,
     );
   }
@@ -238,13 +247,10 @@ export async function updateMeContextHandler(
       (workContext) => workContext.work_context_id === selectedWorkContextId,
     )
   ) {
-    return errorResponse(
+    return contextError(
       "ME_CONTEXT_WORK_CONTEXT_FORBIDDEN",
       "Selected work context is not available to this user",
       requestId,
-      "NONE",
-      403,
-      undefined,
       req,
     );
   }
@@ -258,14 +264,12 @@ export async function updateMeContextHandler(
   }
 
   if (!selectedWorkContextId) {
-    return errorResponse(
+    return contextError(
       "ME_CONTEXT_WORK_CONTEXT_REQUIRED",
       "selected_work_context_id required",
       requestId,
-      "NONE",
-      400,
-      undefined,
       req,
+      400,
     );
   }
 
@@ -281,14 +285,12 @@ export async function updateMeContextHandler(
     .eq("status", "ACTIVE");
 
   if (updateError) {
-    return errorResponse(
+    return contextError(
       "ME_CONTEXT_UPDATE_FAILED",
       updateError.message,
       requestId,
-      "NONE",
-      500,
-      undefined,
       req,
+      500,
     );
   }
 
@@ -307,16 +309,24 @@ export async function updateMeContextHandler(
       session.sessionId,
     );
 
+  } catch (error) {
+    console.error("ME_CONTEXT_SNAPSHOT_REBUILD_FAILED", {
+      request_id: requestId,
+      auth_user_id: session.authUserId,
+      company_id: selectedCompanyId,
+      work_context_id: selectedWorkContextId,
+      error: error instanceof Error ? error.message : "ME_CONTEXT_SNAPSHOT_REBUILD_FAILED",
+    });
+  }
+
+  try {
     const runtimeContext = await readRuntimeContext(refreshedSession);
     return okResponse(runtimeContext, requestId, req);
   } catch (error) {
-    return errorResponse(
+    return contextError(
       error instanceof Error ? error.message : "ME_CONTEXT_READ_FAILED",
       "Runtime context read failed",
       requestId,
-      "NONE",
-      403,
-      undefined,
       req,
     );
   }

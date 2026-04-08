@@ -11,9 +11,12 @@
 import { Fragment, useEffect, useMemo } from "react";
 
 const ACTION_TONE_CLASS = Object.freeze({
-  primary: "border-sky-300 bg-sky-50 text-sky-900 hover:bg-sky-100",
-  neutral: "border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
-  danger: "border-rose-300 bg-rose-50 text-rose-900 hover:bg-rose-100",
+  primary:
+    "border-sky-700 bg-sky-100 text-sky-950 hover:bg-sky-200",
+  neutral:
+    "border-slate-400 bg-white text-slate-800 hover:bg-slate-50",
+  danger:
+    "border-rose-700 bg-rose-100 text-rose-950 hover:bg-rose-200",
 });
 
 const METRIC_TONE_CLASS = Object.freeze({
@@ -21,14 +24,21 @@ const METRIC_TONE_CLASS = Object.freeze({
   emerald: "border-emerald-200 bg-emerald-50",
   rose: "border-rose-200 bg-rose-50",
   amber: "border-amber-200 bg-amber-50",
-  slate: "border-slate-200 bg-slate-50",
+  slate: "border-slate-300 bg-slate-100",
 });
 
 const NOTICE_TONE_CLASS = Object.freeze({
-  success: "border-emerald-200 bg-emerald-50 text-emerald-900",
-  error: "border-rose-200 bg-rose-50 text-rose-900",
-  info: "border-sky-200 bg-sky-50 text-sky-900",
-  neutral: "border-slate-200 bg-slate-50 text-slate-800",
+  success: "border-emerald-200 bg-emerald-50 text-emerald-950",
+  error: "border-rose-200 bg-rose-50 text-rose-950",
+  info: "border-sky-200 bg-sky-50 text-sky-950",
+  neutral: "border-slate-200 bg-slate-50 text-slate-900",
+});
+
+const NOTICE_TONE_LABEL = Object.freeze({
+  success: "Saved",
+  error: "Attention Required",
+  info: "Heads Up",
+  neutral: "Status",
 });
 
 const SECTION_TONE_CLASS = Object.freeze({
@@ -123,7 +133,7 @@ export function ErpMetricCard({
 }) {
   return (
     <article
-      className={`border px-3 py-2 ${METRIC_TONE_CLASS[tone] ?? METRIC_TONE_CLASS.sky}`}
+      className={`grid gap-2 border px-3 py-2 shadow-sm ${METRIC_TONE_CLASS[tone] ?? METRIC_TONE_CLASS.sky}`}
     >
       <div className="flex items-center justify-between gap-3">
         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -135,12 +145,12 @@ export function ErpMetricCard({
           </span>
         ) : null}
       </div>
-      <div className="mt-2 flex items-end justify-between gap-3">
-        <h3 className="text-xl font-semibold tracking-tight text-slate-900">
+      <div className="grid gap-1">
+        <h3 className="text-2xl font-semibold tracking-tight text-slate-900">
           {value}
         </h3>
         {caption ? (
-          <p className="max-w-[16rem] text-right text-xs leading-5 text-slate-500">
+          <p className="max-w-[20rem] text-xs leading-5 text-slate-500">
             {caption}
           </p>
         ) : null}
@@ -155,23 +165,35 @@ export function ErpFieldPreview({
   caption,
   multiline = false,
   tone = "default",
+  badge = "",
 }) {
-  const toneClass =
-    tone === "success"
-      ? "border-emerald-200 bg-[#f5fffa]"
-      : "border-slate-200 bg-white";
+  const toneClass = {
+    default: "border-slate-300 bg-white",
+    success: "border-emerald-200 bg-emerald-50",
+    sky: "border-sky-200 bg-sky-50",
+    emerald: "border-emerald-200 bg-emerald-50",
+    amber: "border-amber-200 bg-amber-50",
+    rose: "border-rose-200 bg-rose-50",
+  }[tone] ?? "border-slate-300 bg-white";
 
   return (
-    <article className={`border px-3 py-3 ${toneClass}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-        {label}
-      </p>
+    <article className={`grid gap-2 border px-3 py-3 ${toneClass}`}>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+          {label}
+        </p>
+        {badge ? (
+          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+            {badge}
+          </span>
+        ) : null}
+      </div>
       {multiline ? (
-        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">
+        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-800">
           {value || "Not available yet"}
         </p>
       ) : (
-        <p className="mt-2 text-sm font-semibold text-slate-900">
+        <p className="text-sm font-semibold text-slate-900">
           {value || "Not available yet"}
         </p>
       )}
@@ -184,7 +206,7 @@ export function ErpFieldPreview({
 
 export function ErpActionStrip({ actions = [] }) {
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex flex-wrap gap-2">
       {actions.map((action, index) => {
         const toneClass =
           action.disabled
@@ -199,9 +221,9 @@ export function ErpActionStrip({ actions = [] }) {
             disabled={action.disabled}
             onClick={action.onClick}
             onKeyDown={action.onKeyDown}
-            className={`border px-3 py-2 text-left transition ${toneClass}`}
+            className={`min-w-[132px] border px-3 py-2 text-left transition ${toneClass}`}
           >
-            <span className="block text-sm font-semibold">
+            <span className="block text-[13px] font-semibold uppercase tracking-[0.04em]">
               {renderMnemonicLabel(action.label, action.mnemonic)}
             </span>
             {[action.hint, action.mnemonicHint]
@@ -233,10 +255,10 @@ export function ErpSectionCard({
 }) {
   return (
     <section
-      className={`border px-4 py-4 ${SECTION_TONE_CLASS[tone] ?? SECTION_TONE_CLASS.default} ${className}`.trim()}
+      className={`overflow-hidden border shadow-[0_4px_12px_rgba(15,23,42,0.04)] ${SECTION_TONE_CLASS[tone] ?? SECTION_TONE_CLASS.default} ${className}`.trim()}
     >
       {(eyebrow || title || description || aside) ? (
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 pb-3">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-4 py-3">
           <div className="min-w-0">
             {eyebrow ? (
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -257,7 +279,7 @@ export function ErpSectionCard({
           {aside ? <Fragment>{aside}</Fragment> : null}
         </div>
       ) : null}
-      <div className={eyebrow || title || description || aside ? "pt-4" : ""}>
+      <div className={eyebrow || title || description || aside ? "px-4 py-4" : "px-4 py-4"}>
         {children}
       </div>
     </section>
@@ -269,12 +291,29 @@ export default function ErpScreenScaffold({
   title,
   description,
   actions = [],
+  topActions = [],
   notices = [],
+  error = "",
+  notice = "",
   metrics = [],
   footerHints = [],
   children,
 }) {
-  const resolvedActions = useMemo(() => withActionMnemonics(actions), [actions]);
+  const mergedActions = useMemo(
+    () => (actions.length > 0 ? actions : topActions),
+    [actions, topActions]
+  );
+  const mergedNotices = useMemo(
+    () => [
+      ...notices,
+      ...(error ? [{ key: "error-alias", tone: "error", message: error }] : []),
+      ...(notice
+        ? [{ key: "notice-alias", tone: "success", message: notice }]
+        : []),
+    ],
+    [error, notice, notices]
+  );
+  const resolvedActions = useMemo(() => withActionMnemonics(mergedActions), [mergedActions]);
 
   useEffect(() => {
     function handleMnemonic(event) {
@@ -307,15 +346,15 @@ export default function ErpScreenScaffold({
 
   return (
     <section className="min-h-full text-slate-900">
-      <div className="mx-auto flex max-w-none flex-col gap-3">
-        <div className="border border-slate-300 bg-white">
-          <div className="border-b border-slate-300 bg-[#eef4fb] px-4 py-2">
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
+      <div className="mx-auto flex max-w-none flex-col gap-4">
+        <div className="overflow-hidden border border-slate-400 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.06)]">
+          <div className="border-b border-slate-300 bg-[linear-gradient(180deg,#f5f8fb_0%,#e8eef5_100%)] px-4 py-3">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
               <div className="min-w-0">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-sky-700">
                   {eyebrow}
                 </p>
-                <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+                <h1 className="mt-2 text-[1.7rem] font-semibold tracking-tight text-slate-900">
                   {title}
                 </h1>
                 {description ? (
@@ -325,7 +364,7 @@ export default function ErpScreenScaffold({
                 ) : null}
               </div>
 
-              {actions.length > 0 ? (
+              {resolvedActions.length > 0 ? (
                 <div className="xl:justify-self-end">
                   <ErpActionStrip actions={resolvedActions} />
                 </div>
@@ -334,7 +373,7 @@ export default function ErpScreenScaffold({
           </div>
 
           {metrics.length > 0 ? (
-            <div className="grid gap-2 border-b border-slate-300 bg-[#f8fbfd] px-4 py-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-2 border-b border-slate-300 bg-[#f6f8fb] px-4 py-3 md:grid-cols-2 xl:grid-cols-4">
               {metrics.map((metric, index) => (
                 <ErpMetricCard
                   key={metric.key ?? `${metric.label}-${index}`}
@@ -344,9 +383,9 @@ export default function ErpScreenScaffold({
             </div>
           ) : null}
 
-          {notices.length > 0 ? (
+          {mergedNotices.length > 0 ? (
             <div className="grid gap-2 border-b border-slate-300 bg-white px-4 py-3">
-              {notices.map((notice, index) => {
+              {mergedNotices.map((notice, index) => {
                 if (!notice?.message) {
                   return null;
                 }
@@ -354,9 +393,16 @@ export default function ErpScreenScaffold({
                 return (
                   <div
                     key={notice.key ?? `${notice.tone}-${index}`}
-                    className={`border px-3 py-2 text-sm ${NOTICE_TONE_CLASS[notice.tone] ?? NOTICE_TONE_CLASS.info}`}
+                    className={`border px-3 py-3 text-sm ${NOTICE_TONE_CLASS[notice.tone] ?? NOTICE_TONE_CLASS.info}`}
                   >
-                    {notice.message}
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70">
+                          {NOTICE_TONE_LABEL[notice.tone] ?? NOTICE_TONE_LABEL.info}
+                        </div>
+                        <div className="mt-1 leading-6">{notice.message}</div>
+                      </div>
+                    </div>
                   </div>
                 );
               })}
@@ -364,10 +410,10 @@ export default function ErpScreenScaffold({
           ) : null}
         </div>
 
-        <div className="grid gap-3">{children}</div>
+        <div className="grid gap-4">{children}</div>
 
         {footerHints.length > 0 ? (
-          <div className="border border-slate-300 bg-[#f7f9fc] px-4 py-2">
+          <div className="border border-slate-300 bg-[#eef3f7] px-4 py-2 shadow-[0_4px_10px_rgba(15,23,42,0.04)]">
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
               {footerHints.map((hint) => (
                 <span key={hint}>{hint}</span>

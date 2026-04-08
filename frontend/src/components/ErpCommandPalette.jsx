@@ -62,6 +62,10 @@ export default function ErpCommandPalette({
   useEffect(() => {
     const unsubscribeOverlay = subscribeErpCommandPalette((snapshot) => {
       setVisible(snapshot.visible);
+      if (!snapshot.visible) {
+        setQuery("");
+        setActiveIndex(0);
+      }
     });
     const unsubscribeCommands = subscribeRegisteredScreenCommands((snapshot) => {
       setScreenRegistry(snapshot);
@@ -108,12 +112,14 @@ export default function ErpCommandPalette({
         return (left.order ?? 0) - (right.order ?? 0);
       });
   }, [commands, query]);
+  const resolvedActiveIndex =
+    filteredCommands.length === 0
+      ? 0
+      : Math.min(activeIndex, filteredCommands.length - 1);
 
   useEffect(() => {
     if (!visible) {
-      setQuery("");
-      setActiveIndex(0);
-      return;
+      return undefined;
     }
 
     const timerId = window.setTimeout(() => {
@@ -122,14 +128,6 @@ export default function ErpCommandPalette({
 
     return () => window.clearTimeout(timerId);
   }, [visible]);
-
-  useEffect(() => {
-    if (activeIndex < filteredCommands.length) {
-      return;
-    }
-
-    setActiveIndex(filteredCommands.length > 0 ? filteredCommands.length - 1 : 0);
-  }, [activeIndex, filteredCommands.length]);
 
   async function executeCommand(command) {
     if (!command || command.disabled) {
@@ -180,7 +178,9 @@ export default function ErpCommandPalette({
 
               if (event.key === "Enter" && filteredCommands.length > 0) {
                 event.preventDefault();
-                void executeCommand(filteredCommands[activeIndex] ?? filteredCommands[0]);
+                void executeCommand(
+                  filteredCommands[resolvedActiveIndex] ?? filteredCommands[0]
+                );
               }
             }}
             placeholder="Search commands, screens, save actions, navigation, lock, logout..."
@@ -190,7 +190,7 @@ export default function ErpCommandPalette({
 
         <div className="flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
           <span className="border border-slate-300 bg-white px-3 py-2">
-            Ctrl+K Open
+            Ctrl+K Or F9 Open
           </span>
           <span className="border border-slate-300 bg-white px-3 py-2">
             Arrow Up/Down Move
@@ -215,7 +215,7 @@ export default function ErpCommandPalette({
               className="space-y-3"
             >
               {filteredCommands.map((command, index) => {
-                const highlighted = index === activeIndex;
+                const highlighted = index === resolvedActiveIndex;
 
                 return (
                   <button
@@ -241,11 +241,11 @@ export default function ErpCommandPalette({
                         orientation: "vertical",
                       });
                     }}
-                    className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${
+                    className={`w-full border px-4 py-4 text-left transition ${
                       command.disabled
                         ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
                         : highlighted
-                          ? "border-sky-400 bg-sky-50 text-slate-900"
+                          ? "border-sky-500 bg-sky-100 text-slate-900"
                           : "border-slate-300 bg-white text-slate-900 hover:bg-slate-50"
                     }`}
                   >

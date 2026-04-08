@@ -9,6 +9,7 @@ import {
   updateMenuHandler,
   updateMenuTreeHandler,
   updateMenuStateHandler,
+  deleteMenuHandler,
   previewUserHandler
 } from "../_core/auth/menu.handler.ts";
 
@@ -64,6 +65,17 @@ export async function dispatchMenuRoutes(
     if (!context.isAdmin) return null;
 
     return await updateMenuHandler(req, {
+      context,
+      auth_user_id: session.authUserId,
+      request_id: requestId,
+      session_id: session.sessionId
+    });
+
+  case "DELETE:/api/admin/menu":
+
+    if (!context.isAdmin) return null;
+
+    return await deleteMenuHandler(req, {
       context,
       auth_user_id: session.authUserId,
       request_id: requestId,

@@ -190,6 +190,73 @@ async function resolveProtectedRouteAclMeta(
     };
   }
 
+  const hrRouteMeta: Record<string, { resourceCode: string; action: VwedAction }> = {
+    "POST:/api/hr/leave/request": {
+      resourceCode: "HR_LEAVE_APPLY",
+      action: "WRITE",
+    },
+    "GET:/api/hr/leave/my-requests": {
+      resourceCode: "HR_LEAVE_MY_REQUESTS",
+      action: "VIEW",
+    },
+    "POST:/api/hr/leave/cancel": {
+      resourceCode: "HR_LEAVE_MY_REQUESTS",
+      action: "EDIT",
+    },
+    "GET:/api/hr/leave/approval-inbox": {
+      resourceCode: "HR_LEAVE_APPROVAL_INBOX",
+      action: "VIEW",
+    },
+    "GET:/api/hr/leave/approval-history": {
+      resourceCode: "HR_LEAVE_APPROVAL_SCOPE_HISTORY",
+      action: "VIEW",
+    },
+    "GET:/api/hr/leave/register": {
+      resourceCode: "HR_LEAVE_REGISTER",
+      action: "VIEW",
+    },
+    "GET:/api/hr/out-work/destinations": {
+      resourceCode: "HR_OUT_WORK_APPLY",
+      action: "VIEW",
+    },
+    "POST:/api/hr/out-work/destination": {
+      resourceCode: "HR_OUT_WORK_APPLY",
+      action: "WRITE",
+    },
+    "POST:/api/hr/out-work/request": {
+      resourceCode: "HR_OUT_WORK_APPLY",
+      action: "WRITE",
+    },
+    "GET:/api/hr/out-work/my-requests": {
+      resourceCode: "HR_OUT_WORK_MY_REQUESTS",
+      action: "VIEW",
+    },
+    "POST:/api/hr/out-work/cancel": {
+      resourceCode: "HR_OUT_WORK_MY_REQUESTS",
+      action: "EDIT",
+    },
+    "GET:/api/hr/out-work/approval-inbox": {
+      resourceCode: "HR_OUT_WORK_APPROVAL_INBOX",
+      action: "VIEW",
+    },
+    "GET:/api/hr/out-work/approval-history": {
+      resourceCode: "HR_OUT_WORK_APPROVAL_SCOPE_HISTORY",
+      action: "VIEW",
+    },
+    "GET:/api/hr/out-work/register": {
+      resourceCode: "HR_OUT_WORK_REGISTER",
+      action: "VIEW",
+    },
+  };
+
+  if (hrRouteMeta[routeKey]) {
+    return {
+      skipAcl: false,
+      resourceCode: hrRouteMeta[routeKey].resourceCode,
+      action: hrRouteMeta[routeKey].action,
+    };
+  }
+
   return { skipAcl: false };
 }
 

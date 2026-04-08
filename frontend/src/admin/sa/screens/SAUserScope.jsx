@@ -15,6 +15,7 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpScreenScaffold, {
+  ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
@@ -35,6 +36,20 @@ async function readJsonSafe(response) {
   }
 }
 
+function buildApiError(json, fallbackCode) {
+  const code = json?.code ?? fallbackCode;
+  const requestId = json?.request_id ?? json?.requestId ?? null;
+  const decisionTrace = json?.decision_trace ?? json?.decisionTrace ?? null;
+  const message = [code, decisionTrace, requestId ? `Req ${requestId}` : null]
+    .filter(Boolean)
+    .join(" | ");
+  const error = new Error(message || fallbackCode);
+  error.code = code;
+  error.requestId = requestId;
+  error.decisionTrace = decisionTrace;
+  return error;
+}
+
 async function fetchUserScope(authUserId) {
   const response = await fetch(
     `${import.meta.env.VITE_API_BASE}/api/admin/users/scope?auth_user_id=${encodeURIComponent(authUserId)}`,
@@ -46,8 +61,7 @@ async function fetchUserScope(authUserId) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !json?.data) {
-    const error = new Error(json?.code ?? "USER_SCOPE_READ_FAILED");
-    throw error;
+    throw buildApiError(json, "USER_SCOPE_READ_FAILED");
   }
 
   return json.data;
@@ -66,8 +80,7 @@ async function saveUserScope(payload) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    const error = new Error(json?.code ?? "USER_SCOPE_SAVE_FAILED");
-    throw error;
+    throw buildApiError(json, "USER_SCOPE_SAVE_FAILED");
   }
 
   return json.data;
@@ -94,6 +107,72 @@ function formatCompanyMeta(company) {
 
 function formatCompanyAddress(company) {
   return company?.full_address ?? "Address not captured";
+}
+
+function formatSelectionPreview(items, formatter, emptyMessage) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return emptyMessage;
+  }
+
+  const preview = items
+    .slice(0, 3)
+    .map((item) => formatter(item))
+    .filter(Boolean)
+    .join("\n");
+
+  return items.length > 3 ? `${preview}\n+${items.length - 3} more` : preview;
+}
+
+function ScopeSummaryCard({
+  eyebrow,
+  title,
+  count,
+  description,
+  preview,
+  status,
+  onOpen,
+  actionLabel,
+  tone = "default",
+}) {
+  const toneClass =
+    tone === "warning"
+      ? "border-amber-200 bg-[#fffaf2]"
+      : tone === "success"
+        ? "border-emerald-200 bg-[#f5fffa]"
+        : "border-slate-200 bg-white";
+
+  return (
+    <article className={`grid gap-3 border px-4 py-4 ${toneClass}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+            {eyebrow}
+          </p>
+          <h3 className="mt-2 text-sm font-semibold text-slate-900">{title}</h3>
+        </div>
+        <span className="text-lg font-semibold text-slate-900">{count}</span>
+      </div>
+      <p className="text-sm leading-6 text-slate-600">{description}</p>
+      <div className="border border-slate-200 bg-white px-3 py-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+          Current Selection
+        </p>
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+          {preview}
+        </p>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs leading-5 text-slate-500">{status}</p>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+        >
+          {actionLabel}
+        </button>
+      </div>
+    </article>
+  );
 }
 
 export default function SAUserScope() {
@@ -126,6 +205,7 @@ export default function SAUserScope() {
   const [projectIds, setProjectIds] = useState([]);
   const [departmentIds, setDepartmentIds] = useState([]);
   const [companyPickerOpen, setCompanyPickerOpen] = useState(false);
+  const [activeScopeEditor, setActiveScopeEditor] = useState("");
   const [companySearch, setCompanySearch] = useState("");
   const [workCompanySearch, setWorkCompanySearch] = useState("");
   const [workContextSearch, setWorkContextSearch] = useState("");
@@ -160,9 +240,10 @@ export default function SAUserScope() {
       } catch (caughtError) {
         if (!alive) return;
         setError(
-          caughtError?.message === "USER_SCOPE_ACL_USER_REQUIRED"
+          caughtError?.code === "USER_SCOPE_ACL_USER_REQUIRED" ||
+            caughtError?.message === "USER_SCOPE_ACL_USER_REQUIRED"
             ? "Scope mapping is available only after the user receives an ACL role."
-            : "Unable to load user scope right now."
+            : caughtError?.message || "Unable to load user scope right now."
         );
       } finally {
         if (alive) {
@@ -215,6 +296,26 @@ export default function SAUserScope() {
 
   const selectedParentCompany =
     availableCompanies.find((company) => company.id === parentCompanyId) ?? null;
+  const selectedWorkCompanies = useMemo(
+    () => availableCompanies.filter((company) => workCompanyIds.includes(company.id)),
+    [availableCompanies, workCompanyIds]
+  );
+  const selectedProjects = useMemo(
+    () => availableProjects.filter((project) => projectIds.includes(project.id)),
+    [availableProjects, projectIds]
+  );
+  const selectedDepartments = useMemo(
+    () =>
+      availableDepartments.filter((department) => departmentIds.includes(department.id)),
+    [availableDepartments, departmentIds]
+  );
+  const selectedWorkContexts = useMemo(
+    () =>
+      availableWorkContexts.filter((workContext) =>
+        workContextIds.includes(workContext.id)
+      ),
+    [availableWorkContexts, workContextIds]
+  );
 
   const filteredCompanies = useMemo(
     () =>
@@ -343,9 +444,10 @@ export default function SAUserScope() {
       setNotice("User scope saved successfully.");
     } catch (caughtError) {
       setError(
-        caughtError?.message === "USER_SCOPE_ACL_USER_REQUIRED"
+        caughtError?.code === "USER_SCOPE_ACL_USER_REQUIRED" ||
+          caughtError?.message === "USER_SCOPE_ACL_USER_REQUIRED"
           ? "Scope mapping is available only for ACL users with an assigned role."
-          : "User scope was not finalized by the backend."
+          : caughtError?.message || "User scope was not finalized by the backend."
       );
     } finally {
       setSaving(false);
@@ -364,6 +466,29 @@ export default function SAUserScope() {
     }, 0);
   }
 
+  function closeScopeEditor() {
+    setActiveScopeEditor("");
+  }
+
+  function openScopeEditor(scopeKey) {
+    setActiveScopeEditor(scopeKey);
+
+    globalThis.setTimeout(() => {
+      if (scopeKey === "work-companies") {
+        workCompanySearchRef.current?.focus();
+      }
+      if (scopeKey === "work-contexts") {
+        workContextSearchRef.current?.focus();
+      }
+      if (scopeKey === "projects") {
+        projectSearchRef.current?.focus();
+      }
+      if (scopeKey === "departments") {
+        departmentSearchRef.current?.focus();
+      }
+    }, 0);
+  }
+
   function selectParentCompany(companyId) {
     setParentCompanyId(companyId);
     setNotice("");
@@ -376,7 +501,7 @@ export default function SAUserScope() {
       perform: () => void handleSave(),
     },
     focusSearch: {
-      perform: () => workCompanySearchRef.current?.focus(),
+      perform: () => openScopeEditor("work-companies"),
     },
     focusPrimary: {
       perform: () => parentCompanyButtonRef.current?.focus(),
@@ -417,33 +542,33 @@ export default function SAUserScope() {
     {
       id: "sa-user-scope-work",
       group: "Current Screen",
-      label: "Focus work company filter",
+      label: "Edit work companies",
       keywords: ["work company", "operational scope"],
-      perform: () => workCompanySearchRef.current?.focus(),
+      perform: () => openScopeEditor("work-companies"),
       order: 40,
     },
     {
       id: "sa-user-scope-work-contexts",
       group: "Current Screen",
-      label: "Focus work context filter",
+      label: "Edit work contexts",
       keywords: ["work context", "functional context"],
-      perform: () => workContextSearchRef.current?.focus(),
+      perform: () => openScopeEditor("work-contexts"),
       order: 50,
     },
     {
       id: "sa-user-scope-projects",
       group: "Current Screen",
-      label: "Focus project filter",
+      label: "Edit projects",
       keywords: ["projects", "project scope"],
-      perform: () => projectSearchRef.current?.focus(),
+      perform: () => openScopeEditor("projects"),
       order: 60,
     },
     {
       id: "sa-user-scope-departments",
       group: "Current Screen",
-      label: "Focus department filter",
+      label: "Edit departments",
       keywords: ["departments", "department scope"],
-      perform: () => departmentSearchRef.current?.focus(),
+      perform: () => openScopeEditor("departments"),
       order: 65,
     },
     {
@@ -496,18 +621,35 @@ export default function SAUserScope() {
         }),
     },
     {
+      key: "edit-work-scope",
+      label: "Edit Work Scope",
+      hint: "F3",
+      tone: "neutral",
+      disabled: loading || !authUserId,
+      buttonRef: (element) => {
+        actionBarRefs.current[2] = element;
+      },
+      onClick: () => openScopeEditor("work-companies"),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 2,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
       key: "save-scope",
       label: saving ? "Saving..." : "Save Scope",
-      hint: "Ctrl+S",
+      hint: "Ctrl+S | F2",
       tone: "primary",
       disabled: saving || loading || !authUserId,
       buttonRef: (element) => {
-        actionBarRefs.current[2] = element;
+        actionBarRefs.current[3] = element;
       },
       onClick: () => void handleSave(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 2,
+          index: 3,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
@@ -645,7 +787,7 @@ export default function SAUserScope() {
               </span>
             </button>
             <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Enter = open picker | Ctrl+S = save scope
+              Enter = open picker | F2 or Ctrl+S = save scope
             </p>
           </label>
         </ErpSectionCard>
@@ -675,336 +817,165 @@ export default function SAUserScope() {
                 ? "Ready"
                 : readinessFlags.join(" | ")}
             </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              <ErpFieldPreview
+                label="Work Company Scope"
+                value={`${workCompanyIds.length} selected`}
+                caption="Operational company selection is edited in a drawer so the main screen stays readable."
+                tone={workCompanyIds.length > 0 ? "success" : "amber"}
+              />
+              <ErpFieldPreview
+                label="Work Context Scope"
+                value={`${workContextIds.length} selected`}
+                caption="Contexts stay filtered by the chosen work companies."
+                tone={workContextIds.length > 0 ? "success" : "amber"}
+              />
+            </div>
           </div>
         </ErpSectionCard>
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr,1fr]">
+      <div className="mt-6 grid gap-6 xl:grid-cols-[1.15fr,0.85fr]">
         <ErpSectionCard
-          eyebrow="Work Company"
-          title="Operational Company Scope"
-          description="The user may operate only inside these assigned Work Companies. Approval authority is still governed separately."
+          eyebrow="Scope Editors"
+          title="Edit one scope at a time"
+          description="Operational scope now opens in focused drawers instead of filling the full page with long checkbox lists."
         >
-          <QuickFilterInput
-            label="Filter Work Companies"
-            value={workCompanySearch}
-            onChange={setWorkCompanySearch}
-            inputRef={workCompanySearchRef}
-            placeholder="Filter by code, name, state, pin, or address"
-            hint="Arrow Down moves into the company checkbox list."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (
-                  event.key === "ArrowDown" &&
-                  filteredWorkCompanies.length > 0
-                ) {
-                  event.preventDefault();
-                  workCompanyRefs.current[0]?.focus();
-                }
-              },
-            }}
-          />
-
-          <div className="mt-5 max-h-[24rem] space-y-3 overflow-y-auto pr-1">
-            {filteredWorkCompanies.length === 0 ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                No work company matches the current filter.
-              </div>
-            ) : (
-              filteredWorkCompanies.map((company, index) => {
-                const selected = workCompanyIds.includes(company.id);
-
-                return (
-                  <label
-                    key={company.id}
-                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
-                      selected
-                        ? "border-cyan-300 bg-cyan-50 text-cyan-900"
-                        : "border-slate-300 bg-white text-slate-700"
-                    }`}
-                  >
-                    <input
-                      ref={(element) => {
-                        workCompanyRefs.current[index] = element;
-                      }}
-                      data-erp-nav-item="true"
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() =>
-                        toggleSelection(company.id, workCompanyIds, setWorkCompanyIds)
-                      }
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: workCompanyRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-cyan-600"
-                    />
-                    <span>
-                      <span className="font-semibold">{company.company_code}</span>
-                      {" - "}
-                      {company.company_name}
-                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
-                        {formatCompanyMeta(company)}
-                      </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-600">
-                        {formatCompanyAddress(company)}
-                      </span>
-                    </span>
-                  </label>
-                );
-              })
-            )}
+          <div className="grid gap-3 md:grid-cols-2">
+            <ScopeSummaryCard
+              eyebrow="Work Companies"
+              title="Operational Company Scope"
+              count={String(workCompanyIds.length)}
+              description="Use this drawer to choose which companies the user can operate inside."
+              preview={formatSelectionPreview(
+                selectedWorkCompanies,
+                (company) => `${company.company_code} - ${company.company_name}`,
+                "No work company selected yet."
+              )}
+              status="Work context choices stay constrained by the selected companies."
+              onOpen={() => openScopeEditor("work-companies")}
+              actionLabel="Edit Companies"
+              tone={workCompanyIds.length > 0 ? "success" : "warning"}
+            />
+            <ScopeSummaryCard
+              eyebrow="Work Contexts"
+              title="Runtime Functional Context"
+              count={String(workContextIds.length)}
+              description="Context selection decides which runtime capability packs are available after sign-in."
+              preview={formatSelectionPreview(
+                selectedWorkContexts,
+                (workContext) =>
+                  `${workContext.work_context_code} - ${workContext.work_context_name}`,
+                workCompanyIds.length === 0
+                  ? "Select work companies first."
+                  : "No work context selected yet."
+              )}
+              status={
+                workCompanyIds.length === 0
+                  ? "Choose at least one work company first so context options become available."
+                  : "Only contexts from the chosen companies are shown in the drawer."
+              }
+              onOpen={() => openScopeEditor("work-contexts")}
+              actionLabel="Edit Contexts"
+              tone={workContextIds.length > 0 ? "success" : "warning"}
+            />
+            <ScopeSummaryCard
+              eyebrow="Projects"
+              title="Reusable Project Mapping"
+              count={String(projectIds.length)}
+              description="Project access is managed separately so user scope stays understandable and reusable."
+              preview={formatSelectionPreview(
+                selectedProjects,
+                (project) => `${project.project_code} - ${project.project_name}`,
+                "No project selected yet."
+              )}
+              status="Keep only the projects the user really needs for faster navigation."
+              onOpen={() => openScopeEditor("projects")}
+              actionLabel="Edit Projects"
+              tone={projectIds.length > 0 ? "success" : "default"}
+            />
+            <ScopeSummaryCard
+              eyebrow="Departments"
+              title="Department Mapping"
+              count={String(departmentIds.length)}
+              description="Department scope stays available for HR readiness without crowding the main screen."
+              preview={formatSelectionPreview(
+                selectedDepartments,
+                (department) =>
+                  `${department.department_code} - ${department.department_name}`,
+                "No department selected yet."
+              )}
+              status="Department assignment stays visible, but editing happens in its own drawer."
+              onOpen={() => openScopeEditor("departments")}
+              actionLabel="Edit Departments"
+              tone={departmentIds.length > 0 ? "success" : "default"}
+            />
           </div>
         </ErpSectionCard>
 
         <ErpSectionCard
-          eyebrow="Project Scope"
-          title="Reusable Project Mapping"
-          description="Projects remain reusable. This surface only maps the user to the project universe they can work inside."
+          eyebrow="Selection Preview"
+          title="Current assignment snapshot"
+          description="This panel keeps the selected scope understandable without forcing the operator to scan every checkbox on the page."
         >
-          <QuickFilterInput
-            label="Filter Projects"
-            value={projectSearch}
-            onChange={setProjectSearch}
-            inputRef={projectSearchRef}
-            placeholder="Filter by project code or project name"
-            hint="Arrow Down moves into the project checkbox list."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (
-                  event.key === "ArrowDown" &&
-                  filteredProjects.length > 0
-                ) {
-                  event.preventDefault();
-                  projectRefs.current[0]?.focus();
-                }
-              },
-            }}
-          />
-
-          <div className="mt-5 max-h-[24rem] space-y-3 overflow-y-auto pr-1">
-            {filteredProjects.length === 0 ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                No project matches the current filter.
-              </div>
-            ) : (
-              filteredProjects.map((project, index) => {
-                const selected = projectIds.includes(project.id);
-
-                return (
-                  <label
-                    key={project.id}
-                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
-                      selected
-                        ? "border-emerald-300 bg-emerald-50 text-emerald-900"
-                        : "border-slate-300 bg-white text-slate-700"
-                    }`}
-                  >
-                    <input
-                      ref={(element) => {
-                        projectRefs.current[index] = element;
-                      }}
-                      data-erp-nav-item="true"
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() =>
-                        toggleSelection(project.id, projectIds, setProjectIds)
-                      }
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: projectRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-emerald-600"
-                    />
-                    <span>
-                      <span className="font-semibold">{project.project_code}</span>
-                      {" - "}
-                      {project.project_name}
-                    </span>
-                  </label>
-                );
-              })
-            )}
-          </div>
-        </ErpSectionCard>
-      </div>
-
-      <div className="mt-6">
-        <ErpSectionCard
-          eyebrow="Work Context"
-          title="Runtime Functional Context"
-          description="Selected Work Contexts decide which functional capability packs the user may activate inside the selected Work Companies."
-        >
-          <QuickFilterInput
-            label="Filter Work Contexts"
-            value={workContextSearch}
-            onChange={setWorkContextSearch}
-            inputRef={workContextSearchRef}
-            placeholder="Filter by company, context, or department"
-            hint="Arrow Down moves into the work-context checkbox list."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (
-                  event.key === "ArrowDown" &&
-                  filteredWorkContexts.length > 0
-                ) {
-                  event.preventDefault();
-                  workContextRefs.current[0]?.focus();
-                }
-              },
-            }}
-          />
-
-          <div className="mt-5 grid gap-3 md:grid-cols-2">
-            {filteredWorkContexts.length === 0 ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                {workCompanyIds.length === 0
-                  ? "Select at least one work company to see work-context options."
-                  : "No work context matches the current filter."}
-              </div>
-            ) : (
-              filteredWorkContexts.map((workContext, index) => {
-                const selected = workContextIds.includes(workContext.id);
-
-                return (
-                  <label
-                    key={workContext.id}
-                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
-                      selected
-                        ? "border-violet-300 bg-violet-50 text-violet-900"
-                        : "border-slate-300 bg-white text-slate-700"
-                    }`}
-                  >
-                    <input
-                      ref={(element) => {
-                        workContextRefs.current[index] = element;
-                      }}
-                      data-erp-nav-item="true"
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() =>
-                        toggleSelection(
-                          workContext.id,
-                          workContextIds,
-                          setWorkContextIds
-                        )
-                      }
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: workContextRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-violet-600"
-                    />
-                    <span>
-                      <span className="font-semibold">
-                        {workContext.work_context_code}
-                      </span>
-                      {" - "}
-                      {workContext.work_context_name}
-                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
-                        {workContext.company_code} | {workContext.company_name}
-                      </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-600">
-                        {workContext.department_code
-                          ? `${workContext.department_code} | ${workContext.department_name}`
-                          : "Company-wide functional context"}
-                      </span>
-                    </span>
-                  </label>
-                );
-              })
-            )}
-          </div>
-        </ErpSectionCard>
-      </div>
-
-      <div className="mt-6">
-        <ErpSectionCard
-          eyebrow="Department Scope"
-          title="Department Mapping"
-          description="Department mapping remains visible here so HR identity and later operational readiness can be prepared from one control surface."
-        >
-          <QuickFilterInput
-            label="Filter Departments"
-            value={departmentSearch}
-            onChange={setDepartmentSearch}
-            inputRef={departmentSearchRef}
-            placeholder="Filter by department code or department name"
-            hint="Arrow Down moves into the department checkbox list."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (
-                  event.key === "ArrowDown" &&
-                  filteredDepartments.length > 0
-                ) {
-                  event.preventDefault();
-                  departmentRefs.current[0]?.focus();
-                }
-              },
-            }}
-          />
-
-          <div className="mt-5 grid gap-3 md:grid-cols-2">
-            {filteredDepartments.length === 0 ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                No department matches the current filter.
-              </div>
-            ) : (
-              filteredDepartments.map((department, index) => {
-                const selected = departmentIds.includes(department.id);
-
-                return (
-                  <label
-                    key={department.id}
-                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
-                      selected
-                        ? "border-amber-300 bg-amber-50 text-amber-900"
-                        : "border-slate-300 bg-white text-slate-700"
-                    }`}
-                  >
-                    <input
-                      ref={(element) => {
-                        departmentRefs.current[index] = element;
-                      }}
-                      data-erp-nav-item="true"
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() =>
-                        toggleSelection(
-                          department.id,
-                          departmentIds,
-                          setDepartmentIds
-                        )
-                      }
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: departmentRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-amber-600"
-                    />
-                    <span>
-                      <span className="font-semibold">
-                        {department.department_code}
-                      </span>
-                      {" - "}
-                      {department.department_name}
-                    </span>
-                  </label>
-                );
-              })
-            )}
+          <div className="grid gap-3">
+            <div className="grid gap-3 md:grid-cols-2">
+              <ErpFieldPreview
+                label="Selected Work Companies"
+                value={formatSelectionPreview(
+                  selectedWorkCompanies,
+                  (company) => `${company.company_code} - ${company.company_name}`,
+                  "No work company selected yet."
+                )}
+                caption="These companies define the operating perimeter."
+                multiline
+                tone={workCompanyIds.length > 0 ? "success" : "default"}
+              />
+              <ErpFieldPreview
+                label="Selected Work Contexts"
+                value={formatSelectionPreview(
+                  selectedWorkContexts,
+                  (workContext) =>
+                    `${workContext.work_context_code} - ${workContext.work_context_name}`,
+                  workCompanyIds.length === 0
+                    ? "Select work companies first."
+                    : "No work context selected yet."
+                )}
+                caption="Contexts stay filtered from the selected companies."
+                multiline
+                tone={workContextIds.length > 0 ? "success" : "default"}
+              />
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <ErpFieldPreview
+                label="Selected Projects"
+                value={formatSelectionPreview(
+                  selectedProjects,
+                  (project) => `${project.project_code} - ${project.project_name}`,
+                  "No project selected yet."
+                )}
+                caption="Project mapping remains reusable across later workflows."
+                multiline
+                tone={projectIds.length > 0 ? "success" : "default"}
+              />
+              <ErpFieldPreview
+                label="Selected Departments"
+                value={formatSelectionPreview(
+                  selectedDepartments,
+                  (department) =>
+                    `${department.department_code} - ${department.department_name}`,
+                  "No department selected yet."
+                )}
+                caption="Department readiness stays visible without overcrowding the page."
+                multiline
+                tone={departmentIds.length > 0 ? "success" : "default"}
+              />
+            </div>
+            <div className="border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              Use <span className="font-semibold text-slate-900">F3</span> or the
+              summary buttons to open a focused editor drawer. The main screen keeps
+              only the operational snapshot now.
+            </div>
           </div>
         </ErpSectionCard>
       </div>
@@ -1108,6 +1079,435 @@ export default function SAUserScope() {
                   );
                 })}
               </div>
+            )}
+          </div>
+        </div>
+      </DrawerBase>
+
+      <DrawerBase
+        visible={activeScopeEditor === "work-companies"}
+        title="Edit Work Companies"
+        onEscape={closeScopeEditor}
+        initialFocusRef={workCompanySearchRef}
+        width="min(760px, calc(100vw - 24px))"
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={closeScopeEditor}
+              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            >
+              Done
+            </button>
+            <button
+              type="button"
+              disabled={saving || loading || !authUserId}
+              onClick={() => void handleSave()}
+              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+            >
+              {saving ? "Saving..." : "Save Scope"}
+            </button>
+          </>
+        )}
+      >
+        <div className="grid gap-4">
+          <p className="text-sm leading-6 text-slate-600">
+            Select only the companies where this user actually works. Work contexts
+            will follow these company choices automatically.
+          </p>
+          <QuickFilterInput
+            label="Filter Work Companies"
+            value={workCompanySearch}
+            onChange={setWorkCompanySearch}
+            inputRef={workCompanySearchRef}
+            placeholder="Filter by code, name, state, pin, or address"
+            hint="Arrow Down moves into the company checkbox list."
+            inputProps={{
+              onKeyDown: (event) => {
+                if (
+                  event.key === "ArrowDown" &&
+                  filteredWorkCompanies.length > 0
+                ) {
+                  event.preventDefault();
+                  workCompanyRefs.current[0]?.focus();
+                }
+              },
+            }}
+          />
+
+          <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
+            {filteredWorkCompanies.length === 0 ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                No work company matches the current filter.
+              </div>
+            ) : (
+              filteredWorkCompanies.map((company, index) => {
+                const selected = workCompanyIds.includes(company.id);
+
+                return (
+                  <label
+                    key={company.id}
+                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                      selected
+                        ? "border-cyan-300 bg-cyan-50 text-cyan-900"
+                        : "border-slate-300 bg-white text-slate-700"
+                    }`}
+                  >
+                    <input
+                      ref={(element) => {
+                        workCompanyRefs.current[index] = element;
+                      }}
+                      data-erp-nav-item="true"
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() =>
+                        toggleSelection(company.id, workCompanyIds, setWorkCompanyIds)
+                      }
+                      onKeyDown={(event) =>
+                        handleLinearNavigation(event, {
+                          index,
+                          refs: workCompanyRefs.current,
+                          orientation: "vertical",
+                        })
+                      }
+                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-cyan-600"
+                    />
+                    <span>
+                      <span className="font-semibold">{company.company_code}</span>
+                      {" - "}
+                      {company.company_name}
+                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                        {formatCompanyMeta(company)}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-600">
+                        {formatCompanyAddress(company)}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </DrawerBase>
+
+      <DrawerBase
+        visible={activeScopeEditor === "work-contexts"}
+        title="Edit Work Contexts"
+        onEscape={closeScopeEditor}
+        initialFocusRef={workContextSearchRef}
+        width="min(860px, calc(100vw - 24px))"
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={closeScopeEditor}
+              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            >
+              Done
+            </button>
+            <button
+              type="button"
+              disabled={saving || loading || !authUserId}
+              onClick={() => void handleSave()}
+              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+            >
+              {saving ? "Saving..." : "Save Scope"}
+            </button>
+          </>
+        )}
+      >
+        <div className="grid gap-4">
+          <p className="text-sm leading-6 text-slate-600">
+            Context choices stay tied to the selected work companies. This drawer
+            hides unrelated data so the operator can focus on actual runtime access.
+          </p>
+          <QuickFilterInput
+            label="Filter Work Contexts"
+            value={workContextSearch}
+            onChange={setWorkContextSearch}
+            inputRef={workContextSearchRef}
+            placeholder="Filter by company, context, or department"
+            hint="Arrow Down moves into the work-context checkbox list."
+            inputProps={{
+              onKeyDown: (event) => {
+                if (
+                  event.key === "ArrowDown" &&
+                  filteredWorkContexts.length > 0
+                ) {
+                  event.preventDefault();
+                  workContextRefs.current[0]?.focus();
+                }
+              },
+            }}
+          />
+
+          <div className="grid gap-3 md:grid-cols-2">
+            {filteredWorkContexts.length === 0 ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                {workCompanyIds.length === 0
+                  ? "Select at least one work company to see work-context options."
+                  : "No work context matches the current filter."}
+              </div>
+            ) : (
+              filteredWorkContexts.map((workContext, index) => {
+                const selected = workContextIds.includes(workContext.id);
+
+                return (
+                  <label
+                    key={workContext.id}
+                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                      selected
+                        ? "border-violet-300 bg-violet-50 text-violet-900"
+                        : "border-slate-300 bg-white text-slate-700"
+                    }`}
+                  >
+                    <input
+                      ref={(element) => {
+                        workContextRefs.current[index] = element;
+                      }}
+                      data-erp-nav-item="true"
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() =>
+                        toggleSelection(
+                          workContext.id,
+                          workContextIds,
+                          setWorkContextIds
+                        )
+                      }
+                      onKeyDown={(event) =>
+                        handleLinearNavigation(event, {
+                          index,
+                          refs: workContextRefs.current,
+                          orientation: "vertical",
+                        })
+                      }
+                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-violet-600"
+                    />
+                    <span>
+                      <span className="font-semibold">
+                        {workContext.work_context_code}
+                      </span>
+                      {" - "}
+                      {workContext.work_context_name}
+                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                        {workContext.company_code} | {workContext.company_name}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-600">
+                        {workContext.department_code
+                          ? `${workContext.department_code} | ${workContext.department_name}`
+                          : "Company-wide functional context"}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </DrawerBase>
+
+      <DrawerBase
+        visible={activeScopeEditor === "projects"}
+        title="Edit Projects"
+        onEscape={closeScopeEditor}
+        initialFocusRef={projectSearchRef}
+        width="min(760px, calc(100vw - 24px))"
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={closeScopeEditor}
+              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            >
+              Done
+            </button>
+            <button
+              type="button"
+              disabled={saving || loading || !authUserId}
+              onClick={() => void handleSave()}
+              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+            >
+              {saving ? "Saving..." : "Save Scope"}
+            </button>
+          </>
+        )}
+      >
+        <div className="grid gap-4">
+          <p className="text-sm leading-6 text-slate-600">
+            Keep project mapping limited to the working universe the user really
+            needs. Dense selection stays inside this drawer instead of the main page.
+          </p>
+          <QuickFilterInput
+            label="Filter Projects"
+            value={projectSearch}
+            onChange={setProjectSearch}
+            inputRef={projectSearchRef}
+            placeholder="Filter by project code or project name"
+            hint="Arrow Down moves into the project checkbox list."
+            inputProps={{
+              onKeyDown: (event) => {
+                if (event.key === "ArrowDown" && filteredProjects.length > 0) {
+                  event.preventDefault();
+                  projectRefs.current[0]?.focus();
+                }
+              },
+            }}
+          />
+
+          <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
+            {filteredProjects.length === 0 ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                No project matches the current filter.
+              </div>
+            ) : (
+              filteredProjects.map((project, index) => {
+                const selected = projectIds.includes(project.id);
+
+                return (
+                  <label
+                    key={project.id}
+                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                      selected
+                        ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                        : "border-slate-300 bg-white text-slate-700"
+                    }`}
+                  >
+                    <input
+                      ref={(element) => {
+                        projectRefs.current[index] = element;
+                      }}
+                      data-erp-nav-item="true"
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() =>
+                        toggleSelection(project.id, projectIds, setProjectIds)
+                      }
+                      onKeyDown={(event) =>
+                        handleLinearNavigation(event, {
+                          index,
+                          refs: projectRefs.current,
+                          orientation: "vertical",
+                        })
+                      }
+                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-emerald-600"
+                    />
+                    <span>
+                      <span className="font-semibold">{project.project_code}</span>
+                      {" - "}
+                      {project.project_name}
+                    </span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </DrawerBase>
+
+      <DrawerBase
+        visible={activeScopeEditor === "departments"}
+        title="Edit Departments"
+        onEscape={closeScopeEditor}
+        initialFocusRef={departmentSearchRef}
+        width="min(760px, calc(100vw - 24px))"
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={closeScopeEditor}
+              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            >
+              Done
+            </button>
+            <button
+              type="button"
+              disabled={saving || loading || !authUserId}
+              onClick={() => void handleSave()}
+              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+            >
+              {saving ? "Saving..." : "Save Scope"}
+            </button>
+          </>
+        )}
+      >
+        <div className="grid gap-4">
+          <p className="text-sm leading-6 text-slate-600">
+            Department mapping stays available for HR readiness, but edits happen in
+            this focused drawer so the main screen remains clean.
+          </p>
+          <QuickFilterInput
+            label="Filter Departments"
+            value={departmentSearch}
+            onChange={setDepartmentSearch}
+            inputRef={departmentSearchRef}
+            placeholder="Filter by department code or department name"
+            hint="Arrow Down moves into the department checkbox list."
+            inputProps={{
+              onKeyDown: (event) => {
+                if (
+                  event.key === "ArrowDown" &&
+                  filteredDepartments.length > 0
+                ) {
+                  event.preventDefault();
+                  departmentRefs.current[0]?.focus();
+                }
+              },
+            }}
+          />
+
+          <div className="grid gap-3 md:grid-cols-2">
+            {filteredDepartments.length === 0 ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                No department matches the current filter.
+              </div>
+            ) : (
+              filteredDepartments.map((department, index) => {
+                const selected = departmentIds.includes(department.id);
+
+                return (
+                  <label
+                    key={department.id}
+                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                      selected
+                        ? "border-amber-300 bg-amber-50 text-amber-900"
+                        : "border-slate-300 bg-white text-slate-700"
+                    }`}
+                  >
+                    <input
+                      ref={(element) => {
+                        departmentRefs.current[index] = element;
+                      }}
+                      data-erp-nav-item="true"
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() =>
+                        toggleSelection(
+                          department.id,
+                          departmentIds,
+                          setDepartmentIds
+                        )
+                      }
+                      onKeyDown={(event) =>
+                        handleLinearNavigation(event, {
+                          index,
+                          refs: departmentRefs.current,
+                          orientation: "vertical",
+                        })
+                      }
+                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-amber-600"
+                    />
+                    <span>
+                      <span className="font-semibold">
+                        {department.department_code}
+                      </span>
+                      {" - "}
+                      {department.department_name}
+                    </span>
+                  </label>
+                );
+              })
             )}
           </div>
         </div>

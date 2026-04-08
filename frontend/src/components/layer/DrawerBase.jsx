@@ -29,7 +29,11 @@ export default function DrawerBase({
         width,
       }}
     >
-      {title ? <h2 style={titleStyle}>{title}</h2> : null}
+      {title ? (
+        <div style={headerStyle}>
+          <h2 style={titleStyle}>{title}</h2>
+        </div>
+      ) : null}
       <div
         {...contentProps}
         style={{
@@ -59,7 +63,8 @@ export default function DrawerBase({
 const overlayStyle = {
   position: "fixed",
   inset: 0,
-  background: "rgba(15, 23, 42, 0.28)",
+  background:
+    "linear-gradient(180deg, rgba(15, 23, 42, 0.34) 0%, rgba(15, 23, 42, 0.22) 100%)",
   zIndex: 999997,
   display: "flex",
   alignItems: "stretch",
@@ -70,11 +75,11 @@ const overlayStyle = {
 
 const panelStyle = {
   height: "100%",
-  background: "#f7f9fc",
-  border: "1px solid #94a3b8",
+  background: "#f8fafc",
+  border: "1px solid #8d9baa",
   borderRadius: "0",
-  boxShadow: "0 18px 48px rgba(15, 23, 42, 0.2)",
-  padding: "20px",
+  boxShadow: "0 18px 48px rgba(15, 23, 42, 0.24)",
+  padding: "0",
   overflow: "hidden",
   display: "flex",
   flexDirection: "column",
@@ -83,25 +88,34 @@ const panelStyle = {
   overscrollBehavior: "contain",
 };
 
+const headerStyle = {
+  borderBottom: "1px solid #cbd5e1",
+  background: "linear-gradient(180deg, #f7fafc 0%, #eef3f7 100%)",
+  padding: "18px 20px 16px",
+};
+
 const titleStyle = {
   margin: 0,
-  fontSize: "20px",
+  fontSize: "18px",
   fontWeight: 700,
   color: "#0f172a",
 };
 
 const contentStyle = {
-  marginTop: "18px",
   flex: 1,
   minHeight: 0,
-  overflow: "hidden",
+  overflow: "auto",
+  padding: "18px 20px",
 };
 
 const actionsStyle = {
-  marginTop: "22px",
+  marginTop: 0,
+  borderTop: "1px solid #cbd5e1",
+  background: "#eef3f7",
   display: "flex",
   justifyContent: "flex-end",
   gap: "10px",
   flexWrap: "wrap",
   flexShrink: 0,
+  padding: "16px 20px",
 };

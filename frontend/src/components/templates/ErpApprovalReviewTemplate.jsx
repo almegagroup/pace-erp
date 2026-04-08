@@ -34,19 +34,33 @@ export default function ErpApprovalReviewTemplate({
       notices={notices}
       metrics={metrics}
       footerHints={[
-        "Alt+Shift+F Filter Target",
+        "Alt+Shift+F Or F3 Filter Target",
         "Arrow Keys Move Review Queue",
         "Esc Close Or Back",
-        "Ctrl+K Command Bar",
+        "Ctrl+K Or F9 Command Bar",
       ]}
     >
-      <div className="grid gap-3">
+      <div className="grid gap-4">
         {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
-        {sideSection ? <ErpSectionCard {...sideSection} tone="accent" /> : null}
-        {reviewSection ? (
-          <ErpSectionCard {...reviewSection} className="min-h-[560px]" />
-        ) : null}
-        {summarySection ? <ErpSectionCard {...summarySection} /> : null}
+        <div
+          className={`grid gap-4 ${
+            sideSection || summarySection
+              ? "xl:grid-cols-[minmax(0,1.45fr)_360px]"
+              : "grid-cols-1"
+          }`}
+        >
+          <div className="min-w-0">
+            {reviewSection ? (
+              <ErpSectionCard {...reviewSection} className="min-h-[560px]" />
+            ) : null}
+          </div>
+          {sideSection || summarySection ? (
+            <div className="grid gap-4">
+              {sideSection ? <ErpSectionCard {...sideSection} tone="accent" /> : null}
+              {summarySection ? <ErpSectionCard {...summarySection} /> : null}
+            </div>
+          ) : null}
+        </div>
         {bottomSection ? <div>{bottomSection}</div> : null}
       </div>
     </ErpScreenScaffold>
