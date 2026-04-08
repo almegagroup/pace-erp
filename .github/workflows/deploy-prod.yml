@@ -23,4 +23,4 @@ jobs:
         run: supabase link --project-ref bsjpvkigpllichlknmah
 
       - name: Run DB Migrations
-        run: supabase db deploy
+        run: supabase db push --linked --include-all
