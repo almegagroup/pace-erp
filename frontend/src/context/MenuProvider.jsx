@@ -8,27 +8,36 @@
  * Authority: Frontend
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { MenuContext } from "./MenuContext.js";
 import { buildRouteIndex } from "../router/routeIndex.js";
+import {
+  buildShellSnapshot,
+  clearShellSnapshotCache,
+  EMPTY_RUNTIME_CONTEXT,
+  EMPTY_SHELL_PROFILE,
+  readShellSnapshotCache,
+  writeShellSnapshotCache,
+} from "../store/shellSnapshotCache.js";
 
 export function MenuProvider({ children }) {
-  const [menu, setMenu] = useState([]);
-  const [allowedRoutes, setAllowedRoutes] = useState(new Set());
-  const [loading, setLoading] = useState(true);
-  const [shellProfile, setShellProfileState] = useState({
-    userCode: "",
-    roleCode: "",
-    tagline: "Process Automation & Control Environment",
-  });
-  const [runtimeContext, setRuntimeContextState] = useState({
-    isAdmin: false,
-    selectedCompanyId: "",
-    currentCompany: null,
-    availableCompanies: [],
-    availableWorkContexts: [],
-    selectedWorkContext: null,
-  });
+  const cachedSnapshot = readShellSnapshotCache();
+  const [menu, setMenu] = useState(() => cachedSnapshot?.menu ?? []);
+  const [allowedRoutes, setAllowedRoutes] = useState(() =>
+    cachedSnapshot?.menu?.length > 0
+      ? buildRouteIndex(cachedSnapshot.menu)
+      : new Set()
+  );
+  const [loading, setLoading] = useState(() => !cachedSnapshot);
+  const [shellProfile, setShellProfileState] = useState(
+    () => cachedSnapshot?.shellProfile ?? EMPTY_SHELL_PROFILE
+  );
+  const [runtimeContext, setRuntimeContextState] = useState(
+    () => cachedSnapshot?.runtimeContext ?? EMPTY_RUNTIME_CONTEXT
+  );
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState(
+    () => cachedSnapshot?.cachedAt ?? 0
+  );
 
   const startMenuLoading = useCallback(() => {
     setLoading(true);
@@ -37,19 +46,10 @@ export function MenuProvider({ children }) {
   const clearMenuSnapshot = useCallback(() => {
     setMenu([]);
     setAllowedRoutes(new Set());
-    setShellProfileState({
-      userCode: "",
-      roleCode: "",
-      tagline: "Process Automation & Control Environment",
-    });
-    setRuntimeContextState({
-      isAdmin: false,
-      selectedCompanyId: "",
-      currentCompany: null,
-      availableCompanies: [],
-      availableWorkContexts: [],
-      selectedWorkContext: null,
-    });
+    setShellProfileState(EMPTY_SHELL_PROFILE);
+    setRuntimeContextState(EMPTY_RUNTIME_CONTEXT);
+    setSnapshotUpdatedAt(0);
+    clearShellSnapshotCache();
     setLoading(false);
   }, []);
 
@@ -64,6 +64,7 @@ export function MenuProvider({ children }) {
 
     setMenu(snapshot);
     setAllowedRoutes(buildRouteIndex(snapshot));
+    setSnapshotUpdatedAt(Date.now());
     setLoading(false);
   }, []);
 
@@ -90,6 +91,32 @@ export function MenuProvider({ children }) {
     });
   }, []);
 
+  useEffect(() => {
+    if (
+      loading ||
+      menu.length === 0 ||
+      !shellProfile.userCode ||
+      !shellProfile.roleCode
+    ) {
+      return;
+    }
+
+    writeShellSnapshotCache(
+      buildShellSnapshot({
+        menu,
+        shellProfile,
+        runtimeContext,
+        cachedAt: snapshotUpdatedAt || Date.now(),
+      })
+    );
+  }, [
+    loading,
+    menu,
+    runtimeContext,
+    shellProfile,
+    snapshotUpdatedAt,
+  ]);
+
   return (
     <MenuContext.Provider
       value={{
@@ -98,6 +125,7 @@ export function MenuProvider({ children }) {
         loading,
         shellProfile,
         runtimeContext,
+        snapshotUpdatedAt,
         startMenuLoading,
         clearMenuSnapshot,
         setMenuSnapshot,

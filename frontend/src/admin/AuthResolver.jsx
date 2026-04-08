@@ -122,8 +122,9 @@ export default function AuthResolver() {
             color: "#4a6273",
           }}
         >
-          We are validating your session, loading the correct home dashboard,
-          and refreshing the latest menu authority for your role.
+          We are opening your ERP home workspace and restoring the correct
+          shell for your role. Fresh data will settle quietly in the
+          background when needed.
         </p>
 
         <div

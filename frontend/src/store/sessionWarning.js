@@ -17,6 +17,7 @@ import {
   getClusterAdmission,
 } from "./sessionCluster.js";
 import { releaseSingleTabOwnership } from "./singleTabSession.js";
+import { clearShellSnapshotCache } from "./shellSnapshotCache.js";
 
 const WARNING_MESSAGES = {
   IDLE_WARNING:
@@ -202,6 +203,7 @@ export function hardLogout(options = {}) {
   clearNavigationStack();
   clearWorkspaceLock();
   clearClusterAdmission();
+  clearShellSnapshotCache();
   releaseSingleTabOwnership();
 
   state = {

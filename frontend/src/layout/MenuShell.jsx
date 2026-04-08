@@ -187,9 +187,13 @@ async function fetchLiveRuntimeSnapshot() {
   const [contextResponse, menuResponse] = await Promise.all([
     fetch(`${import.meta.env.VITE_API_BASE}/api/me/context`, {
       credentials: "include",
+      erpUiMode: "blocking",
+      erpUiLabel: "Refreshing workspace shell",
     }),
     fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
       credentials: "include",
+      erpUiMode: "blocking",
+      erpUiLabel: "Refreshing workspace shell",
     }),
   ]);
 
@@ -324,21 +328,24 @@ export default function MenuShell() {
     ? `${runtimeContext.selectedWorkContext.work_context_code} | ${runtimeContext.selectedWorkContext.work_context_name}`
     : "No work context selected";
   const networkStatusLabel =
-    networkActivity.inFlightCount > 0
-      ? `Syncing ${networkActivity.inFlightCount} request${networkActivity.inFlightCount === 1 ? "" : "s"}`
+    networkActivity.blockingInFlightCount > 0
+      ? `Processing ${networkActivity.blockingInFlightCount} action${networkActivity.blockingInFlightCount === 1 ? "" : "s"}`
       : networkActivity.lastOutcome === "error"
         ? "Last sync failed"
         : networkActivity.lastCompletedAt > 0
           ? "System ready"
           : "Waiting";
   const networkStatusTone =
-    networkActivity.inFlightCount > 0
+    networkActivity.blockingInFlightCount > 0
       ? "border-amber-300 bg-amber-50 text-amber-900"
       : networkActivity.lastOutcome === "error"
         ? "border-rose-300 bg-rose-50 text-rose-900"
         : "border-emerald-300 bg-emerald-50 text-emerald-900";
-  const busyOverlayVisible = networkActivity.inFlightCount > 0;
-  const busyOverlayLabel = networkActivity.lastLabel || "Processing ERP action";
+  const busyOverlayVisible = networkActivity.blockingInFlightCount > 0;
+  const busyOverlayLabel =
+    networkActivity.lastBlockingLabel ||
+    networkActivity.lastLabel ||
+    "Processing ERP action";
 
   const handleWorkCompanyChange = useCallback(
     async (nextCompanyId) => {
@@ -593,14 +600,20 @@ export default function MenuShell() {
   }, []);
 
   useEffect(() => {
-    if (networkActivity.inFlightCount <= 0 || !networkActivity.startedAt) {
+    if (
+      networkActivity.blockingInFlightCount <= 0 ||
+      !networkActivity.blockingStartedAt
+    ) {
       setBusyElapsedSeconds(0);
       return undefined;
     }
 
     const updateElapsed = () => {
       setBusyElapsedSeconds(
-        Math.max(1, Math.ceil((Date.now() - networkActivity.startedAt) / 1000))
+        Math.max(
+          1,
+          Math.ceil((Date.now() - networkActivity.blockingStartedAt) / 1000)
+        )
       );
     };
 
@@ -608,7 +621,7 @@ export default function MenuShell() {
     const intervalId = window.setInterval(updateElapsed, 250);
 
     return () => window.clearInterval(intervalId);
-  }, [networkActivity.inFlightCount, networkActivity.startedAt]);
+  }, [networkActivity.blockingInFlightCount, networkActivity.blockingStartedAt]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1411,11 +1424,19 @@ export default function MenuShell() {
             <div className="grid gap-2 text-right">
               <div
                 className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] ${networkStatusTone} ${
-                  networkActivity.inFlightCount > 0 ? "erp-status-marquee" : ""
+                  networkActivity.blockingInFlightCount > 0
+                    ? "erp-status-marquee"
+                    : ""
                 }`}
               >
                 {networkStatusLabel}
-                {networkActivity.lastLabel ? ` | ${networkActivity.lastLabel}` : ""}
+                {networkActivity.blockingInFlightCount > 0
+                  ? networkActivity.lastBlockingLabel
+                    ? ` | ${networkActivity.lastBlockingLabel}`
+                    : ""
+                  : networkActivity.lastOutcome === "error" && networkActivity.lastLabel
+                    ? ` | ${networkActivity.lastLabel}`
+                    : ""}
               </div>
             </div>
           </div>
@@ -1576,7 +1597,7 @@ export default function MenuShell() {
             </p>
           </div>
           <div className="text-xs uppercase tracking-[0.16em] text-slate-500">
-            Requests running: {networkActivity.inFlightCount}
+            Blocking actions: {networkActivity.blockingInFlightCount}
           </div>
         </div>
       </BlockingLayer>

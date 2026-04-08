@@ -23,6 +23,12 @@ import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { buildMenuTree, getTopLevelRoutePages } from "../../../navigation/menuProjection.js";
+import {
+  readViewSnapshotCache,
+  writeViewSnapshotCache,
+} from "../../../store/viewSnapshotCache.js";
+
+const SA_CONTROL_PANEL_CACHE_KEY = "sa-control-panel";
 
 async function readJsonSafe(response) {
   try {
@@ -180,26 +186,36 @@ function DataTableCard({
 }
 
 export default function SAControlPanel() {
+  const cachedSnapshot = readViewSnapshotCache(SA_CONTROL_PANEL_CACHE_KEY);
   const { menu } = useMenu();
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(
+    () => !cachedSnapshot?.controlPanel
+  );
   const [error, setError] = useState("");
-  const [controlPanel, setControlPanel] = useState(null);
-  const [health, setHealth] = useState(null);
+  const [controlPanel, setControlPanel] = useState(
+    () => cachedSnapshot?.controlPanel ?? null
+  );
+  const [health, setHealth] = useState(() => cachedSnapshot?.health ?? null);
   const [detailDrawer, setDetailDrawer] = useState("");
   const topActionRefs = useRef([]);
   const quickLaunchRefs = useRef([]);
 
-  async function handleRefresh() {
+  async function handleRefresh({ userInitiated = false } = {}) {
     setLoading(true);
     setError("");
 
     try {
+      const uiMode = userInitiated ? "blocking" : "background";
       const [controlPanelResponse, healthResponse] = await Promise.all([
         fetch(`${import.meta.env.VITE_API_BASE}/api/admin/control-panel`, {
           credentials: "include",
+          erpUiMode: uiMode,
+          erpUiLabel: "Refreshing control panel",
         }),
         fetch(`${import.meta.env.VITE_API_BASE}/api/admin/system-health`, {
           credentials: "include",
+          erpUiMode: uiMode,
+          erpUiLabel: "Refreshing control panel",
         }),
       ]);
 
@@ -214,6 +230,10 @@ export default function SAControlPanel() {
 
       setControlPanel(controlPanelJson.data ?? null);
       setHealth(healthJson?.ok ? healthJson.data ?? null : null);
+      writeViewSnapshotCache(SA_CONTROL_PANEL_CACHE_KEY, {
+        controlPanel: controlPanelJson.data ?? null,
+        health: healthJson?.ok ? healthJson.data ?? null : null,
+      });
     } catch {
       setError("Unable to load the SA control panel right now.");
     } finally {
@@ -302,7 +322,7 @@ export default function SAControlPanel() {
       label: loading ? "Refreshing control panel..." : "Refresh control panel",
       keywords: ["refresh", "control panel", "diagnostics", "health"],
       disabled: loading,
-      perform: () => void handleRefresh(),
+      perform: () => void handleRefresh({ userInitiated: true }),
       order: 10,
     },
     {
@@ -344,7 +364,7 @@ export default function SAControlPanel() {
   useErpScreenHotkeys({
     refresh: {
       disabled: loading,
-      perform: () => void handleRefresh(),
+      perform: () => void handleRefresh({ userInitiated: true }),
     },
     focusPrimary: {
       perform: () => quickLaunchRefs.current[0]?.[0]?.focus?.(),
@@ -360,7 +380,7 @@ export default function SAControlPanel() {
       buttonRef: (element) => {
         topActionRefs.current[0] = element;
       },
-      onClick: () => void handleRefresh(),
+      onClick: () => void handleRefresh({ userInitiated: true }),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 0,

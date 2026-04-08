@@ -162,12 +162,26 @@ globalThis.fetch = async (...args) => {
     args[0] instanceof Request
       ? args[0].method
       : args[1]?.method ?? "GET";
+  const normalizedRequestMethod = String(requestMethod || "GET").toUpperCase();
+  const requestUiMode =
+    args[1]?.erpUiMode ??
+    (normalizedRequestMethod === "GET" || normalizedRequestMethod === "HEAD"
+      ? "silent"
+      : undefined);
+  const requestUiLabel = args[1]?.erpUiLabel;
+  const isSilentRequest = requestUiMode === "silent";
   const shouldAttachClusterHeaders =
     isApiRequest && !url.includes("/api/session/cluster/admit");
   const shouldTrackActivity =
-    isApiRequest && !isPassiveProbe && !isWarningAcknowledgeRefresh;
+    isApiRequest &&
+    !isPassiveProbe &&
+    !isWarningAcknowledgeRefresh &&
+    !isSilentRequest;
   const activityToken = shouldTrackActivity
-    ? beginNetworkActivity(url, requestMethod)
+    ? beginNetworkActivity(url, requestMethod, {
+        mode: requestUiMode,
+        label: requestUiLabel,
+      })
     : null;
 
   const finalArgs = shouldAttachClusterHeaders ? withClusterHeaders(args) : args;

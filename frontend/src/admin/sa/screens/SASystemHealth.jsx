@@ -16,6 +16,12 @@ import ErpScreenScaffold, {
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import {
+  readViewSnapshotCache,
+  writeViewSnapshotCache,
+} from "../../../store/viewSnapshotCache.js";
+
+const SA_SYSTEM_HEALTH_CACHE_KEY = "sa-system-health";
 
 async function readJsonSafe(response) {
   try {
@@ -47,53 +53,13 @@ function formatSystemVersion(value) {
 }
 
 export default function SASystemHealth() {
+  const cachedSnapshot = readViewSnapshotCache(SA_SYSTEM_HEALTH_CACHE_KEY);
   const actionBarRefs = useRef([]);
-  const [health, setHealth] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [health, setHealth] = useState(() => cachedSnapshot?.health ?? null);
+  const [loading, setLoading] = useState(() => !cachedSnapshot?.health);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    let alive = true;
-
-    async function loadHealth() {
-      setLoading(true);
-      setError("");
-
-      try {
-        const response = await fetch(
-          `${import.meta.env.VITE_API_BASE}/api/admin/system-health`,
-          {
-            credentials: "include",
-          }
-        );
-
-        const json = await readJsonSafe(response);
-
-        if (!alive) return;
-
-        if (!response.ok || !json?.ok) {
-          throw new Error("SYSTEM_HEALTH_READ_FAILED");
-        }
-
-        setHealth(json.data ?? null);
-      } catch {
-        if (!alive) return;
-        setError("Unable to load ERP system health right now.");
-      } finally {
-        if (alive) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void loadHealth();
-
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  async function handleRefresh() {
+  async function loadHealth({ userInitiated = false } = {}) {
     setLoading(true);
     setError("");
 
@@ -102,21 +68,52 @@ export default function SASystemHealth() {
         `${import.meta.env.VITE_API_BASE}/api/admin/system-health`,
         {
           credentials: "include",
+          erpUiMode: userInitiated ? "blocking" : "background",
+          erpUiLabel: "Refreshing system health",
         }
       );
 
       const json = await readJsonSafe(response);
 
       if (!response.ok || !json?.ok) {
-        throw new Error("SYSTEM_HEALTH_REFRESH_FAILED");
+        throw new Error(
+          userInitiated
+            ? "SYSTEM_HEALTH_REFRESH_FAILED"
+            : "SYSTEM_HEALTH_READ_FAILED"
+        );
       }
 
       setHealth(json.data ?? null);
+      writeViewSnapshotCache(SA_SYSTEM_HEALTH_CACHE_KEY, {
+        health: json.data ?? null,
+      });
     } catch {
-      setError("Unable to refresh ERP system health right now.");
+      setError(
+        userInitiated
+          ? "Unable to refresh ERP system health right now."
+          : "Unable to load ERP system health right now."
+      );
     } finally {
       setLoading(false);
     }
+  }
+
+  useEffect(() => {
+    let alive = true;
+
+    void loadHealth().catch(() => {
+      if (!alive) {
+        return;
+      }
+    });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function handleRefresh() {
+    await loadHealth({ userInitiated: true });
   }
 
   const dbStatus = health?.db_status ?? "N/A";
