@@ -25,9 +25,19 @@ jobs:
         run: |
           supabase link --project-ref bsjpvkigpllichlknmah
 
+ dev
+      - name: Link Supabase Project
+        run: supabase link --project-ref bsjpvkigpllichlknmah
+
+      - name: Run DB Migrations
+        run: supabase db push --linked --include-all
+
+        
+
       # 🧱 APPLY MIGRATIONS
       - name: Apply DB migrations
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           supabase db push
+ main
