@@ -9,11 +9,14 @@ import { openRoute } from "../../../navigation/screenStackEngine.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../context/useMenu.js";
-import { buildMenuTree, getTopLevelRoutePages } from "../../../navigation/menuProjection.js";
 import {
   readViewSnapshotCache,
   writeViewSnapshotCache,
 } from "../../../store/viewSnapshotCache.js";
+import {
+  buildSaMenuSections,
+  flattenSaMenuSections,
+} from "../saMenuSections.js";
 
 const SA_HOME_CACHE_KEY = "sa-home-dashboard";
 
@@ -162,21 +165,42 @@ export default function SAHome() {
     void refreshDashboardSnapshot();
   }, []);
 
-  const launchActions = useMemo(
-    () => {
-      const pages = getTopLevelRoutePages(buildMenuTree(menu));
+  const launchSections = useMemo(() => {
+    const sections = buildSaMenuSections(menu, {
+      excludeMenuCodes: ["SA_HOME"],
+    });
 
-      return pages
-        .filter((item) => item.menu_code !== "SA_HOME")
-        .map((item) => ({
-          badge: "Open",
-          title: item.title,
-          description:
-            item.description ?? "Open the selected Super Admin workspace.",
-          onClick: () => openRoute(item.route_path),
-        }));
-    },
-    [menu]
+    return sections.map((section) => ({
+      ...section,
+      pages: section.pages.map((item) => ({
+        badge: "Open",
+        menuCode: item.menu_code,
+        title: item.title,
+        description:
+          item.description ?? "Open the selected Super Admin workspace.",
+        routePath: item.route_path,
+        onClick: () => openRoute(item.route_path),
+      })),
+    }));
+  }, [menu]);
+
+  const launchActions = useMemo(
+    () =>
+      flattenSaMenuSections(
+        launchSections.map((section) => ({
+          ...section,
+          pages: section.pages,
+        }))
+      ),
+    [launchSections]
+  );
+
+  const launchIndexByMenuCode = useMemo(
+    () =>
+      new Map(
+        launchActions.map((action, index) => [action.menuCode, index])
+      ),
+    [launchActions]
   );
 
   const topActions = [
@@ -197,13 +221,13 @@ export default function SAHome() {
         }),
     },
     {
-      key: "open-menu-governance",
-      label: "Menu Governance",
+      key: "open-control-panel",
+      label: "Control Panel",
       tone: "neutral",
       buttonRef: (element) => {
         topActionRefs.current[1] = element;
       },
-      onClick: () => openRoute("/sa/menu"),
+      onClick: () => openRoute("/sa/control-panel"),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 1,
@@ -293,7 +317,7 @@ export default function SAHome() {
     <ErpScreenScaffold
       eyebrow="Super Admin Command"
       title="Super Admin Dashboard"
-      description="Dense launch surface for Super Admin work. Pick the next governance job directly from the launch list without mouse travel."
+      description="Follow the setup flow from organization foundations to runtime checks. Each section groups the next safe SA step without mixing advanced governance into the first pass."
       actions={topActions}
       notices={
         error
@@ -309,51 +333,75 @@ export default function SAHome() {
       metrics={metrics}
     >
       <ErpSectionCard
-        eyebrow="Launch Rail"
-        title="Open the next SA workspace"
-        description="Use arrows, Enter, or the command bar to move straight into the next governance job."
+        eyebrow="Setup Flow"
+        title="Complete setup in the right order"
+        description="Move left to right through the governance cycle. Start with company and team structure, then wire access, then onboard users, then finish approval and reporting rules."
       >
-        <div className="grid gap-2">
-          {launchActions.map((action, index) => (
-            <HomeActionCard
-              key={action.title}
-              action={action}
-              index={index}
-              refs={cardRefs}
-              registerRef={(element) => {
-                cardRefs.current[index] = element;
-              }}
-            />
-          ))}
+        <div className="grid gap-6">
+          {launchSections.map((section) => (
+            <div key={section.key} className="grid gap-2">
+              <div className="border border-slate-300 bg-[#eef4fb] px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+                  {section.title}
+                </p>
+                <p className="mt-1 text-sm text-slate-600">
+                  {section.description || "Open the next published workspace from this section."}
+                </p>
+              </div>
+                <div className="grid gap-2">
+                  {section.pages.map((action) => {
+                    const flatIndex = launchIndexByMenuCode.get(action.menuCode) ?? 0;
+
+                    return (
+                      <HomeActionCard
+                        key={`${section.key}-${action.title}`}
+                        action={action}
+                        index={flatIndex}
+                        refs={cardRefs}
+                        registerRef={(element) => {
+                          cardRefs.current[flatIndex] = element;
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
         </div>
       </ErpSectionCard>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <ErpSectionCard
-          eyebrow="Operating Pattern"
-          title="Keyboard Operation"
-          description="This page is a worksheet-style launcher, not a poster dashboard."
+          eyebrow="Working Rule"
+          title="How SA Should Move"
+          description="This dashboard is a runbook, not a free-form launchpad."
         >
           <div className="grid gap-2">
             <div className="grid grid-cols-[140px_minmax(0,1fr)] border border-slate-200 bg-white px-3 py-3">
-              <p className="text-sm font-semibold text-slate-900">Alt+Shift+P</p>
+              <p className="text-sm font-semibold text-slate-900">Step 1</p>
               <p className="text-sm text-slate-600">
-                Returns focus to the launch list.
+                Finish Organization Setup before assigning screen packs or user scope.
               </p>
             </div>
             <div className="grid grid-cols-[140px_minmax(0,1fr)] border border-slate-200 bg-white px-3 py-3">
-              <p className="text-sm font-semibold text-slate-900">Alt+R</p>
+              <p className="text-sm font-semibold text-slate-900">Step 2</p>
               <p className="text-sm text-slate-600">
-                Reloads the snapshot without leaving the shell.
+                Finish Access Setup before onboarding live users into work scopes.
+              </p>
+            </div>
+            <div className="grid grid-cols-[140px_minmax(0,1fr)] border border-slate-200 bg-white px-3 py-3">
+              <p className="text-sm font-semibold text-slate-900">Step 3</p>
+              <p className="text-sm text-slate-600">
+                Keep approval and report visibility separate from screen access.
               </p>
             </div>
           </div>
         </ErpSectionCard>
 
         <ErpSectionCard
-          eyebrow="Snapshot Summary"
-          title="Current readiness view"
-          description="These figures are derived from the same backend-owned admin projections used by the deeper SA surfaces."
+          eyebrow="Readiness"
+          title="Current runtime health"
+          description="These checks come from the same backend projections that power the deeper SA workspaces."
         >
           <div className="grid gap-2">
             {[

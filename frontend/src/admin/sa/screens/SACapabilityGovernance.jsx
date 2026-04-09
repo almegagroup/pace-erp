@@ -176,14 +176,14 @@ export default function SACapabilityGovernance(){
   return (
     <ErpScreenScaffold
       eyebrow="SA Capability Governance"
-      title="Capability, Work Context, and ACL Version Control"
-      description="Create reusable capability packs, fill them with mapped business-resource actions, attach them to work contexts, and freeze immutable ACL versions."
+      title="Screen Packs, Work Scopes, and ACL Version Control"
+      description="Create reusable screen packs, fill them with mapped page actions, attach them to work scopes, and freeze immutable ACL versions without editing users one by one."
       actions={[{key:"control-panel",label:"Control Panel",tone:"neutral",buttonRef:(el)=>{topRefs.current[0]=el;},onClick:()=>{openScreen("SA_CONTROL_PANEL",{mode:"replace"});navigate("/sa/control-panel");},onKeyDown:(e)=>handleLinearNavigation(e,{index:0,refs:topRefs.current,orientation:"horizontal"})}]}
       notices={[...(error?[{key:"error",tone:"error",message:error}]:[]),...(notice?[{key:"notice",tone:"success",message:notice}]:[])]}
       metrics={[{key:"caps",label:"Capabilities",value:loading?"...":String(caps.length),tone:"sky",caption:"Available capability packs."},{key:"contexts",label:"Work Contexts",value:loading?"...":String(contexts.length),tone:"emerald",caption:"Contexts in selected company."},{key:"rows",label:"Capability Rows",value:loading?"...":String(capRows.length),tone:"amber",caption:"Rows for selected capability."},{key:"attached",label:"Attached Contexts",value:bindingLoading?"...":String(attachedContextCount),tone:"violet",caption:"Selected pack is currently attached here."}]}
     >
       <div className="grid gap-6 xl:grid-cols-[1.1fr,0.9fr]">
-        <ErpSectionCard eyebrow="Capability Actions" title="Capability matrix" description="Create one pack, choose one module, then set all page-action rows together instead of typing manual resource codes.">
+          <ErpSectionCard eyebrow="Screen Packs" title="Capability matrix" description="Create one reusable pack, choose one module, then set all page-action rows together instead of typing manual resource codes for each work scope.">
           <div className="mb-6 grid gap-3 border border-slate-300 bg-slate-50 px-4 py-4">
             <div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Create Capability Pack</p><p className="mt-1 text-xs text-slate-600">Start with CAP_HR_REQUESTER, CAP_HR_APPROVER, and CAP_HR_REPORT_VIEWER.</p></div>
             <div className="grid gap-3 md:grid-cols-2">

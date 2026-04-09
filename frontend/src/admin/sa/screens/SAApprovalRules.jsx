@@ -337,8 +337,8 @@ export default function SAApprovalRules() {
   return (
     <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
-      title="Scoped Approver Rules"
-      description="Bind exact approvers to exact company, module, resource, action, and requester subject scope. This prevents Arka-like overreach across unrelated departments."
+      title="Who Approves What"
+      description="Bind exact approvers to exact company, module, resource, action, and requester work scope. This keeps company-wide approvers and department-specific approvers cleanly separated."
       actions={[
         {
           key: "policy",

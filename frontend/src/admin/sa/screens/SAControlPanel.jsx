@@ -15,18 +15,18 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
-import {
-  handleGridNavigation,
-  handleLinearNavigation,
-} from "../../../navigation/erpRovingFocus.js";
+import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../context/useMenu.js";
-import { buildMenuTree, getTopLevelRoutePages } from "../../../navigation/menuProjection.js";
 import {
   readViewSnapshotCache,
   writeViewSnapshotCache,
 } from "../../../store/viewSnapshotCache.js";
+import {
+  buildSaMenuSections,
+  flattenSaMenuSections,
+} from "../saMenuSections.js";
 
 const SA_CONTROL_PANEL_CACHE_KEY = "sa-control-panel";
 
@@ -288,32 +288,42 @@ export default function SAControlPanel() {
       : null,
   ].filter(Boolean);
 
-  const quickLaunch = useMemo(() => {
-    const rootAndDeepLaunches = getTopLevelRoutePages(buildMenuTree(menu))
-      .filter(
-        (item) =>
-          item.menu_code !== "SA_HOME" &&
-          item.menu_code !== "SA_CONTROL_PANEL"
-      )
-      .map((item) => ({
+  const quickLaunchSections = useMemo(() => {
+    const sections = buildSaMenuSections(menu, {
+      excludeMenuCodes: ["SA_HOME", "SA_CONTROL_PANEL"],
+    });
+
+    return sections.map((section) => ({
+      ...section,
+      pages: section.pages.map((item) => ({
         badge: "Open",
+        menuCode: item.menu_code,
         title: item.title,
         description:
           item.description ?? "Open the selected Super Admin governance workspace.",
         onClick: () => openRoute(item.route_path),
-      }));
-
-    return [
-      ...rootAndDeepLaunches,
-      {
-        badge: "Anchor",
-        title: "Back To SA Home",
-        description:
-          "Return to the Super Admin dashboard entry shell and main command overview.",
-        onClick: () => openScreen("SA_HOME", { mode: "reset" }),
-      },
-    ];
+      })),
+    }));
   }, [menu]);
+
+  const quickLaunch = useMemo(
+    () =>
+      flattenSaMenuSections(
+        quickLaunchSections.map((section) => ({
+          ...section,
+          pages: section.pages,
+        }))
+      ),
+    [quickLaunchSections]
+  );
+
+  const quickLaunchIndexByMenuCode = useMemo(
+    () =>
+      new Map(
+        quickLaunch.map((action, index) => [action.menuCode, index])
+      ),
+    [quickLaunch]
+  );
 
   useErpScreenCommands([
     {
@@ -330,7 +340,7 @@ export default function SAControlPanel() {
       group: "Current Screen",
       label: "Focus quick launch grid",
       keywords: ["focus", "quick launch", "actions"],
-      perform: () => quickLaunchRefs.current[0]?.[0]?.focus?.(),
+      perform: () => quickLaunchRefs.current[0]?.focus?.(),
       order: 20,
     },
     {
@@ -367,7 +377,7 @@ export default function SAControlPanel() {
       perform: () => void handleRefresh({ userInitiated: true }),
     },
     focusPrimary: {
-      perform: () => quickLaunchRefs.current[0]?.[0]?.focus?.(),
+      perform: () => quickLaunchRefs.current[0]?.focus?.(),
     },
   });
 
@@ -461,11 +471,11 @@ export default function SAControlPanel() {
 
   const launchSummary = useMemo(
     () => [
-      "Project master keyboard-native manage screen live",
-      "User lifecycle and scope governance live",
-      "Company module enablement keyboard surface live",
-      "ACL role permission governance live",
-      "Workflow and approval rule governance live",
+      "Organization foundations first",
+      "Access packs and role baselines next",
+      "Users after access structure is ready",
+      "Approvals and report visibility last",
+      "Diagnostics only after setup changes land",
     ],
     []
   );
@@ -614,28 +624,44 @@ export default function SAControlPanel() {
         <ErpSectionCard
           eyebrow="Quick Launch"
           title="Open the next SA workspace"
-          description="The launch list is now the primary working target for keyboard-first control-plane movement."
+          description="Use the same setup sequence as the sidebar: foundations first, advanced governance later."
         >
-          <div className="grid gap-2">
-            {quickLaunch.map((action, index) => (
-              <LaunchCard
-                key={action.title}
-                {...action}
-                buttonRef={(element) => {
-                  const rowIndex = Math.floor(index / 2);
-                  const columnIndex = index % 2;
-                  quickLaunchRefs.current[rowIndex] ??= [];
-                  quickLaunchRefs.current[rowIndex][columnIndex] = element;
-                }}
-                primaryFocus={index === 0}
-                onKeyDown={(event) =>
-                  handleGridNavigation(event, {
-                    rowIndex: Math.floor(index / 2),
-                    columnIndex: index % 2,
-                    gridRefs: quickLaunchRefs.current,
-                  })
-                }
-              />
+          <div className="grid gap-6">
+            {quickLaunchSections.map((section) => (
+              <div key={section.key} className="grid gap-2">
+                <div className="border border-slate-300 bg-[#eef4fb] px-3 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+                    {section.title}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {section.description || "Open the next governance workspace in this section."}
+                  </p>
+                </div>
+                <div className="grid gap-2">
+                  {section.pages.map((action) => {
+                    const flatIndex =
+                      quickLaunchIndexByMenuCode.get(action.menuCode) ?? 0;
+
+                    return (
+                      <LaunchCard
+                        key={`${section.key}-${action.menuCode}`}
+                        {...action}
+                        buttonRef={(element) => {
+                          quickLaunchRefs.current[flatIndex] = element;
+                        }}
+                        primaryFocus={flatIndex === 0}
+                        onKeyDown={(event) =>
+                          handleLinearNavigation(event, {
+                            index: flatIndex,
+                            refs: quickLaunchRefs.current,
+                            orientation: "vertical",
+                          })
+                        }
+                      />
+                    );
+                  })}
+                </div>
+              </div>
             ))}
           </div>
         </ErpSectionCard>

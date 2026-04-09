@@ -695,7 +695,7 @@ export default function SADepartmentMaster() {
           <ErpSectionCard
             eyebrow="Runtime Layer"
             title="Derived Work Context"
-            description="This is the runtime object ACL will eventually evaluate. Business pages can be assigned later, but the context foundation can exist now."
+            description="This is the runtime work scope ACL will evaluate later. Business pages can be assigned after the team foundation already exists."
             tone="accent"
           >
             {selectedDepartment?.derived_work_context ? (
@@ -735,15 +735,15 @@ export default function SADepartmentMaster() {
           <ErpSectionCard
             eyebrow="Next Step"
             title="How To Use This Foundation"
-            description="You can safely create departments now even before business pages exist."
+            description="You can safely create team foundations now even before business pages exist."
             tone="warning"
           >
             <div className="grid gap-2">
               {[
-                "Create the department now so the company structure is real.",
-                "Let the backend auto-create the matching DEPT_* work context.",
-                "Later, when business pages exist, assign capability packs and ACL to that work context.",
-                "Use User Scope to bind users into the right department-derived work context.",
+                "Create the department now so the company team structure is real.",
+                "Let the backend auto-create the matching DEPT_* work scope.",
+                "Later, when business pages exist, assign screen packs and ACL to that work scope.",
+                "Use User Scope to bind users into the right department-derived work scope.",
               ].map((line) => (
                 <div
                   key={line}

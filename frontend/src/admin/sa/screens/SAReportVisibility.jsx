@@ -309,8 +309,8 @@ export default function SAReportVisibility() {
   return (
     <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
-      title="Report Visibility Rules"
-      description="Separate report visibility from approver authority. Meeta can view all leave registers without becoming every department's approver."
+      title="Who Can See Reports"
+      description="Separate report visibility from approver authority. A reviewer can see registers and details without becoming an approver."
       actions={[
         {
           key: "approver",
