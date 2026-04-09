@@ -193,7 +193,7 @@ export default function SAApprovalPolicy() {
     <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
       title="Exact Resource Approval Policy"
-      description="Set which business resource-action pairs require workflow approval. This is the exact law below module-wide approval defaults."
+      description="Decide which exact business page and action require approval. This is the lawbook below broad module defaults."
       actions={[
         {
           key: "approver-rules",

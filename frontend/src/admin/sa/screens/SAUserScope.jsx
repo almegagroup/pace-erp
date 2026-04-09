@@ -986,7 +986,7 @@ export default function SAUserScope() {
     <ErpScreenScaffold
       eyebrow="SA User Scope Governance"
       title="ERP User Scope Mapping"
-      description="Bind HR identity truth through Parent Company, then assign Work Companies and future operational scope without mixing those responsibilities into a single vague user record."
+      description="Bind one team identity through Parent Company and Department, then assign Work Companies and Work Scopes separately so SA does not mix HR truth with runtime access."
       actions={topActions}
       notices={notices}
       metrics={metrics}
