@@ -71,18 +71,29 @@ function shouldTouchSessionClock(
 }
 
 function enforceSessionLogout(
-  result: { action?: string } | null,
+  result: { action?: string; status?: string } | null,
   requestId: string
 ): Response | null {
- if (result?.action === "LOGOUT") {
-  return errorResponse(
-    "SESSION_LOGOUT",
-    "Session expired",
-    requestId,
-    "LOGOUT",
-    401,
-  );
-}
+  if (result?.action === "LOGOUT") {
+    const code =
+      result.status === "ABSENT"
+        ? "SESSION_ABSENT"
+        : result.status === "REVOKED"
+          ? "SESSION_REVOKED"
+          : result.status === "IDLE_EXPIRED"
+            ? "SESSION_IDLE_EXPIRED"
+            : result.status === "TTL_EXPIRED" || result.status === "EXPIRED"
+              ? "SESSION_EXPIRED"
+              : "SESSION_EXPIRED";
+
+    return errorResponse(
+      code,
+      "Session expired",
+      requestId,
+      "LOGOUT",
+      401,
+    );
+  }
   return null;
 }
 

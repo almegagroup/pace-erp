@@ -68,31 +68,26 @@ export function enforceIdleLifecycle(
 
   if (idleMs >= IDLE_EXPIRE_MS) {
     log({
-  level: "OBSERVABILITY",
-  event: "SESSION_IDLE_EXPIRED",
-});
+      level: "OBSERVABILITY",
+      event: "SESSION_IDLE_EXPIRED",
+    });
 
-recordSessionTimeline({
-  requestId: "SYSTEM_IDLE",
-  sessionId: session.sessionId,
-  userId: session.authUserId,
-  event: "IDLE",
-});
+    recordSessionTimeline({
+      requestId: "SYSTEM_IDLE",
+      sessionId: session.sessionId,
+      userId: session.authUserId,
+      event: "IDLE",
+    });
+
     return { status: "IDLE_EXPIRED", action: "LOGOUT" };
   }
 
   if (idleMs >= IDLE_WARNING_MS) {
     log({
-  level: "OBSERVABILITY",
-  event: "SESSION_IDLE_WARNING",
-});
+      level: "OBSERVABILITY",
+      event: "SESSION_IDLE_WARNING",
+    });
 
-recordSessionTimeline({
-  requestId: "SYSTEM_IDLE",
-  sessionId: session.sessionId,
-  userId: session.authUserId,
-  event: "IDLE",
-});
     return { status: "IDLE_WARNING", action: "NONE" };
   }
 
