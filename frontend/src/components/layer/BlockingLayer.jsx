@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   closeBlockingLayer,
+  getBlockingLayerIndex,
   isBlockingLayerActive,
   isTopBlockingLayer,
   openBlockingLayer,
@@ -135,6 +136,17 @@ export default function BlockingLayer({
   const layerIdRef = useRef(null);
   const previousFocusRef = useRef(null);
   const previousOverflowRef = useRef("");
+  const onEscapeRef = useRef(onEscape);
+  const initialFocusRefRef = useRef(initialFocusRef);
+  const [layerDepth, setLayerDepth] = useState(0);
+
+  useEffect(() => {
+    onEscapeRef.current = onEscape;
+  }, [onEscape]);
+
+  useEffect(() => {
+    initialFocusRefRef.current = initialFocusRef;
+  }, [initialFocusRef]);
 
   useEffect(() => {
     if (!visible) {
@@ -157,11 +169,14 @@ export default function BlockingLayer({
 
     const layerId = openBlockingLayer();
     layerIdRef.current = layerId;
+    const depthFrameId = window.requestAnimationFrame(() => {
+      setLayerDepth(Math.max(0, getBlockingLayerIndex(layerId)));
+    });
 
     const focusInitialElement = () => {
       if (!isTopBlockingLayer(layerId)) return;
 
-      const preferred = initialFocusRef?.current;
+      const preferred = initialFocusRefRef.current?.current;
       const focusable = getFocusableElements(dialogRef.current);
       const fallback = focusable[0] ?? dialogRef.current;
       const target =
@@ -232,10 +247,10 @@ export default function BlockingLayer({
         return;
       }
 
-      if (event.key === "Escape" && typeof onEscape === "function") {
+      if (event.key === "Escape" && typeof onEscapeRef.current === "function") {
         event.preventDefault();
         event.stopPropagation();
-        onEscape();
+        onEscapeRef.current();
       }
     };
 
@@ -246,7 +261,7 @@ export default function BlockingLayer({
       if (!dialog || dialog.contains(event.target)) return;
 
       const focusable = getFocusableElements(dialog);
-      const fallback = initialFocusRef?.current ?? focusable[0] ?? dialog;
+      const fallback = initialFocusRefRef.current?.current ?? focusable[0] ?? dialog;
 
       if (fallback instanceof HTMLElement) {
         fallback.focus();
@@ -258,6 +273,7 @@ export default function BlockingLayer({
     window.setTimeout(focusInitialElement, 0);
 
     return () => {
+      window.cancelAnimationFrame(depthFrameId);
       window.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("focusin", onFocusIn, true);
       closeBlockingLayer(layerId);
@@ -266,16 +282,29 @@ export default function BlockingLayer({
         document.body.style.overflow = previousOverflowRef.current;
       }
 
+      window.requestAnimationFrame(() => {
+        setLayerDepth(0);
+      });
+
       if (previousFocusRef.current instanceof HTMLElement) {
         previousFocusRef.current.focus();
       }
     };
-  }, [initialFocusRef, onEscape, visible]);
+  }, [visible]);
+
+  const resolvedOverlayStyle = useMemo(() => {
+    const baseZIndex = Number(overlayStyle?.zIndex ?? 999990);
+
+    return {
+      ...overlayStyle,
+      zIndex: baseZIndex + layerDepth * 4,
+    };
+  }, [layerDepth, overlayStyle]);
 
   if (!visible) return null;
 
   return createPortal(
-    <div style={overlayStyle} aria-modal="true" role="dialog">
+    <div style={resolvedOverlayStyle} aria-modal="true" role="dialog">
       <div
         ref={dialogRef}
         style={dialogStyle}

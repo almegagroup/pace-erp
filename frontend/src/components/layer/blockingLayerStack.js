@@ -22,3 +22,7 @@ export function isBlockingLayerActive() {
 export function isTopBlockingLayer(layerId) {
   return layerStack[layerStack.length - 1] === layerId;
 }
+
+export function getBlockingLayerIndex(layerId) {
+  return layerStack.indexOf(layerId);
+}
