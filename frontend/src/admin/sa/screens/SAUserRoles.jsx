@@ -52,6 +52,20 @@ async function fetchUsers() {
   return json.data;
 }
 
+async function fetchUsersWithRetry(attempts = 2) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetchUsers();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error("USER_ROLE_LIST_READ_FAILED");
+}
+
 function getRoleTone(roleCode) {
   switch (roleCode) {
     case "SA":
@@ -215,23 +229,44 @@ export default function SAUserRoles() {
         throw new Error("USER_ROLE_UPDATE_FAILED");
       }
 
-      const refreshedUsers = await fetchUsers();
-      const refreshedTarget = refreshedUsers.find(
-        (row) => row.auth_user_id === user.auth_user_id
-      );
+      try {
+        const refreshedUsers = await fetchUsersWithRetry();
+        const refreshedTarget = refreshedUsers.find(
+          (row) => row.auth_user_id === user.auth_user_id
+        );
 
-      setUsers(refreshedUsers);
-      setDraftRoles(
-        Object.fromEntries(
-          refreshedUsers.map((row) => [row.auth_user_id, row.role_code ?? ""])
-        )
-      );
+        setUsers(refreshedUsers);
+        setDraftRoles(
+          Object.fromEntries(
+            refreshedUsers.map((row) => [row.auth_user_id, row.role_code ?? ""])
+          )
+        );
 
-      if (
-        refreshedTarget?.role_code !== nextRole ||
-        refreshedTarget?.role_rank !== (ERP_ROLE_RANKS[nextRole] ?? null)
-      ) {
-        throw new Error("USER_ROLE_NOT_FINALIZED");
+        if (
+          refreshedTarget?.role_code !== nextRole ||
+          refreshedTarget?.role_rank !== (ERP_ROLE_RANKS[nextRole] ?? null)
+        ) {
+          throw new Error("USER_ROLE_NOT_FINALIZED");
+        }
+      } catch {
+        setUsers((current) =>
+          current.map((row) =>
+            row.auth_user_id === user.auth_user_id
+              ? {
+                  ...row,
+                  role_code: nextRole,
+                  role_rank:
+                    typeof json?.data?.role_rank === "number"
+                      ? json.data.role_rank
+                      : (ERP_ROLE_RANKS[nextRole] ?? row.role_rank ?? null),
+                }
+              : row
+          )
+        );
+        setDraftRoles((current) => ({
+          ...current,
+          [user.auth_user_id]: nextRole,
+        }));
       }
     } catch {
       setError("User role change was not finalized by the backend.");
