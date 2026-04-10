@@ -282,9 +282,20 @@ export default function SAUserScope() {
     () => sortCompanies(options.companies ?? []),
     [options.companies]
   );
+  const eligibleProjectCompanyIds = useMemo(
+    () => [...new Set([parentCompanyId, ...workCompanyIds].filter(Boolean))],
+    [parentCompanyId, workCompanyIds]
+  );
   const availableProjects = useMemo(
-    () => sortProjects(options.projects ?? []),
-    [options.projects]
+    () =>
+      sortProjects(
+        (options.projects ?? []).filter((project) =>
+          eligibleProjectCompanyIds.length === 0
+            ? true
+            : eligibleProjectCompanyIds.includes(project.company_id)
+        )
+      ),
+    [options.projects, eligibleProjectCompanyIds]
   );
   const availableDepartments = useMemo(
     () => sortDepartments(options.departments ?? []),
@@ -410,6 +421,20 @@ export default function SAUserScope() {
       current.filter((workContextId) => allowedIds.has(workContextId))
     );
   }, [options.work_contexts, workCompanyIds]);
+
+  useEffect(() => {
+    const allowedProjectIds = new Set(
+      (options.projects ?? [])
+        .filter((project) =>
+          eligibleProjectCompanyIds.length === 0
+            ? true
+            : eligibleProjectCompanyIds.includes(project.company_id)
+        )
+        .map((project) => project.id)
+    );
+
+    setProjectIds((current) => current.filter((projectId) => allowedProjectIds.has(projectId)));
+  }, [options.projects, eligibleProjectCompanyIds]);
 
   function toggleSelection(value, current, setter) {
     setter(
@@ -1127,8 +1152,9 @@ export default function SAUserScope() {
       >
         <div className="grid gap-4">
           <p className="text-sm leading-6 text-slate-600">
-            Select only the companies where this user actually works. Work contexts
-            will follow these company choices automatically.
+            Select only the companies where this user actually works. This choice
+            only narrows which work contexts appear in the next drawer. Runtime
+            contexts save exactly as checked there.
           </p>
           <QuickFilterInput
             label="Filter Work Companies"
@@ -1234,8 +1260,8 @@ export default function SAUserScope() {
       >
         <div className="grid gap-4">
           <p className="text-sm leading-6 text-slate-600">
-            Context choices stay tied to the selected work companies. This drawer
-            hides unrelated data so the operator can focus on actual runtime access.
+            Context choices stay tied to the selected work companies, but nothing
+            here is auto-added on save. Only the checked runtime scopes will persist.
           </p>
           <QuickFilterInput
             label="Filter Work Contexts"

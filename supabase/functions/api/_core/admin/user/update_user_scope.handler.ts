@@ -217,14 +217,6 @@ export async function updateUserScopeHandler(
       );
     }
 
-    const defaultWorkContextIds = eligibleCompanyIds
-      .map((companyId) =>
-        (validWorkContexts ?? []).find((row) =>
-          row.company_id === companyId && row.work_context_code === "GENERAL_OPS"
-        )?.work_context_id ?? null
-      )
-      .filter(Boolean) as string[];
-
     const departmentWorkContextIds = departmentIds
       .map((departmentId) =>
         (validWorkContexts ?? []).find((row) => row.department_id === departmentId)?.work_context_id ??
@@ -249,10 +241,22 @@ export async function updateUserScopeHandler(
     ])];
 
     const workContextIds = [...new Set([
-      ...defaultWorkContextIds,
       ...((departmentWorkContextIds.filter(Boolean)) as string[]),
       ...explicitWorkContextIds,
     ])];
+
+    const explicitWorkContextRows = explicitWorkContextIds
+      .map((workContextId) => validWorkContextMap.get(workContextId) ?? null)
+      .filter(Boolean);
+
+    const primaryWorkContextId =
+      explicitWorkContextRows.find((row) =>
+        row?.company_id === parentCompanyId && row?.work_context_code === "GENERAL_OPS"
+      )?.work_context_id ??
+      explicitWorkContextRows.find((row) => row?.company_id === parentCompanyId)?.work_context_id ??
+      explicitWorkContextRows[0]?.work_context_id ??
+      departmentWorkContextIds.find(Boolean) ??
+      null;
 
     const parentPayload = {
       auth_user_id: targetAuthUserId,
@@ -392,7 +396,7 @@ export async function updateUserScopeHandler(
             auth_user_id: targetAuthUserId,
             company_id: validWorkContextMap.get(workContextId)?.company_id ?? null,
             work_context_id: workContextId,
-            is_primary: defaultWorkContextIds.includes(workContextId),
+            is_primary: workContextId === primaryWorkContextId,
           })),
         );
 
