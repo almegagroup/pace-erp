@@ -359,6 +359,43 @@ export default function MenuShell() {
   const footerShortcutLine =
     "Esc Back | Alt+H Home | Alt+W Or F8 Work Context | Alt+PgUp Prev Page | Alt+PgDn Next Page | Ctrl+K Or F9 Command Bar | Ctrl+S Or F2 Save | Alt+R Or F4 Refresh | Alt+Shift+F Or F3 Search | Alt+Shift+P Or F7 Primary";
 
+  const holdRuntimeSwitchOverlayUntilPaint = useCallback(async () => {
+    await new Promise((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(resolve);
+      });
+    });
+  }, []);
+
+  const focusWorkContextSwitcher = useCallback(() => {
+    if (!showWorkContextSwitcher) {
+      return;
+    }
+
+    const target = workContextSelectRef.current;
+
+    if (!(target instanceof HTMLSelectElement)) {
+      return;
+    }
+
+    if (focusElement(target)) {
+      setActiveZone("menu");
+    }
+
+    try {
+      if (typeof target.showPicker === "function") {
+        target.showPicker();
+        return;
+      }
+    } catch {
+      // Fallback below keeps the shortcut functional even where showPicker is unsupported.
+    }
+
+    window.requestAnimationFrame(() => {
+      target.click();
+    });
+  }, [showWorkContextSwitcher]);
+
   const handleWorkCompanyChange = useCallback(
     async (nextCompanyId) => {
       if (!nextCompanyId || nextCompanyId === runtimeContext?.selectedCompanyId) {
@@ -461,43 +498,6 @@ export default function MenuShell() {
       setRuntimeContextError("Latest menu changes could not be refreshed.");
     }
   }, [setMenuSnapshot, setRuntimeContext]);
-
-  const holdRuntimeSwitchOverlayUntilPaint = useCallback(async () => {
-    await new Promise((resolve) => {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(resolve);
-      });
-    });
-  }, []);
-
-  const focusWorkContextSwitcher = useCallback(() => {
-    if (!showWorkContextSwitcher) {
-      return;
-    }
-
-    const target = workContextSelectRef.current;
-
-    if (!(target instanceof HTMLSelectElement)) {
-      return;
-    }
-
-    if (focusElement(target)) {
-      setActiveZone("menu");
-    }
-
-    try {
-      if (typeof target.showPicker === "function") {
-        target.showPicker();
-        return;
-      }
-    } catch {
-      // Fallback below keeps the shortcut functional even where showPicker is unsupported.
-    }
-
-    window.requestAnimationFrame(() => {
-      target.click();
-    });
-  }, [showWorkContextSwitcher]);
 
   const handleWorkContextChange = useCallback(
     async (nextWorkContextId) => {
