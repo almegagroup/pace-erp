@@ -154,6 +154,9 @@ export default function SARolePermissions() {
   async function loadPermissions(roleCode = selectedRoleCode) {
     setLoading(true);
     setError("");
+    setPermissions([]);
+    setMatrixDrafts({});
+    setSelectedResourceCode("");
 
     try {
       const data = await fetchRolePermissions(roleCode);
