@@ -5,6 +5,7 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 
@@ -21,13 +22,29 @@ const newCap=()=>({capability_code:"",capability_name:"",description:""});
 const newDraft=(cap="",res="")=>({capability_code:cap,resource_code:res,can_view:false,can_write:false,can_edit:false,can_delete:false,can_approve:false,can_export:false,denied_actions:[]});
 const rowDraft=(cap,row)=>({...newDraft(cap,row.resource_code),...row,denied_actions:Array.isArray(row.denied_actions)?row.denied_actions:[]});
 const hasRule=(d)=>ACTIONS.some(([,k])=>Boolean(d[k]))||d.denied_actions.length>0;
+const normalize=(value)=>String(value??"").trim().toLowerCase();
+
+function classifyContext(row){
+  if (row.department_code) return "DEPARTMENT";
+  if (row.work_context_code === "GENERAL_OPS") return "GENERAL";
+  return "MANUAL";
+}
+
+function recommendedCapabilityCodes(row){
+  const code=String(row?.work_context_code??"").toUpperCase();
+  if (code === "GENERAL_OPS") return ["CAP_HR_SELF_SERVICE"];
+  if (code === "HR_APPROVER") return ["CAP_HR_APPROVER"];
+  if (code === "HR_AUDIT") return ["CAP_HR_AUDIT_VIEW"];
+  if (code === "HR_DIRECTOR") return ["CAP_HR_DIRECTOR"];
+  return [];
+}
 
 export default function SACapabilityGovernance(){
   const navigate=useNavigate();
-  const topRefs=useRef([]), matrixRowRefs=useRef([]), searchRef=useRef(null);
-  const [companies,setCompanies]=useState([]),[caps,setCaps]=useState([]),[catalog,setCatalog]=useState([]),[contexts,setContexts]=useState([]),[versions,setVersions]=useState([]),[capRows,setCapRows]=useState([]),[ctxCaps,setCtxCaps]=useState([]),[contextBindingMap,setContextBindingMap]=useState({});
+  const topRefs=useRef([]), matrixRowRefs=useRef([]), searchRef=useRef(null), bindingSearchRef=useRef(null);
+  const [companies,setCompanies]=useState([]),[caps,setCaps]=useState([]),[catalog,setCatalog]=useState([]),[contexts,setContexts]=useState([]),[versions,setVersions]=useState([]),[capRows,setCapRows]=useState([]),[ctxCaps,setCtxCaps]=useState([]),[contextCapabilityMap,setContextCapabilityMap]=useState({});
   const [companyId,setCompanyId]=useState(""),[capCode,setCapCode]=useState(""),[ctxId,setCtxId]=useState(""),[projectCode,setProjectCode]=useState(""),[moduleCode,setModuleCode]=useState(""),[selectedResourceCode,setSelectedResourceCode]=useState("");
-  const [search,setSearch]=useState(""),[drafts,setDrafts]=useState({}),[capDraft,setCapDraft]=useState(newCap()),[versionDescription,setVersionDescription]=useState(""),[contextSearch,setContextSearch]=useState("");
+  const [search,setSearch]=useState(""),[drafts,setDrafts]=useState({}),[capDraft,setCapDraft]=useState(newCap()),[versionDescription,setVersionDescription]=useState(""),[contextSearch,setContextSearch]=useState(""),[bindingSearch,setBindingSearch]=useState(""),[bindingDrawerOpen,setBindingDrawerOpen]=useState(false);
   const [loading,setLoading]=useState(true),[catalogLoading,setCatalogLoading]=useState(true),[saving,setSaving]=useState(false),[bindingLoading,setBindingLoading]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
 
   async function loadBootstrap(){
@@ -52,7 +69,8 @@ export default function SACapabilityGovernance(){
     catch(err){setCapRows([]); setError(`Capability action rows could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
   }
   async function loadCompanyState(id=companyId){
-    if(!id){setContexts([]);setVersions([]);return;}
+    setBindingDrawerOpen(false);
+    if(!id){setContexts([]);setVersions([]); setCtxCaps([]); return;}
     try{
       const [w,v]=await Promise.all([fetchApi(`/api/admin/acl/work-contexts?company_id=${encodeURIComponent(id)}`),fetchApi(`/api/admin/acl/versions?company_id=${encodeURIComponent(id)}`)]);
       const next=w.work_contexts??[]; setContexts(next); setVersions(v.versions??[]);
@@ -64,26 +82,26 @@ export default function SACapabilityGovernance(){
     try{const d=await fetchApi(`/api/admin/acl/work-context-capabilities?work_context_id=${encodeURIComponent(id)}`); setCtxCaps(d.capabilities??[]);}
     catch(err){setCtxCaps([]); setError(`Work-context capability bindings could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
   }
-  async function loadContextBindingMap(nextContexts=contexts, nextCapCode=capCode){
-    if(!nextCapCode||nextContexts.length===0){setContextBindingMap({}); return;}
+  async function loadContextCapabilityMap(nextContexts=contexts){
+    if(nextContexts.length===0){setContextCapabilityMap({}); return;}
     setBindingLoading(true);
     try{
       const settled=await Promise.allSettled(
         nextContexts.map(async (row)=>{
           const data=await fetchApi(`/api/admin/acl/work-context-capabilities?work_context_id=${encodeURIComponent(row.work_context_id)}`);
-          return [row.work_context_id,(data.capabilities??[]).some((cap)=>cap.capability_code===nextCapCode)];
+          return [row.work_context_id,(data.capabilities??[]).map((cap)=>cap.capability_code)];
         }),
       );
       const nextMap={};
       for(const result of settled){
         if(result.status==="fulfilled"){
-          const [workContextId,isAttached]=result.value;
-          nextMap[workContextId]=isAttached;
+          const [workContextId,attachedCodes]=result.value;
+          nextMap[workContextId]=attachedCodes;
         }
       }
-      setContextBindingMap(nextMap);
+      setContextCapabilityMap(nextMap);
     }catch(err){
-      setContextBindingMap({});
+      setContextCapabilityMap({});
       setError(`Capability-to-context status could not be loaded. ${err.message??"REQUEST_FAILED"}`);
     }finally{
       setBindingLoading(false);
@@ -93,7 +111,7 @@ export default function SACapabilityGovernance(){
   useEffect(()=>{void loadCapRows(capCode);},[capCode]);
   useEffect(()=>{void loadCompanyState(companyId);},[companyId]);
   useEffect(()=>{void loadCtxCaps(ctxId);},[ctxId]);
-  useEffect(()=>{void loadContextBindingMap(contexts,capCode);},[contexts,capCode]);
+  useEffect(()=>{void loadContextCapabilityMap(contexts);},[contexts]);
 
   const capMap=useMemo(()=>new Map(capRows.map((r)=>[r.resource_code,r])),[capRows]);
   const projectOptions=useMemo(()=>[...new Set(catalog.map((r)=>r.project_code).filter(Boolean))].sort(),[catalog]);
@@ -114,7 +132,8 @@ export default function SACapabilityGovernance(){
     if(!selectedResourceCode||!rows.some((r)=>r.resource.resource_code===selectedResourceCode)) setSelectedResourceCode(rows[0].resource.resource_code);
   },[rows,selectedResourceCode]);
   const selectedRow=useMemo(()=>rows.find((r)=>r.resource.resource_code===selectedResourceCode)??null,[rows,selectedResourceCode]);
-  const attachedContextCount=useMemo(()=>Object.values(contextBindingMap).filter(Boolean).length,[contextBindingMap]);
+  const selectedContext=useMemo(()=>contexts.find((row)=>row.work_context_id===ctxId)??null,[contexts,ctxId]);
+  const attachedContextCount=useMemo(()=>Object.values(contextCapabilityMap).filter((codes)=>Array.isArray(codes)&&codes.includes(capCode)).length,[contextCapabilityMap,capCode]);
   const filteredContexts=useMemo(()=>{
     const needle=String(contextSearch??"").trim().toLowerCase();
     return contexts.filter((row)=>{
@@ -124,6 +143,15 @@ export default function SACapabilityGovernance(){
         .some((value)=>String(value).toLowerCase().includes(needle));
     });
   },[contexts,contextSearch]);
+  const filteredBindingCaps=useMemo(()=>{
+    const needle=normalize(bindingSearch);
+    return caps.filter((cap)=>{
+      if(!needle) return true;
+      return [cap.capability_code,cap.capability_name,cap.description]
+        .filter(Boolean)
+        .some((value)=>normalize(value).includes(needle));
+    });
+  },[caps,bindingSearch]);
 
   function updateDraft(resourceCode,updater){
     setDrafts((cur)=>{const base=cur[resourceCode]??(capMap.has(resourceCode)?rowDraft(capCode,capMap.get(resourceCode)):newDraft(capCode,resourceCode)); return {...cur,[resourceCode]:updater(base)};});
@@ -168,6 +196,26 @@ export default function SACapabilityGovernance(){
     const ok=await openActionConfirm({eyebrow:"Capability Governance",title:"Clear Selected Resource Rule",message:`${selectedRow.resource.title} resource-er explicit capability rule clear korte chao?`,confirmLabel:"Clear",cancelLabel:"Cancel"});
     if(!ok) return;
     updateDraft(selectedRow.resource.resource_code,()=>newDraft(capCode,selectedRow.resource.resource_code));
+  }
+  function openBindingDrawer(row){
+    setCtxId(row.work_context_id);
+    setCtxCaps([]);
+    setBindingSearch("");
+    setBindingDrawerOpen(true);
+    void loadCtxCaps(row.work_context_id);
+  }
+  async function toggleCapabilityForContext(workContextId, capabilityCode, attached, workContextCode){
+    await postAndRefresh(
+      attached?"/api/admin/acl/work-context-capabilities/unassign":"/api/admin/acl/work-context-capabilities/assign",
+      {work_context_id:workContextId,capability_code:capabilityCode},
+      async ()=>{
+        await loadCtxCaps(workContextId);
+        await loadContextCapabilityMap(contexts);
+      },
+      attached
+        ?`Capability ${capabilityCode} removed from ${workContextCode}.`
+        :`Capability ${capabilityCode} attached to ${workContextCode}.`,
+    );
   }
 
   useErpScreenCommands([
@@ -221,7 +269,7 @@ export default function SACapabilityGovernance(){
           <ErpSectionCard eyebrow="Selected Resource" title={selectedRow?.resource?.title??"Advanced deny editor"} description="Main matrix handles allow flags. Explicit deny stays here as an advanced override for the selected resource.">
             {selectedRow?<div className="space-y-4"><div className="border border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600"><div>{selectedRow.resource.resource_code}</div><div className="mt-1">{[selectedRow.resource.project_code,selectedRow.resource.module_code,selectedRow.resource.route_path].filter(Boolean).join(" | ")}</div></div><div className="border border-slate-300 bg-white"><div className="grid grid-cols-[minmax(0,1fr)_84px] border-b border-slate-300 bg-slate-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500"><span>Advanced Explicit Deny</span><span className="text-center">Deny</span></div>{ACTIONS.map(([actionCode,,label])=><div key={`deny-${actionCode}`} className="grid grid-cols-[minmax(0,1fr)_84px] items-center border-b border-slate-200 px-4 py-3 text-sm text-slate-700 last:border-b-0"><span>{label}</span><label className="flex justify-center"><input type="checkbox" checked={selectedRow.draft.denied_actions.includes(actionCode)} onChange={(e)=>updateDeny(selectedRow.resource.resource_code,actionCode,e.target.checked)} className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-rose-600" /></label></div>)}</div><button type="button" onClick={()=>void clearSelected()} className="border border-rose-300 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700">Clear Selected Resource Rule</button></div>:<div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">Matrix theke ekta resource row select koro. Tarpor chaile explicit deny advanced override set korte parbe.</div>}
           </ErpSectionCard>
-          <ErpSectionCard eyebrow="Capability Coverage" title={capCode||"Selected capability summary"} description="See what the selected capability contains and where it is attached. Work-context creation stays elsewhere; this screen only binds packs to existing contexts.">
+          <ErpSectionCard eyebrow="Capability Coverage" title={capCode||"Selected capability summary"} description="Top capability selection drives only the matrix and this summary. Work-scope binding happens row by row below so SA does not have to remember the selected pack while attaching.">
             <div className="grid gap-3 md:grid-cols-3">
               <div className="border border-slate-300 bg-slate-50 px-4 py-3"><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Selected Pack</p><p className="mt-2 text-sm font-semibold text-slate-900">{capCode||"Choose capability"}</p></div>
               <div className="border border-slate-300 bg-slate-50 px-4 py-3"><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Saved Rows</p><p className="mt-2 text-sm font-semibold text-slate-900">{capRows.length}</p></div>
@@ -231,27 +279,33 @@ export default function SACapabilityGovernance(){
               {capRows.length===0?<div className="px-4 py-4 text-sm text-slate-500">এই capability pack-এ এখনো কোনো saved page/action row নেই। আগে left side matrix save করো.</div>:capRows.map((row)=><div key={row.resource_code} className="border-b border-slate-200 px-4 py-3 last:border-b-0"><div className="text-sm font-semibold text-slate-900">{row.resource_code}</div><div className="mt-1 text-xs text-slate-500">{ACTIONS.filter(([,key])=>row[key]).map(([, , label])=>label).join(", ")||"No allow flags"}{Array.isArray(row.denied_actions)&&row.denied_actions.length?` | Deny: ${row.denied_actions.join(", ")}`:""}</div></div>)}
             </div>
           </ErpSectionCard>
-          <ErpSectionCard eyebrow="Work Contexts" title="Attach selected capability to existing contexts" description="Company-wide GENERAL_OPS and department-derived DEPT_* contexts come from company or department setup. Manual scopes like PROD_POWDER or MGMT_ALL should be created in Work Context Master first, then attached here.">
+          <ErpSectionCard eyebrow="Work Contexts" title="Open one scope, then choose packs inside the drawer" description="GENERAL_OPS, DEPT_* and manual scopes all appear here. Open one work scope row first, then attach or remove the exact packs inside the drawer so SA does not accidentally bind the wrong capability.">
             <label className="block"><span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Company</span><select value={companyId} onChange={(e)=>setCompanyId(e.target.value)} className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none">{companies.map((c)=><option key={c.id} value={c.id}>{c.company_code} | {c.company_name}</option>)}</select></label>
             <QuickFilterInput label="Search Contexts" value={contextSearch} onChange={setContextSearch} placeholder="Search by company, department, or context code" hint="GENERAL_OPS is company-wide. DEPT_* rows come from department setup." />
             <div className="mt-6 border border-slate-300">
               {contexts.length===0?<div className="bg-slate-50 px-4 py-4 text-sm text-slate-500">No work context is currently defined for this company. Company and department setup first complete koro.</div>:filteredContexts.length===0?<div className="bg-slate-50 px-4 py-4 text-sm text-slate-500">Current search-e kono context match koreni.</div>:filteredContexts.map((row)=>{
-                const attached=Boolean(contextBindingMap[row.work_context_id]);
-                return <div key={row.work_context_id} className={`flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 last:border-b-0 ${attached?"border-violet-200 bg-violet-50":"border-slate-300 bg-white"}`}>
-                  <button type="button" onClick={()=>setCtxId(row.work_context_id)} className="min-w-0 flex-1 cursor-pointer text-left">
+                const attachedCodes=contextCapabilityMap[row.work_context_id]??[];
+                const contextType=classifyContext(row);
+                const recommendedCodes=recommendedCapabilityCodes(row);
+                return <div key={row.work_context_id} className={`flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 last:border-b-0 ${ctxId===row.work_context_id?"border-sky-200 bg-sky-50":"border-slate-300 bg-white"}`}>
+                  <button type="button" onClick={()=>openBindingDrawer(row)} className="min-w-0 flex-1 cursor-pointer text-left">
                     <div className="text-sm font-semibold text-slate-900">{row.work_context_code} | {row.work_context_name}</div>
                     <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">{row.company_code} | {row.company_name}</div>
                     <div className="mt-1 text-xs text-slate-500">{row.department_code?`${row.department_code} | ${row.department_name}`:"Company-wide context (GENERAL_OPS type)"}</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <span className={`border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${contextType==="GENERAL"?"border-sky-300 bg-sky-50 text-sky-800":contextType==="DEPARTMENT"?"border-slate-300 bg-slate-100 text-slate-700":"border-amber-300 bg-amber-50 text-amber-800"}`}>{contextType==="GENERAL"?"General scope":contextType==="DEPARTMENT"?"Department scope":"Manual scope"}</span>
+                      <span className="border border-violet-300 bg-violet-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-violet-800">{attachedCodes.length} pack{attachedCodes.length===1?"":"s"} attached</span>
+                      {recommendedCodes.map((code)=><span key={`${row.work_context_id}-${code}`} className="border border-emerald-300 bg-emerald-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-800">Recommended: {code}</span>)}
+                    </div>
                   </button>
                   <div className="flex items-center gap-3">
-                    <span className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${attached?"text-violet-700":"text-slate-500"}`}>{attached?"Attached":"Not attached"}</span>
-                    <button type="button" disabled={!capCode||saving||bindingLoading} onClick={()=>void postAndRefresh(attached?"/api/admin/acl/work-context-capabilities/unassign":"/api/admin/acl/work-context-capabilities/assign",{work_context_id:row.work_context_id,capability_code:capCode},async ()=>{await loadCtxCaps(ctxId||row.work_context_id); await loadContextBindingMap(contexts,capCode);},attached?`Capability ${capCode} removed from ${row.work_context_code}.`:`Capability ${capCode} attached to ${row.work_context_code}.`)} className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${attached?"border-rose-300 bg-rose-50 text-rose-700":"border-emerald-300 bg-emerald-50 text-emerald-800"}`}>{attached?"Remove":"Attach"}</button>
+                    <button type="button" disabled={saving||bindingLoading} onClick={()=>openBindingDrawer(row)} className="border border-sky-300 bg-sky-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-900">Manage Packs</button>
                   </div>
                 </div>;
               })}
             </div>
             <div className="mt-4 border border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600">
-              {ctxId&&ctxCaps.length>0?`Selected context currently carries: ${ctxCaps.map((cap)=>cap.capability_code).join(", ")}`:"Select any context row to inspect what packs are already attached there."}
+              {ctxId&&ctxCaps.length>0?`Selected work scope currently carries: ${ctxCaps.map((cap)=>cap.capability_code).join(", ")}`:"Open any work scope row to inspect and manage its attached packs."}
             </div>
           </ErpSectionCard>
           <ErpSectionCard eyebrow="ACL Versions" title="Immutable company ledger" description="Freeze current governance rows into a new ACL version, then activate only the version runtime should use.">
@@ -261,6 +315,95 @@ export default function SACapabilityGovernance(){
           </ErpSectionCard>
         </div>
       </div>
+      <DrawerBase
+        visible={bindingDrawerOpen}
+        title={selectedContext?`${selectedContext.work_context_code} | ${selectedContext.work_context_name}`:"Manage Work Scope Packs"}
+        onEscape={()=>setBindingDrawerOpen(false)}
+        initialFocusRef={bindingSearchRef}
+        width="min(560px, calc(100vw - 24px))"
+        actions={
+          <button
+            type="button"
+            onClick={()=>setBindingDrawerOpen(false)}
+            className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-sky-950"
+          >
+            Done
+          </button>
+        }
+      >
+        {selectedContext?(
+          <div className="grid gap-4">
+            <div className="grid gap-3 border border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Scope Type</p>
+                <p className="mt-1 font-semibold text-slate-900">
+                  {classifyContext(selectedContext)==="GENERAL"?"General scope":classifyContext(selectedContext)==="DEPARTMENT"?"Department-derived scope":"Manual work scope"}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Company</p>
+                <p className="mt-1">{selectedContext.company_code} | {selectedContext.company_name}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Department Link</p>
+                <p className="mt-1">{selectedContext.department_code?`${selectedContext.department_code} | ${selectedContext.department_name}`:"No department link. This is a company-wide or manual scope."}</p>
+              </div>
+              {recommendedCapabilityCodes(selectedContext).length>0?(
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Recommended First Pack</p>
+                  <p className="mt-1 font-semibold text-emerald-800">{recommendedCapabilityCodes(selectedContext).join(", ")}</p>
+                </div>
+              ):null}
+            </div>
+            <div className="grid gap-3">
+              <label className="block">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Search Packs</span>
+                <input
+                  ref={bindingSearchRef}
+                  type="text"
+                  value={bindingSearch}
+                  onChange={(e)=>setBindingSearch(e.target.value)}
+                  placeholder="Search by pack code, name, or description"
+                  className="mt-2 w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+                />
+              </label>
+              <div className="border border-slate-300 bg-white">
+                {filteredBindingCaps.length===0?(
+                  <div className="px-4 py-4 text-sm text-slate-500">Current search-e kono capability pack match koreni.</div>
+                ):filteredBindingCaps.map((cap)=>{
+                  const attached=ctxCaps.some((item)=>item.capability_code===cap.capability_code);
+                  const recommended=recommendedCapabilityCodes(selectedContext).includes(cap.capability_code);
+                  return (
+                    <div key={`${selectedContext.work_context_id}-${cap.capability_code}`} className={`grid gap-3 border-b px-4 py-4 last:border-b-0 ${recommended?"bg-emerald-50":"bg-white"}`}>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap gap-2">
+                            <span className="text-sm font-semibold text-slate-900">{cap.capability_code}</span>
+                            <span className="text-sm text-slate-600">{cap.capability_name}</span>
+                            {recommended?<span className="border border-emerald-300 bg-emerald-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-900">Recommended</span>:null}
+                            {attached?<span className="border border-violet-300 bg-violet-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-violet-800">Attached</span>:null}
+                          </div>
+                          {cap.description?<p className="mt-2 text-xs leading-5 text-slate-500">{cap.description}</p>:null}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={saving||bindingLoading}
+                          onClick={()=>void toggleCapabilityForContext(selectedContext.work_context_id,cap.capability_code,attached,selectedContext.work_context_code)}
+                          className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${attached?"border-rose-300 bg-rose-50 text-rose-700":"border-emerald-300 bg-emerald-50 text-emerald-800"}`}
+                        >
+                          {attached?"Remove":"Attach"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ):(
+          <div className="text-sm text-slate-500">Choose one work scope row first.</div>
+        )}
+      </DrawerBase>
     </ErpScreenScaffold>
   );
 }
