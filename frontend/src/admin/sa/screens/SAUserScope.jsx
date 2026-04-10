@@ -123,6 +123,21 @@ function formatSelectionPreview(items, formatter, emptyMessage) {
   return items.length > 3 ? `${preview}\n+${items.length - 3} more` : preview;
 }
 
+function formatDepartmentLabel(department) {
+  const companyLabel = [department?.company_code, department?.company_name]
+    .filter(Boolean)
+    .join(" | ");
+  const departmentLabel = [department?.department_code, department?.department_name]
+    .filter(Boolean)
+    .join(" | ");
+
+  if (companyLabel && departmentLabel) {
+    return `${companyLabel} | ${departmentLabel}`;
+  }
+
+  return departmentLabel || companyLabel || "Unknown Department";
+}
+
 function ScopeSummaryCard({
   eyebrow,
   title,
@@ -353,6 +368,8 @@ export default function SAUserScope() {
   const filteredDepartments = useMemo(
     () =>
       applyQuickFilter(availableDepartments, departmentSearch, [
+        "company_code",
+        "company_name",
         "department_code",
         "department_name",
       ]),
@@ -901,8 +918,7 @@ export default function SAUserScope() {
               description="Department scope stays available for HR readiness without crowding the main screen."
               preview={formatSelectionPreview(
                 selectedDepartments,
-                (department) =>
-                  `${department.department_code} - ${department.department_name}`,
+                (department) => formatDepartmentLabel(department),
                 "No department selected yet."
               )}
               status="Department assignment stays visible, but editing happens in its own drawer."
@@ -962,8 +978,7 @@ export default function SAUserScope() {
                 label="Selected Departments"
                 value={formatSelectionPreview(
                   selectedDepartments,
-                  (department) =>
-                    `${department.department_code} - ${department.department_name}`,
+                  (department) => formatDepartmentLabel(department),
                   "No department selected yet."
                 )}
                 caption="Department readiness stays visible without overcrowding the page."
@@ -1498,13 +1513,11 @@ export default function SAUserScope() {
                       }
                       className="mt-1 h-4 w-4 border-slate-300 bg-white text-amber-600"
                     />
-                    <span>
-                      <span className="font-semibold">
-                        {department.department_code}
+                      <span>
+                        <span className="font-semibold">
+                          {formatDepartmentLabel(department)}
+                        </span>
                       </span>
-                      {" - "}
-                      {department.department_name}
-                    </span>
                   </label>
                 );
               })
