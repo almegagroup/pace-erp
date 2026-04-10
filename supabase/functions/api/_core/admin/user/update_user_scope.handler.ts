@@ -151,7 +151,7 @@ export async function updateUserScopeHandler(
         .in("project_id", projectIds)
         .in("company_id", eligibleCompanyIds);
 
-    const validProjectCount = (validProjects ?? []).filter((row) => {
+    const persistedProjectIds = [...new Set((validProjects ?? []).filter((row) => {
       const project = Array.isArray(row.project) ? row.project[0] : row.project;
       return (
         eligibleCompanyIds.includes(row.company_id) &&
@@ -159,15 +159,7 @@ export async function updateUserScopeHandler(
         project?.id === row.project_id &&
         project?.status === "ACTIVE"
       );
-    }).length;
-
-    if (validProjectCount !== projectIds.length) {
-      return blocked(
-        "USER_SCOPE_PROJECT_INVALID",
-        "one or more projects are invalid or not mapped inside the eligible company universe",
-        ctx,
-      );
-    }
+    }).map((row) => row.project_id))];
 
     const { data: validDepartments } = departmentIds.length === 0
       ? { data: [] }
@@ -323,11 +315,11 @@ export async function updateUserScopeHandler(
       );
     }
 
-    if (projectIds.length > 0) {
+    if (persistedProjectIds.length > 0) {
       const { error: projectInsertError } = await db
         .schema("erp_map").from("user_projects")
         .insert(
-          projectIds.map((projectId) => ({
+          persistedProjectIds.map((projectId) => ({
             auth_user_id: targetAuthUserId,
             project_id: projectId,
           })),
@@ -414,7 +406,7 @@ export async function updateUserScopeHandler(
         auth_user_id: targetAuthUserId,
         parent_company_id: parentCompanyId,
         work_company_ids: workCompanyIds,
-        project_ids: projectIds,
+        project_ids: persistedProjectIds,
         department_ids: persistedDepartmentIds,
         work_context_ids: workContextIds,
         updated_by: ctx.auth_user_id,
