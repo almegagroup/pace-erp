@@ -170,7 +170,10 @@ export default function SACapabilityGovernance(){
     updateDraft(selectedRow.resource.resource_code,()=>newDraft(capCode,selectedRow.resource.resource_code));
   }
 
-  useErpScreenCommands([{id:"sa-capability-governance-control-panel",group:"Current Screen",label:"Go to SA control panel",keywords:["control panel","sa"],perform:()=>{openScreen("SA_CONTROL_PANEL",{mode:"replace"});navigate("/sa/control-panel");},order:10}]);
+  useErpScreenCommands([
+    {id:"sa-capability-governance-control-panel",group:"Current Screen",label:"Go to SA control panel",keywords:["control panel","sa"],perform:()=>{openScreen("SA_CONTROL_PANEL",{mode:"replace"});navigate("/sa/control-panel");},order:10},
+    {id:"sa-capability-governance-work-context-master",group:"Current Screen",label:"Open work context master",keywords:["work context","work scope","manual scope"],perform:()=>{openScreen("SA_WORK_CONTEXT_MASTER",{mode:"replace"});navigate("/sa/work-contexts");},order:20},
+  ]);
   useErpScreenHotkeys({refresh:{disabled:loading||catalogLoading,perform:()=>{void loadBootstrap(); void loadCatalog();}},focusSearch:{perform:()=>searchRef.current?.focus()},save:{disabled:saving,perform:()=>void saveMatrix()}});
 
   return (
@@ -178,7 +181,10 @@ export default function SACapabilityGovernance(){
       eyebrow="SA Capability Governance"
       title="Screen Packs, Work Scopes, and ACL Version Control"
       description="Create reusable screen packs, fill them with mapped page actions, attach them to work scopes, and freeze immutable ACL versions without editing users one by one."
-      actions={[{key:"control-panel",label:"Control Panel",tone:"neutral",buttonRef:(el)=>{topRefs.current[0]=el;},onClick:()=>{openScreen("SA_CONTROL_PANEL",{mode:"replace"});navigate("/sa/control-panel");},onKeyDown:(e)=>handleLinearNavigation(e,{index:0,refs:topRefs.current,orientation:"horizontal"})}]}
+      actions={[
+        {key:"control-panel",label:"Control Panel",tone:"neutral",buttonRef:(el)=>{topRefs.current[0]=el;},onClick:()=>{openScreen("SA_CONTROL_PANEL",{mode:"replace"});navigate("/sa/control-panel");},onKeyDown:(e)=>handleLinearNavigation(e,{index:0,refs:topRefs.current,orientation:"horizontal"})},
+        {key:"work-context-master",label:"Work Context Master",tone:"neutral",buttonRef:(el)=>{topRefs.current[1]=el;},onClick:()=>{openScreen("SA_WORK_CONTEXT_MASTER",{mode:"replace"});navigate("/sa/work-contexts");},onKeyDown:(e)=>handleLinearNavigation(e,{index:1,refs:topRefs.current,orientation:"horizontal"})},
+      ]}
       notices={[...(error?[{key:"error",tone:"error",message:error}]:[]),...(notice?[{key:"notice",tone:"success",message:notice}]:[])]}
       metrics={[{key:"caps",label:"Capabilities",value:loading?"...":String(caps.length),tone:"sky",caption:"Available capability packs."},{key:"contexts",label:"Work Contexts",value:loading?"...":String(contexts.length),tone:"emerald",caption:"Contexts in selected company."},{key:"rows",label:"Capability Rows",value:loading?"...":String(capRows.length),tone:"amber",caption:"Rows for selected capability."},{key:"attached",label:"Attached Contexts",value:bindingLoading?"...":String(attachedContextCount),tone:"violet",caption:"Selected pack is currently attached here."}]}
     >
@@ -225,7 +231,7 @@ export default function SACapabilityGovernance(){
               {capRows.length===0?<div className="px-4 py-4 text-sm text-slate-500">এই capability pack-এ এখনো কোনো saved page/action row নেই। আগে left side matrix save করো.</div>:capRows.map((row)=><div key={row.resource_code} className="border-b border-slate-200 px-4 py-3 last:border-b-0"><div className="text-sm font-semibold text-slate-900">{row.resource_code}</div><div className="mt-1 text-xs text-slate-500">{ACTIONS.filter(([,key])=>row[key]).map(([, , label])=>label).join(", ")||"No allow flags"}{Array.isArray(row.denied_actions)&&row.denied_actions.length?` | Deny: ${row.denied_actions.join(", ")}`:""}</div></div>)}
             </div>
           </ErpSectionCard>
-          <ErpSectionCard eyebrow="Work Contexts" title="Attach selected capability to existing contexts" description="Company-wide GENERAL_OPS and department-derived DEPT_* contexts come from company/department setup. Here SA only decides which capability pack goes where.">
+          <ErpSectionCard eyebrow="Work Contexts" title="Attach selected capability to existing contexts" description="Company-wide GENERAL_OPS and department-derived DEPT_* contexts come from company or department setup. Manual scopes like PROD_POWDER or MGMT_ALL should be created in Work Context Master first, then attached here.">
             <label className="block"><span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Company</span><select value={companyId} onChange={(e)=>setCompanyId(e.target.value)} className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none">{companies.map((c)=><option key={c.id} value={c.id}>{c.company_code} | {c.company_name}</option>)}</select></label>
             <QuickFilterInput label="Search Contexts" value={contextSearch} onChange={setContextSearch} placeholder="Search by company, department, or context code" hint="GENERAL_OPS is company-wide. DEPT_* rows come from department setup." />
             <div className="mt-6 border border-slate-300">

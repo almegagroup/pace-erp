@@ -42,6 +42,14 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_WORK_CONTEXT_MASTER: {
+    screen_code: "SA_WORK_CONTEXT_MASTER",
+    route: "/sa/work-contexts",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_GROUP_GOVERNANCE: {
     screen_code: "SA_GROUP_GOVERNANCE",
     route: "/sa/groups",
