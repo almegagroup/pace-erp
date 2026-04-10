@@ -117,6 +117,7 @@ function getRoleTone(roleCode) {
     case "GA":
       return "border-indigo-300 bg-indigo-50 text-indigo-700";
     case "DIRECTOR":
+    case "L4_MANAGER":
       return "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700";
     case "L3_MANAGER":
     case "L2_MANAGER":

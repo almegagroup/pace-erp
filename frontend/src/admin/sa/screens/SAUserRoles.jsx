@@ -59,6 +59,7 @@ function getRoleTone(roleCode) {
     case "GA":
       return "bg-indigo-100 text-indigo-700";
     case "DIRECTOR":
+    case "L4_MANAGER":
       return "bg-violet-100 text-violet-700";
     case "L3_MANAGER":
     case "L2_MANAGER":
@@ -277,7 +278,7 @@ export default function SAUserRoles() {
   const assignedCount = governableUsers.filter((user) => user.role_code).length;
   const unassignedCount = governableUsers.filter((user) => !user.role_code).length;
   const managerCount = governableUsers.filter((user) =>
-    ["L3_MANAGER", "L2_MANAGER", "L1_MANAGER"].includes(user.role_code)
+    ["L4_MANAGER", "L3_MANAGER", "L2_MANAGER", "L1_MANAGER"].includes(user.role_code)
   ).length;
   const rolePagination = useErpPagination(filteredUsers, 10);
 
