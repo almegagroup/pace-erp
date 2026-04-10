@@ -9,9 +9,20 @@
  */
 
 export function logNavigationEvent(event) {
-  // Gate-8 rule:
-  // - Read-only
-  // - No side effects
-  // - No control flow impact
-  void event;
+  if (!event || typeof console === "undefined") {
+    return;
+  }
+
+  const shouldLog =
+    import.meta.env.DEV ||
+    globalThis.localStorage?.getItem("__PACE_NAV_DEBUG__") === "1";
+
+  if (!shouldLog) {
+    return;
+  }
+
+  console.debug("[ERP_NAV]", {
+    ts: new Date().toISOString(),
+    ...event,
+  });
 }

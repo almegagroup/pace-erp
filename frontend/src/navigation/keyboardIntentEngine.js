@@ -53,6 +53,9 @@ function normalizeKeyEvent(event) {
     return "INTENT_SCREEN_REFRESH";
   }
   if (shift && key === "F8") return "INTENT_OPEN_NEW_WINDOW";
+  if ((event.altKey && key.toLowerCase() === "w") || key === "F8") {
+    return "INTENT_FOCUS_WORK_CONTEXT";
+  }
   if ((event.altKey && shift && key.toLowerCase() === "f") || key === "F3") {
     return "INTENT_SCREEN_FOCUS_SEARCH";
   }
@@ -60,6 +63,8 @@ function normalizeKeyEvent(event) {
     return "INTENT_SCREEN_FOCUS_PRIMARY";
   }
   if (isEditableTarget(event.target)) return null;
+  if (event.altKey && key === "PageUp") return "INTENT_PAGINATION_PREVIOUS";
+  if (event.altKey && key === "PageDown") return "INTENT_PAGINATION_NEXT";
   if (ctrl && key === "ArrowLeft") return "INTENT_SIDEBAR_HIDE";
   if (ctrl && key === "ArrowRight") return "INTENT_SIDEBAR_SHOW";
   if (ctrl && shift && key.toLowerCase() === "l") return "INTENT_LOGOUT_CONFIRM";
