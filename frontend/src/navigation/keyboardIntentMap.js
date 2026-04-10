@@ -17,6 +17,7 @@ import { lockWorkspace } from "../store/workspaceLock.js";
 import { dispatchWorkspaceFocusCommand } from "./workspaceFocusBus.js";
 import { openErpCommandPalette } from "../store/erpCommandPalette.js";
 import { executeErpScreenHotkey } from "../store/erpScreenHotkeys.js";
+import { executeErpPaginationHotkey } from "../store/erpPaginationHotkeys.js";
 
 /**
  * SECURITY ALLOWLIST
@@ -28,8 +29,11 @@ const INTENT_HANDLERS = Object.freeze({
   INTENT_SCREEN_SAVE: handleScreenSave,
   INTENT_SCREEN_REFRESH: handleScreenRefresh,
   INTENT_OPEN_NEW_WINDOW: handleOpenNewWindow,
+  INTENT_FOCUS_WORK_CONTEXT: handleFocusWorkContext,
   INTENT_SCREEN_FOCUS_SEARCH: handleScreenFocusSearch,
   INTENT_SCREEN_FOCUS_PRIMARY: handleScreenFocusPrimary,
+  INTENT_PAGINATION_PREVIOUS: handlePaginationPrevious,
+  INTENT_PAGINATION_NEXT: handlePaginationNext,
   INTENT_SIDEBAR_HIDE: handleSidebarHide,
   INTENT_SIDEBAR_SHOW: handleSidebarShow,
   INTENT_LOGOUT_CONFIRM: handleLogoutConfirm,
@@ -142,6 +146,15 @@ function handleOpenNewWindow() {
   dispatchWorkspaceFocusCommand("OPEN_NEW_WINDOW");
 }
 
+function handleFocusWorkContext() {
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_FOCUS_WORK_CONTEXT",
+    action: "FOCUS_WORK_CONTEXT",
+  });
+  dispatchWorkspaceFocusCommand("FOCUS_WORK_CONTEXT");
+}
+
 function handleScreenFocusSearch() {
   const executed = executeErpScreenHotkey("focusSearch");
   if (!executed) {
@@ -165,6 +178,32 @@ function handleScreenFocusPrimary() {
     source: "keyboard",
     intent: "INTENT_SCREEN_FOCUS_PRIMARY",
     action: "SCREEN_FOCUS_PRIMARY",
+  });
+}
+
+function handlePaginationPrevious() {
+  const executed = executeErpPaginationHotkey("previous");
+  if (!executed) {
+    return;
+  }
+
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_PAGINATION_PREVIOUS",
+    action: "PAGINATION_PREVIOUS",
+  });
+}
+
+function handlePaginationNext() {
+  const executed = executeErpPaginationHotkey("next");
+  if (!executed) {
+    return;
+  }
+
+  logNavigationEvent({
+    source: "keyboard",
+    intent: "INTENT_PAGINATION_NEXT",
+    action: "PAGINATION_NEXT",
   });
 }
 

@@ -34,6 +34,7 @@ import SAAudit from "../admin/sa/screens/SAAudit.jsx";
 import SACompanyCreate from "../admin/sa/screens/SACompanyCreate.jsx";
 import SACompanyManage from "../admin/sa/screens/SACompanyManage.jsx";
 import SADepartmentMaster from "../admin/sa/screens/SADepartmentMaster.jsx";
+import SAWorkContextMaster from "../admin/sa/screens/SAWorkContextMaster.jsx";
 import SAGroupGovernance from "../admin/sa/screens/SAGroupGovernance.jsx";
 import SASessions from "../admin/sa/screens/SASessions.jsx";
 import SASystemHealth from "../admin/sa/screens/SASystemHealth.jsx";
@@ -130,6 +131,10 @@ export default function AppRouter() {
                     <Route
                       path="department-master"
                       element={<SADepartmentMaster />}
+                    />
+                    <Route
+                      path="work-contexts"
+                      element={<SAWorkContextMaster />}
                     />
                     <Route path="groups" element={<SAGroupGovernance />} />
                     <Route path="users" element={<SAUsers />} />

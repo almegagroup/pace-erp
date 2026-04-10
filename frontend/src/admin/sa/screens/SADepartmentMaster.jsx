@@ -380,6 +380,17 @@ export default function SADepartmentMaster() {
       order: 40,
     },
     {
+      id: "sa-department-master-work-contexts",
+      group: "Current Screen",
+      label: "Open work context master",
+      keywords: ["work context", "work scope", "manual scope"],
+      perform: () => {
+        openScreen("SA_WORK_CONTEXT_MASTER", { mode: "replace" });
+        navigate("/sa/work-contexts");
+      },
+      order: 45,
+    },
+    {
       id: "sa-department-master-capability",
       group: "Current Screen",
       label: "Open capability governance",
@@ -433,15 +444,15 @@ export default function SADepartmentMaster() {
             }),
         },
         {
-          key: "user-scope",
-          label: "User Scope",
+          key: "work-contexts",
+          label: "Work Context Master",
           tone: "neutral",
           buttonRef: (element) => {
             actionRefs.current[1] = element;
           },
           onClick: () => {
-            openScreen("SA_USER_SCOPE", { mode: "replace" });
-            navigate("/sa/users/scope");
+            openScreen("SA_WORK_CONTEXT_MASTER", { mode: "replace" });
+            navigate("/sa/work-contexts");
           },
           onKeyDown: (event) =>
             handleLinearNavigation(event, {
@@ -451,11 +462,29 @@ export default function SADepartmentMaster() {
             }),
         },
         {
+          key: "user-scope",
+          label: "User Scope",
+          tone: "neutral",
+          buttonRef: (element) => {
+            actionRefs.current[2] = element;
+          },
+          onClick: () => {
+            openScreen("SA_USER_SCOPE", { mode: "replace" });
+            navigate("/sa/users/scope");
+          },
+          onKeyDown: (event) =>
+            handleLinearNavigation(event, {
+              index: 2,
+              refs: actionRefs.current,
+              orientation: "horizontal",
+            }),
+        },
+        {
           key: "capabilities",
           label: "Capability Governance",
           tone: "neutral",
           buttonRef: (element) => {
-            actionRefs.current[2] = element;
+            actionRefs.current[3] = element;
           },
           onClick: () => {
             openScreen("SA_CAPABILITY_GOVERNANCE", { mode: "replace" });
@@ -463,7 +492,7 @@ export default function SADepartmentMaster() {
           },
           onKeyDown: (event) =>
             handleLinearNavigation(event, {
-              index: 2,
+              index: 3,
               refs: actionRefs.current,
               orientation: "horizontal",
             }),
@@ -739,10 +768,11 @@ export default function SADepartmentMaster() {
             tone="warning"
           >
             <div className="grid gap-2">
-              {[
+              {[ 
                 "Create the department now so the company team structure is real.",
                 "Let the backend auto-create the matching DEPT_* work scope.",
-                "Later, when business pages exist, assign screen packs and ACL to that work scope.",
+                "Open Work Context Master for manual scopes like PROD_POWDER, QA_ADMIX, SCM_OPERATIONS, or MGMT_ALL.",
+                "Later, when business pages exist, assign screen packs and ACL to each exact work scope.",
                 "Use User Scope to bind users into the right department-derived work scope.",
               ].map((line) => (
                 <div

@@ -2,6 +2,7 @@ export const ERP_ROLE_OPTIONS = Object.freeze([
   { code: "SA", label: "Super Admin", rank: 999 },
   { code: "GA", label: "Global Admin", rank: 888 },
   { code: "DIRECTOR", label: "Director", rank: 100 },
+  { code: "L4_MANAGER", label: "L4 Manager", rank: 95 },
   { code: "L3_MANAGER", label: "L3 Manager", rank: 90 },
   { code: "L2_AUDITOR", label: "L2 Auditor", rank: 80 },
   { code: "L1_AUDITOR", label: "L1 Auditor", rank: 70 },

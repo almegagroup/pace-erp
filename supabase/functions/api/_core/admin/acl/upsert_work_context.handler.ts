@@ -22,6 +22,18 @@ type UpsertWorkContextInput = {
   is_active?: boolean;
 };
 
+type CompanyRow = {
+  id: string;
+  status: string | null;
+  company_kind: string | null;
+};
+
+type DepartmentRow = {
+  id: string;
+  company_id: string;
+  status: string | null;
+};
+
 type AdminContext = {
   context: ContextResolution;
 };
@@ -60,6 +72,88 @@ export async function upsertWorkContextHandler(
     }
 
     const db = getServiceRoleClientWithContext(ctx.context);
+    const { data: company, error: companyError } = await db
+      .schema("erp_master")
+      .from("companies")
+      .select("id, status, company_kind")
+      .eq("id", companyId)
+      .maybeSingle<CompanyRow>();
+
+    if (companyError) {
+      return errorResponse(
+        "WORK_CONTEXT_COMPANY_FETCH_FAILED",
+        companyError.message,
+        requestId,
+      );
+    }
+
+    if (!company) {
+      return errorResponse(
+        "WORK_CONTEXT_COMPANY_NOT_FOUND",
+        "Selected company not found",
+        requestId,
+      );
+    }
+
+    if (company.company_kind !== "BUSINESS") {
+      return errorResponse(
+        "WORK_CONTEXT_COMPANY_INVALID",
+        "Work contexts can only be governed for business companies",
+        requestId,
+      );
+    }
+
+    if (
+      workContextCode === "GENERAL_OPS" || workContextCode.startsWith("DEPT_")
+    ) {
+      return errorResponse(
+        "WORK_CONTEXT_CODE_RESERVED",
+        "System work-context codes are reserved for company and department foundations",
+        requestId,
+      );
+    }
+
+    if (departmentId) {
+      const { data: department, error: departmentError } = await db
+        .schema("erp_master")
+        .from("departments")
+        .select("id, company_id, status")
+        .eq("id", departmentId)
+        .maybeSingle<DepartmentRow>();
+
+      if (departmentError) {
+        return errorResponse(
+          "WORK_CONTEXT_DEPARTMENT_FETCH_FAILED",
+          departmentError.message,
+          requestId,
+        );
+      }
+
+      if (!department) {
+        return errorResponse(
+          "WORK_CONTEXT_DEPARTMENT_NOT_FOUND",
+          "Selected department not found",
+          requestId,
+        );
+      }
+
+      if (department.company_id !== companyId) {
+        return errorResponse(
+          "WORK_CONTEXT_DEPARTMENT_COMPANY_MISMATCH",
+          "Department must belong to the same company as the work context",
+          requestId,
+        );
+      }
+
+      if (department.status !== "ACTIVE") {
+        return errorResponse(
+          "WORK_CONTEXT_DEPARTMENT_INACTIVE",
+          "Only active departments can be linked to a manual work context",
+          requestId,
+        );
+      }
+    }
+
     const { data: existing, error: existingError } = await db
       .schema("erp_acl")
       .from("work_contexts")
@@ -76,10 +170,10 @@ export async function upsertWorkContextHandler(
       );
     }
 
-    if (existing?.is_system === true && isActive === false) {
+    if (existing?.is_system === true) {
       return errorResponse(
         "SYSTEM_WORK_CONTEXT_IMMUTABLE",
-        "System work context cannot be disabled",
+        "System work context must be managed from company or department foundations",
         requestId,
       );
     }

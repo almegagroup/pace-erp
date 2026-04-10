@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import ErpCompactFilterSelect from "../../../components/inputs/ErpCompactFilterSelect.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
@@ -354,33 +355,17 @@ export default function SASessions() {
     eyebrow: "Session Filter",
     title: "Session Inventory",
     aside: (
-      <div className="flex flex-wrap gap-2">
-        {FILTERS.map((option, index) => (
-          <button
-            key={option.key}
-            ref={(element) => {
-              filterRefs.current[index] = element;
-            }}
-            data-workspace-primary-focus={index === 0 ? "true" : undefined}
-            type="button"
-            onClick={() => setFilter(option.key)}
-            onKeyDown={(event) =>
-              handleLinearNavigation(event, {
-                index,
-                refs: filterRefs.current,
-                orientation: "horizontal",
-              })
-            }
-            className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-              filter === option.key
-                ? "border-sky-400 bg-sky-50 text-sky-900"
-                : "border-slate-300 bg-white text-slate-600"
-            }`}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
+      <ErpCompactFilterSelect
+        label="Session View"
+        value={filter}
+        options={FILTERS}
+        onChange={setFilter}
+        selectRef={(element) => {
+          filterRefs.current[0] = element;
+        }}
+        primaryFocus={true}
+        helperText="Compact filtering reduces pre-list keyboard travel in dense governance inventories."
+      />
     ),
     children: (
       <QuickFilterInput
@@ -389,7 +374,7 @@ export default function SASessions() {
         value={searchQuery}
         onChange={setSearchQuery}
         placeholder="Search by session, user, company, designation, auth, or status"
-        hint="Visible quick filter for the session inventory. Alt+Shift+F jumps here, Alt+Shift+P returns to the filter rail."
+        hint="Visible quick filter for the session inventory. Alt+Shift+F jumps here, Alt+Shift+P returns to the filter selector."
       />
     ),
   };

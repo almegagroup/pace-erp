@@ -17,6 +17,7 @@ import {
   handleGridNavigation,
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
+import ErpCompactFilterSelect from "../../../components/inputs/ErpCompactFilterSelect.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
@@ -117,6 +118,7 @@ function getRoleTone(roleCode) {
     case "GA":
       return "border-indigo-300 bg-indigo-50 text-indigo-700";
     case "DIRECTOR":
+    case "L4_MANAGER":
       return "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700";
     case "L3_MANAGER":
     case "L2_MANAGER":
@@ -529,36 +531,22 @@ export default function SAUsers() {
     eyebrow: "User Filter",
     title: "Governable User Inventory",
     aside: (
-      <div className="flex flex-wrap items-center gap-2">
-        {FILTERS.map((option, index) => (
-          <button
-            key={option.key}
-            ref={(element) => {
-              filterRefs.current[index] = element;
-            }}
-            data-workspace-primary-focus={index === 0 ? "true" : undefined}
-            type="button"
-            onClick={() => setFilter(option.key)}
-            onKeyDown={(event) =>
-              handleLinearNavigation(event, {
-                index,
-                refs: filterRefs.current,
-                orientation: "horizontal",
-              })
-            }
-            className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-              filter === option.key
-                ? "border-sky-400 bg-sky-50 text-sky-900"
-                : "border-slate-300 bg-white text-slate-600"
-            }`}
-          >
-            {option.label}
-          </button>
-        ))}
-        <span className="ml-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-          {visibleColumnKeys.length}/{USER_COLUMN_DEFS.length} visible columns
-        </span>
-      </div>
+      <ErpCompactFilterSelect
+        label="Directory View"
+        value={filter}
+        options={FILTERS}
+        onChange={setFilter}
+        selectRef={(element) => {
+          filterRefs.current[0] = element;
+        }}
+        primaryFocus={true}
+        helperText="Compact filtering keeps the directory selector short so keyboard focus reaches the main list faster."
+        extra={
+          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+            {visibleColumnKeys.length}/{USER_COLUMN_DEFS.length} visible columns
+          </span>
+        }
+      />
     ),
     children: (
       <QuickFilterInput

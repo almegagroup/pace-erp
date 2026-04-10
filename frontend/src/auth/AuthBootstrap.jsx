@@ -13,6 +13,94 @@ import { getShellSnapshotAgeMs } from "../store/shellSnapshotCache.js";
 
 const SESSION_IDENTITY_RECHECK_AFTER_HIDDEN_MS = 5 * 60 * 1000;
 const SHELL_SNAPSHOT_BACKGROUND_REFRESH_MS = 3 * 60 * 1000;
+const BOOTSTRAP_RETRY_DELAYS_MS = [500, 1200, 2400];
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function createTaggedError(code, meta = {}) {
+  const error = new Error(code);
+  error.code = code;
+  error.meta = meta;
+  return error;
+}
+
+function isAuthResponseFailure(response, json) {
+  if (json?.action === "LOGOUT") {
+    return true;
+  }
+
+  if (response.status === 401) {
+    return true;
+  }
+
+  return json?.code === "AUTH_NOT_AUTHENTICATED";
+}
+
+function isTransientBootstrapStatus(status) {
+  return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+async function fetchBootstrapEnvelope(path, options = {}) {
+  const url = `${import.meta.env.VITE_API_BASE}${path}`;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= BOOTSTRAP_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetch(url, options);
+      const json = await response.clone().json().catch(() => null);
+
+      if (response.ok) {
+        return { response, json };
+      }
+
+      if (isAuthResponseFailure(response, json)) {
+        throw createTaggedError("BOOTSTRAP_AUTH_FAILURE", {
+          path,
+          status: response.status,
+          code: json?.code ?? null,
+        });
+      }
+
+      if (
+        isTransientBootstrapStatus(response.status) &&
+        attempt < BOOTSTRAP_RETRY_DELAYS_MS.length
+      ) {
+        await wait(BOOTSTRAP_RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+
+      throw createTaggedError("BOOTSTRAP_UPSTREAM_UNAVAILABLE", {
+        path,
+        status: response.status,
+        code: json?.code ?? null,
+      });
+    } catch (error) {
+      if (error?.code === "BOOTSTRAP_AUTH_FAILURE") {
+        throw error;
+      }
+
+      lastError = error;
+
+      if (attempt >= BOOTSTRAP_RETRY_DELAYS_MS.length) {
+        throw createTaggedError("BOOTSTRAP_UPSTREAM_UNAVAILABLE", {
+          path,
+          cause:
+            error instanceof Error
+              ? error.message
+              : "BOOTSTRAP_UPSTREAM_UNAVAILABLE",
+        });
+      }
+
+      await wait(BOOTSTRAP_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  throw lastError ?? createTaggedError("BOOTSTRAP_UPSTREAM_UNAVAILABLE", { path });
+}
 
 export default function AuthBootstrap({ children }) {
   const location = useLocation();
@@ -69,13 +157,11 @@ export default function AuthBootstrap({ children }) {
       };
 
       try {
-        const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/profile`, {
+        const { response, json } = await fetchBootstrapEnvelope("/api/me/profile", {
           credentials: "include",
           erpUiMode: "silent",
           erpUiLabel: "Validating session identity",
         });
-
-        const json = await response.json().catch(() => null);
 
         if (disposed) {
           return;
@@ -101,14 +187,19 @@ export default function AuthBootstrap({ children }) {
           clearClusterAdmission();
           navigate("/app", { replace: true });
         }
-      } catch {
+      } catch (error) {
         if (disposed) {
           return;
         }
 
-        clearMenuSnapshot();
-        clearClusterAdmission();
-        navigate("/login", { replace: true });
+        if (error?.code === "BOOTSTRAP_AUTH_FAILURE") {
+          clearMenuSnapshot();
+          clearClusterAdmission();
+          navigate("/login", { replace: true });
+          return;
+        }
+
+        console.warn("SESSION_IDENTITY_RECHECK_SKIPPED", error);
       } finally {
         identityValidationRef.current = {
           inFlight: false,
@@ -156,35 +247,30 @@ export default function AuthBootstrap({ children }) {
 
   useEffect(() => {
     let alive = true;
+    let retryTimerId = null;
 
     async function fetchShellSnapshot({ mode = "silent" } = {}) {
-      const [profileRes, contextRes, menuRes] = await Promise.all([
-        fetch(`${import.meta.env.VITE_API_BASE}/api/me/profile`, {
+      const [profileEnvelope, contextEnvelope, menuEnvelope] = await Promise.all([
+        fetchBootstrapEnvelope("/api/me/profile", {
           credentials: "include",
           erpUiMode: mode,
           erpUiLabel: "Loading workspace shell",
         }),
-        fetch(`${import.meta.env.VITE_API_BASE}/api/me/context`, {
+        fetchBootstrapEnvelope("/api/me/context", {
           credentials: "include",
           erpUiMode: mode,
           erpUiLabel: "Loading workspace shell",
         }),
-        fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
+        fetchBootstrapEnvelope("/api/me/menu", {
           credentials: "include",
           erpUiMode: mode,
           erpUiLabel: "Loading workspace shell",
         }),
       ]);
 
-      if (!profileRes.ok || !contextRes.ok || !menuRes.ok) {
-        throw new Error("AUTH_BOOTSTRAP_FETCH_FAILED");
-      }
-
-      const [profileData, contextData, menuData] = await Promise.all([
-        profileRes.json(),
-        contextRes.json(),
-        menuRes.json(),
-      ]);
+      const profileData = profileEnvelope.json;
+      const contextData = contextEnvelope.json;
+      const menuData = menuEnvelope.json;
 
       return {
         shellProfile: {
@@ -271,11 +357,32 @@ export default function AuthBootstrap({ children }) {
       return true;
     }
 
-    async function boot() {
-      const pathname = location.pathname;
+    function scheduleBootRetry(pathname, bootKey) {
+      if (!alive || retryTimerId) {
+        return;
+      }
+
+      retryTimerId = window.setTimeout(() => {
+        retryTimerId = null;
+
+        if (!alive) {
+          return;
+        }
+
+        bootStateRef.current = {
+          bootKey,
+          inFlight: false,
+        };
+
+        void boot(pathname, bootKey);
+      }, BOOTSTRAP_RETRY_DELAYS_MS.at(-1) ?? 2400);
+    }
+
+    async function boot(explicitPathname = location.pathname, explicitBootKey = null) {
+      const pathname = explicitPathname;
       const currentUrl = new URL(globalThis.location.href);
       const joinToken = currentUrl.searchParams.get("cluster_join");
-      const bootKey = `${pathname}|${joinToken ?? ""}`;
+      const bootKey = explicitBootKey ?? `${pathname}|${joinToken ?? ""}`;
 
       if (isPublicRoute(pathname) || pathname === "/auth/callback") {
         bootStateRef.current = {
@@ -337,18 +444,11 @@ export default function AuthBootstrap({ children }) {
       try {
         startMenuLoading();
 
-        const meRes = await fetch(`${import.meta.env.VITE_API_BASE}/api/me`, {
+        await fetchBootstrapEnvelope("/api/me", {
           credentials: "include",
           erpUiMode: "silent",
           erpUiLabel: "Loading workspace shell",
         });
-
-        if (!meRes.ok) {
-          clearMenuSnapshot();
-          clearClusterAdmission();
-          navigate("/login", { replace: true });
-          return;
-        }
 
         const admissionReady = await ensureWindowAdmission(joinToken);
 
@@ -409,10 +509,16 @@ export default function AuthBootstrap({ children }) {
           inFlight: false,
         };
 
-        console.error("AUTH_BOOTSTRAP_FAILED", error);
-        clearMenuSnapshot();
-        clearClusterAdmission();
-        navigate("/login", { replace: true });
+        if (error?.code === "BOOTSTRAP_AUTH_FAILURE") {
+          console.error("AUTH_BOOTSTRAP_AUTH_FAILURE", error);
+          clearMenuSnapshot();
+          clearClusterAdmission();
+          navigate("/login", { replace: true });
+          return;
+        }
+
+        console.warn("AUTH_BOOTSTRAP_RETRYING_AFTER_UPSTREAM_FAILURE", error);
+        scheduleBootRetry(pathname, bootKey);
       } finally {
         if (alive && bootStateRef.current.bootKey === bootKey) {
           bootStateRef.current = {
@@ -427,6 +533,9 @@ export default function AuthBootstrap({ children }) {
 
     return () => {
       alive = false;
+      if (retryTimerId) {
+        window.clearTimeout(retryTimerId);
+      }
     };
   }, [
     clearMenuSnapshot,

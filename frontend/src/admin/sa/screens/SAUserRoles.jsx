@@ -16,12 +16,12 @@ import {
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
 import { useMenu } from "../../../context/useMenu.js";
+import ErpCompactFilterSelect from "../../../components/inputs/ErpCompactFilterSelect.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import { applyQuickFilter, sortUsers } from "../../../shared/erpCollections.js";
 import {
-  ERP_ROLE_FILTERS,
   ERP_ROLE_LABELS,
   ERP_ROLE_OPTIONS,
   ERP_ROLE_RANKS,
@@ -52,6 +52,20 @@ async function fetchUsers() {
   return json.data;
 }
 
+async function fetchUsersWithRetry(attempts = 2) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetchUsers();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error("USER_ROLE_LIST_READ_FAILED");
+}
+
 function getRoleTone(roleCode) {
   switch (roleCode) {
     case "SA":
@@ -59,6 +73,7 @@ function getRoleTone(roleCode) {
     case "GA":
       return "bg-indigo-100 text-indigo-700";
     case "DIRECTOR":
+    case "L4_MANAGER":
       return "bg-violet-100 text-violet-700";
     case "L3_MANAGER":
     case "L2_MANAGER":
@@ -214,23 +229,44 @@ export default function SAUserRoles() {
         throw new Error("USER_ROLE_UPDATE_FAILED");
       }
 
-      const refreshedUsers = await fetchUsers();
-      const refreshedTarget = refreshedUsers.find(
-        (row) => row.auth_user_id === user.auth_user_id
-      );
+      try {
+        const refreshedUsers = await fetchUsersWithRetry();
+        const refreshedTarget = refreshedUsers.find(
+          (row) => row.auth_user_id === user.auth_user_id
+        );
 
-      setUsers(refreshedUsers);
-      setDraftRoles(
-        Object.fromEntries(
-          refreshedUsers.map((row) => [row.auth_user_id, row.role_code ?? ""])
-        )
-      );
+        setUsers(refreshedUsers);
+        setDraftRoles(
+          Object.fromEntries(
+            refreshedUsers.map((row) => [row.auth_user_id, row.role_code ?? ""])
+          )
+        );
 
-      if (
-        refreshedTarget?.role_code !== nextRole ||
-        refreshedTarget?.role_rank !== (ERP_ROLE_RANKS[nextRole] ?? null)
-      ) {
-        throw new Error("USER_ROLE_NOT_FINALIZED");
+        if (
+          refreshedTarget?.role_code !== nextRole ||
+          refreshedTarget?.role_rank !== (ERP_ROLE_RANKS[nextRole] ?? null)
+        ) {
+          throw new Error("USER_ROLE_NOT_FINALIZED");
+        }
+      } catch {
+        setUsers((current) =>
+          current.map((row) =>
+            row.auth_user_id === user.auth_user_id
+              ? {
+                  ...row,
+                  role_code: nextRole,
+                  role_rank:
+                    typeof json?.data?.role_rank === "number"
+                      ? json.data.role_rank
+                      : (ERP_ROLE_RANKS[nextRole] ?? row.role_rank ?? null),
+                }
+              : row
+          )
+        );
+        setDraftRoles((current) => ({
+          ...current,
+          [user.auth_user_id]: nextRole,
+        }));
       }
     } catch {
       setError("User role change was not finalized by the backend.");
@@ -277,7 +313,7 @@ export default function SAUserRoles() {
   const assignedCount = governableUsers.filter((user) => user.role_code).length;
   const unassignedCount = governableUsers.filter((user) => !user.role_code).length;
   const managerCount = governableUsers.filter((user) =>
-    ["L3_MANAGER", "L2_MANAGER", "L1_MANAGER"].includes(user.role_code)
+    ["L4_MANAGER", "L3_MANAGER", "L2_MANAGER", "L1_MANAGER"].includes(user.role_code)
   ).length;
   const rolePagination = useErpPagination(filteredUsers, 10);
 
@@ -435,79 +471,33 @@ export default function SAUserRoles() {
     },
   ];
 
+  const roleFilterOptions = useMemo(
+    () => [
+      { key: "ALL", label: "All Roles" },
+      { key: "UNASSIGNED", label: "Unassigned" },
+      ...ERP_ROLE_OPTIONS.map((role) => ({
+        key: role.code,
+        label: role.label,
+      })),
+    ],
+    []
+  );
+
   const filterSection = {
     eyebrow: "Role Filters",
     title: "Role Assignment Control Rail",
     aside: (
-      <div className="flex flex-wrap gap-2">
-        <button
-          ref={(element) => {
-            filterRefs.current[0] = element;
-          }}
-          data-workspace-primary-focus="true"
-          type="button"
-          onClick={() => setRoleFilter("ALL")}
-          onKeyDown={(event) =>
-            handleLinearNavigation(event, {
-              index: 0,
-              refs: filterRefs.current,
-              orientation: "horizontal",
-            })
-          }
-          className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-            roleFilter === "ALL"
-              ? "border-sky-400 bg-sky-50 text-sky-900"
-              : "border-slate-300 bg-white text-slate-600"
-          }`}
-        >
-          All Roles
-        </button>
-        <button
-          ref={(element) => {
-            filterRefs.current[1] = element;
-          }}
-          type="button"
-          onClick={() => setRoleFilter("UNASSIGNED")}
-          onKeyDown={(event) =>
-            handleLinearNavigation(event, {
-              index: 1,
-              refs: filterRefs.current,
-              orientation: "horizontal",
-            })
-          }
-          className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-            roleFilter === "UNASSIGNED"
-              ? "border-sky-400 bg-sky-50 text-sky-900"
-              : "border-slate-300 bg-white text-slate-600"
-          }`}
-        >
-          Unassigned
-        </button>
-        {ERP_ROLE_FILTERS.map((role, index) => (
-          <button
-            key={role.key}
-            ref={(element) => {
-              filterRefs.current[index + 2] = element;
-            }}
-            type="button"
-            onClick={() => setRoleFilter(role.key)}
-            onKeyDown={(event) =>
-              handleLinearNavigation(event, {
-                index: index + 2,
-                refs: filterRefs.current,
-                orientation: "horizontal",
-              })
-            }
-            className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-              roleFilter === role.key
-                ? "border-sky-400 bg-sky-50 text-sky-900"
-                : "border-slate-300 bg-white text-slate-600"
-            }`}
-          >
-            {role.label}
-          </button>
-        ))}
-      </div>
+      <ErpCompactFilterSelect
+        label="Role View"
+        value={roleFilter}
+        options={roleFilterOptions}
+        onChange={setRoleFilter}
+        selectRef={(element) => {
+          filterRefs.current[0] = element;
+        }}
+        primaryFocus={true}
+        helperText="One compact selector replaces the long role tab rail so keyboard focus reaches the list faster."
+      />
     ),
     children: (
       <QuickFilterInput
@@ -516,7 +506,7 @@ export default function SAUserRoles() {
         value={searchQuery}
         onChange={setSearchQuery}
         placeholder="Search by user code, name, company, designation, auth, role, or state"
-        hint="Visible quick filter for dense role governance. Alt+Shift+F jumps here, Alt+Shift+P returns to the role filter rail."
+        hint="Visible quick filter for dense role governance. Alt+Shift+F jumps here, Alt+Shift+P returns to the role filter selector."
       />
     ),
   };

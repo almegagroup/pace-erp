@@ -251,11 +251,16 @@ export default function MenuShell() {
     getNetworkActivitySnapshot()
   );
   const [busyElapsedSeconds, setBusyElapsedSeconds] = useState(0);
+  const [runtimeSwitchState, setRuntimeSwitchState] = useState({
+    active: false,
+    label: "",
+  });
 
   const menuButtonRefs = useRef([]);
   const drawerButtonRefs = useRef([]);
   const actionButtonRefs = useRef([]);
   const contentRegionRef = useRef(null);
+  const workContextSelectRef = useRef(null);
   const stackDepth = getStackDepth();
 
   const navigationTree = useMemo(() => buildMenuTree(menu), [menu]);
@@ -341,11 +346,55 @@ export default function MenuShell() {
       : networkActivity.lastOutcome === "error"
         ? "border-rose-300 bg-rose-50 text-rose-900"
         : "border-emerald-300 bg-emerald-50 text-emerald-900";
-  const busyOverlayVisible = networkActivity.blockingInFlightCount > 0;
+  const busyOverlayVisible =
+    runtimeSwitchState.active || networkActivity.blockingInFlightCount > 0;
   const busyOverlayLabel =
+    runtimeSwitchState.label ||
     networkActivity.lastBlockingLabel ||
     networkActivity.lastLabel ||
     "Processing ERP action";
+  const shellShortcutLine = workspaceMode
+    ? "Esc Back | Alt+H Home | Alt+Left Hide Rail | Alt+Right Show Rail | Alt+W Or F8 Work Context | Ctrl+K Or F9 Command Bar"
+    : "Alt+M Menu | Alt+A Function Rail | Alt+C Work Area | Alt+W Or F8 Work Context | Ctrl+K Or F9 Command Bar";
+  const footerShortcutLine =
+    "Esc Back | Alt+H Home | Alt+W Or F8 Work Context | Alt+PgUp Prev Page | Alt+PgDn Next Page | Ctrl+K Or F9 Command Bar | Ctrl+S Or F2 Save | Alt+R Or F4 Refresh | Alt+Shift+F Or F3 Search | Alt+Shift+P Or F7 Primary";
+
+  const holdRuntimeSwitchOverlayUntilPaint = useCallback(async () => {
+    await new Promise((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(resolve);
+      });
+    });
+  }, []);
+
+  const focusWorkContextSwitcher = useCallback(() => {
+    if (!showWorkContextSwitcher) {
+      return;
+    }
+
+    const target = workContextSelectRef.current;
+
+    if (!(target instanceof HTMLSelectElement)) {
+      return;
+    }
+
+    if (focusElement(target)) {
+      setActiveZone("menu");
+    }
+
+    try {
+      if (typeof target.showPicker === "function") {
+        target.showPicker();
+        return;
+      }
+    } catch {
+      // Fallback below keeps the shortcut functional even where showPicker is unsupported.
+    }
+
+    window.requestAnimationFrame(() => {
+      target.click();
+    });
+  }, [showWorkContextSwitcher]);
 
   const handleWorkCompanyChange = useCallback(
     async (nextCompanyId) => {
@@ -354,6 +403,10 @@ export default function MenuShell() {
       }
 
       setRuntimeContextError("");
+      setRuntimeSwitchState({
+        active: true,
+        label: "Switching work company",
+      });
 
       try {
         const contextResponse = await fetch(
@@ -361,6 +414,8 @@ export default function MenuShell() {
           {
             method: "POST",
             credentials: "include",
+            erpUiMode: "blocking",
+            erpUiLabel: "Switching work company",
             headers: {
               "Content-Type": "application/json",
             },
@@ -381,9 +436,14 @@ export default function MenuShell() {
           );
         }
 
-        const menuResponse = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
-          credentials: "include",
-        });
+        const menuResponse = await fetch(
+          `${import.meta.env.VITE_API_BASE}/api/me/menu`,
+          {
+            credentials: "include",
+            erpUiMode: "blocking",
+            erpUiLabel: "Refreshing workspace after work company switch",
+          }
+        );
         const menuJson = await readJsonSafe(menuResponse);
 
         if (!menuResponse.ok || !menuJson?.ok) {
@@ -405,14 +465,21 @@ export default function MenuShell() {
           selectedWorkContext: contextJson.data.selected_work_context ?? null,
         });
         setMenuSnapshot(menuJson?.data?.menu ?? []);
+        await holdRuntimeSwitchOverlayUntilPaint();
       } catch (error) {
         console.error("WORK_COMPANY_SWITCH_FAILED", error);
         setRuntimeContextError(
           error instanceof Error ? error.message : "Work company could not be switched."
         );
+      } finally {
+        setRuntimeSwitchState({
+          active: false,
+          label: "",
+        });
       }
     },
     [
+      holdRuntimeSwitchOverlayUntilPaint,
       runtimeContext?.selectedCompanyId,
       setMenuSnapshot,
       setRuntimeContext,
@@ -446,6 +513,10 @@ export default function MenuShell() {
       }
 
       setRuntimeContextError("");
+      setRuntimeSwitchState({
+        active: true,
+        label: "Switching work context",
+      });
 
       try {
         const contextResponse = await fetch(
@@ -453,6 +524,8 @@ export default function MenuShell() {
           {
             method: "POST",
             credentials: "include",
+            erpUiMode: "blocking",
+            erpUiLabel: "Switching work context",
             headers: {
               "Content-Type": "application/json",
             },
@@ -474,9 +547,14 @@ export default function MenuShell() {
           );
         }
 
-        const menuResponse = await fetch(`${import.meta.env.VITE_API_BASE}/api/me/menu`, {
-          credentials: "include",
-        });
+        const menuResponse = await fetch(
+          `${import.meta.env.VITE_API_BASE}/api/me/menu`,
+          {
+            credentials: "include",
+            erpUiMode: "blocking",
+            erpUiLabel: "Refreshing workspace after work context switch",
+          }
+        );
         const menuJson = await readJsonSafe(menuResponse);
 
         if (!menuResponse.ok || !menuJson?.ok) {
@@ -498,14 +576,21 @@ export default function MenuShell() {
           selectedWorkContext: contextJson.data.selected_work_context ?? null,
         });
         setMenuSnapshot(menuJson?.data?.menu ?? []);
+        await holdRuntimeSwitchOverlayUntilPaint();
       } catch (error) {
         console.error("WORK_CONTEXT_SWITCH_FAILED", error);
         setRuntimeContextError(
           error instanceof Error ? error.message : "Work context could not be switched."
         );
+      } finally {
+        setRuntimeSwitchState({
+          active: false,
+          label: "",
+        });
       }
     },
     [
+      holdRuntimeSwitchOverlayUntilPaint,
       runtimeContext?.selectedCompanyId,
       runtimeContext?.selectedWorkContext?.work_context_id,
       setMenuSnapshot,
@@ -738,18 +823,6 @@ export default function MenuShell() {
     [activeZone, focusZone]
   );
 
-  function getHomeRouteTarget() {
-    if (location.pathname.startsWith("/sa")) {
-      return "SA_HOME";
-    }
-
-    if (location.pathname.startsWith("/ga")) {
-      return "GA_HOME";
-    }
-
-    return "DASHBOARD_HOME";
-  }
-
   function handleMenuRoute(routePath) {
     if (!getScreenForRoute(routePath)) {
       return;
@@ -830,9 +903,25 @@ export default function MenuShell() {
     await confirmAndRequestLogout();
   }
 
-  async function handleBack() {
+  const handleBack = useCallback(async () => {
     if (drawerVisible) {
-      handleDrawerBack();
+      const parentNode =
+        drawerTrail.length > 1 ? drawerTrail[drawerTrail.length - 2] : sidebarRoots[resolvedMenuFocusIndex] ?? null;
+      const parentEntries = parentNode?.children ?? [];
+      const currentMenuCode = drawerTrail[drawerTrail.length - 1]?.item?.menu_code ?? "";
+      const parentIndex = parentEntries.findIndex(
+        (node) => node.item?.menu_code === currentMenuCode
+      );
+
+      setDrawerPath((currentPath) => currentPath.slice(0, -1));
+      setDrawerFocusIndex(parentIndex >= 0 ? parentIndex : 0);
+
+      window.requestAnimationFrame(() => {
+        const safeIndex = parentIndex >= 0 ? parentIndex : 0;
+        focusElement(
+          drawerButtonRefs.current[safeIndex] ?? drawerButtonRefs.current[0]
+        );
+      });
       return;
     }
 
@@ -842,17 +931,23 @@ export default function MenuShell() {
     }
 
     popScreen();
-  }
+  }, [drawerTrail, drawerVisible, resolvedMenuFocusIndex, sidebarRoots, stackDepth]);
 
-  function handleGoHome() {
-    resetToScreen(getHomeRouteTarget());
-  }
+  const handleGoHome = useCallback(() => {
+    const target = location.pathname.startsWith("/sa")
+      ? "SA_HOME"
+      : location.pathname.startsWith("/ga")
+        ? "GA_HOME"
+        : "DASHBOARD_HOME";
+
+    resetToScreen(target);
+  }, [location.pathname]);
 
   function handleLockWorkspace() {
     lockWorkspace();
   }
 
-  async function handleOpenNewWindow() {
+  const handleOpenNewWindow = useCallback(async () => {
     const homePath = location.pathname.startsWith("/sa")
       ? "/sa/home"
       : location.pathname.startsWith("/ga")
@@ -875,7 +970,7 @@ export default function MenuShell() {
     if (!result.ok) {
       setClusterWindowMessage(getClusterWindowErrorMessage(result.code));
     }
-  }
+  }, [location.pathname]);
 
   useEffect(() => {
     const unsubscribe = subscribeWorkspaceFocusCommands((command) => {
@@ -883,6 +978,7 @@ export default function MenuShell() {
       if (command === "FOCUS_MENU_ZONE") focusZone("menu");
       if (command === "FOCUS_ACTIONS_ZONE") focusZone("actions");
       if (command === "FOCUS_CONTENT_ZONE") focusZone("content");
+      if (command === "FOCUS_WORK_CONTEXT") focusWorkContextSwitcher();
       if (command === "OPEN_NEW_WINDOW") void handleOpenNewWindow();
       if (command === "FOCUS_NEXT_ZONE") cycleZoneFocus(1);
       if (command === "FOCUS_PREVIOUS_ZONE") cycleZoneFocus(-1);
@@ -892,7 +988,13 @@ export default function MenuShell() {
     });
 
     return unsubscribe;
-  }, [cycleZoneFocus, focusZone]);
+  }, [
+    cycleZoneFocus,
+    focusWorkContextSwitcher,
+    focusZone,
+    handleGoHome,
+    handleOpenNewWindow,
+  ]);
 
   useEffect(() => {
     function handleShellBackRequest(event) {
@@ -904,7 +1006,7 @@ export default function MenuShell() {
     return () => {
       window.removeEventListener("erp:shell-back-request", handleShellBackRequest);
     };
-  }, [drawerVisible, drawerPath, stackDepth]);
+  }, [handleBack]);
 
   useEffect(() => {
     function handleRailToggle(event) {
@@ -1200,7 +1302,11 @@ export default function MenuShell() {
               {showWorkContextSwitcher ? (
                 <label className="mt-3 block text-[10px] font-semibold uppercase tracking-[0.18em] text-white/80">
                   Work Context
+                  <span className="ml-2 text-[9px] tracking-[0.16em] text-white/60">
+                    Alt+W / F8
+                  </span>
                   <select
+                    ref={workContextSelectRef}
                     value={runtimeContext?.selectedWorkContext?.work_context_id ?? ""}
                     onChange={(event) => void handleWorkContextChange(event.target.value)}
                     className="mt-1 w-full border border-white/30 bg-white/10 px-2 py-1 text-xs font-medium text-white outline-none"
@@ -1443,9 +1549,7 @@ export default function MenuShell() {
         </header>
 
         <div className="border-b border-slate-300 bg-[#eef3f7] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-          {workspaceMode
-            ? "Esc Back | Alt+H Home | Alt+Left Hide Rail | Alt+Right Show Rail | Ctrl+K Or F9 Command Bar"
-            : "Alt+M Menu | Alt+A Function Rail | Alt+C Work Area | Ctrl+K Or F9 Command Bar"}
+          {shellShortcutLine}
         </div>
 
         {showKeyboardHelp || clusterWindowMessage ? (
@@ -1480,7 +1584,7 @@ export default function MenuShell() {
         </div>
 
         <footer className="border-t border-slate-300 bg-[#e8eef4] px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-          Esc Back | Alt+H Home | Ctrl+K Or F9 Command Bar | Ctrl+S Or F2 Save | Alt+R Or F4 Refresh | Alt+Shift+F Or F3 Search | Alt+Shift+P Or F7 Primary
+          {footerShortcutLine}
           {activeScreenHotkeys.length > 0
             ? ` | ${activeScreenHotkeys.map((item) => `${item.key} ${item.label}`).join(" | ")}`
             : ""}

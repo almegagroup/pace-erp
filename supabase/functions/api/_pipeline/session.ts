@@ -14,6 +14,8 @@ import { log } from "../_lib/logger.ts";
 import { recordSessionTimeline } from "../_core/session/session_timeline.ts";
 import { recordSecurityEvent } from "../_security/security_events.ts";
 
+const IDLE_EXPIRE_MS = 30 * 60 * 1000;
+
 export type SessionResolution =
   | { status: "ABSENT"; action: "LOGOUT" }
   | {
@@ -106,6 +108,32 @@ export async function stepSession(
     data.status === "IDLE" ||
     data.status === "CREATED"
   ) {
+    return { status: "EXPIRED", action: "LOGOUT" };
+  }
+
+  const nowMs = Date.now();
+  const expiresAtMs = new Date(data.expires_at).getTime();
+  const lastSeenMs = new Date(data.last_seen_at).getTime();
+
+  if (Number.isFinite(expiresAtMs) && nowMs >= expiresAtMs) {
+    log({
+      level: "OBSERVABILITY",
+      request_id: requestId,
+      event: "SESSION_TTL_STALE_AT_LOOKUP",
+      meta: { session_id: sessionId },
+    });
+    recordSecurityEvent(req, requestId, "SESSION_EXPIRED", "SESSION");
+    return { status: "EXPIRED", action: "LOGOUT" };
+  }
+
+  if (Number.isFinite(lastSeenMs) && nowMs - lastSeenMs >= IDLE_EXPIRE_MS) {
+    log({
+      level: "OBSERVABILITY",
+      request_id: requestId,
+      event: "SESSION_IDLE_STALE_AT_LOOKUP",
+      meta: { session_id: sessionId },
+    });
+    recordSecurityEvent(req, requestId, "SESSION_IDLE_EXPIRED", "SESSION");
     return { status: "EXPIRED", action: "LOGOUT" };
   }
 

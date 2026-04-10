@@ -7,6 +7,7 @@ ________________________________________
 •	SA (999) – ERP GOD, unrestricted, cannot be denied.
 •	GA (888) – Group GOD, multi-company within group.
 •	DIRECTOR (100) – Multi-company authority.
+•	L4_MANAGER (95) – Senior multi-company manager.
 •	L3_MANAGER (90) – Multi-company.
 •	L2_AUDITOR (80) – Highest auditor.
 •	L1_AUDITOR (70) – Auditor.
@@ -18,7 +19,7 @@ ________________________________________
 •	L1_USER (10) – Entry-level.
 Approver Cone (Locked)
 •	Max 3 approvers.
-•	Chain: L1_USER → L1/L2 Manager → L3 → Director → GA → SA.
+•	Chain: L1_USER → L1/L2 Manager → L3/L4 Manager → Director → GA → SA.
 •	Auditors cannot approve.
 Delete Restriction
 •	Delete only via GA (proposal) + SA (final approve).
@@ -54,7 +55,7 @@ Role allow vs user deny conflict. ### Final Locked Solution - Final Precedence L
 ________________________________________
 Problem 2 — Role × Menu × Action Explosion
 Issue
-12 roles × 100 menus × 7 actions = 8400 permission cells → impossible manually.
+13 roles × 100 menus × 7 actions = 9100 permission cells → impossible manually.
 Final Locked Solution
 •	Capability Packs (Manager, Auditor, Finance, Director, Stores, QA, etc.)
 •	Role Inheritance (higher role auto gets lower role permissions)
