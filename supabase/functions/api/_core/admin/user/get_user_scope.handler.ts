@@ -62,6 +62,22 @@ function sortByCodeThenName(
   });
 }
 
+function enrichDepartmentRows(
+  rows: Array<Record<string, unknown> | null | undefined> | null | undefined,
+  companyLookup: Map<string, Record<string, unknown>>,
+): Record<string, unknown>[] {
+  return (rows ?? []).filter(isRecord).map((row) => {
+    const companyId = normalizeText(row.company_id);
+    const company = companyId ? companyLookup.get(companyId) ?? null : null;
+
+    return {
+      ...row,
+      company_code: normalizeText(company?.company_code) || null,
+      company_name: normalizeText(company?.company_name) || null,
+    };
+  });
+}
+
 function blocked(
   code: string,
   message: string,
@@ -269,6 +285,7 @@ export async function getUserScopeHandler(
     const projectMap = new Map((scopedProjects ?? []).map((row) => [row.id, row]));
     const departmentMap = new Map((scopedDepartments ?? []).map((row) => [row.id, row]));
     const workContextMap = new Map((availableWorkContexts ?? []).map((row) => [row.work_context_id, row]));
+    const availableCompanyMap = new Map((availableCompanies ?? []).map((row) => [row.id, row]));
 
     const { data: availableProjectLinks } = eligibleScopeCompanyIds.length === 0
       ? { data: [] }
@@ -343,9 +360,12 @@ export async function getUserScopeHandler(
             "project_name",
           ),
           departments: sortByCodeThenName(
-            departmentIds
-            .map((departmentId) => departmentMap.get(departmentId))
-            .filter(Boolean),
+            enrichDepartmentRows(
+              departmentIds
+                .map((departmentId) => departmentMap.get(departmentId))
+                .filter(Boolean),
+              companyMap,
+            ),
             "department_code",
             "department_name",
           ),
@@ -391,7 +411,10 @@ export async function getUserScopeHandler(
             "project_name",
           ),
           departments: sortByCodeThenName(
-            availableDepartments,
+            enrichDepartmentRows(
+              availableDepartments,
+              availableCompanyMap,
+            ),
             "department_code",
             "department_name",
           ),

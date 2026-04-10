@@ -43,6 +43,28 @@ type HandlerContext = {
   request_id: string;
 };
 
+type ParentCompanyRow = {
+  auth_user_id: string;
+  company_id: string;
+};
+
+type CompanyRow = {
+  id: string;
+  company_code: string;
+  company_name: string;
+};
+
+type CompanyGroupRow = {
+  company_id: string;
+  group_id: number;
+};
+
+type GroupRow = {
+  id: number;
+  group_code: string;
+  name: string;
+};
+
 export async function listUsersHandler(
   _req: Request,
   ctx: HandlerContext
@@ -88,16 +110,68 @@ export async function listUsersHandler(
       )
       .in("auth_user_id", authUserIds);
 
+  const { data: parentCompanyRows } = authUserIds.length === 0
+    ? { data: [] }
+    : await db
+      .schema("erp_map").from("user_parent_companies")
+      .select("auth_user_id, company_id")
+      .in("auth_user_id", authUserIds);
+
+  const parentCompanyIds = [...new Set(
+    ((parentCompanyRows ?? []) as ParentCompanyRow[]).map((row) => row.company_id),
+  )];
+
+  const { data: parentCompanies } = parentCompanyIds.length === 0
+    ? { data: [] }
+    : await db
+      .schema("erp_master").from("companies")
+      .select("id, company_code, company_name")
+      .in("id", parentCompanyIds);
+
+  const { data: companyGroupRows } = parentCompanyIds.length === 0
+    ? { data: [] }
+    : await db
+      .schema("erp_map").from("company_group")
+      .select("company_id, group_id")
+      .in("company_id", parentCompanyIds);
+
+  const groupIds = [...new Set(
+    ((companyGroupRows ?? []) as CompanyGroupRow[]).map((row) => row.group_id),
+  )];
+
+  const { data: groups } = groupIds.length === 0
+    ? { data: [] }
+    : await db
+      .schema("erp_master").from("groups")
+      .select("id, group_code, name")
+      .in("id", groupIds);
+
   const roleMap = new Map(
     (roleRows ?? []).map((row) => [row.auth_user_id, row])
   );
   const signupMap = new Map(
     (signupRows ?? []).map((row) => [row.auth_user_id, row])
   );
+  const parentCompanyMapByUser = new Map(
+    ((parentCompanyRows ?? []) as ParentCompanyRow[]).map((row) => [row.auth_user_id, row.company_id]),
+  );
+  const companyMap = new Map(
+    ((parentCompanies ?? []) as CompanyRow[]).map((row) => [row.id, row]),
+  );
+  const companyGroupMap = new Map(
+    ((companyGroupRows ?? []) as CompanyGroupRow[]).map((row) => [row.company_id, row.group_id]),
+  );
+  const groupMap = new Map(
+    ((groups ?? []) as GroupRow[]).map((row) => [String(row.id), row]),
+  );
 
   const payload = (users ?? []).map((user) => {
     const roleRow = roleMap.get(user.auth_user_id);
     const signupRow = signupMap.get(user.auth_user_id);
+    const parentCompanyId = parentCompanyMapByUser.get(user.auth_user_id) ?? null;
+    const parentCompany = parentCompanyId ? companyMap.get(parentCompanyId) ?? null : null;
+    const groupId = parentCompanyId ? companyGroupMap.get(parentCompanyId) ?? null : null;
+    const group = groupId ? groupMap.get(String(groupId)) ?? null : null;
 
     return {
       ...user,
@@ -105,7 +179,13 @@ export async function listUsersHandler(
       role_rank: roleRow?.role_rank ?? null,
       is_acl_user: Boolean(roleRow?.role_code),
       name: signupRow?.name ?? null,
-      parent_company_name: signupRow?.parent_company_name ?? null,
+      parent_company_id: parentCompanyId,
+      parent_company_code: parentCompany?.company_code ?? null,
+      parent_company_name:
+        parentCompany?.company_name ?? signupRow?.parent_company_name ?? null,
+      group_id: groupId ?? null,
+      group_code: group?.group_code ?? null,
+      group_name: group?.name ?? null,
       designation_hint: signupRow?.designation_hint ?? null,
       phone_number: signupRow?.phone_number ?? null,
       signup_decision: signupRow?.decision ?? null,

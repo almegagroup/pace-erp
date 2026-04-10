@@ -19,6 +19,7 @@ import { useMenu } from "../../../context/useMenu.js";
 import ErpCompactFilterSelect from "../../../components/inputs/ErpCompactFilterSelect.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
+import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import { applyQuickFilter, sortUsers } from "../../../shared/erpCollections.js";
 import {
@@ -29,6 +30,30 @@ import {
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
+import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
+
+const ROLE_COLUMN_DEFS = Object.freeze([
+  { key: "user_code", label: "User ID" },
+  { key: "name", label: "Name" },
+  { key: "group", label: "Group" },
+  { key: "company", label: "Company" },
+  { key: "designation", label: "Designation" },
+  { key: "auth", label: "Auth" },
+  { key: "current_role", label: "Current Role" },
+  { key: "next_role", label: "Next Role" },
+  { key: "state", label: "State" },
+  { key: "action", label: "Action" },
+]);
+
+const DEFAULT_VISIBLE_ROLE_COLUMNS = Object.freeze([
+  "user_code",
+  "name",
+  "company",
+  "current_role",
+  "next_role",
+  "state",
+  "action",
+]);
 
 async function readJsonSafe(response) {
   try {
@@ -112,6 +137,22 @@ function formatIdentityName(user) {
   return user.name ?? "Unknown User";
 }
 
+function formatCompanyLabel(user) {
+  if (user?.parent_company_code && user?.parent_company_name) {
+    return `${user.parent_company_code} | ${user.parent_company_name}`;
+  }
+
+  return user?.parent_company_name ?? "Company Not Captured";
+}
+
+function formatGroupLabel(user) {
+  if (user?.group_code && user?.group_name) {
+    return `${user.group_code} | ${user.group_name}`;
+  }
+
+  return user?.group_code ?? user?.group_name ?? "Group Not Mapped";
+}
+
 export default function SAUserRoles() {
   const { shellProfile } = useMenu();
   const [users, setUsers] = useState([]);
@@ -121,10 +162,17 @@ export default function SAUserRoles() {
   const [roleFilter, setRoleFilter] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [updatingUserId, setUpdatingUserId] = useState("");
+  const [showColumnDrawer, setShowColumnDrawer] = useState(false);
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
   const rowControlRefs = useRef([]);
   const searchInputRef = useRef(null);
+  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
+    useErpVisibleColumns({
+      storageKey: "erp.sa.userRoles.columns",
+      columnDefs: ROLE_COLUMN_DEFS,
+      defaultColumnKeys: DEFAULT_VISIBLE_ROLE_COLUMNS,
+    });
 
   useEffect(() => {
     let alive = true;
@@ -301,6 +349,9 @@ export default function SAUserRoles() {
       applyQuickFilter(roleFilteredUsers, searchQuery, [
         "user_code",
         "name",
+        "group_code",
+        "group_name",
+        "parent_company_code",
         "parent_company_name",
         "designation_hint",
         "auth_user_id",
@@ -358,6 +409,14 @@ export default function SAUserRoles() {
       keywords: ["acl", "role permissions", "permission matrix"],
       perform: () => openScreen("SA_ROLE_PERMISSIONS"),
       order: 50,
+    },
+    {
+      id: "sa-user-roles-columns",
+      group: "Current Screen",
+      label: "Choose visible columns",
+      keywords: ["columns", "show hide", "table"],
+      perform: () => setShowColumnDrawer(true),
+      order: 60,
     },
   ]);
 
@@ -436,6 +495,21 @@ export default function SAUserRoles() {
           orientation: "horizontal",
         }),
     },
+    {
+      key: "columns",
+      label: "Columns",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionBarRefs.current[4] = element;
+      },
+      onClick: () => setShowColumnDrawer(true),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 4,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
   ];
 
   const metrics = [
@@ -497,6 +571,11 @@ export default function SAUserRoles() {
         }}
         primaryFocus={true}
         helperText="One compact selector replaces the long role tab rail so keyboard focus reaches the list faster."
+        extra={
+          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+            {visibleColumnKeys.length}/{ROLE_COLUMN_DEFS.length} visible columns
+          </span>
+        }
       />
     ),
     children: (
@@ -537,21 +616,14 @@ export default function SAUserRoles() {
         <table className="min-w-full border-collapse">
           <thead>
             <tr>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                User Identity
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Current Role
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Next Role
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                State
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Action
-              </th>
+              {visibleColumns.map((column) => (
+                <th
+                  key={column.key}
+                  className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
+                >
+                  {column.label}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -564,112 +636,119 @@ export default function SAUserRoles() {
                   key={user.auth_user_id}
                   className="border-b border-slate-200 bg-white align-top"
                 >
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <div className="font-semibold text-slate-900">
-                      {user.user_code ?? "Uncoded User"}{" "}
-                      <span className="text-slate-600">
-                        {formatIdentityName(user)}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
-                      {user.parent_company_name ?? "Company Not Captured"}
-                    </div>
-                    <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
-                      {user.designation_hint ?? "Designation Not Captured"}
-                    </div>
-                    <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
-                      Auth {shortId(user.auth_user_id)}
-                    </div>
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getRoleTone(user.role_code)}`}
-                      >
-                        {user.role_code ?? "UNASSIGNED"}
-                      </span>
-                      {typeof user.role_rank === "number" ? (
-                        <span className="text-xs text-slate-500">
-                          Rank {user.role_rank}
+                  {visibleColumns.map((column) => (
+                    <td key={column.key} className="px-3 py-3 text-sm text-slate-700">
+                      {column.key === "user_code" ? (
+                        <span className="font-semibold text-slate-900">
+                          {user.user_code ?? "Uncoded User"}
                         </span>
                       ) : null}
-                    </div>
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <select
-                      ref={(element) => {
-                        rowControlRefs.current[index] ??= [];
-                        rowControlRefs.current[index][0] = element;
-                      }}
-                      value={selectedRole}
-                      onChange={(event) =>
-                        setDraftRoles((current) => ({
-                          ...current,
-                          [user.auth_user_id]: event.target.value,
-                        }))
-                      }
-                      onKeyDown={(event) => {
-                        if (
-                          event.key === "ArrowLeft" ||
-                          event.key === "ArrowRight" ||
-                          event.key === "Home" ||
-                          event.key === "End"
-                        ) {
-                          handleGridNavigation(event, {
-                            rowIndex: index,
-                            columnIndex: 0,
-                            gridRefs: rowControlRefs.current,
-                          });
-                        }
-                      }}
-                      className="min-w-[190px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-700 outline-none"
-                    >
-                      <option value="">Select role</option>
-                      {ERP_ROLE_OPTIONS.map((role) => (
-                        <option key={role.code} value={role.code}>
-                          {role.label}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <span
-                      className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}
-                    >
-                      {user.state ?? "UNKNOWN"}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <button
-                      ref={(element) => {
-                        rowControlRefs.current[index] ??= [];
-                        rowControlRefs.current[index][1] = element;
-                      }}
-                      type="button"
-                      disabled={
-                        isUpdating ||
-                        !selectedRole ||
-                        selectedRole === user.role_code
-                      }
-                      onClick={() => void handleApplyRole(user)}
-                      onKeyDown={(event) =>
-                        handleGridNavigation(event, {
-                          rowIndex: index,
-                          columnIndex: 1,
-                          gridRefs: rowControlRefs.current,
-                        })
-                      }
-                      className={`border border-sky-300 bg-sky-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 ${
-                        isUpdating ||
-                        !selectedRole ||
-                        selectedRole === user.role_code
-                          ? "cursor-not-allowed opacity-60"
-                          : ""
-                      }`}
-                    >
-                      {isUpdating ? "Updating..." : "Apply Role"}
-                    </button>
-                  </td>
+                      {column.key === "name" ? formatIdentityName(user) : null}
+                      {column.key === "group" ? (
+                        <span className="text-xs uppercase tracking-[0.14em] text-slate-600">
+                          {formatGroupLabel(user)}
+                        </span>
+                      ) : null}
+                      {column.key === "company" ? (
+                        <span className="text-xs uppercase tracking-[0.14em] text-slate-600">
+                          {formatCompanyLabel(user)}
+                        </span>
+                      ) : null}
+                      {column.key === "designation"
+                        ? user.designation_hint ?? "Designation Not Captured"
+                        : null}
+                      {column.key === "auth" ? `AUTH ${shortId(user.auth_user_id)}` : null}
+                      {column.key === "current_role" ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getRoleTone(user.role_code)}`}
+                          >
+                            {user.role_code ?? "UNASSIGNED"}
+                          </span>
+                          {typeof user.role_rank === "number" ? (
+                            <span className="text-xs text-slate-500">
+                              Rank {user.role_rank}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {column.key === "next_role" ? (
+                        <select
+                          ref={(element) => {
+                            rowControlRefs.current[index] ??= [];
+                            rowControlRefs.current[index][0] = element;
+                          }}
+                          value={selectedRole}
+                          onChange={(event) =>
+                            setDraftRoles((current) => ({
+                              ...current,
+                              [user.auth_user_id]: event.target.value,
+                            }))
+                          }
+                          onKeyDown={(event) => {
+                            if (
+                              event.key === "ArrowLeft" ||
+                              event.key === "ArrowRight" ||
+                              event.key === "Home" ||
+                              event.key === "End"
+                            ) {
+                              handleGridNavigation(event, {
+                                rowIndex: index,
+                                columnIndex: 0,
+                                gridRefs: rowControlRefs.current,
+                              });
+                            }
+                          }}
+                          className="min-w-[190px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-700 outline-none"
+                        >
+                          <option value="">Select role</option>
+                          {ERP_ROLE_OPTIONS.map((role) => (
+                            <option key={role.code} value={role.code}>
+                              {role.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+                      {column.key === "state" ? (
+                        <span
+                          className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}
+                        >
+                          {user.state ?? "UNKNOWN"}
+                        </span>
+                      ) : null}
+                      {column.key === "action" ? (
+                        <button
+                          ref={(element) => {
+                            rowControlRefs.current[index] ??= [];
+                            rowControlRefs.current[index][1] = element;
+                          }}
+                          type="button"
+                          disabled={
+                            isUpdating ||
+                            !selectedRole ||
+                            selectedRole === user.role_code
+                          }
+                          onClick={() => void handleApplyRole(user)}
+                          onKeyDown={(event) =>
+                            handleGridNavigation(event, {
+                              rowIndex: index,
+                              columnIndex: 1,
+                              gridRefs: rowControlRefs.current,
+                            })
+                          }
+                          className={`border border-sky-300 bg-sky-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 ${
+                            isUpdating ||
+                            !selectedRole ||
+                            selectedRole === user.role_code
+                              ? "cursor-not-allowed opacity-60"
+                              : ""
+                          }`}
+                        >
+                          {isUpdating ? "Updating..." : "Apply Role"}
+                        </button>
+                      ) : null}
+                    </td>
+                  ))}
                 </tr>
               );
             })}
@@ -680,25 +759,38 @@ export default function SAUserRoles() {
   };
 
   return (
-    <ErpMasterListTemplate
-      eyebrow="SA Role Governance"
-      title="ERP User Role Assignment"
-      description="This keyboard-native list keeps role filters, quick search, and inline role application in one structured operating surface."
-      actions={topActions}
-      notices={
-        error
-          ? [
-              {
-                key: "error",
-                tone: "error",
-                message: error,
-              },
-            ]
-          : []
-      }
-      metrics={metrics}
-      filterSection={filterSection}
-      listSection={listSection}
-    />
+    <>
+      <ErpMasterListTemplate
+        eyebrow="SA Role Governance"
+        title="ERP User Role Assignment"
+        description="This keyboard-native list keeps role filters, quick search, and inline role application in one structured operating surface."
+        actions={topActions}
+        notices={
+          error
+            ? [
+                {
+                  key: "error",
+                  tone: "error",
+                  message: error,
+                },
+              ]
+            : []
+        }
+        metrics={metrics}
+        filterSection={filterSection}
+        listSection={listSection}
+      />
+
+      <ErpColumnVisibilityDrawer
+        visible={showColumnDrawer}
+        title="Role Assignment Columns"
+        description="Show only the user identity fields you need while assigning roles in bulk."
+        columns={ROLE_COLUMN_DEFS}
+        visibleColumnKeys={visibleColumnKeys}
+        onToggleColumn={toggleColumn}
+        onResetColumns={resetColumns}
+        onClose={() => setShowColumnDrawer(false)}
+      />
+    </>
   );
 }
