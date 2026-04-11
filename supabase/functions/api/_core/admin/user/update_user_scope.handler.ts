@@ -43,6 +43,13 @@ function blocked(
   ctx: HandlerContext,
   routeKey = "POST:/api/admin/users/scope",
 ): Response {
+  console.error("USER_SCOPE_SAVE_BLOCKED", {
+    request_id: ctx.request_id,
+    actor_auth_user_id: ctx.auth_user_id,
+    code,
+    message,
+    route_key: routeKey,
+  });
   return errorResponse(
     code,
     message,
@@ -223,17 +230,21 @@ export async function updateUserScopeHandler(
       );
     }
 
+    const derivedDepartmentIds = (
+      explicitWorkContextIds
+        .map((workContextId) => validWorkContextMap.get(workContextId)?.department_id ?? null)
+        .filter(Boolean) as string[]
+    );
+
     const persistedDepartmentIds = [...new Set([
       ...departmentIds,
-      ...(
-        explicitWorkContextIds
-          .map((workContextId) => validWorkContextMap.get(workContextId)?.department_id ?? null)
-          .filter(Boolean) as string[]
-      ),
+      ...derivedDepartmentIds,
     ])];
 
+    const autoDepartmentWorkContextIds = (departmentWorkContextIds.filter(Boolean)) as string[];
+
     const workContextIds = [...new Set([
-      ...((departmentWorkContextIds.filter(Boolean)) as string[]),
+      ...autoDepartmentWorkContextIds,
       ...explicitWorkContextIds,
     ])];
 
@@ -401,6 +412,33 @@ export async function updateUserScopeHandler(
       }
     }
 
+    const adjustments = {
+      dropped_project_ids: projectIds.filter((projectId) => !persistedProjectIds.includes(projectId)),
+      derived_department_ids: persistedDepartmentIds.filter((departmentId) => !departmentIds.includes(departmentId)),
+      derived_work_context_ids: workContextIds.filter((workContextId) => !explicitWorkContextIds.includes(workContextId)),
+    };
+
+    console.info("USER_SCOPE_SAVE_APPLIED", {
+      request_id: ctx.request_id,
+      target_auth_user_id: targetAuthUserId,
+      actor_auth_user_id: ctx.auth_user_id,
+      requested: {
+        parent_company_id: parentCompanyId,
+        work_company_ids: workCompanyIds,
+        project_ids: projectIds,
+        department_ids: departmentIds,
+        work_context_ids: explicitWorkContextIds,
+      },
+      persisted: {
+        parent_company_id: parentCompanyId,
+        work_company_ids: workCompanyIds,
+        project_ids: persistedProjectIds,
+        department_ids: persistedDepartmentIds,
+        work_context_ids: workContextIds,
+      },
+      adjustments,
+    });
+
     return okResponse(
       {
         auth_user_id: targetAuthUserId,
@@ -409,6 +447,7 @@ export async function updateUserScopeHandler(
         project_ids: persistedProjectIds,
         department_ids: persistedDepartmentIds,
         work_context_ids: workContextIds,
+        adjustments,
         updated_by: ctx.auth_user_id,
       },
       ctx.request_id,

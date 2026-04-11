@@ -40,13 +40,23 @@ function buildApiError(json, fallbackCode) {
   const code = json?.code ?? fallbackCode;
   const requestId = json?.request_id ?? json?.requestId ?? null;
   const decisionTrace = json?.decision_trace ?? json?.decisionTrace ?? null;
-  const message = [code, decisionTrace, requestId ? `Req ${requestId}` : null]
+  const publicMessage =
+    typeof json?.message === "string" && json.message.trim().length > 0
+      ? json.message.trim()
+      : null;
+  const message = [
+    code,
+    decisionTrace && decisionTrace !== code ? decisionTrace : null,
+    publicMessage,
+    requestId ? `Req ${requestId}` : null,
+  ]
     .filter(Boolean)
     .join(" | ");
   const error = new Error(message || fallbackCode);
   error.code = code;
   error.requestId = requestId;
   error.decisionTrace = decisionTrace;
+  error.publicMessage = publicMessage;
   return error;
 }
 
@@ -96,6 +106,17 @@ function extractIds(rows, key = "id") {
     : [];
 }
 
+function sameIdSet(left, right) {
+  const normalizedLeft = [...new Set((left ?? []).filter(Boolean))].sort();
+  const normalizedRight = [...new Set((right ?? []).filter(Boolean))].sort();
+
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return false;
+  }
+
+  return normalizedLeft.every((value, index) => value === normalizedRight[index]);
+}
+
 function formatCompanyMeta(company) {
   const parts = [
     company?.state_name,
@@ -136,6 +157,41 @@ function formatDepartmentLabel(department) {
   }
 
   return departmentLabel || companyLabel || "Unknown Department";
+}
+
+function humanizeDecisionTrace(decisionTrace) {
+  switch (decisionTrace) {
+    case "USER_SCOPE_PROJECT_INVALID":
+      return "One or more selected projects do not match the currently selected company scope.";
+    case "USER_SCOPE_WORK_CONTEXT_INVALID":
+      return "One or more selected work contexts are outside the chosen work companies.";
+    case "USER_SCOPE_DEPARTMENT_INVALID":
+      return "One or more selected departments are outside the chosen company scope.";
+    case "USER_SCOPE_DEPARTMENT_WORK_CONTEXT_MISSING":
+      return "A selected department is missing its governed department work context.";
+    case "USER_SCOPE_COMPANY_INVALID":
+      return "One or more selected companies are inactive or not business companies.";
+    default:
+      return "";
+  }
+}
+
+function describeAdjustmentSummary(adjustments) {
+  const parts = [];
+
+  if ((adjustments?.dropped_project_ids ?? []).length > 0) {
+    parts.push(`${adjustments.dropped_project_ids.length} project dropped`);
+  }
+
+  if ((adjustments?.derived_department_ids ?? []).length > 0) {
+    parts.push(`${adjustments.derived_department_ids.length} department auto-derived`);
+  }
+
+  if ((adjustments?.derived_work_context_ids ?? []).length > 0) {
+    parts.push(`${adjustments.derived_work_context_ids.length} work context auto-derived`);
+  }
+
+  return parts.join(" | ");
 }
 
 function ScopeSummaryCard({
@@ -213,6 +269,7 @@ export default function SAUserScope() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [warningNotice, setWarningNotice] = useState("");
 
   const [parentCompanyId, setParentCompanyId] = useState("");
   const [workCompanyIds, setWorkCompanyIds] = useState([]);
@@ -240,6 +297,7 @@ export default function SAUserScope() {
       setLoading(true);
       setError("");
       setNotice("");
+      setWarningNotice("");
 
       try {
         const data = await fetchUserScope(authUserId);
@@ -254,6 +312,13 @@ export default function SAUserScope() {
         setDepartmentIds(extractIds(data.scope?.departments));
       } catch (caughtError) {
         if (!alive) return;
+        console.error("USER_SCOPE_READ_FAILED", {
+          auth_user_id: authUserId,
+          code: caughtError?.code ?? null,
+          decisionTrace: caughtError?.decisionTrace ?? null,
+          requestId: caughtError?.requestId ?? null,
+          message: caughtError?.message ?? "USER_SCOPE_READ_FAILED",
+        });
         setError(
           caughtError?.code === "USER_SCOPE_ACL_USER_REQUIRED" ||
             caughtError?.message === "USER_SCOPE_ACL_USER_REQUIRED"
@@ -436,6 +501,27 @@ export default function SAUserScope() {
     setProjectIds((current) => current.filter((projectId) => allowedProjectIds.has(projectId)));
   }, [options.projects, eligibleProjectCompanyIds]);
 
+  const isScopeDirty = useMemo(() => {
+    if (!payload?.scope) {
+      return false;
+    }
+
+    return (
+      parentCompanyId !== (payload.scope?.parent_company?.id ?? "") ||
+      !sameIdSet(workCompanyIds, extractIds(payload.scope?.work_companies)) ||
+      !sameIdSet(workContextIds, extractIds(payload.scope?.work_contexts)) ||
+      !sameIdSet(projectIds, extractIds(payload.scope?.projects)) ||
+      !sameIdSet(departmentIds, extractIds(payload.scope?.departments))
+    );
+  }, [
+    departmentIds,
+    parentCompanyId,
+    payload,
+    projectIds,
+    workCompanyIds,
+    workContextIds,
+  ]);
+
   function toggleSelection(value, current, setter) {
     setter(
       current.includes(value)
@@ -449,6 +535,14 @@ export default function SAUserScope() {
       setError("Select a Parent Company before saving scope.");
       return;
     }
+
+    const requestedScope = {
+      parent_company_id: parentCompanyId,
+      work_company_ids: [...workCompanyIds],
+      work_context_ids: [...workContextIds],
+      project_ids: [...projectIds],
+      department_ids: [...departmentIds],
+    };
 
     const approved = await openActionConfirm({
       eyebrow: "SA User Scope Governance",
@@ -465,15 +559,12 @@ export default function SAUserScope() {
     setSaving(true);
     setError("");
     setNotice("");
+    setWarningNotice("");
 
     try {
-      await saveUserScope({
+      const savedScope = await saveUserScope({
         auth_user_id: authUserId,
-        parent_company_id: parentCompanyId,
-        work_company_ids: workCompanyIds,
-        work_context_ids: workContextIds,
-        project_ids: projectIds,
-        department_ids: departmentIds,
+        ...requestedScope,
       });
 
       const refreshed = await fetchUserScope(authUserId);
@@ -483,13 +574,56 @@ export default function SAUserScope() {
       setWorkContextIds(extractIds(refreshed.scope?.work_contexts));
       setProjectIds(extractIds(refreshed.scope?.projects));
       setDepartmentIds(extractIds(refreshed.scope?.departments));
-      setNotice("User scope saved successfully.");
+
+      const adjustmentSummary = describeAdjustmentSummary(savedScope?.adjustments);
+      const wasAdjusted = Boolean(adjustmentSummary);
+
+      console.info("USER_SCOPE_SAVE_RESULT", {
+        auth_user_id: authUserId,
+        requested: requestedScope,
+        persisted: {
+          parent_company_id: savedScope?.parent_company_id ?? null,
+          work_company_ids: savedScope?.work_company_ids ?? [],
+          work_context_ids: savedScope?.work_context_ids ?? [],
+          project_ids: savedScope?.project_ids ?? [],
+          department_ids: savedScope?.department_ids ?? [],
+        },
+        adjustments: savedScope?.adjustments ?? null,
+      });
+
+      if (wasAdjusted) {
+        console.warn("USER_SCOPE_SAVE_ADJUSTED", {
+          auth_user_id: authUserId,
+          requested: requestedScope,
+          persisted: savedScope,
+          adjustments: savedScope?.adjustments ?? null,
+        });
+        setWarningNotice(
+          `User scope saved with backend adjustments. ${adjustmentSummary}. Check console for exact details.`
+        );
+      } else {
+        setNotice("User scope saved successfully.");
+      }
+
+      setActiveScopeEditor("");
     } catch (caughtError) {
+      console.error("USER_SCOPE_SAVE_FAILED", {
+        auth_user_id: authUserId,
+        requested: requestedScope,
+        code: caughtError?.code ?? null,
+        decisionTrace: caughtError?.decisionTrace ?? null,
+        requestId: caughtError?.requestId ?? null,
+        message: caughtError?.message ?? "USER_SCOPE_SAVE_FAILED",
+      });
+
+      const decisionTraceMessage = humanizeDecisionTrace(caughtError?.decisionTrace);
       setError(
         caughtError?.code === "USER_SCOPE_ACL_USER_REQUIRED" ||
           caughtError?.message === "USER_SCOPE_ACL_USER_REQUIRED"
           ? "Scope mapping is available only for ACL users with an assigned role."
-          : caughtError?.message || "User scope was not finalized by the backend."
+          : decisionTraceMessage ||
+              caughtError?.message ||
+              "User scope was not finalized by the backend."
       );
     } finally {
       setSaving(false);
@@ -508,7 +642,21 @@ export default function SAUserScope() {
     }, 0);
   }
 
-  function closeScopeEditor() {
+  async function closeScopeEditor() {
+    if (activeScopeEditor && isScopeDirty) {
+      const approved = await openActionConfirm({
+        eyebrow: "SA User Scope Governance",
+        title: "Close Without Saving",
+        message: "This scope drawer has unsaved changes. Close it without saving?",
+        confirmLabel: "Close Without Saving",
+        cancelLabel: "Keep Editing",
+      });
+
+      if (!approved) {
+        return;
+      }
+    }
+
     setActiveScopeEditor("");
   }
 
@@ -762,6 +910,15 @@ export default function SAUserScope() {
             key: "notice",
             tone: "success",
             message: notice,
+          },
+        ]
+      : []),
+    ...(warningNotice
+      ? [
+          {
+            key: "warning",
+            tone: "warning",
+            message: warningNotice,
           },
         ]
       : []),
@@ -1134,10 +1291,10 @@ export default function SAUserScope() {
           <>
             <button
               type="button"
-              onClick={closeScopeEditor}
+              onClick={() => void closeScopeEditor()}
               className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
             >
-              Done
+              Close
             </button>
             <button
               type="button"
@@ -1242,10 +1399,10 @@ export default function SAUserScope() {
           <>
             <button
               type="button"
-              onClick={closeScopeEditor}
+              onClick={() => void closeScopeEditor()}
               className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
             >
-              Done
+              Close
             </button>
             <button
               type="button"
@@ -1359,10 +1516,10 @@ export default function SAUserScope() {
           <>
             <button
               type="button"
-              onClick={closeScopeEditor}
+              onClick={() => void closeScopeEditor()}
               className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
             >
-              Done
+              Close
             </button>
             <button
               type="button"
@@ -1457,10 +1614,10 @@ export default function SAUserScope() {
           <>
             <button
               type="button"
-              onClick={closeScopeEditor}
+              onClick={() => void closeScopeEditor()}
               className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
             >
-              Done
+              Close
             </button>
             <button
               type="button"
