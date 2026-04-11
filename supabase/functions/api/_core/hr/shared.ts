@@ -1,6 +1,16 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { getActiveAclVersionIdForCompany } from "../../_shared/acl_runtime.ts";
 import type { ContextResolution } from "../../_pipeline/context.ts";
+import {
+  createWorkflowScopeContextMap,
+  isBusinessWorkflowWorkContext,
+  isDepartmentWorkContextCode,
+  isGeneralOpsWorkContextCode,
+  loadActiveCompanyWorkContexts,
+  pickScopedApproverRules,
+  pickScopedViewerRules as pickScopedViewerRulesByPriority,
+  resolveDepartmentWorkflowScopeId,
+} from "../../_shared/workflow_scope.ts";
 
 export const LEAVE_RESOURCE_CODES = Object.freeze({
   apply: "HR_LEAVE_APPLY",
@@ -285,6 +295,27 @@ export async function createWorkflowRequest(
   request_id: string;
   current_state: "PENDING" | "APPROVED";
 }> {
+  if (!requesterWorkContextId) {
+    throw new Error("WORKFLOW_REQUEST_BUSINESS_CONTEXT_REQUIRED");
+  }
+
+  const workContextMap = createWorkflowScopeContextMap(
+    await loadActiveCompanyWorkContexts(serviceRoleClient, companyId),
+  );
+  const requesterWorkContext = workContextMap.get(requesterWorkContextId) ?? null;
+
+  if (!requesterWorkContext) {
+    throw new Error("WORKFLOW_REQUEST_BUSINESS_CONTEXT_INVALID");
+  }
+
+  if (!isBusinessWorkflowWorkContext(requesterWorkContext)) {
+    throw new Error(
+      isGeneralOpsWorkContextCode(requesterWorkContext.work_context_code)
+        ? "WORKFLOW_REQUEST_GENERAL_CONTEXT_FORBIDDEN"
+        : "WORKFLOW_REQUEST_BUSINESS_CONTEXT_INVALID",
+    );
+  }
+
   const aclVersionId = await getActiveAclVersionIdForCompany(
     serviceRoleClient,
     companyId,
@@ -527,28 +558,11 @@ export function pickScopedApprovers(
     resource_code?: string | null;
     action_code?: string | null;
     requester_work_context_id?: string | null;
+    requester_department_work_context_id?: string | null;
   },
   approverRows: ApproverRuleRow[],
 ): ApproverRuleRow[] {
-  const scopeMatchedRows = approverRows.filter((row) => {
-    if (row.subject_work_context_id === null) {
-      return true;
-    }
-
-    return row.subject_work_context_id === (workflow.requester_work_context_id ?? null);
-  });
-
-  if (workflow.resource_code && workflow.action_code) {
-    return scopeMatchedRows.filter(
-      (row) =>
-        row.resource_code === workflow.resource_code &&
-        row.action_code === workflow.action_code,
-    );
-  }
-
-  return scopeMatchedRows.filter(
-    (row) => row.resource_code === null && row.action_code === null,
-  );
+  return pickScopedApproverRules(workflow, approverRows);
 }
 
 export function isApproverMatch(
@@ -572,21 +586,12 @@ export function pickScopedViewerRules(
     resource_code?: string | null;
     action_code?: string | null;
     requester_work_context_id?: string | null;
+    requester_department_work_context_id?: string | null;
   },
   viewerRows: ViewerRuleRow[],
   targetAction: "VIEW" | "EXPORT" = "VIEW",
 ): ViewerRuleRow[] {
-  return viewerRows.filter((row) => {
-    const subjectMatched = row.subject_work_context_id === null ||
-      row.subject_work_context_id === (workflow.requester_work_context_id ?? null);
-
-    if (!subjectMatched) {
-      return false;
-    }
-
-    return row.resource_code === workflow.resource_code &&
-      row.action_code === targetAction;
-  });
+  return pickScopedViewerRulesByPriority(workflow, viewerRows, targetAction);
 }
 
 export function isViewerMatch(
@@ -667,7 +672,7 @@ type UserScopeWorkContextRow = {
   work_context_id: string;
   company_id: string;
   work_context_code: string;
-  work_context_name: string;
+  work_context_name: string | null;
   department_id: string | null;
 };
 
@@ -678,8 +683,8 @@ type UserScopeWorkContextLookupRow = UserScopeWorkContextRow & {
 export async function resolveRequesterSubjectWorkContext(input: {
   authUserId: string;
   parentCompanyId: string;
-  preferredWorkContextId?: string | null;
-}): Promise<UserScopeWorkContextRow | null> {
+  explicitWorkContextId?: string | null;
+}): Promise<UserScopeWorkContextRow> {
   const { data: userRows, error } = await serviceRoleClient
     .schema("erp_acl")
     .from("user_work_contexts")
@@ -694,42 +699,124 @@ export async function resolveRequesterSubjectWorkContext(input: {
   const workContextIds = [...new Set((userRows ?? []).map((row) => row.work_context_id).filter(Boolean))];
 
   if (workContextIds.length === 0) {
-    return null;
+    throw new Error("HR_REQUESTER_SCOPE_NOT_ASSIGNED");
   }
 
-  const { data: workContextRows, error: workContextError } = await serviceRoleClient
-    .schema("erp_acl")
-    .from("work_contexts")
-    .select("work_context_id, company_id, work_context_code, work_context_name, department_id, is_active")
-    .in("work_context_id", workContextIds)
-    .eq("company_id", input.parentCompanyId)
-    .eq("is_active", true);
-
-  if (workContextError) {
-    throw new Error("HR_REQUESTER_SCOPE_WORK_CONTEXT_READ_FAILED");
-  }
-
-  const rows = (workContextRows ?? []).filter((row): row is UserScopeWorkContextLookupRow =>
-    Boolean(row?.work_context_id && row?.company_id && row?.work_context_code && row?.is_active === true)
+  const companyWorkContexts = await loadActiveCompanyWorkContexts(
+    serviceRoleClient,
+    input.parentCompanyId,
   );
+  const companyWorkContextMap = createWorkflowScopeContextMap(companyWorkContexts);
 
-  const departmentContexts = rows.filter((row) => row.department_id);
-  const generalOps = rows.find((row) => row.work_context_code === "GENERAL_OPS") ?? null;
+  const rows = workContextIds
+    .map((workContextId) => companyWorkContextMap.get(workContextId) ?? null)
+    .filter((row): row is UserScopeWorkContextLookupRow =>
+      Boolean(row?.work_context_id && row?.company_id && row?.work_context_code && row?.is_active === true)
+    );
 
-  if (input.preferredWorkContextId) {
-    const matchedPreferred = rows.find((row) => row.work_context_id === input.preferredWorkContextId) ?? null;
-    if (matchedPreferred) {
-      return matchedPreferred;
+  if (rows.length === 0) {
+    throw new Error("HR_REQUESTER_SCOPE_NOT_ASSIGNED");
+  }
+
+  if (input.explicitWorkContextId) {
+    const explicitMatch =
+      rows.find((row) => row.work_context_id === input.explicitWorkContextId) ?? null;
+
+    if (!explicitMatch) {
+      throw new Error("HR_REQUESTER_SCOPE_INVALID_EXPLICIT_CONTEXT");
+    }
+
+    if (!isBusinessWorkflowWorkContext(explicitMatch)) {
+      throw new Error("HR_REQUESTER_SCOPE_GENERAL_CONTEXT_FORBIDDEN");
+    }
+
+    return explicitMatch;
+  }
+
+  const { data: userDepartmentRows, error: userDepartmentError } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_departments")
+    .select("department_id")
+    .eq("auth_user_id", input.authUserId);
+
+  if (userDepartmentError) {
+    throw new Error("HR_REQUESTER_SCOPE_DEPARTMENT_LOOKUP_FAILED");
+  }
+
+  const userDepartmentIds = [...new Set(
+    (userDepartmentRows ?? [])
+      .map((row) => String(row.department_id ?? "").trim())
+      .filter(Boolean),
+  )];
+
+  if (userDepartmentIds.length > 0) {
+    const { data: departmentRows, error: departmentError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("departments")
+      .select("id, company_id, status")
+      .in("id", userDepartmentIds);
+
+    if (departmentError) {
+      throw new Error("HR_REQUESTER_SCOPE_DEPARTMENT_LOOKUP_FAILED");
+    }
+
+    const matchedDepartments = (departmentRows ?? []).filter((row) =>
+      row.company_id === input.parentCompanyId && row.status === "ACTIVE"
+    );
+
+    if (matchedDepartments.length > 1) {
+      throw new Error("HR_REQUESTER_SCOPE_SELECTION_REQUIRED");
+    }
+
+    if (matchedDepartments.length === 1) {
+      const departmentId = matchedDepartments[0].id;
+      const departmentContext =
+        rows.find((row) =>
+          row.department_id === departmentId &&
+          isDepartmentWorkContextCode(row.work_context_code)
+        ) ?? null;
+
+      if (departmentContext && isBusinessWorkflowWorkContext(departmentContext)) {
+        return departmentContext;
+      }
+
+      throw new Error("HR_REQUESTER_SCOPE_DEPARTMENT_CONTEXT_MISSING");
     }
   }
+
+  const departmentContexts = rows.filter((row) =>
+    row.department_id && isDepartmentWorkContextCode(row.work_context_code)
+  );
 
   if (departmentContexts.length === 1) {
     return departmentContexts[0];
   }
 
-  if (departmentContexts.length === 0) {
-    return generalOps;
+  if (departmentContexts.length > 1) {
+    throw new Error("HR_REQUESTER_SCOPE_SELECTION_REQUIRED");
   }
 
-  throw new Error("HR_REQUESTER_SCOPE_SELECTION_REQUIRED");
+  const singleBusinessContext =
+    rows.filter((row) => isBusinessWorkflowWorkContext(row)).length === 1
+      ? rows.find((row) => isBusinessWorkflowWorkContext(row)) ?? null
+      : null;
+
+  if (singleBusinessContext?.department_id) {
+    const derivedDepartmentContextId = resolveDepartmentWorkflowScopeId(
+      {
+        requester_work_context_id: singleBusinessContext.work_context_id,
+      },
+      companyWorkContextMap,
+    );
+
+    const derivedDepartmentContext = derivedDepartmentContextId
+      ? companyWorkContextMap.get(derivedDepartmentContextId) ?? null
+      : null;
+
+    if (derivedDepartmentContext && isBusinessWorkflowWorkContext(derivedDepartmentContext)) {
+      return derivedDepartmentContext;
+    }
+  }
+
+  throw new Error("HR_REQUESTER_SCOPE_DEPARTMENT_CONTEXT_REQUIRED");
 }

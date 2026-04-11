@@ -2,6 +2,11 @@ import { okResponse, errorResponse } from "../response.ts";
 import { log } from "../../_lib/logger.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import {
+  createWorkflowScopeContextMap,
+  loadActiveCompanyWorkContexts,
+  resolveDepartmentWorkflowScopeId,
+} from "../../_shared/workflow_scope.ts";
+import {
   LEAVE_RESOURCE_CODES,
   appendWorkflowEvent,
   assertHrBusinessContext,
@@ -56,6 +61,33 @@ type WorkflowRequestRow = {
   resource_code: string | null;
   action_code: string | null;
   created_at: string;
+};
+
+type LeaveCaseRow = {
+  leave_request_id: string;
+  workflow_request_id: string;
+  requester_auth_user_id: string;
+  requester_display: string;
+  requester_work_context_id: string | null;
+  requester_department_work_context_id: string | null;
+  requester_work_context_code: string | null;
+  requester_work_context_name: string | null;
+  parent_company_id: string;
+  parent_company_code: string | null;
+  parent_company_name: string | null;
+  from_date: string;
+  to_date: string;
+  total_days: number;
+  reason: string;
+  created_at: string;
+  current_state: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
+  approval_type: "ANYONE" | "SEQUENTIAL" | "MUST_ALL";
+  decision_count: number;
+  can_cancel: boolean;
+  decision_history: ReturnType<typeof buildDecisionHistory>;
+  resource_code: string | null;
+  action_code: string | null;
+  module_code: string;
 };
 
 function buildDecisionHistory(
@@ -146,8 +178,13 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
   const companyIdentityMap = await loadCompanyIdentityMap(
     rows.map((row) => row.parent_company_id),
   );
+  const companyWorkContextMap = rows[0]?.parent_company_id
+    ? createWorkflowScopeContextMap(
+        await loadActiveCompanyWorkContexts(serviceRoleClient, rows[0].parent_company_id),
+      )
+    : new Map();
 
-  const cases = [];
+  const cases: LeaveCaseRow[] = [];
 
   for (const row of rows) {
     const workflow = workflowMap.get(row.workflow_request_id);
@@ -157,6 +194,15 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
 
     const decisions = decisionMap.get(row.workflow_request_id) ?? [];
     const companyIdentity = companyIdentityMap.get(row.parent_company_id) ?? null;
+    const requesterDepartmentWorkContextId = resolveDepartmentWorkflowScopeId(
+      {
+        requester_work_context_id: workflow.requester_work_context_id ?? null,
+      },
+      companyWorkContextMap,
+    );
+    const requesterWorkContext = workflow.requester_work_context_id
+      ? companyWorkContextMap.get(workflow.requester_work_context_id) ?? null
+      : null;
 
     cases.push({
       leave_request_id: row.leave_request_id,
@@ -166,6 +212,9 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
         userIdentityMap.get(row.requester_auth_user_id) ?? null,
       ),
       requester_work_context_id: workflow.requester_work_context_id ?? null,
+      requester_department_work_context_id: requesterDepartmentWorkContextId,
+      requester_work_context_code: requesterWorkContext?.work_context_code ?? null,
+      requester_work_context_name: requesterWorkContext?.work_context_name ?? null,
       parent_company_id: row.parent_company_id,
       parent_company_code: companyIdentity?.company_code ?? null,
       parent_company_name: companyIdentity?.company_name ?? null,
@@ -256,12 +305,12 @@ export async function createLeaveRequestHandler(
 
     const totalDays = calculateInclusiveDays(fromDate, toDate);
     const parentCompany = await getParentCompanyScope(ctx.auth_user_id);
+    const explicitRequesterWorkContextId =
+      String(body?.requester_work_context_id ?? "").trim() || null;
     const requesterWorkContext = await resolveRequesterSubjectWorkContext({
       authUserId: ctx.auth_user_id,
       parentCompanyId: parentCompany.company_id,
-      preferredWorkContextId:
-        String(body?.requester_work_context_id ?? "").trim() ||
-        (ctx.context.companyId === parentCompany.company_id ? ctx.context.workContextId : null),
+      explicitWorkContextId: explicitRequesterWorkContextId,
     });
     const approvalConfig = await resolveApprovalConfig(
       LEAVE_RESOURCE_CODES.apply,
@@ -276,7 +325,7 @@ export async function createLeaveRequestHandler(
       approvalConfig.approval_required,
       approvalConfig.approval_type,
       LEAVE_RESOURCE_CODES.approvalInbox,
-      requesterWorkContext?.work_context_id ?? null,
+      requesterWorkContext.work_context_id,
     );
 
     const { data: leaveRow, error: leaveError } = await serviceRoleClient
@@ -286,7 +335,7 @@ export async function createLeaveRequestHandler(
         workflow_request_id: workflow.request_id,
         requester_auth_user_id: ctx.auth_user_id,
         parent_company_id: parentCompany.company_id,
-        requester_work_context_id: requesterWorkContext?.work_context_id ?? null,
+        requester_work_context_id: requesterWorkContext.work_context_id,
         from_date: fromDate,
         to_date: toDate,
         total_days: totalDays,
@@ -337,9 +386,9 @@ export async function createLeaveRequestHandler(
           approval_type: approvalConfig.approval_type,
           parent_company_code: parentCompany.company_code,
           parent_company_name: parentCompany.company_name,
-          requester_work_context_id: requesterWorkContext?.work_context_id ?? null,
-          requester_work_context_code: requesterWorkContext?.work_context_code ?? null,
-          requester_work_context_name: requesterWorkContext?.work_context_name ?? null,
+          requester_work_context_id: requesterWorkContext.work_context_id,
+          requester_work_context_code: requesterWorkContext.work_context_code ?? null,
+          requester_work_context_name: requesterWorkContext.work_context_name ?? null,
         },
       },
       ctx.request_id,
@@ -555,6 +604,7 @@ export async function listLeaveApprovalInboxHandler(
           resource_code: row.resource_code,
           action_code: row.action_code,
           requester_work_context_id: row.requester_work_context_id,
+          requester_department_work_context_id: row.requester_department_work_context_id,
         },
         approverRows,
       );
@@ -618,6 +668,7 @@ export async function listLeaveApprovalScopeHistoryHandler(
           resource_code: row.resource_code,
           action_code: row.action_code,
           requester_work_context_id: row.requester_work_context_id,
+          requester_department_work_context_id: row.requester_department_work_context_id,
         },
         approverRows,
       );
@@ -669,6 +720,7 @@ export async function listLeaveRegisterHandler(
           resource_code: LEAVE_RESOURCE_CODES.register,
           action_code: "VIEW",
           requester_work_context_id: row.requester_work_context_id,
+          requester_department_work_context_id: row.requester_department_work_context_id,
         },
         viewerRows,
         "VIEW",

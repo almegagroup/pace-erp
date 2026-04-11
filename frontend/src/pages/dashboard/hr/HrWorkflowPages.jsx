@@ -700,7 +700,7 @@ export function LeaveApplyWorkspace() {
           <ErpSectionCard
             eyebrow="Rule"
             title="Business law"
-            description="Leave request uses parent-company HR truth. Pending request stays cancellable only while no approver decision exists."
+            description="Leave request uses parent-company HR truth and is stored against a governed business work scope. GENERAL_OPS personal workspace never drives approval routing."
           >
             <div className="grid gap-2">
               <ErpFieldPreview
@@ -710,8 +710,8 @@ export function LeaveApplyWorkspace() {
               />
               <ErpFieldPreview
                 label="Approval Queue"
-                value="Exact resource-driven"
-                caption="Approver rules will route the case after submit."
+                value="Business-scope driven"
+                caption="If no explicit business scope is sent, backend derives the mapped department scope before routing."
               />
             </div>
           </ErpSectionCard>
@@ -931,7 +931,7 @@ export function OutWorkApplyWorkspace() {
         ]}
         formEyebrow="Out Work Request"
         formTitle="Submit an out work request"
-        formDescription="Choose destination, date range, and reason. If destination is missing, create it once and reuse it later."
+        formDescription="Choose destination, date range, and reason. If destination is missing, create it once and reuse it later. Approval routing uses governed business scope, not the current personal workspace."
         formContent={
           <div className="grid gap-3">
             <div className="grid gap-3 md:grid-cols-3">
