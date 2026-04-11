@@ -237,6 +237,20 @@ function describeAdjustmentDetails(adjustments) {
   return parts.join(" | ");
 }
 
+function isBenignDerivedDepartmentContext(adjustments) {
+  const droppedProjectCount = adjustments?.dropped_project_ids?.length ?? 0;
+  const droppedWorkContextCount = adjustments?.dropped_work_context_ids?.length ?? 0;
+  const derivedDepartmentCount = adjustments?.derived_department_ids?.length ?? 0;
+  const derivedWorkContextCount = adjustments?.derived_work_context_ids?.length ?? 0;
+
+  return (
+    droppedProjectCount === 0 &&
+    droppedWorkContextCount === 0 &&
+    derivedDepartmentCount === 0 &&
+    derivedWorkContextCount > 0
+  );
+}
+
 function ScopeSummaryCard({
   eyebrow,
   title,
@@ -638,16 +652,24 @@ export default function SAUserScope() {
       });
 
       if (wasAdjusted) {
-        console.warn("USER_SCOPE_SAVE_ADJUSTED", {
+        const benignDerivedContext = isBenignDerivedDepartmentContext(savedScope?.adjustments);
+
+        (benignDerivedContext ? console.info : console.warn)("USER_SCOPE_SAVE_ADJUSTED", {
           auth_user_id: authUserId,
           requested: requestedScope,
           persisted: savedScope,
           adjustments: savedScope?.adjustments ?? null,
         });
         const adjustmentDetails = describeAdjustmentDetails(savedScope?.adjustments);
-        setWarningNotice(
-          `User scope saved with backend adjustments. ${adjustmentSummary}.${adjustmentDetails ? ` ${adjustmentDetails}.` : ""} Check console for exact details.`
-        );
+        if (benignDerivedContext) {
+          setNotice(
+            `User scope saved successfully. Department-linked work context was auto-added.${adjustmentDetails ? ` ${adjustmentDetails}.` : ""}`
+          );
+        } else {
+          setWarningNotice(
+            `User scope saved with backend adjustments. ${adjustmentSummary}.${adjustmentDetails ? ` ${adjustmentDetails}.` : ""} Check console for exact details.`
+          );
+        }
       } else {
         setNotice("User scope saved successfully.");
       }
