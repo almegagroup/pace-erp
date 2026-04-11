@@ -142,31 +142,38 @@ export async function updateUserScopeHandler(
       );
     }
 
-    const { data: validProjects } = projectIds.length === 0
+    const { data: projectCompanyLinks } = projectIds.length === 0
       ? { data: [] }
       : await db
         .schema("erp_map")
         .from("company_projects")
-        .select(`
-          project_id,
-          company_id,
-          project:project_id (
-            id,
-            status
-          )
-        `)
+        .select("project_id, company_id")
         .in("project_id", projectIds)
         .in("company_id", eligibleCompanyIds);
 
-    const persistedProjectIds = [...new Set((validProjects ?? []).filter((row) => {
-      const project = Array.isArray(row.project) ? row.project[0] : row.project;
-      return (
-        eligibleCompanyIds.includes(row.company_id) &&
-        activeBusinessCompanyIds.has(row.company_id) &&
-        project?.id === row.project_id &&
-        project?.status === "ACTIVE"
-      );
-    }).map((row) => row.project_id))];
+    const linkedProjectIds = [...new Set(
+      (projectCompanyLinks ?? [])
+        .filter((row) =>
+          eligibleCompanyIds.includes(row.company_id) &&
+          activeBusinessCompanyIds.has(row.company_id)
+        )
+        .map((row) => row.project_id)
+    )];
+
+    const { data: activeProjects } = linkedProjectIds.length === 0
+      ? { data: [] }
+      : await db
+        .schema("erp_master")
+        .from("projects")
+        .select("id, status")
+        .in("id", linkedProjectIds)
+        .eq("status", "ACTIVE");
+
+    const activeProjectIds = new Set((activeProjects ?? []).map((row) => row.id));
+
+    const persistedProjectIds = projectIds.filter((projectId) =>
+      linkedProjectIds.includes(projectId) && activeProjectIds.has(projectId)
+    );
 
     const { data: validDepartments } = departmentIds.length === 0
       ? { data: [] }
