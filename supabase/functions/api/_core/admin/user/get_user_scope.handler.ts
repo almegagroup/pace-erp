@@ -84,6 +84,12 @@ function blocked(
   ctx: HandlerContext,
   routeKey = "GET:/api/admin/users/scope",
 ): Response {
+  console.error("USER_SCOPE_READ_BLOCKED", {
+    request_id: ctx.request_id,
+    code,
+    message,
+    route_key: routeKey,
+  });
   return errorResponse(
     code,
     message,
