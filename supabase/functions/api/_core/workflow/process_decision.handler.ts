@@ -12,6 +12,12 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { evaluateRouting as _evaluateRouting } from "./routing.engine.ts";
 import { errorResponse } from "../response.ts";
 import { getActiveAclVersionIdForCompany } from "../../_shared/acl_runtime.ts";
+import {
+  createWorkflowScopeContextMap,
+  loadActiveCompanyWorkContexts,
+  pickScopedApproverRules,
+  resolveDepartmentWorkflowScopeId,
+} from "../../_shared/workflow_scope.ts";
 
 interface HandlerContext {
   auth_user_id: string;
@@ -35,6 +41,7 @@ interface ApproverMapRow {
 interface DecisionRow {
   stage_number: number;
   decision: "APPROVED" | "REJECTED";
+  approver_auth_user_id?: string;
 }
 
 export async function processDecisionHandler(
@@ -133,24 +140,24 @@ if (approverError || !approvers || approvers.length === 0) {
   );
 }
 
-const scopedApprovers = approvers.filter((approver) => {
-  const subjectMatched =
-    approver.subject_work_context_id === null ||
-    approver.subject_work_context_id === (workflow.requester_work_context_id ?? null);
-
-  if (!subjectMatched) {
-    return false;
-  }
-
-  if (workflow.resource_code && workflow.action_code) {
-    return (
-      approver.resource_code === workflow.resource_code &&
-      approver.action_code === workflow.action_code
-    );
-  }
-
-  return approver.resource_code === null && approver.action_code === null;
-});
+const workContextMap = createWorkflowScopeContextMap(
+  await loadActiveCompanyWorkContexts(serviceRoleClient, workflow.company_id),
+);
+const requesterDepartmentWorkContextId = resolveDepartmentWorkflowScopeId(
+  {
+    requester_work_context_id: workflow.requester_work_context_id ?? null,
+  },
+  workContextMap,
+);
+const scopedApprovers = pickScopedApproverRules(
+  {
+    resource_code: workflow.resource_code,
+    action_code: workflow.action_code,
+    requester_work_context_id: workflow.requester_work_context_id ?? null,
+    requester_department_work_context_id: requesterDepartmentWorkContextId,
+  },
+  approvers,
+);
 
 if (scopedApprovers.length === 0) {
   return errorResponse(
@@ -160,18 +167,19 @@ if (scopedApprovers.length === 0) {
   );
 }
 
-// Check if current user is valid approver
-const matchingApprover = scopedApprovers.find((a) => {
-  if (a.approver_user_id) {
-    return a.approver_user_id === ctx.auth_user_id;
-  }
-  if (a.approver_role_code) {
-    return a.approver_role_code === ctx.roleCode;
-  }
-  return false;
-});
+const matchingApprovers = scopedApprovers
+  .filter((a) => {
+    if (a.approver_user_id) {
+      return a.approver_user_id === ctx.auth_user_id;
+    }
+    if (a.approver_role_code) {
+      return a.approver_role_code === ctx.roleCode;
+    }
+    return false;
+  })
+  .sort((left, right) => left.approval_stage - right.approval_stage);
 
-if (!matchingApprover) {
+if (matchingApprovers.length === 0) {
   return errorResponse(
     "NOT_AUTHORIZED_APPROVER",
     "User is not authorized to approve this request",
@@ -226,8 +234,66 @@ if (!aclCheck) {
 }
 
 // =========================================================
-// STEP 5: Duplicate Decision Prevention
+// STEP 5: Decision Fetch + Stage Discipline
 // =========================================================
+
+const {
+  data: allDecisions,
+  error: allDecisionError,
+} = (await serviceRoleClient
+  .schema("acl").from("workflow_decisions")
+  .select("stage_number, decision, approver_auth_user_id")
+  .eq("request_id", workflow.request_id)) as {
+  data: DecisionRow[] | null;
+  error: unknown;
+};
+
+if (allDecisionError) {
+  return errorResponse(
+    "DECISION_FETCH_FAILED",
+    "Failed to fetch workflow decisions",
+    ctx.request_id
+  );
+}
+
+if ((allDecisions ?? []).some((row) => row.approver_auth_user_id === ctx.auth_user_id)) {
+  return errorResponse(
+    "DUPLICATE_DECISION",
+    "Decision already submitted for this request",
+    ctx.request_id
+  );
+}
+
+const distinctStages = [
+  ...new Set(scopedApprovers.map((approver) => approver.approval_stage)),
+].sort((left, right) => left - right);
+let matchingApprover = matchingApprovers[0] ?? null;
+
+// Sequential enforcement
+if (workflow.approval_type === "SEQUENTIAL") {
+  const decidedStages = new Set((allDecisions ?? []).map((row) => row.stage_number));
+  const expectedStage = distinctStages.find((stage) => !decidedStages.has(stage)) ?? null;
+
+  matchingApprover = expectedStage === null
+    ? null
+    : matchingApprovers.find((row) => row.approval_stage === expectedStage) ?? null;
+
+  if (!matchingApprover) {
+    return errorResponse(
+      "INVALID_STAGE_ORDER",
+      "Sequential approval must follow stage order",
+      ctx.request_id
+    );
+  }
+}
+
+if (!matchingApprover) {
+  return errorResponse(
+    "NOT_AUTHORIZED_APPROVER",
+    "User is not authorized to approve this request",
+    ctx.request_id
+  );
+}
 
 const { data: existingDecision, error: decisionCheckError } =
   await serviceRoleClient
@@ -252,54 +318,6 @@ if (existingDecision) {
     "Decision already submitted for this stage",
     ctx.request_id
   );
-}
-
-// =========================================================
-// STEP 6: Stage Discipline Enforcement
-// =========================================================
-
-// Fetch all decisions for this request
-const {
-  data: allDecisions,
-  error: allDecisionError,
-} = (await serviceRoleClient
-  .schema("acl").from("workflow_decisions")
-  .select("stage_number, decision")
-  .eq("request_id", workflow.request_id)) as {
-  data: DecisionRow[] | null;
-  error: unknown;
-};
-
-if (allDecisionError) {
-  return errorResponse(
-    "DECISION_FETCH_FAILED",
-    "Failed to fetch workflow decisions",
-    ctx.request_id
-  );
-}
-
-// Determine total stages from approver_map
-
-
-// Sequential enforcement
-if (workflow.approval_type === "SEQUENTIAL") {
-  const decidedStages = (allDecisions ?? []).map(
-  (d) => d.stage_number
-);
-
-  // Find lowest stage not yet decided
-  let expectedStage = 1;
-  while (decidedStages.includes(expectedStage)) {
-    expectedStage++;
-  }
-
-  if (matchingApprover.approval_stage !== expectedStage) {
-    return errorResponse(
-      "INVALID_STAGE_ORDER",
-      "Sequential approval must follow stage order",
-      ctx.request_id
-    );
-  }
 }
 
 // =========================================================
@@ -396,10 +414,6 @@ if (updatedDecisionError) {
   );
 }
 
-// Calculate distinct stage count
-const distinctStages = [
-  ...new Set(scopedApprovers.map((a) => a.approval_stage)),
-];
 const totalStages = distinctStages.length;
 
 // Call routing engine
