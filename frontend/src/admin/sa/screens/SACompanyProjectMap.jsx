@@ -104,7 +104,11 @@ export default function SACompanyProjectMap() {
         setProjectDetail(null);
         setCompanies([]);
       }
-    } catch {
+    } catch (err) {
+      console.error("PROJECT_LIST_LOAD_FAILED", {
+        project_id: preferredProjectId || null,
+        message: err?.message ?? "PROJECT_LIST_FAILED",
+      });
       setProjects([]);
       setProjectDetail(null);
       setCompanies([]);
@@ -128,7 +132,11 @@ export default function SACompanyProjectMap() {
       const data = await fetchProjectCompanyMap(projectId);
       setProjectDetail(data.project ?? null);
       setCompanies(data.companies ?? []);
-    } catch {
+    } catch (err) {
+      console.error("PROJECT_COMPANY_MAP_LOAD_FAILED", {
+        project_id: projectId,
+        message: err?.message ?? "PROJECT_COMPANY_MAP_FAILED",
+      });
       setProjectDetail(null);
       setCompanies([]);
       setError("Company project mapping could not be loaded right now.");
@@ -238,19 +246,35 @@ export default function SACompanyProjectMap() {
     setNotice("");
 
     try {
-      await postJson(
-        isMapped ? "/api/admin/project/unmap-company" : "/api/admin/project/map-company",
-        {
-          company_id: company.id,
-          project_id: projectDetail.id,
-        }
-      );
+      const path = isMapped
+        ? "/api/admin/project/unmap-company"
+        : "/api/admin/project/map-company";
+      const payload = {
+        company_id: company.id,
+        project_id: projectDetail.id,
+      };
+      const result = await postJson(path, payload);
+      console.info("PROJECT_COMPANY_MAP_TOGGLE_RESULT", {
+        path,
+        requested: payload,
+        persisted: result ?? null,
+      });
       setNotice(
         `Company ${company.company_code} ${isMapped ? "removed from" : "attached to"} ${projectDetail.project_code}.`
       );
       await loadCompanyMap(projectDetail.id);
-    } catch {
-      setError("Project mapping could not be saved right now.");
+    } catch (err) {
+      console.error("PROJECT_COMPANY_MAP_TOGGLE_FAILED", {
+        company_id: company.id,
+        project_id: projectDetail.id,
+        mapped_before: isMapped,
+        message: err?.message ?? "REQUEST_FAILED",
+      });
+      setError(
+        err instanceof Error
+          ? `Project mapping could not be saved. ${err.message}`
+          : "Project mapping could not be saved right now."
+      );
     } finally {
       setSaving(false);
     }

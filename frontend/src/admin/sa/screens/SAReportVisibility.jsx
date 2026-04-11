@@ -86,6 +86,12 @@ export default function SAReportVisibility() {
       });
       setDraft((current) => ({ ...current, ...preferred }));
     } catch (err) {
+      console.error("REPORT_VISIBILITY_WORKSPACE_LOAD_FAILED", {
+        code: err?.code ?? null,
+        decisionTrace: err?.decisionTrace ?? null,
+        requestId: err?.requestId ?? null,
+        message: err?.message ?? "REPORT_VISIBILITY_WORKSPACE_LIST_FAILED",
+      });
       setError(
         err instanceof Error
           ? `Report visibility workspace could not be loaded. ${err.message}`
@@ -235,7 +241,7 @@ export default function SAReportVisibility() {
     setNotice("");
 
     try {
-      await saveViewerRule({
+      const payload = {
         viewer_id: draft.viewer_id ?? undefined,
         company_id: draft.company_id,
         module_code: draft.module_code,
@@ -244,11 +250,32 @@ export default function SAReportVisibility() {
         subject_work_context_id: draft.subject_work_context_id || undefined,
         viewer_user_id: draft.target_mode === "user" ? draft.viewer_user_id : undefined,
         viewer_role_code: draft.target_mode === "role" ? draft.viewer_role_code : undefined,
+      };
+      const savedRule = await saveViewerRule(payload);
+      console.info("REPORT_VIEWER_RULE_SAVE_RESULT", {
+        requested: payload,
+        persisted: savedRule ?? null,
       });
       await loadWorkspace({ ...draft, viewer_id: null });
       setDraft((current) => ({ ...current, viewer_id: null }));
       setNotice("Report visibility rule saved.");
     } catch (err) {
+      console.error("REPORT_VIEWER_RULE_SAVE_FAILED", {
+        requested: {
+          viewer_id: draft.viewer_id ?? null,
+          company_id: draft.company_id,
+          module_code: draft.module_code,
+          resource_code: draft.resource_code,
+          action_code: draft.action_code,
+          subject_work_context_id: draft.subject_work_context_id || null,
+          viewer_user_id: draft.target_mode === "user" ? draft.viewer_user_id : null,
+          viewer_role_code: draft.target_mode === "role" ? draft.viewer_role_code : null,
+        },
+        code: err?.code ?? null,
+        decisionTrace: err?.decisionTrace ?? null,
+        requestId: err?.requestId ?? null,
+        message: err?.message ?? "REPORT_VIEWER_RULE_UPSERT_FAILED",
+      });
       setError(
         err instanceof Error
           ? `Report visibility rule could not be saved. ${err.message}`
@@ -276,9 +303,21 @@ export default function SAReportVisibility() {
 
     try {
       await deleteViewerRule(rule.viewer_id);
+      console.info("REPORT_VIEWER_RULE_DELETE_RESULT", {
+        viewer_id: rule.viewer_id,
+        resource_code: rule.resource_code ?? null,
+        module_code: rule.module_code ?? null,
+      });
       await loadWorkspace(draft);
       setNotice("Report visibility rule deleted.");
     } catch (err) {
+      console.error("REPORT_VIEWER_RULE_DELETE_FAILED", {
+        viewer_id: rule.viewer_id,
+        code: err?.code ?? null,
+        decisionTrace: err?.decisionTrace ?? null,
+        requestId: err?.requestId ?? null,
+        message: err?.message ?? "REPORT_VIEWER_RULE_DELETE_FAILED",
+      });
       setError(
         err instanceof Error
           ? `Report visibility rule could not be deleted. ${err.message}`

@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
+import { log } from "../../../_lib/logger.ts";
 
 function assertAdmin(
   ctx: { context: ContextResolution },
@@ -41,6 +42,13 @@ export async function mapCompanyToProjectHandler(
     const projectId = body.project_id?.trim();
 
     if (!companyId || !projectId) {
+      log({
+        level: "SECURITY",
+        request_id: ctx.request_id,
+        gate_id: "9.4C",
+        event: "PROJECT_COMPANY_MAP_INVALID_INPUT",
+        meta: body,
+      });
       return errorResponse(
         "INVALID_INPUT",
         "company_id and project_id required",
@@ -59,6 +67,13 @@ export async function mapCompanyToProjectHandler(
       .maybeSingle();
 
     if (!company) {
+      log({
+        level: "SECURITY",
+        request_id: ctx.request_id,
+        gate_id: "9.4C",
+        event: "PROJECT_COMPANY_MAP_COMPANY_NOT_FOUND",
+        meta: { company_id: companyId, project_id: projectId },
+      });
       return errorResponse(
         "COMPANY_NOT_FOUND",
         "company not found",
@@ -74,6 +89,13 @@ export async function mapCompanyToProjectHandler(
       .maybeSingle();
 
     if (!project) {
+      log({
+        level: "SECURITY",
+        request_id: ctx.request_id,
+        gate_id: "9.4C",
+        event: "PROJECT_COMPANY_MAP_PROJECT_NOT_FOUND",
+        meta: { company_id: companyId, project_id: projectId },
+      });
       return errorResponse(
         "PROJECT_NOT_FOUND",
         "project not found",
@@ -90,6 +112,13 @@ export async function mapCompanyToProjectHandler(
       .maybeSingle();
 
     if (existing) {
+      log({
+        level: "INFO",
+        request_id: ctx.request_id,
+        gate_id: "9.4C",
+        event: "PROJECT_COMPANY_MAP_ALREADY_MAPPED",
+        meta: { company_id: companyId, project_id: projectId },
+      });
       return okResponse(
         {
           status: "ALREADY_MAPPED",
@@ -109,6 +138,13 @@ export async function mapCompanyToProjectHandler(
       });
 
     if (error) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "9.4C",
+        event: "PROJECT_COMPANY_MAP_FAILED",
+        meta: { company_id: companyId, project_id: projectId, error: error.message },
+      });
       return errorResponse(
         "PROJECT_COMPANY_MAPPING_FAILED",
         "project company mapping failed",
@@ -116,6 +152,13 @@ export async function mapCompanyToProjectHandler(
       );
     }
 
+    log({
+      level: "INFO",
+      request_id: ctx.request_id,
+      gate_id: "9.4C",
+      event: "PROJECT_COMPANY_MAPPED",
+      meta: { company_id: companyId, project_id: projectId },
+    });
     return okResponse(
       {
         company_id: companyId,
@@ -124,6 +167,13 @@ export async function mapCompanyToProjectHandler(
       ctx.request_id,
     );
   } catch (err) {
+    log({
+      level: "ERROR",
+      request_id: ctx.request_id,
+      gate_id: "9.4C",
+      event: "PROJECT_COMPANY_MAP_EXCEPTION",
+      meta: { error: String(err) },
+    });
     return errorResponse(
       (err as Error).message || "PROJECT_COMPANY_MAP_EXCEPTION",
       "project company map exception",

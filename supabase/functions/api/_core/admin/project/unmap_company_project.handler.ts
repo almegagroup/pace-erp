@@ -11,6 +11,7 @@
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
+import { log } from "../../../_lib/logger.ts";
 
 function assertAdmin(
   ctx: { context: ContextResolution },
@@ -41,6 +42,13 @@ export async function unmapCompanyProjectHandler(
     const projectId = body.project_id?.trim();
 
     if (!companyId || !projectId) {
+      log({
+        level: "SECURITY",
+        request_id: ctx.request_id,
+        gate_id: "9.4D",
+        event: "PROJECT_COMPANY_UNMAP_INVALID_INPUT",
+        meta: body,
+      });
       return errorResponse(
         "INVALID_INPUT",
         "company_id and project_id required",
@@ -59,6 +67,13 @@ export async function unmapCompanyProjectHandler(
       .maybeSingle();
 
     if (!existing) {
+      log({
+        level: "INFO",
+        request_id: ctx.request_id,
+        gate_id: "9.4D",
+        event: "PROJECT_COMPANY_UNMAP_NO_MAPPING",
+        meta: { company_id: companyId, project_id: projectId },
+      });
       return okResponse(
         {
           status: "NO_MAPPING_FOUND",
@@ -76,6 +91,13 @@ export async function unmapCompanyProjectHandler(
       .eq("project_id", projectId);
 
     if (projectModulesError) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "9.4D",
+        event: "PROJECT_COMPANY_UNMAP_MODULE_LOOKUP_FAILED",
+        meta: { company_id: companyId, project_id: projectId, error: projectModulesError.message },
+      });
       return errorResponse(
         "PROJECT_MODULE_LIST_FAILED",
         "project module list failed",
@@ -96,6 +118,13 @@ export async function unmapCompanyProjectHandler(
         .in("module_code", moduleCodes);
 
       if (moduleCleanupError) {
+        log({
+          level: "ERROR",
+          request_id: ctx.request_id,
+          gate_id: "9.4D",
+          event: "PROJECT_COMPANY_UNMAP_MODULE_CLEANUP_FAILED",
+          meta: { company_id: companyId, project_id: projectId, error: moduleCleanupError.message },
+        });
         return errorResponse(
           "PROJECT_MODULE_CLEANUP_FAILED",
           "project module cleanup failed",
@@ -112,6 +141,13 @@ export async function unmapCompanyProjectHandler(
       .eq("project_id", projectId);
 
     if (error) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "9.4D",
+        event: "PROJECT_COMPANY_UNMAP_FAILED",
+        meta: { company_id: companyId, project_id: projectId, error: error.message },
+      });
       return errorResponse(
         "PROJECT_COMPANY_UNMAP_FAILED",
         "project company unmap failed",
@@ -119,6 +155,13 @@ export async function unmapCompanyProjectHandler(
       );
     }
 
+    log({
+      level: "INFO",
+      request_id: ctx.request_id,
+      gate_id: "9.4D",
+      event: "PROJECT_COMPANY_UNMAPPED",
+      meta: { company_id: companyId, project_id: projectId },
+    });
     return okResponse(
       {
         status: "UNMAPPED",
@@ -128,6 +171,13 @@ export async function unmapCompanyProjectHandler(
       ctx.request_id,
     );
   } catch (err) {
+    log({
+      level: "ERROR",
+      request_id: ctx.request_id,
+      gate_id: "9.4D",
+      event: "PROJECT_COMPANY_UNMAP_EXCEPTION",
+      meta: { error: String(err) },
+    });
     return errorResponse(
       (err as Error).message || "PROJECT_COMPANY_UNMAP_EXCEPTION",
       "project company unmap exception",

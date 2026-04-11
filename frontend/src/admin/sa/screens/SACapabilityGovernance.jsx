@@ -15,7 +15,17 @@ async function readJsonSafe(r){try{return await r.clone().json();}catch{return n
 async function fetchApi(path,options){
   const r=await fetch(`${import.meta.env.VITE_API_BASE}${path}`,{credentials:"include",...options});
   const j=await readJsonSafe(r);
-  if(!r.ok||!j?.ok){const code=j?.code??"REQUEST_FAILED";const req=j?.request_id?` | Req ${j.request_id}`:"";const trace=j?.decision_trace?` | ${j.decision_trace}`:"";throw new Error(`${code}${trace}${req}`);}
+  if(!r.ok||!j?.ok){
+    const code=j?.code??"REQUEST_FAILED";
+    const req=j?.request_id?` | Req ${j.request_id}`:"";
+    const trace=j?.decision_trace?` | ${j.decision_trace}`:"";
+    const publicMessage=typeof j?.message==="string"&&j.message.trim().length>0?` | ${j.message.trim()}`:"";
+    const error=new Error(`${code}${trace}${publicMessage}${req}`);
+    error.code=code;
+    error.requestId=j?.request_id??null;
+    error.decisionTrace=j?.decision_trace??null;
+    throw error;
+  }
   return j.data??{};
 }
 const newCap=()=>({capability_code:"",capability_name:"",description:""});
@@ -55,18 +65,18 @@ export default function SACapabilityGovernance(){
       setCompanies(nextCompanies); setCaps(nextCaps);
       if(!companyId) setCompanyId(nextCompanies[0]?.id??"");
       if(!capCode) setCapCode(nextCaps[0]?.capability_code??"");
-    }catch(err){setError(`Capability governance bootstrap could not be loaded. ${err.message??"REQUEST_FAILED"}`);}finally{setLoading(false);}
+    }catch(err){console.error("CAPABILITY_BOOTSTRAP_LOAD_FAILED",{message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setError(`Capability governance bootstrap could not be loaded. ${err.message??"REQUEST_FAILED"}`);}finally{setLoading(false);}
   }
   async function loadCatalog(){
     setCatalogLoading(true);
     try{const data=await fetchApi("/api/admin/approval/resource-policy"); setCatalog(data.resources??[]);}
-    catch(err){setCatalog([]); setError(`Capability resource catalog could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
+    catch(err){console.error("CAPABILITY_CATALOG_LOAD_FAILED",{message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setCatalog([]); setError(`Capability resource catalog could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
     finally{setCatalogLoading(false);}
   }
   async function loadCapRows(code=capCode){
     if(!code){setCapRows([]);return;}
     try{const data=await fetchApi(`/api/admin/acl/capability-actions?capability_code=${encodeURIComponent(code)}`); setCapRows(data.permissions??[]);}
-    catch(err){setCapRows([]); setError(`Capability action rows could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
+    catch(err){console.error("CAPABILITY_ROWS_LOAD_FAILED",{capability_code:code||null,message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setCapRows([]); setError(`Capability action rows could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
   }
   async function loadCompanyState(id=companyId){
     setBindingDrawerOpen(false);
@@ -75,12 +85,12 @@ export default function SACapabilityGovernance(){
       const [w,v]=await Promise.all([fetchApi(`/api/admin/acl/work-contexts?company_id=${encodeURIComponent(id)}`),fetchApi(`/api/admin/acl/versions?company_id=${encodeURIComponent(id)}`)]);
       const next=w.work_contexts??[]; setContexts(next); setVersions(v.versions??[]);
       setCtxId((cur)=>next.some((r)=>r.work_context_id===cur)?cur:next[0]?.work_context_id??"");
-    }catch(err){setContexts([]);setVersions([]);setError(`Company capability state could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
+    }catch(err){console.error("COMPANY_CAPABILITY_STATE_LOAD_FAILED",{company_id:id||null,message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setContexts([]);setVersions([]);setError(`Company capability state could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
   }
   async function loadCtxCaps(id=ctxId){
     if(!id){setCtxCaps([]);return;}
     try{const d=await fetchApi(`/api/admin/acl/work-context-capabilities?work_context_id=${encodeURIComponent(id)}`); setCtxCaps(d.capabilities??[]);}
-    catch(err){setCtxCaps([]); setError(`Work-context capability bindings could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
+    catch(err){console.error("WORK_CONTEXT_CAPABILITIES_LOAD_FAILED",{work_context_id:id||null,message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setCtxCaps([]); setError(`Work-context capability bindings could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
   }
   async function loadContextCapabilityMap(nextContexts=contexts){
     if(nextContexts.length===0){setContextCapabilityMap({}); return;}
@@ -101,6 +111,7 @@ export default function SACapabilityGovernance(){
       }
       setContextCapabilityMap(nextMap);
     }catch(err){
+      console.error("CONTEXT_CAPABILITY_MAP_LOAD_FAILED",{message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});
       setContextCapabilityMap({});
       setError(`Capability-to-context status could not be loaded. ${err.message??"REQUEST_FAILED"}`);
     }finally{
@@ -164,8 +175,8 @@ export default function SACapabilityGovernance(){
   }
   async function postAndRefresh(path,payload,refreshFn,successMessage){
     setSaving(true); setError(""); setNotice("");
-    try{await fetchApi(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}); await refreshFn(); setNotice(successMessage);}
-    catch(err){setError(`Governance request could not be completed. ${err.message??"REQUEST_FAILED"}`);}
+    try{const result=await fetchApi(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}); console.info("CAPABILITY_GOVERNANCE_ACTION_RESULT",{path,requested:payload,persisted:result??null}); await refreshFn(); setNotice(successMessage);}
+    catch(err){console.error("CAPABILITY_GOVERNANCE_ACTION_FAILED",{path,requested:payload,message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setError(`Governance request could not be completed. ${err.message??"REQUEST_FAILED"}`);}
     finally{setSaving(false);}
   }
   async function saveCap(){
@@ -173,9 +184,10 @@ export default function SACapabilityGovernance(){
     if(!code||!name){setError("Capability code and capability name are required."); return;}
     setSaving(true); setError(""); setNotice("");
     try{
-      await fetchApi("/api/admin/acl/capabilities",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:code,capability_name:name,description:capDraft.description.trim()})});
+      const result=await fetchApi("/api/admin/acl/capabilities",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:code,capability_name:name,description:capDraft.description.trim()})});
+      console.info("CAPABILITY_PACK_SAVE_RESULT",{requested:{capability_code:code,capability_name:name,description:capDraft.description.trim()},persisted:result??null});
       await loadBootstrap(); setCapCode(code); setDrafts({}); setCapDraft(newCap()); setNotice(`Capability ${code} saved successfully.`);
-    }catch(err){setError(`Capability pack could not be saved. ${err.message??"REQUEST_FAILED"}`);}finally{setSaving(false);}
+    }catch(err){console.error("CAPABILITY_PACK_SAVE_FAILED",{requested:{capability_code:code,capability_name:name,description:capDraft.description.trim()},message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setError(`Capability pack could not be saved. ${err.message??"REQUEST_FAILED"}`);}finally{setSaving(false);}
   }
   async function saveMatrix(){
     if(!capCode){setError("Create or choose one capability pack first."); return;}
@@ -188,8 +200,9 @@ export default function SACapabilityGovernance(){
         if(!explicit){ if(hadExisting){ await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capCode,resource_code:row.resource.resource_code})}); } continue; }
         await fetchApi("/api/admin/acl/capability-actions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capCode,resource_code:row.resource.resource_code,can_view:payload.can_view,can_write:payload.can_write,can_edit:payload.can_edit,can_delete:payload.can_delete,can_approve:payload.can_approve,can_export:payload.can_export,denied_actions:payload.denied_actions})});
       }
+      console.info("CAPABILITY_MATRIX_SAVE_RESULT",{capability_code:capCode,module_code:moduleCode,project_code:projectCode||null});
       await loadCapRows(capCode); setNotice(`${capCode} capability-er jonno ${moduleCode} matrix save hoyeche.`);
-    }catch(err){setError(`Capability matrix could not be saved. ${err.message??"REQUEST_FAILED"}`);}finally{setSaving(false);}
+    }catch(err){console.error("CAPABILITY_MATRIX_SAVE_FAILED",{capability_code:capCode,module_code:moduleCode,project_code:projectCode||null,selected_resource_code:selectedResourceCode||null,message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setError(`Capability matrix could not be saved. ${err.message??"REQUEST_FAILED"}`);}finally{setSaving(false);}
   }
   async function clearSelected(){
     if(!selectedRow) return;

@@ -39,6 +39,13 @@ export async function upsertReportViewerRuleHandler(
     const body = (await req.json()) as Partial<UpsertViewerInput>;
 
     if (!body.company_id || !body.module_code || !body.resource_code || !body.action_code) {
+      log({
+        level: "SECURITY",
+        request_id: requestId,
+        gate_id: "9.11",
+        event: "REPORT_VIEWER_RULE_INVALID_INPUT",
+        meta: body,
+      });
       return errorResponse(
         "INVALID_INPUT",
         "company_id, module_code, resource_code, action_code required",
@@ -47,6 +54,13 @@ export async function upsertReportViewerRuleHandler(
     }
 
     if (!["VIEW", "EXPORT"].includes(body.action_code)) {
+      log({
+        level: "SECURITY",
+        request_id: requestId,
+        gate_id: "9.11",
+        event: "REPORT_VIEWER_RULE_INVALID_ACTION",
+        meta: body,
+      });
       return errorResponse(
         "INVALID_ACTION_CODE",
         "action_code must be VIEW or EXPORT",
@@ -58,6 +72,13 @@ export async function upsertReportViewerRuleHandler(
       (body.viewer_role_code && body.viewer_user_id) ||
       (!body.viewer_role_code && !body.viewer_user_id)
     ) {
+      log({
+        level: "SECURITY",
+        request_id: requestId,
+        gate_id: "9.11",
+        event: "REPORT_VIEWER_RULE_INVALID_TARGET",
+        meta: body,
+      });
       return errorResponse(
         "INVALID_VIEWER_TARGET",
         "Provide either viewer_role_code or viewer_user_id",
@@ -69,6 +90,13 @@ export async function upsertReportViewerRuleHandler(
     if (body.viewer_role_code) {
       roleCode = normalizeRoleCode(body.viewer_role_code);
       if (!roleCode) {
+        log({
+          level: "SECURITY",
+          request_id: requestId,
+          gate_id: "9.11",
+          event: "REPORT_VIEWER_RULE_INVALID_ROLE",
+          meta: body,
+        });
         return errorResponse("INVALID_ROLE_CODE", "Unknown role", requestId);
       }
     }
@@ -122,6 +150,13 @@ export async function upsertReportViewerRuleHandler(
         : await existingQuery.maybeSingle();
 
     if (lookupError) {
+      log({
+        level: "ERROR",
+        request_id: requestId,
+        gate_id: "9.11",
+        event: "REPORT_VIEWER_RULE_LOOKUP_FAILED",
+        meta: { error: lookupError.message },
+      });
       return errorResponse("REPORT_VIEWER_RULE_LOOKUP_FAILED", "Lookup failed", requestId);
     }
 
@@ -163,8 +198,22 @@ export async function upsertReportViewerRuleHandler(
       );
     }
 
+    log({
+      level: "INFO",
+      request_id: requestId,
+      gate_id: "9.11",
+      event: "REPORT_VIEWER_RULE_UPSERTED",
+      meta: payload,
+    });
     return okResponse(payload, requestId);
   } catch (err) {
+    log({
+      level: "ERROR",
+      request_id: requestId,
+      gate_id: "9.11",
+      event: "REPORT_VIEWER_RULE_EXCEPTION",
+      meta: { error: String(err) },
+    });
     return errorResponse(
       (err as Error).message || "REQUEST_BLOCKED",
       "Unhandled error",

@@ -1,6 +1,7 @@
 import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
+import { log } from "../../../_lib/logger.ts";
 
 function assertAdmin(
   ctx: { context: ContextResolution },
@@ -100,12 +101,33 @@ export async function listResourceApprovalPolicyHandler(
     ]);
 
     if (resourceMapError) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "SA.RESOURCE_POLICY",
+        event: "RESOURCE_POLICY_RESOURCE_MAP_LOOKUP_FAILED",
+        meta: { error: resourceMapError.message },
+      });
       return errorResponse("RESOURCE_MAP_LIST_FAILED", resourceMapError.message, ctx.request_id);
     }
     if (moduleError) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "SA.RESOURCE_POLICY",
+        event: "RESOURCE_POLICY_MODULE_LOOKUP_FAILED",
+        meta: { error: moduleError.message },
+      });
       return errorResponse("MODULE_LIST_FAILED", moduleError.message, ctx.request_id);
     }
     if (projectError) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "SA.RESOURCE_POLICY",
+        event: "RESOURCE_POLICY_PROJECT_LOOKUP_FAILED",
+        meta: { error: projectError.message },
+      });
       return errorResponse("PROJECT_LIST_FAILED", projectError.message, ctx.request_id);
     }
 
@@ -130,9 +152,23 @@ export async function listResourceApprovalPolicyHandler(
       ]);
 
     if (menuError) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "SA.RESOURCE_POLICY",
+        event: "RESOURCE_POLICY_MENU_LOOKUP_FAILED",
+        meta: { error: menuError.message, resource_count: resourceCodes.length },
+      });
       return errorResponse("MENU_RESOURCE_LIST_FAILED", menuError.message, ctx.request_id);
     }
     if (policyError) {
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        gate_id: "SA.RESOURCE_POLICY",
+        event: "RESOURCE_POLICY_LIST_FAILED",
+        meta: { error: policyError.message, resource_count: resourceCodes.length },
+      });
       return errorResponse("RESOURCE_POLICY_LIST_FAILED", policyError.message, ctx.request_id);
     }
 
@@ -178,6 +214,13 @@ export async function listResourceApprovalPolicyHandler(
 
     return okResponse({ resources }, ctx.request_id);
   } catch (err) {
+    log({
+      level: "ERROR",
+      request_id: ctx.request_id,
+      gate_id: "SA.RESOURCE_POLICY",
+      event: "RESOURCE_POLICY_LIST_EXCEPTION",
+      meta: { error: String(err) },
+    });
     return errorResponse(
       (err as Error).message || "RESOURCE_POLICY_LIST_EXCEPTION",
       "resource approval policy list exception",

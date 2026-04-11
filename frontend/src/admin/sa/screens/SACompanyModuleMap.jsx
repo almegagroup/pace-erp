@@ -126,7 +126,11 @@ export default function SACompanyModuleMap() {
 
       setCompanies(rows);
       setSelectedCompanyId(nextCompanyId);
-    } catch {
+    } catch (err) {
+      console.error("COMPANY_MODULE_COMPANY_LOAD_FAILED", {
+        company_id: preferredCompanyId || null,
+        message: err?.message ?? "COMPANY_LIST_FAILED",
+      });
       setCompanies([]);
       setSelectedCompanyId("");
       setModulePayload(null);
@@ -160,7 +164,12 @@ export default function SACompanyModuleMap() {
         modules: nextModules,
       });
       setSelectedModuleCode(nextModuleCode);
-    } catch {
+    } catch (err) {
+      console.error("COMPANY_MODULE_LOAD_FAILED", {
+        company_id: companyId,
+        module_code: preferredModuleCode || null,
+        message: err?.message ?? "COMPANY_MODULE_LIST_FAILED",
+      });
       setModulePayload(null);
       setSelectedModuleCode("");
       setError("Company module rows could not be loaded right now.");
@@ -287,22 +296,38 @@ export default function SACompanyModuleMap() {
     setNotice("");
 
     try {
-      await postJson(
+      const path =
         nextAction === "enable"
           ? "/api/admin/acl/company-module/enable"
-          : "/api/admin/acl/company-module/disable",
-        {
-          company_id: selectedCompany.id,
-          module_code: row.module_code,
-        },
-      );
+          : "/api/admin/acl/company-module/disable";
+      const payload = {
+        company_id: selectedCompany.id,
+        module_code: row.module_code,
+      };
+
+      const result = await postJson(path, payload);
+      console.info("COMPANY_MODULE_TOGGLE_RESULT", {
+        path,
+        requested: payload,
+        persisted: result ?? null,
+      });
 
       await loadModules(selectedCompany.id, row.module_code);
       setNotice(
         `Module ${row.module_code} ${nextAction === "enable" ? "enabled for" : "disabled for"} ${selectedCompany.company_code}.`,
       );
-    } catch {
-      setError("Company module mapping could not be saved right now.");
+    } catch (err) {
+      console.error("COMPANY_MODULE_TOGGLE_FAILED", {
+        company_id: selectedCompany.id,
+        module_code: row.module_code,
+        action: nextAction,
+        message: err?.message ?? "COMPANY_MODULE_TOGGLE_FAILED",
+      });
+      setError(
+        err instanceof Error
+          ? `Company module mapping could not be saved. ${err.message}`
+          : "Company module mapping could not be saved right now."
+      );
     } finally {
       setSaving(false);
     }

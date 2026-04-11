@@ -86,6 +86,12 @@ export default function SAApprovalPolicy() {
         "";
       setSelectedResourceCode(nextSelectedResourceCode);
     } catch (err) {
+      console.error("RESOURCE_POLICY_WORKSPACE_LOAD_FAILED", {
+        code: err?.code ?? null,
+        requestId: err?.requestId ?? null,
+        decisionTrace: err?.decisionTrace ?? null,
+        message: err?.message ?? "RESOURCE_POLICY_LIST_FAILED",
+      });
       setResources([]);
       setSelectedResourceCode("");
       setError(
@@ -177,8 +183,24 @@ export default function SAApprovalPolicy() {
         max_approvers: approvalRequired ? Number(maxApprovers) : 3,
       });
       await loadWorkspace(selectedResource.resource_code);
+      console.info("RESOURCE_POLICY_SAVE_RESULT", {
+        resource_code: selectedResource.resource_code,
+        action_code: actionCode,
+        approval_required: approvalRequired,
+        approval_type: approvalRequired ? approvalType : null,
+        min_approvers: approvalRequired ? Number(minApprovers) : 1,
+        max_approvers: approvalRequired ? Number(maxApprovers) : 3,
+      });
       setNotice(`Approval policy saved for ${selectedResource.resource_code} | ${actionCode}.`);
     } catch (err) {
+      console.error("RESOURCE_POLICY_SAVE_FAILED", {
+        resource_code: selectedResource.resource_code,
+        action_code: actionCode,
+        code: err?.code ?? null,
+        requestId: err?.requestId ?? null,
+        decisionTrace: err?.decisionTrace ?? null,
+        message: err?.message ?? "RESOURCE_POLICY_UPSERT_FAILED",
+      });
       setError(
         err instanceof Error
           ? `Approval policy could not be saved. ${err.message}`
