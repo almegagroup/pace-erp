@@ -90,21 +90,37 @@ export async function updateUserScopeHandler(
 
     const db = getServiceRoleClientWithContext(ctx.context);
 
-    const { data: activeBusinessCompanies } = await db
+    const { data: activeBusinessCompanies, error: activeBusinessCompaniesError } = await db
       .schema("erp_master").from("companies")
       .select("id")
       .eq("status", "ACTIVE")
       .eq("company_kind", "BUSINESS");
 
+    if (activeBusinessCompaniesError) {
+      return blocked(
+        `USER_SCOPE_COMPANY_LOOKUP_FAILED:${activeBusinessCompaniesError.message}`,
+        "business company lookup failed",
+        ctx,
+      );
+    }
+
     const activeBusinessCompanyIds = new Set(
       (activeBusinessCompanies ?? []).map((row) => row.id),
     );
 
-    const { data: user } = await db
+    const { data: user, error: userLookupError } = await db
       .schema("erp_core").from("users")
       .select("auth_user_id")
       .eq("auth_user_id", targetAuthUserId)
       .maybeSingle();
+
+    if (userLookupError) {
+      return blocked(
+        `USER_SCOPE_USER_LOOKUP_FAILED:${userLookupError.message}`,
+        "user lookup failed",
+        ctx,
+      );
+    }
 
     if (!user) {
       return blocked(
@@ -114,11 +130,19 @@ export async function updateUserScopeHandler(
       );
     }
 
-    const { data: roleRow } = await db
+    const { data: roleRow, error: roleLookupError } = await db
       .schema("erp_acl").from("user_roles")
       .select("role_code")
       .eq("auth_user_id", targetAuthUserId)
       .maybeSingle();
+
+    if (roleLookupError) {
+      return blocked(
+        `USER_SCOPE_ROLE_LOOKUP_FAILED:${roleLookupError.message}`,
+        "role lookup failed",
+        ctx,
+      );
+    }
 
     if (!roleRow?.role_code) {
       return blocked(
@@ -142,14 +166,22 @@ export async function updateUserScopeHandler(
       );
     }
 
-    const { data: projectCompanyLinks } = projectIds.length === 0
-      ? { data: [] }
+    const { data: projectCompanyLinks, error: projectCompanyLinksError } = projectIds.length === 0
+      ? { data: [], error: null }
       : await db
         .schema("erp_map")
         .from("company_projects")
         .select("project_id, company_id")
         .in("project_id", projectIds)
         .in("company_id", eligibleCompanyIds);
+
+    if (projectCompanyLinksError) {
+      return blocked(
+        `USER_SCOPE_PROJECT_LINK_LOOKUP_FAILED:${projectCompanyLinksError.message}`,
+        "project company mapping lookup failed",
+        ctx,
+      );
+    }
 
     const linkedProjectIds = [...new Set(
       (projectCompanyLinks ?? [])
@@ -160,8 +192,8 @@ export async function updateUserScopeHandler(
         .map((row) => row.project_id)
     )];
 
-    const { data: activeProjects } = linkedProjectIds.length === 0
-      ? { data: [] }
+    const { data: activeProjects, error: activeProjectsError } = linkedProjectIds.length === 0
+      ? { data: [], error: null }
       : await db
         .schema("erp_master")
         .from("projects")
@@ -169,20 +201,46 @@ export async function updateUserScopeHandler(
         .in("id", linkedProjectIds)
         .eq("status", "ACTIVE");
 
+    if (activeProjectsError) {
+      return blocked(
+        `USER_SCOPE_PROJECT_LOOKUP_FAILED:${activeProjectsError.message}`,
+        "active project lookup failed",
+        ctx,
+      );
+    }
+
     const activeProjectIds = new Set((activeProjects ?? []).map((row) => row.id));
 
+    const linkedProjectIdSet = new Set(linkedProjectIds);
+    const droppedProjects = projectIds
+      .filter((projectId) => !(linkedProjectIdSet.has(projectId) && activeProjectIds.has(projectId)))
+      .map((projectId) => ({
+        project_id: projectId,
+        reason: linkedProjectIdSet.has(projectId)
+          ? "PROJECT_NOT_ACTIVE"
+          : "PROJECT_NOT_MAPPED_TO_SELECTED_COMPANY",
+      }));
+
     const persistedProjectIds = projectIds.filter((projectId) =>
-      linkedProjectIds.includes(projectId) && activeProjectIds.has(projectId)
+      linkedProjectIdSet.has(projectId) && activeProjectIds.has(projectId)
     );
 
-    const { data: validDepartments } = departmentIds.length === 0
-      ? { data: [] }
+    const { data: validDepartments, error: validDepartmentsError } = departmentIds.length === 0
+      ? { data: [], error: null }
       : await db
         .schema("erp_master").from("departments")
         .select("id, company_id")
         .in("id", departmentIds)
         .in("company_id", eligibleCompanyIds)
         .eq("status", "ACTIVE");
+
+    if (validDepartmentsError) {
+      return blocked(
+        `USER_SCOPE_DEPARTMENT_LOOKUP_FAILED:${validDepartmentsError.message}`,
+        "department lookup failed",
+        ctx,
+      );
+    }
 
     const validDepartmentCount = (validDepartments ?? []).filter((department) =>
       eligibleCompanyIds.includes(department.company_id) &&
@@ -197,17 +255,19 @@ export async function updateUserScopeHandler(
       );
     }
 
-    const { data: validWorkContexts } = workCompanyIds.length === 0
-      ? await db
-        .schema("erp_acl").from("work_contexts")
-        .select("work_context_id, company_id, work_context_code, department_id")
-        .eq("is_active", true)
-        .in("company_id", eligibleCompanyIds)
-      : await db
-        .schema("erp_acl").from("work_contexts")
-        .select("work_context_id, company_id, work_context_code, department_id")
-        .eq("is_active", true)
-        .in("company_id", eligibleCompanyIds);
+    const { data: validWorkContexts, error: validWorkContextsError } = await db
+      .schema("erp_acl").from("work_contexts")
+      .select("work_context_id, company_id, work_context_code, department_id")
+      .eq("is_active", true)
+      .in("company_id", eligibleCompanyIds);
+
+    if (validWorkContextsError) {
+      return blocked(
+        `USER_SCOPE_WORK_CONTEXT_LOOKUP_FAILED:${validWorkContextsError.message}`,
+        "work context lookup failed",
+        ctx,
+      );
+    }
 
     const validWorkContextMap = new Map(
       (validWorkContexts ?? []).map((row) => [row.work_context_id, row]),
@@ -223,13 +283,41 @@ export async function updateUserScopeHandler(
       );
     }
 
-    const departmentWorkContextIds = departmentIds
-      .map((departmentId) =>
-        (validWorkContexts ?? []).find((row) => row.department_id === departmentId)?.work_context_id ??
-          null
+    if (departmentIds.length > 1) {
+      return blocked(
+        "USER_SCOPE_SINGLE_DEPARTMENT_REQUIRED",
+        "only one department can be assigned to a user",
+        ctx,
       );
+    }
 
-    if (departmentWorkContextIds.some((workContextId) => !workContextId)) {
+    const selectedDepartmentId = departmentIds[0] ?? null;
+
+    const explicitWorkContextRows = explicitWorkContextIds
+      .map((workContextId) => validWorkContextMap.get(workContextId) ?? null)
+      .filter(Boolean);
+
+    const filteredExplicitWorkContextRows = explicitWorkContextRows.filter((row) =>
+      !row?.department_id || row.department_id === selectedDepartmentId
+    );
+
+    const droppedWorkContexts = explicitWorkContextRows
+      .filter((row) => row?.department_id && row.department_id !== selectedDepartmentId)
+      .map((row) => ({
+        work_context_id: row?.work_context_id ?? null,
+        reason: "WORK_CONTEXT_DEPARTMENT_MISMATCH",
+        department_id: row?.department_id ?? null,
+      }))
+      .filter((row) => row.work_context_id);
+
+    const departmentWorkContextIds = selectedDepartmentId
+      ? [
+          (validWorkContexts ?? []).find((row) => row.department_id === selectedDepartmentId)?.work_context_id ??
+            null,
+        ]
+      : [];
+
+    if (selectedDepartmentId && departmentWorkContextIds.some((workContextId) => !workContextId)) {
       return blocked(
         "USER_SCOPE_DEPARTMENT_WORK_CONTEXT_MISSING",
         "one or more departments are missing a governed department work context",
@@ -237,34 +325,23 @@ export async function updateUserScopeHandler(
       );
     }
 
-    const derivedDepartmentIds = (
-      explicitWorkContextIds
-        .map((workContextId) => validWorkContextMap.get(workContextId)?.department_id ?? null)
-        .filter(Boolean) as string[]
-    );
-
-    const persistedDepartmentIds = [...new Set([
-      ...departmentIds,
-      ...derivedDepartmentIds,
-    ])];
+    const persistedDepartmentIds = selectedDepartmentId ? [selectedDepartmentId] : [];
 
     const autoDepartmentWorkContextIds = (departmentWorkContextIds.filter(Boolean)) as string[];
 
     const workContextIds = [...new Set([
       ...autoDepartmentWorkContextIds,
-      ...explicitWorkContextIds,
+      ...filteredExplicitWorkContextRows
+        .map((row) => row?.work_context_id ?? null)
+        .filter(Boolean),
     ])];
 
-    const explicitWorkContextRows = explicitWorkContextIds
-      .map((workContextId) => validWorkContextMap.get(workContextId) ?? null)
-      .filter(Boolean);
-
     const primaryWorkContextId =
-      explicitWorkContextRows.find((row) =>
+      filteredExplicitWorkContextRows.find((row) =>
         row?.company_id === parentCompanyId && row?.work_context_code === "GENERAL_OPS"
       )?.work_context_id ??
-      explicitWorkContextRows.find((row) => row?.company_id === parentCompanyId)?.work_context_id ??
-      explicitWorkContextRows[0]?.work_context_id ??
+      filteredExplicitWorkContextRows.find((row) => row?.company_id === parentCompanyId)?.work_context_id ??
+      filteredExplicitWorkContextRows[0]?.work_context_id ??
       departmentWorkContextIds.find(Boolean) ??
       null;
 
@@ -420,10 +497,25 @@ export async function updateUserScopeHandler(
     }
 
     const adjustments = {
-      dropped_project_ids: projectIds.filter((projectId) => !persistedProjectIds.includes(projectId)),
-      derived_department_ids: persistedDepartmentIds.filter((departmentId) => !departmentIds.includes(departmentId)),
+      dropped_project_ids: droppedProjects.map((row) => row.project_id),
+      dropped_projects: droppedProjects,
+      derived_department_ids: [],
+      dropped_work_context_ids: droppedWorkContexts.map((row) => row.work_context_id),
+      dropped_work_contexts: droppedWorkContexts,
       derived_work_context_ids: workContextIds.filter((workContextId) => !explicitWorkContextIds.includes(workContextId)),
     };
+
+    if (projectIds.length > 0) {
+      console.info("USER_SCOPE_PROJECT_VALIDATION", {
+        request_id: ctx.request_id,
+        target_auth_user_id: targetAuthUserId,
+        eligible_company_ids: eligibleCompanyIds,
+        requested_project_ids: projectIds,
+        linked_project_ids: linkedProjectIds,
+        active_project_ids: [...activeProjectIds],
+        dropped_projects: droppedProjects,
+      });
+    }
 
     console.info("USER_SCOPE_SAVE_APPLIED", {
       request_id: ctx.request_id,

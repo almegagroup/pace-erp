@@ -10,7 +10,11 @@ export function describeApiError(json, fallbackCode) {
   const code = json?.code ?? fallbackCode ?? "REQUEST_FAILED";
   const trace = json?.decision_trace ? ` | Trace ${json.decision_trace}` : "";
   const requestId = json?.request_id ? ` | Req ${json.request_id}` : "";
-  return `${code}${trace}${requestId}`;
+  const publicMessage =
+    typeof json?.message === "string" && json.message.trim().length > 0
+      ? ` | ${json.message.trim()}`
+      : "";
+  return `${code}${trace}${publicMessage}${requestId}`;
 }
 
 async function fetchJson(path, options = {}, fallbackCode = "REQUEST_FAILED") {
@@ -22,7 +26,12 @@ async function fetchJson(path, options = {}, fallbackCode = "REQUEST_FAILED") {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    throw new Error(describeApiError(json, fallbackCode));
+    const error = new Error(describeApiError(json, fallbackCode));
+    error.code = json?.code ?? fallbackCode ?? "REQUEST_FAILED";
+    error.requestId = json?.request_id ?? null;
+    error.decisionTrace = json?.decision_trace ?? null;
+    error.publicMessage = json?.message ?? null;
+    throw error;
   }
 
   return json.data;

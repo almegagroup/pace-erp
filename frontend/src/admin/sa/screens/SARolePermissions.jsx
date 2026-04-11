@@ -161,9 +161,17 @@ export default function SARolePermissions() {
     try {
       const data = await fetchRolePermissions(roleCode);
       setPermissions(data);
-    } catch {
+    } catch (err) {
+      console.error("ROLE_PERMISSION_LOAD_FAILED", {
+        role_code: roleCode,
+        message: err?.message ?? "ROLE_PERMISSION_LIST_FAILED",
+      });
       setPermissions([]);
-      setError("Unable to load role permissions right now.");
+      setError(
+        err instanceof Error
+          ? `Unable to load role permissions. ${err.message}`
+          : "Unable to load role permissions right now."
+      );
     } finally {
       setLoading(false);
     }
@@ -175,9 +183,16 @@ export default function SARolePermissions() {
     try {
       const resources = await fetchResourceCatalog();
       setResourceCatalog(resources);
-    } catch {
+    } catch (err) {
+      console.error("ROLE_PERMISSION_CATALOG_LOAD_FAILED", {
+        message: err?.message ?? "ROLE_PERMISSION_RESOURCE_CATALOG_FAILED",
+      });
       setResourceCatalog([]);
-      setError("Mapped business resources could not be loaded right now.");
+      setError(
+        err instanceof Error
+          ? `Mapped business resources could not be loaded. ${err.message}`
+          : "Mapped business resources could not be loaded right now."
+      );
     } finally {
       setCatalogLoading(false);
     }
@@ -333,6 +348,7 @@ export default function SARolePermissions() {
     setNotice("");
 
     try {
+      const changeSummary = [];
       for (const row of visibleMatrixRows) {
         const payload = row.draft;
         const hadExisting = Boolean(row.savedRow);
@@ -343,6 +359,10 @@ export default function SARolePermissions() {
             await disableRolePermission({
               role_code: selectedRoleCode,
               resource_code: row.resource.resource_code,
+            });
+            changeSummary.push({
+              resource_code: row.resource.resource_code,
+              action: "DISABLE",
             });
           }
           continue;
@@ -359,12 +379,34 @@ export default function SARolePermissions() {
           can_export: payload.can_export,
           denied_actions: payload.denied_actions,
         });
+        changeSummary.push({
+          resource_code: row.resource.resource_code,
+          action: "UPSERT",
+          denied_actions: payload.denied_actions,
+        });
       }
 
       await loadPermissions(selectedRoleCode);
+      console.info("ROLE_PERMISSION_MATRIX_SAVE_RESULT", {
+        role_code: selectedRoleCode,
+        project_code: selectedProjectCode || null,
+        module_code: selectedModuleCode || null,
+        changes: changeSummary,
+      });
       setNotice(`${selectedRoleCode} permissions were saved for the ${selectedModuleCode} module.`);
-    } catch {
-      setError("The role permission matrix could not be saved right now.");
+    } catch (err) {
+      console.error("ROLE_PERMISSION_MATRIX_SAVE_FAILED", {
+        role_code: selectedRoleCode,
+        project_code: selectedProjectCode || null,
+        module_code: selectedModuleCode || null,
+        selected_resource_code: selectedResourceCode || null,
+        message: err?.message ?? "ROLE_PERMISSION_UPSERT_FAILED",
+      });
+      setError(
+        err instanceof Error
+          ? `The role permission matrix could not be saved. ${err.message}`
+          : "The role permission matrix could not be saved right now."
+      );
     } finally {
       setSaving(false);
     }

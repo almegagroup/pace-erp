@@ -169,6 +169,8 @@ function humanizeDecisionTrace(decisionTrace) {
       return "One or more selected departments are outside the chosen company scope.";
     case "USER_SCOPE_DEPARTMENT_WORK_CONTEXT_MISSING":
       return "A selected department is missing its governed department work context.";
+    case "USER_SCOPE_SINGLE_DEPARTMENT_REQUIRED":
+      return "A user can hold only one HR department at a time.";
     case "USER_SCOPE_COMPANY_INVALID":
       return "One or more selected companies are inactive or not business companies.";
     default:
@@ -189,6 +191,47 @@ function describeAdjustmentSummary(adjustments) {
 
   if ((adjustments?.derived_work_context_ids ?? []).length > 0) {
     parts.push(`${adjustments.derived_work_context_ids.length} work context auto-derived`);
+  }
+
+  if ((adjustments?.dropped_work_context_ids ?? []).length > 0) {
+    parts.push(`${adjustments.dropped_work_context_ids.length} work context dropped`);
+  }
+
+  return parts.join(" | ");
+}
+
+function describeAdjustmentDetails(adjustments) {
+  const parts = [];
+
+  if ((adjustments?.dropped_projects ?? []).length > 0) {
+    const projectReasonSummary = adjustments.dropped_projects
+      .map((row) =>
+        row?.reason === "PROJECT_NOT_ACTIVE"
+          ? `${row.project_id} inactive`
+          : `${row.project_id} not mapped to the selected company scope`
+      )
+      .join(" | ");
+    parts.push(`Projects adjusted: ${projectReasonSummary}`);
+  }
+
+  if ((adjustments?.derived_department_ids ?? []).length > 0) {
+    parts.push(
+      `Departments auto-derived: ${adjustments.derived_department_ids.join(", ")}`
+    );
+  }
+
+  if ((adjustments?.derived_work_context_ids ?? []).length > 0) {
+    parts.push(
+      `Work contexts auto-derived: ${adjustments.derived_work_context_ids.join(", ")}`
+    );
+  }
+
+  if ((adjustments?.dropped_work_contexts ?? []).length > 0) {
+    parts.push(
+      `Work contexts removed because they belonged to a different department: ${adjustments.dropped_work_contexts
+        .map((row) => row.work_context_id)
+        .join(", ")}`
+    );
   }
 
   return parts.join(" | ");
@@ -374,6 +417,7 @@ export default function SAUserScope() {
             ? true
             : workCompanyIds.includes(workContext.company_id)
         )
+        .filter((workContext) => !workContext.department_id)
         .slice()
         .sort((left, right) =>
           `${left.company_code ?? ""}|${left.work_context_code ?? ""}|${left.work_context_name ?? ""}`.localeCompare(
@@ -476,16 +520,12 @@ export default function SAUserScope() {
   );
 
   useEffect(() => {
-    const allowedIds = new Set(
-      (options.work_contexts ?? [])
-        .filter((workContext) => workCompanyIds.includes(workContext.company_id))
-        .map((workContext) => workContext.id)
-    );
+    const allowedIds = new Set(availableWorkContexts.map((workContext) => workContext.id));
 
     setWorkContextIds((current) =>
       current.filter((workContextId) => allowedIds.has(workContextId))
     );
-  }, [options.work_contexts, workCompanyIds]);
+  }, [availableWorkContexts]);
 
   useEffect(() => {
     const allowedProjectIds = new Set(
@@ -527,6 +567,12 @@ export default function SAUserScope() {
       current.includes(value)
         ? current.filter((item) => item !== value)
         : [...current, value]
+    );
+  }
+
+  function toggleSingleDepartment(departmentId) {
+    setDepartmentIds((current) =>
+      current[0] === departmentId ? [] : [departmentId]
     );
   }
 
@@ -598,8 +644,9 @@ export default function SAUserScope() {
           persisted: savedScope,
           adjustments: savedScope?.adjustments ?? null,
         });
+        const adjustmentDetails = describeAdjustmentDetails(savedScope?.adjustments);
         setWarningNotice(
-          `User scope saved with backend adjustments. ${adjustmentSummary}. Check console for exact details.`
+          `User scope saved with backend adjustments. ${adjustmentSummary}.${adjustmentDetails ? ` ${adjustmentDetails}.` : ""} Check console for exact details.`
         );
       } else {
         setNotice("User scope saved successfully.");
@@ -1632,8 +1679,8 @@ export default function SAUserScope() {
       >
         <div className="grid gap-4">
           <p className="text-sm leading-6 text-slate-600">
-            Department mapping stays available for HR readiness, but edits happen in
-            this focused drawer so the main screen remains clean.
+            Department mapping is single-select HR identity truth. Changing it here
+            automatically governs the matching department work context.
           </p>
           <QuickFilterInput
             label="Filter Departments"
@@ -1641,7 +1688,7 @@ export default function SAUserScope() {
             onChange={setDepartmentSearch}
             inputRef={departmentSearchRef}
             placeholder="Filter by department code or department name"
-            hint="Arrow Down moves into the department checkbox list."
+            hint="Arrow Down moves into the department list. Only one department can stay selected."
             inputProps={{
               onKeyDown: (event) => {
                 if (
@@ -1680,13 +1727,7 @@ export default function SAUserScope() {
                       data-erp-nav-item="true"
                       type="checkbox"
                       checked={selected}
-                      onChange={() =>
-                        toggleSelection(
-                          department.id,
-                          departmentIds,
-                          setDepartmentIds
-                        )
-                      }
+                      onChange={() => toggleSingleDepartment(department.id)}
                       onKeyDown={(event) =>
                         handleLinearNavigation(event, {
                           index,

@@ -90,6 +90,12 @@ export default function SAApprovalRules() {
         ...preferred,
       }));
     } catch (err) {
+      console.error("APPROVAL_WORKSPACE_LOAD_FAILED", {
+        code: err?.code ?? null,
+        decisionTrace: err?.decisionTrace ?? null,
+        requestId: err?.requestId ?? null,
+        message: err?.message ?? "APPROVAL_WORKSPACE_LIST_FAILED",
+      });
       setError(
         err instanceof Error
           ? `Approval workspace could not be loaded. ${err.message}`
@@ -261,7 +267,7 @@ export default function SAApprovalRules() {
     setNotice("");
 
     try {
-      await saveApproverRule({
+      const payload = {
         approver_id: draft.approver_id ?? undefined,
         company_id: draft.company_id,
         module_code: draft.module_code,
@@ -271,11 +277,34 @@ export default function SAApprovalRules() {
         approval_stage: Number(draft.approval_stage || "1"),
         approver_user_id: draft.target_mode === "user" ? draft.approver_user_id : undefined,
         approver_role_code: draft.target_mode === "role" ? draft.approver_role_code : undefined,
+      };
+
+      const savedRule = await saveApproverRule(payload);
+      console.info("APPROVER_RULE_SAVE_RESULT", {
+        requested: payload,
+        persisted: savedRule ?? null,
       });
       await loadWorkspace({ ...draft, approver_id: null });
       setNotice("Scoped approver rule saved.");
       setDraft((current) => ({ ...current, approver_id: null }));
     } catch (err) {
+      console.error("APPROVER_RULE_SAVE_FAILED", {
+        requested: {
+          approver_id: draft.approver_id ?? null,
+          company_id: draft.company_id,
+          module_code: draft.module_code,
+          resource_code: draft.resource_code,
+          action_code: draft.action_code,
+          subject_work_context_id: draft.subject_work_context_id || null,
+          approval_stage: Number(draft.approval_stage || "1"),
+          approver_user_id: draft.target_mode === "user" ? draft.approver_user_id : null,
+          approver_role_code: draft.target_mode === "role" ? draft.approver_role_code : null,
+        },
+        code: err?.code ?? null,
+        decisionTrace: err?.decisionTrace ?? null,
+        requestId: err?.requestId ?? null,
+        message: err?.message ?? "APPROVER_RULE_UPSERT_FAILED",
+      });
       setError(
         err instanceof Error
           ? `Approver rule could not be saved. ${err.message}`
@@ -303,9 +332,21 @@ export default function SAApprovalRules() {
 
     try {
       await deleteApproverRule(rule.approver_id);
+      console.info("APPROVER_RULE_DELETE_RESULT", {
+        approver_id: rule.approver_id,
+        resource_code: rule.resource_code ?? null,
+        module_code: rule.module_code ?? null,
+      });
       await loadWorkspace(draft);
       setNotice("Approver rule deleted.");
     } catch (err) {
+      console.error("APPROVER_RULE_DELETE_FAILED", {
+        approver_id: rule.approver_id,
+        code: err?.code ?? null,
+        decisionTrace: err?.decisionTrace ?? null,
+        requestId: err?.requestId ?? null,
+        message: err?.message ?? "APPROVER_RULE_DELETE_FAILED",
+      });
       setError(
         err instanceof Error
           ? `Approver rule could not be deleted. ${err.message}`
