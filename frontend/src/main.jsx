@@ -202,11 +202,16 @@ globalThis.fetch = async (...args) => {
     /* -------------------------------------------------------
      * WARNING (BACKEND AUTHORITY)
      * ------------------------------------------------------- */
-    if (!isWarningAcknowledgeRefresh && json?.warning?.type === "IDLE_WARNING") {
+    if (
+      !isPassiveProbe &&
+      !isWarningAcknowledgeRefresh &&
+      json?.warning?.type === "IDLE_WARNING"
+    ) {
       showWarning("IDLE_WARNING", refreshSessionAfterWarning);
     }
 
     if (
+      !isPassiveProbe &&
       !isWarningAcknowledgeRefresh &&
       json?.warning?.type === "ABSOLUTE_WARNING"
     ) {

@@ -214,6 +214,10 @@ async function resolveProtectedRouteAclMeta(
       resourceCode: "HR_LEAVE_MY_REQUESTS",
       action: "EDIT",
     },
+    "POST:/api/hr/leave/update": {
+      resourceCode: "HR_LEAVE_MY_REQUESTS",
+      action: "EDIT",
+    },
     "GET:/api/hr/leave/approval-inbox": {
       resourceCode: "HR_LEAVE_APPROVAL_INBOX",
       action: "VIEW",
@@ -243,6 +247,10 @@ async function resolveProtectedRouteAclMeta(
       action: "VIEW",
     },
     "POST:/api/hr/out-work/cancel": {
+      resourceCode: "HR_OUT_WORK_MY_REQUESTS",
+      action: "EDIT",
+    },
+    "POST:/api/hr/out-work/update": {
       resourceCode: "HR_OUT_WORK_MY_REQUESTS",
       action: "EDIT",
     },

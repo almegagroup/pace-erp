@@ -27,6 +27,7 @@ const WARNING_MESSAGES = {
 };
 
 export const SESSION_WARNING_ACK_QUERY = "session_refresh=warning_ack";
+const WARNING_RESHOW_SUPPRESSION_MS = 15 * 1000;
 
 let state = {
   visible: false,
@@ -39,6 +40,10 @@ let state = {
 
 let listeners = [];
 let dismissHandler = null;
+let suppressedWarning = {
+  type: null,
+  until: 0,
+};
 
 function emit() {
   listeners.forEach((listener) => listener({ ...state }));
@@ -92,6 +97,10 @@ export function setProtectedRouteActive(active) {
 
   if (!active) {
     dismissHandler = null;
+    suppressedWarning = {
+      type: null,
+      until: 0,
+    };
     state = {
       ...state,
       visible: false,
@@ -129,8 +138,17 @@ export function getSessionWatchdogSnapshot() {
 
 export function showWarning(type, onDismiss, options = {}) {
   const { broadcast = true } = options;
+  const now = Date.now();
 
   if (state.visible && state.type === type) {
+    dismissHandler = typeof onDismiss === "function" ? onDismiss : dismissHandler;
+    return;
+  }
+
+  if (
+    suppressedWarning.type === type &&
+    suppressedWarning.until > now
+  ) {
     dismissHandler = typeof onDismiss === "function" ? onDismiss : dismissHandler;
     return;
   }
@@ -155,6 +173,7 @@ export function showWarning(type, onDismiss, options = {}) {
 export async function clearWarning(reason = "dismiss", options = {}) {
   const { broadcast = true } = options;
   const handler = dismissHandler;
+  const clearedType = state.type;
 
   dismissHandler = null;
   state = {
@@ -165,6 +184,13 @@ export async function clearWarning(reason = "dismiss", options = {}) {
     frontendActivityAt: Date.now(),
   };
   emit();
+
+  if (clearedType) {
+    suppressedWarning = {
+      type: clearedType,
+      until: Date.now() + WARNING_RESHOW_SUPPRESSION_MS,
+    };
+  }
 
   if (broadcast) {
     broadcastClusterMessage({
@@ -193,6 +219,10 @@ export function hardLogout(options = {}) {
   const { broadcast = true } = options;
   const clusterAdmission = getClusterAdmission();
   dismissHandler = null;
+  suppressedWarning = {
+    type: null,
+    until: 0,
+  };
 
   if (broadcast) {
     broadcastClusterMessage({
