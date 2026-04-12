@@ -40,6 +40,17 @@ type StageScopedRuleRow = ScopedRuleRow & {
   approval_stage: number;
 };
 
+type ActionableApproverRuleRow = {
+  approval_stage: number;
+  approver_role_code: string | null;
+  approver_user_id: string | null;
+};
+
+type ActionableDecisionRow = {
+  stage_number: number;
+  approver_auth_user_id: string;
+};
+
 export function isGeneralOpsWorkContextCode(
   workContextCode: string | null | undefined,
 ): boolean {
@@ -204,4 +215,73 @@ export function pickScopedViewerRules<T extends ScopedRuleRow>(
   }
 
   return [];
+}
+
+export function getNextWorkflowSequentialStage<T extends Pick<ActionableApproverRuleRow, "approval_stage">>(
+  scopedApprovers: T[],
+  decisions: Array<Pick<ActionableDecisionRow, "stage_number">>,
+): number | null {
+  const distinctStages = [
+    ...new Set(scopedApprovers.map((row) => row.approval_stage)),
+  ].sort((left, right) => left - right);
+
+  for (const stage of distinctStages) {
+    const stageHasDecision = decisions.some((decision) => decision.stage_number === stage);
+    if (!stageHasDecision) {
+      return stage;
+    }
+  }
+
+  return null;
+}
+
+export function isWorkflowActionableForApprover<T extends ActionableApproverRuleRow>(
+  input: {
+    approvalType: "ANYONE" | "SEQUENTIAL" | "MUST_ALL";
+    requesterAuthUserId: string;
+    scopedApprovers: T[];
+    decisions: ActionableDecisionRow[];
+    authUserId: string;
+    roleCode: string;
+  },
+): boolean {
+  if (input.requesterAuthUserId === input.authUserId) {
+    return false;
+  }
+
+  const matchedApproverStages = input.scopedApprovers
+    .filter((row) => {
+      if (row.approver_user_id) {
+        return row.approver_user_id === input.authUserId;
+      }
+
+      if (row.approver_role_code) {
+        return row.approver_role_code === input.roleCode;
+      }
+
+      return false;
+    })
+    .map((row) => row.approval_stage);
+
+  if (matchedApproverStages.length === 0) {
+    return false;
+  }
+
+  const currentUserHasDecision = input.decisions.some(
+    (row) => row.approver_auth_user_id === input.authUserId,
+  );
+
+  if (currentUserHasDecision) {
+    return false;
+  }
+
+  if (input.approvalType === "SEQUENTIAL") {
+    const expectedStage = getNextWorkflowSequentialStage(
+      input.scopedApprovers,
+      input.decisions,
+    );
+    return expectedStage !== null && matchedApproverStages.includes(expectedStage);
+  }
+
+  return true;
 }

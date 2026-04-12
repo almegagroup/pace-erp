@@ -32,6 +32,7 @@ export default function ErpMasterListTemplate({
   filterSection = null,
   listSection = null,
   sideSection = null,
+  bottomSection = null,
   footerHints = DEFAULT_FOOTER_HINTS,
 }) {
   return (
@@ -65,6 +66,7 @@ export default function ErpMasterListTemplate({
             </div>
           ) : null}
         </div>
+        {bottomSection ? <div>{bottomSection}</div> : null}
       </div>
     </ErpScreenScaffold>
   );

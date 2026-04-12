@@ -15,6 +15,7 @@ import {
   canRequesterCancel,
   createWorkflowRequest,
   deleteWorkflowRequest,
+  ensureNoDuplicateOutWorkRequest,
   getModuleBindingForResource,
   getParentCompanyScope,
   isActionableForApprover,
@@ -477,6 +478,16 @@ export async function createOutWorkRequestHandler(
       "WRITE",
     );
 
+    await ensureNoDuplicateOutWorkRequest({
+      requesterAuthUserId: ctx.auth_user_id,
+      parentCompanyId: parentCompany.company_id,
+      fromDate,
+      toDate,
+      destinationId: resolvedDestinationId,
+      destinationName: resolvedDestinationName,
+      destinationAddress: resolvedDestinationAddress,
+    });
+
     const workflow = await createWorkflowRequest(
       parentCompany.company_id,
       ctx.auth_user_id,
@@ -552,15 +563,216 @@ export async function createOutWorkRequestHandler(
     });
 
     return errorResponse(
-      (err as Error).message || "OUT_WORK_REQUEST_CREATE_EXCEPTION",
-      "out work request create exception",
+      (err as Error).message === "OUT_WORK_DUPLICATE_DATE_RANGE_DESTINATION"
+        ? "Duplicate out work request already exists for the same date range and destination."
+        : (err as Error).message || "OUT_WORK_REQUEST_CREATE_EXCEPTION",
+      (err as Error).message === "OUT_WORK_DUPLICATE_DATE_RANGE_DESTINATION"
+        ? "Duplicate out work request already exists for the same date range and destination."
+        : "out work request create exception",
       ctx.request_id,
       "NONE",
-      403,
+      (err as Error).message === "OUT_WORK_DUPLICATE_DATE_RANGE_DESTINATION" ? 409 : 403,
       {
         gateId: "HR.OUTWORK",
         routeKey,
         decisionTrace: (err as Error).message || "OUT_WORK_REQUEST_CREATE_EXCEPTION",
+      },
+    );
+  }
+}
+
+export async function updateOutWorkRequestHandler(
+  req: Request,
+  ctx: HrHandlerContext,
+): Promise<Response> {
+  const routeKey = "POST:/api/hr/out-work/update";
+
+  try {
+    assertHrBusinessContext(ctx);
+
+    const body = await req.json().catch(() => ({}));
+    const outWorkRequestId = String(body?.out_work_request_id ?? "").trim();
+    const fromDate = normalizeIsoDate(body?.from_date);
+    const toDate = normalizeIsoDate(body?.to_date);
+    const reason = String(body?.reason ?? "").trim();
+    const destinationId = String(body?.destination_id ?? "").trim();
+
+    if (!outWorkRequestId) {
+      return errorResponse(
+        "OUT_WORK_UPDATE_ID_REQUIRED",
+        "out_work_request_id required",
+        ctx.request_id,
+      );
+    }
+
+    if (!reason) {
+      return errorResponse(
+        "OUT_WORK_REASON_REQUIRED",
+        "out work reason required",
+        ctx.request_id,
+      );
+    }
+
+    if (!destinationId) {
+      return errorResponse(
+        "OUT_WORK_DESTINATION_REQUIRED",
+        "choose destination",
+        ctx.request_id,
+      );
+    }
+
+    if (toDate < fromDate) {
+      return errorResponse(
+        "OUT_WORK_DATE_RANGE_INVALID",
+        "to_date cannot be before from_date",
+        ctx.request_id,
+      );
+    }
+
+    const todayIso = todayIsoInKolkata();
+    const earliestBackdate = shiftIsoDate(todayIso, -3);
+
+    if (fromDate < earliestBackdate) {
+      return errorResponse(
+        "OUT_WORK_BACKDATE_LIMIT_EXCEEDED",
+        "backdate limit exceeded",
+        ctx.request_id,
+      );
+    }
+
+    const { data: requestRow, error: requestError } = await serviceRoleClient
+      .schema("erp_hr")
+      .from("out_work_requests")
+      .select("out_work_request_id, workflow_request_id, requester_auth_user_id, parent_company_id")
+      .eq("out_work_request_id", outWorkRequestId)
+      .maybeSingle();
+
+    if (requestError || !requestRow) {
+      return errorResponse(
+        "OUT_WORK_REQUEST_NOT_FOUND",
+        "out work request not found",
+        ctx.request_id,
+      );
+    }
+
+    if (requestRow.requester_auth_user_id !== ctx.auth_user_id) {
+      return errorResponse(
+        "OUT_WORK_UPDATE_FORBIDDEN",
+        "user cannot edit this request",
+        ctx.request_id,
+      );
+    }
+
+    const { data: workflow, error: workflowError } = await serviceRoleClient
+      .schema("acl")
+      .from("workflow_requests")
+      .select("request_id, module_code, current_state")
+      .eq("request_id", requestRow.workflow_request_id)
+      .maybeSingle();
+
+    if (workflowError || !workflow) {
+      return errorResponse(
+        "OUT_WORK_WORKFLOW_NOT_FOUND",
+        "workflow request not found",
+        ctx.request_id,
+      );
+    }
+
+    const decisionMap = await loadWorkflowDecisionMap([requestRow.workflow_request_id]);
+    const decisions = decisionMap.get(requestRow.workflow_request_id) ?? [];
+
+    if (!canRequesterCancel(workflow.current_state, decisions)) {
+      return errorResponse(
+        "OUT_WORK_EDIT_NOT_ALLOWED",
+        "out work request cannot be edited anymore",
+        ctx.request_id,
+      );
+    }
+
+    const { data: destinationRow, error: destinationError } = await serviceRoleClient
+      .schema("erp_hr")
+      .from("out_work_destinations")
+      .select("destination_id, company_id, destination_name, destination_address, is_active")
+      .eq("destination_id", destinationId)
+      .eq("company_id", requestRow.parent_company_id)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (destinationError || !destinationRow) {
+      return errorResponse(
+        "OUT_WORK_DESTINATION_NOT_FOUND",
+        "destination not found for parent company",
+        ctx.request_id,
+      );
+    }
+
+    await ensureNoDuplicateOutWorkRequest({
+      requesterAuthUserId: ctx.auth_user_id,
+      parentCompanyId: requestRow.parent_company_id,
+      fromDate,
+      toDate,
+      destinationId: destinationRow.destination_id,
+      destinationName: destinationRow.destination_name,
+      destinationAddress: destinationRow.destination_address,
+      excludeOutWorkRequestId: outWorkRequestId,
+    });
+
+    const totalDays = calculateInclusiveDays(fromDate, toDate);
+
+    const { data: updatedRow, error: updateError } = await serviceRoleClient
+      .schema("erp_hr")
+      .from("out_work_requests")
+      .update({
+        destination_id: destinationRow.destination_id,
+        destination_name: destinationRow.destination_name,
+        destination_address: destinationRow.destination_address,
+        from_date: fromDate,
+        to_date: toDate,
+        total_days: totalDays,
+        reason,
+      })
+      .eq("out_work_request_id", outWorkRequestId)
+      .select("out_work_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, destination_id, destination_name, destination_address, from_date, to_date, total_days, reason, cancelled_at, cancelled_by, created_at")
+      .single();
+
+    if (updateError || !updatedRow) {
+      throw new Error("OUT_WORK_REQUEST_UPDATE_FAILED");
+    }
+
+    await appendWorkflowEvent({
+      request_id: requestRow.workflow_request_id,
+      company_id: requestRow.parent_company_id,
+      module_code: workflow.module_code,
+      event_type: "UPDATE",
+      actor_auth_user_id: ctx.auth_user_id,
+      previous_state: workflow.current_state,
+      new_state: workflow.current_state,
+    });
+
+    return okResponse(
+      {
+        request: {
+          ...updatedRow,
+          current_state: workflow.current_state,
+        },
+      },
+      ctx.request_id,
+    );
+  } catch (err) {
+    return errorResponse(
+      (err as Error).message === "OUT_WORK_DUPLICATE_DATE_RANGE_DESTINATION"
+        ? "Duplicate out work request already exists for the same date range and destination."
+        : (err as Error).message || "OUT_WORK_UPDATE_EXCEPTION",
+      (err as Error).message === "OUT_WORK_DUPLICATE_DATE_RANGE_DESTINATION"
+        ? "Duplicate out work request already exists for the same date range and destination."
+        : "out work update exception",
+      ctx.request_id,
+      "NONE",
+      (err as Error).message === "OUT_WORK_DUPLICATE_DATE_RANGE_DESTINATION" ? 409 : 403,
+      {
+        gateId: "HR.OUTWORK",
+        routeKey,
+        decisionTrace: (err as Error).message || "OUT_WORK_UPDATE_EXCEPTION",
       },
     );
   }
@@ -749,6 +961,7 @@ export async function listOutWorkApprovalInboxHandler(
         workflow: {
           approval_type: row.approval_type,
         },
+        requesterAuthUserId: row.requester_auth_user_id,
         scopedApprovers,
         decisions: (row.decision_history ?? []).map((decision) => ({
           request_id: row.workflow_request_id,

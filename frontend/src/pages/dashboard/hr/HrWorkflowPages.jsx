@@ -35,6 +35,8 @@ import {
   listOutWorkDestinations,
   listOutWorkRegister,
   submitWorkflowDecision,
+  updateLeaveRequest,
+  updateOutWorkRequest,
 } from "./hrApi.js";
 
 const STATUS_TONE_CLASS = Object.freeze({
@@ -309,16 +311,25 @@ function useHrVisibleColumns(storageKey) {
   };
 }
 
-function HrRequestRowActions({ mode, request, onCancel, onApprove, onReject }) {
+function HrRequestRowActions({ mode, request, onEdit, onCancel, onApprove, onReject }) {
   if (mode === "myRequests" && request.can_cancel) {
     return (
-      <button
-        type="button"
-        onClick={() => onCancel?.(request)}
-        className="border border-rose-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700"
-      >
-        Cancel
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => onEdit?.(request)}
+          className="border border-sky-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700"
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          onClick={() => onCancel?.(request)}
+          className="border border-rose-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700"
+        >
+          Cancel
+        </button>
+      </div>
     );
   }
 
@@ -453,6 +464,7 @@ export function HrRequestCard({
   kind,
   mode,
   visibleColumns,
+  onEdit,
   onCancel,
   onApprove,
   onReject,
@@ -462,6 +474,7 @@ export function HrRequestCard({
     <HrRequestRowActions
       mode={mode}
       request={request}
+      onEdit={onEdit}
       onCancel={onCancel}
       onApprove={onApprove}
       onReject={onReject}
@@ -1209,6 +1222,17 @@ function HrRequestListWorkspace({
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.myRequests`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
+  const [notice, setNotice] = useState("");
+  const [editingRequest, setEditingRequest] = useState(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editFromDate, setEditFromDate] = useState(todayDefault());
+  const [editToDate, setEditToDate] = useState(todayDefault());
+  const [editReason, setEditReason] = useState("");
+  const [editDestinationId, setEditDestinationId] = useState("");
+  const [editDestinations, setEditDestinations] = useState([]);
+  const [editDestinationsLoading, setEditDestinationsLoading] = useState(false);
+  const earliestBackdate = getHrEarliestBackdate();
+  const editTotalDays = calculateInclusiveDays(editFromDate, editToDate);
   const approvalInboxRoute =
     kind === "leave"
       ? "/dashboard/hr/leave/approval-inbox"
@@ -1233,6 +1257,42 @@ function HrRequestListWorkspace({
     [rows, searchQuery],
   );
 
+  async function loadEditDestinations(preferredDestinationId = "") {
+    if (kind !== "outWork") {
+      return;
+    }
+
+    setEditDestinationsLoading(true);
+    try {
+      const data = await listOutWorkDestinations();
+      const destinationRows = data.destinations ?? [];
+      setEditDestinations(destinationRows);
+      setEditDestinationId(
+        destinationRows.find((row) => row.destination_id === preferredDestinationId)?.destination_id ??
+          destinationRows[0]?.destination_id ??
+          "",
+      );
+    } catch (err) {
+      setEditDestinations([]);
+      setEditDestinationId("");
+      setError(formatError(err, "Destination list could not be loaded."));
+    } finally {
+      setEditDestinationsLoading(false);
+    }
+  }
+
+  async function handleEdit(request) {
+    setNotice("");
+    setEditFromDate(request.from_date ?? todayDefault());
+    setEditToDate(request.to_date ?? todayDefault());
+    setEditReason(request.reason ?? "");
+    setEditingRequest(request);
+
+    if (kind === "outWork") {
+      await loadEditDestinations(request.destination_id ?? "");
+    }
+  }
+
   async function handleCancel(request) {
     const approved = await openActionConfirm({
       eyebrow: kind === "leave" ? "Leave Request" : "Out Work Request",
@@ -1252,8 +1312,57 @@ function HrRequestListWorkspace({
       }
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       await refresh();
+      setNotice("Request cancelled.");
     } catch (err) {
       setError(formatError(err, "Request could not be cancelled."));
+    }
+  }
+
+  async function handleEditSave() {
+    if (!editingRequest) {
+      return;
+    }
+
+    if (!editFromDate || !editToDate || !editReason.trim()) {
+      setError("From date, to date, and reason are required.");
+      return;
+    }
+
+    if (kind === "outWork" && !editDestinationId) {
+      setError("Destination is required.");
+      return;
+    }
+
+    setEditSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      if (kind === "leave") {
+        await updateLeaveRequest({
+          leave_request_id: editingRequest.leave_request_id,
+          from_date: editFromDate,
+          to_date: editToDate,
+          reason: editReason.trim(),
+        });
+      } else {
+        await updateOutWorkRequest({
+          out_work_request_id: editingRequest.out_work_request_id,
+          from_date: editFromDate,
+          to_date: editToDate,
+          destination_id: editDestinationId,
+          reason: editReason.trim(),
+        });
+      }
+
+      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
+      setEditingRequest(null);
+      await refresh();
+      setNotice(kind === "leave" ? "Leave request updated." : "Out work request updated.");
+    } catch (err) {
+      setError(formatError(err, "Request could not be updated."));
+    } finally {
+      setEditSaving(false);
     }
   }
 
@@ -1299,7 +1408,10 @@ function HrRequestListWorkspace({
           onClick: () => void refresh(),
         },
       ]}
-      notices={error ? [{ key: "error", tone: "error", message: error }] : []}
+      notices={[
+        ...(error ? [{ key: "error", tone: "error", message: error }] : []),
+        ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
+      ]}
       metrics={buildListMetrics(rows)}
       filterSection={{
         eyebrow: "Request Search",
@@ -1340,6 +1452,7 @@ function HrRequestListWorkspace({
                     kind={kind}
                     mode="myRequests"
                     visibleColumns={visibleColumns}
+                    onEdit={handleEdit}
                     onCancel={handleCancel}
                   />
                 ))}
@@ -1349,13 +1462,115 @@ function HrRequestListWorkspace({
         ),
       }}
       bottomSection={
-        <HrRequestColumnPickerModal
-          visible={showColumnPicker}
-          visibleColumnKeys={visibleColumnKeys}
-          onClose={() => setShowColumnPicker(false)}
-          onToggleColumn={toggleColumn}
-          onResetColumns={resetColumns}
-        />
+        <>
+          <HrRequestColumnPickerModal
+            visible={showColumnPicker}
+            visibleColumnKeys={visibleColumnKeys}
+            onClose={() => setShowColumnPicker(false)}
+            onToggleColumn={toggleColumn}
+            onResetColumns={resetColumns}
+          />
+          <ModalBase
+            visible={Boolean(editingRequest)}
+            eyebrow={kind === "leave" ? "Leave Request" : "Out Work Request"}
+            title={kind === "leave" ? "Edit Pending Leave" : "Edit Pending Out Work"}
+            message="Edit is allowed only until the first approver decision arrives."
+            onEscape={() => setEditingRequest(null)}
+            width="min(720px, calc(100vw - 32px))"
+            actions={
+              <>
+                <button
+                  type="button"
+                  onClick={() => setEditingRequest(null)}
+                  className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={editSaving}
+                  onClick={() => void handleEditSave()}
+                  className="border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900"
+                >
+                  {editSaving ? "Saving..." : "Save Changes"}
+                </button>
+              </>
+            }
+          >
+            <div className="grid gap-3">
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="grid gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    From Date
+                  </span>
+                  <input
+                    type="date"
+                    value={editFromDate}
+                    min={earliestBackdate}
+                    onChange={(event) => setEditFromDate(event.target.value)}
+                    className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    To Date
+                  </span>
+                  <input
+                    type="date"
+                    value={editToDate}
+                    min={editFromDate || earliestBackdate}
+                    onChange={(event) => setEditToDate(event.target.value)}
+                    className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Number Of Days
+                  </span>
+                  <input
+                    type="text"
+                    readOnly
+                    value={editTotalDays > 0 ? `${editTotalDays}` : "-"}
+                    className="w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
+                  />
+                </label>
+              </div>
+
+              {kind === "outWork" ? (
+                <label className="grid gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Destination
+                  </span>
+                  <select
+                    value={editDestinationId}
+                    disabled={editDestinationsLoading}
+                    onChange={(event) => setEditDestinationId(event.target.value)}
+                    className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  >
+                    <option value="">{editDestinationsLoading ? "Loading..." : "Choose destination"}</option>
+                    {editDestinations.map((row) => (
+                      <option key={row.destination_id} value={row.destination_id}>
+                        {row.destination_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              <label className="grid gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Reason
+                </span>
+                <textarea
+                  rows={4}
+                  value={editReason}
+                  onChange={(event) => setEditReason(event.target.value)}
+                  className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                />
+              </label>
+            </div>
+          </ModalBase>
+        </>
       }
     />
   );

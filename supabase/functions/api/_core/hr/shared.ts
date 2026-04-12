@@ -3,9 +3,11 @@ import { getActiveAclVersionIdForCompany } from "../../_shared/acl_runtime.ts";
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import {
   createWorkflowScopeContextMap,
+  getNextWorkflowSequentialStage,
   isBusinessWorkflowWorkContext,
   isDepartmentWorkContextCode,
   isGeneralOpsWorkContextCode,
+  isWorkflowActionableForApprover,
   loadActiveCompanyWorkContexts,
   pickScopedApproverRules,
   pickScopedViewerRules as pickScopedViewerRulesByPriority,
@@ -101,6 +103,11 @@ export type CompanyIdentity = {
   company_id: string;
   company_code: string | null;
   company_name: string | null;
+};
+
+type WorkflowStateLookupRow = {
+  request_id: string;
+  current_state: string;
 };
 
 function pickDisplayName(
@@ -412,6 +419,142 @@ export async function loadWorkflowDecisionMap(
   return map;
 }
 
+async function loadWorkflowStateMap(
+  requestIds: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+
+  if (requestIds.length === 0) {
+    return map;
+  }
+
+  const { data } = await serviceRoleClient
+    .schema("acl")
+    .from("workflow_requests")
+    .select("request_id, current_state")
+    .in("request_id", requestIds);
+
+  for (const row of (data ?? []) as WorkflowStateLookupRow[]) {
+    map.set(row.request_id, row.current_state);
+  }
+
+  return map;
+}
+
+function isWorkflowStillLive(state: string | null | undefined): boolean {
+  return state !== "CANCELLED" && state !== "REJECTED";
+}
+
+export async function ensureNoDuplicateLeaveRequest(input: {
+  requesterAuthUserId: string;
+  parentCompanyId: string;
+  fromDate: string;
+  toDate: string;
+  excludeLeaveRequestId?: string | null;
+}): Promise<void> {
+  let query = serviceRoleClient
+    .schema("erp_hr")
+    .from("leave_requests")
+    .select("leave_request_id, workflow_request_id")
+    .eq("requester_auth_user_id", input.requesterAuthUserId)
+    .eq("parent_company_id", input.parentCompanyId)
+    .eq("from_date", input.fromDate)
+    .eq("to_date", input.toDate)
+    .is("cancelled_at", null);
+
+  if (input.excludeLeaveRequestId) {
+    query = query.neq("leave_request_id", input.excludeLeaveRequestId);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    throw new Error("LEAVE_DUPLICATE_CHECK_FAILED");
+  }
+
+  const rows = (data ?? []) as Array<{
+    leave_request_id: string;
+    workflow_request_id: string;
+  }>;
+
+  if (rows.length === 0) {
+    return;
+  }
+
+  const workflowStateMap = await loadWorkflowStateMap(
+    rows.map((row) => row.workflow_request_id),
+  );
+
+  const hasLiveDuplicate = rows.some((row) =>
+    isWorkflowStillLive(workflowStateMap.get(row.workflow_request_id)),
+  );
+
+  if (hasLiveDuplicate) {
+    throw new Error("LEAVE_DUPLICATE_DATE_RANGE");
+  }
+}
+
+export async function ensureNoDuplicateOutWorkRequest(input: {
+  requesterAuthUserId: string;
+  parentCompanyId: string;
+  fromDate: string;
+  toDate: string;
+  destinationId?: string | null;
+  destinationName?: string | null;
+  destinationAddress?: string | null;
+  excludeOutWorkRequestId?: string | null;
+}): Promise<void> {
+  let query = serviceRoleClient
+    .schema("erp_hr")
+    .from("out_work_requests")
+    .select("out_work_request_id, workflow_request_id")
+    .eq("requester_auth_user_id", input.requesterAuthUserId)
+    .eq("parent_company_id", input.parentCompanyId)
+    .eq("from_date", input.fromDate)
+    .eq("to_date", input.toDate)
+    .is("cancelled_at", null);
+
+  if (input.destinationId) {
+    query = query.eq("destination_id", input.destinationId);
+  } else {
+    query = query
+      .is("destination_id", null)
+      .eq("destination_name", String(input.destinationName ?? "").trim())
+      .eq("destination_address", String(input.destinationAddress ?? "").trim());
+  }
+
+  if (input.excludeOutWorkRequestId) {
+    query = query.neq("out_work_request_id", input.excludeOutWorkRequestId);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    throw new Error("OUT_WORK_DUPLICATE_CHECK_FAILED");
+  }
+
+  const rows = (data ?? []) as Array<{
+    out_work_request_id: string;
+    workflow_request_id: string;
+  }>;
+
+  if (rows.length === 0) {
+    return;
+  }
+
+  const workflowStateMap = await loadWorkflowStateMap(
+    rows.map((row) => row.workflow_request_id),
+  );
+
+  const hasLiveDuplicate = rows.some((row) =>
+    isWorkflowStillLive(workflowStateMap.get(row.workflow_request_id)),
+  );
+
+  if (hasLiveDuplicate) {
+    throw new Error("OUT_WORK_DUPLICATE_DATE_RANGE_DESTINATION");
+  }
+}
+
 export async function loadApproverRulesForCompanyModule(
   companyId: string,
   moduleCode: string,
@@ -614,18 +757,7 @@ export function getNextSequentialStage(
   scopedApprovers: ApproverRuleRow[],
   decisions: WorkflowDecisionRow[],
 ): number | null {
-  const distinctStages = [
-    ...new Set(scopedApprovers.map((row) => row.approval_stage)),
-  ].sort((left, right) => left - right);
-
-  for (const stage of distinctStages) {
-    const stageHasDecision = decisions.some((decision) => decision.stage_number === stage);
-    if (!stageHasDecision) {
-      return stage;
-    }
-  }
-
-  return null;
+  return getNextWorkflowSequentialStage(scopedApprovers, decisions);
 }
 
 export function canRequesterCancel(
@@ -639,33 +771,20 @@ export function isActionableForApprover(input: {
   workflow: {
     approval_type: "ANYONE" | "SEQUENTIAL" | "MUST_ALL";
   };
+  requesterAuthUserId: string;
   scopedApprovers: ApproverRuleRow[];
   decisions: WorkflowDecisionRow[];
   authUserId: string;
   roleCode: string;
 }): boolean {
-  const matchedApproverStages = input.scopedApprovers
-    .filter((row) => isApproverMatch(row, input.authUserId, input.roleCode))
-    .map((row) => row.approval_stage);
-
-  if (matchedApproverStages.length === 0) {
-    return false;
-  }
-
-  const currentUserHasDecision = input.decisions.some(
-    (row) => row.approver_auth_user_id === input.authUserId,
-  );
-
-  if (currentUserHasDecision) {
-    return false;
-  }
-
-  if (input.workflow.approval_type === "SEQUENTIAL") {
-    const expectedStage = getNextSequentialStage(input.scopedApprovers, input.decisions);
-    return expectedStage !== null && matchedApproverStages.includes(expectedStage);
-  }
-
-  return true;
+  return isWorkflowActionableForApprover({
+    approvalType: input.workflow.approval_type,
+    requesterAuthUserId: input.requesterAuthUserId,
+    scopedApprovers: input.scopedApprovers,
+    decisions: input.decisions,
+    authUserId: input.authUserId,
+    roleCode: input.roleCode,
+  });
 }
 
 type UserScopeWorkContextRow = {

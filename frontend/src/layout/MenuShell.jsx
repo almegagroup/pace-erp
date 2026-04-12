@@ -46,6 +46,7 @@ import {
   getNetworkActivitySnapshot,
   subscribeNetworkActivity,
 } from "../store/networkActivity.js";
+import { pushToast } from "../store/uiToast.js";
 import BlockingLayer from "../components/layer/BlockingLayer.jsx";
 import ErpCommandPalette from "../components/ErpCommandPalette.jsx";
 
@@ -261,6 +262,10 @@ export default function MenuShell() {
   const actionButtonRefs = useRef([]);
   const contentRegionRef = useRef(null);
   const workContextSelectRef = useRef(null);
+  const lastNetworkToastRef = useRef({
+    completedAt: 0,
+    errorAt: 0,
+  });
   const stackDepth = getStackDepth();
 
   const navigationTree = useMemo(() => buildMenuTree(menu), [menu]);
@@ -358,6 +363,40 @@ export default function MenuShell() {
     : "Alt+M Menu | Alt+A Function Rail | Alt+C Work Area | Alt+W Or F8 Work Context | Ctrl+K Or F9 Command Bar";
   const footerShortcutLine =
     "Esc Back | Alt+H Home | Alt+W Or F8 Work Context | Alt+PgUp Prev Page | Alt+PgDn Next Page | Ctrl+K Or F9 Command Bar | Ctrl+S Or F2 Save | Alt+R Or F4 Refresh | Alt+Shift+F Or F3 Search | Alt+Shift+P Or F7 Primary";
+
+  useEffect(() => {
+    if (
+      networkActivity.lastOutcome === "error" &&
+      networkActivity.lastErrorAt > 0 &&
+      networkActivity.lastErrorAt !== lastNetworkToastRef.current.errorAt
+    ) {
+      lastNetworkToastRef.current.errorAt = networkActivity.lastErrorAt;
+      pushToast({
+        id: `network-error:${networkActivity.lastErrorAt}`,
+        tone: "error",
+        title: "Last Sync Failed",
+        message: networkActivity.lastLabel || "ERP action failed.",
+        durationMs: 7000,
+      });
+      return;
+    }
+
+    if (
+      networkActivity.lastOutcome === "success" &&
+      networkActivity.lastResolvedMode === "blocking" &&
+      networkActivity.lastCompletedAt > 0 &&
+      networkActivity.lastCompletedAt !== lastNetworkToastRef.current.completedAt
+    ) {
+      lastNetworkToastRef.current.completedAt = networkActivity.lastCompletedAt;
+      pushToast({
+        id: `network-success:${networkActivity.lastCompletedAt}`,
+        tone: "success",
+        title: "Saved",
+        message: networkActivity.lastLabel || "ERP action completed.",
+        durationMs: 3200,
+      });
+    }
+  }, [networkActivity]);
 
   const holdRuntimeSwitchOverlayUntilPaint = useCallback(async () => {
     await new Promise((resolve) => {
