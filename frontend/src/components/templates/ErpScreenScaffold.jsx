@@ -8,7 +8,8 @@
  * Authority: Frontend
  */
 
-import { Fragment, useEffect, useMemo } from "react";
+import { Fragment, useEffect, useMemo, useRef } from "react";
+import { pushToast } from "../../store/uiToast.js";
 
 const ACTION_TONE_CLASS = Object.freeze({
   primary:
@@ -299,6 +300,7 @@ export default function ErpScreenScaffold({
   footerHints = [],
   children,
 }) {
+  const deliveredToastKeysRef = useRef(new Set());
   const mergedActions = useMemo(
     () => (actions.length > 0 ? actions : topActions),
     [actions, topActions]
@@ -343,6 +345,30 @@ export default function ErpScreenScaffold({
     window.addEventListener("keydown", handleMnemonic, true);
     return () => window.removeEventListener("keydown", handleMnemonic, true);
   }, [resolvedActions]);
+
+  useEffect(() => {
+    mergedNotices.forEach((entry, index) => {
+      if (!entry?.message) {
+        return;
+      }
+
+      const toastKey =
+        entry.key ??
+        `${entry.tone ?? "info"}:${entry.message}:${index}`;
+
+      if (deliveredToastKeysRef.current.has(toastKey)) {
+        return;
+      }
+
+      deliveredToastKeysRef.current.add(toastKey);
+      pushToast({
+        id: toastKey,
+        tone: entry.tone ?? "info",
+        title: NOTICE_TONE_LABEL[entry.tone] ?? NOTICE_TONE_LABEL.info,
+        message: entry.message,
+      });
+    });
+  }, [mergedNotices]);
 
   return (
     <section className="min-h-full text-slate-900">

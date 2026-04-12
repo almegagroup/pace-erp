@@ -13,6 +13,7 @@ import SessionOverlay from "./components/SessionOverlay.jsx";
 import LogoutConfirmOverlay from "./components/LogoutConfirmOverlay.jsx";
 import ActionConfirmOverlay from "./components/ActionConfirmOverlay.jsx";
 import SessionClusterBridge from "./components/SessionClusterBridge.jsx";
+import ToastOverlay from "./components/ToastOverlay.jsx";
 
 function App() {
   return (
@@ -20,6 +21,7 @@ function App() {
       <SessionClusterBridge />
       <AppRouter />
       <SessionOverlay />
+      <ToastOverlay />
       <LogoutConfirmOverlay />
       <ActionConfirmOverlay />
     </>
