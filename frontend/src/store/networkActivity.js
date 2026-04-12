@@ -13,6 +13,7 @@ let snapshot = {
   lastBlockingLabel: "",
   lastBackgroundLabel: "",
   lastOutcome: "idle",
+  lastResolvedMode: "",
 };
 
 const activeRequests = new Map();
@@ -144,6 +145,7 @@ export function finishNetworkActivity(token, { ok = true } = {}) {
         ? request.label
         : snapshot.lastBackgroundLabel,
     lastOutcome: ok ? "success" : "error",
+    lastResolvedMode: request.mode,
   });
 
   emit();
