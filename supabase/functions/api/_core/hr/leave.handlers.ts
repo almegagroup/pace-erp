@@ -613,6 +613,7 @@ export async function listLeaveApprovalInboxHandler(
         workflow: {
           approval_type: row.approval_type,
         },
+        requesterAuthUserId: row.requester_auth_user_id,
         scopedApprovers,
         decisions: (row.decision_history ?? []).map((decision) => ({
           request_id: row.workflow_request_id,

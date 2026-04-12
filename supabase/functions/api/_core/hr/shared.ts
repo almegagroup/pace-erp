@@ -3,9 +3,11 @@ import { getActiveAclVersionIdForCompany } from "../../_shared/acl_runtime.ts";
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import {
   createWorkflowScopeContextMap,
+  getNextWorkflowSequentialStage,
   isBusinessWorkflowWorkContext,
   isDepartmentWorkContextCode,
   isGeneralOpsWorkContextCode,
+  isWorkflowActionableForApprover,
   loadActiveCompanyWorkContexts,
   pickScopedApproverRules,
   pickScopedViewerRules as pickScopedViewerRulesByPriority,
@@ -614,18 +616,7 @@ export function getNextSequentialStage(
   scopedApprovers: ApproverRuleRow[],
   decisions: WorkflowDecisionRow[],
 ): number | null {
-  const distinctStages = [
-    ...new Set(scopedApprovers.map((row) => row.approval_stage)),
-  ].sort((left, right) => left - right);
-
-  for (const stage of distinctStages) {
-    const stageHasDecision = decisions.some((decision) => decision.stage_number === stage);
-    if (!stageHasDecision) {
-      return stage;
-    }
-  }
-
-  return null;
+  return getNextWorkflowSequentialStage(scopedApprovers, decisions);
 }
 
 export function canRequesterCancel(
@@ -639,33 +630,20 @@ export function isActionableForApprover(input: {
   workflow: {
     approval_type: "ANYONE" | "SEQUENTIAL" | "MUST_ALL";
   };
+  requesterAuthUserId: string;
   scopedApprovers: ApproverRuleRow[];
   decisions: WorkflowDecisionRow[];
   authUserId: string;
   roleCode: string;
 }): boolean {
-  const matchedApproverStages = input.scopedApprovers
-    .filter((row) => isApproverMatch(row, input.authUserId, input.roleCode))
-    .map((row) => row.approval_stage);
-
-  if (matchedApproverStages.length === 0) {
-    return false;
-  }
-
-  const currentUserHasDecision = input.decisions.some(
-    (row) => row.approver_auth_user_id === input.authUserId,
-  );
-
-  if (currentUserHasDecision) {
-    return false;
-  }
-
-  if (input.workflow.approval_type === "SEQUENTIAL") {
-    const expectedStage = getNextSequentialStage(input.scopedApprovers, input.decisions);
-    return expectedStage !== null && matchedApproverStages.includes(expectedStage);
-  }
-
-  return true;
+  return isWorkflowActionableForApprover({
+    approvalType: input.workflow.approval_type,
+    requesterAuthUserId: input.requesterAuthUserId,
+    scopedApprovers: input.scopedApprovers,
+    decisions: input.decisions,
+    authUserId: input.authUserId,
+    roleCode: input.roleCode,
+  });
 }
 
 type UserScopeWorkContextRow = {
