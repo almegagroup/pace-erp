@@ -178,6 +178,21 @@ export async function cancelLeaveRequest(leaveRequestId) {
   );
 }
 
+export async function updateLeaveRequest(payload) {
+  return apiJson(
+    "/api/hr/leave/update",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    "LEAVE_REQUEST_UPDATE_FAILED",
+    "Leave request could not be updated.",
+  );
+}
+
 export async function listLeaveApprovalInbox() {
   return apiJson(
     "/api/hr/leave/approval-inbox",
@@ -275,6 +290,21 @@ export async function cancelOutWorkRequest(outWorkRequestId) {
     },
     "OUT_WORK_REQUEST_CANCEL_FAILED",
     "Out work request could not be cancelled.",
+  );
+}
+
+export async function updateOutWorkRequest(payload) {
+  return apiJson(
+    "/api/hr/out-work/update",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    "OUT_WORK_REQUEST_UPDATE_FAILED",
+    "Out work request could not be updated.",
   );
 }
 

@@ -7,6 +7,7 @@ import {
   listLeaveApprovalScopeHistoryHandler,
   listLeaveRegisterHandler,
   listMyLeaveRequestsHandler,
+  updateLeaveRequestHandler,
 } from "../_core/hr/leave.handlers.ts";
 import {
   cancelOutWorkRequestHandler,
@@ -17,6 +18,7 @@ import {
   listOutWorkApprovalScopeHistoryHandler,
   listOutWorkDestinationsHandler,
   listOutWorkRegisterHandler,
+  updateOutWorkRequestHandler,
 } from "../_core/hr/out_work.handlers.ts";
 
 export async function dispatchHrRoutes(
@@ -43,6 +45,9 @@ export async function dispatchHrRoutes(
     case "POST:/api/hr/leave/cancel":
       return await cancelLeaveRequestHandler(req, ctx);
 
+    case "POST:/api/hr/leave/update":
+      return await updateLeaveRequestHandler(req, ctx);
+
     case "GET:/api/hr/leave/approval-inbox":
       return await listLeaveApprovalInboxHandler(req, ctx);
 
@@ -66,6 +71,9 @@ export async function dispatchHrRoutes(
 
     case "POST:/api/hr/out-work/cancel":
       return await cancelOutWorkRequestHandler(req, ctx);
+
+    case "POST:/api/hr/out-work/update":
+      return await updateOutWorkRequestHandler(req, ctx);
 
     case "GET:/api/hr/out-work/approval-inbox":
       return await listOutWorkApprovalInboxHandler(req, ctx);

@@ -15,6 +15,7 @@ import {
   canRequesterCancel,
   createWorkflowRequest,
   deleteWorkflowRequest,
+  ensureNoDuplicateLeaveRequest,
   getModuleBindingForResource,
   getParentCompanyScope,
   isActionableForApprover,
@@ -317,6 +318,13 @@ export async function createLeaveRequestHandler(
       "WRITE",
     );
 
+    await ensureNoDuplicateLeaveRequest({
+      requesterAuthUserId: ctx.auth_user_id,
+      parentCompanyId: parentCompany.company_id,
+      fromDate,
+      toDate,
+    });
+
     const workflow = await createWorkflowRequest(
       parentCompany.company_id,
       ctx.auth_user_id,
@@ -407,15 +415,184 @@ export async function createLeaveRequestHandler(
     });
 
     return errorResponse(
-      (err as Error).message || "LEAVE_REQUEST_CREATE_EXCEPTION",
-      "leave request create exception",
+      (err as Error).message === "LEAVE_DUPLICATE_DATE_RANGE"
+        ? "Duplicate leave request already exists for the same date range."
+        : (err as Error).message || "LEAVE_REQUEST_CREATE_EXCEPTION",
+      (err as Error).message === "LEAVE_DUPLICATE_DATE_RANGE"
+        ? "Duplicate leave request already exists for the same date range."
+        : "leave request create exception",
       ctx.request_id,
       "NONE",
-      403,
+      (err as Error).message === "LEAVE_DUPLICATE_DATE_RANGE" ? 409 : 403,
       {
         gateId: "HR.LEAVE",
         routeKey,
         decisionTrace: (err as Error).message || "LEAVE_REQUEST_CREATE_EXCEPTION",
+      },
+    );
+  }
+}
+
+export async function updateLeaveRequestHandler(
+  req: Request,
+  ctx: HrHandlerContext,
+): Promise<Response> {
+  const routeKey = "POST:/api/hr/leave/update";
+
+  try {
+    assertHrBusinessContext(ctx);
+
+    const body = await req.json().catch(() => ({}));
+    const leaveRequestId = String(body?.leave_request_id ?? "").trim();
+    const fromDate = normalizeIsoDate(body?.from_date);
+    const toDate = normalizeIsoDate(body?.to_date);
+    const reason = String(body?.reason ?? "").trim();
+
+    if (!leaveRequestId) {
+      return errorResponse(
+        "LEAVE_UPDATE_ID_REQUIRED",
+        "leave_request_id required",
+        ctx.request_id,
+      );
+    }
+
+    if (!reason) {
+      return errorResponse(
+        "LEAVE_REASON_REQUIRED",
+        "leave reason required",
+        ctx.request_id,
+      );
+    }
+
+    if (toDate < fromDate) {
+      return errorResponse(
+        "LEAVE_DATE_RANGE_INVALID",
+        "to_date cannot be before from_date",
+        ctx.request_id,
+      );
+    }
+
+    const todayIso = todayIsoInKolkata();
+    const earliestBackdate = shiftIsoDate(todayIso, -3);
+
+    if (fromDate < earliestBackdate) {
+      return errorResponse(
+        "LEAVE_BACKDATE_LIMIT_EXCEEDED",
+        "backdate limit exceeded",
+        ctx.request_id,
+      );
+    }
+
+    const { data: leaveRow, error: leaveError } = await serviceRoleClient
+      .schema("erp_hr")
+      .from("leave_requests")
+      .select("leave_request_id, workflow_request_id, requester_auth_user_id, parent_company_id")
+      .eq("leave_request_id", leaveRequestId)
+      .maybeSingle();
+
+    if (leaveError || !leaveRow) {
+      return errorResponse(
+        "LEAVE_REQUEST_NOT_FOUND",
+        "leave request not found",
+        ctx.request_id,
+      );
+    }
+
+    if (leaveRow.requester_auth_user_id !== ctx.auth_user_id) {
+      return errorResponse(
+        "LEAVE_UPDATE_FORBIDDEN",
+        "user cannot edit this request",
+        ctx.request_id,
+      );
+    }
+
+    const { data: workflow, error: workflowError } = await serviceRoleClient
+      .schema("acl")
+      .from("workflow_requests")
+      .select("request_id, module_code, current_state")
+      .eq("request_id", leaveRow.workflow_request_id)
+      .maybeSingle();
+
+    if (workflowError || !workflow) {
+      return errorResponse(
+        "LEAVE_WORKFLOW_NOT_FOUND",
+        "workflow request not found",
+        ctx.request_id,
+      );
+    }
+
+    const decisionMap = await loadWorkflowDecisionMap([leaveRow.workflow_request_id]);
+    const decisions = decisionMap.get(leaveRow.workflow_request_id) ?? [];
+
+    if (!canRequesterCancel(workflow.current_state, decisions)) {
+      return errorResponse(
+        "LEAVE_EDIT_NOT_ALLOWED",
+        "leave request cannot be edited anymore",
+        ctx.request_id,
+      );
+    }
+
+    await ensureNoDuplicateLeaveRequest({
+      requesterAuthUserId: ctx.auth_user_id,
+      parentCompanyId: leaveRow.parent_company_id,
+      fromDate,
+      toDate,
+      excludeLeaveRequestId: leaveRequestId,
+    });
+
+    const totalDays = calculateInclusiveDays(fromDate, toDate);
+
+    const { data: updatedLeaveRow, error: updateError } = await serviceRoleClient
+      .schema("erp_hr")
+      .from("leave_requests")
+      .update({
+        from_date: fromDate,
+        to_date: toDate,
+        total_days: totalDays,
+        reason,
+      })
+      .eq("leave_request_id", leaveRequestId)
+      .select("leave_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, from_date, to_date, total_days, reason, cancelled_at, cancelled_by, created_at")
+      .single();
+
+    if (updateError || !updatedLeaveRow) {
+      throw new Error("LEAVE_REQUEST_UPDATE_FAILED");
+    }
+
+    await appendWorkflowEvent({
+      request_id: leaveRow.workflow_request_id,
+      company_id: leaveRow.parent_company_id,
+      module_code: workflow.module_code,
+      event_type: "UPDATE",
+      actor_auth_user_id: ctx.auth_user_id,
+      previous_state: workflow.current_state,
+      new_state: workflow.current_state,
+    });
+
+    return okResponse(
+      {
+        leave_request: {
+          ...updatedLeaveRow,
+          current_state: workflow.current_state,
+        },
+      },
+      ctx.request_id,
+    );
+  } catch (err) {
+    return errorResponse(
+      (err as Error).message === "LEAVE_DUPLICATE_DATE_RANGE"
+        ? "Duplicate leave request already exists for the same date range."
+        : (err as Error).message || "LEAVE_UPDATE_EXCEPTION",
+      (err as Error).message === "LEAVE_DUPLICATE_DATE_RANGE"
+        ? "Duplicate leave request already exists for the same date range."
+        : "leave update exception",
+      ctx.request_id,
+      "NONE",
+      (err as Error).message === "LEAVE_DUPLICATE_DATE_RANGE" ? 409 : 403,
+      {
+        gateId: "HR.LEAVE",
+        routeKey,
+        decisionTrace: (err as Error).message || "LEAVE_UPDATE_EXCEPTION",
       },
     );
   }
