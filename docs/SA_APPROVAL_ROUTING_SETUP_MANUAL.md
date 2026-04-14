@@ -1022,6 +1022,178 @@ Save using:
 private HR visibility must remain narrow  
 do not open register access wider than business actually wants
 
+### Report Visibility Mental Map
+
+Think of report visibility as answering only this question:
+
+`Who may see rows that belong to which requester scope?`
+
+Do not think:
+
+- who is the approver
+- who has the higher rank
+- who opened the page from which context
+
+Think only:
+
+- which exact report or register resource is being opened
+- which requester scope those rows belong to
+- which viewer user or role should be allowed to see them
+
+### Very Important Separation
+
+These 3 are different:
+
+1. requester business scope  
+   decides which business lane the request belongs to
+
+2. approval rule  
+   decides who may approve that request
+
+3. report visibility rule  
+   decides who may view that request in register, history, or export screens
+
+One person may be:
+
+- approver but not register viewer
+- register viewer but not approver
+- both approver and register viewer
+
+### How To Read Scope In Report Visibility
+
+Use scope like this:
+
+- own data only  
+  do not give any broad department or company register rule
+
+- same department visibility  
+  use the department scope like `DEPT_DPT003 | PRODUCTION`
+
+- functional visibility  
+  use the exact functional scope like `PROD_POWDER`
+
+- full company visibility  
+  use company-wide blank or all-requester-scopes rule inside that company
+
+- cross-company visibility  
+  create separate report rules in each target company
+
+### Same Department Example
+
+Business:
+
+- `Pradip` should see only Production leave register
+
+Rule:
+
+- resource = `Hr Leave Register`
+- `Action` = `VIEW`
+- `Requester Subject Scope` = `DEPT_DPT003 | PRODUCTION`
+- viewer = `PRADIP`
+
+Meaning:
+
+- Pradip sees Production rows
+- Pradip does not automatically see Supply Chain rows
+
+### Cross Department Example
+
+Business:
+
+- `Ankan` home department is Supply Chain
+- but management wants him to see Production register too
+
+Rule:
+
+- create report visibility rule on Production scope
+- `Requester Subject Scope` = `DEPT_DPT003 | PRODUCTION`
+- viewer = `ANKAN`
+
+Meaning:
+
+- viewer home department does not matter
+- report visibility follows explicit rule, not viewer's own department
+
+### Cross Company Example
+
+Business:
+
+- `Director` should see Company A and Company B leave registers
+
+Correct setup:
+
+1. open `/sa/report-visibility`
+2. select Company A and create Company A rule
+3. select Company B and create Company B rule
+
+Meaning:
+
+- cross-company visibility is never automatic
+- every company needs its own explicit rule
+
+### Functional Visibility Example
+
+Business:
+
+- powder register should be visible only to powder manager
+- liquid register should be visible only to liquid manager
+
+Rules:
+
+- `PROD_POWDER` -> powder manager
+- `PROD_LIQUID` -> liquid manager
+
+Optional fallback:
+
+- audit or director can also get a separate company-wide viewer rule
+
+### Screen Method For SA
+
+Open:
+
+- `/sa/report-visibility`
+
+Then fill the form in this order:
+
+1. choose `Company`
+2. choose `Project`
+3. choose `Module`
+4. choose exact report or register resource
+5. choose `Action = VIEW` or `EXPORT`
+6. choose `Requester Subject Scope`
+7. choose viewer target mode:
+   - `Specific User`
+   - or `Role`
+8. choose the viewer user or viewer role
+9. click `Save Rule`
+
+### How SA Should Decide The Scope
+
+If business says:
+
+- "only Production rows"  
+  use `DEPT_PRODUCTION`
+
+- "only Powder rows"  
+  use `PROD_POWDER`
+
+- "whole company"  
+  use company-wide blank or all-requester-scopes rule
+
+- "two companies"  
+  create one rule in each company
+
+### What Not To Do
+
+Do not assume:
+
+- approver means report viewer
+- higher role means company-wide register access
+- same home department means automatic visibility
+- cross-company manager means automatic cross-company visibility
+
+All report visibility must be explicit.
+
 ---
 
 ## Step 10: Example Full Setup Templates
@@ -1764,3 +1936,281 @@ Before saving any new setup, SA should ask these 7 questions:
 7. After governance changes, did I capture and activate a new ACL version?
 
 If any answer is unclear, pause there and resolve it before going live.
+
+---
+
+## Decision Tree H: Report Visibility Scope Selection
+
+Use this whenever SA is confused about which report visibility scope to choose.
+
+### Question 1
+
+Should the viewer see only one department?
+
+If `yes`:
+
+- use that department `DEPT_*` scope
+
+### Question 2
+
+Should the viewer see only one functional slice inside a department?
+
+If `yes`:
+
+- use the exact manual business scope such as `PROD_POWDER`
+
+### Question 3
+
+Should the viewer see the whole company?
+
+If `yes`:
+
+- use company-wide blank or all-requester-scopes rule in that company
+
+### Question 4
+
+Should the viewer see more than one company?
+
+If `yes`:
+
+- repeat the rule separately in each company
+
+### Question 5
+
+Is the viewer allowed to approve, but business did not explicitly ask for register or report visibility?
+
+If `yes`:
+
+- do not add report visibility automatically
+
+### Final Rule
+
+Approval authority never creates report visibility by itself.  
+Report visibility must always be granted separately and deliberately.
+
+---
+
+## Appendix A: Ready-Made Report Visibility Examples For Current HR Setup
+
+Use this appendix as a fill-up reference for the current organization structure already discussed in this project.
+
+Assumed current examples:
+
+- company = `CMP003 | ALMEGA SURFACE COATS LLP`
+- project = `PRJ001 | HR MANAGEMENT`
+- main departments:
+  - `DPT003 | PRODUCTION`
+  - `DPT009 | SUPPLY CHAIN`
+- known users:
+  - `P0003 | PRADIP BHOWMICK`
+  - `P0004 | ANKAN JYOTI`
+  - `P0002 | HIMANSHU KANABAR`
+
+If your real master data differs, keep the same logic and replace only the company, scope, and user selections.
+
+### Appendix Rule 1: Production Leave Register Viewer
+
+Use when:
+
+- `Pradip` should see only Production leave rows
+
+Open:
+
+- `/sa/report-visibility`
+
+Fill:
+
+1. `Company` = `CMP003 | ALMEGA SURFACE COATS LLP`
+2. `Project` = `PRJ001 | HR MANAGEMENT`
+3. `Module` = HR leave module
+4. exact resource = `Hr Leave Register`
+5. `Action` = `VIEW`
+6. `Requester Subject Scope` = `DEPT_DPT003 | PRODUCTION`
+7. target mode = `Specific User`
+8. viewer user = `P0003 | PRADIP BHOWMICK`
+9. `Save Rule`
+
+Meaning:
+
+- Pradip sees Production leave rows only
+
+### Appendix Rule 2: Supply Chain Leave Register Viewer
+
+Use when:
+
+- `Ankan` should see only Supply Chain leave rows
+
+Fill:
+
+1. `Company` = `CMP003 | ALMEGA SURFACE COATS LLP`
+2. `Project` = `PRJ001 | HR MANAGEMENT`
+3. exact resource = `Hr Leave Register`
+4. `Action` = `VIEW`
+5. `Requester Subject Scope` = `DEPT_DPT009 | SUPPLY CHAIN`
+6. target mode = `Specific User`
+7. viewer user = `P0004 | ANKAN JYOTI`
+8. `Save Rule`
+
+Meaning:
+
+- Ankan sees Supply Chain leave rows only
+
+### Appendix Rule 3: Production Out Work Register Viewer
+
+Use when:
+
+- `Pradip` should see only Production out-work rows
+
+Fill:
+
+1. `Company` = `CMP003 | ALMEGA SURFACE COATS LLP`
+2. `Project` = `PRJ001 | HR MANAGEMENT`
+3. exact resource = `Hr Out Work Register`
+4. `Action` = `VIEW`
+5. `Requester Subject Scope` = `DEPT_DPT003 | PRODUCTION`
+6. target mode = `Specific User`
+7. viewer user = `P0003 | PRADIP BHOWMICK`
+8. `Save Rule`
+
+### Appendix Rule 4: Supply Chain Out Work Register Viewer
+
+Use when:
+
+- `Ankan` should see only Supply Chain out-work rows
+
+Fill:
+
+1. `Company` = `CMP003 | ALMEGA SURFACE COATS LLP`
+2. `Project` = `PRJ001 | HR MANAGEMENT`
+3. exact resource = `Hr Out Work Register`
+4. `Action` = `VIEW`
+5. `Requester Subject Scope` = `DEPT_DPT009 | SUPPLY CHAIN`
+6. target mode = `Specific User`
+7. viewer user = `P0004 | ANKAN JYOTI`
+8. `Save Rule`
+
+### Appendix Rule 5: Plant Head Company-Wide Leave Viewer
+
+Use when:
+
+- plant management should see all leave rows of this company
+
+Fill:
+
+1. `Company` = `CMP003 | ALMEGA SURFACE COATS LLP`
+2. `Project` = `PRJ001 | HR MANAGEMENT`
+3. exact resource = `Hr Leave Register`
+4. `Action` = `VIEW`
+5. `Requester Subject Scope` = leave blank or choose company-wide all-requester-scopes option
+6. target mode = `Specific User`
+7. viewer user = `P0003 | PRADIP BHOWMICK`
+8. `Save Rule`
+
+Meaning:
+
+- Pradip sees all leave rows in this company
+- this should be used only if business truly wants company-wide visibility
+
+### Appendix Rule 6: Director Company-Wide Leave And Out Work Viewer
+
+Use when:
+
+- director should see all HR register rows of this company
+
+Create two rules:
+
+1. one for `Hr Leave Register`
+2. one for `Hr Out Work Register`
+
+For both:
+
+1. `Company` = `CMP003 | ALMEGA SURFACE COATS LLP`
+2. `Project` = `PRJ001 | HR MANAGEMENT`
+3. `Action` = `VIEW`
+4. `Requester Subject Scope` = leave blank or choose company-wide all-requester-scopes option
+5. target mode = `Specific User`
+6. viewer user = `P0002 | HIMANSHU KANABAR`
+7. `Save Rule`
+
+### Appendix Rule 7: Cross Department Viewer Example
+
+Use when:
+
+- `Ankan` home department is Supply Chain
+- but business wants him to see Production register too
+
+This is allowed.
+
+Create:
+
+1. exact resource = `Hr Leave Register`
+2. `Requester Subject Scope` = `DEPT_DPT003 | PRODUCTION`
+3. viewer user = `P0004 | ANKAN JYOTI`
+4. `Save Rule`
+
+Meaning:
+
+- home department does not restrict report visibility
+- explicit viewer rule is the real authority
+
+### Appendix Rule 8: Cross Company Viewer Example
+
+Use when:
+
+- one director or audit user should see HR report rows in another company too
+
+Correct method:
+
+1. open `/sa/report-visibility`
+2. choose Company A and save Company A rule
+3. choose Company B and save Company B rule
+4. repeat per resource:
+   - `Hr Leave Register`
+   - `Hr Out Work Register`
+
+Meaning:
+
+- cross-company report visibility always needs separate company-wise rules
+
+### Appendix Rule 9: Functional Visibility Example
+
+Use only if later you create manual contexts such as:
+
+- `PROD_POWDER`
+- `PROD_LIQUID`
+
+Then report visibility can also split like this:
+
+1. `Hr Leave Register`
+2. `Requester Subject Scope` = `PROD_POWDER`
+3. viewer = powder manager
+
+and separately:
+
+1. `Hr Leave Register`
+2. `Requester Subject Scope` = `PROD_LIQUID`
+3. viewer = liquid manager
+
+This should be used only when report visibility genuinely needs the same functional split.
+
+### Appendix Rule 10: What SA Should Choose In Current Setup
+
+If business intent is:
+
+- "Ankan sees Supply Chain only"  
+  use `DEPT_DPT009 | SUPPLY CHAIN`
+
+- "Pradip sees Production only"  
+  use `DEPT_DPT003 | PRODUCTION`
+
+- "Pradip sees full company"  
+  use company-wide blank or all-requester-scopes rule
+
+- "Director sees full company"  
+  use company-wide blank or all-requester-scopes rule
+
+- "Ankan sees Production too"  
+  add explicit Production viewer rule for Ankan
+
+- "Director sees another company too"  
+  create a new rule in that other company also
