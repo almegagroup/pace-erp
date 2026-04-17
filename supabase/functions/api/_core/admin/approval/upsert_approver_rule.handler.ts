@@ -10,7 +10,7 @@
 
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import type { ContextResolution, PipelineSession } from "../../../_pipeline/context.ts";
-import { getRoleRank, normalizeRoleCode } from "../../../_shared/role_ladder.ts";
+import { normalizeRoleCode } from "../../../_shared/role_ladder.ts";
 import { okResponse, errorResponse } from "../../response.ts";
 import { log } from "../../../_lib/logger.ts";
 import { generateRequestId } from "../../../_lib/request_id.ts";
@@ -36,13 +36,6 @@ type UpsertApproverInput = {
 type AdminContext = {
   context: ContextResolution;
   session: PipelineSession;
-};
-
-type ChainRuleRow = {
-  approver_id: string;
-  approval_stage: number;
-  approver_role_code: string | null;
-  approver_user_id: string | null;
 };
 
 /* =========================================================
@@ -139,13 +132,6 @@ export async function upsertApproverRuleHandler(
         );
       }
 
-      if (roleCode === "L2_AUDITOR" || roleCode === "L1_AUDITOR") {
-        return errorResponse(
-          "INVALID_APPROVER_ROLE",
-          "Auditor roles cannot be used as approvers",
-          requestId
-        );
-      }
     }
 
     const approvalStage = Number(body.approval_stage);
@@ -287,9 +273,7 @@ export async function upsertApproverRuleHandler(
       );
     }
 
-    let targetRoleCode = payload.approver_role_code;
-
-    if (!targetRoleCode && payload.approver_user_id) {
+    if (!payload.approver_role_code && payload.approver_user_id) {
       const { data: targetUserRole, error: targetUserRoleError } = await db
         .schema("erp_acl")
         .from("user_roles")
@@ -305,149 +289,12 @@ export async function upsertApproverRuleHandler(
         );
       }
 
-      targetRoleCode = normalizeRoleCode(targetUserRole?.role_code ?? null);
+      const targetRoleCode = normalizeRoleCode(targetUserRole?.role_code ?? null);
 
       if (!targetRoleCode) {
         return errorResponse(
           "APPROVER_ROLE_LOOKUP_FAILED",
           "Approver user must have a valid ERP role before assignment",
-          requestId
-        );
-      }
-      if (targetRoleCode === "L2_AUDITOR" || targetRoleCode === "L1_AUDITOR") {
-        return errorResponse(
-          "INVALID_APPROVER_ROLE",
-          "Auditor roles cannot be used as approvers",
-          requestId
-        );
-      }
-    }
-
-    const targetRoleRank = getRoleRank(targetRoleCode);
-
-    if (targetRoleRank === null) {
-      return errorResponse(
-        "INVALID_APPROVER_ROLE",
-        "Approver target must resolve to a ranked ERP role",
-        requestId
-      );
-    }
-
-    let chainQuery = db
-      .schema("acl")
-      .from("approver_map")
-      .select("approver_id, approval_stage, approver_role_code, approver_user_id")
-      .eq("company_id", payload.company_id)
-      .eq("module_code", payload.module_code)
-      .eq("scope_type", payload.scope_type);
-
-    if (payload.resource_code && payload.action_code) {
-      chainQuery = chainQuery
-        .eq("resource_code", payload.resource_code)
-        .eq("action_code", payload.action_code);
-    } else {
-      chainQuery = chainQuery
-        .is("resource_code", null)
-        .is("action_code", null);
-    }
-
-    if (payload.subject_work_context_id) {
-      chainQuery = chainQuery.eq("subject_work_context_id", payload.subject_work_context_id);
-    } else {
-      chainQuery = chainQuery.is("subject_work_context_id", null);
-    }
-
-    if (payload.subject_user_id) {
-      chainQuery = chainQuery.eq("subject_user_id", payload.subject_user_id);
-    } else {
-      chainQuery = chainQuery.is("subject_user_id", null);
-    }
-
-    const { data: chainRows, error: chainLookupError } = await chainQuery;
-
-    if (chainLookupError) {
-      return errorResponse(
-        "APPROVER_CHAIN_LOOKUP_FAILED",
-        "Could not validate existing approver chain",
-        requestId
-      );
-    }
-
-    const otherRules = (chainRows ?? []).filter(
-      (row: ChainRuleRow) => !body.approver_id || row.approver_id !== body.approver_id,
-    );
-
-    if (
-      payload.approver_role_code &&
-      otherRules.some((row) => normalizeRoleCode(row.approver_role_code) === payload.approver_role_code)
-    ) {
-      return errorResponse(
-        "DUPLICATE_APPROVER_ROLE_IN_CHAIN",
-        "The same approver role cannot appear twice inside the same scoped approval chain",
-        requestId
-      );
-    }
-
-    const approverUserIds = Array.from(
-      new Set(
-        otherRules
-          .map((row) => row.approver_user_id)
-          .filter((value): value is string => Boolean(value)),
-      ),
-    );
-
-    const userRoleCodeMap = new Map<string, string>();
-
-    if (approverUserIds.length > 0) {
-      const { data: userRoleRows, error: userRoleLookupError } = await db
-        .schema("erp_acl")
-        .from("user_roles")
-        .select("auth_user_id, role_code")
-        .in("auth_user_id", approverUserIds);
-
-      if (userRoleLookupError) {
-        return errorResponse(
-          "APPROVER_CHAIN_ROLE_LOOKUP_FAILED",
-          "Could not validate approver role ranks",
-          requestId
-        );
-      }
-
-      for (const row of userRoleRows ?? []) {
-        const normalized = normalizeRoleCode(row.role_code);
-        if (normalized) {
-          userRoleCodeMap.set(row.auth_user_id, normalized);
-        }
-      }
-    }
-
-    for (const row of otherRules) {
-      const existingRoleCode = row.approver_role_code
-        ? normalizeRoleCode(row.approver_role_code)
-        : userRoleCodeMap.get(row.approver_user_id ?? "");
-
-      if (!existingRoleCode) {
-        continue;
-      }
-
-      const existingRoleRank = getRoleRank(existingRoleCode);
-
-      if (existingRoleRank === null) {
-        continue;
-      }
-
-      if (Number(row.approval_stage) < payload.approval_stage && existingRoleRank >= targetRoleRank) {
-        return errorResponse(
-          "INVALID_APPROVER_STAGE_ORDER",
-          "Lower stages must use strictly lower role rank than higher stages",
-          requestId
-        );
-      }
-
-      if (Number(row.approval_stage) > payload.approval_stage && existingRoleRank <= targetRoleRank) {
-        return errorResponse(
-          "INVALID_APPROVER_STAGE_ORDER",
-          "Higher stages must use strictly higher role rank than lower stages",
           requestId
         );
       }

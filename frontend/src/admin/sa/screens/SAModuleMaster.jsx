@@ -16,7 +16,7 @@ import {
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
-const MIN_REQUIRED_APPROVERS = "2";
+const MIN_REQUIRED_APPROVERS = "1";
 const MAX_ALLOWED_APPROVERS = "3";
 
 async function readJsonSafe(response) {
@@ -653,7 +653,7 @@ export default function SAModuleMaster() {
     <ErpEntryFormTemplate
       eyebrow="Module Master"
       title="Module Master Manage"
-      description="Create project-bound global modules here. Company rollout happens later from the dedicated company module map surface, and SSOT module approval counts stay between 2 and 3."
+      description="Create project-bound global modules here. Company rollout happens later from the dedicated company module map surface, and module approval counts stay between 1 and 3."
       actions={topActions}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
@@ -807,6 +807,7 @@ export default function SAModuleMaster() {
                 disabled={!approvalRequired}
                 className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
               >
+                <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
               </select>
@@ -823,6 +824,7 @@ export default function SAModuleMaster() {
                 disabled={!approvalRequired}
                 className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
               >
+                <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
               </select>
