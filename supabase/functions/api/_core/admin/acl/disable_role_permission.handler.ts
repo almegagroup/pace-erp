@@ -85,26 +85,11 @@ export async function disableRolePermissionHandler(
       body.resource_code.trim().toUpperCase(),
     );
 
-    const { data: existing } = await db
+    const { error, count } = await db
       .schema("acl").from("role_menu_permissions")
-      .select("role_code")
+      .delete({ count: "exact" })
       .eq("role_code", body.role_code)
-      .eq("menu_id", aclMenuId)
-      .maybeSingle();
-
-if (!existing) {
-  return errorResponse(
-    "ROLE_PERMISSION_NOT_FOUND",
-    "No such permission",
-    requestId
-  );
-}
-
-const { error } = await db
-  .schema("acl").from("role_menu_permissions")
-  .delete()
-  .eq("role_code", body.role_code)
-  .eq("menu_id", aclMenuId);
+      .eq("menu_id", aclMenuId);
 
 
     if (error) {
@@ -142,6 +127,7 @@ const { error } = await db
         role_code: body.role_code,
         resource_code: resourceCode,
         disabled: true,
+        deleted_rows: count ?? 0,
       },
       requestId
     );
