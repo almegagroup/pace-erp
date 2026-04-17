@@ -88,6 +88,8 @@ export function MenuProvider({ children }) {
         ? context.availableWorkContexts
         : [],
       selectedWorkContext: context?.selectedWorkContext ?? null,
+      shellIssueCode: context?.shellIssueCode ?? "",
+      shellIssueMessage: context?.shellIssueMessage ?? "",
     });
   }, []);
 

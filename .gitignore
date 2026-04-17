@@ -43,3 +43,5 @@ erp.txt
 .aider.conf.yml
 repo-context/
 .aider*
+.claud*
+.claude/ 

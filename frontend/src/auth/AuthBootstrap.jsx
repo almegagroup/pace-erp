@@ -28,6 +28,39 @@ function createTaggedError(code, meta = {}) {
   return error;
 }
 
+function buildStableRuntimeContext(overrides = {}) {
+  return {
+    isAdmin: false,
+    selectedCompanyId: "",
+    currentCompany: null,
+    availableCompanies: [],
+    availableWorkContexts: [],
+    selectedWorkContext: null,
+    shellIssueCode: "",
+    shellIssueMessage: "",
+    ...overrides,
+  };
+}
+
+function deriveStableBootstrapIssue(error) {
+  const upstreamCode = String(error?.meta?.code ?? "").trim();
+
+  if (
+    upstreamCode === "CONTEXT_UNRESOLVED" ||
+    upstreamCode.startsWith("ME_CONTEXT_")
+  ) {
+    return {
+      code: "CONTEXT_ISSUE",
+      message: "Context issue. Re-select your work company or work context.",
+    };
+  }
+
+  return {
+    code: "WORKSPACE_BOOT_FAILED",
+    message: "Workspace shell could not be loaded right now.",
+  };
+}
+
 function isAuthResponseFailure(response, json) {
   if (json?.action === "LOGOUT") {
     return true;
@@ -247,10 +280,33 @@ export default function AuthBootstrap({ children }) {
 
   useEffect(() => {
     let alive = true;
-    let retryTimerId = null;
 
     async function fetchShellSnapshot({ mode = "silent" } = {}) {
-      const [profileEnvelope, contextEnvelope, menuEnvelope] = await Promise.all([
+      const menuEnvelope = await fetchBootstrapEnvelope("/api/me/menu", {
+        credentials: "include",
+        erpUiMode: mode,
+        erpUiLabel: "Loading workspace shell",
+      });
+      const menuData = menuEnvelope.json;
+
+      const menuRows = Array.isArray(menuData?.data?.menu) ? menuData.data.menu : [];
+
+      if (menuRows.length === 0) {
+        return {
+          shellProfile: {
+            userCode: "",
+            roleCode: "",
+            tagline: "Process Automation & Control Environment",
+          },
+          runtimeContext: buildStableRuntimeContext({
+            shellIssueCode: "NO_ACCESSIBLE_MODULES",
+            shellIssueMessage: "No accessible modules in this context.",
+          }),
+          menu: [],
+        };
+      }
+
+      const [profileEnvelope, contextEnvelope] = await Promise.all([
         fetchBootstrapEnvelope("/api/me/profile", {
           credentials: "include",
           erpUiMode: mode,
@@ -261,16 +317,10 @@ export default function AuthBootstrap({ children }) {
           erpUiMode: mode,
           erpUiLabel: "Loading workspace shell",
         }),
-        fetchBootstrapEnvelope("/api/me/menu", {
-          credentials: "include",
-          erpUiMode: mode,
-          erpUiLabel: "Loading workspace shell",
-        }),
       ]);
 
       const profileData = profileEnvelope.json;
       const contextData = contextEnvelope.json;
-      const menuData = menuEnvelope.json;
 
       return {
         shellProfile: {
@@ -285,8 +335,10 @@ export default function AuthBootstrap({ children }) {
           availableCompanies: contextData?.data?.available_companies ?? [],
           availableWorkContexts: contextData?.data?.available_work_contexts ?? [],
           selectedWorkContext: contextData?.data?.selected_work_context ?? null,
+          shellIssueCode: "",
+          shellIssueMessage: "",
         },
-        menu: menuData?.data?.menu ?? [],
+        menu: menuRows,
       };
     }
 
@@ -355,27 +407,6 @@ export default function AuthBootstrap({ children }) {
       }
 
       return true;
-    }
-
-    function scheduleBootRetry(pathname, bootKey) {
-      if (!alive || retryTimerId) {
-        return;
-      }
-
-      retryTimerId = window.setTimeout(() => {
-        retryTimerId = null;
-
-        if (!alive) {
-          return;
-        }
-
-        bootStateRef.current = {
-          bootKey,
-          inFlight: false,
-        };
-
-        void boot(pathname, bootKey);
-      }, BOOTSTRAP_RETRY_DELAYS_MS.at(-1) ?? 2400);
     }
 
     async function boot(explicitPathname = location.pathname, explicitBootKey = null) {
@@ -517,8 +548,20 @@ export default function AuthBootstrap({ children }) {
           return;
         }
 
-        console.warn("AUTH_BOOTSTRAP_RETRYING_AFTER_UPSTREAM_FAILURE", error);
-        scheduleBootRetry(pathname, bootKey);
+        const stableIssue = deriveStableBootstrapIssue(error);
+        console.warn("AUTH_BOOTSTRAP_STABLE_FAILURE", error);
+        setShellProfile({
+          userCode: "",
+          roleCode: "",
+          tagline: "Process Automation & Control Environment",
+        });
+        setMenuSnapshot([]);
+        setRuntimeContext(
+          buildStableRuntimeContext({
+            shellIssueCode: stableIssue.code,
+            shellIssueMessage: stableIssue.message,
+          })
+        );
       } finally {
         if (alive && bootStateRef.current.bootKey === bootKey) {
           bootStateRef.current = {
@@ -533,9 +576,6 @@ export default function AuthBootstrap({ children }) {
 
     return () => {
       alive = false;
-      if (retryTimerId) {
-        window.clearTimeout(retryTimerId);
-      }
     };
   }, [
     clearMenuSnapshot,

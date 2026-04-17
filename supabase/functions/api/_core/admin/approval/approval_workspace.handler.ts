@@ -130,14 +130,14 @@ export async function listApprovalWorkspaceHandler(
       db
         .schema("acl")
         .from("approver_map")
-        .select("approver_id, company_id, module_code, resource_code, action_code, subject_work_context_id, approval_stage, approver_role_code, approver_user_id, created_at")
+        .select("approver_id, company_id, module_code, resource_code, action_code, scope_type, subject_work_context_id, subject_user_id, approval_stage, approver_role_code, approver_user_id, created_at")
         .order("company_id", { ascending: true })
         .order("module_code", { ascending: true })
         .order("approval_stage", { ascending: true }),
       db
         .schema("acl")
         .from("report_viewer_map")
-        .select("viewer_id, company_id, module_code, resource_code, action_code, subject_work_context_id, viewer_role_code, viewer_user_id, created_at")
+        .select("viewer_id, company_id, module_code, resource_code, action_code, scope_type, subject_work_context_id, subject_user_id, viewer_role_code, viewer_user_id, created_at")
         .order("company_id", { ascending: true })
         .order("module_code", { ascending: true })
         .order("resource_code", { ascending: true }),

@@ -11,7 +11,9 @@ type UpsertViewerInput = {
   module_code: string;
   resource_code: string;
   action_code: "VIEW" | "EXPORT";
+  scope_type?: string;
   subject_work_context_id?: string;
+  subject_user_id?: string;
   viewer_role_code?: string;
   viewer_user_id?: string;
 };
@@ -25,6 +27,11 @@ function assertAdmin(ctx: AdminContext): void {
   if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
     throw new Error("ADMIN_ONLY");
   }
+}
+
+function normalizeScopeType(input: unknown): string {
+  const normalized = String(input ?? "").trim().toUpperCase();
+  return normalized || "COMPANY_WIDE";
 }
 
 export async function upsertReportViewerRuleHandler(
@@ -102,13 +109,66 @@ export async function upsertReportViewerRuleHandler(
     }
 
     const db = getServiceRoleClientWithContext(ctx.context);
+    const scopeType = normalizeScopeType(body.scope_type);
+    const subjectWorkContextId = body.subject_work_context_id?.trim() || null;
+    const subjectUserId = body.subject_user_id?.trim() || null;
+
+    if (!["COMPANY_WIDE", "DEPARTMENT", "WORK_CONTEXT", "USER_EXCEPTION", "DIRECTOR"].includes(scopeType)) {
+      return errorResponse(
+        "INVALID_SCOPE_TYPE",
+        "scope_type must be COMPANY_WIDE, DEPARTMENT, WORK_CONTEXT, USER_EXCEPTION, or DIRECTOR",
+        requestId,
+      );
+    }
+
+    if (scopeType === "USER_EXCEPTION" && !subjectUserId) {
+      return errorResponse(
+        "INVALID_SCOPE_SUBJECT",
+        "USER_EXCEPTION requires subject_user_id",
+        requestId,
+      );
+    }
+
+    if ((scopeType === "WORK_CONTEXT" || scopeType === "DEPARTMENT") && !subjectWorkContextId) {
+      return errorResponse(
+        "INVALID_SCOPE_SUBJECT",
+        `${scopeType} requires subject_work_context_id`,
+        requestId,
+      );
+    }
+
+    if ((scopeType === "COMPANY_WIDE" || scopeType === "DIRECTOR") && (subjectWorkContextId || subjectUserId)) {
+      return errorResponse(
+        "INVALID_SCOPE_SUBJECT",
+        `${scopeType} cannot keep subject_work_context_id or subject_user_id`,
+        requestId,
+      );
+    }
+
+    if (scopeType === "USER_EXCEPTION" && subjectWorkContextId) {
+      return errorResponse(
+        "INVALID_SCOPE_SUBJECT",
+        "USER_EXCEPTION cannot keep subject_work_context_id",
+        requestId,
+      );
+    }
+
+    if ((scopeType === "WORK_CONTEXT" || scopeType === "DEPARTMENT") && subjectUserId) {
+      return errorResponse(
+        "INVALID_SCOPE_SUBJECT",
+        `${scopeType} cannot keep subject_user_id`,
+        requestId,
+      );
+    }
 
     const payload = {
       company_id: body.company_id,
       module_code: body.module_code,
       resource_code: body.resource_code,
       action_code: body.action_code,
-      subject_work_context_id: body.subject_work_context_id?.trim() || null,
+      scope_type: scopeType,
+      subject_work_context_id: subjectWorkContextId,
+      subject_user_id: subjectUserId,
       viewer_role_code: roleCode,
       viewer_user_id: body.viewer_user_id?.trim() || null,
       created_by: ctx.session.authUserId,
@@ -128,6 +188,14 @@ export async function upsertReportViewerRuleHandler(
     } else {
       existingQuery = existingQuery.is("subject_work_context_id", null);
     }
+
+    if (payload.subject_user_id) {
+      existingQuery = existingQuery.eq("subject_user_id", payload.subject_user_id);
+    } else {
+      existingQuery = existingQuery.is("subject_user_id", null);
+    }
+
+    existingQuery = existingQuery.eq("scope_type", payload.scope_type);
 
     if (payload.viewer_user_id) {
       existingQuery = existingQuery
@@ -166,7 +234,9 @@ export async function upsertReportViewerRuleHandler(
       module_code: payload.module_code,
       resource_code: payload.resource_code,
       action_code: payload.action_code,
+      scope_type: payload.scope_type,
       subject_work_context_id: payload.subject_work_context_id,
+      subject_user_id: payload.subject_user_id,
       viewer_role_code: payload.viewer_role_code,
       viewer_user_id: payload.viewer_user_id,
     };

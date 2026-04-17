@@ -76,7 +76,9 @@ export type ApproverRuleRow = {
   module_code: string;
   resource_code: string | null;
   action_code: string | null;
+  scope_type: string | null;
   subject_work_context_id: string | null;
+  subject_user_id: string | null;
   approval_stage: number;
   approver_role_code: string | null;
   approver_user_id: string | null;
@@ -88,7 +90,9 @@ export type ViewerRuleRow = {
   module_code: string;
   resource_code: string;
   action_code: "VIEW" | "EXPORT";
+  scope_type: string | null;
   subject_work_context_id: string | null;
+  subject_user_id: string | null;
   viewer_role_code: string | null;
   viewer_user_id: string | null;
 };
@@ -562,7 +566,7 @@ export async function loadApproverRulesForCompanyModule(
   const { data } = await serviceRoleClient
     .schema("acl")
     .from("approver_map")
-    .select("approver_id, company_id, module_code, resource_code, action_code, subject_work_context_id, approval_stage, approver_role_code, approver_user_id")
+    .select("approver_id, company_id, module_code, resource_code, action_code, scope_type, subject_work_context_id, subject_user_id, approval_stage, approver_role_code, approver_user_id")
     .eq("company_id", companyId)
     .eq("module_code", moduleCode)
     .order("approval_stage", { ascending: true });
@@ -577,7 +581,7 @@ export async function loadViewerRulesForCompanyModule(
   const { data } = await serviceRoleClient
     .schema("acl")
     .from("report_viewer_map")
-    .select("viewer_id, company_id, module_code, resource_code, action_code, subject_work_context_id, viewer_role_code, viewer_user_id")
+    .select("viewer_id, company_id, module_code, resource_code, action_code, scope_type, subject_work_context_id, subject_user_id, viewer_role_code, viewer_user_id")
     .eq("company_id", companyId)
     .eq("module_code", moduleCode)
     .order("resource_code", { ascending: true });
@@ -700,6 +704,7 @@ export function pickScopedApprovers(
   workflow: {
     resource_code?: string | null;
     action_code?: string | null;
+    requester_auth_user_id?: string | null;
     requester_work_context_id?: string | null;
     requester_department_work_context_id?: string | null;
   },
@@ -728,6 +733,7 @@ export function pickScopedViewerRules(
   workflow: {
     resource_code?: string | null;
     action_code?: string | null;
+    requester_auth_user_id?: string | null;
     requester_work_context_id?: string | null;
     requester_department_work_context_id?: string | null;
   },
