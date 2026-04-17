@@ -543,7 +543,7 @@ export default function SAWorkContextMaster() {
       <ErpScreenScaffold
         eyebrow="Work Scope Foundation"
         title="Work Context Master"
-        description="Keep company-wide and department-derived system scopes visible, then create manual work scopes like PROD_POWDER, QA_ADMIX, SCM_OPERATIONS, or MGMT_ALL in a separate focused workspace."
+        description="Keep company-wide and department-derived system scopes visible, then create manual business areas like PROD_POWDER, QA_ADMIX, SCM_OPERATIONS, or MGMT_ALL. Business rule: department is org structure, work scope is runtime business area."
         notices={notices}
         actions={[
           {
@@ -849,7 +849,7 @@ export default function SAWorkContextMaster() {
                   ? `${selectedContext.work_context_code} | ${selectedContext.work_context_name}`
                   : "Choose A Work Scope"
               }
-              description="Department remains HR identity. Work scope remains runtime access identity. Keep these separate for clean governance."
+              description="Department remains org structure. Work scope remains runtime business area. Keep these separate for clean governance."
             >
               {selectedContext ? (
                 <div className="grid gap-3">
@@ -915,15 +915,15 @@ export default function SAWorkContextMaster() {
 
             <ErpSectionCard
               eyebrow="Operating Rule"
-              title="When To Create Manual Scopes"
-              description="Do not overload Department Master. Create manual work scopes only when runtime access needs a finer slice than the team structure gives you."
+              title="When To Create Manual Business Areas"
+              description="Do not overload Department Master. Create manual business areas only when runtime access needs a finer slice than the team structure gives you."
               tone="warning"
             >
               <div className="grid gap-2">
                 {[
                   "Use GENERAL_OPS and DEPT_* as system foundation only.",
-                  "Create manual scopes for splits like PROD_POWDER, PROD_ADMIX, QA_POWDER, QA_ADMIX, SCM_OPERATIONS, MGMT_ALL, or AUDIT_ALL.",
-                  "Attach screen packs in Capability Governance after the manual scope exists.",
+                  "Create manual business areas for splits like PROD_POWDER, PROD_ADMIX, QA_POWDER, QA_ADMIX, SCM_OPERATIONS, MGMT_ALL, or AUDIT_ALL.",
+                  "Attach access packs in Capability Governance after the business area exists.",
                   "Bind users later in User Scope so cross-company access stays explicit and limited.",
                 ].map((line) => (
                   <div

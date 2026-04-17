@@ -16,6 +16,8 @@ function assertAdmin(
 
 const VALID_ACTIONS = new Set(["VIEW", "WRITE", "EDIT", "DELETE", "APPROVE", "EXPORT"]);
 const VALID_APPROVAL_TYPES = new Set(["ANYONE", "SEQUENTIAL", "MUST_ALL"]);
+const MIN_REQUIRED_APPROVERS = 2;
+const MAX_ALLOWED_APPROVERS = 3;
 
 export async function upsertResourceApprovalPolicyHandler(
   req: Request,
@@ -29,8 +31,8 @@ export async function upsertResourceApprovalPolicyHandler(
     const actionCode = String(body?.action_code ?? "").trim().toUpperCase();
     const approvalRequired = body?.approval_required === true;
     const approvalType = String(body?.approval_type ?? "").trim().toUpperCase();
-    const minApprovers = Number(body?.min_approvers ?? 1);
-    const maxApprovers = Number(body?.max_approvers ?? 3);
+    const minApprovers = Number(body?.min_approvers ?? MIN_REQUIRED_APPROVERS);
+    const maxApprovers = Number(body?.max_approvers ?? MAX_ALLOWED_APPROVERS);
 
     if (!resourceCode || !actionCode) {
       return errorResponse("INVALID_INPUT", "resource_code and action_code are required", ctx.request_id);
@@ -42,11 +44,27 @@ export async function upsertResourceApprovalPolicyHandler(
       if (!VALID_APPROVAL_TYPES.has(approvalType)) {
         return errorResponse("INVALID_APPROVAL_TYPE", "approval_type invalid", ctx.request_id);
       }
-      if (!Number.isInteger(minApprovers) || minApprovers < 1 || minApprovers > 3) {
-        return errorResponse("INVALID_MIN_APPROVERS", "min_approvers must be between 1 and 3", ctx.request_id);
+      if (
+        !Number.isInteger(minApprovers) ||
+        minApprovers < MIN_REQUIRED_APPROVERS ||
+        minApprovers > MAX_ALLOWED_APPROVERS
+      ) {
+        return errorResponse(
+          "INVALID_MIN_APPROVERS",
+          `min_approvers must be between ${MIN_REQUIRED_APPROVERS} and ${MAX_ALLOWED_APPROVERS}`,
+          ctx.request_id,
+        );
       }
-      if (!Number.isInteger(maxApprovers) || maxApprovers < 1 || maxApprovers > 3) {
-        return errorResponse("INVALID_MAX_APPROVERS", "max_approvers must be between 1 and 3", ctx.request_id);
+      if (
+        !Number.isInteger(maxApprovers) ||
+        maxApprovers < MIN_REQUIRED_APPROVERS ||
+        maxApprovers > MAX_ALLOWED_APPROVERS
+      ) {
+        return errorResponse(
+          "INVALID_MAX_APPROVERS",
+          `max_approvers must be between ${MIN_REQUIRED_APPROVERS} and ${MAX_ALLOWED_APPROVERS}`,
+          ctx.request_id,
+        );
       }
       if (minApprovers > maxApprovers) {
         return errorResponse("INVALID_APPROVER_RANGE", "min_approvers cannot exceed max_approvers", ctx.request_id);
@@ -71,8 +89,8 @@ export async function upsertResourceApprovalPolicyHandler(
       action_code: actionCode,
       approval_required: approvalRequired,
       approval_type: approvalRequired ? approvalType : null,
-      min_approvers: approvalRequired ? minApprovers : 1,
-      max_approvers: approvalRequired ? maxApprovers : 3,
+      min_approvers: approvalRequired ? minApprovers : MIN_REQUIRED_APPROVERS,
+      max_approvers: approvalRequired ? maxApprovers : MAX_ALLOWED_APPROVERS,
       created_at: new Date().toISOString(),
       created_by: null,
     };

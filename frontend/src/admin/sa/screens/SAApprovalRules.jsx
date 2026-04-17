@@ -470,7 +470,7 @@ export default function SAApprovalRules() {
     <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
       title="Who Approves What"
-      description="Bind exact approvers to exact company, module, resource, action, and requester work scope. This keeps company-wide approvers and department-specific approvers cleanly separated."
+      description="Bind exact approvers to exact company, module, resource, action, and requester work scope. Role rank matters across stages, and the same approver role should not repeat inside one scoped chain."
       actions={[
         {
           key: "policy",
@@ -755,7 +755,7 @@ export default function SAApprovalRules() {
       sideSection={{
         eyebrow: "Rule Editor",
         title: draft.approver_id ? "Edit approver rule" : "Create approver rule",
-        description: "Use explicit scope type so company-wide, director, department, lane, and requester-user exception rules stay deterministic.",
+        description: "Use explicit scope type so company-wide, director, department, lane, and requester-user exception rules stay deterministic. Build stages from lower role rank to higher role rank.",
         children: (
           <div className="grid gap-4">
             <label className="grid gap-2">

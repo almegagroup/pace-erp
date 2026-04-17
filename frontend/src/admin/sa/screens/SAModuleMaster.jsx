@@ -16,6 +16,9 @@ import {
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
+const MIN_REQUIRED_APPROVERS = "2";
+const MAX_ALLOWED_APPROVERS = "3";
+
 async function readJsonSafe(response) {
   try {
     return await response.clone().json();
@@ -219,8 +222,8 @@ export default function SAModuleMaster() {
   const [moduleName, setModuleName] = useState("");
   const [approvalRequired, setApprovalRequired] = useState(false);
   const [approvalType, setApprovalType] = useState("SEQUENTIAL");
-  const [minApprovers, setMinApprovers] = useState("1");
-  const [maxApprovers, setMaxApprovers] = useState("3");
+  const [minApprovers, setMinApprovers] = useState(MIN_REQUIRED_APPROVERS);
+  const [maxApprovers, setMaxApprovers] = useState(MAX_ALLOWED_APPROVERS);
   const [selectedModuleId, setSelectedModuleId] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -240,8 +243,8 @@ export default function SAModuleMaster() {
     setModuleName("");
     setApprovalRequired(false);
     setApprovalType("SEQUENTIAL");
-    setMinApprovers("1");
-    setMaxApprovers("3");
+    setMinApprovers(MIN_REQUIRED_APPROVERS);
+    setMaxApprovers(MAX_ALLOWED_APPROVERS);
   }
 
   function loadSelectedModuleIntoEditor(moduleRow) {
@@ -255,8 +258,8 @@ export default function SAModuleMaster() {
     setModuleName(moduleRow.module_name ?? "");
     setApprovalRequired(moduleRow.approval_required === true);
     setApprovalType(moduleRow.approval_type ?? "SEQUENTIAL");
-    setMinApprovers(String(moduleRow.min_approvers ?? 1));
-    setMaxApprovers(String(moduleRow.max_approvers ?? 3));
+    setMinApprovers(String(moduleRow.min_approvers ?? MIN_REQUIRED_APPROVERS));
+    setMaxApprovers(String(moduleRow.max_approvers ?? MAX_ALLOWED_APPROVERS));
   }
 
   async function loadWorkspace(preferredProjectId = selectedProjectId, preferredModuleId = selectedModuleId) {
@@ -650,7 +653,7 @@ export default function SAModuleMaster() {
     <ErpEntryFormTemplate
       eyebrow="Module Master"
       title="Module Master Manage"
-      description="Create project-bound global modules here. Company rollout happens later from the dedicated company module map surface."
+      description="Create project-bound global modules here. Company rollout happens later from the dedicated company module map surface, and SSOT module approval counts stay between 2 and 3."
       actions={topActions}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
@@ -804,7 +807,6 @@ export default function SAModuleMaster() {
                 disabled={!approvalRequired}
                 className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
               >
-                <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
               </select>
@@ -821,7 +823,6 @@ export default function SAModuleMaster() {
                 disabled={!approvalRequired}
                 className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
               >
-                <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
               </select>

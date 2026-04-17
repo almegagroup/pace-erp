@@ -472,9 +472,10 @@ export default function SAControlPanel() {
   const launchSummary = useMemo(
     () => [
       "Organization foundations first",
-      "Access packs and role baselines next",
-      "Users after access structure is ready",
-      "Approvals and report visibility last",
+      "Role baselines and access packs next",
+      "Users after company and business-area assignment is ready",
+      "Approver map and report visibility last",
+      "Role rank matters, but approver authority is still explicit",
       "Diagnostics only after setup changes land",
     ],
     []

@@ -482,7 +482,7 @@ export default function SAUserRoles() {
     },
     {
       key: "role-permissions",
-      label: "ACL Permissions",
+      label: "Role Permissions",
       tone: "neutral",
       buttonRef: (element) => {
         actionBarRefs.current[3] = element;
@@ -763,7 +763,7 @@ export default function SAUserRoles() {
       <ErpMasterListTemplate
         eyebrow="SA Role Governance"
         title="ERP User Role Assignment"
-        description="This keyboard-native list keeps role filters, quick search, and inline role application in one structured operating surface."
+        description="Role and role rank define the authority ladder here. Role alone does not finalize approval power; explicit approver mapping still decides who can approve what."
         actions={topActions}
         notices={
           error

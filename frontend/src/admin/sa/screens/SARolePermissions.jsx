@@ -574,7 +574,7 @@ export default function SARolePermissions() {
     <ErpApprovalReviewTemplate
       eyebrow="ACL Governance"
       title="Role Permissions"
-      description="Choose project and module once, then set the full page-action matrix for a role without typing manual resource codes."
+      description="Advanced screen only. Use this for broad role-wide baseline access. Do not use this screen to decide who becomes an approver for one specific lane or user."
       actions={topActions}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
@@ -608,6 +608,13 @@ export default function SARolePermissions() {
           value: catalogLoading ? "..." : String(visibleMatrixRows.length),
           tone: "slate",
           caption: "Visible mapped resources in the current project/module filter.",
+        },
+        {
+          key: "warning",
+          label: "Use Carefully",
+          value: "Role-Wide",
+          tone: "amber",
+          caption: "Anything granted here applies to everyone carrying this role.",
         },
       ]}
       filterSection={{
