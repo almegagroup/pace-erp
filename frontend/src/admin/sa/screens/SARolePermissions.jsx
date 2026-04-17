@@ -17,6 +17,22 @@ async function readJsonSafe(response) {
   }
 }
 
+function buildApiError(json, fallbackCode) {
+  const code = json?.code ?? fallbackCode ?? "REQUEST_FAILED";
+  const decisionTrace = json?.decision_trace ? ` | ${json.decision_trace}` : "";
+  const requestId = json?.request_id ? ` | Req ${json.request_id}` : "";
+  const publicMessage =
+    typeof json?.message === "string" && json.message.trim().length > 0
+      ? ` | ${json.message.trim()}`
+      : "";
+  const error = new Error(`${code}${decisionTrace}${publicMessage}${requestId}`);
+  error.code = json?.code ?? fallbackCode ?? "REQUEST_FAILED";
+  error.requestId = json?.request_id ?? null;
+  error.decisionTrace = json?.decision_trace ?? null;
+  error.publicMessage = json?.message ?? null;
+  return error;
+}
+
 async function fetchRolePermissions(roleCode) {
   const response = await fetch(
     `${import.meta.env.VITE_API_BASE}/api/admin/acl/role-permissions?role_code=${encodeURIComponent(roleCode)}`,
@@ -28,7 +44,7 @@ async function fetchRolePermissions(roleCode) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !Array.isArray(json?.data?.permissions)) {
-    throw new Error(json?.code ?? "ROLE_PERMISSION_LIST_FAILED");
+    throw buildApiError(json, "ROLE_PERMISSION_LIST_FAILED");
   }
 
   return json.data.permissions;
@@ -45,7 +61,7 @@ async function fetchResourceCatalog() {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok || !Array.isArray(json?.data?.resources)) {
-    throw new Error(json?.code ?? "ROLE_PERMISSION_RESOURCE_CATALOG_FAILED");
+    throw buildApiError(json, "ROLE_PERMISSION_RESOURCE_CATALOG_FAILED");
   }
 
   return json.data.resources;
@@ -64,7 +80,7 @@ async function saveRolePermission(payload) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    throw new Error(json?.code ?? "ROLE_PERMISSION_UPSERT_FAILED");
+    throw buildApiError(json, "ROLE_PERMISSION_UPSERT_FAILED");
   }
 
   return json.data;
@@ -86,7 +102,7 @@ async function disableRolePermission(payload) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    throw new Error(json?.code ?? "ROLE_PERMISSION_DISABLE_FAILED");
+    throw buildApiError(json, "ROLE_PERMISSION_DISABLE_FAILED");
   }
 
   return json.data;
@@ -165,6 +181,9 @@ export default function SARolePermissions() {
       console.error("ROLE_PERMISSION_LOAD_FAILED", {
         role_code: roleCode,
         message: err?.message ?? "ROLE_PERMISSION_LIST_FAILED",
+        code: err?.code ?? null,
+        requestId: err?.requestId ?? null,
+        decisionTrace: err?.decisionTrace ?? null,
       });
       setPermissions([]);
       setError(
@@ -186,6 +205,9 @@ export default function SARolePermissions() {
     } catch (err) {
       console.error("ROLE_PERMISSION_CATALOG_LOAD_FAILED", {
         message: err?.message ?? "ROLE_PERMISSION_RESOURCE_CATALOG_FAILED",
+        code: err?.code ?? null,
+        requestId: err?.requestId ?? null,
+        decisionTrace: err?.decisionTrace ?? null,
       });
       setResourceCatalog([]);
       setError(
