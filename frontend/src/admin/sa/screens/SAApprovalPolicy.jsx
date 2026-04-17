@@ -52,6 +52,8 @@ async function savePolicy(payload) {
 }
 
 const APPROVAL_TYPE_OPTIONS = ["ANYONE", "SEQUENTIAL", "MUST_ALL"];
+const MIN_REQUIRED_APPROVERS = "2";
+const MAX_ALLOWED_APPROVERS = "3";
 
 export default function SAApprovalPolicy() {
   const navigate = useNavigate();
@@ -68,8 +70,8 @@ export default function SAApprovalPolicy() {
   const [actionCode, setActionCode] = useState("VIEW");
   const [approvalRequired, setApprovalRequired] = useState(false);
   const [approvalType, setApprovalType] = useState("ANYONE");
-  const [minApprovers, setMinApprovers] = useState("1");
-  const [maxApprovers, setMaxApprovers] = useState("3");
+  const [minApprovers, setMinApprovers] = useState(MIN_REQUIRED_APPROVERS);
+  const [maxApprovers, setMaxApprovers] = useState(MAX_ALLOWED_APPROVERS);
 
   async function loadWorkspace(preferredResourceCode = selectedResourceCode) {
     setLoading(true);
@@ -152,15 +154,15 @@ export default function SAApprovalPolicy() {
     if (selectedPolicy) {
       setApprovalRequired(selectedPolicy.approval_required === true);
       setApprovalType(selectedPolicy.approval_type ?? "ANYONE");
-      setMinApprovers(String(selectedPolicy.min_approvers ?? 1));
-      setMaxApprovers(String(selectedPolicy.max_approvers ?? 3));
+      setMinApprovers(String(selectedPolicy.min_approvers ?? MIN_REQUIRED_APPROVERS));
+      setMaxApprovers(String(selectedPolicy.max_approvers ?? MAX_ALLOWED_APPROVERS));
       return;
     }
 
     setApprovalRequired(false);
     setApprovalType("ANYONE");
-    setMinApprovers("1");
-    setMaxApprovers("3");
+    setMinApprovers(MIN_REQUIRED_APPROVERS);
+    setMaxApprovers(MAX_ALLOWED_APPROVERS);
   }, [selectedPolicy]);
 
   async function handleSave() {
@@ -179,8 +181,8 @@ export default function SAApprovalPolicy() {
         action_code: actionCode,
         approval_required: approvalRequired,
         approval_type: approvalRequired ? approvalType : null,
-        min_approvers: approvalRequired ? Number(minApprovers) : 1,
-        max_approvers: approvalRequired ? Number(maxApprovers) : 3,
+        min_approvers: approvalRequired ? Number(minApprovers) : Number(MIN_REQUIRED_APPROVERS),
+        max_approvers: approvalRequired ? Number(maxApprovers) : Number(MAX_ALLOWED_APPROVERS),
       });
       await loadWorkspace(selectedResource.resource_code);
       console.info("RESOURCE_POLICY_SAVE_RESULT", {
@@ -188,8 +190,8 @@ export default function SAApprovalPolicy() {
         action_code: actionCode,
         approval_required: approvalRequired,
         approval_type: approvalRequired ? approvalType : null,
-        min_approvers: approvalRequired ? Number(minApprovers) : 1,
-        max_approvers: approvalRequired ? Number(maxApprovers) : 3,
+        min_approvers: approvalRequired ? Number(minApprovers) : Number(MIN_REQUIRED_APPROVERS),
+        max_approvers: approvalRequired ? Number(maxApprovers) : Number(MAX_ALLOWED_APPROVERS),
       });
       setNotice(`Approval policy saved for ${selectedResource.resource_code} | ${actionCode}.`);
     } catch (err) {
@@ -215,7 +217,7 @@ export default function SAApprovalPolicy() {
     <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
       title="Exact Resource Approval Policy"
-      description="Decide which exact business page and action require approval. This is the lawbook below broad module defaults."
+      description="Decide which exact business page and action require approval. Role rank matters in the approver chain, and SSOT approval count stays between 2 and 3."
       actions={[
         {
           key: "approver-rules",
@@ -433,7 +435,6 @@ export default function SAApprovalPolicy() {
                   onChange={(event) => setMinApprovers(event.target.value)}
                   className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
                 >
-                  <option value="1">1</option>
                   <option value="2">2</option>
                   <option value="3">3</option>
                 </select>
@@ -448,7 +449,6 @@ export default function SAApprovalPolicy() {
                   onChange={(event) => setMaxApprovers(event.target.value)}
                   className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
                 >
-                  <option value="1">1</option>
                   <option value="2">2</option>
                   <option value="3">3</option>
                 </select>
@@ -461,6 +461,7 @@ export default function SAApprovalPolicy() {
               <p>2. My Requests `VIEW` = no approval</p>
               <p>3. Approval Inbox `APPROVE` = no approval policy; approver rules decide who can act</p>
               <p>4. Register/History `VIEW` = no approval</p>
+              <p>5. SSOT chain count stays between 2 and 3 approvers when approval is required</p>
             </div>
           </div>
         ) : null,

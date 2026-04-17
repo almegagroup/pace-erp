@@ -24,6 +24,9 @@ type UpdateModuleInput = {
   max_approvers?: number;
 };
 
+const MIN_REQUIRED_APPROVERS = 2;
+const MAX_ALLOWED_APPROVERS = 3;
+
 export async function updateModuleHandler(
   req: Request,
   ctx: { context: ContextResolution; request_id: string },
@@ -38,8 +41,8 @@ export async function updateModuleHandler(
     const moduleName = body.module_name?.trim();
     const approvalRequired = body.approval_required === true;
     const approvalType = approvalRequired ? body.approval_type ?? null : null;
-    const minApprovers = Number(body.min_approvers ?? 1);
-    const maxApprovers = Number(body.max_approvers ?? 3);
+    const minApprovers = Number(body.min_approvers ?? MIN_REQUIRED_APPROVERS);
+    const maxApprovers = Number(body.max_approvers ?? MAX_ALLOWED_APPROVERS);
 
     if (!moduleId || !moduleName) {
       return errorResponse(
@@ -101,10 +104,16 @@ export async function updateModuleHandler(
       );
     }
 
-    if (minApprovers < 1 || minApprovers > 3 || maxApprovers < 1 || maxApprovers > 3 || minApprovers > maxApprovers) {
+    if (
+      minApprovers < MIN_REQUIRED_APPROVERS ||
+      minApprovers > MAX_ALLOWED_APPROVERS ||
+      maxApprovers < MIN_REQUIRED_APPROVERS ||
+      maxApprovers > MAX_ALLOWED_APPROVERS ||
+      minApprovers > maxApprovers
+    ) {
       return errorResponse(
         "MODULE_APPROVER_BOUNDS_INVALID",
-        "approver bounds must stay within 1 to 3 and min <= max",
+        `approver bounds must stay within ${MIN_REQUIRED_APPROVERS} to ${MAX_ALLOWED_APPROVERS} and min <= max`,
         ctx.request_id,
         "NONE",
         403,
