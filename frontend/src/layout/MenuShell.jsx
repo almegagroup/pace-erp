@@ -475,6 +475,8 @@ export default function MenuShell() {
           );
         }
 
+        setMenuSnapshot([]);
+
         const menuResponse = await fetch(
           `${import.meta.env.VITE_API_BASE}/api/me/menu`,
           {
@@ -502,8 +504,11 @@ export default function MenuShell() {
           availableCompanies: contextJson.data.available_companies ?? [],
           availableWorkContexts: contextJson.data.available_work_contexts ?? [],
           selectedWorkContext: contextJson.data.selected_work_context ?? null,
+          shellIssueCode: "",
+          shellIssueMessage: "",
         });
         setMenuSnapshot(menuJson?.data?.menu ?? []);
+        resetToScreen("DASHBOARD_HOME");
         await holdRuntimeSwitchOverlayUntilPaint();
       } catch (error) {
         console.error("WORK_COMPANY_SWITCH_FAILED", error);
@@ -586,6 +591,8 @@ export default function MenuShell() {
           );
         }
 
+        setMenuSnapshot([]);
+
         const menuResponse = await fetch(
           `${import.meta.env.VITE_API_BASE}/api/me/menu`,
           {
@@ -613,8 +620,11 @@ export default function MenuShell() {
           availableCompanies: contextJson.data.available_companies ?? [],
           availableWorkContexts: contextJson.data.available_work_contexts ?? [],
           selectedWorkContext: contextJson.data.selected_work_context ?? null,
+          shellIssueCode: "",
+          shellIssueMessage: "",
         });
         setMenuSnapshot(menuJson?.data?.menu ?? []);
+        resetToScreen("DASHBOARD_HOME");
         await holdRuntimeSwitchOverlayUntilPaint();
       } catch (error) {
         console.error("WORK_CONTEXT_SWITCH_FAILED", error);

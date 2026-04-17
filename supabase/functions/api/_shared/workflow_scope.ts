@@ -26,6 +26,7 @@ export type WorkflowScopeContextRow = {
 export type WorkflowScopeInput = {
   resource_code?: string | null;
   action_code?: string | null;
+  requester_auth_user_id?: string | null;
   requester_work_context_id?: string | null;
   requester_department_work_context_id?: string | null;
 };
@@ -33,7 +34,9 @@ export type WorkflowScopeInput = {
 type ScopedRuleRow = {
   resource_code: string | null;
   action_code: string | null;
+  scope_type?: string | null;
   subject_work_context_id: string | null;
+  subject_user_id?: string | null;
 };
 
 type StageScopedRuleRow = ScopedRuleRow & {
@@ -160,6 +163,95 @@ function buildScopeTierPriority(workflow: WorkflowScopeInput): Array<string | nu
   return priority;
 }
 
+function dedupeScopedRows<T extends ScopedRuleRow>(
+  rows: T[],
+  getIdentityKey: (row: T) => string,
+): T[] {
+  const seen = new Set<string>();
+  const deduped: T[] = [];
+
+  for (const row of rows) {
+    const key = getIdentityKey(row);
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push(row);
+  }
+
+  return deduped;
+}
+
+function normalizeScopeType(scopeType: string | null | undefined): string | null {
+  const normalized = String(scopeType ?? "").trim().toUpperCase();
+  return normalized || null;
+}
+
+function matchesScopeType(
+  workflow: WorkflowScopeInput,
+  row: ScopedRuleRow,
+): boolean {
+  const scopeType = normalizeScopeType(row.scope_type);
+
+  if (scopeType === "USER_EXCEPTION") {
+    return Boolean(
+      row.subject_user_id &&
+      workflow.requester_auth_user_id &&
+      row.subject_user_id === workflow.requester_auth_user_id,
+    );
+  }
+
+  if (scopeType === "WORK_CONTEXT") {
+    return Boolean(
+      row.subject_work_context_id &&
+      workflow.requester_work_context_id &&
+      row.subject_work_context_id === workflow.requester_work_context_id,
+    );
+  }
+
+  if (scopeType === "DEPARTMENT") {
+    return Boolean(
+      row.subject_work_context_id &&
+      workflow.requester_department_work_context_id &&
+      row.subject_work_context_id === workflow.requester_department_work_context_id,
+    );
+  }
+
+  if (scopeType === "COMPANY_WIDE" || scopeType === "DIRECTOR") {
+    return row.subject_work_context_id === null && (row.subject_user_id ?? null) === null;
+  }
+
+  if (row.subject_user_id) {
+    return Boolean(
+      workflow.requester_auth_user_id &&
+      row.subject_user_id === workflow.requester_auth_user_id,
+    );
+  }
+
+  if (row.subject_work_context_id === null) {
+    return true;
+  }
+
+  return (
+    row.subject_work_context_id === workflow.requester_work_context_id ||
+    row.subject_work_context_id === workflow.requester_department_work_context_id
+  );
+}
+
+function buildScopePriorityBuckets(workflow: WorkflowScopeInput): string[] {
+  const buckets = [
+    "USER_EXCEPTION",
+    "WORK_CONTEXT",
+    "DEPARTMENT",
+    "COMPANY_WIDE",
+    "DIRECTOR",
+    "LEGACY",
+  ];
+
+  return buckets;
+}
+
 export function pickScopedApproverRules<T extends StageScopedRuleRow>(
   workflow: WorkflowScopeInput,
   approverRows: T[],
@@ -169,23 +261,43 @@ export function pickScopedApproverRules<T extends StageScopedRuleRow>(
     return [];
   }
 
-  const scopePriority = buildScopeTierPriority(workflow);
   const stages = [...new Set(resourceScopedRows.map((row) => row.approval_stage))].sort(
     (left, right) => left - right,
   );
+  const scopeBuckets = buildScopePriorityBuckets(workflow);
 
   const resolvedRows: T[] = [];
 
   for (const stage of stages) {
     const stageRows = resourceScopedRows.filter((row) => row.approval_stage === stage);
+    const stageMatches: T[] = [];
 
-    for (const subjectScopeId of scopePriority) {
-      const matches = stageRows.filter((row) => row.subject_work_context_id === subjectScopeId);
-      if (matches.length > 0) {
-        resolvedRows.push(...matches);
-        break;
-      }
+    for (const bucket of scopeBuckets) {
+      const matches = stageRows.filter((row) => {
+        const scopeType = normalizeScopeType(row.scope_type);
+        if (bucket === "LEGACY") {
+          return scopeType === null && matchesScopeType(workflow, row);
+        }
+
+        return scopeType === bucket && matchesScopeType(workflow, row);
+      });
+
+      stageMatches.push(...matches);
     }
+
+    resolvedRows.push(
+      ...dedupeScopedRows(
+        stageMatches,
+        (row) =>
+          [
+            row.resource_code ?? "",
+            row.action_code ?? "",
+            row.subject_work_context_id ?? "",
+            row.approval_stage,
+            JSON.stringify(row),
+          ].join("|"),
+      ),
+    );
   }
 
   return resolvedRows;
@@ -205,16 +317,32 @@ export function pickScopedViewerRules<T extends ScopedRuleRow>(
     return [];
   }
 
-  const scopePriority = buildScopeTierPriority(workflow);
+  const scopeBuckets = buildScopePriorityBuckets(workflow);
+  const resolvedRows: T[] = [];
 
-  for (const subjectScopeId of scopePriority) {
-    const matches = resourceScopedRows.filter((row) => row.subject_work_context_id === subjectScopeId);
-    if (matches.length > 0) {
-      return matches;
-    }
+  for (const bucket of scopeBuckets) {
+    const matches = resourceScopedRows.filter((row) => {
+      const scopeType = normalizeScopeType(row.scope_type);
+      if (bucket === "LEGACY") {
+        return scopeType === null && matchesScopeType(workflow, row);
+      }
+
+      return scopeType === bucket && matchesScopeType(workflow, row);
+    });
+
+    resolvedRows.push(...matches);
   }
 
-  return [];
+  return dedupeScopedRows(
+    resolvedRows,
+    (row) =>
+      [
+        row.resource_code ?? "",
+        row.action_code ?? "",
+        row.subject_work_context_id ?? "",
+        JSON.stringify(row),
+      ].join("|"),
+  );
 }
 
 export function getNextWorkflowSequentialStage<T extends Pick<ActionableApproverRuleRow, "approval_stage">>(

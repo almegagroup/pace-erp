@@ -13,6 +13,8 @@ const EMPTY_RUNTIME_CONTEXT = Object.freeze({
   availableCompanies: [],
   availableWorkContexts: [],
   selectedWorkContext: null,
+  shellIssueCode: "",
+  shellIssueMessage: "",
 });
 
 function canUseStorage() {
@@ -39,6 +41,8 @@ function normalizeRuntimeContext(context) {
       ? context.availableWorkContexts
       : [],
     selectedWorkContext: context?.selectedWorkContext ?? null,
+    shellIssueCode: context?.shellIssueCode ?? "",
+    shellIssueMessage: context?.shellIssueMessage ?? "",
   };
 }
 

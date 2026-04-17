@@ -33,6 +33,53 @@ function buildUserLabel(row) {
   return `${code}${name}${role}${company}`;
 }
 
+function buildWorkContextLabel(row) {
+  if (!row) {
+    return "Company-wide";
+  }
+
+  const primary = row.work_context_name || row.department_name || row.work_context_code;
+  const secondary = row.work_context_name ? row.work_context_code : row.department_name;
+  const company = row.company_code ? `${row.company_code} | ` : "";
+
+  return `${company}${primary}${secondary ? ` | ${secondary}` : ""}`;
+}
+
+const VISIBILITY_SCOPE_OPTIONS = [
+  {
+    value: "COMPANY_WIDE",
+    label: "Company-wide",
+    description: "Broad report visibility across every requester lane in the company.",
+  },
+  {
+    value: "DEPARTMENT",
+    label: "Department",
+    description: "Visible for one requester department lane.",
+  },
+  {
+    value: "WORK_CONTEXT",
+    label: "Work Context",
+    description: "Visible for one exact requester lane or subgroup.",
+  },
+  {
+    value: "USER_EXCEPTION",
+    label: "User Exception",
+    description: "Visible only when a specific requester is involved.",
+  },
+  {
+    value: "DIRECTOR",
+    label: "Director Broad",
+    description: "Broad director-level business visibility for the company.",
+  },
+];
+
+function buildVisibilityScopeLabel(scopeType) {
+  return (
+    VISIBILITY_SCOPE_OPTIONS.find((option) => option.value === String(scopeType ?? "").trim().toUpperCase())
+      ?.label ?? "Company-wide"
+  );
+}
+
 function createEmptyDraft() {
   return {
     viewer_id: null,
@@ -41,7 +88,9 @@ function createEmptyDraft() {
     module_code: "",
     resource_code: "",
     action_code: "VIEW",
+    scope_type: "COMPANY_WIDE",
     subject_work_context_id: "",
+    subject_user_id: "",
     target_mode: "user",
     viewer_user_id: "",
     viewer_role_code: ERP_ROLE_OPTIONS[0]?.code ?? "DIRECTOR",
@@ -160,11 +209,26 @@ export default function SAReportVisibility() {
   const subjectScopeOptions = useMemo(
     () =>
       sortByLabel(
-        workspace.work_contexts.filter((row) => !draft.company_id || row.company_id === draft.company_id),
+        workspace.work_contexts.filter((row) => {
+          if (draft.company_id && row.company_id !== draft.company_id) {
+            return false;
+          }
+
+          const workContextCode = String(row.work_context_code ?? "").trim().toUpperCase();
+          if (draft.scope_type === "DEPARTMENT") {
+            return workContextCode.startsWith("DEPT_");
+          }
+
+          if (draft.scope_type === "WORK_CONTEXT") {
+            return !workContextCode.startsWith("DEPT_");
+          }
+
+          return true;
+        }),
         (row) =>
           `${row.company_code ?? ""} ${row.work_context_code ?? ""} ${row.department_code ?? ""} ${row.department_name ?? ""}`.trim(),
       ),
-    [workspace.work_contexts, draft.company_id],
+    [workspace.work_contexts, draft.company_id, draft.scope_type],
   );
 
   const userOptions = useMemo(() => {
@@ -193,13 +257,16 @@ export default function SAReportVisibility() {
 
       const targetUser = workspace.users.find((user) => user.auth_user_id === row.viewer_user_id);
       const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id);
+      const requesterUser = workspace.users.find((user) => user.auth_user_id === row.subject_user_id);
       const haystack = [
         row.company_id,
         row.module_code,
         row.resource_code,
         row.action_code,
+        row.scope_type,
         row.viewer_role_code,
         targetUser ? buildUserLabel(targetUser) : "",
+        requesterUser ? buildUserLabel(requesterUser) : "",
         scope?.work_context_code,
         scope?.department_name,
       ]
@@ -226,6 +293,16 @@ export default function SAReportVisibility() {
       return;
     }
 
+    if ((draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT") && !draft.subject_work_context_id) {
+      setError("Choose the requester lane for DEPARTMENT or WORK_CONTEXT visibility.");
+      return;
+    }
+
+    if (draft.scope_type === "USER_EXCEPTION" && !draft.subject_user_id) {
+      setError("Choose the requester user for USER_EXCEPTION visibility.");
+      return;
+    }
+
     if (draft.target_mode === "user" && !draft.viewer_user_id) {
       setError("Choose a viewer user.");
       return;
@@ -247,7 +324,12 @@ export default function SAReportVisibility() {
         module_code: draft.module_code,
         resource_code: draft.resource_code,
         action_code: draft.action_code,
-        subject_work_context_id: draft.subject_work_context_id || undefined,
+        scope_type: draft.scope_type,
+        subject_work_context_id:
+          draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT"
+            ? draft.subject_work_context_id || undefined
+            : undefined,
+        subject_user_id: draft.scope_type === "USER_EXCEPTION" ? draft.subject_user_id || undefined : undefined,
         viewer_user_id: draft.target_mode === "user" ? draft.viewer_user_id : undefined,
         viewer_role_code: draft.target_mode === "role" ? draft.viewer_role_code : undefined,
       };
@@ -267,7 +349,12 @@ export default function SAReportVisibility() {
           module_code: draft.module_code,
           resource_code: draft.resource_code,
           action_code: draft.action_code,
-          subject_work_context_id: draft.subject_work_context_id || null,
+          scope_type: draft.scope_type,
+          subject_work_context_id:
+            draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT"
+              ? draft.subject_work_context_id || null
+              : null,
+          subject_user_id: draft.scope_type === "USER_EXCEPTION" ? draft.subject_user_id || null : null,
           viewer_user_id: draft.target_mode === "user" ? draft.viewer_user_id : null,
           viewer_role_code: draft.target_mode === "role" ? draft.viewer_role_code : null,
         },
@@ -338,7 +425,9 @@ export default function SAReportVisibility() {
       module_code: rule.module_code,
       resource_code: rule.resource_code,
       action_code: rule.action_code ?? "VIEW",
+      scope_type: rule.scope_type ?? "COMPANY_WIDE",
       subject_work_context_id: rule.subject_work_context_id ?? "",
+      subject_user_id: rule.subject_user_id ?? "",
       target_mode: rule.viewer_user_id ? "user" : "role",
       viewer_user_id: rule.viewer_user_id ?? "",
       viewer_role_code: rule.viewer_role_code ?? ERP_ROLE_OPTIONS[0]?.code ?? "DIRECTOR",
@@ -414,9 +503,11 @@ export default function SAReportVisibility() {
         {
           key: "scope",
           label: "Visibility Scope",
-          value: draft.subject_work_context_id ? "Scoped" : "Company-wide",
-          tone: draft.subject_work_context_id ? "amber" : "slate",
-          caption: "Leave blank to allow full company-level reporting access for the selected report resource.",
+          value: buildVisibilityScopeLabel(draft.scope_type),
+          tone: draft.scope_type === "COMPANY_WIDE" || draft.scope_type === "DIRECTOR" ? "slate" : "amber",
+          caption:
+            VISIBILITY_SCOPE_OPTIONS.find((option) => option.value === draft.scope_type)?.description ??
+            "Choose how broadly this report visibility should match.",
         },
         {
           key: "action",
@@ -443,6 +534,7 @@ export default function SAReportVisibility() {
                       ...current,
                       company_id: event.target.value,
                       subject_work_context_id: "",
+                      subject_user_id: "",
                     }))
                   }
                   className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
@@ -553,6 +645,7 @@ export default function SAReportVisibility() {
               const user = workspace.users.find((item) => item.auth_user_id === row.viewer_user_id) ?? null;
               const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id) ?? null;
               const resource = workspace.resources.find((item) => item.resource_code === row.resource_code) ?? null;
+              const requesterUser = workspace.users.find((item) => item.auth_user_id === row.subject_user_id) ?? null;
 
               return (
                 <button
@@ -585,9 +678,16 @@ export default function SAReportVisibility() {
                         {user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.viewer_role_code] ?? row.viewer_role_code}
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
-                        {scope
-                          ? `${scope.company_code} | ${scope.work_context_code}${scope.department_name ? ` | ${scope.department_name}` : ""}`
-                          : "Viewer scope: company-wide"}
+                        Scope: {buildVisibilityScopeLabel(row.scope_type)}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {row.scope_type === "USER_EXCEPTION"
+                          ? `Requester user: ${buildUserLabel(requesterUser)}`
+                          : scope
+                            ? `Viewer lane: ${buildWorkContextLabel(scope)}`
+                            : row.scope_type === "DIRECTOR"
+                              ? "Viewer lane: director broad visibility"
+                              : "Viewer lane: company-wide broad visibility"}
                       </div>
                     </div>
                     <button
@@ -610,7 +710,7 @@ export default function SAReportVisibility() {
       sideSection={{
         eyebrow: "Viewer Rule Editor",
         title: draft.viewer_id ? "Edit visibility rule" : "Create visibility rule",
-        description: "Use company-wide rows for Meeta/Pradeep-style reporting access. Use scoped rows when only one requester context should be visible.",
+        description: "Use explicit scope type so company-wide, director, department, lane, and requester-user exception visibility stays deterministic.",
         children: (
           <div className="grid gap-4">
             <label className="grid gap-2">
@@ -637,7 +737,35 @@ export default function SAReportVisibility() {
 
             <label className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Requester Subject Scope
+                Scope Type
+              </span>
+              <select
+                value={draft.scope_type}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    scope_type: event.target.value,
+                    subject_work_context_id:
+                      event.target.value === "DEPARTMENT" || event.target.value === "WORK_CONTEXT"
+                        ? current.subject_work_context_id
+                        : "",
+                    subject_user_id: event.target.value === "USER_EXCEPTION" ? current.subject_user_id : "",
+                  }))
+                }
+                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+              >
+                {VISIBILITY_SCOPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {(draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT") ? (
+              <label className="grid gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                {draft.scope_type === "DEPARTMENT" ? "Requester Department Lane" : "Requester Work Context"}
               </span>
               <select
                 value={draft.subject_work_context_id}
@@ -649,15 +777,42 @@ export default function SAReportVisibility() {
                 }
                 className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
               >
-                <option value="">All requester scopes in this company</option>
+                <option value="">
+                  {draft.scope_type === "DEPARTMENT" ? "Choose requester department lane" : "Choose requester work context"}
+                </option>
                 {subjectScopeOptions.map((row) => (
                   <option key={row.work_context_id} value={row.work_context_id}>
-                    {row.company_code} | {row.work_context_code}
-                    {row.department_name ? ` | ${row.department_name}` : ""}
+                    {buildWorkContextLabel(row)}
                   </option>
                 ))}
               </select>
             </label>
+            ) : null}
+
+            {draft.scope_type === "USER_EXCEPTION" ? (
+              <label className="grid gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Requester User Exception
+                </span>
+                <select
+                  value={draft.subject_user_id}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      subject_user_id: event.target.value,
+                    }))
+                  }
+                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                >
+                  <option value="">Choose requester user</option>
+                  {userOptions.map((row) => (
+                    <option key={row.auth_user_id} value={row.auth_user_id}>
+                      {buildUserLabel(row)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
 
             <div className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -733,7 +888,7 @@ export default function SAReportVisibility() {
             )}
 
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-xs text-slate-600">
-              Use company-wide viewer rows for HR-wide salary/report visibility. Use subject-scoped viewer rows when only one department or requester context should be visible.
+              Use company-wide or director viewer rows for broad business visibility. Use department, lane, or user-exception viewer rows when the report must stay tightly scoped.
             </div>
           </div>
         ),

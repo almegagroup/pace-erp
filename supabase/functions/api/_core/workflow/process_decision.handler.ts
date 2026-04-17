@@ -18,6 +18,7 @@ import {
   pickScopedApproverRules,
   resolveDepartmentWorkflowScopeId,
 } from "../../_shared/workflow_scope.ts";
+import { readAclSnapshotDecision } from "../../_shared/acl_snapshot.ts";
 
 interface HandlerContext {
   auth_user_id: string;
@@ -33,7 +34,9 @@ interface ApproverMapRow {
   module_code: string;
   resource_code: string | null;
   action_code: string | null;
+  scope_type: string | null;
   subject_work_context_id: string | null;
+  subject_user_id: string | null;
   approval_stage: number;
   approver_role_code: string | null;
   approver_user_id: string | null;
@@ -153,6 +156,7 @@ const scopedApprovers = pickScopedApproverRules(
   {
     resource_code: workflow.resource_code,
     action_code: workflow.action_code,
+    requester_auth_user_id: workflow.requester_auth_user_id ?? null,
     requester_work_context_id: workflow.requester_work_context_id ?? null,
     requester_department_work_context_id: requesterDepartmentWorkContextId,
   },
@@ -191,31 +195,31 @@ if (matchingApprovers.length === 0) {
 // STEP 4.5: ACL Snapshot Authorization Check (7.5.17)
 // =========================================================
 
+const approvalResourceCode = String(workflow.resource_code ?? "").trim();
+const approvalActionCode = String(workflow.action_code ?? "APPROVE").trim() || "APPROVE";
+
+if (!approvalResourceCode) {
+  return errorResponse(
+    "WORKFLOW_APPROVAL_SCOPE_MISSING",
+    "Workflow request is missing approval resource scope",
+    ctx.request_id
+  );
+}
+
 const activeAclVersionId = await getActiveAclVersionIdForCompany(
   serviceRoleClient,
   workflow.company_id,
 );
 
-let aclCheckQuery = serviceRoleClient
-  .schema("acl").from("precomputed_acl_view")
-  .select("auth_user_id")
-  .eq("acl_version_id", activeAclVersionId)
-  .eq("auth_user_id", ctx.auth_user_id)
-  .eq("company_id", workflow.company_id)
-  .eq("work_context_id", ctx.workContextId)
-  .eq("decision", "ALLOW");
-
-if (workflow.resource_code && workflow.action_code) {
-  aclCheckQuery = aclCheckQuery
-    .eq("resource_code", workflow.resource_code)
-    .eq("action_code", "APPROVE");
-} else {
-  aclCheckQuery = aclCheckQuery
-    .eq("resource_code", workflow.module_code)
-    .eq("action_code", "APPROVE");
-}
-
-const { data: aclCheck, error: aclError } = await aclCheckQuery.maybeSingle();
+const { data: aclCheck, error: aclError } = await readAclSnapshotDecision({
+  db: serviceRoleClient,
+  aclVersionId: activeAclVersionId,
+  authUserId: ctx.auth_user_id,
+  companyId: workflow.company_id,
+  workContextId: ctx.workContextId,
+  resourceCode: approvalResourceCode,
+  actionCode: approvalActionCode,
+});
 
 if (aclError) {
   return errorResponse(
@@ -225,7 +229,7 @@ if (aclError) {
   );
 }
 
-if (!aclCheck) {
+if (!aclCheck || aclCheck.decision !== "ALLOW") {
   return errorResponse(
     "ACL_DENIED",
     "User not permitted by ACL snapshot",

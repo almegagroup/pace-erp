@@ -17,7 +17,7 @@ import {
 
 export default function AuthResolver() {
   const location = useLocation();
-  const { menu } = useMenu();
+  const { loading, menu, runtimeContext } = useMenu();
   const shuffledTips = useMemo(() => shuffleRedirectTips(REDIRECT_TIPS), []);
   const [tipIndex, setTipIndex] = useState(0);
 
@@ -53,6 +53,23 @@ export default function AuthResolver() {
 
     return () => window.clearInterval(intervalId);
   }, [shuffledTips]);
+
+  const stableIssueTitle =
+    runtimeContext?.shellIssueCode === "NO_ACCESSIBLE_MODULES"
+      ? "No accessible modules"
+      : runtimeContext?.shellIssueCode === "CONTEXT_ISSUE"
+        ? "Context issue"
+        : runtimeContext?.shellIssueCode
+          ? "Workspace unavailable"
+          : "";
+  const stableIssueMessage =
+    runtimeContext?.shellIssueMessage ||
+    "The protected workspace could not be opened right now.";
+  const showStableIssue =
+    !loading &&
+    Array.isArray(menu) &&
+    menu.length === 0 &&
+    Boolean(runtimeContext?.shellIssueCode);
 
   return (
     <div
@@ -111,7 +128,7 @@ export default function AuthResolver() {
             letterSpacing: "-0.04em",
           }}
         >
-          Preparing your ERP workspace
+          {showStableIssue ? stableIssueTitle : "Preparing your ERP workspace"}
         </h1>
 
         <p
@@ -122,9 +139,9 @@ export default function AuthResolver() {
             color: "#4a6273",
           }}
         >
-          We are opening your ERP home workspace and restoring the correct
-          shell for your role. Fresh data will settle quietly in the
-          background when needed.
+          {showStableIssue
+            ? stableIssueMessage
+            : "We are opening your ERP home workspace and restoring the correct shell for your role. Fresh data will settle quietly in the background when needed."}
         </p>
 
         <div
@@ -153,25 +170,62 @@ export default function AuthResolver() {
             />
           </div>
 
-          <div
-            style={{
-              height: "10px",
-              borderRadius: "999px",
-              overflow: "hidden",
-              background: "#dbe8ef",
-            }}
-          >
+          {showStableIssue ? (
             <div
               style={{
-                width: "38%",
-                height: "100%",
-                borderRadius: "999px",
-                background: "linear-gradient(90deg, #2f7db1 0%, #7ecbff 100%)",
-                animation: "pace-auth-slide 1.25s ease-in-out infinite",
-                transformOrigin: "left center",
+                border: "1px solid #d7e5ee",
+                borderRadius: "18px",
+                background: "#f8fbfd",
+                padding: "18px 18px 16px",
+                minHeight: "84px",
               }}
-            />
-          </div>
+            >
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: "11px",
+                  letterSpacing: "0.18em",
+                  textTransform: "uppercase",
+                  color: "#628099",
+                  fontWeight: 800,
+                }}
+              >
+                Stable Recovery State
+              </p>
+              <p
+                style={{
+                  margin: "12px 0 0",
+                  fontSize: "16px",
+                  lineHeight: 1.7,
+                  color: "#17354a",
+                }}
+              >
+                {runtimeContext?.shellIssueCode === "NO_ACCESSIBLE_MODULES"
+                  ? "This account is active, but no menu items are available in the current context."
+                  : "The session is valid, but the selected business context needs attention before the workspace can open."}
+              </p>
+            </div>
+          ) : (
+            <div
+              style={{
+                height: "10px",
+                borderRadius: "999px",
+                overflow: "hidden",
+                background: "#dbe8ef",
+              }}
+            >
+              <div
+                style={{
+                  width: "38%",
+                  height: "100%",
+                  borderRadius: "999px",
+                  background: "linear-gradient(90deg, #2f7db1 0%, #7ecbff 100%)",
+                  animation: "pace-auth-slide 1.25s ease-in-out infinite",
+                  transformOrigin: "left center",
+                }}
+              />
+            </div>
+          )}
 
           <div
             style={{

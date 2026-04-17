@@ -35,7 +35,9 @@ export async function listReportViewerRulesHandler(
         module_code,
         resource_code,
         action_code,
+        scope_type,
         subject_work_context_id,
+        subject_user_id,
         viewer_role_code,
         viewer_user_id,
         created_at

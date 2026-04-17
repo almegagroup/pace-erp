@@ -951,6 +951,7 @@ export async function listOutWorkApprovalInboxHandler(
         {
           resource_code: row.resource_code,
           action_code: row.action_code,
+          requester_auth_user_id: row.requester_auth_user_id,
           requester_work_context_id: row.requester_work_context_id,
           requester_department_work_context_id: row.requester_department_work_context_id,
         },
@@ -1011,6 +1012,7 @@ export async function listOutWorkApprovalScopeHistoryHandler(
         {
           resource_code: row.resource_code,
           action_code: row.action_code,
+          requester_auth_user_id: row.requester_auth_user_id,
           requester_work_context_id: row.requester_work_context_id,
           requester_department_work_context_id: row.requester_department_work_context_id,
         },
@@ -1058,6 +1060,7 @@ export async function listOutWorkRegisterHandler(
         {
           resource_code: OUT_WORK_RESOURCE_CODES.register,
           action_code: "VIEW",
+          requester_auth_user_id: row.requester_auth_user_id,
           requester_work_context_id: row.requester_work_context_id,
           requester_department_work_context_id: row.requester_department_work_context_id,
         },

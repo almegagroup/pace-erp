@@ -20,6 +20,7 @@ import type {
 import { getServiceRoleClientWithContext } from "../_shared/serviceRoleClient.ts";
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { recordSecurityEvent } from "../_security/security_events.ts";
+import { readAclSnapshotDecision } from "../_shared/acl_snapshot.ts";
 
 async function getActiveAclVersionId(
   db: SupabaseClient,
@@ -153,21 +154,15 @@ const db = getServiceRoleClientWithContext({
 
 const activeAclVersionId = await getActiveAclVersionId(db, companyId as string);
 
-const { data, error } = await db
-  .schema("acl").from("precomputed_acl_view")
-  .select(`
-    resource_code,
-    action_code,
-    decision,
-    decision_reason
-  `)
-  .eq("acl_version_id", activeAclVersionId)
-  .eq("auth_user_id", authUserId)
-  .eq("company_id", companyId)
-  .eq("work_context_id", workContextId)
-  .eq("resource_code", resourceCode)
-  .eq("action_code", action)
-  .maybeSingle();
+const { data, error } = await readAclSnapshotDecision({
+  db,
+  aclVersionId: activeAclVersionId,
+  authUserId,
+  companyId,
+  workContextId,
+  resourceCode,
+  actionCode: action,
+});
 
 if (error) {
   return {

@@ -13,6 +13,32 @@ import { okResponse } from "../../response.ts";
 import { log } from "../../../_lib/logger.ts";
 import { verifyHumanRequest } from "../../../_security/human_verification.ts";
 
+function summarizeAuthorizationHeader(authHeader: string | null) {
+  const trimmedHeader = authHeader?.trim() ?? "";
+
+  if (!trimmedHeader) {
+    return {
+      hasAuthHeader: false,
+      authScheme: null,
+      tokenPresent: false,
+      tokenLength: 0,
+    };
+  }
+
+  const firstSpace = trimmedHeader.indexOf(" ");
+  const authScheme =
+    firstSpace === -1 ? trimmedHeader : trimmedHeader.slice(0, firstSpace);
+  const token =
+    firstSpace === -1 ? "" : trimmedHeader.slice(firstSpace + 1).trim();
+
+  return {
+    hasAuthHeader: true,
+    authScheme,
+    tokenPresent: token.length > 0,
+    tokenLength: token.length,
+  };
+}
+
 /**
  * Signup Request Handler
  *
@@ -87,7 +113,7 @@ if (humanToken) {
   log({
   level: "OBSERVABILITY",
   event: "SIGNUP_STEP_1_HEADER",
-  meta: { authHeader }
+  meta: summarizeAuthorizationHeader(authHeader)
 });
 
 const token = authHeader?.replace("Bearer ", "");

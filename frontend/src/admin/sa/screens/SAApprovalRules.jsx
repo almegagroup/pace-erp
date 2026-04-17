@@ -33,6 +33,53 @@ function buildUserLabel(row) {
   return `${code}${name}${role}${company}`;
 }
 
+function buildWorkContextLabel(row) {
+  if (!row) {
+    return "Company-wide";
+  }
+
+  const primary = row.work_context_name || row.department_name || row.work_context_code;
+  const secondary = row.work_context_name ? row.work_context_code : row.department_name;
+  const company = row.company_code ? `${row.company_code} | ` : "";
+
+  return `${company}${primary}${secondary ? ` | ${secondary}` : ""}`;
+}
+
+const APPROVAL_SCOPE_OPTIONS = [
+  {
+    value: "COMPANY_WIDE",
+    label: "Company-wide",
+    description: "Broad approver across every requester lane in the company.",
+  },
+  {
+    value: "DEPARTMENT",
+    label: "Department",
+    description: "Applies to the requester department lane only.",
+  },
+  {
+    value: "WORK_CONTEXT",
+    label: "Work Context",
+    description: "Applies to one exact requester lane or subgroup.",
+  },
+  {
+    value: "USER_EXCEPTION",
+    label: "User Exception",
+    description: "Applies only when one specific requester submits.",
+  },
+  {
+    value: "DIRECTOR",
+    label: "Director Broad",
+    description: "Highest business-level broad participant for the company.",
+  },
+];
+
+function buildApprovalScopeLabel(scopeType) {
+  return (
+    APPROVAL_SCOPE_OPTIONS.find((option) => option.value === String(scopeType ?? "").trim().toUpperCase())
+      ?.label ?? "Company-wide"
+  );
+}
+
 function createEmptyDraft() {
   return {
     approver_id: null,
@@ -41,7 +88,9 @@ function createEmptyDraft() {
     module_code: "",
     resource_code: "",
     action_code: "APPROVE",
+    scope_type: "COMPANY_WIDE",
     subject_work_context_id: "",
+    subject_user_id: "",
     approval_stage: "1",
     target_mode: "user",
     approver_user_id: "",
@@ -188,12 +237,29 @@ export default function SAApprovalRules() {
   }, [actionOptions, draft.action_code]);
 
   const subjectScopeOptions = useMemo(() => {
+    const needsDepartmentOnly = draft.scope_type === "DEPARTMENT";
+    const needsExactContext = draft.scope_type === "WORK_CONTEXT";
     return sortByLabel(
-      workspace.work_contexts.filter((row) => !draft.company_id || row.company_id === draft.company_id),
+      workspace.work_contexts.filter((row) => {
+        if (draft.company_id && row.company_id !== draft.company_id) {
+          return false;
+        }
+
+        const workContextCode = String(row.work_context_code ?? "").trim().toUpperCase();
+        if (needsDepartmentOnly) {
+          return workContextCode.startsWith("DEPT_");
+        }
+
+        if (needsExactContext) {
+          return !workContextCode.startsWith("DEPT_");
+        }
+
+        return true;
+      }),
       (row) =>
         `${row.company_code ?? ""} ${row.work_context_code ?? ""} ${row.department_code ?? ""} ${row.department_name ?? ""}`.trim(),
     );
-  }, [workspace.work_contexts, draft.company_id]);
+  }, [workspace.work_contexts, draft.company_id, draft.scope_type]);
 
   const userOptions = useMemo(() => {
     return sortByLabel(
@@ -219,13 +285,16 @@ export default function SAApprovalRules() {
       const targetScope = workspace.work_contexts.find(
         (scope) => scope.work_context_id === row.subject_work_context_id,
       );
+      const requesterUser = workspace.users.find((user) => user.auth_user_id === row.subject_user_id);
       const haystack = [
         row.company_id,
         row.module_code,
         row.resource_code,
         row.action_code,
+        row.scope_type,
         row.approver_role_code,
         targetUser ? buildUserLabel(targetUser) : "",
+        requesterUser ? buildUserLabel(requesterUser) : "",
         targetScope?.work_context_code,
         targetScope?.department_name,
       ]
@@ -252,6 +321,16 @@ export default function SAApprovalRules() {
       return;
     }
 
+    if ((draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT") && !draft.subject_work_context_id) {
+      setError("Choose the requester lane for DEPARTMENT or WORK_CONTEXT rules.");
+      return;
+    }
+
+    if (draft.scope_type === "USER_EXCEPTION" && !draft.subject_user_id) {
+      setError("Choose the requester user for USER_EXCEPTION rules.");
+      return;
+    }
+
     if (draft.target_mode === "user" && !draft.approver_user_id) {
       setError("Choose an approver user.");
       return;
@@ -273,7 +352,12 @@ export default function SAApprovalRules() {
         module_code: draft.module_code,
         resource_code: draft.resource_code,
         action_code: draft.action_code,
-        subject_work_context_id: draft.subject_work_context_id || undefined,
+        scope_type: draft.scope_type,
+        subject_work_context_id:
+          draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT"
+            ? draft.subject_work_context_id || undefined
+            : undefined,
+        subject_user_id: draft.scope_type === "USER_EXCEPTION" ? draft.subject_user_id || undefined : undefined,
         approval_stage: Number(draft.approval_stage || "1"),
         approver_user_id: draft.target_mode === "user" ? draft.approver_user_id : undefined,
         approver_role_code: draft.target_mode === "role" ? draft.approver_role_code : undefined,
@@ -295,7 +379,12 @@ export default function SAApprovalRules() {
           module_code: draft.module_code,
           resource_code: draft.resource_code,
           action_code: draft.action_code,
-          subject_work_context_id: draft.subject_work_context_id || null,
+          scope_type: draft.scope_type,
+          subject_work_context_id:
+            draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT"
+              ? draft.subject_work_context_id || null
+              : null,
+          subject_user_id: draft.scope_type === "USER_EXCEPTION" ? draft.subject_user_id || null : null,
           approval_stage: Number(draft.approval_stage || "1"),
           approver_user_id: draft.target_mode === "user" ? draft.approver_user_id : null,
           approver_role_code: draft.target_mode === "role" ? draft.approver_role_code : null,
@@ -367,7 +456,9 @@ export default function SAApprovalRules() {
       module_code: rule.module_code,
       resource_code: rule.resource_code ?? "",
       action_code: rule.action_code ?? "APPROVE",
+      scope_type: rule.scope_type ?? "COMPANY_WIDE",
       subject_work_context_id: rule.subject_work_context_id ?? "",
+      subject_user_id: rule.subject_user_id ?? "",
       approval_stage: String(rule.approval_stage ?? 1),
       target_mode: rule.approver_user_id ? "user" : "role",
       approver_user_id: rule.approver_user_id ?? "",
@@ -453,9 +544,11 @@ export default function SAApprovalRules() {
         {
           key: "scope",
           label: "Requester Scope",
-          value: draft.subject_work_context_id ? "Scoped" : "Company-wide",
-          tone: draft.subject_work_context_id ? "amber" : "slate",
-          caption: "Leave blank only if every requester in this company-module should share the same approver pool.",
+          value: buildApprovalScopeLabel(draft.scope_type),
+          tone: draft.scope_type === "COMPANY_WIDE" || draft.scope_type === "DIRECTOR" ? "slate" : "amber",
+          caption:
+            APPROVAL_SCOPE_OPTIONS.find((option) => option.value === draft.scope_type)?.description ??
+            "Choose how narrowly or broadly this approver should match.",
         },
         {
           key: "target",
@@ -469,7 +562,7 @@ export default function SAApprovalRules() {
       ]}
       filterSection={{
         eyebrow: "Scope Filters",
-        title: "Choose exact approval scope",
+        title: "Choose approval pool boundaries",
         children: (
           <div className="grid gap-3">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -484,6 +577,7 @@ export default function SAApprovalRules() {
                       ...current,
                       company_id: event.target.value,
                       subject_work_context_id: "",
+                      subject_user_id: "",
                     }))
                   }
                   className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
@@ -508,6 +602,7 @@ export default function SAApprovalRules() {
                       project_code: event.target.value,
                       module_code: "",
                       resource_code: "",
+                      scope_type: current.scope_type,
                     }))
                   }
                   className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
@@ -531,6 +626,7 @@ export default function SAApprovalRules() {
                       ...current,
                       module_code: event.target.value,
                       resource_code: "",
+                      scope_type: current.scope_type,
                     }))
                   }
                   className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
@@ -579,7 +675,7 @@ export default function SAApprovalRules() {
       reviewSection={{
         eyebrow: "Existing Rules",
         title: loading ? "Loading approver rules" : `${filteredRules.length} visible approver rule${filteredRules.length === 1 ? "" : "s"}`,
-        description: "Pick a row to edit it, or delete rows that should no longer route approvals.",
+      description: "Pick a row to edit it, or delete rows that should no longer route approvals.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading scoped approver rules.
@@ -594,6 +690,7 @@ export default function SAApprovalRules() {
               const user = workspace.users.find((item) => item.auth_user_id === row.approver_user_id) ?? null;
               const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id) ?? null;
               const resource = workspace.resources.find((item) => item.resource_code === row.resource_code) ?? null;
+              const requesterUser = workspace.users.find((item) => item.auth_user_id === row.subject_user_id) ?? null;
 
               return (
                 <button
@@ -626,9 +723,16 @@ export default function SAApprovalRules() {
                         Stage {row.approval_stage} | {user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.approver_role_code] ?? row.approver_role_code}
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
-                        {scope
-                          ? `${scope.company_code} | ${scope.work_context_code}${scope.department_name ? ` | ${scope.department_name}` : ""}`
-                          : "Requester scope: company-wide"}
+                        Scope: {buildApprovalScopeLabel(row.scope_type)}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {row.scope_type === "USER_EXCEPTION"
+                          ? `Requester user: ${buildUserLabel(requesterUser)}`
+                          : scope
+                            ? `Requester lane: ${buildWorkContextLabel(scope)}`
+                            : row.scope_type === "DIRECTOR"
+                              ? "Requester lane: director broad coverage"
+                              : "Requester lane: company-wide broad coverage"}
                       </div>
                     </div>
                     <button
@@ -651,7 +755,7 @@ export default function SAApprovalRules() {
       sideSection={{
         eyebrow: "Rule Editor",
         title: draft.approver_id ? "Edit approver rule" : "Create approver rule",
-        description: "Use requester subject scope to keep approvers narrow. Example: Accounts requests -> Arka, Engineering requests -> Bikash.",
+        description: "Use explicit scope type so company-wide, director, department, lane, and requester-user exception rules stay deterministic.",
         children: (
           <div className="grid gap-4">
             <label className="grid gap-2">
@@ -678,7 +782,35 @@ export default function SAApprovalRules() {
 
             <label className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Requester Subject Scope
+                Scope Type
+              </span>
+              <select
+                value={draft.scope_type}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    scope_type: event.target.value,
+                    subject_work_context_id:
+                      event.target.value === "DEPARTMENT" || event.target.value === "WORK_CONTEXT"
+                        ? current.subject_work_context_id
+                        : "",
+                    subject_user_id: event.target.value === "USER_EXCEPTION" ? current.subject_user_id : "",
+                  }))
+                }
+                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+              >
+                {APPROVAL_SCOPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {(draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT") ? (
+              <label className="grid gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                {draft.scope_type === "DEPARTMENT" ? "Requester Department Lane" : "Requester Work Context"}
               </span>
               <select
                 value={draft.subject_work_context_id}
@@ -690,15 +822,42 @@ export default function SAApprovalRules() {
                 }
                 className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
               >
-                <option value="">All requester scopes in this company</option>
+                <option value="">
+                  {draft.scope_type === "DEPARTMENT" ? "Choose requester department lane" : "Choose requester work context"}
+                </option>
                 {subjectScopeOptions.map((row) => (
                   <option key={row.work_context_id} value={row.work_context_id}>
-                    {row.company_code} | {row.work_context_code}
-                    {row.department_name ? ` | ${row.department_name}` : ""}
+                    {buildWorkContextLabel(row)}
                   </option>
                 ))}
               </select>
             </label>
+            ) : null}
+
+            {draft.scope_type === "USER_EXCEPTION" ? (
+              <label className="grid gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Requester User Exception
+                </span>
+                <select
+                  value={draft.subject_user_id}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      subject_user_id: event.target.value,
+                    }))
+                  }
+                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                >
+                  <option value="">Choose requester user</option>
+                  {userOptions.map((row) => (
+                    <option key={row.auth_user_id} value={row.auth_user_id}>
+                      {buildUserLabel(row)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
 
             <label className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -795,7 +954,7 @@ export default function SAApprovalRules() {
 
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-xs text-slate-600">
               Use exact resource `*_APPROVAL_INBOX` with action `APPROVE` for approver routing.
-              Keep requester scope empty only when the same approver pool should work for every requester in the company.
+              Company-wide and director rows are broad participants, not weak fallback rows. Department, lane, and user-exception rows can coexist in the same effective approver pool.
             </div>
           </div>
         ),
