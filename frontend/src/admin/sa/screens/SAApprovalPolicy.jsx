@@ -52,7 +52,7 @@ async function savePolicy(payload) {
 }
 
 const APPROVAL_TYPE_OPTIONS = ["ANYONE", "SEQUENTIAL", "MUST_ALL"];
-const MIN_REQUIRED_APPROVERS = "2";
+const MIN_REQUIRED_APPROVERS = "1";
 const MAX_ALLOWED_APPROVERS = "3";
 
 export default function SAApprovalPolicy() {
@@ -217,7 +217,7 @@ export default function SAApprovalPolicy() {
     <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
       title="Exact Resource Approval Policy"
-      description="Decide which exact business page and action require approval. Role rank matters in the approver chain, and SSOT approval count stays between 2 and 3."
+      description="Decide which exact business page and action require approval. Role rank still matters in governance, but approval count stays flexible between 1 and 3."
       actions={[
         {
           key: "approver-rules",
@@ -435,6 +435,7 @@ export default function SAApprovalPolicy() {
                   onChange={(event) => setMinApprovers(event.target.value)}
                   className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
                 >
+                  <option value="1">1</option>
                   <option value="2">2</option>
                   <option value="3">3</option>
                 </select>
@@ -449,6 +450,7 @@ export default function SAApprovalPolicy() {
                   onChange={(event) => setMaxApprovers(event.target.value)}
                   className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
                 >
+                  <option value="1">1</option>
                   <option value="2">2</option>
                   <option value="3">3</option>
                 </select>
@@ -461,7 +463,7 @@ export default function SAApprovalPolicy() {
               <p>2. My Requests `VIEW` = no approval</p>
               <p>3. Approval Inbox `APPROVE` = no approval policy; approver rules decide who can act</p>
               <p>4. Register/History `VIEW` = no approval</p>
-              <p>5. SSOT chain count stays between 2 and 3 approvers when approval is required</p>
+              <p>5. Approval count stays between 1 and 3 approvers when approval is required</p>
             </div>
           </div>
         ) : null,

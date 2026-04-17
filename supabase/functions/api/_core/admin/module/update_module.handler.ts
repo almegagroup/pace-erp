@@ -24,7 +24,7 @@ type UpdateModuleInput = {
   max_approvers?: number;
 };
 
-const MIN_REQUIRED_APPROVERS = 2;
+const MIN_REQUIRED_APPROVERS = 1;
 const MAX_ALLOWED_APPROVERS = 3;
 
 export async function updateModuleHandler(

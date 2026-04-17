@@ -16,7 +16,7 @@ function assertAdmin(
 
 const VALID_ACTIONS = new Set(["VIEW", "WRITE", "EDIT", "DELETE", "APPROVE", "EXPORT"]);
 const VALID_APPROVAL_TYPES = new Set(["ANYONE", "SEQUENTIAL", "MUST_ALL"]);
-const MIN_REQUIRED_APPROVERS = 2;
+const MIN_REQUIRED_APPROVERS = 1;
 const MAX_ALLOWED_APPROVERS = 3;
 
 export async function upsertResourceApprovalPolicyHandler(
