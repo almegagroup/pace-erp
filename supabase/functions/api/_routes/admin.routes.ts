@@ -76,6 +76,8 @@ import { upsertWorkContextHandler } from "../_core/admin/acl/upsert_work_context
 import { listWorkContextCapabilitiesHandler } from "../_core/admin/acl/list_work_context_capabilities.handler.ts";
 import { assignWorkContextCapabilityHandler } from "../_core/admin/acl/assign_work_context_capability.handler.ts";
 import { unassignWorkContextCapabilityHandler } from "../_core/admin/acl/unassign_work_context_capability.handler.ts";
+import { listWorkContextProjectsHandler } from "../_core/admin/acl/list_work_context_projects.handler.ts";
+import { syncWorkContextProjectsHandler } from "../_core/admin/acl/sync_work_context_projects.handler.ts";
 import { listAclVersionsHandler } from "../_core/admin/acl/list_acl_versions.handler.ts";
 import { listAclVersionCenterStatusHandler } from "../_core/admin/acl/list_acl_version_center_status.handler.ts";
 import { createAclVersionHandler } from "../_core/admin/acl/create_acl_version.handler.ts";
@@ -494,6 +496,18 @@ export async function dispatchAdminRoutes(
 
     case "POST:/api/admin/acl/work-context-capabilities/unassign":
       response = await unassignWorkContextCapabilityHandler(req, {
+        context,
+      });
+      break;
+
+    case "GET:/api/admin/acl/work-context-projects":
+      response = await listWorkContextProjectsHandler(req, {
+        context,
+      });
+      break;
+
+    case "POST:/api/admin/acl/work-context-projects":
+      response = await syncWorkContextProjectsHandler(req, {
         context,
       });
       break;

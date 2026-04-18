@@ -29,7 +29,8 @@ type SignupRow = {
 
 type IdRow = { auth_user_id: string; company_id?: string | null; project_id?: string | null; department_id?: string | null; work_context_id?: string | null; is_primary?: boolean | null };
 type CompanyRow = { id: string; company_code: string | null; company_name: string | null };
-type ProjectRow = { id: string; project_code: string | null; project_name: string | null; company_id: string | null };
+type CompanyProjectRow = { company_id: string; project_id: string };
+type ProjectRow = { id: string; project_code: string | null; project_name: string | null; company_id?: string | null };
 type DepartmentRow = { id: string; department_code: string | null; department_name: string | null; company_id: string | null };
 type WorkContextRow = { work_context_id: string; work_context_code: string | null; work_context_name: string | null; company_id: string | null; department_id: string | null; is_active: boolean | null };
 
@@ -57,7 +58,9 @@ function buildReportRow({
   parentCompany,
   identityDepartment,
   workCompanies,
-  projects,
+  directProjectOverrides,
+  inheritedProjects,
+  effectiveProjects,
   workContexts,
   primaryWorkContext,
 }: {
@@ -67,14 +70,20 @@ function buildReportRow({
   parentCompany: CompanyRow | null;
   identityDepartment: DepartmentRow | null;
   workCompanies: CompanyRow[];
-  projects: ProjectRow[];
+  directProjectOverrides: ProjectRow[];
+  inheritedProjects: ProjectRow[];
+  effectiveProjects: ProjectRow[];
   workContexts: Array<{ context: WorkContextRow; department: DepartmentRow | null }>;
   primaryWorkContext: { context: WorkContextRow; department: DepartmentRow | null } | null;
 }) {
   const workCompanyCodes = workCompanies.map((row) => row.company_code).filter(Boolean).join(", ");
   const workCompanyNames = workCompanies.map((row) => row.company_name).filter(Boolean).join(", ");
-  const projectCodes = projects.map((row) => row.project_code).filter(Boolean).join(", ");
-  const projectNames = projects.map((row) => row.project_name).filter(Boolean).join(", ");
+  const directProjectOverrideCodes = directProjectOverrides.map((row) => row.project_code).filter(Boolean).join(", ");
+  const directProjectOverrideNames = directProjectOverrides.map((row) => row.project_name).filter(Boolean).join(", ");
+  const inheritedProjectCodes = inheritedProjects.map((row) => row.project_code).filter(Boolean).join(", ");
+  const inheritedProjectNames = inheritedProjects.map((row) => row.project_name).filter(Boolean).join(", ");
+  const effectiveProjectCodes = effectiveProjects.map((row) => row.project_code).filter(Boolean).join(", ");
+  const effectiveProjectNames = effectiveProjects.map((row) => row.project_name).filter(Boolean).join(", ");
   const workAreaCodes = workContexts.map((row) => row.context.work_context_code).filter(Boolean).join(", ");
   const workAreaNames = workContexts.map((row) => row.context.work_context_name).filter(Boolean).join(", ");
   const workAreaDepartmentCodes = workContexts.map((row) => row.department?.department_code).filter(Boolean).join(", ");
@@ -96,8 +105,12 @@ function buildReportRow({
     identity_department_name: identityDepartment?.department_name ?? null,
     work_company_codes: workCompanyCodes || null,
     work_company_names: workCompanyNames || null,
-    project_codes: projectCodes || null,
-    project_names: projectNames || null,
+    direct_project_override_codes: directProjectOverrideCodes || null,
+    direct_project_override_names: directProjectOverrideNames || null,
+    inherited_project_codes: inheritedProjectCodes || null,
+    inherited_project_names: inheritedProjectNames || null,
+    effective_project_codes: effectiveProjectCodes || null,
+    effective_project_names: effectiveProjectNames || null,
     work_area_codes: workAreaCodes || null,
     work_area_names: workAreaNames || null,
     work_area_department_codes: workAreaDepartmentCodes || null,
@@ -138,7 +151,7 @@ export async function listUserScopeReportHandler(
       { data: signups },
       { data: parentCompanyRows },
       { data: workCompanyRows },
-      { data: projectRows },
+      { data: directProjectOverrideRows },
       { data: departmentRows },
       { data: workContextRows },
     ] = await Promise.all([
@@ -172,35 +185,49 @@ export async function listUserScopeReportHandler(
 
     for (const row of (parentCompanyRows ?? []) as IdRow[]) if (row.company_id) companyIds.add(row.company_id);
     for (const row of (workCompanyRows ?? []) as IdRow[]) if (row.company_id) companyIds.add(row.company_id);
-    for (const row of (projectRows ?? []) as IdRow[]) if (row.project_id) projectIds.add(row.project_id);
+    for (const row of (directProjectOverrideRows ?? []) as IdRow[]) if (row.project_id) projectIds.add(row.project_id);
     for (const row of (departmentRows ?? []) as IdRow[]) if (row.department_id) departmentIds.add(row.department_id);
     for (const row of (workContextRows ?? []) as IdRow[]) if (row.work_context_id) workContextIds.add(row.work_context_id);
+
+    const { data: workContextProjectRows } = workContextIds.size === 0
+      ? { data: [] as Array<{ work_context_id: string; project_id: string }> }
+      : await db
+        .schema("erp_map")
+        .from("work_context_projects")
+        .select("work_context_id, project_id")
+        .in("work_context_id", [...workContextIds]);
+
+    for (const row of workContextProjectRows ?? []) if (row.project_id) projectIds.add(row.project_id);
 
     const [
       { data: companies },
       { data: projects },
       { data: departments },
       { data: workContexts },
+      { data: companyProjectRows },
     ] = await Promise.all([
       companyIds.size === 0
         ? Promise.resolve({ data: [] as CompanyRow[] })
         : db.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", [...companyIds]),
       projectIds.size === 0
         ? Promise.resolve({ data: [] as ProjectRow[] })
-        : db.schema("erp_master").from("projects").select("id, project_code, project_name, company_id").in("id", [...projectIds]),
+        : db.schema("erp_master").from("projects").select("id, project_code, project_name").eq("status", "ACTIVE").in("id", [...projectIds]),
       departmentIds.size === 0
         ? Promise.resolve({ data: [] as DepartmentRow[] })
         : db.schema("erp_master").from("departments").select("id, department_code, department_name, company_id").in("id", [...departmentIds]),
       workContextIds.size === 0
         ? Promise.resolve({ data: [] as WorkContextRow[] })
         : db.schema("erp_acl").from("work_contexts").select("work_context_id, work_context_code, work_context_name, company_id, department_id, is_active").in("work_context_id", [...workContextIds]),
+      companyIds.size === 0 || projectIds.size === 0
+        ? Promise.resolve({ data: [] as CompanyProjectRow[] })
+        : db.schema("erp_map").from("company_projects").select("company_id, project_id").in("company_id", [...companyIds]).in("project_id", [...projectIds]),
     ]);
 
     const roleMap = new Map(((roles ?? []) as RoleRow[]).map((row) => [row.auth_user_id, row]));
     const signupMap = new Map(((signups ?? []) as SignupRow[]).map((row) => [row.auth_user_id, row]));
     const parentCompanyMap = new Map(((parentCompanyRows ?? []) as IdRow[]).map((row) => [row.auth_user_id, row.company_id ?? null]));
     const workCompanyMap = new Map<string, string[]>();
-    const projectMapByUser = new Map<string, string[]>();
+    const directProjectOverrideMapByUser = new Map<string, string[]>();
     const departmentMapByUser = new Map<string, string[]>();
     const workContextMapByUser = new Map<string, Array<{ work_context_id: string; is_primary: boolean }>>();
 
@@ -209,10 +236,10 @@ export async function listUserScopeReportHandler(
       if (row.company_id) current.push(row.company_id);
       workCompanyMap.set(row.auth_user_id, current);
     }
-    for (const row of (projectRows ?? []) as IdRow[]) {
-      const current = projectMapByUser.get(row.auth_user_id) ?? [];
+    for (const row of (directProjectOverrideRows ?? []) as IdRow[]) {
+      const current = directProjectOverrideMapByUser.get(row.auth_user_id) ?? [];
       if (row.project_id) current.push(row.project_id);
-      projectMapByUser.set(row.auth_user_id, current);
+      directProjectOverrideMapByUser.set(row.auth_user_id, current);
     }
     for (const row of (departmentRows ?? []) as IdRow[]) {
       const current = departmentMapByUser.get(row.auth_user_id) ?? [];
@@ -234,6 +261,16 @@ export async function listUserScopeReportHandler(
     const projectMap = new Map(((projects ?? []) as ProjectRow[]).map((row) => [row.id, row]));
     const departmentMap = new Map(((departments ?? []) as DepartmentRow[]).map((row) => [row.id, row]));
     const workContextMap = new Map(((workContexts ?? []) as WorkContextRow[]).map((row) => [row.work_context_id, row]));
+    const workContextProjectMap = new Map<string, string[]>();
+    const companyProjectKeySet = new Set(
+      ((companyProjectRows ?? []) as CompanyProjectRow[]).map((row) => `${row.company_id}:${row.project_id}`),
+    );
+
+    for (const row of workContextProjectRows ?? []) {
+      const current = workContextProjectMap.get(row.work_context_id) ?? [];
+      current.push(row.project_id);
+      workContextProjectMap.set(row.work_context_id, current);
+    }
 
     const reportRows = [];
 
@@ -246,19 +283,39 @@ export async function listUserScopeReportHandler(
       const role = roleMap.get(user.auth_user_id) ?? null;
       const signup = signupMap.get(user.auth_user_id) ?? null;
       const workCompanies = workCompanyMap.get(user.auth_user_id) ?? [];
-      const projectsForUser = projectMapByUser.get(user.auth_user_id) ?? [];
+      const directProjectOverridesForUser = directProjectOverrideMapByUser.get(user.auth_user_id) ?? [];
       const workContextsForUser = workContextMapByUser.get(user.auth_user_id) ?? [];
 
       const candidateCompanyIds = new Set<string>();
       if (parentCompany?.id) candidateCompanyIds.add(parentCompany.id);
       for (const companyId of workCompanies) candidateCompanyIds.add(companyId);
-      for (const projectId of projectsForUser) {
-        const project = projectMap.get(projectId);
-        if (project?.company_id) candidateCompanyIds.add(project.company_id);
-      }
       for (const workContextAssignment of workContextsForUser) {
         const workContext = workContextMap.get(workContextAssignment.work_context_id);
         if (workContext?.company_id) candidateCompanyIds.add(workContext.company_id);
+      }
+
+      const inheritedProjectIds = [...new Set(
+        workContextsForUser.flatMap((assignment) => {
+          const context = workContextMap.get(assignment.work_context_id);
+          const companyId = context?.company_id ?? "";
+          return (workContextProjectMap.get(assignment.work_context_id) ?? []).filter((projectId) =>
+            Boolean(companyId) && companyProjectKeySet.has(`${companyId}:${projectId}`)
+          );
+        }),
+      )];
+
+      const effectiveDirectOverrideIds = directProjectOverridesForUser.filter((projectId) =>
+        [...candidateCompanyIds].some((candidateCompanyId) =>
+          companyProjectKeySet.has(`${candidateCompanyId}:${projectId}`)
+        ),
+      );
+
+      for (const projectId of [...inheritedProjectIds, ...effectiveDirectOverrideIds]) {
+        for (const candidateCompanyId of candidateCompanyIds) {
+          if (companyProjectKeySet.has(`${candidateCompanyId}:${projectId}`)) {
+            candidateCompanyIds.add(candidateCompanyId);
+          }
+        }
       }
 
       if (companyIdFilter && !candidateCompanyIds.has(companyIdFilter)) {
@@ -268,7 +325,16 @@ export async function listUserScopeReportHandler(
       const resolvedWorkCompanies = workCompanies
         .map((companyId) => companyMap.get(companyId) ?? null)
         .filter(Boolean) as CompanyRow[];
-      const resolvedProjects = projectsForUser
+      const resolvedDirectProjectOverrides = effectiveDirectOverrideIds
+        .map((projectId) => projectMap.get(projectId) ?? null)
+        .filter(Boolean) as ProjectRow[];
+      const resolvedInheritedProjects = inheritedProjectIds
+        .map((projectId) => projectMap.get(projectId) ?? null)
+        .filter(Boolean) as ProjectRow[];
+      const resolvedEffectiveProjects = [...new Set([
+        ...inheritedProjectIds,
+        ...effectiveDirectOverrideIds,
+      ])]
         .map((projectId) => projectMap.get(projectId) ?? null)
         .filter(Boolean) as ProjectRow[];
       const resolvedWorkContexts = workContextsForUser
@@ -291,7 +357,9 @@ export async function listUserScopeReportHandler(
           parentCompany,
           identityDepartment,
           workCompanies: resolvedWorkCompanies,
-          projects: resolvedProjects,
+          directProjectOverrides: resolvedDirectProjectOverrides,
+          inheritedProjects: resolvedInheritedProjects,
+          effectiveProjects: resolvedEffectiveProjects,
           workContexts: resolvedWorkContexts,
           primaryWorkContext: resolvedWorkContexts.find((row) => row.isPrimary) ?? resolvedWorkContexts[0] ?? null,
         }),
@@ -303,7 +371,10 @@ export async function listUserScopeReportHandler(
       if (companyCompare !== 0) return companyCompare;
       const userCompare = compareText(left.user_code, right.user_code);
       if (userCompare !== 0) return userCompare;
-      return compareText(left.work_company_codes || left.work_area_codes || left.project_codes, right.work_company_codes || right.work_area_codes || right.project_codes);
+      return compareText(
+        left.work_company_codes || left.work_area_codes || left.effective_project_codes,
+        right.work_company_codes || right.work_area_codes || right.effective_project_codes,
+      );
     });
 
     return okResponse({ rows: reportRows }, ctx.request_id);

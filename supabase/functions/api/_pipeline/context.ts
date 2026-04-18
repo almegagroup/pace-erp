@@ -10,6 +10,7 @@
 
 import { serviceRoleClient } from "../_shared/serviceRoleClient.ts";
 import { isSuperAdmin, isGlobalAdmin } from "../_shared/role_ladder.ts";
+import { hasEffectiveProjectAccess } from "../_shared/effective_project_access.ts";
 
 export type ContextResolution =
   | {
@@ -187,27 +188,14 @@ async function resolveContextFromDb(
   const projectHeader = req.headers.get("x-project-id");
 
   if (projectHeader) {
-    const { data: projectMembership } = await serviceRoleClient
-      .schema("erp_map")
-      .from("user_projects")
-      .select("project_id")
-      .eq("auth_user_id", authUserId)
-      .eq("project_id", projectHeader)
-      .maybeSingle();
+    const projectAllowed = await hasEffectiveProjectAccess(
+      serviceRoleClient,
+      authUserId,
+      companyId,
+      projectHeader,
+    );
 
-    if (!projectMembership) {
-      return unresolved();
-    }
-
-    const { data: projectScope } = await serviceRoleClient
-      .schema("erp_master")
-      .from("projects")
-      .select("id")
-      .eq("id", projectHeader)
-      .eq("company_id", companyId)
-      .maybeSingle();
-
-    if (!projectScope) {
+    if (!projectAllowed) {
       return unresolved();
     }
 

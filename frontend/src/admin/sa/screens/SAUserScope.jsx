@@ -365,7 +365,7 @@ export default function SAUserScope() {
         setParentCompanyId(data.scope?.parent_company?.id ?? "");
         setWorkCompanyIds(extractIds(data.scope?.work_companies));
         setWorkContextIds(extractIds(data.scope?.work_contexts));
-        setProjectIds(extractIds(data.scope?.projects));
+        setProjectIds(extractIds(data.scope?.project_overrides ?? data.scope?.projects));
         setDepartmentIds(extractIds(data.scope?.departments));
       } catch (caughtError) {
         if (!alive) return;
@@ -448,10 +448,12 @@ export default function SAUserScope() {
     () => availableCompanies.filter((company) => workCompanyIds.includes(company.id)),
     [availableCompanies, workCompanyIds]
   );
-  const selectedProjects = useMemo(
+  const selectedProjectOverrides = useMemo(
     () => availableProjects.filter((project) => projectIds.includes(project.id)),
     [availableProjects, projectIds]
   );
+  const inheritedProjects = scope?.inherited_projects ?? [];
+  const effectiveProjects = scope?.effective_projects ?? [];
   const selectedDepartments = useMemo(
     () =>
       availableDepartments.filter((department) => departmentIds.includes(department.id)),
@@ -563,7 +565,7 @@ export default function SAUserScope() {
       parentCompanyId !== (payload.scope?.parent_company?.id ?? "") ||
       !sameIdSet(workCompanyIds, extractIds(payload.scope?.work_companies)) ||
       !sameIdSet(workContextIds, extractIds(payload.scope?.work_contexts)) ||
-      !sameIdSet(projectIds, extractIds(payload.scope?.projects)) ||
+      !sameIdSet(projectIds, extractIds(payload.scope?.project_overrides ?? payload.scope?.projects)) ||
       !sameIdSet(departmentIds, extractIds(payload.scope?.departments))
     );
   }, [
@@ -631,7 +633,7 @@ export default function SAUserScope() {
       setParentCompanyId(refreshed.scope?.parent_company?.id ?? "");
       setWorkCompanyIds(extractIds(refreshed.scope?.work_companies));
       setWorkContextIds(extractIds(refreshed.scope?.work_contexts));
-      setProjectIds(extractIds(refreshed.scope?.projects));
+      setProjectIds(extractIds(refreshed.scope?.project_overrides ?? refreshed.scope?.projects));
       setDepartmentIds(extractIds(refreshed.scope?.departments));
 
       const adjustmentSummary = describeAdjustmentSummary(savedScope?.adjustments);
@@ -1147,18 +1149,18 @@ export default function SAUserScope() {
               tone={workContextIds.length > 0 ? "success" : "warning"}
             />
             <ScopeSummaryCard
-              eyebrow="Projects"
-              title="Reusable Project Mapping"
+              eyebrow="Project Overrides"
+              title="Direct Project Override"
               count={String(projectIds.length)}
-              description="Project access is managed separately so user scope stays understandable and reusable."
+              description="Use direct project overrides only for exception cases. Normal project reach now comes from the selected work areas."
               preview={formatSelectionPreview(
-                selectedProjects,
+                selectedProjectOverrides,
                 (project) => `${project.project_code} - ${project.project_name}`,
-                "No project selected yet."
+                "No direct override selected."
               )}
-              status="Keep only the projects the user really needs for faster navigation."
+              status="Leave this empty when work-area inheritance already gives the correct project reach."
               onOpen={() => openScopeEditor("projects")}
-              actionLabel="Edit Projects"
+              actionLabel="Edit Overrides"
               tone={projectIds.length > 0 ? "success" : "default"}
             />
             <ScopeSummaryCard
@@ -1214,13 +1216,13 @@ export default function SAUserScope() {
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <ErpFieldPreview
-                label="Selected Projects"
+                label="Direct Project Overrides"
                 value={formatSelectionPreview(
-                  selectedProjects,
+                  selectedProjectOverrides,
                   (project) => `${project.project_code} - ${project.project_name}`,
-                  "No project selected yet."
+                  "No direct override selected."
                 )}
-                caption="Project mapping remains reusable across later workflows."
+                caption="Only exception cases should need a direct project override."
                 multiline
                 tone={projectIds.length > 0 ? "success" : "default"}
               />
@@ -1234,6 +1236,30 @@ export default function SAUserScope() {
                 caption="Department readiness stays visible without overcrowding the page."
                 multiline
                 tone={departmentIds.length > 0 ? "success" : "default"}
+              />
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <ErpFieldPreview
+                label="Inherited Projects"
+                value={formatSelectionPreview(
+                  inheritedProjects,
+                  (project) => `${project.project_code} - ${project.project_name}`,
+                  "No inherited project reach yet."
+                )}
+                caption="These projects come automatically from the selected work areas."
+                multiline
+                tone={inheritedProjects.length > 0 ? "success" : "default"}
+              />
+              <ErpFieldPreview
+                label="Effective Projects"
+                value={formatSelectionPreview(
+                  effectiveProjects,
+                  (project) => `${project.project_code} - ${project.project_name}`,
+                  "No effective project reach yet."
+                )}
+                caption="Runtime project reach = inherited projects plus any direct overrides."
+                multiline
+                tone={effectiveProjects.length > 0 ? "success" : "default"}
               />
             </div>
             <div className="border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
@@ -1577,7 +1603,7 @@ export default function SAUserScope() {
 
       <DrawerBase
         visible={activeScopeEditor === "projects"}
-        title="Edit Projects"
+        title="Edit Project Overrides"
         onEscape={closeScopeEditor}
         initialFocusRef={projectSearchRef}
         width="min(760px, calc(100vw - 24px))"
@@ -1603,8 +1629,9 @@ export default function SAUserScope() {
       >
         <div className="grid gap-4">
           <p className="text-sm leading-6 text-slate-600">
-            Keep project mapping limited to the working universe the user really
-            needs. Dense selection stays inside this drawer instead of the main page.
+            Direct project mapping is now override-only. In normal cases, project
+            reach should come from the selected work areas. Use this drawer only
+            when a user truly needs a one-off project exception.
           </p>
           <QuickFilterInput
             label="Filter Projects"
@@ -1612,7 +1639,7 @@ export default function SAUserScope() {
             onChange={setProjectSearch}
             inputRef={projectSearchRef}
             placeholder="Filter by project code or project name"
-            hint="Arrow Down moves into the project checkbox list."
+            hint="Arrow Down moves into the override checkbox list."
             inputProps={{
               onKeyDown: (event) => {
                 if (event.key === "ArrowDown" && filteredProjects.length > 0) {

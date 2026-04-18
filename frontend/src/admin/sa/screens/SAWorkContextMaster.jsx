@@ -64,6 +64,28 @@ async function fetchWorkContextCapabilities(workContextId) {
   return Array.isArray(data.capabilities) ? data.capabilities : [];
 }
 
+async function fetchWorkContextProjects(workContextId) {
+  const data = await fetchApi(
+    `/api/admin/acl/work-context-projects?work_context_id=${encodeURIComponent(workContextId)}`
+  );
+  return {
+    workContext: data.work_context ?? null,
+    projects: Array.isArray(data.projects) ? data.projects : [],
+  };
+}
+
+async function saveWorkContextProjects(payload) {
+  const data = await fetchApi("/api/admin/acl/work-context-projects", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  return Array.isArray(data.project_ids) ? data.project_ids : [];
+}
+
 async function saveWorkContext(payload) {
   const data = await fetchApi("/api/admin/acl/work-contexts", {
     method: "POST",
@@ -169,6 +191,13 @@ export default function SAWorkContextMaster() {
   const [formDraft, setFormDraft] = useState(() => emptyDraft());
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [linkedCapabilities, setLinkedCapabilities] = useState([]);
+  const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
+  const [projectDrawerLoading, setProjectDrawerLoading] = useState(false);
+  const [projectSearch, setProjectSearch] = useState("");
+  const [attachedProjectIds, setAttachedProjectIds] = useState([]);
+  const [availableProjects, setAvailableProjects] = useState([]);
+  const projectSearchRef = useRef(null);
+  const projectCheckboxRefs = useRef([]);
 
   const selectedCompany = useMemo(
     () => companies.find((row) => row.id === selectedCompanyId) ?? null,
@@ -373,6 +402,13 @@ export default function SAWorkContextMaster() {
     setLinkedCapabilities([]);
   }
 
+  function closeProjectDrawer() {
+    setProjectDrawerOpen(false);
+    setProjectSearch("");
+    setAttachedProjectIds([]);
+    setAvailableProjects([]);
+  }
+
   function openCreateDrawer() {
     if (!selectedCompanyId) {
       setError("Choose a company before creating a manual work scope.");
@@ -408,6 +444,76 @@ export default function SAWorkContextMaster() {
     setInspectorOpen(true);
     setError("");
   }
+
+  async function openProjectDrawer(context) {
+    if (!context) {
+      return;
+    }
+
+    setSelectedContextId(context.work_context_id);
+    setProjectDrawerOpen(true);
+    setProjectDrawerLoading(true);
+    setProjectSearch("");
+    setAttachedProjectIds([]);
+    setAvailableProjects([]);
+    setError("");
+
+    try {
+      const data = await fetchWorkContextProjects(context.work_context_id);
+      const projects = data.projects ?? [];
+      setAvailableProjects(projects);
+      setAttachedProjectIds(
+        projects.filter((project) => project.attached === true).map((project) => project.id),
+      );
+    } catch {
+      setError("Project reach could not be loaded for the selected work scope.");
+      setProjectDrawerOpen(false);
+    } finally {
+      setProjectDrawerLoading(false);
+    }
+  }
+
+  async function handleSaveProjects() {
+    if (!selectedContextId) {
+      setError("Choose a work scope before saving inherited projects.");
+      return;
+    }
+
+    setProjectDrawerLoading(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const savedProjectIds = await saveWorkContextProjects({
+        work_context_id: selectedContextId,
+        project_ids: attachedProjectIds,
+      });
+
+      setAttachedProjectIds(savedProjectIds);
+      closeProjectDrawer();
+      setNotice(
+        `Inherited project reach for ${selectedContext?.work_context_code ?? "the selected work scope"} is updated.`,
+      );
+    } catch {
+      setError("Inherited project reach could not be saved right now.");
+    } finally {
+      setProjectDrawerLoading(false);
+    }
+  }
+
+  const filteredProjects = useMemo(() => {
+    const needle = normalize(projectSearch).toLowerCase();
+
+    return availableProjects.filter((project) => {
+      if (!needle) {
+        return true;
+      }
+
+      return [project.project_code, project.project_name]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(needle));
+    });
+  }, [availableProjects, projectSearch]);
 
   async function handleSaveContext() {
     const normalizedCode = normalize(formDraft.work_context_code).toUpperCase();
@@ -884,11 +990,11 @@ export default function SAWorkContextMaster() {
                     />
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => openInspector(selectedContext)}
-                      className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openInspector(selectedContext)}
+                    className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
                     >
                       Inspect Scope
                     </button>
@@ -903,6 +1009,13 @@ export default function SAWorkContextMaster() {
                       }`}
                     >
                       {selectedContext.is_system ? "System Locked" : "Edit Manual Scope"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void openProjectDrawer(selectedContext)}
+                      className="border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-800"
+                    >
+                      Manage Inherited Projects
                     </button>
                   </div>
                 </div>
@@ -923,8 +1036,9 @@ export default function SAWorkContextMaster() {
                 {[
                   "Use GENERAL_OPS and DEPT_* as system foundation only.",
                   "Create manual business areas for splits like PROD_POWDER, PROD_ADMIX, QA_POWDER, QA_ADMIX, SCM_OPERATIONS, MGMT_ALL, or AUDIT_ALL.",
+                  "Bind company-safe projects to each work scope so users inherit project reach from their assigned work areas.",
                   "Attach access packs in Capability Governance after the business area exists.",
-                  "Bind users later in User Scope so cross-company access stays explicit and limited.",
+                  "Bind users later in User Scope so cross-company access stays explicit and limited, and use direct project overrides only for rare exceptions.",
                 ].map((line) => (
                   <div
                     key={line}
@@ -1179,12 +1293,132 @@ export default function SAWorkContextMaster() {
                 ))
               )}
             </div>
+
+            <div className="border border-slate-300 bg-white">
+              <div className="border-b border-slate-300 bg-slate-50 px-4 py-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Project Inheritance
+                </div>
+                <div className="mt-1 text-sm text-slate-600">
+                  Project reach now comes from work-scope inheritance first, then optional user overrides.
+                </div>
+              </div>
+              <div className="px-4 py-4">
+                <button
+                  type="button"
+                  onClick={() => void openProjectDrawer(selectedContext)}
+                  className="border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-800"
+                >
+                  Manage Inherited Projects
+                </button>
+              </div>
+            </div>
           </div>
         ) : (
           <p className="text-sm text-slate-500">
             Choose a work scope first to inspect it here.
           </p>
         )}
+      </DrawerBase>
+
+      <DrawerBase
+        visible={projectDrawerOpen}
+        title="Manage Inherited Projects"
+        onEscape={closeProjectDrawer}
+        initialFocusRef={projectSearchRef}
+        width="min(560px, calc(100vw - 24px))"
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={closeProjectDrawer}
+              className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              disabled={projectDrawerLoading}
+              onClick={() => void handleSaveProjects()}
+              className="border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-900"
+            >
+              {projectDrawerLoading ? "Saving..." : "Save Inherited Projects"}
+            </button>
+          </>
+        }
+      >
+        <div className="grid gap-4">
+          <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            <div className="font-semibold text-slate-900">
+              {selectedContext
+                ? `${selectedContext.work_context_code} | ${selectedContext.work_context_name}`
+                : "No work scope selected"}
+            </div>
+            <div className="mt-1">
+              Projects attached here become inherited project reach for every user assigned to this work scope. Direct user project overrides should stay rare.
+            </div>
+          </div>
+
+          <QuickFilterInput
+            label="Search Projects"
+            value={projectSearch}
+            onChange={setProjectSearch}
+            inputRef={projectSearchRef}
+            placeholder="Search project code or name"
+            hint="Only active projects already linked to this company are available here."
+          />
+
+          <div className="border border-slate-300 bg-white">
+            <div className="border-b border-slate-300 bg-slate-50 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Available Company Projects
+            </div>
+            {projectDrawerLoading ? (
+              <div className="px-4 py-4 text-sm text-slate-500">
+                Loading inherited project options...
+              </div>
+            ) : filteredProjects.length === 0 ? (
+              <div className="px-4 py-4 text-sm text-slate-500">
+                No active company project matched the current filter.
+              </div>
+            ) : (
+              filteredProjects.map((project, index) => {
+                const checked = attachedProjectIds.includes(project.id);
+                return (
+                  <label
+                    key={project.id}
+                    className="flex items-start gap-3 border-b border-slate-200 px-4 py-3 text-sm text-slate-700 last:border-b-0"
+                  >
+                    <input
+                      ref={(element) => {
+                        projectCheckboxRefs.current[index] = element;
+                      }}
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(event) =>
+                        setAttachedProjectIds((current) =>
+                          event.target.checked
+                            ? [...new Set([...current, project.id])]
+                            : current.filter((value) => value !== project.id),
+                        )
+                      }
+                      className="mt-0.5 h-4 w-4 border-slate-300"
+                    />
+                    <span className="grid gap-1">
+                      <span className="font-semibold text-slate-900">
+                        {project.project_code} | {project.project_name}
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        {checked
+                          ? "Inherited by every user assigned to this work scope."
+                          : "Not inherited from this work scope yet."}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
       </DrawerBase>
     </>
   );
