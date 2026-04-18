@@ -209,12 +209,15 @@ export default function AuthBootstrap({ children }) {
 
         const liveUserCode = json.data.user_code ?? "";
         const liveRoleCode = json.data.role_code ?? "";
+        const liveName = json.data.name ?? "";
         const cachedUserCode = shellProfile?.userCode ?? "";
         const cachedRoleCode = shellProfile?.roleCode ?? "";
+        const cachedName = shellProfile?.name ?? "";
 
         if (
           (cachedUserCode && liveUserCode !== cachedUserCode) ||
-          (cachedRoleCode && liveRoleCode !== cachedRoleCode)
+          (cachedRoleCode && liveRoleCode !== cachedRoleCode) ||
+          (cachedName && liveName !== cachedName)
         ) {
           clearMenuSnapshot();
           clearClusterAdmission();
@@ -294,6 +297,7 @@ export default function AuthBootstrap({ children }) {
       if (menuRows.length === 0) {
         return {
           shellProfile: {
+            name: "",
             userCode: "",
             roleCode: "",
             tagline: "Process Automation & Control Environment",
@@ -324,6 +328,7 @@ export default function AuthBootstrap({ children }) {
 
       return {
         shellProfile: {
+          name: profileData?.data?.name ?? "",
           userCode: profileData?.data?.user_code ?? "",
           roleCode: profileData?.data?.role_code ?? "",
           tagline: "Process Automation & Control Environment",
@@ -551,6 +556,7 @@ export default function AuthBootstrap({ children }) {
         const stableIssue = deriveStableBootstrapIssue(error);
         console.warn("AUTH_BOOTSTRAP_STABLE_FAILURE", error);
         setShellProfile({
+          name: "",
           userCode: "",
           roleCode: "",
           tagline: "Process Automation & Control Environment",

@@ -48,10 +48,18 @@ export async function meProfileHandler(
     );
   }
 
+  const { data: signupRow } = await serviceRoleClient
+    .schema("erp_core")
+    .from("signup_requests")
+    .select("name")
+    .eq("auth_user_id", session.authUserId)
+    .maybeSingle();
+
   return okResponse(
     {
       user_code: userRow.user_code,
       role_code: session.roleCode,
+      name: signupRow?.name ?? null,
     },
     requestId,
     req

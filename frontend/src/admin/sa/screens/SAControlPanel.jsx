@@ -322,6 +322,22 @@ export default function SAControlPanel() {
           },
         ],
       },
+      {
+        key: "circulation-reports",
+        title: "Circulation Reports",
+        description:
+          "Flat export surfaces for circulation-ready governance reporting before manual spreadsheet cleanup starts.",
+        pages: [
+          {
+            badge: "Report",
+            menuCode: "SA_USER_SCOPE_REPORT",
+            title: "User Scope Report",
+            description:
+              "Download one flat row per user assignment with company, role, rank, department, and work-area columns kept separate.",
+            onClick: () => openRoute("/sa/users/report"),
+          },
+        ],
+      },
       ...menuSections,
     ];
   }, [menu]);

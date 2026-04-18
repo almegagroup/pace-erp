@@ -190,32 +190,14 @@ export async function getUserScopeHandler(
       .eq("auth_user_id", authUserId);
 
     const workContextIds = [...new Set((workContextRows ?? []).map((row) => row.work_context_id))];
-    const departmentIdsFromWorkContexts = (workContextRows ?? []).flatMap((row) => {
-      const relation = row.work_context;
-
-      if (!relation) {
-        return [];
-      }
-
-      if (Array.isArray(relation)) {
-        return relation
-          .map((item) => item.department_id ?? null)
-          .filter(Boolean);
-      }
-
-      const singleRelation = relation as { department_id?: string | null };
-      return singleRelation.department_id ? [singleRelation.department_id] : [];
-    });
-
     const { data: departmentRows } = await db
       .schema("erp_map").from("user_departments")
       .select("department_id")
       .eq("auth_user_id", authUserId);
 
-    const departmentIds = [...new Set([
-      ...(departmentRows ?? []).map((row) => row.department_id),
-      ...departmentIdsFromWorkContexts,
-    ])];
+    const departmentIds = [...new Set(
+      (departmentRows ?? []).map((row) => row.department_id).filter(Boolean),
+    )];
 
     const companyIdsToResolve = [...new Set([
       ...(parentCompanyId ? [parentCompanyId] : []),

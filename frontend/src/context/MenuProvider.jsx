@@ -70,6 +70,7 @@ export function MenuProvider({ children }) {
 
   const setShellProfile = useCallback((profile) => {
     setShellProfileState({
+      name: profile?.name ?? "",
       userCode: profile?.userCode ?? "",
       roleCode: profile?.roleCode ?? "",
       tagline: profile?.tagline ?? "Process Automation & Control Environment",

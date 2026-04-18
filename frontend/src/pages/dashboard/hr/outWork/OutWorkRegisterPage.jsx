@@ -1,5 +1,5 @@
-import { OutWorkRegisterWorkspace } from "../HrWorkflowPages.jsx";
+import { OutWorkRegisterCriteriaPage } from "../HrRegisterReports.jsx";
 
 export default function OutWorkRegisterPage() {
-  return <OutWorkRegisterWorkspace />;
+  return <OutWorkRegisterCriteriaPage />;
 }
