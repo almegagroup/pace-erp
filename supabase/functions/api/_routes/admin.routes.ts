@@ -76,6 +76,7 @@ import { listWorkContextCapabilitiesHandler } from "../_core/admin/acl/list_work
 import { assignWorkContextCapabilityHandler } from "../_core/admin/acl/assign_work_context_capability.handler.ts";
 import { unassignWorkContextCapabilityHandler } from "../_core/admin/acl/unassign_work_context_capability.handler.ts";
 import { listAclVersionsHandler } from "../_core/admin/acl/list_acl_versions.handler.ts";
+import { listAclVersionCenterStatusHandler } from "../_core/admin/acl/list_acl_version_center_status.handler.ts";
 import { createAclVersionHandler } from "../_core/admin/acl/create_acl_version.handler.ts";
 import { activateAclVersionHandler } from "../_core/admin/acl/activate_acl_version.handler.ts";
 import { deleteAclVersionHandler } from "../_core/admin/acl/delete_acl_version.handler.ts";
@@ -498,6 +499,12 @@ export async function dispatchAdminRoutes(
 
     case "GET:/api/admin/acl/versions":
       response = await listAclVersionsHandler(req, {
+        context,
+      });
+      break;
+
+    case "GET:/api/admin/acl/version-center":
+      response = await listAclVersionCenterStatusHandler(req, {
         context,
       });
       break;

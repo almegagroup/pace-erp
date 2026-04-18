@@ -50,6 +50,7 @@ import SAPageResourceRegistry from "../admin/sa/screens/SAPageResourceRegistry.j
 import SAModuleResourceMap from "../admin/sa/screens/SAModuleResourceMap.jsx";
 import SARolePermissions from "../admin/sa/screens/SARolePermissions.jsx";
 import SACapabilityGovernance from "../admin/sa/screens/SACapabilityGovernance.jsx";
+import SAAclVersionCenter from "../admin/sa/screens/SAAclVersionCenter.jsx";
 import SAApprovalRules from "../admin/sa/screens/SAApprovalRules.jsx";
 import SAApprovalPolicy from "../admin/sa/screens/SAApprovalPolicy.jsx";
 import SAReportVisibility from "../admin/sa/screens/SAReportVisibility.jsx";
@@ -153,6 +154,10 @@ export default function AppRouter() {
                     <Route
                       path="acl/capabilities"
                       element={<SACapabilityGovernance />}
+                    />
+                    <Route
+                      path="acl/version-center"
+                      element={<SAAclVersionCenter />}
                     />
                     <Route
                       path="approval-rules"

@@ -52,9 +52,9 @@ function recommendedCapabilityCodes(row){
 export default function SACapabilityGovernance(){
   const navigate=useNavigate();
   const topRefs=useRef([]), matrixRowRefs=useRef([]), searchRef=useRef(null), bindingSearchRef=useRef(null);
-  const [companies,setCompanies]=useState([]),[caps,setCaps]=useState([]),[catalog,setCatalog]=useState([]),[contexts,setContexts]=useState([]),[versions,setVersions]=useState([]),[capRows,setCapRows]=useState([]),[ctxCaps,setCtxCaps]=useState([]),[contextCapabilityMap,setContextCapabilityMap]=useState({});
+  const [companies,setCompanies]=useState([]),[caps,setCaps]=useState([]),[catalog,setCatalog]=useState([]),[contexts,setContexts]=useState([]),[capRows,setCapRows]=useState([]),[ctxCaps,setCtxCaps]=useState([]),[contextCapabilityMap,setContextCapabilityMap]=useState({});
   const [companyId,setCompanyId]=useState(""),[capCode,setCapCode]=useState(""),[ctxId,setCtxId]=useState(""),[projectCode,setProjectCode]=useState(""),[moduleCode,setModuleCode]=useState(""),[selectedResourceCode,setSelectedResourceCode]=useState("");
-  const [search,setSearch]=useState(""),[drafts,setDrafts]=useState({}),[capDraft,setCapDraft]=useState(newCap()),[versionDescription,setVersionDescription]=useState(""),[contextSearch,setContextSearch]=useState(""),[bindingSearch,setBindingSearch]=useState(""),[bindingDrawerOpen,setBindingDrawerOpen]=useState(false);
+  const [search,setSearch]=useState(""),[drafts,setDrafts]=useState({}),[capDraft,setCapDraft]=useState(newCap()),[contextSearch,setContextSearch]=useState(""),[bindingSearch,setBindingSearch]=useState(""),[bindingDrawerOpen,setBindingDrawerOpen]=useState(false);
   const [loading,setLoading]=useState(true),[catalogLoading,setCatalogLoading]=useState(true),[saving,setSaving]=useState(false),[bindingLoading,setBindingLoading]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
 
   async function loadBootstrap(){
@@ -80,12 +80,12 @@ export default function SACapabilityGovernance(){
   }
   async function loadCompanyState(id=companyId){
     setBindingDrawerOpen(false);
-    if(!id){setContexts([]);setVersions([]); setCtxCaps([]); return;}
+    if(!id){setContexts([]); setCtxCaps([]); return;}
     try{
-      const [w,v]=await Promise.all([fetchApi(`/api/admin/acl/work-contexts?company_id=${encodeURIComponent(id)}`),fetchApi(`/api/admin/acl/versions?company_id=${encodeURIComponent(id)}`)]);
-      const next=w.work_contexts??[]; setContexts(next); setVersions(v.versions??[]);
+      const w=await fetchApi(`/api/admin/acl/work-contexts?company_id=${encodeURIComponent(id)}`);
+      const next=w.work_contexts??[]; setContexts(next);
       setCtxId((cur)=>next.some((r)=>r.work_context_id===cur)?cur:next[0]?.work_context_id??"");
-    }catch(err){console.error("COMPANY_CAPABILITY_STATE_LOAD_FAILED",{company_id:id||null,message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setContexts([]);setVersions([]);setError(`Company capability state could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
+    }catch(err){console.error("COMPANY_CAPABILITY_STATE_LOAD_FAILED",{company_id:id||null,message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setContexts([]);setError(`Company capability state could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
   }
   async function loadCtxCaps(id=ctxId){
     if(!id){setCtxCaps([]);return;}
@@ -234,17 +234,19 @@ export default function SACapabilityGovernance(){
   useErpScreenCommands([
     {id:"sa-capability-governance-control-panel",group:"Current Screen",label:"Go to SA control panel",keywords:["control panel","sa"],perform:()=>{openScreen("SA_CONTROL_PANEL",{mode:"replace"});navigate("/sa/control-panel");},order:10},
     {id:"sa-capability-governance-work-context-master",group:"Current Screen",label:"Open work context master",keywords:["work context","work scope","manual scope"],perform:()=>{openScreen("SA_WORK_CONTEXT_MASTER",{mode:"replace"});navigate("/sa/work-contexts");},order:20},
+    {id:"sa-capability-governance-acl-version-center",group:"Current Screen",label:"Open ACL version center",keywords:["acl version","publish center","immutable version"],perform:()=>{openScreen("SA_ACL_VERSION_CENTER",{mode:"replace"});navigate("/sa/acl/version-center");},order:30},
   ]);
   useErpScreenHotkeys({refresh:{disabled:loading||catalogLoading,perform:()=>{void loadBootstrap(); void loadCatalog();}},focusSearch:{perform:()=>searchRef.current?.focus()},save:{disabled:saving,perform:()=>void saveMatrix()}});
 
   return (
     <ErpScreenScaffold
       eyebrow="SA Capability Governance"
-      title="Screen Packs, Work Scopes, and ACL Version Control"
-      description="Create reusable access packs, fill them with mapped page actions, attach them to business areas, and freeze immutable ACL versions. Business rule: menu comes from access packs only. Approval grants stay separate."
+      title="Screen Packs and Business-Area Binding"
+      description="Create reusable access packs, fill them with mapped page actions, and attach them to business areas. Publish decisions now live in the separate ACL Version Center so SA does not guess when runtime access needs a fresh version."
       actions={[
         {key:"control-panel",label:"Control Panel",tone:"neutral",buttonRef:(el)=>{topRefs.current[0]=el;},onClick:()=>{openScreen("SA_CONTROL_PANEL",{mode:"replace"});navigate("/sa/control-panel");},onKeyDown:(e)=>handleLinearNavigation(e,{index:0,refs:topRefs.current,orientation:"horizontal"})},
         {key:"work-context-master",label:"Work Context Master",tone:"neutral",buttonRef:(el)=>{topRefs.current[1]=el;},onClick:()=>{openScreen("SA_WORK_CONTEXT_MASTER",{mode:"replace"});navigate("/sa/work-contexts");},onKeyDown:(e)=>handleLinearNavigation(e,{index:1,refs:topRefs.current,orientation:"horizontal"})},
+        {key:"acl-version-center",label:"ACL Version Center",tone:"neutral",buttonRef:(el)=>{topRefs.current[2]=el;},onClick:()=>{openScreen("SA_ACL_VERSION_CENTER",{mode:"replace"});navigate("/sa/acl/version-center");},onKeyDown:(e)=>handleLinearNavigation(e,{index:2,refs:topRefs.current,orientation:"horizontal"})},
       ]}
       notices={[...(error?[{key:"error",tone:"error",message:error}]:[]),...(notice?[{key:"notice",tone:"success",message:notice}]:[])]}
       metrics={[{key:"caps",label:"Capabilities",value:loading?"...":String(caps.length),tone:"sky",caption:"Available capability packs."},{key:"contexts",label:"Work Contexts",value:loading?"...":String(contexts.length),tone:"emerald",caption:"Contexts in selected company."},{key:"rows",label:"Capability Rows",value:loading?"...":String(capRows.length),tone:"amber",caption:"Rows for selected capability."},{key:"attached",label:"Attached Contexts",value:bindingLoading?"...":String(attachedContextCount),tone:"violet",caption:"Selected pack is currently attached here."}]}
@@ -321,10 +323,14 @@ export default function SACapabilityGovernance(){
               {ctxId&&ctxCaps.length>0?`Selected business area currently carries: ${ctxCaps.map((cap)=>cap.capability_code).join(", ")}`:"Open any business area row to inspect and manage its attached access packs."}
             </div>
           </ErpSectionCard>
-          <ErpSectionCard eyebrow="ACL Versions" title="Immutable company ledger" description="Freeze current governance rows into a new ACL version, then activate only the version runtime should use.">
-            <input type="text" value={versionDescription} onChange={(e)=>setVersionDescription(e.target.value)} placeholder="Version description" className="w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none" />
-            <button type="button" disabled={!companyId||saving} onClick={()=>void postAndRefresh("/api/admin/acl/versions",{company_id:companyId,description:versionDescription.trim()},()=>loadCompanyState(companyId),"Immutable ACL version captured successfully.")} className="mt-4 border border-sky-300 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-900">Capture Immutable Version</button>
-            <div className="mt-6 border border-slate-300">{versions.length===0?<div className="bg-slate-50 px-4 py-4 text-sm text-slate-500">No ACL version is currently available for this company.</div>:versions.map((v)=><div key={v.acl_version_id} className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-300 bg-white px-4 py-3 last:border-b-0"><div><p className="text-sm font-semibold text-slate-900">V{v.version_number} | {v.description}</p><p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">{v.is_active?"Active":"Inactive"}{v.source_captured_at?" | Source frozen":""}</p></div><div className="flex items-center gap-3"><button type="button" disabled={v.is_active||saving} onClick={()=>void postAndRefresh("/api/admin/acl/versions/activate",{company_id:companyId,acl_version_id:v.acl_version_id},()=>loadCompanyState(companyId),"ACL version activated successfully.")} className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${v.is_active?"border-emerald-300 bg-emerald-50 text-emerald-700":"border-slate-300 bg-white text-slate-700"}`}>{v.is_active?"Active":"Activate"}</button><button type="button" disabled={v.is_active||saving} onClick={()=>void postAndRefresh("/api/admin/acl/versions/delete",{company_id:companyId,acl_version_id:v.acl_version_id},()=>loadCompanyState(companyId),"Inactive ACL version removed successfully.")} className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${v.is_active?"border-slate-200 bg-slate-100 text-slate-400":"border-rose-300 bg-rose-50 text-rose-700"}`}>Remove</button></div></div>)}</div>
+          <ErpSectionCard eyebrow="ACL Publish Flow" title="Versioning moved into its own desk" description="Pack edits and business-area binding happen here. Runtime publish decisions now live in ACL Version Center, where the system detects which companies need a fresh ACL version.">
+            <div className="grid gap-4 border border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-700">
+              <p>Use this workspace to change access packs and work-scope binding. Then open ACL Version Center to see which companies now require a fresh publish snapshot.</p>
+              <div className="flex flex-wrap gap-3">
+                <button type="button" onClick={()=>{openScreen("SA_ACL_VERSION_CENTER",{mode:"replace"});navigate("/sa/acl/version-center");}} className="border border-sky-300 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-900">Open ACL Version Center</button>
+                <button type="button" onClick={()=>{openScreen("SA_WORK_CONTEXT_MASTER",{mode:"replace"});navigate("/sa/work-contexts");}} className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700">Review Work Context Master</button>
+              </div>
+            </div>
           </ErpSectionCard>
         </div>
       </div>
