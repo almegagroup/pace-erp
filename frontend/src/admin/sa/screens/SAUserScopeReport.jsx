@@ -22,16 +22,18 @@ const REPORT_COLUMNS = Object.freeze([
   { key: "parent_company_name", label: "Parent Company Name" },
   { key: "identity_department_code", label: "Identity Department Code" },
   { key: "identity_department_name", label: "Identity Department Name" },
-  { key: "assignment_type", label: "Assignment Type" },
-  { key: "assignment_company_code", label: "Assignment Company Code" },
-  { key: "assignment_company_name", label: "Assignment Company Name" },
-  { key: "project_code", label: "Project Code" },
-  { key: "project_name", label: "Project Name" },
-  { key: "work_context_code", label: "Work Area Code" },
-  { key: "work_context_name", label: "Work Area Name" },
-  { key: "work_context_department_code", label: "Work Area Department Code" },
-  { key: "work_context_department_name", label: "Work Area Department Name" },
-  { key: "is_primary_work_context", label: "Primary Work Area" },
+  { key: "work_company_codes", label: "Work Company Codes" },
+  { key: "work_company_names", label: "Work Company Names" },
+  { key: "project_codes", label: "Project Codes" },
+  { key: "project_names", label: "Project Names" },
+  { key: "work_area_codes", label: "Work Area Codes" },
+  { key: "work_area_names", label: "Work Area Names" },
+  { key: "work_area_department_codes", label: "Work Area Department Codes" },
+  { key: "work_area_department_names", label: "Work Area Department Names" },
+  { key: "primary_work_area_code", label: "Primary Work Area Code" },
+  { key: "primary_work_area_name", label: "Primary Work Area Name" },
+  { key: "primary_work_area_department_code", label: "Primary Work Area Department Code" },
+  { key: "primary_work_area_department_name", label: "Primary Work Area Department Name" },
   { key: "created_at", label: "Created At" },
 ]);
 
@@ -84,6 +86,7 @@ export default function SAUserScopeReport() {
   const [companyId, setCompanyId] = useState("");
   const [rows, setRows] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [visibleColumnKeys, setVisibleColumnKeys] = useState(() => REPORT_COLUMNS.map((column) => column.key));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const actionRefs = useRef([]);
@@ -122,18 +125,24 @@ export default function SAUserScopeReport() {
         row.parent_company_name,
         row.identity_department_code,
         row.identity_department_name,
-        row.assignment_type,
-        row.assignment_company_code,
-        row.assignment_company_name,
-        row.project_code,
-        row.project_name,
-        row.work_context_code,
-        row.work_context_name,
+        row.work_company_codes,
+        row.work_company_names,
+        row.project_codes,
+        row.project_names,
+        row.work_area_codes,
+        row.work_area_names,
+        row.primary_work_area_code,
+        row.primary_work_area_name,
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query)),
     );
   }, [rows, searchQuery]);
+
+  const visibleColumns = useMemo(
+    () => REPORT_COLUMNS.filter((column) => visibleColumnKeys.includes(column.key)),
+    [visibleColumnKeys],
+  );
 
   const selectedCompanyLabel = companies.find((row) => row.id === companyId)
     ? `${companies.find((row) => row.id === companyId).company_code} | ${companies.find((row) => row.id === companyId).company_name}`
@@ -155,7 +164,7 @@ export default function SAUserScopeReport() {
       onSelect: () =>
         downloadCsvFile({
           fileName: "sa-user-scope-report.csv",
-          columns: REPORT_COLUMNS,
+          columns: visibleColumns,
           rows: filteredRows,
         }),
     },
@@ -167,7 +176,7 @@ export default function SAUserScopeReport() {
       handler: () =>
         downloadCsvFile({
           fileName: "sa-user-scope-report.csv",
-          columns: REPORT_COLUMNS,
+          columns: visibleColumns,
           rows: filteredRows,
         }),
     },
@@ -184,7 +193,7 @@ export default function SAUserScopeReport() {
   return (
     <ErpScreenScaffold
       title="SA User Scope Report"
-      description="Flat export-ready user inventory with one row per assignment so company, role, rank, identity, and work area stay in separate columns."
+      description="One user per row, with separate columns for role, rank, identity, work companies, projects, and work areas so the export stays readable."
       actions={[
         {
           key: "refresh",
@@ -207,7 +216,7 @@ export default function SAUserScopeReport() {
           onClick: () =>
             downloadCsvFile({
               fileName: "sa-user-scope-report.csv",
-              columns: REPORT_COLUMNS,
+              columns: visibleColumns,
               rows: filteredRows,
             }),
           onKeyDown: (event) =>
@@ -219,7 +228,7 @@ export default function SAUserScopeReport() {
         <div className="grid gap-3 md:grid-cols-3">
           <ErpFieldPreview label="Selected Company" value={selectedCompanyLabel} />
           <ErpFieldPreview label="Report Rows" value={String(filteredRows.length)} />
-          <ErpFieldPreview label="Download Format" value="Excel-ready CSV" />
+          <ErpFieldPreview label="Visible Columns" value={String(visibleColumns.length)} />
         </div>
 
         <ErpSectionCard title="Report Filters" description="Filter by company before download, then search the loaded rows in-page.">
@@ -261,8 +270,37 @@ export default function SAUserScopeReport() {
         </ErpSectionCard>
 
         <ErpSectionCard
-          title={loading ? "Loading user scope report" : `${filteredRows.length} report row${filteredRows.length === 1 ? "" : "s"}`}
-          description="Each assignment stays on its own row so nothing is mixed before circulation."
+          title="Visible Columns"
+          description="Hide columns you do not want on screen or in the downloaded Excel CSV."
+        >
+          <div className="grid gap-2 md:grid-cols-3">
+            {REPORT_COLUMNS.map((column) => {
+              const checked = visibleColumnKeys.includes(column.key);
+              return (
+                <label key={column.key} className="flex items-center gap-2 border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(event) => {
+                      if (event.target.checked) {
+                        setVisibleColumnKeys((current) =>
+                          REPORT_COLUMNS.map((item) => item.key).filter((key) => key === column.key || current.includes(key)),
+                        );
+                        return;
+                      }
+                      setVisibleColumnKeys((current) => current.filter((key) => key !== column.key));
+                    }}
+                  />
+                  <span>{column.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </ErpSectionCard>
+
+        <ErpSectionCard
+          title={loading ? "Loading user scope report" : `${filteredRows.length} user row${filteredRows.length === 1 ? "" : "s"}`}
+          description="Each user now stays on one row, while work companies, projects, and work areas remain in separate columns."
         >
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
@@ -277,7 +315,7 @@ export default function SAUserScopeReport() {
               <table className="min-w-full border-collapse text-xs">
                 <thead className="bg-slate-100">
                   <tr>
-                    {REPORT_COLUMNS.map((column) => (
+                    {visibleColumns.map((column) => (
                       <th
                         key={column.key}
                         className="border border-slate-200 px-2 py-2 text-left font-semibold uppercase tracking-[0.12em] text-slate-500"
@@ -289,8 +327,8 @@ export default function SAUserScopeReport() {
                 </thead>
                 <tbody>
                   {filteredRows.map((row, index) => (
-                    <tr key={`${row.auth_user_id}-${row.assignment_type}-${row.assignment_company_code ?? row.work_context_code ?? row.project_code ?? "base"}-${index}`}>
-                      {REPORT_COLUMNS.map((column) => (
+                    <tr key={`${row.auth_user_id}-${index}`}>
+                      {visibleColumns.map((column) => (
                         <td key={column.key} className="border border-slate-200 px-2 py-2 text-slate-700">
                           {column.key === "created_at" ? formatDateTime(row[column.key]) : row[column.key] || "-"}
                         </td>
