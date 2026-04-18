@@ -24,8 +24,12 @@ const REPORT_COLUMNS = Object.freeze([
   { key: "identity_department_name", label: "Identity Department Name" },
   { key: "work_company_codes", label: "Work Company Codes" },
   { key: "work_company_names", label: "Work Company Names" },
-  { key: "project_codes", label: "Project Codes" },
-  { key: "project_names", label: "Project Names" },
+  { key: "direct_project_override_codes", label: "Direct Project Override Codes" },
+  { key: "direct_project_override_names", label: "Direct Project Override Names" },
+  { key: "inherited_project_codes", label: "Inherited Project Codes" },
+  { key: "inherited_project_names", label: "Inherited Project Names" },
+  { key: "effective_project_codes", label: "Effective Project Codes" },
+  { key: "effective_project_names", label: "Effective Project Names" },
   { key: "work_area_codes", label: "Work Area Codes" },
   { key: "work_area_names", label: "Work Area Names" },
   { key: "work_area_department_codes", label: "Work Area Department Codes" },
@@ -127,8 +131,12 @@ export default function SAUserScopeReport() {
         row.identity_department_name,
         row.work_company_codes,
         row.work_company_names,
-        row.project_codes,
-        row.project_names,
+        row.direct_project_override_codes,
+        row.direct_project_override_names,
+        row.inherited_project_codes,
+        row.inherited_project_names,
+        row.effective_project_codes,
+        row.effective_project_names,
         row.work_area_codes,
         row.work_area_names,
         row.primary_work_area_code,
@@ -259,7 +267,7 @@ export default function SAUserScopeReport() {
               value={searchQuery}
               onChange={setSearchQuery}
               inputRef={searchRef}
-              placeholder="Search user, role, company, department, project, or work area"
+              placeholder="Search user, role, company, department, inherited project, override project, or work area"
             />
           </div>
           {error ? (
@@ -300,7 +308,7 @@ export default function SAUserScopeReport() {
 
         <ErpSectionCard
           title={loading ? "Loading user scope report" : `${filteredRows.length} user row${filteredRows.length === 1 ? "" : "s"}`}
-          description="Each user now stays on one row, while work companies, projects, and work areas remain in separate columns."
+          description="Each user stays on one row while project reach is split into direct overrides, inherited projects, and effective projects."
         >
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">

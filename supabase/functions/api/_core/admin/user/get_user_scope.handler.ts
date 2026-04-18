@@ -10,6 +10,7 @@
 
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import type { ContextResolution } from "../../../_pipeline/context.ts";
+import { resolveEffectiveProjectAccess } from "../../../_shared/effective_project_access.ts";
 import { okResponse, errorResponse } from "../../response.ts";
 
 type HandlerContext = {
@@ -172,12 +173,12 @@ export async function getUserScopeHandler(
 
     const workCompanyIds = [...new Set((workCompanyRows ?? []).map((row) => row.company_id))];
 
-    const { data: projectRows } = await db
+    const { data: projectOverrideRows } = await db
       .schema("erp_map").from("user_projects")
       .select("project_id")
       .eq("auth_user_id", authUserId);
 
-    const projectIds = [...new Set((projectRows ?? []).map((row) => row.project_id))];
+    const directProjectOverrideIds = [...new Set((projectOverrideRows ?? []).map((row) => row.project_id))];
 
     const { data: workContextRows } = await db
       .schema("erp_acl").from("user_work_contexts")
@@ -227,14 +228,23 @@ export async function getUserScopeHandler(
       ...workCompanyIds,
     ])];
 
+    const effectiveProjectAccess = await resolveEffectiveProjectAccess(db, authUserId);
+    const inheritedProjectIds = effectiveProjectAccess.inheritedProjectIds;
+    const effectiveProjectIds = effectiveProjectAccess.effectiveProjectIds;
+    const scopedProjectIds = [...new Set([
+      ...directProjectOverrideIds,
+      ...inheritedProjectIds,
+      ...effectiveProjectIds,
+    ])];
+
     const { data: scopedProjectLinks } =
-      projectIds.length === 0 || eligibleScopeCompanyIds.length === 0
+      scopedProjectIds.length === 0 || eligibleScopeCompanyIds.length === 0
         ? { data: [] }
         : await db
           .schema("erp_map")
           .from("company_projects")
           .select("project_id, company_id")
-          .in("project_id", projectIds)
+          .in("project_id", scopedProjectIds)
           .in("company_id", eligibleScopeCompanyIds);
 
     const scopedProjectCompanyMap = new Map<string, string>();
@@ -244,12 +254,12 @@ export async function getUserScopeHandler(
       }
     }
 
-    const { data: scopedProjects } = projectIds.length === 0
+    const { data: scopedProjects } = scopedProjectIds.length === 0
       ? { data: [] }
       : await db
         .schema("erp_master").from("projects")
         .select("id, project_code, project_name, status")
-        .in("id", projectIds)
+        .in("id", scopedProjectIds)
         .eq("status", "ACTIVE");
 
     const { data: scopedDepartments } = departmentIds.length === 0 || eligibleScopeCompanyIds.length === 0
@@ -330,8 +340,8 @@ export async function getUserScopeHandler(
             "company_code",
             "company_name",
           ),
-          projects: sortByCodeThenName(
-            projectIds
+          project_overrides: sortByCodeThenName(
+            directProjectOverrideIds
             .map((projectId) => {
               const project = projectMap.get(projectId);
               if (!project) {
@@ -344,6 +354,57 @@ export async function getUserScopeHandler(
               };
             })
             .filter(Boolean),
+            "project_code",
+            "project_name",
+          ),
+          inherited_projects: sortByCodeThenName(
+            inheritedProjectIds
+              .map((projectId) => {
+                const project = projectMap.get(projectId);
+                if (!project) {
+                  return null;
+                }
+
+                return {
+                  ...project,
+                  company_id: scopedProjectCompanyMap.get(projectId) ?? null,
+                };
+              })
+              .filter(Boolean),
+            "project_code",
+            "project_name",
+          ),
+          effective_projects: sortByCodeThenName(
+            effectiveProjectIds
+              .map((projectId) => {
+                const project = projectMap.get(projectId);
+                if (!project) {
+                  return null;
+                }
+
+                return {
+                  ...project,
+                  company_id: scopedProjectCompanyMap.get(projectId) ?? null,
+                };
+              })
+              .filter(Boolean),
+            "project_code",
+            "project_name",
+          ),
+          projects: sortByCodeThenName(
+            directProjectOverrideIds
+              .map((projectId) => {
+                const project = projectMap.get(projectId);
+                if (!project) {
+                  return null;
+                }
+
+                return {
+                  ...project,
+                  company_id: scopedProjectCompanyMap.get(projectId) ?? null,
+                };
+              })
+              .filter(Boolean),
             "project_code",
             "project_name",
           ),
