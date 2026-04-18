@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import EnterpriseDashboard from "../../components/dashboard/EnterpriseDashboard.jsx";
+import ErpScreenScaffold, {
+  ErpFieldPreview,
+  ErpSectionCard,
+} from "../../components/templates/ErpScreenScaffold.jsx";
 import { useErpScreenCommands } from "../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../hooks/useErpScreenHotkeys.js";
 import { handleLinearNavigation } from "../../navigation/erpRovingFocus.js";
@@ -35,9 +38,7 @@ function findFirstRoute(menuSnapshot, routePaths = []) {
 
 async function loadApprovalSummary(canViewApprovalInbox) {
   if (!canViewApprovalInbox) {
-    return {
-      approvalsToday: 0,
-    };
+    return { approvalsToday: 0 };
   }
 
   const [leaveRows, outWorkRows] = await Promise.allSettled([
@@ -50,14 +51,126 @@ async function loadApprovalSummary(canViewApprovalInbox) {
   const outWorkCount =
     outWorkRows.status === "fulfilled" ? (outWorkRows.value?.length ?? 0) : 0;
 
-  return {
-    approvalsToday: leaveCount + outWorkCount,
-  };
+  return { approvalsToday: leaveCount + outWorkCount };
+}
+
+function normalizeMenuRows(menu) {
+  const seenRoutes = new Set();
+
+  return (Array.isArray(menu) ? menu : [])
+    .filter((row) => row?.route_path)
+    .filter((row) => {
+      if (seenRoutes.has(row.route_path)) {
+        return false;
+      }
+
+      seenRoutes.add(row.route_path);
+      return true;
+    })
+    .sort((left, right) => {
+      const moduleCompare = String(left?.module_code ?? "").localeCompare(
+        String(right?.module_code ?? ""),
+        "en",
+        { numeric: true, sensitivity: "base" },
+      );
+
+      if (moduleCompare !== 0) {
+        return moduleCompare;
+      }
+
+      return String(left?.title ?? "").localeCompare(String(right?.title ?? ""), "en", {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
+}
+
+function groupMenuRowsByModule(rows) {
+  return rows.reduce((groups, row) => {
+    const key = row?.module_code || "GENERAL";
+    const existing = groups.get(key);
+
+    if (existing) {
+      existing.rows.push(row);
+      return groups;
+    }
+
+    groups.set(key, {
+      moduleCode: key,
+      moduleName: row?.module_name || key,
+      rows: [row],
+    });
+    return groups;
+  }, new Map());
+}
+
+function TaskButton({ action, index, refs }) {
+  return (
+    <button
+      ref={(element) => {
+        refs.current[index] = element;
+      }}
+      data-workspace-primary-focus={index === 0 ? "true" : undefined}
+      type="button"
+      onClick={action.onClick}
+      disabled={action.disabled}
+      onKeyDown={(event) =>
+        handleLinearNavigation(event, {
+          index,
+          refs: refs.current,
+          orientation: "vertical",
+        })
+      }
+      className={`grid w-full grid-cols-[92px_minmax(0,1fr)_128px] items-center border px-4 py-3 text-left transition ${
+        action.disabled
+          ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+          : "border-slate-300 bg-white hover:border-sky-300 hover:bg-sky-50"
+      }`}
+    >
+      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+        {action.badge}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-slate-900">
+          {action.title}
+        </span>
+        <span className="mt-1 block truncate text-xs text-slate-500">
+          {action.description}
+        </span>
+      </span>
+      <span className="justify-self-end text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+        {action.hint}
+      </span>
+    </button>
+  );
+}
+
+function WorkspaceRow({ row }) {
+  return (
+    <button
+      type="button"
+      onClick={() => openRoute(row.route_path)}
+      className="grid w-full grid-cols-[minmax(0,1fr)_140px] items-center border border-slate-200 bg-white px-3 py-3 text-left transition hover:border-sky-300 hover:bg-sky-50"
+    >
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-slate-900">
+          {row?.title || row?.resource_code || row?.route_path}
+        </span>
+        <span className="mt-1 block truncate text-[11px] uppercase tracking-[0.12em] text-slate-500">
+          {row?.resource_code || row?.route_path}
+        </span>
+      </span>
+      <span className="justify-self-end text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+        Open Route
+      </span>
+    </button>
+  );
 }
 
 export default function UserDashboardHome() {
   const topActionRefs = useRef([]);
-  const { menu } = useMenu();
+  const taskRefs = useRef([]);
+  const { menu, runtimeContext, shellProfile } = useMenu();
   const [approvalSummary, setApprovalSummary] = useState({
     approvalsToday: 0,
   });
@@ -70,7 +183,7 @@ export default function UserDashboardHome() {
         "/dashboard/hr/leave/apply",
         "/dashboard/hr/out-work/apply",
       ]),
-    [menu]
+    [menu],
   );
   const approvalRoute = useMemo(
     () =>
@@ -78,7 +191,7 @@ export default function UserDashboardHome() {
         "/dashboard/hr/leave/approval-inbox",
         "/dashboard/hr/out-work/approval-inbox",
       ]),
-    [menu]
+    [menu],
   );
   const reportingRoute = useMemo(
     () =>
@@ -88,7 +201,7 @@ export default function UserDashboardHome() {
         "/dashboard/hr/leave/approval-history",
         "/dashboard/hr/out-work/approval-history",
       ]),
-    [menu]
+    [menu],
   );
 
   useEffect(() => {
@@ -129,47 +242,28 @@ export default function UserDashboardHome() {
     };
   }, [canViewApprovalInbox]);
 
-  const stats = useMemo(
-    () => [
-      {
-        label: "My Tasks",
-        value: "14",
-        tag: "Queue",
-        tone: "sky",
-        caption: "Work items currently sitting in the user-owned execution lane.",
-      },
-      {
-        label: "Approvals Today",
-        value: String(approvalSummary.approvalsToday).padStart(2, "0"),
-        tag: "Flow",
-        tone: "emerald",
-        caption: "Approval decisions likely to need attention during this shift.",
-      },
-      {
-        label: "Module Access",
-        value: String(new Set((menu ?? []).map((row) => row?.module_code).filter(Boolean)).size).padStart(2, "0"),
-        tag: "Scope",
-        tone: "amber",
-        caption: "Modules currently reachable through ACL and menu projection.",
-      },
-      {
-        label: "Execution Pace",
-        value: "91%",
-        tag: "Trend",
-        tone: "slate",
-        caption: "Current pace indicator for the user's operating session.",
-      },
-    ],
-    [approvalSummary.approvalsToday, menu]
+  const normalizedMenu = useMemo(() => normalizeMenuRows(menu), [menu]);
+  const groupedWorkspaces = useMemo(
+    () => Array.from(groupMenuRowsByModule(normalizedMenu).values()),
+    [normalizedMenu],
   );
+  const availableCompanyCount = runtimeContext?.availableCompanies?.length ?? 0;
+  const availableWorkAreaCount = runtimeContext?.availableWorkContexts?.length ?? 0;
 
-  const actions = [
+  const currentCompanyLabel = runtimeContext?.currentCompany
+    ? `${runtimeContext.currentCompany.company_code} | ${runtimeContext.currentCompany.company_name}`
+    : "No company selected";
+  const currentWorkAreaLabel = runtimeContext?.selectedWorkContext
+    ? `${runtimeContext.selectedWorkContext.work_context_code} | ${runtimeContext.selectedWorkContext.work_context_name}`
+    : "No work area selected";
+
+  const quickTasks = [
     {
       badge: "Work",
-      title: "Priority Queue",
+      title: "Continue Current Queue",
       description: priorityRoute
-        ? "Open the first available request lane and continue work immediately."
-        : "No request lane is exposed in the current ACL projection.",
+        ? "Open the first request workspace exposed by the current ACL access map."
+        : "No request workspace is available in the current access map.",
       hint: priorityRoute ? "Enter Open" : "Unavailable",
       disabled: !priorityRoute,
       onClick: () => {
@@ -179,11 +273,11 @@ export default function UserDashboardHome() {
       },
     },
     {
-      badge: "Review",
-      title: "Approvals Board",
+      badge: "Approval",
+      title: "Review Pending Decisions",
       description: approvalRoute
-        ? "Open the current approval queue and keep workflow moving."
-        : "Approval inbox is not available for this user context.",
+        ? `Open the approval inbox. Current pending count: ${approvalSummary.approvalsToday}.`
+        : "No approval inbox is available in the current access map.",
       hint: approvalRoute ? "Enter Open" : "Unavailable",
       disabled: !approvalRoute,
       onClick: () => {
@@ -193,12 +287,13 @@ export default function UserDashboardHome() {
       },
     },
     {
-      badge: "Track",
-      title: "Performance Signals",
+      badge: "Report",
+      title: "Open Current Registers",
       description: reportingRoute
-        ? "Open the best available register or history view from the current access map."
-        : "Open command routing to find the next available workspace.",
+        ? "Open the best available history or register page from the current scope."
+        : "No direct register route is available right now. Use command search.",
       hint: reportingRoute ? "Enter Open" : "Ctrl+K / F9",
+      disabled: false,
       onClick: () => {
         if (reportingRoute) {
           openRoute(reportingRoute);
@@ -210,52 +305,12 @@ export default function UserDashboardHome() {
     },
   ];
 
-  const topActions = [
-    {
-      key: "focus-queue",
-      label: "Focus Queue",
-      hint: "Alt+Shift+P",
-      tone: "primary",
-      buttonRef: (element) => {
-        topActionRefs.current[0] = element;
-      },
-      onClick: () => {
-        const target = document.querySelector("[data-workspace-primary-focus='true']");
-        target?.focus?.();
-      },
-      onKeyDown: (event) =>
-        handleLinearNavigation(event, {
-          index: 0,
-          refs: topActionRefs.current,
-          orientation: "horizontal",
-        }),
-    },
-    {
-      key: "focus-content",
-      label: "Stay In Workspace",
-      tone: "neutral",
-      buttonRef: (element) => {
-        topActionRefs.current[1] = element;
-      },
-      onClick: () => {
-        const target = document.querySelector("[data-workspace-primary-focus='true']");
-        target?.focus?.();
-      },
-      onKeyDown: (event) =>
-        handleLinearNavigation(event, {
-          index: 1,
-          refs: topActionRefs.current,
-          orientation: "horizontal",
-        }),
-    },
-  ];
-
   useErpScreenCommands([
     {
-      id: "user-home-focus-actions",
+      id: "user-home-focus-primary-task",
       group: "Current Screen",
-      label: "Focus user action queue",
-      keywords: ["user dashboard", "actions", "queue"],
+      label: "Focus primary task list",
+      keywords: ["acl", "home", "task", "focus"],
       perform: () => {
         const target = document.querySelector("[data-workspace-primary-focus='true']");
         target?.focus?.();
@@ -263,30 +318,12 @@ export default function UserDashboardHome() {
       order: 10,
     },
     {
-      id: "user-home-open-priority",
+      id: "user-home-open-command-search",
       group: "Current Screen",
-      label: priorityRoute ? "Open priority queue" : "Priority queue unavailable",
-      keywords: ["dashboard", "priority", "queue"],
-      disabled: !priorityRoute,
-      perform: () => {
-        if (priorityRoute) {
-          openRoute(priorityRoute);
-        }
-      },
+      label: "Open command search",
+      keywords: ["acl", "home", "command", "search"],
+      perform: () => openErpCommandPalette(),
       order: 20,
-    },
-    {
-      id: "user-home-open-approval-board",
-      group: "Current Screen",
-      label: approvalRoute ? "Open approvals board" : "Approvals board unavailable",
-      keywords: ["dashboard", "approval", "board"],
-      disabled: !approvalRoute,
-      perform: () => {
-        if (approvalRoute) {
-          openRoute(approvalRoute);
-        }
-      },
-      order: 30,
     },
   ]);
 
@@ -300,27 +337,147 @@ export default function UserDashboardHome() {
   });
 
   return (
-    <EnterpriseDashboard
-      eyebrow="Operational Workspace"
-      title="User Dashboard"
-      subtitle="Keep the current work queue, approvals, and access summary in a clean workspace."
-      stats={stats}
-      actions={actions}
-      topActions={topActions}
-      workspaceTitle="Keyboard-Native Work Queue"
-      workspaceDescription="This ACL-governed dashboard now behaves like a working surface, not a passive landing page."
-      noteTitle="Operator Rhythm"
-      noteItems={[
-        "Alt+Shift+P returns focus to the primary action card.",
-        "F6 rotates zones; arrows move deterministically inside the action grid.",
-        "Ctrl+K or F9 opens command routing when no direct action lane is available.",
+    <ErpScreenScaffold
+      eyebrow="ACL Workspace"
+      title="Work Start"
+      description="This home page is a clean operator desk. Pick the company and work area in the shell, then open the exact task you need."
+      notices={[
+        {
+          key: "acl-home-scope",
+          tone: "info",
+          message:
+            "Access comes from ACL packs and scope. Approval and report authority remain separately scoped by rules.",
+        },
       ]}
-      summaryTitle="ACL Workspace Snapshot"
-      summaryItems={[
-        "Primary work remains keyboard reachable without mouse rescue.",
-        "ACL and menu projection still own what the user can actually open.",
-        "This dashboard is the base pattern for future keyboard-native ACL modules.",
+      topActions={[
+        {
+          key: "focus-primary-task",
+          label: "Focus Tasks",
+          hint: "Alt+Shift+P",
+          tone: "primary",
+          buttonRef: (element) => {
+            topActionRefs.current[0] = element;
+          },
+          onClick: () => {
+            const target = document.querySelector("[data-workspace-primary-focus='true']");
+            target?.focus?.();
+          },
+          onKeyDown: (event) =>
+            handleLinearNavigation(event, {
+              index: 0,
+              refs: topActionRefs.current,
+              orientation: "horizontal",
+            }),
+        },
+        {
+          key: "open-command-search",
+          label: "Command Search",
+          hint: "Ctrl+K / F9",
+          tone: "neutral",
+          buttonRef: (element) => {
+            topActionRefs.current[1] = element;
+          },
+          onClick: () => openErpCommandPalette(),
+          onKeyDown: (event) =>
+            handleLinearNavigation(event, {
+              index: 1,
+              refs: topActionRefs.current,
+              orientation: "horizontal",
+            }),
+        },
       ]}
-    />
+    >
+      <div className="grid gap-4 xl:grid-cols-[0.94fr_1.06fr]">
+        <div className="grid gap-4">
+          <ErpSectionCard
+            eyebrow="Current Scope"
+            title="Operator Identity"
+            description="Department stays as identity. Company and work area decide where this session can operate right now."
+          >
+            <div className="grid gap-3 md:grid-cols-2">
+              <ErpFieldPreview
+                label="Name"
+                value={shellProfile?.name || "Unknown name"}
+                caption="Current signed-in ACL operator name."
+              />
+              <ErpFieldPreview
+                label="User"
+                value={shellProfile?.userCode || "Unknown user"}
+                caption="Current signed-in ACL operator."
+              />
+              <ErpFieldPreview
+                label="Role"
+                value={shellProfile?.roleCode || "Unknown role"}
+                caption="Authority class from the role ladder."
+              />
+              <ErpFieldPreview
+                label="Current Company"
+                value={currentCompanyLabel}
+                caption={`Accessible companies in scope: ${availableCompanyCount}.`}
+              />
+              <ErpFieldPreview
+                label="Current Work Area"
+                value={currentWorkAreaLabel}
+                caption={`Available work areas in scope: ${availableWorkAreaCount}.`}
+              />
+            </div>
+          </ErpSectionCard>
+
+          <ErpSectionCard
+            eyebrow="Immediate Tasks"
+            title="Open Work"
+            description="Start from the exact task instead of reading a dashboard."
+          >
+            <div className="grid gap-2">
+              {quickTasks.map((action, index) => (
+                <TaskButton
+                  key={action.title}
+                  action={action}
+                  index={index}
+                  refs={taskRefs}
+                />
+              ))}
+            </div>
+          </ErpSectionCard>
+        </div>
+
+        <ErpSectionCard
+          eyebrow="Available Workspaces"
+          title="Open What ACL Allows"
+          description="These routes come from the current ACL snapshot and the selected company and work area."
+        >
+          <div className="grid gap-4">
+            {groupedWorkspaces.length === 0 ? (
+              <div className="border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
+                No route is currently exposed in this ACL snapshot.
+              </div>
+            ) : (
+              groupedWorkspaces.map((group) => (
+                <section key={group.moduleCode} className="grid gap-2">
+                  <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-2">
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        Module
+                      </p>
+                      <h3 className="mt-1 text-sm font-semibold text-slate-900">
+                        {group.moduleName}
+                      </h3>
+                    </div>
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                      {group.rows.length} Route{group.rows.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="grid gap-2">
+                    {group.rows.map((row) => (
+                      <WorkspaceRow key={row.route_path} row={row} />
+                    ))}
+                  </div>
+                </section>
+              ))
+            )}
+          </div>
+        </ErpSectionCard>
+      </div>
+    </ErpScreenScaffold>
   );
 }

@@ -293,56 +293,23 @@ export async function updateUserScopeHandler(
 
     const selectedDepartmentId = departmentIds[0] ?? null;
 
+    const persistedDepartmentIds = selectedDepartmentId ? [selectedDepartmentId] : [];
     const explicitWorkContextRows = explicitWorkContextIds
       .map((workContextId) => validWorkContextMap.get(workContextId) ?? null)
       .filter(Boolean);
 
-    const filteredExplicitWorkContextRows = explicitWorkContextRows.filter((row) =>
-      !row?.department_id || row.department_id === selectedDepartmentId
-    );
-
-    const droppedWorkContexts = explicitWorkContextRows
-      .filter((row) => row?.department_id && row.department_id !== selectedDepartmentId)
-      .map((row) => ({
-        work_context_id: row?.work_context_id ?? null,
-        reason: "WORK_CONTEXT_DEPARTMENT_MISMATCH",
-        department_id: row?.department_id ?? null,
-      }))
-      .filter((row) => row.work_context_id);
-
-    const departmentWorkContextIds = selectedDepartmentId
-      ? [
-          (validWorkContexts ?? []).find((row) => row.department_id === selectedDepartmentId)?.work_context_id ??
-            null,
-        ]
-      : [];
-
-    if (selectedDepartmentId && departmentWorkContextIds.some((workContextId) => !workContextId)) {
-      return blocked(
-        "USER_SCOPE_DEPARTMENT_WORK_CONTEXT_MISSING",
-        "one or more departments are missing a governed department work context",
-        ctx,
-      );
-    }
-
-    const persistedDepartmentIds = selectedDepartmentId ? [selectedDepartmentId] : [];
-
-    const autoDepartmentWorkContextIds = (departmentWorkContextIds.filter(Boolean)) as string[];
-
-    const workContextIds = [...new Set([
-      ...autoDepartmentWorkContextIds,
-      ...filteredExplicitWorkContextRows
+    const workContextIds = [...new Set(
+      explicitWorkContextRows
         .map((row) => row?.work_context_id ?? null)
         .filter(Boolean),
-    ])];
+    )];
 
     const primaryWorkContextId =
-      filteredExplicitWorkContextRows.find((row) =>
+      explicitWorkContextRows.find((row) =>
         row?.company_id === parentCompanyId && row?.work_context_code === "GENERAL_OPS"
       )?.work_context_id ??
-      filteredExplicitWorkContextRows.find((row) => row?.company_id === parentCompanyId)?.work_context_id ??
-      filteredExplicitWorkContextRows[0]?.work_context_id ??
-      departmentWorkContextIds.find(Boolean) ??
+      explicitWorkContextRows.find((row) => row?.company_id === parentCompanyId)?.work_context_id ??
+      explicitWorkContextRows[0]?.work_context_id ??
       null;
 
     const parentPayload = {
@@ -500,9 +467,9 @@ export async function updateUserScopeHandler(
       dropped_project_ids: droppedProjects.map((row) => row.project_id),
       dropped_projects: droppedProjects,
       derived_department_ids: [],
-      dropped_work_context_ids: droppedWorkContexts.map((row) => row.work_context_id),
-      dropped_work_contexts: droppedWorkContexts,
-      derived_work_context_ids: workContextIds.filter((workContextId) => !explicitWorkContextIds.includes(workContextId)),
+      dropped_work_context_ids: [],
+      dropped_work_contexts: [],
+      derived_work_context_ids: [],
     };
 
     if (projectIds.length > 0) {

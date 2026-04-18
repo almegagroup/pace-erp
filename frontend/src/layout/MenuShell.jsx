@@ -280,6 +280,7 @@ export default function MenuShell() {
   );
   const previousScreen = getPreviousScreen();
   const workspaceMode = stackDepth > 1;
+  const aclWorkspace = location.pathname.startsWith("/dashboard");
 
   const activeMenuIndex = useMemo(
     () => resolveTopLevelIndex(sidebarRoots, location.pathname),
@@ -338,6 +339,8 @@ export default function MenuShell() {
   const currentWorkContextLabel = runtimeContext?.selectedWorkContext
     ? `${runtimeContext.selectedWorkContext.work_context_code} | ${runtimeContext.selectedWorkContext.work_context_name}`
     : "No work context selected";
+  const companySwitcherLabel = aclWorkspace ? "Company" : "Work Company";
+  const workContextSwitcherLabel = aclWorkspace ? "Work Area" : "Work Context";
   const networkStatusLabel =
     networkActivity.blockingInFlightCount > 0
       ? `Processing ${networkActivity.blockingInFlightCount} action${networkActivity.blockingInFlightCount === 1 ? "" : "s"}`
@@ -360,10 +363,18 @@ export default function MenuShell() {
     networkActivity.lastLabel ||
     "Processing ERP action";
   const shellShortcutLine = workspaceMode
-    ? "Esc Back | Alt+H Home | Alt+Left Hide Rail | Alt+Right Show Rail | Alt+W Or F8 Work Context | Ctrl+K Or F9 Command Bar"
-    : "Alt+M Menu | Alt+A Function Rail | Alt+C Work Area | Alt+W Or F8 Work Context | Ctrl+K Or F9 Command Bar";
+    ? `Esc Back | Alt+H Home | Alt+Left Hide Rail | Alt+Right Show Rail | Alt+W Or F8 ${workContextSwitcherLabel} | Ctrl+K Or F9 Command Bar`
+    : aclWorkspace
+      ? `Alt+M Menu | Alt+A Function Rail | Alt+C Work Canvas | Alt+W Or F8 ${workContextSwitcherLabel} | Ctrl+K Or F9 Command Bar`
+      : `Alt+M Menu | Alt+A Function Rail | Alt+C Work Area | Alt+W Or F8 ${workContextSwitcherLabel} | Ctrl+K Or F9 Command Bar`;
   const footerShortcutLine =
-    "Esc Back | Alt+H Home | Alt+W Or F8 Work Context | Alt+PgUp Prev Page | Alt+PgDn Next Page | Ctrl+K Or F9 Command Bar | Ctrl+S Or F2 Save | Alt+R Or F4 Refresh | Alt+Shift+F Or F3 Search | Alt+Shift+P Or F7 Primary";
+    `Esc Back | Alt+H Home | Alt+W Or F8 ${workContextSwitcherLabel} | Alt+PgUp Prev Page | Alt+PgDn Next Page | Ctrl+K Or F9 Command Bar | Ctrl+S Or F2 Save | Alt+R Or F4 Refresh | Alt+Shift+F Or F3 Search | Alt+Shift+P Or F7 Primary`;
+
+  useEffect(() => {
+    if (aclWorkspace) {
+      setActionRailCollapsed(true);
+    }
+  }, [aclWorkspace]);
 
   useEffect(() => {
     if (
@@ -1335,7 +1346,7 @@ export default function MenuShell() {
     <div className="erp-app-shell flex h-screen overflow-hidden text-slate-900">
       <aside
         aria-label="Workspace navigation"
-        className={`flex shrink-0 flex-col border-r bg-[#f4f7fa] ${workspaceMode ? "w-[92px]" : collapsed ? "w-[92px]" : "w-[272px]"} ${zoneBorder(activeZone, "menu")}`}
+        className={`flex shrink-0 flex-col border-r bg-[#f4f7fa] ${workspaceMode ? "w-[92px]" : collapsed ? "w-[92px]" : aclWorkspace ? "w-[236px]" : "w-[272px]"} ${zoneBorder(activeZone, "menu")}`}
       >
         <div className="border-b border-slate-500 bg-[linear-gradient(180deg,#0d4f90_0%,#13426f_100%)] px-3 py-3 text-white">
           <div className="flex items-center gap-2">
@@ -1350,11 +1361,17 @@ export default function MenuShell() {
           </div>
           {!workspaceMode && !collapsed ? (
             <>
-              <p className="mt-2 text-xl font-semibold">{shellProfile?.roleCode || "ERP"}</p>
-              <p className="text-sm opacity-90">{shellProfile?.userCode || "User"}</p>
+              <p className={`mt-2 font-semibold ${aclWorkspace ? "text-base" : "text-xl"}`}>
+                {shellProfile?.name || shellProfile?.roleCode || "ERP"}
+              </p>
+              <p className={`${aclWorkspace ? "text-xs" : "text-sm"} opacity-90`}>
+                {[shellProfile?.roleCode || "Role", shellProfile?.userCode || "User"]
+                  .filter(Boolean)
+                  .join(" | ")}
+              </p>
               {showCompanySwitcher ? (
                 <label className="mt-3 block text-[10px] font-semibold uppercase tracking-[0.18em] text-white/80">
-                  Work Company
+                  {companySwitcherLabel}
                   <select
                     value={runtimeContext?.selectedCompanyId ?? ""}
                     onChange={(event) => void handleWorkCompanyChange(event.target.value)}
@@ -1376,7 +1393,7 @@ export default function MenuShell() {
               ) : null}
               {showWorkContextSwitcher ? (
                 <label className="mt-3 block text-[10px] font-semibold uppercase tracking-[0.18em] text-white/80">
-                  Work Context
+                  {workContextSwitcherLabel}
                   <span className="ml-2 text-[9px] tracking-[0.16em] text-white/60">
                     Alt+W / F8
                   </span>
@@ -1500,7 +1517,9 @@ export default function MenuShell() {
           {workspaceMode ? (
             <>
               <div className="font-semibold text-slate-700">{shellProfile?.roleCode || "ERP"}</div>
-              <div className="mt-1 truncate">{shellProfile?.userCode || "User"}</div>
+              <div className="mt-1 truncate">
+                {shellProfile?.name || shellProfile?.userCode || "User"}
+              </div>
             </>
           ) : (
             <>{collapsed ? activeTitle.slice(0, 8) : activeTitle}</>
@@ -1578,7 +1597,7 @@ export default function MenuShell() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-sky-700">
-                {workspaceMode ? "Focused workspace" : "Protected ERP"}
+                {workspaceMode ? "Focused workspace" : aclWorkspace ? "ACL Task Workspace" : "Protected ERP"}
               </div>
               <div className="mt-1 text-lg font-semibold">
               {workspaceMode && previousScreen?.screen_code
@@ -1586,6 +1605,7 @@ export default function MenuShell() {
                 : activeTitle}
               </div>
               <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                <span>{shellProfile?.name || "Name"}</span>
                 <span>{shellProfile?.roleCode || "Role"}</span>
                 <span>{shellProfile?.userCode || "User"}</span>
                 {!runtimeContext?.isAdmin && runtimeContext?.currentCompany ? (

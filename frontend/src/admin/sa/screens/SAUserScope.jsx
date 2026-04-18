@@ -431,7 +431,6 @@ export default function SAUserScope() {
             ? true
             : workCompanyIds.includes(workContext.company_id)
         )
-        .filter((workContext) => !workContext.department_id)
         .slice()
         .sort((left, right) =>
           `${left.company_code ?? ""}|${left.work_context_code ?? ""}|${left.work_context_name ?? ""}`.localeCompare(
@@ -1208,7 +1207,7 @@ export default function SAUserScope() {
                     ? "Select work companies first."
                     : "No work context selected yet."
                 )}
-                caption="Contexts stay filtered from the selected companies."
+                caption="Contexts stay filtered only from the selected companies. Department identity does not auto-limit operational work areas."
                 multiline
                 tone={workContextIds.length > 0 ? "success" : "default"}
               />
@@ -1488,6 +1487,7 @@ export default function SAUserScope() {
           <p className="text-sm leading-6 text-slate-600">
             Context choices stay tied to the selected work companies, but nothing
             here is auto-added on save. Only the checked runtime scopes will persist.
+            Department identity stays separate from these operational work areas.
           </p>
           <QuickFilterInput
             label="Filter Work Contexts"
@@ -1701,8 +1701,9 @@ export default function SAUserScope() {
       >
         <div className="grid gap-4">
           <p className="text-sm leading-6 text-slate-600">
-            Department mapping is single-select HR identity truth. Changing it here
-            automatically governs the matching department work context.
+            Department mapping is single-select HR identity truth. It records the
+            user&apos;s home department, but it no longer auto-adds or removes
+            operational work areas from the work-context drawer.
           </p>
           <QuickFilterInput
             label="Filter Departments"

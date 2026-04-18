@@ -2061,7 +2061,7 @@ export function LeaveRegisterWorkspace() {
       kind="leave"
       title="HR Leave Register"
       description="Parent-company HR and reporting viewers can inspect cross-user leave request history here."
-      loader={(requesterAuthUserId) => listLeaveRegister(requesterAuthUserId)}
+      loader={(requesterAuthUserId) => listLeaveRegister({ requesterAuthUserId })}
     />
   );
 }
@@ -2108,7 +2108,7 @@ export function OutWorkRegisterWorkspace() {
       kind="outWork"
       title="Out Work Register"
       description="Parent-company HR and reporting viewers can inspect cross-user out work request history here."
-      loader={(requesterAuthUserId) => listOutWorkRegister(requesterAuthUserId)}
+      loader={(requesterAuthUserId) => listOutWorkRegister({ requesterAuthUserId })}
     />
   );
 }

@@ -54,6 +54,7 @@ import { listResourceApprovalPolicyHandler } from "../_core/admin/approval/list_
 import { upsertResourceApprovalPolicyHandler } from "../_core/admin/approval/upsert_resource_approval_policy.handler.ts";
 
 import { listUsersHandler } from "../_core/admin/user/list_users.handler.ts";
+import { listUserScopeReportHandler } from "../_core/admin/user/list_user_scope_report.handler.ts";
 import { getUserScopeHandler } from "../_core/admin/user/get_user_scope.handler.ts";
 import { updateUserScopeHandler } from "../_core/admin/user/update_user_scope.handler.ts";
 import { updateUserStateHandler } from "../_core/admin/user/update_user_state.handler.ts";
@@ -530,6 +531,13 @@ export async function dispatchAdminRoutes(
 
     case "GET:/api/admin/users":
       response = await listUsersHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "GET:/api/admin/users/report":
+      response = await listUserScopeReportHandler(req, {
         context,
         request_id: requestId,
       });

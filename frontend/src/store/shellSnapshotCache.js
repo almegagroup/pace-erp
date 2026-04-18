@@ -1,6 +1,7 @@
 const SHELL_SNAPSHOT_STORAGE_KEY = "pace.erp.shell.snapshot.v1";
 
 const EMPTY_SHELL_PROFILE = Object.freeze({
+  name: "",
   userCode: "",
   roleCode: "",
   tagline: "Process Automation & Control Environment",
@@ -23,6 +24,7 @@ function canUseStorage() {
 
 function normalizeShellProfile(profile) {
   return {
+    name: profile?.name ?? "",
     userCode: profile?.userCode ?? "",
     roleCode: profile?.roleCode ?? "",
     tagline: profile?.tagline ?? EMPTY_SHELL_PROFILE.tagline,

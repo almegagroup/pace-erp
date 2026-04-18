@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { useMenu } from "../../../context/useMenu.js";
 import {
@@ -386,6 +386,14 @@ export default function SAUsers() {
       },
       order: 50,
     },
+    {
+      id: "sa-users-open-report",
+      group: "Current Screen",
+      label: "Open flat user scope report",
+      keywords: ["report", "scope report", "excel", "circulate"],
+      perform: () => openRoute("/sa/users/report"),
+      order: 60,
+    },
   ]);
 
   useErpScreenHotkeys({
@@ -478,17 +486,32 @@ export default function SAUsers() {
         }),
     },
     {
+      key: "scope-report",
+      label: "Scope Report",
+      tone: "neutral",
+      buttonRef: (element) => {
+        actionBarRefs.current[5] = element;
+      },
+      onClick: () => openRoute("/sa/users/report"),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 5,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
       key: "refresh-users",
       label: loading ? "Refreshing..." : "Refresh Users",
       hint: "Alt+R",
       tone: "primary",
       buttonRef: (element) => {
-        actionBarRefs.current[5] = element;
+        actionBarRefs.current[6] = element;
       },
       onClick: () => void handleRefresh(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 5,
+          index: 6,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),

@@ -215,10 +215,21 @@ export async function listLeaveApprovalHistory(requesterAuthUserId = "") {
   );
 }
 
-export async function listLeaveRegister(requesterAuthUserId = "") {
-  const query = requesterAuthUserId
-    ? `?requester_auth_user_id=${encodeURIComponent(requesterAuthUserId)}`
-    : "";
+export async function listLeaveRegister(filters = {}) {
+  const params = new URLSearchParams();
+  if (filters?.requesterAuthUserId) {
+    params.set("requester_auth_user_id", filters.requesterAuthUserId);
+  }
+  if (filters?.companyId) {
+    params.set("company_id", filters.companyId);
+  }
+  if (filters?.fromDate) {
+    params.set("from_date", filters.fromDate);
+  }
+  if (filters?.toDate) {
+    params.set("to_date", filters.toDate);
+  }
+  const query = params.toString() ? `?${params.toString()}` : "";
 
   return apiJson(
     `/api/hr/leave/register${query}`,
@@ -330,10 +341,21 @@ export async function listOutWorkApprovalHistory(requesterAuthUserId = "") {
   );
 }
 
-export async function listOutWorkRegister(requesterAuthUserId = "") {
-  const query = requesterAuthUserId
-    ? `?requester_auth_user_id=${encodeURIComponent(requesterAuthUserId)}`
-    : "";
+export async function listOutWorkRegister(filters = {}) {
+  const params = new URLSearchParams();
+  if (filters?.requesterAuthUserId) {
+    params.set("requester_auth_user_id", filters.requesterAuthUserId);
+  }
+  if (filters?.companyId) {
+    params.set("company_id", filters.companyId);
+  }
+  if (filters?.fromDate) {
+    params.set("from_date", filters.fromDate);
+  }
+  if (filters?.toDate) {
+    params.set("to_date", filters.toDate);
+  }
+  const query = params.toString() ? `?${params.toString()}` : "";
 
   return apiJson(
     `/api/hr/out-work/register${query}`,

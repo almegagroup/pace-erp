@@ -24,5 +24,17 @@ export function buildRouteIndex(menuSnapshot) {
   routes.add("/dashboard");
   routes.add("/app");
 
+  const companionRoutePairs = [
+    ["/dashboard/hr/leave/register", "/dashboard/hr/leave/register/results"],
+    ["/dashboard/hr/out-work/register", "/dashboard/hr/out-work/register/results"],
+    ["/sa/users", "/sa/users/report"],
+  ];
+
+  for (const [baseRoute, companionRoute] of companionRoutePairs) {
+    if (routes.has(baseRoute)) {
+      routes.add(companionRoute);
+    }
+  }
+
   return routes;
 }

@@ -140,6 +140,9 @@ async function loadDestinationRows(parentCompanyId: string): Promise<Destination
 async function loadOutWorkRows(filters: {
   requesterAuthUserId?: string;
   parentCompanyId?: string;
+  parentCompanyIds?: string[];
+  fromDate?: string;
+  toDate?: string;
 }): Promise<OutWorkRequestRow[]> {
   let query = serviceRoleClient
     .schema("erp_hr")
@@ -153,6 +156,14 @@ async function loadOutWorkRows(filters: {
 
   if (filters.parentCompanyId) {
     query = query.eq("parent_company_id", filters.parentCompanyId);
+  }
+
+  if (Array.isArray(filters.parentCompanyIds) && filters.parentCompanyIds.length > 0) {
+    query = query.in("parent_company_id", filters.parentCompanyIds);
+  }
+
+  if (filters.fromDate && filters.toDate) {
+    query = query.lte("from_date", filters.toDate).gte("to_date", filters.fromDate);
   }
 
   const { data, error } = await query;
@@ -209,11 +220,17 @@ async function buildOutWorkCases(rows: OutWorkRequestRow[]) {
   const companyIdentityMap = await loadCompanyIdentityMap(
     rows.map((row) => row.parent_company_id),
   );
-  const companyWorkContextMap = rows[0]?.parent_company_id
-    ? createWorkflowScopeContextMap(
-        await loadActiveCompanyWorkContexts(serviceRoleClient, rows[0].parent_company_id),
-      )
-    : new Map();
+  const companyIds = [...new Set(rows.map((row) => row.parent_company_id).filter(Boolean))];
+  const companyWorkContextMaps = new Map<string, ReturnType<typeof createWorkflowScopeContextMap>>();
+
+  for (const companyId of companyIds) {
+    companyWorkContextMaps.set(
+      companyId,
+      createWorkflowScopeContextMap(
+        await loadActiveCompanyWorkContexts(serviceRoleClient, companyId),
+      ),
+    );
+  }
 
   const requests: OutWorkCaseRow[] = [];
 
@@ -225,6 +242,8 @@ async function buildOutWorkCases(rows: OutWorkRequestRow[]) {
 
     const decisions = decisionMap.get(row.workflow_request_id) ?? [];
     const companyIdentity = companyIdentityMap.get(row.parent_company_id) ?? null;
+    const companyWorkContextMap =
+      companyWorkContextMaps.get(row.parent_company_id) ?? new Map();
     const requesterDepartmentWorkContextId = resolveDepartmentWorkflowScopeId(
       {
         requester_work_context_id: workflow.requester_work_context_id ?? null,
@@ -273,6 +292,20 @@ async function buildOutWorkCases(rows: OutWorkRequestRow[]) {
   }
 
   return requests;
+}
+
+async function loadAccessibleRegisterCompanyIds(authUserId: string): Promise<string[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", authUserId);
+
+  if (error) {
+    throw new Error("OUT_WORK_REGISTER_COMPANY_SCOPE_FAILED");
+  }
+
+  return [...new Set((data ?? []).map((row) => row.company_id).filter(Boolean))];
 }
 
 export async function listOutWorkDestinationsHandler(
@@ -1043,19 +1076,69 @@ export async function listOutWorkRegisterHandler(
 
     const url = new URL(req.url);
     const requesterAuthUserId = url.searchParams.get("requester_auth_user_id")?.trim() || undefined;
+    const requestedCompanyId = url.searchParams.get("company_id")?.trim() || "";
+    const fromDate = url.searchParams.get("from_date")?.trim() || "";
+    const toDate = url.searchParams.get("to_date")?.trim() || "";
+    const normalizedFromDate = fromDate ? normalizeIsoDate(fromDate) : "";
+    const normalizedToDate = toDate ? normalizeIsoDate(toDate) : "";
+
+    if ((normalizedFromDate && !normalizedToDate) || (!normalizedFromDate && normalizedToDate)) {
+      return errorResponse(
+        "OUT_WORK_REGISTER_DATE_RANGE_REQUIRED",
+        "both from and to dates are required",
+        ctx.request_id,
+      );
+    }
+
+    if (normalizedFromDate && normalizedToDate) {
+      const totalDays = calculateInclusiveDays(normalizedFromDate, normalizedToDate);
+      if (totalDays <= 0 || totalDays > 366) {
+        return errorResponse(
+          "OUT_WORK_REGISTER_DATE_RANGE_INVALID",
+          "date range must stay within one year",
+          ctx.request_id,
+        );
+      }
+    }
+
+    const accessibleCompanyIds = await loadAccessibleRegisterCompanyIds(ctx.auth_user_id);
+    const resolvedCompanyIds =
+      requestedCompanyId === "*"
+        ? accessibleCompanyIds
+        : requestedCompanyId
+          ? accessibleCompanyIds.includes(requestedCompanyId)
+            ? [requestedCompanyId]
+            : []
+          : ctx.context.companyId
+            ? [ctx.context.companyId]
+            : [];
+
+    if (resolvedCompanyIds.length === 0) {
+      return okResponse({ requests: [] }, ctx.request_id);
+    }
 
     const rows = await loadOutWorkRows({
-      parentCompanyId: ctx.context.companyId,
+      parentCompanyIds: resolvedCompanyIds,
       requesterAuthUserId,
+      fromDate: normalizedFromDate || undefined,
+      toDate: normalizedToDate || undefined,
     });
     const requests = await buildOutWorkCases(rows);
     const moduleBinding = await getModuleBindingForResource(OUT_WORK_RESOURCE_CODES.apply);
-    const viewerRows = await loadViewerRulesForCompanyModule(
-      ctx.context.companyId,
-      moduleBinding.module_code,
-    );
+    const viewerRulesByCompany = new Map<
+      string,
+      Awaited<ReturnType<typeof loadViewerRulesForCompanyModule>>
+    >();
+    for (const companyId of resolvedCompanyIds) {
+      viewerRulesByCompany.set(
+        companyId,
+        await loadViewerRulesForCompanyModule(companyId, moduleBinding.module_code),
+      );
+    }
 
-    const visibleRequests = requests.filter((row) =>
+    const visibleRequests = requests.filter((row) => {
+      const viewerRows = viewerRulesByCompany.get(row.parent_company_id) ?? [];
+      return (
       pickScopedViewerRules(
         {
           resource_code: OUT_WORK_RESOURCE_CODES.register,
@@ -1067,7 +1150,8 @@ export async function listOutWorkRegisterHandler(
         viewerRows,
         "VIEW",
       ).some((viewer) => isViewerMatch(viewer, ctx.auth_user_id, ctx.roleCode))
-    );
+      );
+    });
 
     return okResponse({ requests: visibleRequests }, ctx.request_id);
   } catch (err) {
