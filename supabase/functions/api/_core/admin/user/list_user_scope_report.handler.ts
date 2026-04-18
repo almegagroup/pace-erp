@@ -56,25 +56,30 @@ function buildReportRow({
   signup,
   parentCompany,
   identityDepartment,
-  assignmentType,
-  assignmentCompany,
-  project,
-  workContext,
-  workContextDepartment,
-  isPrimaryWorkContext = false,
+  workCompanies,
+  projects,
+  workContexts,
+  primaryWorkContext,
 }: {
   user: UserRow;
   role: RoleRow | null;
   signup: SignupRow | null;
   parentCompany: CompanyRow | null;
   identityDepartment: DepartmentRow | null;
-  assignmentType: string;
-  assignmentCompany?: CompanyRow | null;
-  project?: ProjectRow | null;
-  workContext?: WorkContextRow | null;
-  workContextDepartment?: DepartmentRow | null;
-  isPrimaryWorkContext?: boolean;
+  workCompanies: CompanyRow[];
+  projects: ProjectRow[];
+  workContexts: Array<{ context: WorkContextRow; department: DepartmentRow | null }>;
+  primaryWorkContext: { context: WorkContextRow; department: DepartmentRow | null } | null;
 }) {
+  const workCompanyCodes = workCompanies.map((row) => row.company_code).filter(Boolean).join(", ");
+  const workCompanyNames = workCompanies.map((row) => row.company_name).filter(Boolean).join(", ");
+  const projectCodes = projects.map((row) => row.project_code).filter(Boolean).join(", ");
+  const projectNames = projects.map((row) => row.project_name).filter(Boolean).join(", ");
+  const workAreaCodes = workContexts.map((row) => row.context.work_context_code).filter(Boolean).join(", ");
+  const workAreaNames = workContexts.map((row) => row.context.work_context_name).filter(Boolean).join(", ");
+  const workAreaDepartmentCodes = workContexts.map((row) => row.department?.department_code).filter(Boolean).join(", ");
+  const workAreaDepartmentNames = workContexts.map((row) => row.department?.department_name).filter(Boolean).join(", ");
+
   return {
     auth_user_id: user.auth_user_id,
     user_code: user.user_code,
@@ -89,16 +94,18 @@ function buildReportRow({
     parent_company_name: parentCompany?.company_name ?? null,
     identity_department_code: identityDepartment?.department_code ?? null,
     identity_department_name: identityDepartment?.department_name ?? null,
-    assignment_type: assignmentType,
-    assignment_company_code: assignmentCompany?.company_code ?? null,
-    assignment_company_name: assignmentCompany?.company_name ?? null,
-    project_code: project?.project_code ?? null,
-    project_name: project?.project_name ?? null,
-    work_context_code: workContext?.work_context_code ?? null,
-    work_context_name: workContext?.work_context_name ?? null,
-    work_context_department_code: workContextDepartment?.department_code ?? null,
-    work_context_department_name: workContextDepartment?.department_name ?? null,
-    is_primary_work_context: isPrimaryWorkContext ? "YES" : "NO",
+    work_company_codes: workCompanyCodes || null,
+    work_company_names: workCompanyNames || null,
+    project_codes: projectCodes || null,
+    project_names: projectNames || null,
+    work_area_codes: workAreaCodes || null,
+    work_area_names: workAreaNames || null,
+    work_area_department_codes: workAreaDepartmentCodes || null,
+    work_area_department_names: workAreaDepartmentNames || null,
+    primary_work_area_code: primaryWorkContext?.context.work_context_code ?? null,
+    primary_work_area_name: primaryWorkContext?.context.work_context_name ?? null,
+    primary_work_area_department_code: primaryWorkContext?.department?.department_code ?? null,
+    primary_work_area_department_name: primaryWorkContext?.department?.department_name ?? null,
   };
 }
 
@@ -258,6 +265,24 @@ export async function listUserScopeReportHandler(
         continue;
       }
 
+      const resolvedWorkCompanies = workCompanies
+        .map((companyId) => companyMap.get(companyId) ?? null)
+        .filter(Boolean) as CompanyRow[];
+      const resolvedProjects = projectsForUser
+        .map((projectId) => projectMap.get(projectId) ?? null)
+        .filter(Boolean) as ProjectRow[];
+      const resolvedWorkContexts = workContextsForUser
+        .map((assignment) => {
+          const context = workContextMap.get(assignment.work_context_id) ?? null;
+          if (!context) return null;
+          return {
+            context,
+            department: context.department_id ? departmentMap.get(context.department_id) ?? null : null,
+            isPrimary: assignment.is_primary,
+          };
+        })
+        .filter(Boolean) as Array<{ context: WorkContextRow; department: DepartmentRow | null; isPrimary: boolean }>;
+
       reportRows.push(
         buildReportRow({
           user,
@@ -265,60 +290,12 @@ export async function listUserScopeReportHandler(
           signup,
           parentCompany,
           identityDepartment,
-          assignmentType: "BASE",
+          workCompanies: resolvedWorkCompanies,
+          projects: resolvedProjects,
+          workContexts: resolvedWorkContexts,
+          primaryWorkContext: resolvedWorkContexts.find((row) => row.isPrimary) ?? resolvedWorkContexts[0] ?? null,
         }),
       );
-
-      for (const companyId of workCompanies) {
-        reportRows.push(
-          buildReportRow({
-            user,
-            role,
-            signup,
-            parentCompany,
-            identityDepartment,
-            assignmentType: "WORK_COMPANY",
-            assignmentCompany: companyMap.get(companyId) ?? null,
-          }),
-        );
-      }
-
-      for (const projectId of projectsForUser) {
-        const project = projectMap.get(projectId) ?? null;
-        reportRows.push(
-          buildReportRow({
-            user,
-            role,
-            signup,
-            parentCompany,
-            identityDepartment,
-            assignmentType: "PROJECT",
-            assignmentCompany: project?.company_id ? companyMap.get(project.company_id) ?? null : null,
-            project,
-          }),
-        );
-      }
-
-      for (const workContextAssignment of workContextsForUser) {
-        const workContext = workContextMap.get(workContextAssignment.work_context_id) ?? null;
-        const workContextDepartment = workContext?.department_id
-          ? departmentMap.get(workContext.department_id) ?? null
-          : null;
-        reportRows.push(
-          buildReportRow({
-            user,
-            role,
-            signup,
-            parentCompany,
-            identityDepartment,
-            assignmentType: "WORK_CONTEXT",
-            assignmentCompany: workContext?.company_id ? companyMap.get(workContext.company_id) ?? null : null,
-            workContext,
-            workContextDepartment,
-            isPrimaryWorkContext: workContextAssignment.is_primary,
-          }),
-        );
-      }
     }
 
     reportRows.sort((left, right) => {
@@ -326,9 +303,7 @@ export async function listUserScopeReportHandler(
       if (companyCompare !== 0) return companyCompare;
       const userCompare = compareText(left.user_code, right.user_code);
       if (userCompare !== 0) return userCompare;
-      const typeCompare = compareText(left.assignment_type, right.assignment_type);
-      if (typeCompare !== 0) return typeCompare;
-      return compareText(left.assignment_company_code || left.work_context_code || left.project_code, right.assignment_company_code || right.work_context_code || right.project_code);
+      return compareText(left.work_company_codes || left.work_area_codes || left.project_codes, right.work_company_codes || right.work_area_codes || right.project_codes);
     });
 
     return okResponse({ rows: reportRows }, ctx.request_id);
