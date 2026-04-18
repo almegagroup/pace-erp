@@ -293,7 +293,7 @@ export default function SAControlPanel() {
       excludeMenuCodes: ["SA_HOME", "SA_CONTROL_PANEL"],
     });
 
-    return sections.map((section) => ({
+    const menuSections = sections.map((section) => ({
       ...section,
       pages: section.pages.map((item) => ({
         badge: "Open",
@@ -304,6 +304,26 @@ export default function SAControlPanel() {
         onClick: () => openRoute(item.route_path),
       })),
     }));
+
+    return [
+      {
+        key: "publish-control",
+        title: "Publish Control",
+        description:
+          "System-detected ACL version publish desk. Review company status, then capture and activate the next immutable version from one place.",
+        pages: [
+          {
+            badge: "Publish",
+            menuCode: "SA_ACL_VERSION_CENTER",
+            title: "ACL Version Center",
+            description:
+              "Review company-wise publish status and follow system recommendations before runtime users depend on new access changes.",
+            onClick: () => openRoute("/sa/acl/version-center"),
+          },
+        ],
+      },
+      ...menuSections,
+    ];
   }, [menu]);
 
   const quickLaunch = useMemo(
@@ -413,6 +433,21 @@ export default function SAControlPanel() {
           orientation: "horizontal",
         }),
     },
+    {
+      key: "acl-version-center",
+      label: "ACL Version Center",
+      tone: "neutral",
+      buttonRef: (element) => {
+        topActionRefs.current[2] = element;
+      },
+      onClick: () => openRoute("/sa/acl/version-center"),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 2,
+          refs: topActionRefs.current,
+          orientation: "horizontal",
+        }),
+    },
   ];
 
   const metrics = [
@@ -475,6 +510,7 @@ export default function SAControlPanel() {
       "Role baselines and access packs next",
       "Users after company and business-area assignment is ready",
       "Approver map and report visibility last",
+      "ACL Version Center publishes access changes after pack and scope edits",
       "Role rank matters, but approver authority is still explicit",
       "Diagnostics only after setup changes land",
     ],

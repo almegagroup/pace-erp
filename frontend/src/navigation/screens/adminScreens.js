@@ -178,6 +178,14 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_ACL_VERSION_CENTER: {
+    screen_code: "SA_ACL_VERSION_CENTER",
+    route: "/sa/acl/version-center",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_APPROVAL_RULES: {
     screen_code: "SA_APPROVAL_RULES",
     route: "/sa/approval-rules",
