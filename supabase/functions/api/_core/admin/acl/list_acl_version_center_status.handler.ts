@@ -96,6 +96,33 @@ function summarizeRecommendation(status: string, pendingReasons: VersionChangeEv
     : "Publish recommended because tracked access-governance changes landed after the active ACL version was frozen.";
 }
 
+function recommendAction(status: string, pendingReasons: VersionChangeEventRow[]) {
+  if (status === "NO_ACTIVE_VERSION") {
+    return {
+      action_code: "CAPTURE_FIRST_ACTIVE_VERSION",
+      title: "Capture first active version",
+      detail:
+        "This company has no active ACL version yet. Capture and activate the first publish snapshot so runtime users stop depending on draft access tables.",
+    };
+  }
+
+  if (status === "PUBLISH_REQUIRED" || pendingReasons.length > 0) {
+    return {
+      action_code: "CAPTURE_AND_ACTIVATE_FRESH_VERSION",
+      title: "Capture and activate a fresh version",
+      detail:
+        "Tracked access-governance sources changed after the active snapshot was frozen. Publish a fresh ACL version so runtime users receive the latest access setup.",
+    };
+  }
+
+  return {
+    action_code: "NO_PUBLISH_REQUIRED",
+    title: "No publish needed now",
+    detail:
+      "Active ACL version already matches the tracked access-governance sources. Capture another version only if you intentionally want a new published checkpoint.",
+  };
+}
+
 export async function listAclVersionCenterStatusHandler(
   _req: Request,
   ctx: HandlerContext,
@@ -214,6 +241,9 @@ export async function listAclVersionCenterStatusHandler(
         : pendingReasons.length > 0
           ? "PUBLISH_REQUIRED"
           : "CLEAN";
+      const action = recommendAction(status, pendingReasons);
+      const activeVersionCount = companyVersions.filter((version) => version.is_active).length;
+      const inactiveVersionCount = companyVersions.length - activeVersionCount;
 
       return {
         company_id: company.id,
@@ -223,8 +253,11 @@ export async function listAclVersionCenterStatusHandler(
         status,
         publish_required: status !== "CLEAN",
         recommendation: summarizeRecommendation(status, pendingReasons),
+        recommended_action: action,
         latest_pending_change_at: pendingReasons[0]?.created_at ?? null,
         pending_change_count: pendingReasons.length,
+        active_version_count: activeVersionCount,
+        inactive_version_count: inactiveVersionCount,
         pending_reasons: pendingReasons.map((reason) => ({
           reason_code: reason.reason_code,
           source_table: reason.source_table,
