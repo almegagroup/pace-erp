@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useBlocker, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
+import {
+  clearNavigationLeaveGuard,
+  setNavigationLeaveGuard,
+} from "../../../store/navigationLeaveGuard.js";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
@@ -84,7 +88,6 @@ export default function SAAclVersionCenter() {
   const navigate = useNavigate();
   const topRefs = useRef([]);
   const companyRefs = useRef([]);
-  const blockerPromptOpenRef = useRef(false);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -150,18 +153,12 @@ export default function SAAclVersionCenter() {
     [companies],
   );
   const publishRequiredCount = publishRequiredCompanies.length;
-  const blocker = useBlocker(publishRequiredCount > 0);
 
   useEffect(() => {
-    if (blocker.state !== "blocked" || blockerPromptOpenRef.current !== false) {
-      return;
-    }
-
-    blockerPromptOpenRef.current = true;
-
-    void (async () => {
-      const approved = await openActionConfirm({
-        eyebrow: "ACL Version Center",
+    if (publishRequiredCount > 0) {
+      setNavigationLeaveGuard({
+        active: true,
+        scope: "ACL_VERSION_CENTER",
         title: "Leave Without Publishing Access Changes?",
         message: publishRequiredCount === 1
           ? "One company still needs a fresh ACL version before runtime users receive the latest access changes. Leave this page anyway?"
@@ -169,16 +166,17 @@ export default function SAAclVersionCenter() {
         confirmLabel: "Leave Anyway",
         cancelLabel: "Stay Here",
       });
+      return () => {
+        clearNavigationLeaveGuard("ACL_VERSION_CENTER");
+      };
+    }
 
-      if (approved) {
-        blocker.proceed();
-      } else {
-        blocker.reset();
-      }
+    clearNavigationLeaveGuard("ACL_VERSION_CENTER");
 
-      blockerPromptOpenRef.current = false;
-    })();
-  }, [blocker, publishRequiredCount]);
+    return () => {
+      clearNavigationLeaveGuard("ACL_VERSION_CENTER");
+    };
+  }, [publishRequiredCount]);
 
   useEffect(() => {
     if (publishRequiredCount === 0) {
@@ -196,6 +194,22 @@ export default function SAAclVersionCenter() {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [publishRequiredCount]);
+
+  async function confirmLeaveIfNeeded() {
+    if (publishRequiredCount === 0) {
+      return true;
+    }
+
+    return await openActionConfirm({
+      eyebrow: "ACL Version Center",
+      title: "Leave Without Publishing Access Changes?",
+      message: publishRequiredCount === 1
+        ? "One company still needs a fresh ACL version before runtime users receive the latest access changes. Leave this page anyway?"
+        : `${publishRequiredCount} companies still need fresh ACL versions before runtime users receive the latest access changes. Leave this page anyway?`,
+      confirmLabel: "Leave Anyway",
+      cancelLabel: "Stay Here",
+    });
+  }
 
   async function handlePublishNow() {
     if (!selectedCompany) {
@@ -324,7 +338,9 @@ export default function SAAclVersionCenter() {
       group: "Current Screen",
       label: "Go to capability governance",
       keywords: ["capability", "packs", "work scopes"],
-      perform: () => {
+      perform: async () => {
+        const approved = await confirmLeaveIfNeeded();
+        if (!approved) return;
         openScreen("SA_CAPABILITY_GOVERNANCE", { mode: "replace" });
         navigate("/sa/acl/capabilities");
       },
@@ -335,7 +351,9 @@ export default function SAAclVersionCenter() {
       group: "Current Screen",
       label: "Go to control panel",
       keywords: ["control panel", "diagnostics"],
-      perform: () => {
+      perform: async () => {
+        const approved = await confirmLeaveIfNeeded();
+        if (!approved) return;
         openScreen("SA_CONTROL_PANEL", { mode: "replace" });
         navigate("/sa/control-panel");
       },
@@ -378,7 +396,9 @@ export default function SAAclVersionCenter() {
           buttonRef: (element) => {
             topRefs.current[1] = element;
           },
-          onClick: () => {
+          onClick: async () => {
+            const approved = await confirmLeaveIfNeeded();
+            if (!approved) return;
             openScreen("SA_CAPABILITY_GOVERNANCE", { mode: "replace" });
             navigate("/sa/acl/capabilities");
           },
@@ -396,7 +416,9 @@ export default function SAAclVersionCenter() {
           buttonRef: (element) => {
             topRefs.current[2] = element;
           },
-          onClick: () => {
+          onClick: async () => {
+            const approved = await confirmLeaveIfNeeded();
+            if (!approved) return;
             openScreen("SA_CONTROL_PANEL", { mode: "replace" });
             navigate("/sa/control-panel");
           },

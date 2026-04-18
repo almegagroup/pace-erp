@@ -47,6 +47,7 @@ import {
   subscribeNetworkActivity,
 } from "../store/networkActivity.js";
 import { pushToast } from "../store/uiToast.js";
+import { confirmNavigationLeaveIfNeeded } from "../store/navigationLeaveGuard.js";
 import BlockingLayer from "../components/layer/BlockingLayer.jsx";
 import ErpCommandPalette from "../components/ErpCommandPalette.jsx";
 
@@ -441,6 +442,11 @@ export default function MenuShell() {
         return;
       }
 
+      const approved = await confirmNavigationLeaveIfNeeded("ACL_VERSION_CENTER");
+      if (!approved) {
+        return;
+      }
+
       setRuntimeContextError("");
       setRuntimeSwitchState({
         active: true,
@@ -553,6 +559,11 @@ export default function MenuShell() {
         !runtimeContext?.selectedCompanyId ||
         nextWorkContextId === currentWorkContextId
       ) {
+        return;
+      }
+
+      const approved = await confirmNavigationLeaveIfNeeded("ACL_VERSION_CENTER");
+      if (!approved) {
         return;
       }
 
@@ -872,8 +883,13 @@ export default function MenuShell() {
     [activeZone, focusZone]
   );
 
-  function handleMenuRoute(routePath) {
+  async function handleMenuRoute(routePath) {
     if (!getScreenForRoute(routePath)) {
+      return;
+    }
+
+    const approved = await confirmNavigationLeaveIfNeeded("ACL_VERSION_CENTER");
+    if (!approved) {
       return;
     }
 
@@ -893,7 +909,7 @@ export default function MenuShell() {
 
     if (node.item?.route_path) {
       setDrawerPath([]);
-      handleMenuRoute(node.item.route_path);
+      void handleMenuRoute(node.item.route_path);
     }
   }
 
@@ -909,7 +925,7 @@ export default function MenuShell() {
     }
 
     if (node.item?.route_path) {
-      handleMenuRoute(node.item.route_path);
+      void handleMenuRoute(node.item.route_path);
     }
   }
 
@@ -979,15 +995,25 @@ export default function MenuShell() {
       return;
     }
 
+    const approved = await confirmNavigationLeaveIfNeeded("ACL_VERSION_CENTER");
+    if (!approved) {
+      return;
+    }
+
     popScreen();
   }, [drawerTrail, drawerVisible, resolvedMenuFocusIndex, sidebarRoots, stackDepth]);
 
-  const handleGoHome = useCallback(() => {
+  const handleGoHome = useCallback(async () => {
     const target = location.pathname.startsWith("/sa")
       ? "SA_HOME"
       : location.pathname.startsWith("/ga")
         ? "GA_HOME"
         : "DASHBOARD_HOME";
+
+    const approved = await confirmNavigationLeaveIfNeeded("ACL_VERSION_CENTER");
+    if (!approved) {
+      return;
+    }
 
     resetToScreen(target);
   }, [location.pathname]);
@@ -1023,7 +1049,7 @@ export default function MenuShell() {
 
   useEffect(() => {
     const unsubscribe = subscribeWorkspaceFocusCommands((command) => {
-      if (command === "GO_HOME") handleGoHome();
+      if (command === "GO_HOME") void handleGoHome();
       if (command === "FOCUS_MENU_ZONE") focusZone("menu");
       if (command === "FOCUS_ACTIONS_ZONE") focusZone("actions");
       if (command === "FOCUS_CONTENT_ZONE") focusZone("content");
