@@ -1403,7 +1403,7 @@ export default function MenuShell() {
                     onChange={(event) => void handleWorkContextChange(event.target.value)}
                     className="mt-1 w-full border border-white/30 bg-white/10 px-2 py-1 text-xs font-medium text-white outline-none"
                   >
-                    {availableWorkContexts.map((workContext) => (
+                    {availableWorkContexts.filter((wc) => !wc.work_context_code?.startsWith("DEPT_")).map((workContext) => (
                       <option
                         key={workContext.work_context_id}
                         value={workContext.work_context_id}

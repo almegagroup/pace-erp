@@ -218,6 +218,7 @@ export async function resolveDefaultWorkContextId(
       work_context_id,
       work_context:work_context_id!inner (
         work_context_id,
+        work_context_code,
         is_active
       )
     `)
@@ -230,7 +231,10 @@ export async function resolveDefaultWorkContextId(
     throw new Error("WORK_CONTEXT_RESOLUTION_FAILED");
   }
 
-  const resolved = data.find((row) => row.work_context?.is_active === true);
+  const resolved = data.find((row) => {
+    const wc = row.work_context as { work_context_id: string; work_context_code: string; is_active: boolean } | null;
+    return wc?.is_active === true && !wc.work_context_code?.startsWith("DEPT_");
+  });
   return resolved?.work_context_id ?? null;
 }
 
