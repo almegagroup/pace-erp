@@ -78,6 +78,7 @@ import { assignWorkContextCapabilityHandler } from "../_core/admin/acl/assign_wo
 import { unassignWorkContextCapabilityHandler } from "../_core/admin/acl/unassign_work_context_capability.handler.ts";
 import { listWorkContextProjectsHandler } from "../_core/admin/acl/list_work_context_projects.handler.ts";
 import { syncWorkContextProjectsHandler } from "../_core/admin/acl/sync_work_context_projects.handler.ts";
+import { listGovernanceSummaryReportHandler } from "../_core/admin/acl/list_governance_summary_report.handler.ts";
 import { listAclVersionsHandler } from "../_core/admin/acl/list_acl_versions.handler.ts";
 import { listAclVersionCenterStatusHandler } from "../_core/admin/acl/list_acl_version_center_status.handler.ts";
 import { createAclVersionHandler } from "../_core/admin/acl/create_acl_version.handler.ts";
@@ -509,6 +510,13 @@ export async function dispatchAdminRoutes(
     case "POST:/api/admin/acl/work-context-projects":
       response = await syncWorkContextProjectsHandler(req, {
         context,
+      });
+      break;
+
+    case "GET:/api/admin/acl/governance-summary-report":
+      response = await listGovernanceSummaryReportHandler(req, {
+        context,
+        request_id: requestId,
       });
       break;
 

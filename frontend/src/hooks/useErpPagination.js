@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 
-export function useErpPagination(items, pageSize = 12) {
-  const [requestedPage, setRequestedPage] = useState(1);
+export function useErpPagination(items, pageSize = 12, initialPage = 1) {
+  const [requestedPage, setRequestedPage] = useState(() => {
+    const parsed = Number(initialPage);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1;
+  });
   const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
   const page = Math.min(requestedPage, totalPages);
 

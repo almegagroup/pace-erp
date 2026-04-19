@@ -42,6 +42,7 @@ import SAUsers from "../admin/sa/screens/SAUsers.jsx";
 import SAUserRoles from "../admin/sa/screens/SAUserRoles.jsx";
 import SAUserScope from "../admin/sa/screens/SAUserScope.jsx";
 import SAUserScopeReport from "../admin/sa/screens/SAUserScopeReport.jsx";
+import SAGovernanceSummaryReport from "../admin/sa/screens/SAGovernanceSummaryReport.jsx";
 import SASignupRequests from "../admin/sa/screens/SASignupRequests.jsx";
 import SAProjectMaster from "../admin/sa/screens/SAProjectMaster.jsx";
 import SAProjectManage from "../admin/sa/screens/SAProjectManage.jsx";
@@ -145,6 +146,10 @@ export default function AppRouter() {
                     <Route path="users/roles" element={<SAUserRoles />} />
                     <Route path="users/scope" element={<SAUserScope />} />
                     <Route path="users/report" element={<SAUserScopeReport />} />
+                    <Route
+                      path="acl/governance-summary-report"
+                      element={<SAGovernanceSummaryReport />}
+                    />
                     <Route path="project-master" element={<SAProjectMaster />} />
                     <Route path="projects/manage" element={<SAProjectManage />} />
                     <Route path="projects/map" element={<SACompanyProjectMap />} />

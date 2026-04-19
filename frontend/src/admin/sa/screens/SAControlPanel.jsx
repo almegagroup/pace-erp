@@ -330,6 +330,14 @@ export default function SAControlPanel() {
         pages: [
           {
             badge: "Report",
+            menuCode: "SA_GOVERNANCE_SUMMARY_REPORT",
+            title: "Governance Summary Report",
+            description:
+              "Download one flat row per company with departments, work contexts, capability packs, inherited projects, modules, and ACL versions aligned together.",
+            onClick: () => openRoute("/sa/acl/governance-summary-report"),
+          },
+          {
+            badge: "Report",
             menuCode: "SA_USER_SCOPE_REPORT",
             title: "User Scope Report",
             description:
