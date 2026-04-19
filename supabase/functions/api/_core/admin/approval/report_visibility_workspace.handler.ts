@@ -69,7 +69,7 @@ export async function listReportVisibilityWorkspaceHandler(
       db
         .schema("erp_master")
         .from("companies")
-        .select("id, company_code, company_name, status, company_kind")
+        .select("id, company_code, company_name, state_name, full_address, pin_code, status, company_kind")
         .eq("company_kind", "BUSINESS")
         .eq("status", "ACTIVE")
         .order("company_name", { ascending: true }),
@@ -215,6 +215,9 @@ export async function listReportVisibilityWorkspaceHandler(
         company_id: row.company_id,
         company_code: company?.company_code ?? null,
         company_name: company?.company_name ?? null,
+        company_state_name: company?.state_name ?? null,
+        company_full_address: company?.full_address ?? null,
+        company_pin_code: company?.pin_code ?? null,
         work_context_code: row.work_context_code,
         work_context_name: row.work_context_name,
         department_id: row.department_id ?? null,
@@ -239,6 +242,9 @@ export async function listReportVisibilityWorkspaceHandler(
           parent_company_id: parentCompanyId,
           parent_company_code: parentCompany?.company_code ?? null,
           parent_company_name: parentCompany?.company_name ?? null,
+          parent_company_state_name: parentCompany?.state_name ?? null,
+          parent_company_full_address: parentCompany?.full_address ?? null,
+          parent_company_pin_code: parentCompany?.pin_code ?? null,
         };
       })
       .sort((left, right) =>

@@ -1593,80 +1593,82 @@ export default function MenuShell() {
       ) : null}
 
       <main className={`flex min-w-0 flex-1 flex-col border-r bg-[#f7f9fb] ${zoneBorder(activeZone, "content")}`}>
-        <header className="border-b border-slate-400 bg-[linear-gradient(180deg,#f8fafc_0%,#e9eef4_100%)] px-4 py-3 text-slate-900">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-sky-700">
-                {workspaceMode ? "Focused workspace" : aclWorkspace ? "ACL Task Workspace" : "Protected ERP"}
+        <div className="sticky top-0 z-30">
+          <header className="border-b border-slate-400 bg-[linear-gradient(180deg,#f8fafc_0%,#e9eef4_100%)] px-4 py-3 text-slate-900">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-sky-700">
+                  {workspaceMode ? "Focused workspace" : aclWorkspace ? "ACL Task Workspace" : "Protected ERP"}
+                </div>
+                <div className="mt-1 text-lg font-semibold">
+                {workspaceMode && previousScreen?.screen_code
+                  ? `${formatScreenTitle(previousScreen.screen_code)} / ${activeTitle}`
+                  : activeTitle}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  <span>{shellProfile?.name || "Name"}</span>
+                  <span>{shellProfile?.roleCode || "Role"}</span>
+                  <span>{shellProfile?.userCode || "User"}</span>
+                  {!runtimeContext?.isAdmin && runtimeContext?.currentCompany ? (
+                    <span>{runtimeContext.currentCompany.company_code}</span>
+                  ) : null}
+                  {!runtimeContext?.isAdmin && runtimeContext?.selectedWorkContext ? (
+                    <span>{runtimeContext.selectedWorkContext.work_context_code}</span>
+                  ) : null}
+                  <span>{workspaceMode ? `Stack ${stackDepth}` : `Zone ${WORKSPACE_ZONES.indexOf(activeZone) + 1}`}</span>
+                  {clusterAdmission?.windowSlot ? (
+                    <span>
+                      Window {clusterAdmission.windowSlot}/{clusterAdmission.maxWindowCount ?? 3}
+                    </span>
+                  ) : null}
+                </div>
               </div>
-              <div className="mt-1 text-lg font-semibold">
-              {workspaceMode && previousScreen?.screen_code
-                ? `${formatScreenTitle(previousScreen.screen_code)} / ${activeTitle}`
-                : activeTitle}
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                <span>{shellProfile?.name || "Name"}</span>
-                <span>{shellProfile?.roleCode || "Role"}</span>
-                <span>{shellProfile?.userCode || "User"}</span>
-                {!runtimeContext?.isAdmin && runtimeContext?.currentCompany ? (
-                  <span>{runtimeContext.currentCompany.company_code}</span>
-                ) : null}
-                {!runtimeContext?.isAdmin && runtimeContext?.selectedWorkContext ? (
-                  <span>{runtimeContext.selectedWorkContext.work_context_code}</span>
-                ) : null}
-                <span>{workspaceMode ? `Stack ${stackDepth}` : `Zone ${WORKSPACE_ZONES.indexOf(activeZone) + 1}`}</span>
-                {clusterAdmission?.windowSlot ? (
-                  <span>
-                    Window {clusterAdmission.windowSlot}/{clusterAdmission.maxWindowCount ?? 3}
-                  </span>
-                ) : null}
+              <div className="grid gap-2 text-right">
+                <div
+                  className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] ${networkStatusTone} ${
+                    networkActivity.blockingInFlightCount > 0
+                      ? "erp-status-marquee"
+                      : ""
+                  }`}
+                >
+                  {networkStatusLabel}
+                  {networkActivity.blockingInFlightCount > 0
+                    ? networkActivity.lastBlockingLabel
+                      ? ` | ${networkActivity.lastBlockingLabel}`
+                      : ""
+                    : networkActivity.lastOutcome === "error" && networkActivity.lastLabel
+                      ? ` | ${networkActivity.lastLabel}`
+                      : ""}
+                </div>
               </div>
             </div>
-            <div className="grid gap-2 text-right">
-              <div
-                className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] ${networkStatusTone} ${
-                  networkActivity.blockingInFlightCount > 0
-                    ? "erp-status-marquee"
-                    : ""
-                }`}
-              >
-                {networkStatusLabel}
-                {networkActivity.blockingInFlightCount > 0
-                  ? networkActivity.lastBlockingLabel
-                    ? ` | ${networkActivity.lastBlockingLabel}`
-                    : ""
-                  : networkActivity.lastOutcome === "error" && networkActivity.lastLabel
-                    ? ` | ${networkActivity.lastLabel}`
-                    : ""}
-              </div>
-            </div>
-          </div>
-        </header>
+          </header>
 
-        <div className="border-b border-slate-300 bg-[#eef3f7] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-          {shellShortcutLine}
+          <div className="border-b border-slate-300 bg-[#eef3f7] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+            {shellShortcutLine}
+          </div>
+
+          {showKeyboardHelp || clusterWindowMessage ? (
+            <div className="border-b border-slate-300 bg-[#fff8dc] px-4 py-2 text-sm text-slate-700">
+              {clusterWindowMessage ? (
+                <p>{clusterWindowMessage}</p>
+              ) : (
+                <p>
+                  Screen shortcuts:{" "}
+                  {activeScreenHotkeys.length > 0
+                    ? activeScreenHotkeys.map((item) => `${item.key} ${item.label}`).join(" | ")
+                    : "No extra route shortcuts"}
+                </p>
+              )}
+            </div>
+          ) : null}
+
+          {runtimeContextError ? (
+            <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+              <p>{runtimeContextError}</p>
+            </div>
+          ) : null}
         </div>
-
-        {showKeyboardHelp || clusterWindowMessage ? (
-          <div className="border-b border-slate-300 bg-[#fff8dc] px-4 py-2 text-sm text-slate-700">
-            {clusterWindowMessage ? (
-              <p>{clusterWindowMessage}</p>
-            ) : (
-              <p>
-                Screen shortcuts:{" "}
-                {activeScreenHotkeys.length > 0
-                  ? activeScreenHotkeys.map((item) => `${item.key} ${item.label}`).join(" | ")
-                  : "No extra route shortcuts"}
-              </p>
-            )}
-          </div>
-        ) : null}
-
-        {runtimeContextError ? (
-          <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
-            <p>{runtimeContextError}</p>
-          </div>
-        ) : null}
 
         <div
           ref={contentRegionRef}

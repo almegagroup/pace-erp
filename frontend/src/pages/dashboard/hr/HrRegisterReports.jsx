@@ -4,6 +4,7 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpStickyDataTable from "../../../components/data/ErpStickyDataTable.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
@@ -122,6 +123,19 @@ function resolveCompanyLabel(companies, companyId) {
   return company ? `${company.company_code} | ${company.company_name}` : "Company not selected";
 }
 
+function resolveCompanyAddress(companies, companyId) {
+  if (companyId === "*") {
+    return "All companies currently in scope";
+  }
+  const company = (companies ?? []).find((row) => row.id === companyId);
+  if (!company) return "Address not captured";
+  return (
+    [company.full_address, company.state_name, company.pin_code]
+      .filter(Boolean)
+      .join(", ") || "Address not captured"
+  );
+}
+
 function normalizeCellValue(columnKey, value) {
   if (columnKey === "created_at") return formatDateTime(value);
   if (columnKey === "from_date" || columnKey === "to_date") return formatIsoDate(value);
@@ -211,11 +225,15 @@ function RegisterCriteriaPage({ kind, title, description, resultPath }) {
       ]}
     >
       <div className="grid gap-4">
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-4">
           <ErpFieldPreview label="Date Limit" value="Max 1 Year" />
           <ErpFieldPreview
             label="Company Scope"
             value={criteria.companyId ? resolveCompanyLabel(availableCompanies, criteria.companyId) : "Choose company or *"}
+          />
+          <ErpFieldPreview
+            label="Company Address"
+            value={criteria.companyId ? resolveCompanyAddress(availableCompanies, criteria.companyId) : "Choose company first"}
           />
           <ErpFieldPreview label="Output" value="Separate results page + Excel CSV" />
         </div>
@@ -406,9 +424,10 @@ function RegisterResultsPage({ kind, title, loader, criteriaPath }) {
       ]}
     >
       <div className="grid gap-4">
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-5">
           <ErpFieldPreview label="Date Range" value={`${formatIsoDate(criteria.fromDate)} -> ${formatIsoDate(criteria.toDate)}`} />
           <ErpFieldPreview label="Company" value={resolveCompanyLabel(availableCompanies, criteria.companyId)} />
+          <ErpFieldPreview label="Company Address" value={resolveCompanyAddress(availableCompanies, criteria.companyId)} />
           <ErpFieldPreview label="Visible Rows" value={String(filteredRows.length)} />
           <ErpFieldPreview label="Current Page" value={`${safePage} / ${totalPages}`} />
         </div>
@@ -442,33 +461,13 @@ function RegisterResultsPage({ kind, title, loader, criteriaPath }) {
             </div>
           ) : (
             <div className="grid gap-3">
-              <div className="overflow-auto border border-slate-200">
-                <table className="min-w-full border-collapse text-xs">
-                  <thead className="bg-slate-100">
-                    <tr>
-                      {columns.map((column) => (
-                        <th
-                          key={column.key}
-                          className="border border-slate-200 px-2 py-2 text-left font-semibold uppercase tracking-[0.12em] text-slate-500"
-                        >
-                          {column.label}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedRows.map((row) => (
-                      <tr key={`${row.workflow_request_id}-${row.requester_auth_user_id}`}>
-                        {columns.map((column) => (
-                          <td key={column.key} className="border border-slate-200 px-2 py-2 text-slate-700">
-                            {normalizeCellValue(column.key, row?.[column.key])}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <ErpStickyDataTable
+                columns={columns}
+                rows={pagedRows}
+                rowKey={(row) => `${row.workflow_request_id}-${row.requester_auth_user_id}`}
+                renderCell={(row, column) => normalizeCellValue(column.key, row?.[column.key])}
+                maxBodyHeightClass="max-h-[60vh]"
+              />
 
               <div className="flex flex-wrap items-center justify-between gap-3 border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
                 <span>

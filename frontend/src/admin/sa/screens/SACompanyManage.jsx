@@ -19,6 +19,7 @@ import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
+import { formatCompanyAddress } from "../../../shared/companyDisplay.js";
 
 async function readJsonSafe(response) {
   try {
@@ -446,6 +447,9 @@ export default function SACompanyManage() {
                                 </div>
                                 <div className="text-xs text-slate-500">
                                   {row.company_name}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  {formatCompanyAddress(row)}
                                 </div>
                               </div>
                             ) : null}

@@ -11,6 +11,10 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { applyQuickFilter, sortProjects } from "../../../shared/erpCollections.js";
+import {
+  formatCompanyAddress,
+  formatCompanyLabel,
+} from "../../../shared/companyDisplay.js";
 
 async function readJsonSafe(response) {
   try {
@@ -495,8 +499,9 @@ export default function SACompanyProjectMap() {
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <span className="block font-semibold text-slate-900">
-                            {company.company_code} - {company.company_name}
+                            {formatCompanyLabel(company, { separator: " - " })}
                           </span>
+                          <span className="mt-1 block text-xs text-slate-500">{formatCompanyAddress(company)}</span>
                           <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
                             {company.status ?? "UNKNOWN"} | {company.gst_number ?? "GST not captured"}
                           </span>

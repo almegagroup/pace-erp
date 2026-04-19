@@ -21,6 +21,9 @@ type CompanyRow = {
   id: string;
   company_code: string;
   company_name: string;
+  state_name: string | null;
+  full_address: string | null;
+  pin_code: string | null;
   status: string | null;
 };
 
@@ -137,7 +140,7 @@ export async function listAclVersionCenterStatusHandler(
     const { data: companyData, error: companyError } = await db
       .schema("erp_master")
       .from("companies")
-      .select("id, company_code, company_name, status")
+      .select("id, company_code, company_name, state_name, full_address, pin_code, status")
       .eq("company_kind", "BUSINESS")
       .order("company_name", { ascending: true });
 
@@ -249,6 +252,9 @@ export async function listAclVersionCenterStatusHandler(
         company_id: company.id,
         company_code: company.company_code,
         company_name: company.company_name,
+        company_state_name: company.state_name ?? null,
+        company_full_address: company.full_address ?? null,
+        company_pin_code: company.pin_code ?? null,
         company_status: company.status ?? "UNKNOWN",
         status,
         publish_required: status !== "CLEAN",

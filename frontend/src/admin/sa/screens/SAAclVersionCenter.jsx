@@ -12,6 +12,11 @@ import ErpScreenScaffold, {
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import {
+  formatCompanyAddress,
+  formatCompanyLabel,
+  formatCompanyOptionLabel,
+} from "../../../shared/companyDisplay.js";
 
 async function readJsonSafe(response) {
   try {
@@ -607,7 +612,7 @@ export default function SAAclVersionCenter() {
                       key={company.company_id}
                       value={company.company_code}
                     >
-                      {company.company_name}
+                      {formatCompanyOptionLabel(company)}
                     </option>
                   ))}
                   {companies.map((company) => (
@@ -615,7 +620,7 @@ export default function SAAclVersionCenter() {
                       key={`${company.company_id}-name`}
                       value={company.company_name}
                     >
-                      {company.company_code}
+                      {formatCompanyOptionLabel(company)}
                     </option>
                   ))}
                 </datalist>
@@ -674,8 +679,9 @@ export default function SAAclVersionCenter() {
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-slate-900">
-                          {company.company_code} | {company.company_name}
+                          {formatCompanyLabel(company)}
                         </p>
+                        <p className="mt-1 text-xs text-slate-500">{formatCompanyAddress(company)}</p>
                         <p className="mt-1 text-xs text-slate-500">{company.recommendation}</p>
                       </div>
                       <span
@@ -721,6 +727,15 @@ export default function SAAclVersionCenter() {
             ) : (
               <div className="grid gap-4">
                 <div className="grid gap-3 md:grid-cols-2">
+                  <div className="border border-slate-300 bg-slate-50 px-4 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      Company
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-slate-900">
+                      {formatCompanyLabel(selectedCompany)}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">{formatCompanyAddress(selectedCompany)}</p>
+                  </div>
                   <div className="border border-slate-300 bg-slate-50 px-4 py-3">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                       Status

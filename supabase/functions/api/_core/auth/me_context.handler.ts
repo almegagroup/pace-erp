@@ -61,7 +61,7 @@ async function readRuntimeContext(
     : await serviceRoleClient
       .schema("erp_master")
       .from("companies")
-      .select("id, company_code, company_name")
+      .select("id, company_code, company_name, state_name, full_address, pin_code")
       .in("id", companyIds)
       .eq("status", "ACTIVE")
       .eq("company_kind", "BUSINESS")
@@ -75,6 +75,9 @@ async function readRuntimeContext(
     id: row.id,
     company_code: row.company_code,
     company_name: row.company_name,
+    state_name: row.state_name ?? null,
+    full_address: row.full_address ?? null,
+    pin_code: row.pin_code ?? null,
   }));
 
   let selectedCompanyId = activeSession.selectedCompanyId ?? null;

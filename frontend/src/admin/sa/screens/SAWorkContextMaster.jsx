@@ -11,6 +11,11 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
+import {
+  formatCompanyAddress,
+  formatCompanyLabel,
+  formatCompanyOptionLabel,
+} from "../../../shared/companyDisplay.js";
 
 function normalize(value) {
   return String(value ?? "").trim();
@@ -773,7 +778,7 @@ export default function SAWorkContextMaster() {
                     <option value="">Select company</option>
                     {companies.map((company) => (
                       <option key={company.id} value={company.id}>
-                        {company.company_code} | {company.company_name}
+                        {formatCompanyOptionLabel(company)}
                       </option>
                     ))}
                   </select>
@@ -985,8 +990,8 @@ export default function SAWorkContextMaster() {
                     />
                     <ErpFieldPreview
                       label="Foundation"
-                      value={selectedCompany?.company_code ?? "No company"}
-                      caption="Every work scope stays pinned to one company."
+                      value={formatCompanyLabel(selectedCompany)}
+                      caption={formatCompanyAddress(selectedCompany)}
                     />
                   </div>
 
@@ -1087,9 +1092,10 @@ export default function SAWorkContextMaster() {
         <div className="grid gap-4">
           <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-600">
             <div className="font-semibold text-slate-900">
-              {selectedCompany
-                ? `${selectedCompany.company_code} | ${selectedCompany.company_name}`
-                : "No company selected"}
+              {formatCompanyLabel(selectedCompany)}
+            </div>
+            <div className="mt-1 text-xs leading-5 text-slate-500">
+              {formatCompanyAddress(selectedCompany)}
             </div>
             <div className="mt-1">
               System scopes stay locked. This drawer creates or edits only manual runtime slices.
