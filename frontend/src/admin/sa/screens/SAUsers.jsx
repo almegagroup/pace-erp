@@ -27,6 +27,10 @@ import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
+import {
+  readViewSnapshotCache,
+  writeViewSnapshotCache,
+} from "../../../store/viewSnapshotCache.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Users" },
@@ -47,6 +51,8 @@ const DEFAULT_VISIBLE_USER_COLUMNS = Object.freeze([
   "state",
   "created",
 ]);
+
+const USER_VIEW_SNAPSHOT_KEY = "sa.users.directory";
 
 async function readJsonSafe(response) {
   try {
@@ -138,15 +144,22 @@ function getRoleTone(roleCode) {
 }
 
 export default function SAUsers() {
+  const viewSnapshot = useMemo(
+    () => readViewSnapshotCache(USER_VIEW_SNAPSHOT_KEY) ?? {},
+    []
+  );
   const { shellProfile } = useMenu();
   const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [filter, setFilter] = useState("ALL");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [filter, setFilter] = useState(viewSnapshot.filter ?? "ALL");
+  const [searchQuery, setSearchQuery] = useState(viewSnapshot.searchQuery ?? "");
   const [updatingUserId, setUpdatingUserId] = useState("");
   const [showColumnDrawer, setShowColumnDrawer] = useState(false);
+  const [returnFocusAuthUserId, setReturnFocusAuthUserId] = useState(
+    viewSnapshot.returnFocusAuthUserId ?? ""
+  );
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
   const rowActionRefs = useRef([]);
@@ -312,12 +325,58 @@ export default function SAUsers() {
     () => filteredUsers.find((user) => canOpenScope(user)) ?? null,
     [filteredUsers]
   );
-  const userPagination = useErpPagination(filteredUsers, 10);
+  const userPagination = useErpPagination(
+    filteredUsers,
+    10,
+    viewSnapshot.page ?? 1
+  );
+
+  useEffect(() => {
+    writeViewSnapshotCache(USER_VIEW_SNAPSHOT_KEY, {
+      filter,
+      searchQuery,
+      page: userPagination.page,
+      returnFocusAuthUserId,
+    });
+  }, [filter, searchQuery, userPagination.page, returnFocusAuthUserId]);
+
+  useEffect(() => {
+    if (!returnFocusAuthUserId) {
+      return;
+    }
+
+    const pageIndex = userPagination.pageItems.findIndex(
+      (user) => user.auth_user_id === returnFocusAuthUserId
+    );
+
+    if (pageIndex < 0) {
+      return;
+    }
+
+    const focusTarget = rowActionRefs.current[pageIndex]?.[0];
+
+    if (!focusTarget) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      focusTarget.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [returnFocusAuthUserId, userPagination.pageItems]);
 
   function handleOpenScope(user) {
     if (!user?.auth_user_id) {
       return;
     }
+
+    writeViewSnapshotCache(USER_VIEW_SNAPSHOT_KEY, {
+      filter,
+      searchQuery,
+      page: userPagination.page,
+      returnFocusAuthUserId: user.auth_user_id,
+    });
 
     openScreen("SA_USER_SCOPE");
     navigate(`/sa/users/scope?auth_user_id=${encodeURIComponent(user.auth_user_id)}`);
@@ -728,6 +787,11 @@ export default function SAUsers() {
                         {isUpdating ? "Updating..." : actionLabel}
                       </button>
                     </div>
+                    {returnFocusAuthUserId === user.auth_user_id ? (
+                      <div className="mt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700">
+                        Current return focus
+                      </div>
+                    ) : null}
                   </td>
                 </tr>
               );
