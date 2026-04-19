@@ -3,6 +3,7 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpStickyDataTable from "../../../components/data/ErpStickyDataTable.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -20,10 +21,12 @@ const REPORT_COLUMNS = Object.freeze([
   { key: "phone_number", label: "Phone Number" },
   { key: "parent_company_code", label: "Parent Company Code" },
   { key: "parent_company_name", label: "Parent Company Name" },
+  { key: "parent_company_address", label: "Parent Company Address" },
   { key: "identity_department_code", label: "Identity Department Code" },
   { key: "identity_department_name", label: "Identity Department Name" },
   { key: "work_company_codes", label: "Work Company Codes" },
   { key: "work_company_names", label: "Work Company Names" },
+  { key: "work_company_addresses", label: "Work Company Addresses" },
   { key: "direct_project_override_codes", label: "Direct Project Override Codes" },
   { key: "direct_project_override_names", label: "Direct Project Override Names" },
   { key: "inherited_project_codes", label: "Inherited Project Codes" },
@@ -83,6 +86,15 @@ function formatDateTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatCompanyAddress(company) {
+  if (!company) return "All companies in scope";
+  return (
+    [company.full_address, company.state_name, company.pin_code]
+      .filter(Boolean)
+      .join(", ") || "Address not captured"
+  );
 }
 
 export default function SAUserScopeReport() {
@@ -233,8 +245,12 @@ export default function SAUserScopeReport() {
       ]}
     >
       <div className="grid gap-4">
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-4">
           <ErpFieldPreview label="Selected Company" value={selectedCompanyLabel} />
+          <ErpFieldPreview
+            label="Selected Company Address"
+            value={formatCompanyAddress(companies.find((row) => row.id === companyId) ?? null)}
+          />
           <ErpFieldPreview label="Report Rows" value={String(filteredRows.length)} />
           <ErpFieldPreview label="Visible Columns" value={String(visibleColumns.length)} />
         </div>
@@ -319,33 +335,16 @@ export default function SAUserScopeReport() {
               No report row matches the current filter.
             </div>
           ) : (
-            <div className="overflow-auto border border-slate-200">
-              <table className="min-w-full border-collapse text-xs">
-                <thead className="bg-slate-100">
-                  <tr>
-                    {visibleColumns.map((column) => (
-                      <th
-                        key={column.key}
-                        className="border border-slate-200 px-2 py-2 text-left font-semibold uppercase tracking-[0.12em] text-slate-500"
-                      >
-                        {column.label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRows.map((row, index) => (
-                    <tr key={`${row.auth_user_id}-${index}`}>
-                      {visibleColumns.map((column) => (
-                        <td key={column.key} className="border border-slate-200 px-2 py-2 text-slate-700">
-                          {column.key === "created_at" ? formatDateTime(row[column.key]) : row[column.key] || "-"}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ErpStickyDataTable
+              columns={visibleColumns}
+              rows={filteredRows}
+              rowKey={(row, index) => `${row.auth_user_id}-${index}`}
+              renderCell={(row, column) =>
+                column.key === "created_at"
+                  ? formatDateTime(row[column.key])
+                  : row[column.key] || "-"
+              }
+            />
           )}
         </ErpSectionCard>
       </div>

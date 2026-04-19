@@ -11,6 +11,9 @@ type CompanyRow = {
   id: string;
   company_code: string;
   company_name: string;
+  state_name: string | null;
+  full_address: string | null;
+  pin_code: string | null;
   status: string | null;
 };
 
@@ -104,7 +107,7 @@ export async function listGovernanceSummaryReportHandler(
     const { data: companies, error: companyError } = await db
       .schema("erp_master")
       .from("companies")
-      .select("id, company_code, company_name, status")
+      .select("id, company_code, company_name, state_name, full_address, pin_code, status")
       .eq("company_kind", "BUSINESS")
       .order("company_code", { ascending: true });
 
@@ -289,6 +292,8 @@ export async function listGovernanceSummaryReportHandler(
       return {
         company_code: company.company_code,
         company_name: company.company_name,
+        company_state_name: company.state_name ?? null,
+        company_address: toJoinedUnique([company.full_address, company.state_name, company.pin_code]),
         company_status: company.status ?? null,
         department_codes: toJoinedUnique(companyDepartments.map((row) => row.department_code)),
         department_names: toJoinedUnique(companyDepartments.map((row) => row.department_name)),

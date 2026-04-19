@@ -88,7 +88,7 @@ export async function listWorkContextsHandler(
       : await db
         .schema("erp_master")
         .from("companies")
-        .select("id, company_code, company_name")
+        .select("id, company_code, company_name, state_name, full_address, pin_code")
         .in("id", companyIds);
 
     if (companyError) {
@@ -151,6 +151,9 @@ export async function listWorkContextsHandler(
           company_id: row.company_id,
           company_code: companyMap.get(row.company_id)?.company_code ?? null,
           company_name: companyMap.get(row.company_id)?.company_name ?? null,
+          company_state_name: companyMap.get(row.company_id)?.state_name ?? null,
+          company_full_address: companyMap.get(row.company_id)?.full_address ?? null,
+          company_pin_code: companyMap.get(row.company_id)?.pin_code ?? null,
           work_context_code: row.work_context_code,
           work_context_name: row.work_context_name,
           description: row.description ?? null,

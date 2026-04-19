@@ -9,6 +9,10 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
+import {
+  formatCompanyAddress,
+  formatCompanyLabel,
+} from "../../../shared/companyDisplay.js";
 
 async function readJsonSafe(response) {
   try {
@@ -820,8 +824,9 @@ export default function SAGroupGovernance() {
                     >
                       <div>
                         <div className="font-semibold text-slate-900">
-                          {company.company_code} | {company.company_name}
+                          {formatCompanyLabel(company)}
                         </div>
+                        <div className="mt-1 text-xs text-slate-500">{formatCompanyAddress(company)}</div>
                         <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-slate-500">
                           {company.status ?? "UNKNOWN"} | {company.gst_number ?? "No GST"}
                         </div>
@@ -877,7 +882,9 @@ export default function SAGroupGovernance() {
                       key={company.id}
                       className="border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
                     >
-                      {company.company_code} | {company.company_name} | {company.status ?? "UNKNOWN"}
+                      <div className="font-semibold text-slate-900">{formatCompanyLabel(company)}</div>
+                      <div className="mt-1 text-xs text-slate-500">{formatCompanyAddress(company)}</div>
+                      <div className="mt-1 text-xs text-slate-500">{company.status ?? "UNKNOWN"}</div>
                     </div>
                   ))}
                 </div>

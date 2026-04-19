@@ -28,7 +28,14 @@ type SignupRow = {
 };
 
 type IdRow = { auth_user_id: string; company_id?: string | null; project_id?: string | null; department_id?: string | null; work_context_id?: string | null; is_primary?: boolean | null };
-type CompanyRow = { id: string; company_code: string | null; company_name: string | null };
+type CompanyRow = {
+  id: string;
+  company_code: string | null;
+  company_name: string | null;
+  state_name: string | null;
+  full_address: string | null;
+  pin_code: string | null;
+};
 type CompanyProjectRow = { company_id: string; project_id: string };
 type ProjectRow = { id: string; project_code: string | null; project_name: string | null; company_id?: string | null };
 type DepartmentRow = { id: string; department_code: string | null; department_name: string | null; company_id: string | null };
@@ -78,6 +85,10 @@ function buildReportRow({
 }) {
   const workCompanyCodes = workCompanies.map((row) => row.company_code).filter(Boolean).join(", ");
   const workCompanyNames = workCompanies.map((row) => row.company_name).filter(Boolean).join(", ");
+  const workCompanyAddresses = workCompanies
+    .map((row) => [row.full_address, row.state_name, row.pin_code].filter(Boolean).join(", "))
+    .filter(Boolean)
+    .join(" | ");
   const directProjectOverrideCodes = directProjectOverrides.map((row) => row.project_code).filter(Boolean).join(", ");
   const directProjectOverrideNames = directProjectOverrides.map((row) => row.project_name).filter(Boolean).join(", ");
   const inheritedProjectCodes = inheritedProjects.map((row) => row.project_code).filter(Boolean).join(", ");
@@ -101,10 +112,15 @@ function buildReportRow({
     phone_number: signup?.phone_number ?? null,
     parent_company_code: parentCompany?.company_code ?? null,
     parent_company_name: parentCompany?.company_name ?? null,
+    parent_company_address:
+      [parentCompany?.full_address, parentCompany?.state_name, parentCompany?.pin_code]
+        .filter(Boolean)
+        .join(", ") || null,
     identity_department_code: identityDepartment?.department_code ?? null,
     identity_department_name: identityDepartment?.department_name ?? null,
     work_company_codes: workCompanyCodes || null,
     work_company_names: workCompanyNames || null,
+    work_company_addresses: workCompanyAddresses || null,
     direct_project_override_codes: directProjectOverrideCodes || null,
     direct_project_override_names: directProjectOverrideNames || null,
     inherited_project_codes: inheritedProjectCodes || null,
@@ -208,7 +224,11 @@ export async function listUserScopeReportHandler(
     ] = await Promise.all([
       companyIds.size === 0
         ? Promise.resolve({ data: [] as CompanyRow[] })
-        : db.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", [...companyIds]),
+        : db
+            .schema("erp_master")
+            .from("companies")
+            .select("id, company_code, company_name, state_name, full_address, pin_code")
+            .in("id", [...companyIds]),
       projectIds.size === 0
         ? Promise.resolve({ data: [] as ProjectRow[] })
         : db.schema("erp_master").from("projects").select("id, project_code, project_name").eq("status", "ACTIVE").in("id", [...projectIds]),

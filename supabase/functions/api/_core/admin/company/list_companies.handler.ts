@@ -33,6 +33,9 @@ type CompanyRow = {
   company_code: string;
   company_name: string;
   gst_number: string | null;
+  state_name: string | null;
+  full_address: string | null;
+  pin_code: string | null;
   status: string | null;
   company_kind: string | null;
   created_at: string | null;
@@ -61,7 +64,7 @@ export async function listCompaniesHandler(
 
     const { data: companies, error: companyError } = await db
       .schema("erp_master").from("companies")
-      .select("id, company_code, company_name, gst_number, status, company_kind, created_at")
+      .select("id, company_code, company_name, gst_number, state_name, full_address, pin_code, status, company_kind, created_at")
       .eq("company_kind", "BUSINESS")
       .order("company_name", { ascending: true });
 

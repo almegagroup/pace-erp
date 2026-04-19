@@ -9,6 +9,11 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
+import {
+  formatCompanyAddress,
+  formatCompanyLabel,
+  formatCompanyOptionLabel,
+} from "../../../shared/companyDisplay.js";
 
 async function readJsonSafe(response) {
   try {
@@ -268,7 +273,7 @@ export default function SADepartmentMaster() {
     const approved = await openActionConfirm({
       eyebrow: "Department Master",
       title: "Create Department",
-      message: `Create ${normalizedName} for ${selectedCompany?.company_code ?? "selected company"}?`,
+      message: `Create ${normalizedName} for ${formatCompanyLabel(selectedCompany, { separator: " - " })}?`,
       confirmLabel: "Create Department",
       cancelLabel: "Cancel",
     });
@@ -552,17 +557,22 @@ export default function SADepartmentMaster() {
                   <option value="">Select company</option>
                   {companies.map((company) => (
                     <option key={company.id} value={company.id}>
-                      {company.company_code} | {company.company_name}
+                      {formatCompanyOptionLabel(company)}
                     </option>
                   ))}
                 </select>
               </label>
 
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-3">
                 <ErpFieldPreview
                   label="Company Status"
                   value={selectedCompany?.status ?? "Unknown"}
                   caption="Department activation follows company lifecycle."
+                />
+                <ErpFieldPreview
+                  label="Company Address"
+                  value={formatCompanyAddress(selectedCompany)}
+                  caption="Keep the registered office visible while creating departments."
                 />
                 <ErpFieldPreview
                   label="Mapped Group"

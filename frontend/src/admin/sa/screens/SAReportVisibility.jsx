@@ -7,6 +7,11 @@ import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 import {
+  formatCompanyAddress,
+  formatCompanyLabel,
+  formatCompanyOptionLabel,
+} from "../../../shared/companyDisplay.js";
+import {
   deleteViewerRule,
   fetchReportVisibilityWorkspace,
   saveViewerRule,
@@ -162,6 +167,10 @@ export default function SAReportVisibility() {
         (row) => `${row.company_code ?? ""} ${row.company_name ?? ""}`.trim(),
       ),
     [workspace.companies],
+  );
+  const selectedCompany = useMemo(
+    () => workspace.companies.find((row) => row.id === draft.company_id) ?? null,
+    [workspace.companies, draft.company_id],
   );
 
   const projectOptions = useMemo(() => {
@@ -542,7 +551,7 @@ export default function SAReportVisibility() {
                   <option value="">Choose company</option>
                   {companyOptions.map((row) => (
                     <option key={row.id} value={row.id}>
-                      {row.company_code} | {row.company_name}
+                      {formatCompanyOptionLabel(row)}
                     </option>
                   ))}
                 </select>
@@ -624,6 +633,22 @@ export default function SAReportVisibility() {
               inputRef={searchRef}
               placeholder="Search by viewer, scope, company, module, or resource"
             />
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="border border-slate-300 bg-slate-50 px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Selected Company
+                </p>
+                <p className="mt-2 text-sm font-semibold text-slate-900">
+                  {selectedCompany ? formatCompanyLabel(selectedCompany) : "Choose company"}
+                </p>
+              </div>
+              <div className="border border-slate-300 bg-slate-50 px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Company Address
+                </p>
+                <p className="mt-2 text-sm text-slate-700">{formatCompanyAddress(selectedCompany)}</p>
+              </div>
+            </div>
           </div>
         ),
       }}

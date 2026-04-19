@@ -8,6 +8,11 @@ import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import {
+  formatCompanyAddress,
+  formatCompanyLabel,
+  formatCompanyOptionLabel,
+} from "../../../shared/companyDisplay.js";
 
 const ACTIONS = [["VIEW","can_view","View"],["WRITE","can_write","Write"],["EDIT","can_edit","Edit"],["DELETE","can_delete","Delete"],["APPROVE","can_approve","Approve"],["EXPORT","can_export","Export"]];
 
@@ -295,7 +300,7 @@ export default function SACapabilityGovernance(){
             </div>
           </ErpSectionCard>
           <ErpSectionCard eyebrow="Business Areas" title="Open one business area, then choose access packs inside the drawer" description="GENERAL_OPS, DEPT_* and manual scopes all appear here. Open one business area row first, then attach or remove the exact access packs inside the drawer so SA does not accidentally bind the wrong pack.">
-            <label className="block"><span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Company</span><select value={companyId} onChange={(e)=>setCompanyId(e.target.value)} className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none">{companies.map((c)=><option key={c.id} value={c.id}>{c.company_code} | {c.company_name}</option>)}</select></label>
+            <label className="block"><span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Company</span><select value={companyId} onChange={(e)=>setCompanyId(e.target.value)} className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none">{companies.map((c)=><option key={c.id} value={c.id}>{formatCompanyOptionLabel(c)}</option>)}</select></label>
             <QuickFilterInput label="Search Contexts" value={contextSearch} onChange={setContextSearch} placeholder="Search by company, department, or context code" hint="GENERAL_OPS is company-wide. DEPT_* rows come from department setup." />
             <div className="mt-6 border border-slate-300">
               {contexts.length===0?<div className="bg-slate-50 px-4 py-4 text-sm text-slate-500">No work context is currently defined for this company. Company and department setup first complete koro.</div>:filteredContexts.length===0?<div className="bg-slate-50 px-4 py-4 text-sm text-slate-500">Current search-e kono context match koreni.</div>:filteredContexts.map((row)=>{
@@ -305,7 +310,8 @@ export default function SACapabilityGovernance(){
                 return <div key={row.work_context_id} className={`flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 last:border-b-0 ${ctxId===row.work_context_id?"border-sky-200 bg-sky-50":"border-slate-300 bg-white"}`}>
                   <button type="button" onClick={()=>openBindingDrawer(row)} className="min-w-0 flex-1 cursor-pointer text-left">
                     <div className="text-sm font-semibold text-slate-900">{row.work_context_code} | {row.work_context_name}</div>
-                    <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">{row.company_code} | {row.company_name}</div>
+                    <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">{formatCompanyLabel(row)}</div>
+                    <div className="mt-1 text-xs text-slate-500">{formatCompanyAddress(row)}</div>
                     <div className="mt-1 text-xs text-slate-500">{row.department_code?`${row.department_code} | ${row.department_name}`:"Company-wide context (GENERAL_OPS type)"}</div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       <span className={`border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${contextType==="GENERAL"?"border-sky-300 bg-sky-50 text-sky-800":contextType==="DEPARTMENT"?"border-slate-300 bg-slate-100 text-slate-700":"border-amber-300 bg-amber-50 text-amber-800"}`}>{contextType==="GENERAL"?"General scope":contextType==="DEPARTMENT"?"Department scope":"Manual scope"}</span>
@@ -361,7 +367,8 @@ export default function SACapabilityGovernance(){
               </div>
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Company</p>
-                <p className="mt-1">{selectedContext.company_code} | {selectedContext.company_name}</p>
+                <p className="mt-1">{formatCompanyLabel(selectedContext)}</p>
+                <p className="mt-1 text-xs text-slate-500">{formatCompanyAddress(selectedContext)}</p>
               </div>
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Department Link</p>

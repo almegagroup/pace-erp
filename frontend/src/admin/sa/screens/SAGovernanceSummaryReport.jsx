@@ -3,6 +3,7 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpStickyDataTable from "../../../components/data/ErpStickyDataTable.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -12,6 +13,7 @@ import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 const REPORT_COLUMNS = Object.freeze([
   { key: "company_code", label: "Company Code" },
   { key: "company_name", label: "Company Name" },
+  { key: "company_address", label: "Company Address" },
   { key: "company_status", label: "Company Status" },
   { key: "department_codes", label: "Department Codes" },
   { key: "department_names", label: "Department Names" },
@@ -74,6 +76,15 @@ function formatDateTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatCompanyAddress(company) {
+  if (!company) return "All companies in scope";
+  return (
+    [company.full_address, company.state_name, company.pin_code]
+      .filter(Boolean)
+      .join(", ") || "Address not captured"
+  );
 }
 
 export default function SAGovernanceSummaryReport() {
@@ -212,8 +223,9 @@ export default function SAGovernanceSummaryReport() {
       ]}
     >
       <div className="grid gap-4">
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-4">
           <ErpFieldPreview label="Selected Company" value={selectedCompanyLabel} />
+          <ErpFieldPreview label="Selected Company Address" value={formatCompanyAddress(selectedCompany)} />
           <ErpFieldPreview label="Report Rows" value={String(filteredRows.length)} />
           <ErpFieldPreview label="Visible Columns" value={String(visibleColumns.length)} />
         </div>
@@ -312,35 +324,16 @@ export default function SAGovernanceSummaryReport() {
               No report row matches the current filter.
             </div>
           ) : (
-            <div className="overflow-auto border border-slate-200">
-              <table className="min-w-full border-collapse text-xs">
-                <thead className="bg-slate-100">
-                  <tr>
-                    {visibleColumns.map((column) => (
-                      <th
-                        key={column.key}
-                        className="border border-slate-200 px-2 py-2 text-left font-semibold uppercase tracking-[0.12em] text-slate-500"
-                      >
-                        {column.label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRows.map((row, index) => (
-                    <tr key={`${row.company_code}-${index}`}>
-                      {visibleColumns.map((column) => (
-                        <td key={column.key} className="border border-slate-200 px-2 py-2 text-slate-700">
-                          {column.key === "active_acl_version_created_at"
-                            ? formatDateTime(row[column.key])
-                            : row[column.key] || "-"}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ErpStickyDataTable
+              columns={visibleColumns}
+              rows={filteredRows}
+              rowKey={(row, index) => `${row.company_code}-${index}`}
+              renderCell={(row, column) =>
+                column.key === "active_acl_version_created_at"
+                  ? formatDateTime(row[column.key])
+                  : row[column.key] || "-"
+              }
+            />
           )}
         </ErpSectionCard>
       </div>

@@ -11,6 +11,10 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
+import {
+  formatCompanyAddress,
+  formatCompanyLabel,
+} from "../../../shared/companyDisplay.js";
 
 async function readJsonSafe(response) {
   try {
@@ -476,8 +480,9 @@ export default function SACompanyModuleMap() {
                     }`}
                   >
                     <span className="block font-semibold">
-                      {row.company_code} - {row.company_name}
+                      {formatCompanyLabel(row, { separator: " - " })}
                     </span>
+                    <span className="mt-1 block text-xs text-slate-500">{formatCompanyAddress(row)}</span>
                     <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
                       {row.status ?? "UNKNOWN"} | {row.group_code ?? "No group"}
                     </span>
@@ -500,6 +505,11 @@ export default function SACompanyModuleMap() {
           >
             {selectedCompany ? (
               <div className="grid gap-4 md:grid-cols-2">
+                <ErpFieldPreview
+                  label="Company"
+                  value={formatCompanyLabel(selectedCompany)}
+                  caption={formatCompanyAddress(selectedCompany)}
+                />
                 <ErpFieldPreview
                   label="Company State"
                   value={selectedCompany.status ?? "UNKNOWN"}

@@ -373,7 +373,7 @@ export default function ErpScreenScaffold({
   return (
     <section className="min-h-full text-slate-900">
       <div className="mx-auto flex max-w-none flex-col gap-4">
-        <div className="overflow-hidden border border-slate-400 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.06)]">
+        <div className="sticky top-0 z-20 overflow-hidden border border-slate-400 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.06)]">
           <div className="border-b border-slate-300 bg-[linear-gradient(180deg,#f5f8fb_0%,#e8eef5_100%)] px-4 py-3">
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
               <div className="min-w-0">
