@@ -173,6 +173,21 @@ if (error) {
 }
 
 if (!data) {
+  log({
+    level: "WARN",
+    request_id: _requestId,
+    gate_id: "10.4",
+    route_key: `${resourceCode}:${action}`,
+    event: "ACL_DEFAULT_DENY_NO_MATCH",
+    actor: authUserId,
+    meta: {
+      company_id: companyId,
+      work_context_id: workContextId,
+      resource_code: resourceCode,
+      action,
+      acl_version_id: activeAclVersionId,
+    },
+  });
   return {
     decision: "DENY",
     reason: "ACL_DEFAULT_DENY_NO_MATCH",
