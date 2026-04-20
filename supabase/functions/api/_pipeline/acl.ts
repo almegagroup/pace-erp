@@ -18,12 +18,12 @@ import type {
   VwedAction,
 } from "../_acl/vwed_engine.ts";
 import { getServiceRoleClientWithContext } from "../_shared/serviceRoleClient.ts";
-import type { SupabaseClient } from "@supabase/supabase-js"
+import type { DbClient } from "../_shared/db_client.ts";
 import { recordSecurityEvent } from "../_security/security_events.ts";
 import { readAclSnapshotDecision } from "../_shared/acl_snapshot.ts";
 
 async function getActiveAclVersionId(
-  db: SupabaseClient,
+  db: DbClient,
   companyId: string,
 ): Promise<string> {
   const { data, error } = await db

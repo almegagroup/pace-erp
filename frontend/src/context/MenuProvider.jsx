@@ -80,6 +80,7 @@ export function MenuProvider({ children }) {
   const setRuntimeContext = useCallback((context) => {
     setRuntimeContextState({
       isAdmin: context?.isAdmin === true,
+      workspaceMode: context?.workspaceMode ?? null,
       selectedCompanyId: context?.selectedCompanyId ?? "",
       currentCompany: context?.currentCompany ?? null,
       availableCompanies: Array.isArray(context?.availableCompanies)

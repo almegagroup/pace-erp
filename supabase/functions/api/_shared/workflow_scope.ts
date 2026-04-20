@@ -8,11 +8,7 @@
  * Authority: Backend
  */
 
-type DbClient = {
-  schema: (schema: string) => {
-    from: (table: string) => any;
-  };
-};
+import type { DbClient } from "./db_client.ts";
 
 export type WorkflowScopeContextRow = {
   work_context_id: string;

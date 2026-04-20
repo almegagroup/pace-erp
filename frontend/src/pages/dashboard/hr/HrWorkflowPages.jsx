@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { useMenu } from "../../../context/useMenu.js";
+import { pushToast } from "../../../store/uiToast.js";
+import { getErrorMessage } from "../../../config/errorMessages.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
@@ -168,6 +170,11 @@ const HR_REQUEST_COLUMN_DEFS = Object.freeze([
     width: "minmax(190px, 1fr)",
   },
   {
+    key: "department",
+    label: "Department",
+    width: "minmax(160px, 0.9fr)",
+  },
+  {
     key: "fromDate",
     label: "From Date",
     width: "minmax(120px, 0.7fr)",
@@ -218,6 +225,7 @@ const HR_DEFAULT_VISIBLE_COLUMN_KEYS = Object.freeze([
   "name",
   "code",
   "company",
+  "department",
   "fromDate",
   "toDate",
   "days",
@@ -371,10 +379,16 @@ function HrRequestColumnCell({ request, kind, column }) {
     request.parent_company_id ??
     "-";
 
+  const departmentDisplay =
+    request.department_name ??
+    request.department_code ??
+    "-";
+
   const contentByColumn = {
     name: <div className="text-sm font-semibold text-slate-900">{requesterParts.name}</div>,
     code: <div className="text-sm text-slate-700">{requesterParts.code}</div>,
     company: <div className="text-sm text-slate-700">{companyDisplay}</div>,
+    department: <div className="text-sm text-slate-700">{departmentDisplay}</div>,
     fromDate: <div className="text-sm text-slate-700">{formatIsoDate(request.from_date)}</div>,
     toDate: <div className="text-sm text-slate-700">{formatIsoDate(request.to_date)}</div>,
     days: <div className="text-sm text-slate-700">{request.total_days}</div>,
@@ -1584,8 +1598,15 @@ function HrApprovalInboxWorkspace({
   openHistory,
 }) {
   const navigate = useNavigate();
+  const { runtimeContext } = useMenu();
+  const isMulti = runtimeContext?.workspaceMode === "MULTI";
+  const availableCompanies = Array.isArray(runtimeContext?.availableCompanies)
+    ? runtimeContext.availableCompanies
+    : [];
   const searchRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState("");
+  // Company filter for MULTI users: "*" = All Companies (default), or specific company ID
+  const [companyFilter, setCompanyFilter] = useState("*");
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [decisionTally, setDecisionTally] = useState({
     approved: 0,
@@ -1595,20 +1616,25 @@ function HrApprovalInboxWorkspace({
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.approvalInbox`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
 
-  const filteredRows = useMemo(
-    () =>
-      applyQuickFilter(rows, searchQuery, [
-        "requester_display",
-        "reason",
-        "current_state",
-        "parent_company_name",
-        "parent_company_code",
-        "destination_name",
-        "destination_address",
-        "workflow_request_id",
-      ]),
-    [rows, searchQuery],
-  );
+  const filteredRows = useMemo(() => {
+    let result = applyQuickFilter(rows, searchQuery, [
+      "requester_display",
+      "reason",
+      "current_state",
+      "parent_company_name",
+      "parent_company_code",
+      "destination_name",
+      "destination_address",
+      "workflow_request_id",
+    ]);
+    // MULTI users: apply company filter when a specific company is chosen
+    if (isMulti && companyFilter && companyFilter !== "*") {
+      result = result.filter(
+        (row) => row.parent_company_id === companyFilter,
+      );
+    }
+    return result;
+  }, [rows, searchQuery, isMulti, companyFilter]);
 
   async function handleDecision(request, decision) {
     const approved = await openActionConfirm({
@@ -1621,8 +1647,11 @@ function HrApprovalInboxWorkspace({
 
     if (!approved) return;
 
+    // For MULTI users: pass the request's company so the backend context pipeline resolves correctly.
+    const companyId = isMulti ? (request.parent_company_id ?? null) : null;
+
     try {
-      await submitWorkflowDecision(request.workflow_request_id, decision);
+      await submitWorkflowDecision(request.workflow_request_id, decision, companyId);
       setDecisionTally((current) => ({
         approved: current.approved + (decision === "APPROVED" ? 1 : 0),
         rejected: current.rejected + (decision === "REJECTED" ? 1 : 0),
@@ -1630,6 +1659,33 @@ function HrApprovalInboxWorkspace({
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       await refresh();
     } catch (err) {
+      // Company revoked mid-session: refresh context so the company disappears from selectors.
+      const errorCode = typeof err?.code === "string" ? err.code : "";
+      const isCompanyRevoked =
+        errorCode === "MULTI_COMPANY_ACCESS_DENIED" ||
+        errorCode === "ME_CONTEXT_COMPANY_FORBIDDEN" ||
+        errorCode === "MULTI_COMPANY_INVALID";
+
+      if (isCompanyRevoked) {
+        const humanMessage =
+          getErrorMessage(errorCode) ??
+          "You no longer have access to that company.";
+        pushToast({
+          tone: "error",
+          title: "Company Access Revoked",
+          message: `${humanMessage} The company has been removed from your session.`,
+        });
+        console.error("WORKFLOW_DECISION_COMPANY_REVOKED", {
+          code: errorCode,
+          company_id: companyId,
+          request_id: err?.requestId ?? null,
+        });
+        // Refresh context so the revoked company disappears from all selectors.
+        window.dispatchEvent(new CustomEvent("erp:menu-refresh-request"));
+        await refresh();
+        return;
+      }
+
       setError(formatError(err, "Decision could not be submitted."));
     }
   }
@@ -1702,13 +1758,34 @@ function HrApprovalInboxWorkspace({
         eyebrow: "Queue Search",
         title: "Filter approval inbox",
         children: (
-          <QuickFilterInput
-            label="Quick Search"
-            value={searchQuery}
-            onChange={setSearchQuery}
-            inputRef={searchRef}
-            placeholder="Search requester, reason, destination, or workflow id"
-          />
+          <div className="grid gap-3">
+            {isMulti && availableCompanies.length > 0 ? (
+              <div className="grid gap-1">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Company
+                </span>
+                <select
+                  value={companyFilter}
+                  onChange={(event) => setCompanyFilter(event.target.value)}
+                  className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
+                >
+                  <option value="*">* All Companies</option>
+                  {availableCompanies.map((company) => (
+                    <option key={company.id} value={company.id}>
+                      {company.company_code} | {company.company_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+            <QuickFilterInput
+              label="Quick Search"
+              value={searchQuery}
+              onChange={setSearchQuery}
+              inputRef={searchRef}
+              placeholder="Search requester, reason, destination, or workflow id"
+            />
+          </div>
         ),
       }}
       reviewSection={{

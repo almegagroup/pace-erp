@@ -8,11 +8,7 @@
  * Authority: Backend
  */
 
-type SnapshotDbClient = {
-  schema: (schema: string) => {
-    from: (table: string) => any;
-  };
-};
+import type { DbClient } from "./db_client.ts";
 
 export type AclSnapshotDecision = {
   resource_code: string;
@@ -22,7 +18,7 @@ export type AclSnapshotDecision = {
 };
 
 export async function readAclSnapshotDecision(input: {
-  db: SnapshotDbClient;
+  db: DbClient;
   aclVersionId: string;
   authUserId: string;
   companyId: string;

@@ -1,7 +1,5 @@
-import { createClient } from "@supabase/supabase-js";
 import { listCanonicalCompanyIds } from "./canonical_access.ts";
-
-type DbClient = ReturnType<typeof createClient>;
+import type { DbClient } from "./db_client.ts";
 
 type WorkContextAssignmentRow = {
   work_context_id: string;

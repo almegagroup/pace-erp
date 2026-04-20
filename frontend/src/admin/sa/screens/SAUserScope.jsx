@@ -77,6 +77,23 @@ async function fetchUserScope(authUserId) {
   return json.data;
 }
 
+async function setPrimaryCompany(authUserId, companyId) {
+  const response = await fetch(
+    `${import.meta.env.VITE_API_BASE}/api/admin/users/scope/primary-company`,
+    {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auth_user_id: authUserId, company_id: companyId }),
+    },
+  );
+  const json = await readJsonSafe(response);
+  if (!response.ok || !json?.ok) {
+    throw buildApiError(json, "SET_PRIMARY_COMPANY_FAILED");
+  }
+  return json.data;
+}
+
 async function saveUserScope(payload) {
   const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/users/scope`, {
     method: "POST",
@@ -329,6 +346,8 @@ export default function SAUserScope() {
   const [warningNotice, setWarningNotice] = useState("");
 
   const [parentCompanyId, setParentCompanyId] = useState("");
+  const [primaryWorkCompanyId, setPrimaryWorkCompanyId] = useState("");
+  const [settingPrimary, setSettingPrimary] = useState(false);
   const [workCompanyIds, setWorkCompanyIds] = useState([]);
   const [workContextIds, setWorkContextIds] = useState([]);
   const [projectIds, setProjectIds] = useState([]);
@@ -363,6 +382,7 @@ export default function SAUserScope() {
 
         setPayload(data);
         setParentCompanyId(data.scope?.parent_company?.id ?? "");
+        setPrimaryWorkCompanyId(data.scope?.primary_company_id ?? "");
         setWorkCompanyIds(extractIds(data.scope?.work_companies));
         setWorkContextIds(extractIds(data.scope?.work_contexts));
         setProjectIds(extractIds(data.scope?.project_overrides ?? data.scope?.projects));
@@ -631,6 +651,7 @@ export default function SAUserScope() {
       const refreshed = await fetchUserScope(authUserId);
       setPayload(refreshed);
       setParentCompanyId(refreshed.scope?.parent_company?.id ?? "");
+      setPrimaryWorkCompanyId(refreshed.scope?.primary_company_id ?? "");
       setWorkCompanyIds(extractIds(refreshed.scope?.work_companies));
       setWorkContextIds(extractIds(refreshed.scope?.work_contexts));
       setProjectIds(extractIds(refreshed.scope?.project_overrides ?? refreshed.scope?.projects));
@@ -697,6 +718,39 @@ export default function SAUserScope() {
       );
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSetPrimaryCompany(companyId) {
+    if (!authUserId || !companyId || settingPrimary) {
+      return;
+    }
+
+    setSettingPrimary(true);
+    setError("");
+
+    try {
+      await setPrimaryCompany(authUserId, companyId);
+      setPrimaryWorkCompanyId(companyId);
+      setNotice(
+        "Primary company updated. Change takes effect at the user's next login.",
+      );
+    } catch (caughtError) {
+      console.error("SET_PRIMARY_COMPANY_FAILED", {
+        auth_user_id: authUserId,
+        company_id: companyId,
+        code: caughtError?.code ?? null,
+        decisionTrace: caughtError?.decisionTrace ?? null,
+        requestId: caughtError?.requestId ?? null,
+        message: caughtError?.message ?? "SET_PRIMARY_COMPANY_FAILED",
+      });
+      setError(
+        caughtError?.publicMessage ||
+          caughtError?.message ||
+          "Primary company could not be updated.",
+      );
+    } finally {
+      setSettingPrimary(false);
     }
   }
 
@@ -1435,47 +1489,73 @@ export default function SAUserScope() {
             ) : (
               filteredWorkCompanies.map((company, index) => {
                 const selected = workCompanyIds.includes(company.id);
+                const isPrimary = selected && company.id === primaryWorkCompanyId;
 
                 return (
-                  <label
+                  <div
                     key={company.id}
-                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                    className={`border px-4 py-3 text-sm ${
                       selected
                         ? "border-cyan-300 bg-cyan-50 text-cyan-900"
                         : "border-slate-300 bg-white text-slate-700"
                     }`}
                   >
-                    <input
-                      ref={(element) => {
-                        workCompanyRefs.current[index] = element;
-                      }}
-                      data-erp-nav-item="true"
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() =>
-                        toggleSelection(company.id, workCompanyIds, setWorkCompanyIds)
-                      }
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: workCompanyRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-cyan-600"
-                    />
-                    <span>
-                      <span className="font-semibold">{company.company_code}</span>
-                      {" - "}
-                      {company.company_name}
-                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
-                        {formatCompanyMeta(company)}
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        ref={(element) => {
+                          workCompanyRefs.current[index] = element;
+                        }}
+                        data-erp-nav-item="true"
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() =>
+                          toggleSelection(company.id, workCompanyIds, setWorkCompanyIds)
+                        }
+                        onKeyDown={(event) =>
+                          handleLinearNavigation(event, {
+                            index,
+                            refs: workCompanyRefs.current,
+                            orientation: "vertical",
+                          })
+                        }
+                        className="mt-1 h-4 w-4 border-slate-300 bg-white text-cyan-600"
+                      />
+                      <span className="flex-1">
+                        <span className="font-semibold">{company.company_code}</span>
+                        {" - "}
+                        {company.company_name}
+                        <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                          {formatCompanyMeta(company)}
+                        </span>
+                        <span className="mt-1 block text-xs leading-5 text-slate-600">
+                          {formatCompanyAddress(company)}
+                        </span>
                       </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-600">
-                        {formatCompanyAddress(company)}
-                      </span>
-                    </span>
-                  </label>
+                    </label>
+                    {selected ? (
+                      <div className="mt-2 flex items-center gap-2 pl-7">
+                        {isPrimary ? (
+                          <span className="border border-emerald-300 bg-emerald-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-800">
+                            Primary
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={settingPrimary || !authUserId}
+                            onClick={() => void handleSetPrimaryCompany(company.id)}
+                            className="border border-slate-300 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {settingPrimary ? "Setting..." : "Set as Primary"}
+                          </button>
+                        )}
+                        <span className="text-[10px] text-slate-400">
+                          {isPrimary
+                            ? "Default company at next login"
+                            : "Click to make this the default login company"}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
                 );
               })
             )}

@@ -493,6 +493,7 @@ contextResult = await stepContext(req, {
   roleCode: activeSession.roleCode,
   selectedCompanyId: activeSession.selectedCompanyId,
   selectedWorkContextId: activeSession.selectedWorkContextId,
+  workspaceMode: activeSession.workspaceMode ?? null,
 });
 
     if (contextResult.status === "UNRESOLVED") {

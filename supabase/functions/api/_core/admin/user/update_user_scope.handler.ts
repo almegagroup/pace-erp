@@ -345,13 +345,20 @@ export async function updateUserScopeHandler(
     }
 
     if (workCompanyIds.length > 0) {
+      // is_primary = true for parent company if it exists in work companies.
+      // If parent company is not a work company (e.g. org parent only),
+      // fall back to first work company as primary.
+      const primaryWorkCompanyId = workCompanyIds.includes(parentCompanyId)
+        ? parentCompanyId
+        : workCompanyIds[0];
+
       const { error: workInsertError } = await db
         .schema("erp_map").from("user_companies")
         .insert(
           workCompanyIds.map((companyId) => ({
             auth_user_id: targetAuthUserId,
             company_id: companyId,
-            is_primary: false,
+            is_primary: companyId === primaryWorkCompanyId,
           })),
         );
 

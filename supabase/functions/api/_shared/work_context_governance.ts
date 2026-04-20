@@ -8,11 +8,7 @@
  * Authority: Backend
  */
 
-type DbClient = {
-  schema: (schema: string) => {
-    from: (table: string) => any;
-  };
-};
+import type { DbClient } from "./db_client.ts";
 
 type DepartmentWorkContextInput = {
   companyId: string;

@@ -19,10 +19,12 @@ import {
   resolveDefaultWorkCompanyId,
   resolveDefaultWorkContextId,
   resolveCanonicalAccessProfile,
+  listCanonicalCompanyIds,
 } from "../../_shared/canonical_access.ts";
 import {
   rebuildAclSessionMenuSnapshot,
   rebuildAdminSessionMenuSnapshot,
+  rebuildGlobalAclMenuSnapshot,
 } from "../../_shared/acl_runtime.ts";
 
 function extractDeviceInfo(_ctx: LoginContext) {
@@ -38,6 +40,7 @@ async function buildAndStoreMenuSnapshot(
   requestId: string,
   selectedCompanyId: string | null,
   selectedWorkContextId: string | null,
+  workspaceMode?: "SINGLE" | "MULTI" | null,
 ) {
   const start = Date.now();
 
@@ -92,6 +95,33 @@ async function buildAndStoreMenuSnapshot(
           level: "ERROR",
           request_id: requestId,
           event: "SA_SNAPSHOT_REBUILD_FAILED",
+          meta: { error: String(error) },
+        });
+      }
+
+      return;
+    }
+
+    // MULTI (Type 2) users: build GLOBAL_ACL snapshot — union of all companies
+    if (workspaceMode === "MULTI") {
+      try {
+        const menuRows = await rebuildGlobalAclMenuSnapshot(
+          supabase,
+          authUserId,
+          sessionId,
+        );
+
+        log({
+          level: "INFO",
+          request_id: requestId,
+          event: "GLOBAL_ACL_SNAPSHOT_SUCCESS",
+          meta: { count: menuRows.length },
+        });
+      } catch (error) {
+        log({
+          level: "ERROR",
+          request_id: requestId,
+          event: "GLOBAL_ACL_SNAPSHOT_REBUILD_FAILED",
           meta: { error: String(error) },
         });
       }
@@ -320,12 +350,24 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
     }
   }
 
+  let workspaceMode: "SINGLE" | "MULTI" | null = null;
+
+  if (roleCode !== "SA" && roleCode !== "GA") {
+    try {
+      const allCompanyIds = await listCanonicalCompanyIds(supabase, authUserId);
+      workspaceMode = allCompanyIds.length > 1 ? "MULTI" : "SINGLE";
+    } catch {
+      workspaceMode = "SINGLE";
+    }
+  }
+
   const { sessionId } = await createSession(
     authUserId,
     roleCode,
     selectedCompanyId,
     selectedWorkContextId,
     extractDeviceInfo(ctx),
+    workspaceMode,
   );
 
   await buildAndStoreMenuSnapshot(
@@ -334,6 +376,7 @@ export async function loginHandler(ctx: LoginContext): Promise<Response> {
     requestId,
     selectedCompanyId,
     selectedWorkContextId,
+    workspaceMode,
   );
 
   recordSessionTimeline({

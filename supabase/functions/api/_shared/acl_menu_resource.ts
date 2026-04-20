@@ -8,7 +8,7 @@
  * Authority: Backend
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { DbClient } from "./db_client.ts";
 
 type ResolvedAclMenuResource = {
   aclMenuId: string;
@@ -16,7 +16,7 @@ type ResolvedAclMenuResource = {
 };
 
 export async function resolveOrProvisionAclMenuResource(
-  db: SupabaseClient,
+  db: DbClient,
   resourceCodeInput: string,
 ): Promise<ResolvedAclMenuResource> {
   const normalizedResourceCode = resourceCodeInput.trim().toUpperCase();

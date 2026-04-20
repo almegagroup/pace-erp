@@ -168,10 +168,11 @@ export async function getUserScopeHandler(
 
     const { data: workCompanyRows } = await db
       .schema("erp_map").from("user_companies")
-      .select("company_id")
+      .select("company_id, is_primary")
       .eq("auth_user_id", authUserId);
 
     const workCompanyIds = [...new Set((workCompanyRows ?? []).map((row) => row.company_id))];
+    const primaryWorkCompanyId = (workCompanyRows ?? []).find((row) => row.is_primary)?.company_id ?? workCompanyIds[0] ?? null;
 
     const { data: projectOverrideRows } = await db
       .schema("erp_map").from("user_projects")
@@ -333,6 +334,7 @@ export async function getUserScopeHandler(
         },
         scope: {
           parent_company: parentCompanyId ? companyMap.get(parentCompanyId) ?? null : null,
+          primary_company_id: primaryWorkCompanyId,
           work_companies: sortByCodeThenName(
             workCompanyIds
             .map((companyId) => companyMap.get(companyId))

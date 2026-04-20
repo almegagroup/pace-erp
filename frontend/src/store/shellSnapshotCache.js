@@ -9,6 +9,7 @@ const EMPTY_SHELL_PROFILE = Object.freeze({
 
 const EMPTY_RUNTIME_CONTEXT = Object.freeze({
   isAdmin: false,
+  workspaceMode: null,
   selectedCompanyId: "",
   currentCompany: null,
   availableCompanies: [],
@@ -34,6 +35,7 @@ function normalizeShellProfile(profile) {
 function normalizeRuntimeContext(context) {
   return {
     isAdmin: context?.isAdmin === true,
+    workspaceMode: context?.workspaceMode ?? null,
     selectedCompanyId: context?.selectedCompanyId ?? "",
     currentCompany: context?.currentCompany ?? null,
     availableCompanies: Array.isArray(context?.availableCompanies)
