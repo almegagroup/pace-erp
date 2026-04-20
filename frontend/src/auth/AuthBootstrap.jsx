@@ -335,6 +335,7 @@ export default function AuthBootstrap({ children }) {
         },
         runtimeContext: {
           isAdmin: contextData?.data?.is_admin === true,
+          workspaceMode: contextData?.data?.workspace_mode ?? null,
           selectedCompanyId: contextData?.data?.selected_company_id ?? "",
           currentCompany: contextData?.data?.current_company ?? null,
           availableCompanies: contextData?.data?.available_companies ?? [],
