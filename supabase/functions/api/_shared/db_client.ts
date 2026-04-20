@@ -8,7 +8,13 @@
  * Authority: Backend
  */
 
-export type DbQueryBuilder = {
+// DbQueryBuilder explicitly extends PromiseLike<{data, error}> so that TypeScript
+// recognises direct `await` of a query chain as valid (TS1320 / deno-ts(1320)).
+// The intersection keeps full structural compatibility with the real Supabase client
+// because PostgrestQueryBuilder is itself PromiseLike<PostgrestResponse<any>> and
+// TypeScript's method-parameter bivariance makes the two PromiseLike instantiations
+// structurally compatible.
+export type DbQueryBuilder = PromiseLike<{ data: any; error: any }> & {
   select: (...args: unknown[]) => DbQueryBuilder;
   insert: (...args: unknown[]) => DbQueryBuilder;
   upsert: (...args: unknown[]) => DbQueryBuilder;
@@ -23,7 +29,6 @@ export type DbQueryBuilder = {
   limit: (...args: unknown[]) => DbQueryBuilder;
   maybeSingle: (...args: unknown[]) => Promise<{ data: any; error: any }>;
   single: (...args: unknown[]) => Promise<{ data: any; error: any }>;
-  then?: PromiseLike<any>["then"];
 };
 
 export type DbSchemaClient = {
