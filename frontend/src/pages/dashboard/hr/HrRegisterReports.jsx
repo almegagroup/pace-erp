@@ -511,19 +511,29 @@ export function LeaveRegisterCriteriaPage() {
   );
 }
 
+function loadLeaveRegisterRows(criteria) {
+  return listLeaveRegister({
+    companyId: criteria.companyId,
+    fromDate: criteria.fromDate,
+    toDate: criteria.toDate,
+  });
+}
+
+function loadOutWorkRegisterRows(criteria) {
+  return listOutWorkRegister({
+    companyId: criteria.companyId,
+    fromDate: criteria.fromDate,
+    toDate: criteria.toDate,
+  });
+}
+
 export function LeaveRegisterResultsPage() {
   return (
     <RegisterResultsPage
       kind="leave"
       title="Leave Register Report"
       criteriaPath="/dashboard/hr/leave/register"
-      loader={(criteria) =>
-        listLeaveRegister({
-          companyId: criteria.companyId,
-          fromDate: criteria.fromDate,
-          toDate: criteria.toDate,
-        })
-      }
+      loader={loadLeaveRegisterRows}
     />
   );
 }
@@ -545,13 +555,7 @@ export function OutWorkRegisterResultsPage() {
       kind="outWork"
       title="Out Work Register Report"
       criteriaPath="/dashboard/hr/out-work/register"
-      loader={(criteria) =>
-        listOutWorkRegister({
-          companyId: criteria.companyId,
-          fromDate: criteria.fromDate,
-          toDate: criteria.toDate,
-        })
-      }
+      loader={loadOutWorkRegisterRows}
     />
   );
 }
