@@ -511,20 +511,22 @@ export function LeaveRegisterCriteriaPage() {
   );
 }
 
-function loadLeaveRegisterRows(criteria) {
-  return listLeaveRegister({
+async function loadLeaveRegisterRows(criteria) {
+  const data = await listLeaveRegister({
     companyId: criteria.companyId,
     fromDate: criteria.fromDate,
     toDate: criteria.toDate,
   });
+  return Array.isArray(data?.requests) ? data.requests : [];
 }
 
-function loadOutWorkRegisterRows(criteria) {
-  return listOutWorkRegister({
+async function loadOutWorkRegisterRows(criteria) {
+  const data = await listOutWorkRegister({
     companyId: criteria.companyId,
     fromDate: criteria.fromDate,
     toDate: criteria.toDate,
   });
+  return Array.isArray(data?.requests) ? data.requests : [];
 }
 
 export function LeaveRegisterResultsPage() {
