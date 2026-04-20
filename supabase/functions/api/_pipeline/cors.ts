@@ -15,7 +15,7 @@
 import { recordSecurityEvent } from "../_security/security_events.ts";
 
 const ALLOWED_CORS_HEADERS =
-  "Content-Type, Authorization, X-Requested-With, x-erp-window-token";
+  "Content-Type, Authorization, X-Requested-With, x-erp-window-token, x-company-id";
 
 
 const allowedEnv =
