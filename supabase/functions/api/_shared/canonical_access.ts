@@ -205,7 +205,7 @@ export async function listAvailableWorkContexts(
 
   for (const row of ((data ?? []) as UserWorkContextJoinRow[])
     .map((item) => item.work_context)
-    .filter(Boolean)) {
+    .filter((r): r is NonNullable<typeof r> => r !== null)) {
     if (row.is_active !== true || deduped.has(row.work_context_id)) {
       continue;
     }
