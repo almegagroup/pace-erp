@@ -10,6 +10,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { buildRlsContextHeaders } from "./context_headers.ts";
 import type { ContextResolution } from "../_pipeline/context.ts";
+import type { DbClient } from "./db_client.ts";
 
 /* --------------------------------------------------
  * ENV RESOLUTION (Deno + Node compatible)
@@ -37,7 +38,7 @@ if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
  * BASE SERVICE ROLE CLIENT
  * -------------------------------------------------- */
 
-export const serviceRoleClient = createClient(
+export const serviceRoleClient: DbClient = createClient(
   SUPABASE_URL,
   SERVICE_ROLE_KEY,
   {
@@ -61,7 +62,7 @@ export function assertServiceRole(): void {
  * (RLS context injection)
  * -------------------------------------------------- */
 
-export function getServiceRoleClientWithContext(ctx: ContextResolution) {
+export function getServiceRoleClientWithContext(ctx: ContextResolution): DbClient {
   let headers: Record<string, string>;
 
   // 🔥 1️⃣ HARD FAIL — UNRESOLVED CONTEXT

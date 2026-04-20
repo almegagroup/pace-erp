@@ -19,6 +19,7 @@ import {
 import {
   rebuildAclSessionMenuSnapshot,
   rebuildAdminSessionMenuSnapshot,
+  rebuildGlobalAclMenuSnapshot,
 } from "../../_shared/acl_runtime.ts";
 
 /* =========================================================
@@ -28,8 +29,9 @@ import {
 interface MenuHandlerCtx {
   context: ContextResolution;
   auth_user_id: string;
-  session_id: string;  
+  session_id: string;
   request_id: string;
+  workspace_mode: "SINGLE" | "MULTI" | null;
 }
 
 /* =========================================================
@@ -41,16 +43,16 @@ export async function meMenuHandler(
   ctx: MenuHandlerCtx
 ): Promise<Response> {
 
-  const { context, auth_user_id, session_id, request_id } = ctx;
+  const { context, auth_user_id, session_id, request_id, workspace_mode } = ctx;
   if (!session_id) {
-  return errorResponse(
-    "SESSION_ID_MISSING",
-    "Session ID not provided",
-    request_id,
-    "NONE",
-    500
-  );
-}
+    return errorResponse(
+      "SESSION_ID_MISSING",
+      "Session ID not provided",
+      request_id,
+      "NONE",
+      500
+    );
+  }
   const reqStart = performance.now();
 
   // --------------------------------------------------
@@ -70,9 +72,15 @@ export async function meMenuHandler(
   const resolvedWorkContextId =
     resolvedContext.isAdmin === true ? null : resolvedContext.workContextId ?? null;
 
-  
-
-  const universe = resolvedContext.isAdmin === true ? "SA" : "ACL";
+  // Universe selection:
+  //   SA/GA admin  → "SA"
+  //   Type 2 MULTI → "GLOBAL_ACL"  (union of all companies, navigation only)
+  //   Type 1 SINGLE → "ACL"        (single company + work context)
+  const universe = resolvedContext.isAdmin === true
+    ? "SA"
+    : workspace_mode === "MULTI"
+      ? "GLOBAL_ACL"
+      : "ACL";
 
 console.log("MENU_CONTEXT", {
   request_id,
@@ -94,6 +102,8 @@ console.log("MENU_CONTEXT", {
   try {
     if (resolvedContext.isAdmin) {
       await rebuildAdminSessionMenuSnapshot(db, auth_user_id, session_id);
+    } else if (universe === "GLOBAL_ACL") {
+      await rebuildGlobalAclMenuSnapshot(db, auth_user_id, session_id);
     } else if (resolvedContext.companyId && resolvedWorkContextId) {
       await rebuildAclSessionMenuSnapshot(
         db,
@@ -113,8 +123,10 @@ console.log("MENU_CONTEXT", {
       .eq("session_id", session_id)
       .eq("universe", universe);
 
-    // ACL → company বাধ্যতামূলক
-    if (!resolvedContext.isAdmin) {
+    // ACL → company + work_context mandatory
+    // GLOBAL_ACL → no company filter (company_id is NULL in snapshot)
+    // SA → no filters (already handled by universe)
+    if (!resolvedContext.isAdmin && universe === "ACL") {
       if (!resolvedContext.companyId) {
         return errorResponse(
           "INVALID_CONTEXT",
@@ -124,8 +136,6 @@ console.log("MENU_CONTEXT", {
           500
         );
       }
-
-     
 
       query = query
         .eq("company_id", resolvedContext.companyId)

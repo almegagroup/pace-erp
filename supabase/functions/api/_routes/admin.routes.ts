@@ -59,6 +59,7 @@ import { getUserScopeHandler } from "../_core/admin/user/get_user_scope.handler.
 import { updateUserScopeHandler } from "../_core/admin/user/update_user_scope.handler.ts";
 import { updateUserStateHandler } from "../_core/admin/user/update_user_state.handler.ts";
 import { updateUserRoleHandler } from "../_core/admin/user/update_user_role.handler.ts";
+import { setPrimaryCompanyHandler } from "../_core/admin/user/set_primary_company.handler.ts";
 
 import { listAuditLogsHandler } from "../_core/admin/audit/list_audit_logs.handler.ts";
 import { logAdminAction } from "../_core/audit/log_admin_action.ts";
@@ -595,6 +596,14 @@ export async function dispatchAdminRoutes(
         request_id: requestId,
         auth_user_id: session.authUserId,
         roleCode: context.roleCode,
+      });
+      break;
+
+    case "PATCH:/api/admin/users/scope/primary-company":
+      response = await setPrimaryCompanyHandler(req, {
+        context,
+        request_id: requestId,
+        auth_user_id: session.authUserId,
       });
       break;
 

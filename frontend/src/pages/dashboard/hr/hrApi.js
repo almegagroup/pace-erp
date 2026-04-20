@@ -112,16 +112,19 @@ async function apiJson(path, options = {}, fallbackCode = "REQUEST_FAILED", fall
   return json.data;
 }
 
-async function apiWorkflowDecision(payload) {
+async function apiWorkflowDecision(payload, companyId = null) {
   let response;
+
+  const headers = { "Content-Type": "application/json" };
+  if (companyId) {
+    headers["x-company-id"] = companyId;
+  }
 
   try {
     response = await fetch(`${import.meta.env.VITE_API_BASE}/api/workflow/decision`, {
       method: "POST",
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(payload),
     });
   } catch (error) {
@@ -365,9 +368,15 @@ export async function listOutWorkRegister(filters = {}) {
   );
 }
 
-export async function submitWorkflowDecision(requestId, decision) {
-  return apiWorkflowDecision({
-    request_id: requestId,
-    decision,
-  });
+/**
+ * Submit an approval/rejection decision for a workflow request.
+ * @param {string} requestId
+ * @param {"APPROVED"|"REJECTED"} decision
+ * @param {string|null} [companyId] — required for MULTI (Type 2) users; send the request's parent_company_id
+ */
+export async function submitWorkflowDecision(requestId, decision, companyId = null) {
+  return apiWorkflowDecision(
+    { request_id: requestId, decision },
+    companyId,
+  );
 }

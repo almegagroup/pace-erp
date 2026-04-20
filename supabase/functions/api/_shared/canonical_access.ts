@@ -8,9 +8,7 @@
  * Authority: Backend
  */
 
-import { createClient } from "@supabase/supabase-js";
-
-type DbClient = ReturnType<typeof createClient>;
+import type { DbClient } from "./db_client.ts";
 
 export type CanonicalAccessProfile = {
   userCode: string;
@@ -25,6 +23,29 @@ export type WorkContextOption = {
   work_context_name: string;
   description: string | null;
   department_id: string | null;
+};
+
+type UserWorkContextJoinRow = {
+  work_context_id: string;
+  company_id: string;
+  work_context: {
+    work_context_id: string;
+    company_id: string;
+    work_context_code: string;
+    work_context_name: string;
+    description: string | null;
+    department_id: string | null;
+    is_active: boolean;
+  } | null;
+};
+
+type DefaultWorkContextJoinRow = {
+  work_context_id: string;
+  work_context: {
+    work_context_id: string;
+    work_context_code: string;
+    is_active: boolean;
+  } | null;
 };
 
 export async function resolveCanonicalAccessProfile(
@@ -182,7 +203,9 @@ export async function listAvailableWorkContexts(
 
   const deduped = new Map<string, WorkContextOption>();
 
-  for (const row of (data ?? []).map((item) => item.work_context).filter(Boolean)) {
+  for (const row of ((data ?? []) as UserWorkContextJoinRow[])
+    .map((item) => item.work_context)
+    .filter(Boolean)) {
     if (row.is_active !== true || deduped.has(row.work_context_id)) {
       continue;
     }
@@ -231,8 +254,8 @@ export async function resolveDefaultWorkContextId(
     throw new Error("WORK_CONTEXT_RESOLUTION_FAILED");
   }
 
-  const resolved = data.find((row) => {
-    const wc = row.work_context as { work_context_id: string; work_context_code: string; is_active: boolean } | null;
+  const resolved = ((data ?? []) as DefaultWorkContextJoinRow[]).find((row) => {
+    const wc = row.work_context;
     return wc?.is_active === true && !wc.work_context_code?.startsWith("DEPT_");
   });
   return resolved?.work_context_id ?? null;

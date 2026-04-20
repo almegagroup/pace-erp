@@ -121,6 +121,7 @@ async function readRuntimeContext(
 
   return {
     is_admin: activeSession.roleCode === "SA" || activeSession.roleCode === "GA",
+    workspace_mode: activeSession.workspaceMode ?? "SINGLE",
     selected_company_id: selectedCompanyId,
     available_companies: availableCompanies,
     available_work_contexts: availableWorkContexts,
@@ -303,23 +304,28 @@ export async function updateMeContextHandler(
     selectedWorkContextId,
   };
 
-  try {
-    await rebuildAclSessionMenuSnapshot(
-      serviceRoleClient,
-      session.authUserId,
-      selectedCompanyId,
-      selectedWorkContextId,
-      session.sessionId,
-    );
-
-  } catch (error) {
-    console.error("ME_CONTEXT_SNAPSHOT_REBUILD_FAILED", {
-      request_id: requestId,
-      auth_user_id: session.authUserId,
-      company_id: selectedCompanyId,
-      work_context_id: selectedWorkContextId,
-      error: error instanceof Error ? error.message : "ME_CONTEXT_SNAPSHOT_REBUILD_FAILED",
-    });
+  // Type 2 (MULTI) users: POST /api/me/context saves preference hint only.
+  // Their navigation menu is served from the GLOBAL_ACL snapshot built at login.
+  // Rebuilding an ACL snapshot here would overwrite the GLOBAL_ACL with a
+  // single-company view — incorrect for multi-company navigation.
+  if (session.workspaceMode !== "MULTI") {
+    try {
+      await rebuildAclSessionMenuSnapshot(
+        serviceRoleClient,
+        session.authUserId,
+        selectedCompanyId,
+        selectedWorkContextId,
+        session.sessionId,
+      );
+    } catch (error) {
+      console.error("ME_CONTEXT_SNAPSHOT_REBUILD_FAILED", {
+        request_id: requestId,
+        auth_user_id: session.authUserId,
+        company_id: selectedCompanyId,
+        work_context_id: selectedWorkContextId,
+        error: error instanceof Error ? error.message : "ME_CONTEXT_SNAPSHOT_REBUILD_FAILED",
+      });
+    }
   }
 
   try {

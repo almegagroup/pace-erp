@@ -25,6 +25,7 @@ export type SessionResolution =
       roleCode: string;
       selectedCompanyId: string | null;
       selectedWorkContextId: string | null;
+      workspaceMode: "SINGLE" | "MULTI" | null;
       clusterId: string | null;
       clusterWindowToken: string | null;
       created_at: string;
@@ -80,7 +81,7 @@ export async function stepSession(
     .schema("erp_core")
     .from("sessions")
     .select(
-      "session_id, auth_user_id, role_code, selected_company_id, selected_work_context_id, status, cluster_id, created_at, last_seen_at, expires_at"
+      "session_id, auth_user_id, role_code, selected_company_id, selected_work_context_id, workspace_mode, status, cluster_id, created_at, last_seen_at, expires_at"
     )
     .eq("session_id", sessionId)
     .single();
@@ -184,6 +185,12 @@ export async function stepSession(
     return { status: "REVOKED", action: "LOGOUT" };
   }
 
+  const rawWorkspaceMode = data.workspace_mode;
+  const workspaceMode: "SINGLE" | "MULTI" | null =
+    rawWorkspaceMode === "SINGLE" || rawWorkspaceMode === "MULTI"
+      ? rawWorkspaceMode
+      : null;
+
   return {
     status: "ACTIVE",
     sessionId,
@@ -191,6 +198,7 @@ export async function stepSession(
     roleCode,
     selectedCompanyId: data.selected_company_id ?? null,
     selectedWorkContextId: data.selected_work_context_id ?? null,
+    workspaceMode,
     clusterId: data.cluster_id ?? null,
     clusterWindowToken,
     created_at: data.created_at,

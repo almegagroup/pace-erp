@@ -35,6 +35,7 @@ export type PipelineSession = {
   roleCode: string;
   selectedCompanyId?: string | null;
   selectedWorkContextId?: string | null;
+  workspaceMode?: "SINGLE" | "MULTI" | null;
 };
 
 function sanitizeContextInput(): void {
@@ -105,11 +106,61 @@ async function resolveContextFromDb(
   session: PipelineSession,
 ): Promise<ContextResolution> {
   const authUserId = session.authUserId;
+
+  // -------------------------------------------------------
+  // Type 2 (MULTI) — company comes from x-company-id header
+  // -------------------------------------------------------
+  // If the header is present and the user is MULTI:
+  //   → validate membership strictly, NO fallback to session
+  //   → if company not accessible → UNRESOLVED → 403
+  // If the header is absent:
+  //   → fall through to existing session-based resolution
+  // -------------------------------------------------------
+  if (session.workspaceMode === "MULTI") {
+    const headerCompanyId = req.headers.get("x-company-id")?.trim() ?? null;
+
+    if (headerCompanyId) {
+      const { data: membership, error: membershipError } = await serviceRoleClient
+        .schema("erp_map")
+        .from("user_companies")
+        .select("company_id")
+        .eq("auth_user_id", authUserId)
+        .eq("company_id", headerCompanyId)
+        .maybeSingle();
+
+      if (membershipError) {
+        return unresolved();
+      }
+
+      if (!membership) {
+        // Company specified but not accessible — hard deny, no fallback
+        return unresolved();
+      }
+
+      // Company validated — continue resolution with this company
+      return await resolveContextForCompany(req, session, headerCompanyId);
+    }
+  }
+
+  // SINGLE users or MULTI without x-company-id header:
+  // resolve company from session (existing behavior)
   const companyId = await resolveCompanyId(authUserId, session.selectedCompanyId);
 
   if (!companyId) {
     return unresolved();
   }
+
+  return await resolveContextForCompany(req, session, companyId);
+}
+
+// Shared resolution path once companyId is validated.
+// Used by both SINGLE (session-resolved) and MULTI (header-resolved) paths.
+async function resolveContextForCompany(
+  req: Request,
+  session: PipelineSession,
+  companyId: string,
+): Promise<ContextResolution> {
+  const authUserId = session.authUserId;
 
   const { data: workContextRows, error: workContextError } = await serviceRoleClient
     .schema("erp_acl")
@@ -141,15 +192,9 @@ async function resolveContextFromDb(
     department_id: string | null;
     is_active: boolean;
   } | null => {
-    if (!value) {
-      return null;
-    }
-
+    if (!value) return null;
     const row = Array.isArray(value) ? value[0] : value;
-    if (!row || typeof row !== "object") {
-      return null;
-    }
-
+    if (!row || typeof row !== "object") return null;
     return row as {
       work_context_id: string;
       company_id: string;

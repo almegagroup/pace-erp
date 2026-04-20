@@ -8,7 +8,11 @@
  * Authority: Backend
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { DbClient } from "./db_client.ts";
+import {
+  listCanonicalCompanyIds,
+  resolveDefaultWorkContextId,
+} from "./canonical_access.ts";
 
 type MenuSnapshotRow = {
   menu_code: string;
@@ -22,7 +26,7 @@ type MenuSnapshotRow = {
 };
 
 export async function getActiveAclVersionIdForCompany(
-  db: SupabaseClient,
+  db: DbClient,
   companyId: string,
 ): Promise<string> {
   const { data, error } = await db
@@ -41,7 +45,7 @@ export async function getActiveAclVersionIdForCompany(
 }
 
 export async function ensureAclVersionSourceCaptured(
-  db: SupabaseClient,
+  db: DbClient,
   aclVersionId: string,
   companyId: string,
   actorUserId?: string | null,
@@ -80,7 +84,7 @@ export async function ensureAclVersionSourceCaptured(
 }
 
 export async function rebuildAdminSessionMenuSnapshot(
-  db: SupabaseClient,
+  db: DbClient,
   authUserId: string,
   sessionId?: string | null,
 ): Promise<MenuSnapshotRow[]> {
@@ -148,7 +152,7 @@ export async function rebuildAdminSessionMenuSnapshot(
 }
 
 export async function rebuildAclSessionMenuSnapshot(
-  db: SupabaseClient,
+  db: DbClient,
   authUserId: string,
   companyId: string,
   workContextId: string,
@@ -254,4 +258,78 @@ export async function rebuildAclSessionMenuSnapshot(
   }
 
   return menuRows ?? [];
+}
+
+export async function rebuildGlobalAclMenuSnapshot(
+  db: DbClient,
+  authUserId: string,
+  sessionId: string,
+): Promise<MenuSnapshotRow[]> {
+  // 1. Collect all active canonical companies for this user
+  const companyIds = await listCanonicalCompanyIds(db, authUserId);
+
+  if (companyIds.length === 0) return [];
+
+  // 2. For each company: resolve default work context → build ACL menu snapshot
+  //    (no sessionId passed — we don't store per-company session snapshots here)
+  //    Union all results, deduplicate by menu_code (first occurrence wins)
+  const seenMenuCodes = new Set<string>();
+  const unionMenuRows: MenuSnapshotRow[] = [];
+
+  for (const companyId of companyIds) {
+    try {
+      const workContextId = await resolveDefaultWorkContextId(db, authUserId, companyId);
+      if (!workContextId) continue;
+
+      const menuRows = await rebuildAclSessionMenuSnapshot(
+        db,
+        authUserId,
+        companyId,
+        workContextId,
+        // No sessionId — builds erp_menu.menu_snapshot only, no session cache write
+      );
+
+      for (const row of menuRows) {
+        if (!seenMenuCodes.has(row.menu_code)) {
+          seenMenuCodes.add(row.menu_code);
+          unionMenuRows.push(row);
+        }
+      }
+    } catch {
+      // One company failing must not block login for all others
+      continue;
+    }
+  }
+
+  // 3. Delete any existing GLOBAL_ACL snapshot for this session
+  const { error: deleteError } = await db
+    .schema("erp_cache")
+    .from("session_menu_snapshot")
+    .delete()
+    .eq("session_id", sessionId)
+    .eq("universe", "GLOBAL_ACL");
+
+  if (deleteError) {
+    throw new Error("GLOBAL_ACL_SESSION_MENU_SNAPSHOT_DELETE_FAILED");
+  }
+
+  // 4. Insert the unified snapshot
+  const { error: insertError } = await db
+    .schema("erp_cache")
+    .from("session_menu_snapshot")
+    .insert({
+      session_id: sessionId,
+      auth_user_id: authUserId,
+      universe: "GLOBAL_ACL",
+      company_id: null,
+      work_context_id: null,
+      snapshot_version: 0,
+      menu_json: unionMenuRows,
+    });
+
+  if (insertError) {
+    throw new Error("GLOBAL_ACL_SESSION_MENU_SNAPSHOT_INSERT_FAILED");
+  }
+
+  return unionMenuRows;
 }

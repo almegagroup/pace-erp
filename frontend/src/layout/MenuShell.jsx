@@ -215,6 +215,7 @@ async function fetchLiveRuntimeSnapshot() {
   return {
     runtimeContext: {
       isAdmin: contextJson.data.is_admin === true,
+      workspaceMode: contextJson.data.workspace_mode ?? null,
       selectedCompanyId: contextJson.data.selected_company_id ?? "",
       currentCompany: contextJson.data.current_company ?? null,
       availableCompanies: contextJson.data.available_companies ?? [],
@@ -257,6 +258,25 @@ export default function MenuShell() {
     active: false,
     label: "",
   });
+  const [modeBHintDismissed, setModeBHintDismissed] = useState(() => {
+    try {
+      return window.localStorage.getItem("pace.erp.hint.modeb.v1") === "dismissed";
+    } catch {
+      return false;
+    }
+  });
+
+  const showModeBHint =
+    runtimeContext?.workspaceMode === "MULTI" && !modeBHintDismissed;
+
+  const dismissModeBHint = () => {
+    try {
+      window.localStorage.setItem("pace.erp.hint.modeb.v1", "dismissed");
+    } catch {
+      // Best-effort only.
+    }
+    setModeBHintDismissed(true);
+  };
 
   const menuButtonRefs = useRef([]);
   const drawerButtonRefs = useRef([]);
@@ -325,9 +345,12 @@ export default function MenuShell() {
   const availableWorkContexts = Array.isArray(runtimeContext?.availableWorkContexts)
     ? runtimeContext.availableWorkContexts
     : [];
+  // MULTI (Type 2) users see the global menu — no shell company switcher.
+  // They select company per transaction via in-page selectors.
   const showCompanySwitcher =
     shellProfile?.roleCode !== "SA" &&
     shellProfile?.roleCode !== "GA" &&
+    runtimeContext?.workspaceMode !== "MULTI" &&
     availableCompanies.length > 1;
   const showWorkContextSwitcher =
     shellProfile?.roleCode !== "SA" &&
@@ -516,6 +539,7 @@ export default function MenuShell() {
 
         setRuntimeContext({
           isAdmin: contextJson.data.is_admin === true,
+          workspaceMode: contextJson.data.workspace_mode ?? null,
           selectedCompanyId: contextJson.data.selected_company_id ?? "",
           currentCompany: contextJson.data.current_company ?? null,
           availableCompanies: contextJson.data.available_companies ?? [],
@@ -637,6 +661,7 @@ export default function MenuShell() {
 
         setRuntimeContext({
           isAdmin: contextJson.data.is_admin === true,
+          workspaceMode: contextJson.data.workspace_mode ?? null,
           selectedCompanyId: contextJson.data.selected_company_id ?? "",
           currentCompany: contextJson.data.current_company ?? null,
           availableCompanies: contextJson.data.available_companies ?? [],
@@ -1666,6 +1691,22 @@ export default function MenuShell() {
           {runtimeContextError ? (
             <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
               <p>{runtimeContextError}</p>
+            </div>
+          ) : null}
+
+          {showModeBHint ? (
+            <div className="flex items-start justify-between gap-3 border-b border-sky-200 bg-sky-50 px-4 py-2">
+              <p className="text-sm text-sky-800">
+                <span className="font-semibold">Multi-company access enabled.</span>{" "}
+                Your menu covers all assigned companies. Use the company selector on each transaction to work across companies.
+              </p>
+              <button
+                type="button"
+                onClick={dismissModeBHint}
+                className="shrink-0 border border-sky-300 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 hover:bg-sky-50"
+              >
+                Dismiss
+              </button>
             </div>
           ) : null}
         </div>

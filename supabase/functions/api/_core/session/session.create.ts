@@ -25,6 +25,7 @@ export async function createSession(
     device_id: string;
     device_summary: string;
   },
+  workspaceMode?: "SINGLE" | "MULTI" | null,
 ): Promise<{ sessionId: string; clusterId: string }> {
   assertRlsEnabled();
 
@@ -83,6 +84,7 @@ export async function createSession(
       role_code: roleCode,
       selected_company_id: selectedCompanyId,
       selected_work_context_id: selectedWorkContextId,
+      workspace_mode: workspaceMode ?? null,
       status: "ACTIVE",
       created_at: nowIso,
       last_seen_at: nowIso,
