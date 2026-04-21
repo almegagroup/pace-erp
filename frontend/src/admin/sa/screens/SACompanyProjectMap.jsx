@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
@@ -76,8 +77,6 @@ export default function SACompanyProjectMap() {
   const [searchParams] = useSearchParams();
   const initialProjectId = searchParams.get("project_id") ?? "";
   const actionRefs = useRef([]);
-  const projectRefs = useRef([]);
-  const companyRefs = useRef([]);
   const projectSearchRef = useRef(null);
   const companySearchRef = useRef(null);
   const [projects, setProjects] = useState([]);
@@ -187,6 +186,9 @@ export default function SACompanyProjectMap() {
 
   const mappedCompanies = companies.filter((row) => row.is_mapped);
 
+  const { getRowProps: getProjectRowProps } = useErpListNavigation(filteredProjects);
+  const { getRowProps: getCompanyRowProps } = useErpListNavigation(filteredCompanies);
+
   useErpScreenHotkeys({
     refresh: {
       disabled: loading,
@@ -288,7 +290,6 @@ export default function SACompanyProjectMap() {
     <ErpScreenScaffold
       eyebrow="Project Mapping"
       title="Company Project Map"
-      description="Attach reusable projects to business companies only after the project itself is stable. Mapping is where a project enters operational scope."
       actions={[
         {
           key: "project-manage",
@@ -331,44 +332,11 @@ export default function SACompanyProjectMap() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "projects",
-          label: "Projects",
-          value: loading ? "..." : String(projects.length),
-          tone: "sky",
-          caption: "Reusable projects available for operational mapping.",
-        },
-        {
-          key: "mapped",
-          label: "Mapped Companies",
-          value: projectDetail ? String(mappedCompanies.length) : "0",
-          tone: "emerald",
-          caption: projectDetail
-            ? "Business companies currently attached to the selected project."
-            : "Select a project to inspect mappings.",
-        },
-        {
-          key: "available",
-          label: "Available Companies",
-          value: projectDetail ? String(companies.length) : "0",
-          tone: "amber",
-          caption: "Business companies eligible for this project universe.",
-        },
-        {
-          key: "state",
-          label: "Project State",
-          value: projectDetail?.status ?? "N/A",
-          tone: "slate",
-          caption: "Lifecycle should be stable before broad company rollout.",
-        },
-      ]}
     >
       <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <ErpSectionCard
           eyebrow="Projects"
           title="Choose project"
-          description="Project selection happens on the left; company assignment happens on the right."
         >
           <div className="grid gap-4">
             <QuickFilterInput
@@ -395,18 +363,9 @@ export default function SACompanyProjectMap() {
                   return (
                     <button
                       key={project.id}
-                      ref={(element) => {
-                        projectRefs.current[index] = element;
-                      }}
+                      {...getProjectRowProps(index)}
                       type="button"
                       onClick={() => setSelectedProjectId(project.id)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: projectRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
                       className={`w-full border-b border-slate-300 px-4 py-3 text-left text-sm transition last:border-b-0 ${
                         isSelected
                           ? "bg-sky-50 text-slate-900"
@@ -435,7 +394,6 @@ export default function SACompanyProjectMap() {
                 ? `${projectDetail.project_code} | ${projectDetail.project_name}`
                 : "No project selected"
             }
-            description="Mapping does not change the project master itself. It only decides which business companies can operate inside this project universe."
           >
             {projectDetail ? (
               <div className="grid gap-4 md:grid-cols-2">
@@ -460,7 +418,6 @@ export default function SACompanyProjectMap() {
           <ErpSectionCard
             eyebrow="Companies"
             title="Business company rollout"
-            description="Map or unmap companies one by one. A project stays reusable; this surface only decides where it is operationally allowed."
           >
             <div className="grid gap-4">
               <QuickFilterInput
@@ -484,16 +441,7 @@ export default function SACompanyProjectMap() {
                   {filteredCompanies.map((company, index) => (
                     <div
                       key={company.id}
-                      ref={(element) => {
-                        companyRefs.current[index] = element;
-                      }}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: companyRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
+                      {...getCompanyRowProps(index)}
                       className="border-b border-slate-300 bg-white px-4 py-3 last:border-b-0"
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">

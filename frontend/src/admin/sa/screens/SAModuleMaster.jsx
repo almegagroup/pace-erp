@@ -6,11 +6,11 @@ import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
 import {
-  ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
@@ -215,7 +215,6 @@ export default function SAModuleMaster() {
   const projectRef = useRef(null);
   const moduleCodeRef = useRef(null);
   const searchInputRef = useRef(null);
-  const rowRefs = useRef([]);
   const [projects, setProjects] = useState([]);
   const [modules, setModules] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -461,6 +460,7 @@ export default function SAModuleMaster() {
   }, [filteredModules, selectedModuleId]);
 
   const modulePagination = useErpPagination(filteredModules, 10);
+  const { getRowProps } = useErpListNavigation(modulePagination.pageItems);
 
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
@@ -653,51 +653,13 @@ export default function SAModuleMaster() {
     <ErpEntryFormTemplate
       eyebrow="Module Master"
       title="Module Master Manage"
-      description="Create project-bound global modules here. Company rollout happens later from the dedicated company module map surface, and module approval counts stay between 1 and 3."
       actions={topActions}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "projects",
-          label: "Active Projects",
-          value: loading ? "..." : String(activeProjects.length),
-          tone: "sky",
-          caption: "Only active projects should receive new modules.",
-        },
-        {
-          key: "modules",
-          label: "Modules",
-          value: loading ? "..." : String(modules.length),
-          tone: "emerald",
-          caption: "Global module rows currently registered under reusable projects.",
-        },
-        {
-          key: "approval",
-          label: "Approval Required",
-          value: loading ? "..." : String(modules.filter((row) => row.approval_required).length),
-          tone: "amber",
-          caption: "Modules carrying intrinsic approval policy at the registry layer.",
-        },
-        {
-          key: "mapped-companies",
-          label: "Selected Rollout",
-          value: selectedModule ? String(selectedModule.mapped_company_count ?? 0) : "0",
-          tone: "slate",
-          caption: selectedModule
-            ? "Companies currently using the selected module."
-            : "Select a module to inspect rollout count.",
-        },
-      ]}
       formEyebrow={editorMode === "edit" ? "Edit" : "Create"}
       formTitle={editorMode === "edit" ? "Edit selected module" : "Create a new project module"}
-      formDescription={
-        editorMode === "edit"
-          ? "Module code stays fixed after creation. You can change the display name and intrinsic approval law here."
-          : "Each module belongs to one project. Companies can only receive this module after the project itself has been mapped to them."
-      }
       formContent={
         <div ref={formContainerRef} className="grid gap-3">
           <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
@@ -832,106 +794,6 @@ export default function SAModuleMaster() {
           </div>
         </div>
       }
-      sideContent={
-        <>
-          <ErpSectionCard
-            eyebrow="Search"
-            title="Module quick filter"
-            description="Filter the registered module inventory without leaving the create form."
-          >
-            <QuickFilterInput
-              label="Find Module"
-              value={searchQuery}
-              onChange={setSearchQuery}
-              inputRef={searchInputRef}
-              placeholder="Filter by module code, module name, or project"
-              hint="Alt+Shift+F focuses this filter."
-            />
-          </ErpSectionCard>
-
-          <ErpSectionCard
-            eyebrow="Selected"
-            title="Module preview"
-            description="Use this read model to confirm intrinsic approval law before rolling the module out to companies."
-          >
-            <div className="grid gap-3">
-              <ErpFieldPreview
-                label="Module"
-                value={
-                  selectedModule
-                    ? `${selectedModule.module_code} | ${selectedModule.module_name}`
-                    : "No module selected"
-                }
-                caption={
-                  selectedModule
-                    ? `${selectedModule.project_code} | ${selectedModule.project_name}`
-                    : "Select a module from the inventory."
-                }
-                tone={selectedModule ? "success" : "default"}
-              />
-              <ErpFieldPreview
-                label="Approval"
-                value={
-                  selectedModule
-                    ? selectedModule.approval_required
-                      ? "Required"
-                      : "Not required"
-                    : "N/A"
-                }
-                caption={selectedModule ? formatApprovalCaption(selectedModule) : "No module selected."}
-              />
-              <ErpFieldPreview
-                label="Mapped Companies"
-                  value={selectedModule ? String(selectedModule.mapped_company_count ?? 0) : "0"}
-                  caption="Rollout count across company-module map."
-              />
-              {selectedModule ? (
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    disabled={saving}
-                    onClick={() => loadSelectedModuleIntoEditor(selectedModule)}
-                    className="border border-cyan-300 bg-white px-4 py-2 text-sm font-semibold text-cyan-700"
-                  >
-                    Edit Selected Module
-                  </button>
-
-                  {selectedModule.is_active ? (
-                    <button
-                      type="button"
-                      disabled={saving}
-                      onClick={() => void handleStateChange("INACTIVE")}
-                      className="border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700"
-                    >
-                      Inactivate Module
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={saving}
-                      onClick={() => void handleStateChange("ACTIVE")}
-                      className="border border-emerald-300 bg-white px-4 py-2 text-sm font-semibold text-emerald-700"
-                    >
-                      Activate Module
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    className="border border-sky-300 bg-white px-4 py-2 text-sm font-semibold text-sky-700"
-                    onClick={() => {
-                      openScreen("SA_COMPANY_MODULE_MAP", { mode: "replace" });
-                      navigate("/sa/acl/company-modules");
-                    }}
-                  >
-                    Open Company Module Map
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </ErpSectionCard>
-        </>
-      }
       bottomContent={
         <ErpSectionCard
           eyebrow="Module Inventory"
@@ -963,18 +825,9 @@ export default function SAModuleMaster() {
               {modulePagination.pageItems.map((row, index) => (
                 <button
                   key={row.module_id}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
+                  {...getRowProps(index)}
                   type="button"
                   onClick={() => setSelectedModuleId(row.module_id)}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: rowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
                   className={`w-full border-b border-slate-300 px-4 py-3 text-left text-sm transition last:border-b-0 ${
                     row.module_id === selectedModuleId
                       ? "bg-sky-50 text-slate-900"

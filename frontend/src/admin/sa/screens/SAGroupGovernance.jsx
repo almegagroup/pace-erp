@@ -5,6 +5,7 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -139,7 +140,6 @@ function companySearchValue(row) {
 export default function SAGroupGovernance() {
   const navigate = useNavigate();
   const topActionRefs = useRef([]);
-  const groupRefs = useRef([]);
   const createInputRef = useRef(null);
   const groupSearchRef = useRef(null);
   const companySearchRef = useRef(null);
@@ -198,6 +198,8 @@ export default function SAGroupGovernance() {
     return groups.filter((row) => groupSearchValue(row).includes(needle));
   }, [groupSearch, groups]);
 
+  const { getRowProps: getGroupRowProps } = useErpListNavigation(filteredGroups);
+
   useEffect(() => {
     if (filteredGroups.length === 0) {
       if (selectedGroupId !== null) {
@@ -237,18 +239,6 @@ export default function SAGroupGovernance() {
 
     return companies.filter((row) => String(row.group_id) === String(selectedGroup.id));
   }, [companies, selectedGroup]);
-
-  const metrics = useMemo(() => {
-    const activeGroups = groups.filter((row) => row.state === "ACTIVE").length;
-    const mappedCompanyCount = companies.filter((row) => row.group_id !== null).length;
-
-    return {
-      groups: groups.length,
-      activeGroups,
-      mappedCompanies: mappedCompanyCount,
-      unmappedCompanies: companies.length - mappedCompanyCount,
-    };
-  }, [groups, companies]);
 
   async function handleCreateGroup() {
     const name = normalize(groupDraft);
@@ -539,7 +529,6 @@ export default function SAGroupGovernance() {
     <ErpScreenScaffold
       eyebrow="SA Group Governance"
       title="Group Create, Manage, And Company Mapping"
-      description="Treat groups as a global master, then map business companies into that envelope without mixing this governance into company creation."
       notices={notices}
       actions={[
         {
@@ -576,32 +565,6 @@ export default function SAGroupGovernance() {
             }),
         },
       ]}
-      metrics={[
-        {
-          label: "Groups",
-          value: metrics.groups,
-          caption: "Global groups available for company mapping.",
-          tone: "sky",
-        },
-        {
-          label: "Active Groups",
-          value: metrics.activeGroups,
-          caption: "Groups ready for operational use.",
-          tone: "emerald",
-        },
-        {
-          label: "Mapped Companies",
-          value: metrics.mappedCompanies,
-          caption: "Business companies already placed into a group.",
-          tone: "amber",
-        },
-        {
-          label: "Unmapped Companies",
-          value: metrics.unmappedCompanies,
-          caption: "Companies still waiting for group assignment.",
-          tone: "rose",
-        },
-      ]}
       footerHints={[
         "ALT+R REFRESH",
         "ALT+S GROUP SEARCH",
@@ -614,7 +577,6 @@ export default function SAGroupGovernance() {
           <ErpSectionCard
             eyebrow="Create"
             title="Create Global Group"
-            description="Groups are global master records. They are not owned by a company."
           >
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
               <label className="grid gap-2">
@@ -644,7 +606,6 @@ export default function SAGroupGovernance() {
           <ErpSectionCard
             eyebrow="Inventory"
             title="Group Roster"
-            description="Pick a group to manage state and company assignments."
           >
             <label className="grid gap-2">
               <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -671,18 +632,9 @@ export default function SAGroupGovernance() {
                   return (
                     <button
                       key={group.id}
-                      ref={(element) => {
-                        groupRefs.current[index] = element;
-                      }}
+                      {...getGroupRowProps(index)}
                       type="button"
                       onClick={() => setSelectedGroupId(group.id)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: groupRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
                       className={`border px-4 py-3 text-left ${
                         selected
                           ? "border-sky-300 bg-sky-50 text-sky-900"
@@ -707,7 +659,6 @@ export default function SAGroupGovernance() {
           <ErpSectionCard
             eyebrow="Selected Group"
             title={selectedGroup ? `${selectedGroup.group_code} | ${selectedGroup.name}` : "Choose A Group"}
-            description="State, rename, and safe removal all happen here. Remove only works when no company is still mapped."
           >
             {selectedGroup ? (
               <>
@@ -786,9 +737,6 @@ export default function SAGroupGovernance() {
           <ErpSectionCard
             eyebrow="Mapping"
             title="Company To Group Mapping"
-            description={selectedGroup
-              ? `Map or move business companies into ${selectedGroup.group_code}.`
-              : "Select a group first, then map companies into it."}
           >
             <label className="grid gap-2">
               <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -868,7 +816,6 @@ export default function SAGroupGovernance() {
           <ErpSectionCard
             eyebrow="Selected Group"
             title="Mapped Company Read Model"
-            description="A compact read model of companies currently attached to the selected group."
           >
             {selectedGroup ? (
               mappedCompanies.length === 0 ? (

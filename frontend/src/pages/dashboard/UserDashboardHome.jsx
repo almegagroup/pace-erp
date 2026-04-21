@@ -340,7 +340,6 @@ export default function UserDashboardHome() {
     <ErpScreenScaffold
       eyebrow="ACL Workspace"
       title="Work Start"
-      description="This home page is a clean operator desk. Pick the company and work area in the shell, then open the exact task you need."
       notices={[
         {
           key: "acl-home-scope",
@@ -392,7 +391,6 @@ export default function UserDashboardHome() {
           <ErpSectionCard
             eyebrow="Current Scope"
             title="Operator Identity"
-            description="Department stays as identity. Company and work area decide where this session can operate right now."
           >
             <div className="grid gap-3 md:grid-cols-2">
               <ErpFieldPreview
@@ -426,7 +424,6 @@ export default function UserDashboardHome() {
           <ErpSectionCard
             eyebrow="Immediate Tasks"
             title="Open Work"
-            description="Start from the exact task instead of reading a dashboard."
           >
             <div className="grid gap-2">
               {quickTasks.map((action, index) => (
@@ -444,7 +441,6 @@ export default function UserDashboardHome() {
         <ErpSectionCard
           eyebrow="Available Workspaces"
           title="Open What ACL Allows"
-          description="These routes come from the current ACL snapshot and the selected company and work area."
         >
           <div className="grid gap-4">
             {groupedWorkspaces.length === 0 ? (

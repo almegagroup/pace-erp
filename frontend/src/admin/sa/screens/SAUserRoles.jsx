@@ -31,6 +31,7 @@ import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 
 const ROLE_COLUMN_DEFS = Object.freeze([
   { key: "user_code", label: "User ID" },
@@ -361,12 +362,8 @@ export default function SAUserRoles() {
     [roleFilteredUsers, searchQuery]
   );
 
-  const assignedCount = governableUsers.filter((user) => user.role_code).length;
-  const unassignedCount = governableUsers.filter((user) => !user.role_code).length;
-  const managerCount = governableUsers.filter((user) =>
-    ["L4_MANAGER", "L3_MANAGER", "L2_MANAGER", "L1_MANAGER"].includes(user.role_code)
-  ).length;
   const rolePagination = useErpPagination(filteredUsers, 10);
+  const { getRowProps } = useErpListNavigation(rolePagination.pageItems);
 
   useErpScreenCommands([
     {
@@ -512,39 +509,6 @@ export default function SAUserRoles() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "all-users",
-      label: "All Users",
-      value: loading ? "..." : String(governableUsers.length),
-      tone: "sky",
-      caption:
-        "Governable users visible for role assignment. The current operator is excluded.",
-    },
-    {
-      key: "assigned-users",
-      label: "Assigned",
-      value: loading ? "..." : String(assignedCount),
-      tone: "emerald",
-      caption: "Users that currently have a canonical ERP role assignment.",
-    },
-    {
-      key: "unassigned-users",
-      label: "Unassigned",
-      value: loading ? "..." : String(unassignedCount),
-      tone: "rose",
-      caption:
-        "Users missing an explicit role row and needing assignment attention.",
-    },
-    {
-      key: "manager-users",
-      label: "Managers",
-      value: loading ? "..." : String(managerCount),
-      tone: "amber",
-      caption: "Users currently placed in the manager tier of the role ladder.",
-    },
-  ];
-
   const roleFilterOptions = useMemo(
     () => [
       { key: "ALL", label: "All Roles" },
@@ -634,6 +598,7 @@ export default function SAUserRoles() {
               return (
                 <tr
                   key={user.auth_user_id}
+                  {...getRowProps(index)}
                   className="border-b border-slate-200 bg-white align-top"
                 >
                   {visibleColumns.map((column) => (
@@ -776,7 +741,6 @@ export default function SAUserRoles() {
               ]
             : []
         }
-        metrics={metrics}
         filterSection={filterSection}
         listSection={listSection}
       />

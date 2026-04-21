@@ -9,6 +9,7 @@ import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 
 async function readJsonSafe(response) {
   try {
@@ -87,7 +88,6 @@ function sortResources(rows) {
 export default function SAModuleResourceMap() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchRef = useRef(null);
   const [modules, setModules] = useState([]);
   const [resources, setResources] = useState([]);
@@ -170,6 +170,8 @@ export default function SAModuleResourceMap() {
     filteredResources.find((row) => row.resource_code === selectedResourceCode) ??
     filteredResources[0] ??
     null;
+
+  const { getRowProps } = useErpListNavigation(filteredResources);
 
   useEffect(() => {
     setTargetModuleCode(selectedResource?.owner_module_code ?? "");
@@ -259,17 +261,6 @@ export default function SAModuleResourceMap() {
       setSaving(false);
     }
   }
-
-  const metrics = useMemo(() => {
-    const assigned = resources.filter((row) => row.owner_module_code).length;
-
-    return {
-      resources: resources.length,
-      assigned,
-      unassigned: resources.length - assigned,
-      modules: modules.length,
-    };
-  }, [modules.length, resources]);
 
   useErpScreenCommands([
     {
@@ -377,32 +368,6 @@ export default function SAModuleResourceMap() {
             }),
         },
       ]}
-      metrics={[
-        {
-          label: "Published Pages",
-          value: loading ? "..." : metrics.resources,
-          caption: "Only ACL/business pages are eligible for module ownership.",
-          tone: "sky",
-        },
-        {
-          label: "Assigned",
-          value: loading ? "..." : metrics.assigned,
-          caption: "Published pages already owned by a module.",
-          tone: "emerald",
-        },
-        {
-          label: "Unassigned",
-          value: loading ? "..." : metrics.unassigned,
-          caption: "Published pages still waiting for module ownership.",
-          tone: "amber",
-        },
-        {
-          label: "Modules",
-          value: loading ? "..." : metrics.modules,
-          caption: "Global modules available to own resources.",
-          tone: "slate",
-        },
-      ]}
       footerHints={[
         "ALT+R REFRESH",
         "ALT+SHIFT+F SEARCH",
@@ -445,18 +410,9 @@ export default function SAModuleResourceMap() {
                 return (
                   <button
                     key={row.resource_code}
-                    ref={(element) => {
-                      rowRefs.current[index] = element;
-                    }}
+                    {...getRowProps(index)}
                     type="button"
                     onClick={() => setSelectedResourceCode(row.resource_code)}
-                    onKeyDown={(event) =>
-                      handleLinearNavigation(event, {
-                        index,
-                        refs: rowRefs.current,
-                        orientation: "vertical",
-                      })
-                    }
                     className={`border px-4 py-3 text-left ${
                       selected
                         ? "border-sky-300 bg-sky-50 text-sky-900"

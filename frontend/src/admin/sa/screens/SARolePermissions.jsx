@@ -3,10 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
+import { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 
 async function readJsonSafe(response) {
@@ -309,6 +311,8 @@ export default function SARolePermissions() {
     [selectedResourceCode, visibleMatrixRows]
   );
 
+  const { getRowProps } = useErpListNavigation(visibleMatrixRows);
+
   function updateDraft(resourceCode, updater) {
     setMatrixDrafts((current) => {
       const base =
@@ -574,48 +578,10 @@ export default function SARolePermissions() {
     <ErpApprovalReviewTemplate
       eyebrow="ACL Governance"
       title="Role Permissions"
-      description="Advanced screen only. Use this for broad role-wide baseline access. Do not use this screen to decide who becomes an approver for one specific lane or user."
       actions={topActions}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
-      ]}
-      metrics={[
-        {
-          key: "role",
-          label: "Role",
-          value: selectedRoleCode,
-          tone: "sky",
-          caption: ERP_ROLE_LABELS[selectedRoleCode] ?? "Selected role under ACL review.",
-        },
-        {
-          key: "project",
-          label: "Project",
-          value: selectedProjectCode || "All",
-          tone: "emerald",
-          caption: "Filter the business universe before touching the matrix.",
-        },
-        {
-          key: "module",
-          label: "Module",
-          value: selectedModuleCode || "Choose",
-          tone: "amber",
-          caption: "Matrix works best after choosing one module.",
-        },
-        {
-          key: "resources",
-          label: "Rows",
-          value: catalogLoading ? "..." : String(visibleMatrixRows.length),
-          tone: "slate",
-          caption: "Visible mapped resources in the current project/module filter.",
-        },
-        {
-          key: "warning",
-          label: "Use Carefully",
-          value: "Role-Wide",
-          tone: "amber",
-          caption: "Anything granted here applies to everyone carrying this role.",
-        },
       ]}
       filterSection={{
         eyebrow: "Role Filter",
@@ -723,12 +689,13 @@ export default function SARolePermissions() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleMatrixRows.map(({ resource, draft }) => {
+                  {visibleMatrixRows.map(({ resource, draft }, index) => {
                     const selected = resource.resource_code === selectedResourceCode;
 
                     return (
                       <tr
                         key={resource.resource_code}
+                        {...getRowProps(index)}
                         className={selected ? "bg-sky-50" : "bg-white"}
                       >
                         <td
@@ -781,12 +748,12 @@ export default function SARolePermissions() {
             </div>
           ),
       }}
-      sideSection={{
-        eyebrow: "Selected Resource",
-        title: selectedMatrixRow?.resource?.title ?? "Advanced deny editor",
-        description:
-          "Main matrix only handles allow flags. Explicit deny stays here as an advanced override for the selected resource.",
-        children: selectedMatrixRow ? (
+      bottomSection={
+        <ErpSectionCard
+          eyebrow="Selected Resource"
+          title={selectedMatrixRow?.resource?.title ?? "Advanced deny editor"}
+        >
+          {selectedMatrixRow ? (
           <div className="space-y-4">
             <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600">
               <div>{selectedMatrixRow.resource.resource_code}</div>
@@ -840,8 +807,9 @@ export default function SARolePermissions() {
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Select one resource row from the matrix to edit advanced deny overrides.
           </div>
-        ),
-      }}
+        )}
+        </ErpSectionCard>
+      }
     />
   );
 }

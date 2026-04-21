@@ -22,6 +22,7 @@ import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 
 async function readJsonSafe(response) {
   try {
@@ -234,10 +235,12 @@ export default function SASignupRequests() {
   );
   const signupPagination = useErpPagination(filteredRequests, 10);
 
-  const totalRequests = requests.length;
-  const withCompanyHintCount = requests.filter((row) => row.parent_company_name).length;
-  const withPhoneCount = requests.filter((row) => row.phone_number).length;
-  const withDesignationCount = requests.filter((row) => row.designation_hint).length;
+  const { getRowProps, getRowElement } = useErpListNavigation(signupPagination.pageItems, {
+    onActivate: (_row, index) => {
+      const firstBtn = getRowElement(index)?.querySelector("button:not(:disabled)");
+      firstBtn?.focus();
+    },
+  });
 
   useErpScreenCommands([
     {
@@ -337,53 +340,6 @@ export default function SASignupRequests() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "pending-queue",
-      label: "Pending Queue",
-      value: loading ? "..." : String(totalRequests),
-      tone: "sky",
-      caption:
-        "Current pending ERP access requests awaiting Super Admin review.",
-    },
-    {
-      key: "company-hint",
-      label: "Company Hint",
-      value: loading ? "..." : String(withCompanyHintCount),
-      tone: "amber",
-      caption:
-        "Requests that already include a parent company hint for onboarding context.",
-    },
-    {
-      key: "phone-ready",
-      label: "Phone Ready",
-      value: loading ? "..." : String(withPhoneCount),
-      tone: "emerald",
-      caption:
-        "Requests with contact number present for quick follow-up if needed.",
-    },
-    {
-      key: "designation-hint",
-      label: "Designation Hint",
-      value: loading ? "..." : String(withDesignationCount),
-      tone: "slate",
-      caption:
-        "Requests that already include a designation hint for role review.",
-    },
-  ];
-
-  const summarySection = {
-    eyebrow: "Onboarding Contract",
-    title: "Approval And Rejection Remain DB-Owned Atomic Actions",
-    description:
-      "This screen consumes the pending queue and sends decisions to the existing atomic backend authority. Approval creates the ERP user lifecycle through the DB-owned function, while rejection closes the request without frontend-owned mutation logic.",
-    aside: (
-      <span className="border border-sky-200 bg-sky-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
-        Gate 4 Intake
-      </span>
-    ),
-  };
-
   const filterSection = {
     eyebrow: "Review Queue",
     title: "Pending ERP Onboarding Intake",
@@ -460,7 +416,7 @@ export default function SASignupRequests() {
               const isActing = actingUserId === request.auth_user_id;
 
               return (
-                <tr key={request.auth_user_id} className="border-b border-slate-200 bg-white align-top">
+                <tr key={request.auth_user_id} {...getRowProps(index)} className="border-b border-slate-200 bg-white align-top">
                   <td className="px-3 py-3 text-sm text-slate-700">
                     <div className="font-semibold text-slate-900">
                       {request.name ?? "Unnamed Request"}
@@ -549,7 +505,6 @@ export default function SASignupRequests() {
     <ErpMasterListTemplate
       eyebrow="SA Onboarding Queue"
       title="Pending Signup Requests"
-      description="This keyboard-native list keeps the onboarding queue, quick search, and approve/reject decisions in one deterministic operating surface."
       actions={topActions}
       notices={
         error
@@ -562,8 +517,6 @@ export default function SASignupRequests() {
             ]
           : []
       }
-      metrics={metrics}
-      summarySection={summarySection}
       filterSection={filterSection}
       listSection={listSection}
     />

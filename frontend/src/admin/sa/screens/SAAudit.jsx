@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import ErpCompactFilterSelect from "../../../components/inputs/ErpCompactFilterSelect.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
@@ -73,7 +74,6 @@ export default function SAAudit() {
   const [searchQuery, setSearchQuery] = useState("");
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchInputRef = useRef(null);
 
   useEffect(() => {
@@ -165,10 +165,7 @@ export default function SAAudit() {
     [searchQuery, statusFilteredRows]
   );
   const auditPagination = useErpPagination(filteredRows, 10);
-
-  const successCount = auditRows.filter((row) => row.status === "SUCCESS").length;
-  const failedCount = auditRows.filter((row) => row.status === "FAILED").length;
-  const companyScopedCount = auditRows.filter((row) => row.company_id).length;
+  const { getRowProps } = useErpListNavigation(auditPagination.pageItems);
 
   useErpScreenCommands([
     {
@@ -242,39 +239,6 @@ export default function SAAudit() {
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
-    },
-  ];
-
-  const metrics = [
-    {
-      key: "all-events",
-      label: "All Events",
-      value: loading ? "..." : String(auditRows.length),
-      tone: "sky",
-      caption:
-        "Full admin action history currently returned by the backend audit endpoint.",
-    },
-    {
-      key: "successful-events",
-      label: "Successful",
-      value: loading ? "..." : String(successCount),
-      tone: "emerald",
-      caption: "Administrative actions that completed successfully.",
-    },
-    {
-      key: "failed-events",
-      label: "Failed",
-      value: loading ? "..." : String(failedCount),
-      tone: "rose",
-      caption:
-        "Administrative actions that ended in failed status and may require review.",
-    },
-    {
-      key: "company-scoped",
-      label: "Company Scoped",
-      value: loading ? "..." : String(companyScopedCount),
-      tone: "amber",
-      caption: "Audit rows that explicitly bind to a company scope.",
     },
   ];
 
@@ -358,17 +322,7 @@ export default function SAAudit() {
               {auditPagination.pageItems.map((row, index) => (
                 <tr
                   key={row.audit_id}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
-                  tabIndex={0}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: rowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
+                  {...getRowProps(index)}
                   className="border-b border-slate-200 bg-white"
                 >
                   <td className="px-3 py-2 text-sm text-slate-700">
@@ -436,7 +390,6 @@ export default function SAAudit() {
     <ErpMasterListTemplate
       eyebrow="SA Audit Viewer"
       title="Admin Audit Trail"
-      description="This keyboard-native list keeps audit filters, quick search, and dense review rows in one structured operating surface."
       actions={topActions}
       notices={
         error
@@ -449,7 +402,6 @@ export default function SAAudit() {
             ]
           : []
       }
-      metrics={metrics}
       filterSection={filterSection}
       listSection={listSection}
     />

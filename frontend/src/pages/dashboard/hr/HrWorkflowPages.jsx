@@ -10,10 +10,6 @@ import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemp
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
 import ErpReportFilterTemplate from "../../../components/templates/ErpReportFilterTemplate.jsx";
-import {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
@@ -629,45 +625,13 @@ export function LeaveApplyWorkspace() {
     <ErpEntryFormTemplate
       eyebrow="HR Management"
       title="Leave Apply"
-      description="Users submit leave requests in the parent-company HR universe. Current date theke maximum 3 days back apply allowed."
       actions={actions}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "backdate",
-          label: "Backdate Window",
-          value: "3 Days",
-          tone: "amber",
-          caption: `Earliest allowed from-date: ${formatIsoDate(earliestBackdate)}`,
-        },
-        {
-          key: "days",
-          label: "Total Days",
-          value: totalDays > 0 ? String(totalDays) : "-",
-          tone: "sky",
-          caption: "Days auto-calculated from selected range.",
-        },
-        {
-          key: "scope",
-          label: "Company Scope",
-          value: "Parent HR",
-          tone: "emerald",
-          caption: "Leave never uses work-company transaction truth.",
-        },
-        {
-          key: "cancel",
-          label: "Cancel Rule",
-          value: "Pending Only",
-          tone: "slate",
-          caption: "Requester can cancel until first approver decision arrives.",
-        },
-      ]}
       formEyebrow="Leave Request"
       formTitle="Submit a leave request"
-      formDescription="Choose date range, let day count auto-calculate, write a reason, then send into the approval queue."
       formContent={
         <div className="grid gap-3">
           <div className="grid gap-3 md:grid-cols-3">
@@ -721,52 +685,6 @@ export function LeaveApplyWorkspace() {
             />
           </label>
         </div>
-      }
-      sideContent={
-        <>
-          <ErpSectionCard
-            eyebrow="Rule"
-            title="Business law"
-            description="Leave request uses parent-company HR truth and is stored against a governed business work scope. GENERAL_OPS personal workspace never drives approval routing."
-          >
-            <div className="grid gap-2">
-              <ErpFieldPreview
-                label="Backdate Limit"
-                value="Current date - 3 days"
-                caption="Older leave request will be blocked."
-              />
-              <ErpFieldPreview
-                label="Approval Queue"
-                value="Business-scope driven"
-                caption="If no explicit business scope is sent, backend derives the mapped department scope before routing."
-              />
-            </div>
-          </ErpSectionCard>
-          <ErpSectionCard
-            eyebrow="Latest Result"
-            title="Last submitted request"
-            description="Most recent create result from this screen."
-          >
-            {lastCreated ? (
-              <div className="grid gap-2">
-                <ErpFieldPreview
-                  label="Request"
-                  value={`${formatIsoDate(lastCreated.from_date)} to ${formatIsoDate(lastCreated.to_date)}`}
-                  caption={`${lastCreated.total_days} day(s) | ${lastCreated.current_state}`}
-                />
-                <ErpFieldPreview
-                  label="Workflow"
-                  value={lastCreated.workflow_request_id}
-                  caption={lastCreated.parent_company_name ?? lastCreated.parent_company_id}
-                />
-              </div>
-            ) : (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                Submit a request to see the latest create result here.
-              </div>
-            )}
-          </ErpSectionCard>
-        </>
       }
     />
   );
@@ -920,45 +838,13 @@ export function OutWorkApplyWorkspace() {
       <ErpEntryFormTemplate
         eyebrow="HR Management"
         title="Out Work Apply"
-        description="Use this flow when the user is outside office for company work. Destination stays company-reusable for later observation and reporting."
         actions={actions}
         notices={[
           ...(error ? [{ key: "error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
         ]}
-        metrics={[
-          {
-            key: "destinations",
-            label: "Destinations",
-            value: loadingDestinations ? "..." : String(destinations.length),
-            tone: "sky",
-            caption: "Parent-company reusable destination master rows.",
-          },
-          {
-            key: "days",
-            label: "Total Days",
-            value: totalDays > 0 ? String(totalDays) : "-",
-            tone: "amber",
-            caption: "Auto-calculated from selected range.",
-          },
-          {
-            key: "backdate",
-            label: "Backdate Window",
-            value: "3 Days",
-            tone: "slate",
-            caption: `Earliest allowed from-date: ${formatIsoDate(earliestBackdate)}`,
-          },
-          {
-            key: "cancel",
-            label: "Cancel Rule",
-            value: "Pending Only",
-            tone: "emerald",
-            caption: "Requester can cancel until first approver decision arrives.",
-          },
-        ]}
         formEyebrow="Out Work Request"
         formTitle="Submit an out work request"
-        formDescription="Choose destination, date range, and reason. If destination is missing, create it once and reuse it later. Approval routing uses governed business scope, not the current personal workspace."
         formContent={
           <div className="grid gap-3">
             <div className="grid gap-3 md:grid-cols-3">
@@ -1041,58 +927,6 @@ export function OutWorkApplyWorkspace() {
               />
             </label>
           </div>
-        }
-        sideContent={
-          <>
-            <ErpSectionCard
-              eyebrow="Destination Law"
-              title="Reusable destination memory"
-              description="If preferred destination is not in the list, create it once and the same company will be able to reuse it later."
-            >
-              <div className="grid gap-2">
-                <ErpFieldPreview
-                  label="Storage Scope"
-                  value="Per Parent Company"
-                  caption="Destination master stays company specific."
-                />
-                <ErpFieldPreview
-                  label="Selection"
-                  value={
-                    destinations.find((row) => row.destination_id === destinationId)?.destination_name ??
-                    "No destination selected"
-                  }
-                  caption={
-                    destinations.find((row) => row.destination_id === destinationId)?.destination_address ??
-                    "Choose or create a destination."
-                  }
-                />
-              </div>
-            </ErpSectionCard>
-            <ErpSectionCard
-              eyebrow="Latest Result"
-              title="Last submitted request"
-              description="Most recent create result from this screen."
-            >
-              {lastCreated ? (
-                <div className="grid gap-2">
-                  <ErpFieldPreview
-                    label="Destination"
-                    value={lastCreated.destination_name}
-                    caption={lastCreated.destination_address}
-                  />
-                  <ErpFieldPreview
-                    label="Workflow"
-                    value={lastCreated.workflow_request_id}
-                    caption={`${lastCreated.total_days} day(s) | ${lastCreated.current_state}`}
-                  />
-                </div>
-              ) : (
-                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                  Submit a request to see the latest create result here.
-                </div>
-              )}
-            </ErpSectionCard>
-          </>
         }
       />
       <ModalBase
@@ -1185,45 +1019,9 @@ function useHrQueryLoader(loader, args = []) {
   };
 }
 
-function buildListMetrics(rows) {
-  return [
-    {
-      key: "total",
-      label: "Total",
-      value: String(rows.length),
-      tone: "sky",
-      caption: "Rows returned by the current business flow.",
-    },
-    {
-      key: "pending",
-      label: "Pending",
-      value: String(rows.filter((row) => row.current_state === "PENDING").length),
-      tone: "amber",
-      caption: "Still waiting for approval decision.",
-    },
-    {
-      key: "approved",
-      label: "Approved",
-      value: String(rows.filter((row) => row.current_state === "APPROVED").length),
-      tone: "emerald",
-      caption: "Cases already approved in workflow.",
-    },
-    {
-      key: "rejected",
-      label: "Rejected/Cancelled",
-      value: String(
-        rows.filter((row) => ["REJECTED", "CANCELLED"].includes(row.current_state)).length,
-      ),
-      tone: "slate",
-      caption: "Closed requests no longer in pending lane.",
-    },
-  ];
-}
-
 function HrRequestListWorkspace({
   kind,
   title,
-  description,
   loader,
   openApply,
   openInbox,
@@ -1384,7 +1182,6 @@ function HrRequestListWorkspace({
     <ErpMasterListTemplate
       eyebrow="HR Management"
       title={title}
-      description={description}
       actions={[
         {
           key: "apply",
@@ -1426,7 +1223,6 @@ function HrRequestListWorkspace({
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={buildListMetrics(rows)}
       filterSection={{
         eyebrow: "Request Search",
         title: "Find request history rows",
@@ -1445,7 +1241,6 @@ function HrRequestListWorkspace({
         title: loading
           ? "Loading request rows"
           : `${filteredRows.length} visible request${filteredRows.length === 1 ? "" : "s"}`,
-        description: "Pending rows stay cancellable until no approver decision exists.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading request history.
@@ -1593,7 +1388,6 @@ function HrRequestListWorkspace({
 function HrApprovalInboxWorkspace({
   kind,
   title,
-  description,
   loader,
   openHistory,
 }) {
@@ -1694,7 +1488,6 @@ function HrApprovalInboxWorkspace({
     <ErpApprovalReviewTemplate
       eyebrow="HR Management"
       title={title}
-      description={description}
       actions={[
         {
           key: "history",
@@ -1724,36 +1517,6 @@ function HrApprovalInboxWorkspace({
         },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
-      metrics={[
-        {
-          key: "queue",
-          label: "Queue",
-          value: String(rows.length),
-          tone: "sky",
-          caption: "Rows still actionable for the current approver.",
-        },
-        {
-          key: "pending",
-          label: "Pending",
-          value: String(rows.filter((row) => row.current_state === "PENDING").length),
-          tone: "amber",
-          caption: "Still waiting for your decision.",
-        },
-        {
-          key: "approved",
-          label: "Approved",
-          value: String(decisionTally.approved),
-          tone: "emerald",
-          caption: "Approved from this inbox during the current session.",
-        },
-        {
-          key: "rejected",
-          label: "Rejected",
-          value: String(decisionTally.rejected),
-          tone: "slate",
-          caption: "Rejected from this inbox during the current session.",
-        },
-      ]}
       filterSection={{
         eyebrow: "Queue Search",
         title: "Filter approval inbox",
@@ -1793,7 +1556,6 @@ function HrApprovalInboxWorkspace({
         title: loading
           ? "Loading approval inbox"
           : `${filteredRows.length} actionable request${filteredRows.length === 1 ? "" : "s"}`,
-        description: "Only requests currently actionable for the logged-in approver stay in this queue.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading approval inbox.
@@ -1839,7 +1601,6 @@ function HrApprovalInboxWorkspace({
 function HrApprovalHistoryWorkspace({
   kind,
   title,
-  description,
   loader,
 }) {
   const searchRef = useRef(null);
@@ -1880,7 +1641,6 @@ function HrApprovalHistoryWorkspace({
     <ErpApprovalReviewTemplate
       eyebrow="HR Management"
       title={title}
-      description={description}
       actions={[
         {
           key: "columns",
@@ -1897,7 +1657,6 @@ function HrApprovalHistoryWorkspace({
         },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
-      metrics={buildListMetrics(rows)}
       filterSection={{
         eyebrow: "Scope Filter",
         title: "Filter approver scope history",
@@ -1925,7 +1684,6 @@ function HrApprovalHistoryWorkspace({
         title: loading
           ? "Loading approval scope history"
           : `${filteredRows.length} visible request${filteredRows.length === 1 ? "" : "s"}`,
-        description: "This page shows all cases where the logged-in user belongs to the approver scope, even if somebody else already decided.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading approval scope history.
@@ -1969,7 +1727,6 @@ function HrApprovalHistoryWorkspace({
 function HrRegisterWorkspace({
   kind,
   title,
-  description,
   loader,
 }) {
   const searchRef = useRef(null);
@@ -2010,7 +1767,6 @@ function HrRegisterWorkspace({
     <ErpReportFilterTemplate
       eyebrow="HR Management"
       title={title}
-      description={description}
       actions={[
         {
           key: "columns",
@@ -2027,7 +1783,6 @@ function HrRegisterWorkspace({
         },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
-      metrics={buildListMetrics(rows)}
       filterSection={{
         eyebrow: "Register Filters",
         title: "Filter register rows",
@@ -2055,7 +1810,6 @@ function HrRegisterWorkspace({
         title: loading
           ? "Loading register"
           : `${filteredRows.length} visible request${filteredRows.length === 1 ? "" : "s"}`,
-        description: "HR and reporting visibility lane for the selected company universe.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading register.
@@ -2101,7 +1855,6 @@ export function LeaveMyRequestsWorkspace() {
     <HrRequestListWorkspace
       kind="leave"
       title="My Leave Requests"
-      description="See own leave request history with current workflow status. Pending rows stay cancellable only until the first approver acts."
       loader={() => listMyLeaveRequests()}
       openApply="HR_LEAVE_APPLY"
       openInbox="HR_LEAVE_APPROVAL_INBOX"
@@ -2114,7 +1867,6 @@ export function LeaveApprovalInboxWorkspace() {
     <HrApprovalInboxWorkspace
       kind="leave"
       title="Leave Approval Inbox"
-      description="Approvers see only the currently actionable leave requests here and can approve or reject without leaving the queue."
       loader={() => listLeaveApprovalInbox()}
       openHistory="HR_LEAVE_APPROVAL_SCOPE_HISTORY"
     />
@@ -2126,7 +1878,6 @@ export function LeaveApprovalScopeHistoryWorkspace() {
     <HrApprovalHistoryWorkspace
       kind="leave"
       title="Leave Approval Scope History"
-      description="See every leave request where the logged-in user belongs to the approver scope, whether or not the logged-in user gave the decision."
       loader={(requesterAuthUserId) => listLeaveApprovalHistory(requesterAuthUserId)}
     />
   );
@@ -2137,7 +1888,6 @@ export function LeaveRegisterWorkspace() {
     <HrRegisterWorkspace
       kind="leave"
       title="HR Leave Register"
-      description="Parent-company HR and reporting viewers can inspect cross-user leave request history here."
       loader={(requesterAuthUserId) => listLeaveRegister({ requesterAuthUserId })}
     />
   );
@@ -2148,7 +1898,6 @@ export function OutWorkMyRequestsWorkspace() {
     <HrRequestListWorkspace
       kind="outWork"
       title="My Out Work Requests"
-      description="See own out work request history with current workflow status. Pending rows stay cancellable only until the first approver acts."
       loader={() => listMyOutWorkRequests()}
       openApply="HR_OUT_WORK_APPLY"
       openInbox="HR_OUT_WORK_APPROVAL_INBOX"
@@ -2161,7 +1910,6 @@ export function OutWorkApprovalInboxWorkspace() {
     <HrApprovalInboxWorkspace
       kind="outWork"
       title="Out Work Approval Inbox"
-      description="Approvers see only the currently actionable out work requests here and can approve or reject without leaving the queue."
       loader={() => listOutWorkApprovalInbox()}
       openHistory="HR_OUT_WORK_APPROVAL_SCOPE_HISTORY"
     />
@@ -2173,7 +1921,6 @@ export function OutWorkApprovalScopeHistoryWorkspace() {
     <HrApprovalHistoryWorkspace
       kind="outWork"
       title="Out Work Approval Scope History"
-      description="See every out work request where the logged-in user belongs to the approver scope, whether or not the logged-in user gave the decision."
       loader={(requesterAuthUserId) => listOutWorkApprovalHistory(requesterAuthUserId)}
     />
   );
@@ -2184,7 +1931,6 @@ export function OutWorkRegisterWorkspace() {
     <HrRegisterWorkspace
       kind="outWork"
       title="Out Work Register"
-      description="Parent-company HR and reporting viewers can inspect cross-user out work request history here."
       loader={(requesterAuthUserId) => listOutWorkRegister({ requesterAuthUserId })}
     />
   );

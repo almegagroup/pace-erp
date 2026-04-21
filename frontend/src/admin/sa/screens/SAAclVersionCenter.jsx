@@ -12,6 +12,7 @@ import ErpScreenScaffold, {
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import {
   formatCompanyAddress,
   formatCompanyLabel,
@@ -143,7 +144,6 @@ function orderedVersions(versions) {
 export default function SAAclVersionCenter() {
   const navigate = useNavigate();
   const topRefs = useRef([]);
-  const companyRefs = useRef([]);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -224,6 +224,8 @@ export default function SAAclVersionCenter() {
       });
   }, [companies, companySearch, statusFilter]);
 
+  const { getRowProps: getCompanyRowProps } = useErpListNavigation(filteredCompanies);
+
   useEffect(() => {
     if (filteredCompanies.length === 0) {
       return;
@@ -254,14 +256,6 @@ export default function SAAclVersionCenter() {
   }, [selectedCompanyId, selectedCompany]);
 
   const publishRequiredCount = publishRequiredCompanies.length;
-  const noActiveVersionCount = useMemo(
-    () => companies.filter((company) => company.status === "NO_ACTIVE_VERSION").length,
-    [companies],
-  );
-  const cleanCount = useMemo(
-    () => companies.filter((company) => company.status === "CLEAN").length,
-    [companies],
-  );
 
   useEffect(() => {
     if (publishRequiredCount > 0) {
@@ -483,7 +477,6 @@ export default function SAAclVersionCenter() {
     <ErpScreenScaffold
       eyebrow="SA ACL Version Center"
       title="Company Publish Control"
-      description="System decides when access-governance changes require a fresh ACL publish. SA reviews the recommendation here, then captures and activates the next company version."
       actions={[
         {
           key: "refresh",
@@ -555,42 +548,11 @@ export default function SAAclVersionCenter() {
             }]
           : []),
       ]}
-      metrics={[
-        {
-          key: "companies",
-          label: "Companies",
-          value: loading ? "..." : String(companies.length),
-          tone: "sky",
-          caption: "Business companies visible to the publish center.",
-        },
-        {
-          key: "publish-required",
-          label: "Publish Required",
-          value: loading ? "..." : String(publishRequiredCount),
-          tone: publishRequiredCount > 0 ? "amber" : "emerald",
-          caption: "Companies where runtime access is older than tracked access-governance changes.",
-        },
-        {
-          key: "no-active",
-          label: "No Active Version",
-          value: loading ? "..." : String(noActiveVersionCount),
-          tone: noActiveVersionCount > 0 ? "amber" : "emerald",
-          caption: "Companies that still need a first baseline ACL publish.",
-        },
-        {
-          key: "clean",
-          label: "Clean Companies",
-          value: loading ? "..." : String(cleanCount),
-          tone: "emerald",
-          caption: "Companies whose active ACL version already reflects tracked access-governance sources.",
-        },
-      ]}
     >
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <ErpSectionCard
           eyebrow="Company Status"
           title="Publish recommendation by company"
-          description="System watches tracked access-governance sources. If a company is marked publish required, runtime users are still on an older frozen ACL version."
         >
           <div className="grid gap-3 border border-slate-300 bg-slate-50 px-4 py-4">
             <div className="grid gap-3 md:grid-cols-[1fr_220px]">
@@ -660,18 +622,9 @@ export default function SAAclVersionCenter() {
                 return (
                   <button
                     key={company.company_id}
-                    ref={(element) => {
-                      companyRefs.current[index] = element;
-                    }}
+                    {...getCompanyRowProps(index)}
                     type="button"
                     onClick={() => setSelectedCompanyId(company.company_id)}
-                    onKeyDown={(event) =>
-                      handleLinearNavigation(event, {
-                        index,
-                        refs: companyRefs.current,
-                        orientation: "vertical",
-                      })
-                    }
                     className={`grid w-full gap-2 border-b px-4 py-4 text-left last:border-b-0 ${
                       selected ? "border-sky-200 bg-sky-50" : "border-slate-200 bg-white"
                     }`}
@@ -718,7 +671,6 @@ export default function SAAclVersionCenter() {
           <ErpSectionCard
             eyebrow="Selected Company"
             title={selectedCompany ? `${selectedCompany.company_code} publish desk` : "Choose one company"}
-            description="Publish from here after the system recommends it. Capture with activate-now is the default safe path so runtime users immediately receive the newest access snapshot."
           >
             {!selectedCompany ? (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
@@ -820,7 +772,6 @@ export default function SAAclVersionCenter() {
           <ErpSectionCard
             eyebrow="Pending Reasons"
             title="Why publish is recommended"
-            description="Only tracked access-governance sources show up here. Approval routing and report visibility changes stay outside this publish detector."
           >
             {!selectedCompany ? (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
@@ -856,7 +807,6 @@ export default function SAAclVersionCenter() {
           <ErpSectionCard
             eyebrow="Published Ledger"
             title="Existing versions"
-            description="Use the active line as your runtime truth. Keep older inactive versions for rollback-style recovery, and remove only when you no longer need that checkpoint."
           >
             {!selectedCompany ? (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">

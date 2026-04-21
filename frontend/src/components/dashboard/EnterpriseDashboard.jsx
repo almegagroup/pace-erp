@@ -62,13 +62,11 @@ function ActionCard({ action, index, gridRefs }) {
 export default function EnterpriseDashboard({
   eyebrow,
   title,
-  subtitle,
   stats = [],
   actions = [],
   topActions = [],
   notices = [],
   workspaceTitle = "Operator Action Queue",
-  workspaceDescription = "Arrow keys move inside the card grid. Enter opens the focused workspace.",
   noteTitle = "Keyboard Grammar",
   noteItems = [],
   summaryTitle = "Workspace Snapshot",
@@ -89,7 +87,6 @@ export default function EnterpriseDashboard({
     <ErpScreenScaffold
       eyebrow={eyebrow}
       title={title}
-      description={subtitle}
       actions={topActions}
       notices={notices}
       metrics={metrics}
@@ -98,7 +95,6 @@ export default function EnterpriseDashboard({
         <ErpSectionCard
           eyebrow="Action Workspace"
           title={workspaceTitle}
-          description={workspaceDescription}
         >
           <div className="grid gap-2">
             {actions.map((action, index) => (

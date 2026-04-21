@@ -323,40 +323,6 @@ export default function SACompanyCreate() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "gst-source",
-      label: "GST Source",
-      value: gstProfile?.source ?? "Pending",
-      caption: "GST lookup checks cache first. A miss falls through to Applyflow.",
-      tone: "sky",
-    },
-    {
-      key: "resolved-state",
-      label: "Resolved State",
-      value: gstProfile?.state_name ?? "Pending",
-      caption: "Geographic company state derived from the GST profile.",
-      tone: "amber",
-    },
-    {
-      key: "pin-code",
-      label: "PIN Code",
-      value: gstProfile?.pin_code ?? "Pending",
-      caption: "Postal code captured separately for the company master.",
-      tone: "slate",
-    },
-    {
-      key: "created-company",
-      label: "Created Company",
-      value: createdCompany?.company_code ?? "Not Created",
-      caption: createdCompany
-        ? `${createdCompany.company_name}${createdCompany.state_name ? ` | ${createdCompany.state_name}` : ""}`
-        : "The company code appears here after a successful create.",
-      tone: createdCompany ? "emerald" : "sky",
-      badge: createdCompany ? "Ready" : "Pending",
-    },
-  ];
-
   const notices = [
     notice
       ? {
@@ -373,37 +339,6 @@ export default function SACompanyCreate() {
         }
       : null,
   ].filter(Boolean);
-
-  const sideContent = (
-    <>
-      <ErpFieldPreview
-        label="Legal Name"
-        value={gstProfile?.legal_name ?? companyName}
-        caption="GST legal name is preferred and also becomes the default company name."
-      />
-      <ErpFieldPreview
-        label="Trade Name"
-        value={gstProfile?.trade_name}
-        caption="Visible for review, but company master still uses the legal name as the canonical title."
-      />
-      <ErpFieldPreview
-        label="Company State"
-        value={gstProfile?.state_name}
-        caption="Derived from the GST address payload and stored as a dedicated company field."
-      />
-      <ErpFieldPreview
-        label="PIN Code"
-        value={gstProfile?.pin_code}
-        caption="Captured separately so postal filters and reporting can use a clean field."
-      />
-      <ErpFieldPreview
-        label="Full Address"
-        value={gstProfile?.full_address}
-        caption="Stored as a single human-readable address field on company master."
-        multiline
-      />
-    </>
-  );
 
   const bottomContent = createdCompany ? (
     <ErpSectionCard
@@ -457,13 +392,10 @@ export default function SACompanyCreate() {
     <ErpEntryFormTemplate
       eyebrow="SA Company Governance"
       title="Create Business Company"
-      description="This worksheet keeps GST lookup, company identity review, and final create action in one direct keyboard path."
       actions={topActions}
       notices={notices}
-      metrics={metrics}
       formEyebrow="Entry Form"
       formTitle="GST-driven company setup"
-      formDescription="Start at GST, confirm the canonical company name, then save directly without leaving the worksheet flow."
       formContent={(
         <div ref={formContainerRef} className="grid gap-3">
           <div
@@ -572,7 +504,6 @@ export default function SACompanyCreate() {
           </div>
         </div>
       )}
-      sideContent={sideContent}
       bottomContent={bottomContent}
     />
   );

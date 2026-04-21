@@ -27,6 +27,7 @@ import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import {
   readViewSnapshotCache,
   writeViewSnapshotCache,
@@ -331,6 +332,10 @@ export default function SAUsers() {
     viewSnapshot.page ?? 1
   );
 
+  const { getRowProps } = useErpListNavigation(userPagination.pageItems, {
+    onActivate: (row) => handleOpenScope(row),
+  });
+
   useEffect(() => {
     writeViewSnapshotCache(USER_VIEW_SNAPSHOT_KEY, {
       filter,
@@ -381,12 +386,6 @@ export default function SAUsers() {
     openScreen("SA_USER_SCOPE");
     navigate(`/sa/users/scope?auth_user_id=${encodeURIComponent(user.auth_user_id)}`);
   }
-
-  const activeCount = governableUsers.filter((user) => user.state === "ACTIVE").length;
-  const disabledCount = governableUsers.filter((user) => user.state === "DISABLED").length;
-  const privilegedCount = governableUsers.filter(
-    (user) => user.role_code === "SA" || user.role_code === "GA"
-  ).length;
 
   useErpScreenCommands([
     {
@@ -577,38 +576,6 @@ export default function SAUsers() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "all-users",
-      label: "All Users",
-      value: loading ? "..." : String(governableUsers.length),
-      tone: "sky",
-      caption:
-        "Governable ERP users currently visible in the directory. The current operator is excluded.",
-    },
-    {
-      key: "active-users",
-      label: "Active",
-      value: loading ? "..." : String(activeCount),
-      tone: "emerald",
-      caption: "Users whose ERP access is currently enabled.",
-    },
-    {
-      key: "disabled-users",
-      label: "Disabled",
-      value: loading ? "..." : String(disabledCount),
-      tone: "rose",
-      caption: "Users whose ERP access has been suspended.",
-    },
-    {
-      key: "privileged-users",
-      label: "Privileged",
-      value: loading ? "..." : String(privilegedCount),
-      tone: "amber",
-      caption: "Users presently carrying SA or GA posture in the ERP role ladder.",
-    },
-  ];
-
   const filterSection = {
     eyebrow: "User Filter",
     title: "Governable User Inventory",
@@ -691,7 +658,7 @@ export default function SAUsers() {
               const scopeEnabled = canOpenScope(user);
 
               return (
-                <tr key={user.auth_user_id} className="border-b border-slate-200 bg-white align-top">
+                <tr key={user.auth_user_id} {...getRowProps(rowIndex)} className="border-b border-slate-200 bg-white align-top">
                   {visibleColumns.map((column) => (
                     <td key={column.key} className="px-3 py-3 text-sm text-slate-700">
                       {column.key === "user" ? (
@@ -820,7 +787,6 @@ export default function SAUsers() {
               ]
             : []
         }
-        metrics={metrics}
         filterSection={filterSection}
         listSection={listSection}
       />

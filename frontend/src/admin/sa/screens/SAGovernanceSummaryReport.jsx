@@ -191,7 +191,6 @@ export default function SAGovernanceSummaryReport() {
   return (
     <ErpScreenScaffold
       title="SA Governance Summary Report"
-      description="One company per row, combining departments, work contexts, capability bindings, inherited projects, enabled modules, and ACL versions into one circulation-ready export."
       actions={[
         {
           key: "refresh",
@@ -232,7 +231,6 @@ export default function SAGovernanceSummaryReport() {
 
         <ErpSectionCard
           title="Report Filters"
-          description="Filter by company before download, then search the loaded governance rows in-page."
         >
           <div className="grid gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
             <label className="grid gap-2">
@@ -273,7 +271,6 @@ export default function SAGovernanceSummaryReport() {
 
         <ErpSectionCard
           title="Visible Columns"
-          description="Hide columns you do not want on screen or in the downloaded Excel CSV."
         >
           <div className="grid gap-2 md:grid-cols-3">
             {REPORT_COLUMNS.map((column) => {
@@ -313,7 +310,6 @@ export default function SAGovernanceSummaryReport() {
               ? "Loading governance summary report"
               : `${filteredRows.length} company row${filteredRows.length === 1 ? "" : "s"}`
           }
-          description="Each business company stays on one row with department, work-context, capability, module, project, and ACL version details aligned side by side."
         >
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">

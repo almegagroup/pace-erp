@@ -24,14 +24,10 @@ const DEFAULT_FOOTER_HINTS = Object.freeze([
 export default function ErpMasterListTemplate({
   eyebrow,
   title,
-  description,
   actions = [],
   notices = [],
-  metrics = [],
-  summarySection = null,
   filterSection = null,
   listSection = null,
-  sideSection = null,
   bottomSection = null,
   footerHints = DEFAULT_FOOTER_HINTS,
 }) {
@@ -39,33 +35,15 @@ export default function ErpMasterListTemplate({
     <ErpScreenScaffold
       eyebrow={eyebrow}
       title={title}
-      description={description}
       actions={actions}
       notices={notices}
-      metrics={metrics}
       footerHints={footerHints}
     >
       <div className="grid gap-4">
         {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
-        <div
-          className={`grid gap-4 ${
-            sideSection || summarySection
-              ? "xl:grid-cols-[minmax(0,1.45fr)_360px]"
-              : "grid-cols-1"
-          }`}
-        >
-          <div className="min-w-0">
-            {listSection ? (
-              <ErpSectionCard {...listSection} className="min-h-[560px]" />
-            ) : null}
-          </div>
-          {sideSection || summarySection ? (
-            <div className="grid gap-4">
-              {sideSection ? <ErpSectionCard {...sideSection} /> : null}
-              {summarySection ? <ErpSectionCard {...summarySection} /> : null}
-            </div>
-          ) : null}
-        </div>
+        {listSection ? (
+          <ErpSectionCard {...listSection} className="min-h-[560px]" />
+        ) : null}
         {bottomSection ? <div>{bottomSection}</div> : null}
       </div>
     </ErpScreenScaffold>

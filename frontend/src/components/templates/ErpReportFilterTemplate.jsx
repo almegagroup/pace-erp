@@ -15,24 +15,18 @@ import ErpScreenScaffold, {
 export default function ErpReportFilterTemplate({
   eyebrow,
   title,
-  description,
   actions = [],
   notices = [],
-  metrics = [],
-  summarySection = null,
   filterSection = null,
   reportSection = null,
-  sideSection = null,
   bottomSection = null,
 }) {
   return (
     <ErpScreenScaffold
       eyebrow={eyebrow}
       title={title}
-      description={description}
       actions={actions}
       notices={notices}
-      metrics={metrics}
       footerHints={[
         "Alt+Shift+F Or F3 Filter Target",
         "Arrow Keys Traverse Reports",
@@ -42,25 +36,9 @@ export default function ErpReportFilterTemplate({
     >
       <div className="grid gap-4">
         {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
-        <div
-          className={`grid gap-4 ${
-            summarySection || sideSection
-              ? "xl:grid-cols-[minmax(0,1.45fr)_360px]"
-              : "grid-cols-1"
-          }`}
-        >
-          <div className="min-w-0">
-            {reportSection ? (
-              <ErpSectionCard {...reportSection} className="min-h-[560px]" />
-            ) : null}
-          </div>
-          {summarySection || sideSection ? (
-            <div className="grid gap-4">
-              {summarySection ? <ErpSectionCard {...summarySection} /> : null}
-              {sideSection ? <ErpSectionCard {...sideSection} /> : null}
-            </div>
-          ) : null}
-        </div>
+        {reportSection ? (
+          <ErpSectionCard {...reportSection} className="min-h-[560px]" />
+        ) : null}
         {bottomSection ? <div>{bottomSection}</div> : null}
       </div>
     </ErpScreenScaffold>

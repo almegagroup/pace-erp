@@ -13,6 +13,7 @@ import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 
 async function readJsonSafe(response) {
   try {
@@ -105,7 +106,6 @@ function createPageRows(menus) {
 export default function SAPageResourceRegistry() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchRef = useRef(null);
   const [menus, setMenus] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -169,18 +169,7 @@ export default function SAPageResourceRegistry() {
     filteredRows[0] ??
     null;
 
-  const metrics = useMemo(() => {
-    const total = pageRows.length;
-    const published = pageRows.filter((row) => row.is_published).length;
-    const active = pageRows.filter((row) => row.is_active).length;
-
-    return {
-      total,
-      published,
-      unpublished: total - published,
-      active,
-    };
-  }, [pageRows]);
+  const { getRowProps } = useErpListNavigation(filteredRows);
 
   useErpScreenCommands([
     {
@@ -314,32 +303,6 @@ export default function SAPageResourceRegistry() {
             }),
         },
       ]}
-      metrics={[
-        {
-          label: "Total Pages",
-          value: loading ? "..." : metrics.total,
-          caption: "Codemade ACL/business pages available for governance.",
-          tone: "sky",
-        },
-        {
-          label: "Published",
-          value: loading ? "..." : metrics.published,
-          caption: "Pages already placed into a menu group.",
-          tone: "emerald",
-        },
-        {
-          label: "Unpublished",
-          value: loading ? "..." : metrics.unpublished,
-          caption: "Pages still outside menu and waiting for placement.",
-          tone: "amber",
-        },
-        {
-          label: "Active Pages",
-          value: loading ? "..." : metrics.active,
-          caption: "Published pages currently enabled in menu.",
-          tone: "slate",
-        },
-      ]}
       footerHints={[
         "ALT+R REFRESH",
         "ALT+SHIFT+F SEARCH",
@@ -382,18 +345,9 @@ export default function SAPageResourceRegistry() {
                 return (
                   <button
                     key={row.screen_code}
-                    ref={(element) => {
-                      rowRefs.current[index] = element;
-                    }}
+                    {...getRowProps(index)}
                     type="button"
                     onClick={() => setSelectedScreenCode(row.screen_code)}
-                    onKeyDown={(event) =>
-                      handleLinearNavigation(event, {
-                        index,
-                        refs: rowRefs.current,
-                        orientation: "vertical",
-                      })
-                    }
                     className={`border px-4 py-3 text-left ${
                       selected
                         ? "border-sky-300 bg-sky-50 text-sky-900"

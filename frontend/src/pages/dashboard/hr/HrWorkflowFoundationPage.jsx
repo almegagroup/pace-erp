@@ -23,30 +23,22 @@ function renderFieldPreviews(fields = []) {
 export default function HrWorkflowFoundationPage({
   eyebrow,
   title,
-  description,
-  metrics,
   notices,
   actions,
   footerHints,
   policyTitle,
-  policyDescription,
   policyFields,
   workspaceTitle,
-  workspaceDescription,
   workspaceFields,
   routingTitle,
-  routingDescription,
   routingFields,
   historyTitle,
-  historyDescription,
   historyFields,
 }) {
   return (
     <ErpScreenScaffold
       eyebrow={eyebrow}
       title={title}
-      description={description}
-      metrics={metrics}
       notices={notices}
       actions={actions}
       footerHints={footerHints}
@@ -54,7 +46,6 @@ export default function HrWorkflowFoundationPage({
       <ErpSectionCard
         eyebrow="Policy Frame"
         title={policyTitle}
-        description={policyDescription}
         tone="accent"
       >
         {renderFieldPreviews(policyFields)}
@@ -63,7 +54,6 @@ export default function HrWorkflowFoundationPage({
       <ErpSectionCard
         eyebrow="Workspace"
         title={workspaceTitle}
-        description={workspaceDescription}
       >
         {renderFieldPreviews(workspaceFields)}
       </ErpSectionCard>
@@ -71,7 +61,6 @@ export default function HrWorkflowFoundationPage({
       <ErpSectionCard
         eyebrow="Approval"
         title={routingTitle}
-        description={routingDescription}
         tone="warning"
       >
         {renderFieldPreviews(routingFields)}
@@ -80,7 +69,6 @@ export default function HrWorkflowFoundationPage({
       <ErpSectionCard
         eyebrow="History"
         title={historyTitle}
-        description={historyDescription}
         tone="success"
       >
         {renderFieldPreviews(historyFields)}

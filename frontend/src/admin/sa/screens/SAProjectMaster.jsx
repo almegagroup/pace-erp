@@ -6,11 +6,11 @@ import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
 import {
-  ErpFieldPreview,
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { applyQuickFilter, sortProjects } from "../../../shared/erpCollections.js";
@@ -78,7 +78,6 @@ export default function SAProjectMaster() {
   const formContainerRef = useRef(null);
   const projectNameRef = useRef(null);
   const searchInputRef = useRef(null);
-  const projectRowRefs = useRef([]);
   const [projects, setProjects] = useState([]);
   const [projectName, setProjectName] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -158,6 +157,7 @@ export default function SAProjectMaster() {
     [projects, searchQuery]
   );
   const projectPagination = useErpPagination(filteredProjects, 10);
+  const { getRowProps } = useErpListNavigation(projectPagination.pageItems);
 
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
@@ -314,42 +314,10 @@ export default function SAProjectMaster() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "total",
-      label: "Projects",
-      value: loading ? "..." : String(projects.length),
-      tone: "sky",
-      caption: "Project rows currently returned by the global master list flow.",
-    },
-    {
-      key: "active",
-      label: "Active",
-      value: loading ? "..." : String(projects.filter((row) => row.status === "ACTIVE").length),
-      tone: "emerald",
-      caption: "Active project masters from the global backend list endpoint.",
-    },
-    {
-      key: "filtered",
-      label: "Visible",
-      value: loading ? "..." : String(filteredProjects.length),
-      tone: "amber",
-      caption: "Rows matching the current quick filter.",
-    },
-    {
-      key: "recent",
-      label: "Recent Create",
-      value: recentProject?.project_code ?? "None",
-      tone: "slate",
-      caption: recentProject?.project_name ?? "No project created in this session yet.",
-    },
-  ];
-
   return (
     <ErpEntryFormTemplate
       eyebrow="Project Master"
       title="Project Master Manage"
-      description="Create reusable global project rows here, then move into dedicated lifecycle and company mapping surfaces when the project is ready."
       actions={topActions}
       notices={[
         ...(error
@@ -371,10 +339,8 @@ export default function SAProjectMaster() {
             ]
           : []),
       ]}
-      metrics={metrics}
       formEyebrow="Create"
       formTitle="Create a new project"
-      formDescription="Create a reusable global project row here. Company rollout now happens from the dedicated company project map screen."
       formContent={
         <div ref={formContainerRef} className="grid gap-3">
           <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
@@ -396,45 +362,6 @@ export default function SAProjectMaster() {
             </p>
           </label>
         </div>
-      }
-      sideContent={
-        <>
-          <ErpSectionCard
-            eyebrow="Search"
-            title="Project quick filter"
-            description="Filter the current global project list without leaving the create form."
-          >
-            <QuickFilterInput
-              label="Find Project"
-              value={searchQuery}
-              onChange={setSearchQuery}
-              inputRef={searchInputRef}
-              placeholder="Filter by code, name, status, or created time"
-              hint="Alt+Shift+F focuses this filter."
-            />
-          </ErpSectionCard>
-
-          <ErpSectionCard
-            eyebrow="Recent"
-            title="Last created project"
-            description="The most recent project created in this session stays visible here."
-          >
-            <ErpFieldPreview
-              label="Project"
-              value={
-                recentProject
-                  ? `${recentProject.project_code} | ${recentProject.project_name}`
-                  : "No project created yet"
-              }
-              caption={
-                recentProject
-                  ? `Status ${recentProject.status ?? "ACTIVE"}`
-                  : "Create a project to populate this preview."
-              }
-              tone={recentProject ? "success" : "default"}
-            />
-          </ErpSectionCard>
-        </>
       }
       bottomContent={
         <ErpSectionCard
@@ -467,17 +394,8 @@ export default function SAProjectMaster() {
               {projectPagination.pageItems.map((project, index) => (
                 <button
                   key={project.id}
-                  ref={(element) => {
-                    projectRowRefs.current[index] = element;
-                  }}
+                  {...getRowProps(index)}
                   type="button"
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: projectRowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
                   className="w-full border-b border-slate-300 bg-white px-4 py-3 text-left text-sm text-slate-700 transition last:border-b-0 focus:bg-sky-50"
                 >
                   <span className="block font-semibold text-slate-900">

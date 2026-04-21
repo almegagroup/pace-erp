@@ -5,6 +5,7 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -120,7 +121,6 @@ export default function SADepartmentMaster() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
   const createInputRef = useRef(null);
-  const departmentRefs = useRef([]);
   const companySelectRef = useRef(null);
   const selectedCompanyIdRef = useRef("");
   const selectedDepartmentIdRef = useRef("");
@@ -152,22 +152,6 @@ export default function SADepartmentMaster() {
   useEffect(() => {
     selectedDepartmentIdRef.current = selectedDepartmentId;
   }, [selectedDepartmentId]);
-
-  const readiness = useMemo(() => {
-    const activeDepartments = departments.filter((row) => row.status === "ACTIVE").length;
-    const readyContexts = departments.filter((row) => row.derived_work_context).length;
-    const totalAssignedUsers = departments.reduce(
-      (sum, row) => sum + Number(row.derived_work_context?.assigned_user_count ?? 0),
-      0
-    );
-
-    return {
-      departments: departments.length,
-      activeDepartments,
-      readyContexts,
-      totalAssignedUsers,
-    };
-  }, [departments]);
 
   const loadCompaniesAndDepartments = useCallback(
     async (preferredCompanyId = "", preferredDepartmentId = "") => {
@@ -347,6 +331,8 @@ export default function SADepartmentMaster() {
     }
   }
 
+  const { getRowProps: getDepartmentRowProps } = useErpListNavigation(departments);
+
   useErpScreenCommands([
     {
       id: "sa-department-master-refresh",
@@ -430,7 +416,6 @@ export default function SADepartmentMaster() {
     <ErpScreenScaffold
       eyebrow="Department Foundation"
       title="Department Master"
-      description="Create company-bound departments now, let the backend derive `DEPT_*` work contexts automatically, and leave detailed business-page capability wiring for later."
       notices={notices}
       actions={[
         {
@@ -503,32 +488,6 @@ export default function SADepartmentMaster() {
             }),
         },
       ]}
-      metrics={[
-        {
-          label: "Departments",
-          value: readiness.departments,
-          caption: "Departments created inside the selected company.",
-          tone: "sky",
-        },
-        {
-          label: "Active",
-          value: readiness.activeDepartments,
-          caption: "Departments currently available for user mapping.",
-          tone: "emerald",
-        },
-        {
-          label: "Derived Contexts",
-          value: readiness.readyContexts,
-          caption: "Department rows already carrying their `DEPT_*` work context.",
-          tone: readiness.readyContexts === readiness.departments ? "emerald" : "amber",
-        },
-        {
-          label: "Assigned Users",
-          value: readiness.totalAssignedUsers,
-          caption: "Users already bound into department-derived contexts.",
-          tone: "slate",
-        },
-      ]}
       footerHints={[
         "ALT+R REFRESH",
         "ALT+S COMPANY",
@@ -541,7 +500,6 @@ export default function SADepartmentMaster() {
           <ErpSectionCard
             eyebrow="Context"
             title="Selected Company"
-            description="Departments remain per-company. Pick the business company you want to structure."
           >
             <div className="grid gap-3">
               <label className="grid gap-2">
@@ -590,7 +548,6 @@ export default function SADepartmentMaster() {
           <ErpSectionCard
             eyebrow="Create"
             title="Create Department"
-            description="This creates the department row first. The backend immediately derives the matching `DEPT_*` work context."
           >
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
               <label className="grid gap-2">
@@ -620,7 +577,6 @@ export default function SADepartmentMaster() {
           <ErpSectionCard
             eyebrow="Roster"
             title="Department Inventory"
-            description="Choose a department to inspect its derived work context and lifecycle readiness."
           >
             <div className="grid gap-2">
               {loading ? (
@@ -638,18 +594,9 @@ export default function SADepartmentMaster() {
                   return (
                     <button
                       key={department.id}
-                      ref={(element) => {
-                        departmentRefs.current[index] = element;
-                      }}
+                      {...getDepartmentRowProps(index)}
                       type="button"
                       onClick={() => setSelectedDepartmentId(department.id)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: departmentRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
                       className={`border px-4 py-3 text-left ${
                         isSelected
                           ? "border-sky-300 bg-sky-50 text-sky-900"
@@ -679,7 +626,6 @@ export default function SADepartmentMaster() {
                 ? `${selectedDepartment.department_code} | ${selectedDepartment.department_name}`
                 : "Choose A Department"
             }
-            description="Department is the business identity layer. The derived work context is the runtime access layer."
           >
             {selectedDepartment ? (
               <>
@@ -734,7 +680,6 @@ export default function SADepartmentMaster() {
           <ErpSectionCard
             eyebrow="Runtime Layer"
             title="Derived Work Context"
-            description="This is the runtime work scope ACL will evaluate later. Business pages can be assigned after the team foundation already exists."
             tone="accent"
           >
             {selectedDepartment?.derived_work_context ? (
@@ -774,7 +719,6 @@ export default function SADepartmentMaster() {
           <ErpSectionCard
             eyebrow="Next Step"
             title="How To Use This Foundation"
-            description="You can safely create team foundations now even before business pages exist."
             tone="warning"
           >
             <div className="grid gap-2">

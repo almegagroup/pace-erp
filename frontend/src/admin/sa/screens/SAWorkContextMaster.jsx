@@ -5,6 +5,7 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpScreenScaffold, {
@@ -378,18 +379,7 @@ export default function SAWorkContextMaster() {
     });
   }, [search, typeFilter, workContexts]);
 
-  const metrics = useMemo(() => {
-    const systemCount = workContexts.filter((row) => row.is_system === true).length;
-    const manualCount = workContexts.length - systemCount;
-    const activeCount = workContexts.filter((row) => row.is_active === true).length;
-
-    return {
-      total: workContexts.length,
-      manual: manualCount,
-      system: systemCount,
-      active: activeCount,
-    };
-  }, [workContexts]);
+  const { getRowProps } = useErpListNavigation(filteredContexts);
 
   const notices = [
     error ? { tone: "error", message: error } : null,
@@ -654,7 +644,6 @@ export default function SAWorkContextMaster() {
       <ErpScreenScaffold
         eyebrow="Work Scope Foundation"
         title="Work Context Master"
-        description="Keep company-wide and department-derived system scopes visible, then create manual business areas like PROD_POWDER, QA_ADMIX, SCM_OPERATIONS, or MGMT_ALL. Business rule: department is org structure, work scope is runtime business area."
         notices={notices}
         actions={[
           {
@@ -724,32 +713,6 @@ export default function SAWorkContextMaster() {
               }),
           },
         ]}
-        metrics={[
-          {
-            label: "Total Scopes",
-            value: metrics.total,
-            caption: "All work scopes currently defined in the selected company.",
-            tone: "sky",
-          },
-          {
-            label: "Manual Scopes",
-            value: metrics.manual,
-            caption: "Business slices created manually for Powder, Admix, SCM, Management, or Audit.",
-            tone: "emerald",
-          },
-          {
-            label: "System Scopes",
-            value: metrics.system,
-            caption: "GENERAL_OPS plus DEPT_* scopes derived from company and department foundations.",
-            tone: "amber",
-          },
-          {
-            label: "Active",
-            value: metrics.active,
-            caption: "Scopes currently available for capability wiring and user assignment.",
-            tone: "slate",
-          },
-        ]}
         footerHints={[
           "ALT+R REFRESH",
           "ALT+S SEARCH",
@@ -762,7 +725,6 @@ export default function SAWorkContextMaster() {
             <ErpSectionCard
               eyebrow="Company Scope"
               title="Select Company"
-              description="Work scopes remain company-bound. Change company first, then inspect or create manual runtime slices."
             >
               <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_150px]">
                 <label className="grid gap-2">
@@ -858,6 +820,7 @@ export default function SAWorkContextMaster() {
                         return (
                           <tr
                             key={context.work_context_id}
+                            {...getRowProps(index)}
                             className={selected ? "bg-sky-50" : "bg-white"}
                           >
                             <td className="border-b border-slate-200 px-4 py-3 align-top">

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
@@ -101,8 +102,6 @@ function sortModules(rows) {
 export default function SACompanyModuleMap() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const companyRefs = useRef([]);
-  const moduleRefs = useRef([]);
   const companySearchRef = useRef(null);
   const moduleSearchRef = useRef(null);
   const [companies, setCompanies] = useState([]);
@@ -236,6 +235,9 @@ export default function SACompanyModuleMap() {
     modules.find((row) => row.module_code === selectedModuleCode) ??
     null;
 
+  const { getRowProps: getCompanyRowProps } = useErpListNavigation(filteredCompanies);
+  const { getRowProps: getModuleRowProps } = useErpListNavigation(filteredModules);
+
   const enabledModules = modules.filter((row) => row.enabled);
   const uniqueProjects = new Set(modules.map((row) => row.project_code).filter(Boolean));
 
@@ -341,7 +343,6 @@ export default function SACompanyModuleMap() {
     <ErpScreenScaffold
       eyebrow="Company Module Rollout"
       title="Company Module Map"
-      description="Modules stay under projects. A company only sees modules from projects already mapped to it, and SA decides module rollout one company at a time."
       actions={[
         {
           key: "module-master",
@@ -400,44 +401,11 @@ export default function SACompanyModuleMap() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "companies",
-          label: "Companies",
-          value: loadingCompanies ? "..." : String(companies.length),
-          tone: "sky",
-          caption: "Business companies available for module rollout governance.",
-        },
-        {
-          key: "projects",
-          label: "Mapped Projects",
-          value: loadingModules ? "..." : String(uniqueProjects.size),
-          tone: "emerald",
-          caption: selectedCompany
-            ? "Projects already attached to the selected company."
-            : "Choose a company to inspect project-backed module availability.",
-        },
-        {
-          key: "modules",
-          label: "Available Modules",
-          value: loadingModules ? "..." : String(modules.length),
-          tone: "amber",
-          caption: "Modules eligible for the selected company because their project is already mapped.",
-        },
-        {
-          key: "enabled",
-          label: "Enabled",
-          value: loadingModules ? "..." : String(enabledModules.length),
-          tone: "slate",
-          caption: "Modules currently operational for the selected company.",
-        },
-      ]}
     >
       <div className="grid gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
         <ErpSectionCard
           eyebrow="Companies"
           title="Choose business company"
-          description="Select one company first. This screen only shows modules from projects already mapped into that company."
         >
           <div className="grid gap-4">
             <QuickFilterInput
@@ -461,18 +429,9 @@ export default function SACompanyModuleMap() {
                 {filteredCompanies.map((row, index) => (
                   <button
                     key={row.id}
-                    ref={(element) => {
-                      companyRefs.current[index] = element;
-                    }}
+                    {...getCompanyRowProps(index)}
                     type="button"
                     onClick={() => setSelectedCompanyId(row.id)}
-                    onKeyDown={(event) =>
-                      handleLinearNavigation(event, {
-                        index,
-                        refs: companyRefs.current,
-                        orientation: "vertical",
-                      })
-                    }
                     className={`w-full border-b border-slate-300 px-4 py-3 text-left text-sm transition last:border-b-0 ${
                       row.id === selectedCompanyId
                         ? "bg-sky-50 text-slate-900"
@@ -501,7 +460,6 @@ export default function SACompanyModuleMap() {
                 ? `${selectedCompany.company_code} | ${selectedCompany.company_name}`
                 : "No company selected"
             }
-            description="Project mapping is the gate. If a project is removed from a company, its modules disappear from this rollout screen automatically."
           >
             {selectedCompany ? (
               <div className="grid gap-4 md:grid-cols-2">
@@ -541,7 +499,6 @@ export default function SACompanyModuleMap() {
           <ErpSectionCard
             eyebrow="Modules"
             title="Project-backed module rollout"
-            description="Modules shown here already belong to a mapped project. SA now decides whether each module becomes operational for the selected company."
           >
             <div className="grid gap-4">
               <QuickFilterInput
@@ -569,16 +526,7 @@ export default function SACompanyModuleMap() {
                   {filteredModules.map((row, index) => (
                     <div
                       key={row.module_code}
-                      ref={(element) => {
-                        moduleRefs.current[index] = element;
-                      }}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: moduleRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
+                      {...getModuleRowProps(index)}
                       className={`border-b border-slate-300 px-4 py-3 last:border-b-0 ${
                         row.module_code === selectedModuleCode ? "bg-sky-50" : "bg-white"
                       }`}
@@ -625,7 +573,6 @@ export default function SACompanyModuleMap() {
           <ErpSectionCard
             eyebrow="Selected Module"
             title={selectedModule ? `${selectedModule.module_code} | ${selectedModule.module_name}` : "No module selected"}
-            description="This panel explains the rollout law for the currently selected module."
           >
             {selectedModule ? (
               <div className="grid gap-4 md:grid-cols-2">

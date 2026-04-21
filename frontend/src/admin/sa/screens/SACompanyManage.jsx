@@ -13,6 +13,7 @@ import { useNavigate } from "react-router-dom";
 import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
@@ -97,7 +98,6 @@ const DEFAULT_VISIBLE_COMPANY_COLUMNS = Object.freeze([
 export default function SACompanyManage() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchRef = useRef(null);
   const [companies, setCompanies] = useState([]);
   const [search, setSearch] = useState("");
@@ -141,17 +141,7 @@ export default function SACompanyManage() {
     return companies.filter((row) => companySearchValue(row).includes(needle));
   }, [companies, search]);
 
-  const metrics = useMemo(() => {
-    const activeCount = companies.filter((row) => row.status === "ACTIVE").length;
-    const inactiveCount = companies.filter((row) => row.status === "INACTIVE").length;
-
-    return {
-      total: companies.length,
-      active: activeCount,
-      inactive: inactiveCount,
-      mapped: companies.filter((row) => row.group_id).length,
-    };
-  }, [companies]);
+  const { getRowProps } = useErpListNavigation(filteredCompanies);
 
   useErpScreenHotkeys({
     refresh: {
@@ -325,45 +315,10 @@ export default function SACompanyManage() {
       <ErpMasterListTemplate
         eyebrow="Company Governance"
         title="Manage Business Companies"
-        description="Business company lifecycle should behave like a compact operating register. Search fast, hide unnecessary columns, and change state without leaving the sheet."
         actions={topActions}
         notices={[
           ...(error ? [{ key: "error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
-        ]}
-        metrics={[
-          {
-            key: "total",
-            label: "Total Companies",
-            value: String(metrics.total),
-            caption: "Business companies visible in company master.",
-            tone: "sky",
-            badge: "Live",
-          },
-          {
-            key: "active",
-            label: "Active",
-            value: String(metrics.active),
-            caption: "Currently enabled companies.",
-            tone: "emerald",
-            badge: "Ready",
-          },
-          {
-            key: "inactive",
-            label: "Inactive",
-            value: String(metrics.inactive),
-            caption: "Companies currently disabled.",
-            tone: "amber",
-            badge: "Paused",
-          },
-          {
-            key: "mapped",
-            label: "Mapped To Group",
-            value: String(metrics.mapped),
-            caption: "Companies already linked to a group.",
-            tone: "slate",
-            badge: "Map",
-          },
         ]}
         filterSection={{
           eyebrow: "Registry Filter",
@@ -390,7 +345,6 @@ export default function SACompanyManage() {
           title: loading
             ? "Refreshing company register"
             : `${filteredCompanies.length} visible compan${filteredCompanies.length === 1 ? "y" : "ies"}`,
-          description: "Action column stays visible so lifecycle change remains one move away.",
           children: loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
               Loading company inventory...
@@ -425,17 +379,7 @@ export default function SACompanyManage() {
                     return (
                       <tr
                         key={row.id}
-                        ref={(element) => {
-                          rowRefs.current[index] = element;
-                        }}
-                        tabIndex={0}
-                        onKeyDown={(event) =>
-                          handleLinearNavigation(event, {
-                            index,
-                            refs: rowRefs.current,
-                            orientation: "vertical",
-                          })
-                        }
+                        {...getRowProps(index)}
                         className="border-b border-slate-200"
                       >
                         {visibleColumns.map((column) => (
@@ -493,24 +437,6 @@ export default function SACompanyManage() {
                   })}
                 </tbody>
               </table>
-            </div>
-          ),
-        }}
-        sideSection={{
-          eyebrow: "View Control",
-          title: "Operator notes",
-          description: "Keep the sheet dense and task-focused like a real ERP register.",
-          children: (
-            <div className="grid gap-2 text-sm text-slate-700">
-              <div className="border border-slate-200 bg-white px-3 py-3">
-                Columns can be hidden without losing data or workflow actions.
-              </div>
-              <div className="border border-slate-200 bg-white px-3 py-3">
-                Lifecycle change stays explicit. No hard delete path exists on this screen.
-              </div>
-              <div className="border border-slate-200 bg-white px-3 py-3">
-                Search works across code, company, GST, group, and current state.
-              </div>
             </div>
           ),
         }}

@@ -19,6 +19,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import {
@@ -332,11 +333,6 @@ export default function SAUserScope() {
   const workContextSearchRef = useRef(null);
   const projectSearchRef = useRef(null);
   const departmentSearchRef = useRef(null);
-  const companyOptionRefs = useRef([]);
-  const workCompanyRefs = useRef([]);
-  const workContextRefs = useRef([]);
-  const projectRefs = useRef([]);
-  const departmentRefs = useRef([]);
 
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -542,6 +538,12 @@ export default function SAUserScope() {
       ]),
     [availableWorkContexts, workContextSearch]
   );
+
+  const { getRowProps: getCompanyRowProps } = useErpListNavigation(filteredCompanies);
+  const { getRowProps: getWorkCompanyRowProps } = useErpListNavigation(filteredWorkCompanies);
+  const { getRowProps: getWorkContextRowProps } = useErpListNavigation(filteredWorkContexts);
+  const { getRowProps: getProjectRowProps } = useErpListNavigation(filteredProjects);
+  const { getRowProps: getDepartmentRowProps } = useErpListNavigation(filteredDepartments);
 
   const readinessFlags = useMemo(
     () =>
@@ -970,54 +972,6 @@ export default function SAUserScope() {
     },
   ];
 
-  const metrics =
-    authUserId && payload
-      ? [
-          {
-            key: "user",
-            label: "User",
-            value: user?.user_code ?? "N/A",
-            caption: `${formatIdentityName(user)}${user?.designation_hint ? ` | ${user.designation_hint}` : ""}`,
-            tone: "sky",
-          },
-          {
-            key: "parent-company",
-            label: "Parent Company",
-            value: scope?.parent_company?.company_code ?? "Unset",
-            caption:
-              scope?.parent_company?.company_name ??
-              "HR identity truth is not yet mapped.",
-            tone: scope?.parent_company?.company_code ? "emerald" : "amber",
-          },
-          {
-            key: "work-companies",
-            label: "Work Companies",
-            value: String(workCompanyIds.length),
-            caption:
-              "Operational company scope currently assigned to this user.",
-            tone: workCompanyIds.length > 0 ? "emerald" : "amber",
-          },
-          {
-            key: "work-contexts",
-            label: "Work Contexts",
-            value: String(workContextIds.length),
-            caption:
-              "Runtime functional contexts currently available to this user.",
-            tone: workContextIds.length > 0 ? "emerald" : "amber",
-          },
-          {
-            key: "readiness",
-            label: "Readiness",
-            value: readinessFlags.length === 0 ? "Ready" : "Attention",
-            caption:
-              readinessFlags.length === 0
-                ? "Parent, role, and operational company scope are present."
-                : readinessFlags.join(" | "),
-            tone: readinessFlags.length === 0 ? "emerald" : "rose",
-          },
-        ]
-      : [];
-
   const notices = [
     ...(error
       ? [
@@ -1334,7 +1288,6 @@ export default function SAUserScope() {
       description="Bind one team identity through Parent Company and Department, then assign Work Companies and Work Scopes separately so SA does not mix HR truth with runtime access."
       actions={topActions}
       notices={notices}
-      metrics={metrics}
     >
       {mainContent}
 
@@ -1362,14 +1315,6 @@ export default function SAUserScope() {
             inputRef={companySearchRef}
             placeholder="Search by code, name, state, pin, or address"
             hint="Arrow Down moves into the results. Enter selects the focused company."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (event.key === "ArrowDown" && filteredCompanies.length > 0) {
-                  event.preventDefault();
-                  companyOptionRefs.current[0]?.focus();
-                }
-              },
-            }}
           />
 
           <div
@@ -1392,19 +1337,10 @@ export default function SAUserScope() {
                   return (
                     <button
                       key={company.id}
-                      ref={(element) => {
-                        companyOptionRefs.current[index] = element;
-                      }}
+                      {...getCompanyRowProps(index)}
                       type="button"
                       data-erp-nav-item="true"
                       onClick={() => selectParentCompany(company.id)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: companyOptionRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
                       className={`w-full border px-4 py-4 text-left text-sm transition ${
                         selected
                           ? "border-cyan-300 bg-cyan-50 text-cyan-900"
@@ -1468,17 +1404,6 @@ export default function SAUserScope() {
             inputRef={workCompanySearchRef}
             placeholder="Filter by code, name, state, pin, or address"
             hint="Arrow Down moves into the company checkbox list."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (
-                  event.key === "ArrowDown" &&
-                  filteredWorkCompanies.length > 0
-                ) {
-                  event.preventDefault();
-                  workCompanyRefs.current[0]?.focus();
-                }
-              },
-            }}
           />
 
           <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
@@ -1502,21 +1427,12 @@ export default function SAUserScope() {
                   >
                     <label className="flex items-start gap-3 cursor-pointer">
                       <input
-                        ref={(element) => {
-                          workCompanyRefs.current[index] = element;
-                        }}
+                        {...getWorkCompanyRowProps(index)}
                         data-erp-nav-item="true"
                         type="checkbox"
                         checked={selected}
                         onChange={() =>
                           toggleSelection(company.id, workCompanyIds, setWorkCompanyIds)
-                        }
-                        onKeyDown={(event) =>
-                          handleLinearNavigation(event, {
-                            index,
-                            refs: workCompanyRefs.current,
-                            orientation: "vertical",
-                          })
                         }
                         className="mt-1 h-4 w-4 border-slate-300 bg-white text-cyan-600"
                       />
@@ -1602,17 +1518,6 @@ export default function SAUserScope() {
             inputRef={workContextSearchRef}
             placeholder="Filter by company, context, or department"
             hint="Arrow Down moves into the work-context checkbox list."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (
-                  event.key === "ArrowDown" &&
-                  filteredWorkContexts.length > 0
-                ) {
-                  event.preventDefault();
-                  workContextRefs.current[0]?.focus();
-                }
-              },
-            }}
           />
 
           <div className="grid gap-3 md:grid-cols-2">
@@ -1636,9 +1541,7 @@ export default function SAUserScope() {
                     }`}
                   >
                     <input
-                      ref={(element) => {
-                        workContextRefs.current[index] = element;
-                      }}
+                      {...getWorkContextRowProps(index)}
                       data-erp-nav-item="true"
                       type="checkbox"
                       checked={selected}
@@ -1648,13 +1551,6 @@ export default function SAUserScope() {
                           workContextIds,
                           setWorkContextIds
                         )
-                      }
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: workContextRefs.current,
-                          orientation: "vertical",
-                        })
                       }
                       className="mt-1 h-4 w-4 border-slate-300 bg-white text-violet-600"
                     />
@@ -1720,14 +1616,6 @@ export default function SAUserScope() {
             inputRef={projectSearchRef}
             placeholder="Filter by project code or project name"
             hint="Arrow Down moves into the override checkbox list."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (event.key === "ArrowDown" && filteredProjects.length > 0) {
-                  event.preventDefault();
-                  projectRefs.current[0]?.focus();
-                }
-              },
-            }}
           />
 
           <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
@@ -1749,21 +1637,12 @@ export default function SAUserScope() {
                     }`}
                   >
                     <input
-                      ref={(element) => {
-                        projectRefs.current[index] = element;
-                      }}
+                      {...getProjectRowProps(index)}
                       data-erp-nav-item="true"
                       type="checkbox"
                       checked={selected}
                       onChange={() =>
                         toggleSelection(project.id, projectIds, setProjectIds)
-                      }
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: projectRefs.current,
-                          orientation: "vertical",
-                        })
                       }
                       className="mt-1 h-4 w-4 border-slate-300 bg-white text-emerald-600"
                     />
@@ -1819,17 +1698,6 @@ export default function SAUserScope() {
             inputRef={departmentSearchRef}
             placeholder="Filter by department code or department name"
             hint="Arrow Down moves into the department list. Only one department can stay selected."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (
-                  event.key === "ArrowDown" &&
-                  filteredDepartments.length > 0
-                ) {
-                  event.preventDefault();
-                  departmentRefs.current[0]?.focus();
-                }
-              },
-            }}
           />
 
           <div className="grid gap-3 md:grid-cols-2">
@@ -1851,20 +1719,11 @@ export default function SAUserScope() {
                     }`}
                   >
                     <input
-                      ref={(element) => {
-                        departmentRefs.current[index] = element;
-                      }}
+                      {...getDepartmentRowProps(index)}
                       data-erp-nav-item="true"
                       type="checkbox"
                       checked={selected}
                       onChange={() => toggleSingleDepartment(department.id)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: departmentRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
                       className="mt-1 h-4 w-4 border-slate-300 bg-white text-amber-600"
                     />
                       <span>

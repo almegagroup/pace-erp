@@ -248,7 +248,6 @@ export function ErpActionStrip({ actions = [] }) {
 export function ErpSectionCard({
   eyebrow,
   title,
-  description,
   aside,
   children,
   className = "",
@@ -258,7 +257,7 @@ export function ErpSectionCard({
     <section
       className={`overflow-hidden border shadow-[0_4px_12px_rgba(15,23,42,0.04)] ${SECTION_TONE_CLASS[tone] ?? SECTION_TONE_CLASS.default} ${className}`.trim()}
     >
-      {(eyebrow || title || description || aside) ? (
+      {(eyebrow || title || aside) ? (
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-4 py-3">
           <div className="min-w-0">
             {eyebrow ? (
@@ -271,16 +270,11 @@ export function ErpSectionCard({
                 {title}
               </h2>
             ) : null}
-            {description ? (
-              <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
-                {description}
-              </p>
-            ) : null}
           </div>
           {aside ? <Fragment>{aside}</Fragment> : null}
         </div>
       ) : null}
-      <div className={eyebrow || title || description || aside ? "px-4 py-4" : "px-4 py-4"}>
+      <div className="px-4 py-4">
         {children}
       </div>
     </section>
@@ -383,11 +377,6 @@ export default function ErpScreenScaffold({
                 <h1 className="mt-2 text-[1.7rem] font-semibold tracking-tight text-slate-900">
                   {title}
                 </h1>
-                {description ? (
-                  <p className="mt-2 max-w-5xl text-sm leading-6 text-slate-600">
-                    {description}
-                  </p>
-                ) : null}
               </div>
 
               {resolvedActions.length > 0 ? (
@@ -398,42 +387,6 @@ export default function ErpScreenScaffold({
             </div>
           </div>
 
-          {metrics.length > 0 ? (
-            <div className="grid gap-2 border-b border-slate-300 bg-[#f6f8fb] px-4 py-3 md:grid-cols-2 xl:grid-cols-4">
-              {metrics.map((metric, index) => (
-                <ErpMetricCard
-                  key={metric.key ?? `${metric.label}-${index}`}
-                  {...metric}
-                />
-              ))}
-            </div>
-          ) : null}
-
-          {mergedNotices.length > 0 ? (
-            <div className="grid gap-2 border-b border-slate-300 bg-white px-4 py-3">
-              {mergedNotices.map((notice, index) => {
-                if (!notice?.message) {
-                  return null;
-                }
-
-                return (
-                  <div
-                    key={notice.key ?? `${notice.tone}-${index}`}
-                    className={`border px-3 py-3 text-sm ${NOTICE_TONE_CLASS[notice.tone] ?? NOTICE_TONE_CLASS.info}`}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70">
-                          {NOTICE_TONE_LABEL[notice.tone] ?? NOTICE_TONE_LABEL.info}
-                        </div>
-                        <div className="mt-1 leading-6">{notice.message}</div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
         </div>
 
         <div className="grid gap-4">{children}</div>

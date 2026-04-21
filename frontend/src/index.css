@@ -191,6 +191,33 @@ body[data-workspace-mode="protected"] *::-webkit-scrollbar-thumb {
   background: #e3edf9;
 }
 
+/* ============================================================
+   ERP LIST NAVIGATION — Row focus and selection states
+   Driven by useErpListNavigation hook (UX-4)
+   ============================================================ */
+
+/* Focused row — keyboard focus lands on the <tr> itself */
+.erp-grid-table tbody tr:focus-visible {
+  background: #d6eaf9;
+  outline: 2px solid var(--erp-accent);
+  outline-offset: -2px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Selected row — Space toggles, multi-select supported */
+.erp-grid-table tbody tr[data-erp-row-selected="true"] {
+  background: #bdd9f5;
+  border-left: 3px solid var(--erp-accent);
+}
+
+/* Selected + focused */
+.erp-grid-table tbody tr[data-erp-row-selected="true"]:focus-visible {
+  background: #a8cef0;
+  outline: 2px solid var(--erp-accent);
+  outline-offset: -2px;
+}
+
 @keyframes loader {
 0% { width:0%; }
 100% { width:100%; }

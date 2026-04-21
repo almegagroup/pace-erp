@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
+import { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 import {
@@ -106,7 +108,6 @@ function createEmptyDraft() {
 export default function SAApprovalRules() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchRef = useRef(null);
   const [workspace, setWorkspace] = useState({
     companies: [],
@@ -324,6 +325,8 @@ export default function SAApprovalRules() {
     searchQuery,
   ]);
 
+  const { getRowProps } = useErpListNavigation(filteredRules);
+
   async function handleSave() {
     if (!draft.company_id || !draft.module_code || !draft.resource_code) {
       setError("Company, module, and exact approval resource are required.");
@@ -479,7 +482,6 @@ export default function SAApprovalRules() {
     <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
       title="Who Approves What"
-      description="Bind exact approvers to exact company, module, resource, action, and requester work scope. Role rank still matters in governance, but stage design stays business-driven."
       actions={[
         {
           key: "policy",
@@ -534,40 +536,6 @@ export default function SAApprovalRules() {
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
-      ]}
-      metrics={[
-        {
-          key: "rules",
-          label: "Approver Rules",
-          value: loading ? "..." : String(workspace.approver_rules.length),
-          tone: "sky",
-          caption: "All saved scoped approver rows.",
-        },
-        {
-          key: "visible",
-          label: "Visible",
-          value: loading ? "..." : String(filteredRules.length),
-          tone: "emerald",
-          caption: "Rules matching the current filters.",
-        },
-        {
-          key: "scope",
-          label: "Requester Scope",
-          value: buildApprovalScopeLabel(draft.scope_type),
-          tone: draft.scope_type === "COMPANY_WIDE" || draft.scope_type === "DIRECTOR" ? "slate" : "amber",
-          caption:
-            APPROVAL_SCOPE_OPTIONS.find((option) => option.value === draft.scope_type)?.description ??
-            "Choose how narrowly or broadly this approver should match.",
-        },
-        {
-          key: "target",
-          label: "Target",
-          value: draft.target_mode === "user" ? "Specific User" : "Role",
-          tone: "slate",
-          caption: draft.target_mode === "user"
-            ? buildUserLabel(workspace.users.find((row) => row.auth_user_id === draft.approver_user_id) ?? null)
-            : ERP_ROLE_LABELS[draft.approver_role_code] ?? draft.approver_role_code,
-        },
       ]}
       filterSection={{
         eyebrow: "Scope Filters",
@@ -700,7 +668,6 @@ export default function SAApprovalRules() {
       reviewSection={{
         eyebrow: "Existing Rules",
         title: loading ? "Loading approver rules" : `${filteredRules.length} visible approver rule${filteredRules.length === 1 ? "" : "s"}`,
-      description: "Pick a row to edit it, or delete rows that should no longer route approvals.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading scoped approver rules.
@@ -720,18 +687,9 @@ export default function SAApprovalRules() {
               return (
                 <button
                   key={row.approver_id}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
+                  {...getRowProps(index)}
                   type="button"
                   onClick={() => handleRulePick(row)}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: rowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
                   className={`border px-4 py-4 text-left ${
                     draft.approver_id === row.approver_id ? "border-sky-400 bg-sky-50" : "border-slate-300 bg-white"
                   }`}
@@ -777,11 +735,11 @@ export default function SAApprovalRules() {
           </div>
         ),
       }}
-      sideSection={{
-        eyebrow: "Rule Editor",
-        title: draft.approver_id ? "Edit approver rule" : "Create approver rule",
-        description: "Use explicit scope type so company-wide, director, department, lane, and requester-user exception rules stay deterministic. Stages stay flexible for your business chain design.",
-        children: (
+      bottomSection={
+        <ErpSectionCard
+          eyebrow="Rule Editor"
+          title={draft.approver_id ? "Edit approver rule" : "Create approver rule"}
+        >
           <div className="grid gap-4">
             <label className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -982,8 +940,8 @@ export default function SAApprovalRules() {
               Company-wide and director rows are broad participants, not weak fallback rows. Department, lane, and user-exception rows can coexist in the same effective approver pool.
             </div>
           </div>
-        ),
-      }}
+        </ErpSectionCard>
+      }
     />
   );
 }

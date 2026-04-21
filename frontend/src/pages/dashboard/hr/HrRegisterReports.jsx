@@ -138,7 +138,7 @@ function buildDownloadRows(columns, rows) {
   });
 }
 
-function RegisterCriteriaPage({ kind, title, description, resultScreenCode }) {
+function RegisterCriteriaPage({ kind, title, resultScreenCode }) {
   const { runtimeContext } = useMenu();
   const actionRefs = useRef([]);
   const [criteria, setCriteria] = useState(() => defaultCriteria(kind));
@@ -194,7 +194,6 @@ function RegisterCriteriaPage({ kind, title, description, resultScreenCode }) {
   return (
     <ErpScreenScaffold
       title={title}
-      description={description}
       actions={[
         {
           key: "run",
@@ -225,7 +224,6 @@ function RegisterCriteriaPage({ kind, title, description, resultScreenCode }) {
 
         <ErpSectionCard
           title="Report Criteria"
-          description="Choose date range first, then one company or * for all scoped companies. The report opens on a separate results page."
         >
           <div className="grid gap-3 md:grid-cols-3">
             <label className="grid gap-2">
@@ -375,7 +373,6 @@ function RegisterResultsPage({ kind, title, loader, criteriaScreenCode }) {
   return (
     <ErpScreenScaffold
       title={title}
-      description="Filtered report opens separately so search, review, and download do not overwrite the original criteria page."
       actions={[
         {
           key: "back",
@@ -415,7 +412,7 @@ function RegisterResultsPage({ kind, title, loader, criteriaScreenCode }) {
           <ErpFieldPreview label="Current Page" value={`${safePage} / ${totalPages}`} />
         </div>
 
-        <ErpSectionCard title="Search Report" description="Search inside the loaded report before pagination or download.">
+        <ErpSectionCard title="Search Report">
           <QuickFilterInput
             label="Quick Search"
             value={searchQuery}
@@ -432,7 +429,6 @@ function RegisterResultsPage({ kind, title, loader, criteriaScreenCode }) {
 
         <ErpSectionCard
           title={loading ? "Loading report" : `${filteredRows.length} matching row${filteredRows.length === 1 ? "" : "s"}`}
-          description="Filtered data stays on this page. Browser back returns to the original criteria screen."
         >
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
@@ -488,7 +484,6 @@ export function LeaveRegisterCriteriaPage() {
     <RegisterCriteriaPage
       kind="leave"
       title="Leave Register Report Criteria"
-      description="Choose the leave report criteria first. The filtered output opens in a separate report page."
       resultScreenCode="HR_LEAVE_REGISTER_RESULTS"
     />
   );
@@ -528,7 +523,6 @@ export function OutWorkRegisterCriteriaPage() {
     <RegisterCriteriaPage
       kind="outWork"
       title="Out Work Register Report Criteria"
-      description="Choose the out work report criteria first. The filtered output opens in a separate report page."
       resultScreenCode="HR_OUT_WORK_REGISTER_RESULTS"
     />
   );

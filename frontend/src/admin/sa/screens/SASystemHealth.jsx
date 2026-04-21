@@ -252,41 +252,6 @@ export default function SASystemHealth() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "system-version",
-      label: "System Version",
-      value: loading ? "..." : systemVersion,
-      tone: "sky",
-      caption:
-        "Current backend system version reported by the diagnostics endpoint.",
-    },
-    {
-      key: "database-status",
-      label: "Database",
-      value: loading ? "..." : dbStatus,
-      tone: dbStatus === "DOWN" ? "rose" : "emerald",
-      caption:
-        "Authoritative database connectivity check against ERP session storage.",
-    },
-    {
-      key: "acl-status",
-      label: "ACL Snapshot",
-      value: loading ? "..." : aclStatus,
-      tone: aclStatus === "UNAVAILABLE" ? "amber" : "emerald",
-      caption:
-        "Readiness of the permission projection layer used by controlled access flow.",
-    },
-    {
-      key: "menu-status",
-      label: "Menu Snapshot",
-      value: loading ? "..." : menuStatus,
-      tone: menuStatus === "UNAVAILABLE" ? "amber" : "emerald",
-      caption:
-        "Readiness of the menu projection layer that feeds controlled navigation.",
-    },
-  ];
-
   return (
     <ErpScreenScaffold
       eyebrow="SA Diagnostics"
@@ -304,7 +269,6 @@ export default function SASystemHealth() {
             ]
           : alerts
       }
-      metrics={metrics}
     >
       <ErpSectionCard
         eyebrow="Diagnostics Interpretation"

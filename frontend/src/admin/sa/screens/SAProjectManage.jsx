@@ -11,6 +11,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { applyQuickFilter, sortProjects } from "../../../shared/erpCollections.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 
 async function readJsonSafe(response) {
   try {
@@ -87,7 +88,6 @@ export default function SAProjectManage() {
   const [searchParams] = useSearchParams();
   const initialProjectId = searchParams.get("project_id") ?? "";
   const actionRefs = useRef([]);
-  const projectRefs = useRef([]);
   const searchRef = useRef(null);
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId);
@@ -178,15 +178,7 @@ export default function SAProjectManage() {
   const selectedProject =
     projects.find((row) => row.id === selectedProjectId) ?? null;
 
-  const metrics = useMemo(
-    () => ({
-      total: projects.length,
-      active: projects.filter((row) => row.status === "ACTIVE").length,
-      inactive: projects.filter((row) => row.status === "INACTIVE").length,
-      mappedCompanies: mappedCompanyCount,
-    }),
-    [projects, mappedCompanyCount]
-  );
+  const { getRowProps } = useErpListNavigation(filteredProjects);
 
   useErpScreenHotkeys({
     refresh: {
@@ -328,38 +320,6 @@ export default function SAProjectManage() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "total",
-          label: "Projects",
-          value: loading ? "..." : String(metrics.total),
-          tone: "sky",
-          caption: "Reusable project masters currently available in the global registry.",
-        },
-        {
-          key: "active",
-          label: "Active",
-          value: loading ? "..." : String(metrics.active),
-          tone: "emerald",
-          caption: "Projects ready to be mapped into company operations.",
-        },
-        {
-          key: "inactive",
-          label: "Inactive",
-          value: loading ? "..." : String(metrics.inactive),
-          tone: "amber",
-          caption: "Projects currently parked from operational use.",
-        },
-        {
-          key: "mapped",
-          label: "Mapped Companies",
-          value: selectedProject ? String(metrics.mappedCompanies) : "0",
-          tone: "slate",
-          caption: selectedProject
-            ? "Business companies currently attached to the selected project."
-            : "Select a project to inspect company usage.",
-        },
-      ]}
     >
       <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <ErpSectionCard
@@ -393,18 +353,9 @@ export default function SAProjectManage() {
                   return (
                     <button
                       key={project.id}
-                      ref={(element) => {
-                        projectRefs.current[index] = element;
-                      }}
+                      {...getRowProps(index)}
                       type="button"
                       onClick={() => setSelectedProjectId(project.id)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: projectRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
                       className={`w-full border-b border-slate-300 px-4 py-3 text-left text-sm transition last:border-b-0 ${
                         isSelected
                           ? "bg-sky-50 text-slate-900"

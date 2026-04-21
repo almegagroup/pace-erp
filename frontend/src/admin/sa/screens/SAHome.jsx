@@ -237,41 +237,6 @@ export default function SAHome() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "companies",
-      label: "Companies",
-      value: String(controlPanel?.company_count ?? "..."),
-      caption: "Current company inventory visible inside the SA control plane.",
-      tone: "sky",
-      badge: "Live",
-    },
-    {
-      key: "users",
-      label: "Users",
-      value: String(controlPanel?.erp_user_count ?? "..."),
-      caption: "Mapped ERP users currently available to governance workflows.",
-      tone: "emerald",
-      badge: "ERP",
-    },
-    {
-      key: "pending-signups",
-      label: "Pending Signups",
-      value: String(controlPanel?.pending_signup_count ?? "..."),
-      caption: "Onboarding queue items still waiting for SA decision.",
-      tone: "amber",
-      badge: "Queue",
-    },
-    {
-      key: "snapshot-health",
-      label: "Snapshot Health",
-      value: deriveSnapshotHealth(systemHealth),
-      caption: "Combined health view over DB, ACL snapshot, and menu snapshot readiness.",
-      tone: deriveSnapshotHealth(systemHealth) === "READY" ? "emerald" : "rose",
-      badge: systemHealth?.db_status ?? "Runtime",
-    },
-  ];
-
   const commands = useMemo(
     () => [
       {
@@ -317,7 +282,6 @@ export default function SAHome() {
     <ErpScreenScaffold
       eyebrow="Super Admin Command"
       title="Super Admin Dashboard"
-      description="Follow the setup flow from organization foundations to runtime checks. Each section groups the next safe SA step without mixing advanced governance into the first pass."
       actions={topActions}
       notices={
         error
@@ -330,12 +294,10 @@ export default function SAHome() {
             ]
           : []
       }
-      metrics={metrics}
     >
       <ErpSectionCard
         eyebrow="Setup Flow"
         title="Complete setup in the right order"
-        description="Move left to right through the governance cycle. Start with company and team structure, then wire access, then onboard users, then finish approval and reporting rules."
       >
         <div className="grid gap-6">
           {launchSections.map((section) => (
@@ -374,7 +336,6 @@ export default function SAHome() {
         <ErpSectionCard
           eyebrow="Working Rule"
           title="How SA Should Move"
-          description="This dashboard is a runbook, not a free-form launchpad."
         >
           <div className="grid gap-2">
             <div className="grid grid-cols-[140px_minmax(0,1fr)] border border-slate-200 bg-white px-3 py-3">
@@ -401,7 +362,6 @@ export default function SAHome() {
         <ErpSectionCard
           eyebrow="Readiness"
           title="Current runtime health"
-          description="These checks come from the same backend projections that power the deeper SA workspaces."
         >
           <div className="grid gap-2">
             {[

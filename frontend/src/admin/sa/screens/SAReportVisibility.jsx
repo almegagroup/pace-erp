@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
+import { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 import {
@@ -105,7 +107,6 @@ function createEmptyDraft() {
 export default function SAReportVisibility() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchRef = useRef(null);
   const [workspace, setWorkspace] = useState({
     companies: [],
@@ -296,6 +297,8 @@ export default function SAReportVisibility() {
     searchQuery,
   ]);
 
+  const { getRowProps } = useErpListNavigation(filteredRules);
+
   async function handleSave() {
     if (!draft.company_id || !draft.module_code || !draft.resource_code) {
       setError("Company, module, and exact report resource are required.");
@@ -447,7 +450,6 @@ export default function SAReportVisibility() {
     <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
       title="Who Can See Reports"
-      description="Separate report visibility from approver authority. A reviewer can see registers and details without becoming an approver."
       actions={[
         {
           key: "approver",
@@ -493,38 +495,6 @@ export default function SAReportVisibility() {
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
-      ]}
-      metrics={[
-        {
-          key: "viewerRules",
-          label: "Viewer Rules",
-          value: loading ? "..." : String(workspace.viewer_rules.length),
-          tone: "sky",
-          caption: "All saved report visibility rows.",
-        },
-        {
-          key: "visible",
-          label: "Visible",
-          value: loading ? "..." : String(filteredRules.length),
-          tone: "emerald",
-          caption: "Rules matching the current filter.",
-        },
-        {
-          key: "scope",
-          label: "Visibility Scope",
-          value: buildVisibilityScopeLabel(draft.scope_type),
-          tone: draft.scope_type === "COMPANY_WIDE" || draft.scope_type === "DIRECTOR" ? "slate" : "amber",
-          caption:
-            VISIBILITY_SCOPE_OPTIONS.find((option) => option.value === draft.scope_type)?.description ??
-            "Choose how broadly this report visibility should match.",
-        },
-        {
-          key: "action",
-          label: "Action",
-          value: draft.action_code,
-          tone: "slate",
-          caption: draft.resource_code || "Choose a report resource",
-        },
       ]}
       filterSection={{
         eyebrow: "Visibility Filters",
@@ -655,7 +625,6 @@ export default function SAReportVisibility() {
       reviewSection={{
         eyebrow: "Existing Viewer Rules",
         title: loading ? "Loading visibility rules" : `${filteredRules.length} visible viewer rule${filteredRules.length === 1 ? "" : "s"}`,
-        description: "Use these rows to control who can see company-wide or department-scoped register and report pages.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading report visibility rules.
@@ -675,18 +644,9 @@ export default function SAReportVisibility() {
               return (
                 <button
                   key={row.viewer_id}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
+                  {...getRowProps(index)}
                   type="button"
                   onClick={() => handleRulePick(row)}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: rowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
                   className={`border px-4 py-4 text-left ${
                     draft.viewer_id === row.viewer_id ? "border-sky-400 bg-sky-50" : "border-slate-300 bg-white"
                   }`}
@@ -732,11 +692,11 @@ export default function SAReportVisibility() {
           </div>
         ),
       }}
-      sideSection={{
-        eyebrow: "Viewer Rule Editor",
-        title: draft.viewer_id ? "Edit visibility rule" : "Create visibility rule",
-        description: "Use explicit scope type so company-wide, director, department, lane, and requester-user exception visibility stays deterministic.",
-        children: (
+      bottomSection={
+        <ErpSectionCard
+          eyebrow="Viewer Rule Editor"
+          title={draft.viewer_id ? "Edit visibility rule" : "Create visibility rule"}
+        >
           <div className="grid gap-4">
             <label className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -916,8 +876,8 @@ export default function SAReportVisibility() {
               Use company-wide or director viewer rows for broad business visibility. Use department, lane, or user-exception viewer rows when the report must stay tightly scoped.
             </div>
           </div>
-        ),
-      }}
+        </ErpSectionCard>
+      }
     />
   );
 }

@@ -20,6 +20,7 @@ import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Sessions" },
@@ -235,11 +236,7 @@ export default function SASessions() {
     [searchQuery, statusFilteredSessions]
   );
   const sessionPagination = useErpPagination(filteredSessions, 10);
-
-  const activeCount = sessions.filter((session) => session.status === "ACTIVE").length;
-  const revokedCount = sessions.filter((session) => session.status === "REVOKED").length;
-  const idleCount = sessions.filter((session) => session.status === "IDLE").length;
-  const expiredCount = sessions.filter((session) => session.status === "EXPIRED").length;
+  const { getRowProps } = useErpListNavigation(sessionPagination.pageItems);
 
   useErpScreenCommands([
     {
@@ -313,41 +310,6 @@ export default function SASessions() {
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
-    },
-  ];
-
-  const metrics = [
-    {
-      key: "all-sessions",
-      label: "All Sessions",
-      value: loading ? "..." : String(sessions.length),
-      tone: "sky",
-      caption:
-        "Full admin-visible session inventory returned by the ERP session governance endpoint.",
-    },
-    {
-      key: "active-sessions",
-      label: "Active",
-      value: loading ? "..." : String(activeCount),
-      tone: "emerald",
-      caption:
-        "Currently live ERP sessions that can still access protected routes.",
-    },
-    {
-      key: "revoked-sessions",
-      label: "Revoked",
-      value: loading ? "..." : String(revokedCount),
-      tone: "rose",
-      caption:
-        "Sessions explicitly terminated by logout, new login, or revoke governance.",
-    },
-    {
-      key: "idle-expired",
-      label: "Idle / Expired",
-      value: loading ? "..." : String(idleCount + expiredCount),
-      tone: "amber",
-      caption:
-        "Sessions that are no longer usable because lifecycle termination already occurred.",
     },
   ];
 
@@ -432,7 +394,7 @@ export default function SASessions() {
             </thead>
             <tbody>
               {sessionPagination.pageItems.map((session, index) => (
-                <tr key={session.session_id} className="border-b border-slate-200 bg-white">
+                <tr key={session.session_id} {...getRowProps(index)} className="border-b border-slate-200 bg-white">
                   <td className="px-3 py-2 text-sm text-slate-700">
                     <div>
                       <p className="font-medium text-slate-900">
@@ -528,7 +490,6 @@ export default function SASessions() {
             ]
           : []
       }
-      metrics={metrics}
       filterSection={filterSection}
       listSection={listSection}
     />

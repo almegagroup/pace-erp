@@ -474,47 +474,6 @@ export default function SAControlPanel() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "database",
-      label: "Database",
-      value: loading ? "..." : health?.db_status ?? controlPanel?.db_status ?? "N/A",
-      tone: health?.db_status === "DOWN" ? "rose" : "emerald",
-      caption: "Live database probe from the admin diagnostics layer.",
-    },
-    {
-      key: "mapped-users",
-      label: "Mapped Users",
-      value: loading ? "..." : String(controlPanel?.user_count ?? 0),
-      tone: "sky",
-      caption:
-        "Current user-company role mappings visible to the admin control plane.",
-    },
-    {
-      key: "recent-sessions",
-      label: "Recent Active Sessions",
-      value: loading ? "..." : String(recentSessions.length),
-      tone: "amber",
-      caption:
-        "Preview count from the current active-session diagnostics payload.",
-    },
-    {
-      key: "recent-audit",
-      label: "Recent Admin Activity",
-      value: loading ? "..." : String(recentAudit.length),
-      tone: "slate",
-      caption:
-        "Most recent admin control-plane audit entries returned by backend.",
-    },
-    {
-      key: "system-version",
-      label: "System Build",
-      value: loading ? "..." : systemVersion,
-      tone: "slate",
-      caption: "Current ERP build signature reported by diagnostics payload.",
-    },
-  ];
-
   const notices = [
     ...(error
       ? [
@@ -545,10 +504,8 @@ export default function SAControlPanel() {
     <ErpScreenScaffold
       eyebrow="SA Command Center"
       title="ERP Control Panel"
-      description="Use this screen to assess ERP health, review recent activity, and launch the next SA governance surface without leaving the control plane."
       actions={topActions}
       notices={notices}
-      metrics={metrics}
     >
       <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
         <DataTableCard
@@ -685,7 +642,6 @@ export default function SAControlPanel() {
         <ErpSectionCard
           eyebrow="Quick Launch"
           title="Open the next SA workspace"
-          description="Use the same setup sequence as the sidebar: foundations first, advanced governance later."
         >
           <div className="grid gap-6">
             {quickLaunchSections.map((section) => (
