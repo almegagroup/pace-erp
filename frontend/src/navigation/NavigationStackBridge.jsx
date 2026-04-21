@@ -37,6 +37,12 @@ export default function NavigationStackBridge() {
     if (!active?.route) return;
 
     if (active.route !== location.pathname) {
+      // Companion routes (e.g. /register/results extending /register) are
+      // navigated to via React Router but have no screen code of their own.
+      // If the current pathname is a sub-path of the active screen's route,
+      // leave the user there — do not force them back to the screen root.
+      if (location.pathname.startsWith(active.route + "/")) return;
+
       navigate(active.route, { replace: true });
     }
   }, [location.pathname, navigate]);
