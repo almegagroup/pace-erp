@@ -42,6 +42,14 @@ export const HR_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  HR_LEAVE_REGISTER_RESULTS: {
+    screen_code: "HR_LEAVE_REGISTER_RESULTS",
+    route: "/dashboard/hr/leave/register/results",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   HR_OUT_WORK_APPLY: {
     screen_code: "HR_OUT_WORK_APPLY",
     route: "/dashboard/hr/out-work/apply",
@@ -77,6 +85,14 @@ export const HR_SCREENS = Object.freeze({
   HR_OUT_WORK_REGISTER: {
     screen_code: "HR_OUT_WORK_REGISTER",
     route: "/dashboard/hr/out-work/register",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  HR_OUT_WORK_REGISTER_RESULTS: {
+    screen_code: "HR_OUT_WORK_REGISTER_RESULTS",
+    route: "/dashboard/hr/out-work/register/results",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
