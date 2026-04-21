@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import {
+  openScreen,
+} from "../../../navigation/screenStackEngine.js";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -98,22 +100,6 @@ function calculateInclusiveDays(fromDate, toDate) {
   return Math.floor(diffMs / 86400000) + 1;
 }
 
-function buildSearchParams(criteria) {
-  const params = new URLSearchParams();
-  params.set("from_date", criteria.fromDate);
-  params.set("to_date", criteria.toDate);
-  params.set("company_id", criteria.companyId);
-  return params.toString();
-}
-
-function parseCriteria(locationSearch) {
-  const params = new URLSearchParams(locationSearch);
-  return {
-    fromDate: params.get("from_date")?.trim() || "",
-    toDate: params.get("to_date")?.trim() || "",
-    companyId: params.get("company_id")?.trim() || "",
-  };
-}
 
 function resolveCompanyLabel(companies, companyId) {
   if (companyId === "*") {
@@ -152,8 +138,7 @@ function buildDownloadRows(columns, rows) {
   });
 }
 
-function RegisterCriteriaPage({ kind, title, description, resultPath }) {
-  const navigate = useNavigate();
+function RegisterCriteriaPage({ kind, title, description, resultScreenCode }) {
   const { runtimeContext } = useMenu();
   const actionRefs = useRef([]);
   const [criteria, setCriteria] = useState(() => defaultCriteria(kind));
@@ -186,7 +171,7 @@ function RegisterCriteriaPage({ kind, title, description, resultPath }) {
     }
     setError("");
     writeCriteria(kind, criteria);
-    navigate(`${resultPath}?${buildSearchParams(criteria)}`);
+    openScreen(resultScreenCode);
   }
 
   useErpScreenCommands([
@@ -289,9 +274,7 @@ function RegisterCriteriaPage({ kind, title, description, resultPath }) {
   );
 }
 
-function RegisterResultsPage({ kind, title, loader, criteriaPath }) {
-  const location = useLocation();
-  const navigate = useNavigate();
+function RegisterResultsPage({ kind, title, loader, criteriaScreenCode }) {
   const searchRef = useRef(null);
   const actionRefs = useRef([]);
   const { runtimeContext } = useMenu();
@@ -300,7 +283,7 @@ function RegisterResultsPage({ kind, title, loader, criteriaPath }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
-  const criteria = useMemo(() => parseCriteria(location.search), [location.search]);
+  const criteria = useMemo(() => readCriteria(kind) ?? { fromDate: "", toDate: "", companyId: "" }, [kind]);
   const columns = REPORT_COLUMNS_BY_KIND[kind];
   const availableCompanies = Array.isArray(runtimeContext?.availableCompanies)
     ? runtimeContext.availableCompanies
@@ -357,7 +340,7 @@ function RegisterResultsPage({ kind, title, loader, criteriaPath }) {
       group: "Current Screen",
       label: "Back to report criteria",
       keywords: ["register", "criteria", "back", kind],
-      onSelect: () => navigate(criteriaPath),
+      onSelect: () => openScreen(criteriaScreenCode),
     },
     {
       id: `${kind}-register-results-export`,
@@ -401,7 +384,7 @@ function RegisterResultsPage({ kind, title, loader, criteriaPath }) {
           buttonRef: (element) => {
             actionRefs.current[0] = element;
           },
-          onClick: () => navigate(criteriaPath),
+          onClick: () => openScreen(criteriaScreenCode),
           onKeyDown: (event) =>
             handleLinearNavigation(event, { index: 0, refs: actionRefs.current }),
         },
@@ -506,7 +489,7 @@ export function LeaveRegisterCriteriaPage() {
       kind="leave"
       title="Leave Register Report Criteria"
       description="Choose the leave report criteria first. The filtered output opens in a separate report page."
-      resultPath="/dashboard/hr/leave/register/results"
+      resultScreenCode="HR_LEAVE_REGISTER_RESULTS"
     />
   );
 }
@@ -534,7 +517,7 @@ export function LeaveRegisterResultsPage() {
     <RegisterResultsPage
       kind="leave"
       title="Leave Register Report"
-      criteriaPath="/dashboard/hr/leave/register"
+      criteriaScreenCode="HR_LEAVE_REGISTER"
       loader={loadLeaveRegisterRows}
     />
   );
@@ -546,7 +529,7 @@ export function OutWorkRegisterCriteriaPage() {
       kind="outWork"
       title="Out Work Register Report Criteria"
       description="Choose the out work report criteria first. The filtered output opens in a separate report page."
-      resultPath="/dashboard/hr/out-work/register/results"
+      resultScreenCode="HR_OUT_WORK_REGISTER_RESULTS"
     />
   );
 }
@@ -556,7 +539,7 @@ export function OutWorkRegisterResultsPage() {
     <RegisterResultsPage
       kind="outWork"
       title="Out Work Register Report"
-      criteriaPath="/dashboard/hr/out-work/register"
+      criteriaScreenCode="HR_OUT_WORK_REGISTER"
       loader={loadOutWorkRegisterRows}
     />
   );
