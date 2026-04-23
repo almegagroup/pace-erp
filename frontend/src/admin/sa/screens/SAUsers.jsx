@@ -33,10 +33,6 @@ import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
-import {
-  readViewSnapshotCache,
-  writeViewSnapshotCache,
-} from "../../../store/viewSnapshotCache.js";
 
 const FILTERS = Object.freeze([
   { key: "ALL", label: "All Users" },
@@ -57,8 +53,6 @@ const DEFAULT_VISIBLE_USER_COLUMNS = Object.freeze([
   "state",
   "created",
 ]);
-
-const USER_VIEW_SNAPSHOT_KEY = "sa.users.directory";
 
 async function readJsonSafe(response) {
   try {
@@ -150,21 +144,17 @@ function getRoleTone(roleCode) {
 }
 
 export default function SAUsers() {
-  const viewSnapshot = useMemo(
-    () => readViewSnapshotCache(USER_VIEW_SNAPSHOT_KEY) ?? {},
-    []
-  );
   const { shellProfile } = useMenu();
   const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [filter, setFilter] = useState(viewSnapshot.filter ?? "ALL");
-  const [searchQuery, setSearchQuery] = useState(viewSnapshot.searchQuery ?? "");
+  const [filter, setFilter] = useState("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
   const [updatingUserId, setUpdatingUserId] = useState("");
   const [showColumnDrawer, setShowColumnDrawer] = useState(false);
   const [returnFocusAuthUserId, setReturnFocusAuthUserId] = useState(
-    viewSnapshot.returnFocusAuthUserId ?? ""
+    ""
   );
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
@@ -334,7 +324,7 @@ export default function SAUsers() {
   const userPagination = useErpPagination(
     filteredUsers,
     10,
-    viewSnapshot.page ?? 1
+    1
   );
   const {
     page: userPage,
@@ -348,15 +338,6 @@ export default function SAUsers() {
   const { getRowProps } = useErpListNavigation(userPageItems, {
     onActivate: (row) => handleOpenScope(row),
   });
-
-  useEffect(() => {
-    writeViewSnapshotCache(USER_VIEW_SNAPSHOT_KEY, {
-      filter,
-      searchQuery,
-      page: userPage,
-      returnFocusAuthUserId,
-    });
-  }, [filter, searchQuery, userPage, returnFocusAuthUserId]);
 
   useEffect(
     () =>
@@ -412,13 +393,6 @@ export default function SAUsers() {
     if (!user?.auth_user_id) {
       return;
     }
-
-    writeViewSnapshotCache(USER_VIEW_SNAPSHOT_KEY, {
-      filter,
-      searchQuery,
-      page: userPage,
-      returnFocusAuthUserId: user.auth_user_id,
-    });
 
     openScreenWithContext("SA_USER_SCOPE", {
       auth_user_id: user.auth_user_id,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
@@ -124,7 +124,7 @@ export default function SAReportVisibility() {
   const [searchQuery, setSearchQuery] = useState("");
   const [draft, setDraft] = useState(createEmptyDraft);
 
-  async function loadWorkspace(preferred = draft) {
+  const loadWorkspace = useCallback(async (preferred = draft) => {
     setLoading(true);
     setError("");
 
@@ -155,11 +155,11 @@ export default function SAReportVisibility() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [draft]);
 
   useEffect(() => {
     void loadWorkspace();
-  }, []);
+  }, [loadWorkspace]);
 
   const companyOptions = useMemo(
     () =>

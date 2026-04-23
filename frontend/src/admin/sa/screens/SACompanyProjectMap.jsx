@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
@@ -90,7 +90,7 @@ export default function SACompanyProjectMap() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  async function loadProjects(preferredProjectId = selectedProjectId) {
+  const loadProjects = useCallback(async (preferredProjectId = selectedProjectId) => {
     setLoading(true);
     setError("");
 
@@ -119,9 +119,9 @@ export default function SACompanyProjectMap() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedProjectId]);
 
-  async function loadCompanyMap(projectId = selectedProjectId) {
+  const loadCompanyMap = useCallback(async (projectId = selectedProjectId) => {
     if (!projectId) {
       setProjectDetail(null);
       setCompanies([]);
@@ -146,15 +146,15 @@ export default function SACompanyProjectMap() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedProjectId]);
 
   useEffect(() => {
     void loadProjects(initialProjectId);
-  }, [initialProjectId]);
+  }, [initialProjectId, loadProjects]);
 
   useEffect(() => {
     void loadCompanyMap(selectedProjectId);
-  }, [selectedProjectId]);
+  }, [loadCompanyMap, selectedProjectId]);
 
   const filteredProjects = useMemo(
     () =>

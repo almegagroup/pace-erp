@@ -277,6 +277,7 @@ export default function AuthBootstrap({ children }) {
     location.pathname,
     menu,
     navigate,
+    shellProfile?.name,
     shellProfile?.roleCode,
     shellProfile?.userCode,
   ]);

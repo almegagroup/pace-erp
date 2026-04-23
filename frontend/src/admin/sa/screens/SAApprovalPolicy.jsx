@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
@@ -73,7 +73,7 @@ export default function SAApprovalPolicy() {
   const [minApprovers, setMinApprovers] = useState(MIN_REQUIRED_APPROVERS);
   const [maxApprovers, setMaxApprovers] = useState(MAX_ALLOWED_APPROVERS);
 
-  async function loadWorkspace(preferredResourceCode = selectedResourceCode) {
+  const loadWorkspace = useCallback(async (preferredResourceCode = selectedResourceCode) => {
     setLoading(true);
     setError("");
 
@@ -104,11 +104,11 @@ export default function SAApprovalPolicy() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedResourceCode]);
 
   useEffect(() => {
     void loadWorkspace();
-  }, []);
+  }, [loadWorkspace]);
 
   const filteredResources = useMemo(() => {
     const needle = String(searchQuery ?? "").trim().toLowerCase();

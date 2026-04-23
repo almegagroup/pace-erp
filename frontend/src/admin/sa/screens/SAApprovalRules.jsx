@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
@@ -125,7 +125,7 @@ export default function SAApprovalRules() {
   const [searchQuery, setSearchQuery] = useState("");
   const [draft, setDraft] = useState(createEmptyDraft);
 
-  async function loadWorkspace(preferred = draft) {
+  const loadWorkspace = useCallback(async (preferred = draft) => {
     setLoading(true);
     setError("");
 
@@ -159,11 +159,11 @@ export default function SAApprovalRules() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [draft]);
 
   useEffect(() => {
     void loadWorkspace();
-  }, []);
+  }, [loadWorkspace]);
 
   const companyOptions = useMemo(
     () =>
@@ -218,9 +218,13 @@ export default function SAApprovalRules() {
     [resourceOptions, draft.resource_code],
   );
 
-  const actionOptions = selectedResource?.available_actions?.includes("APPROVE")
-    ? selectedResource.available_actions
-    : ["APPROVE"];
+  const actionOptions = useMemo(
+    () =>
+      selectedResource?.available_actions?.includes("APPROVE")
+        ? selectedResource.available_actions
+        : ["APPROVE"],
+    [selectedResource]
+  );
 
   useEffect(() => {
     if (draft.resource_code && !resourceOptions.some((row) => row.resource_code === draft.resource_code)) {
@@ -280,7 +284,7 @@ export default function SAApprovalRules() {
       }),
       (row) => buildUserLabel(row),
     );
-  }, [workspace.users, draft.company_id, searchQuery]);
+  }, [workspace.users, searchQuery]);
 
   const filteredRules = useMemo(() => {
     const needle = normalizeText(searchQuery).toLowerCase();

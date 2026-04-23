@@ -22,20 +22,13 @@
  *   <tr key={row.id} {...getRowProps(index)} className="...existing classes...">
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 export function useErpListNavigation(rows, { onActivate, onEscape } = {}) {
   const rowRefs = useRef([]);
   const [selectedIndices, setSelectedIndices] = useState(() => new Set());
 
   const rowCount = Array.isArray(rows) ? rows.length : 0;
-
-  // Clear selection when the row set changes (filter, pagination, refresh)
-  useEffect(() => {
-    setSelectedIndices(new Set());
-    // Prune stale refs
-    rowRefs.current = rowRefs.current.slice(0, rowCount);
-  }, [rows, rowCount]);
 
   const focusRow = useCallback(
     (index) => {

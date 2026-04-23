@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ErpScreenScaffold, {
   ErpFieldPreview,
@@ -99,7 +99,7 @@ export default function SAModuleResourceMap() {
   const [selectedResourceCode, setSelectedResourceCode] = useState("");
   const [targetModuleCode, setTargetModuleCode] = useState("");
 
-  async function loadWorkspace(preferredResourceCode = selectedResourceCode) {
+  const loadWorkspace = useCallback(async (preferredResourceCode = selectedResourceCode) => {
     setLoading(true);
     setError("");
 
@@ -133,11 +133,11 @@ export default function SAModuleResourceMap() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedResourceCode]);
 
   useEffect(() => {
     void loadWorkspace();
-  }, []);
+  }, [loadWorkspace]);
 
   const filteredResources = useMemo(() => {
     const needle = String(searchQuery ?? "").trim().toLowerCase();

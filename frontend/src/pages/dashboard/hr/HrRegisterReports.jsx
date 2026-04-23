@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   openScreen,
+  popScreen,
+  getActiveScreenContext,
+  updateActiveScreenContext,
 } from "../../../navigation/screenStackEngine.js";
 import ErpScreenScaffold, {
   ErpFieldPreview,
@@ -54,40 +57,27 @@ const REPORT_COLUMNS_BY_KIND = Object.freeze({
   ],
 });
 
-const STORAGE_KEYS = Object.freeze({
-  leave: "erp.hr.leave.register.criteria",
-  outWork: "erp.hr.outwork.register.criteria",
-});
-
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function readCriteria(kind) {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEYS[kind]);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeCriteria(kind, criteria) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.sessionStorage.setItem(STORAGE_KEYS[kind], JSON.stringify(criteria));
-}
-
-function defaultCriteria(kind) {
-  const saved = readCriteria(kind);
+function defaultCriteria() {
   return {
-    fromDate: saved?.fromDate ?? shiftIsoDate(todayIso(), -30),
-    toDate: saved?.toDate ?? todayIso(),
-    companyId: saved?.companyId ?? "",
+    fromDate: shiftIsoDate(todayIso(), -30),
+    toDate: todayIso(),
+    companyId: "",
+  };
+}
+
+function normalizeCriteria(criteria) {
+  if (!criteria || typeof criteria !== "object") {
+    return defaultCriteria();
+  }
+
+  return {
+    fromDate: criteria.fromDate || shiftIsoDate(todayIso(), -30),
+    toDate: criteria.toDate || todayIso(),
+    companyId: criteria.companyId || "",
   };
 }
 
@@ -138,21 +128,19 @@ function buildDownloadRows(columns, rows) {
   });
 }
 
-function RegisterCriteriaPage({ kind, title, resultScreenCode }) {
+function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCode }) {
   const { runtimeContext } = useMenu();
   const actionRefs = useRef([]);
-  const [criteria, setCriteria] = useState(() => defaultCriteria(kind));
+  const [criteria, setCriteria] = useState(() =>
+    normalizeCriteria(getActiveScreenContext()?.criteria)
+  );
   const [error, setError] = useState("");
   const availableCompanies = Array.isArray(runtimeContext?.availableCompanies)
     ? runtimeContext.availableCompanies
     : [];
 
   function updateCriteria(key, value) {
-    setCriteria((current) => {
-      const next = { ...current, [key]: value };
-      writeCriteria(kind, next);
-      return next;
-    });
+    setCriteria((current) => ({ ...current, [key]: value }));
   }
 
   function handleRunReport() {
@@ -170,8 +158,15 @@ function RegisterCriteriaPage({ kind, title, resultScreenCode }) {
       return;
     }
     setError("");
-    writeCriteria(kind, criteria);
-    openScreen(resultScreenCode);
+    updateActiveScreenContext({ criteria });
+    openScreen(resultScreenCode, {
+      context: {
+        contextKind: "SCREEN_CONTEXT",
+        criteria,
+        criteriaScreenCode,
+        reportKind: kind,
+      },
+    });
   }
 
   useErpScreenCommands([
@@ -265,7 +260,7 @@ function RegisterCriteriaPage({ kind, title, resultScreenCode }) {
   );
 }
 
-function RegisterResultsPage({ kind, title, loader, criteriaScreenCode }) {
+function RegisterResultsPage({ kind, title, loader }) {
   const searchRef = useRef(null);
   const actionRefs = useRef([]);
   const { runtimeContext } = useMenu();
@@ -274,7 +269,10 @@ function RegisterResultsPage({ kind, title, loader, criteriaScreenCode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
-  const criteria = useMemo(() => readCriteria(kind) ?? { fromDate: "", toDate: "", companyId: "" }, [kind]);
+  const criteria = useMemo(
+    () => normalizeCriteria(getActiveScreenContext()?.criteria),
+    []
+  );
   const columns = REPORT_COLUMNS_BY_KIND[kind];
   const availableCompanies = Array.isArray(runtimeContext?.availableCompanies)
     ? runtimeContext.availableCompanies
@@ -331,7 +329,7 @@ function RegisterResultsPage({ kind, title, loader, criteriaScreenCode }) {
       group: "Current Screen",
       label: "Back to report criteria",
       keywords: ["register", "criteria", "back", kind],
-      onSelect: () => openScreen(criteriaScreenCode),
+      onSelect: () => popScreen(),
     },
     {
       id: `${kind}-register-results-export`,
@@ -380,7 +378,7 @@ function RegisterResultsPage({ kind, title, loader, criteriaScreenCode }) {
           buttonRef: (element) => {
             actionRefs.current[0] = element;
           },
-          onClick: () => openScreen(criteriaScreenCode),
+          onClick: () => popScreen(),
           onKeyDown: (event) =>
             handleLinearNavigation(event, { index: 0, refs: actionRefs.current }),
         },
@@ -483,6 +481,7 @@ export function LeaveRegisterCriteriaPage() {
     <RegisterCriteriaPage
       kind="leave"
       title="Leave Register Report Criteria"
+      criteriaScreenCode="HR_LEAVE_REGISTER"
       resultScreenCode="HR_LEAVE_REGISTER_RESULTS"
     />
   );
@@ -522,6 +521,7 @@ export function OutWorkRegisterCriteriaPage() {
     <RegisterCriteriaPage
       kind="outWork"
       title="Out Work Register Report Criteria"
+      criteriaScreenCode="HR_OUT_WORK_REGISTER"
       resultScreenCode="HR_OUT_WORK_REGISTER_RESULTS"
     />
   );

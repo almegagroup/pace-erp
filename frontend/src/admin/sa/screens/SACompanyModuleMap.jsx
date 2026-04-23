@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
@@ -116,7 +116,7 @@ export default function SACompanyModuleMap() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  async function loadCompanies(preferredCompanyId = selectedCompanyId) {
+  const loadCompanies = useCallback(async (preferredCompanyId = selectedCompanyId) => {
     setLoadingCompanies(true);
     setError("");
 
@@ -142,9 +142,9 @@ export default function SACompanyModuleMap() {
     } finally {
       setLoadingCompanies(false);
     }
-  }
+  }, [selectedCompanyId]);
 
-  async function loadModules(companyId = selectedCompanyId, preferredModuleCode = selectedModuleCode) {
+  const loadModules = useCallback(async (companyId = selectedCompanyId, preferredModuleCode = selectedModuleCode) => {
     if (!companyId) {
       setModulePayload(null);
       setSelectedModuleCode("");
@@ -179,15 +179,15 @@ export default function SACompanyModuleMap() {
     } finally {
       setLoadingModules(false);
     }
-  }
+  }, [selectedCompanyId, selectedModuleCode]);
 
   useEffect(() => {
     void loadCompanies();
-  }, []);
+  }, [loadCompanies]);
 
   useEffect(() => {
     void loadModules(selectedCompanyId);
-  }, [selectedCompanyId]);
+  }, [loadModules, selectedCompanyId]);
 
   const filteredCompanies = useMemo(
     () =>
@@ -208,7 +208,7 @@ export default function SACompanyModuleMap() {
     }
   }, [filteredCompanies, selectedCompanyId]);
 
-  const modules = modulePayload?.modules ?? [];
+  const modules = useMemo(() => modulePayload?.modules ?? [], [modulePayload]);
 
   const filteredModules = useMemo(
     () =>

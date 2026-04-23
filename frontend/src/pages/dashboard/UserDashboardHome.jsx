@@ -104,11 +104,19 @@ function groupMenuRowsByModule(rows) {
   }, new Map());
 }
 
+function assignIndexedRef(refObject, index, element) {
+  if (!refObject || typeof refObject !== "object") {
+    return;
+  }
+
+  refObject.current[index] = element;
+}
+
 function TaskButton({ action, index, refs }) {
   return (
     <button
       ref={(element) => {
-        refs.current[index] = element;
+        assignIndexedRef(refs, index, element);
       }}
       data-workspace-primary-focus={index === 0 ? "true" : undefined}
       type="button"

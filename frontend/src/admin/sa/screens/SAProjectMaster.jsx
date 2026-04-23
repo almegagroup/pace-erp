@@ -80,12 +80,11 @@ export default function SAProjectMaster() {
   const searchInputRef = useRef(null);
   const [projects, setProjects] = useState([]);
   const [projectName, setProjectName] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, _setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [recentProject, setRecentProject] = useState(null);
 
   async function loadProjects() {
     setLoading(true);
@@ -135,7 +134,6 @@ export default function SAProjectMaster() {
       });
       const refreshed = await fetchProjects();
       setProjects(sortProjects(refreshed));
-      setRecentProject(created);
       setProjectName("");
       setNotice(`Project ${created.project_code} created successfully.`);
       projectNameRef.current?.focus();

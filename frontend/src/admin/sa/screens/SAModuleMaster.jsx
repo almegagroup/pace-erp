@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
@@ -140,31 +140,6 @@ async function updateModule(payload) {
   return json.data.module;
 }
 
-async function updateModuleState(payload) {
-  let response;
-
-  try {
-    response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/module/state`, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    throw createNetworkError(error, "NETWORK_ERROR_MODULE_STATE");
-  }
-
-  const json = await readJsonSafe(response);
-
-  if (!response.ok || !json?.ok) {
-    throw createDebugError(json, "MODULE_STATE_UPDATE_FAILED");
-  }
-
-  return json.data;
-}
-
 function sortModules(rows) {
   return [...rows].sort((left, right) => {
     const projectCompare = String(left.project_code ?? "").localeCompare(
@@ -224,17 +199,12 @@ export default function SAModuleMaster() {
   const [minApprovers, setMinApprovers] = useState(MIN_REQUIRED_APPROVERS);
   const [maxApprovers, setMaxApprovers] = useState(MAX_ALLOWED_APPROVERS);
   const [selectedModuleId, setSelectedModuleId] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, _setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editorMode, setEditorMode] = useState("create");
-
-  const activeProjects = useMemo(
-    () => projects.filter((row) => row.status === "ACTIVE"),
-    [projects],
-  );
 
   function resetEditor(preferredProjectId = selectedProjectId) {
     setEditorMode("create");
@@ -246,22 +216,7 @@ export default function SAModuleMaster() {
     setMaxApprovers(MAX_ALLOWED_APPROVERS);
   }
 
-  function loadSelectedModuleIntoEditor(moduleRow) {
-    if (!moduleRow) {
-      return;
-    }
-
-    setEditorMode("edit");
-    setSelectedModuleId(moduleRow.module_id);
-    setSelectedProjectId(moduleRow.project_id);
-    setModuleName(moduleRow.module_name ?? "");
-    setApprovalRequired(moduleRow.approval_required === true);
-    setApprovalType(moduleRow.approval_type ?? "SEQUENTIAL");
-    setMinApprovers(String(moduleRow.min_approvers ?? MIN_REQUIRED_APPROVERS));
-    setMaxApprovers(String(moduleRow.max_approvers ?? MAX_ALLOWED_APPROVERS));
-  }
-
-  async function loadWorkspace(preferredProjectId = selectedProjectId, preferredModuleId = selectedModuleId) {
+  const loadWorkspace = useCallback(async (preferredProjectId = selectedProjectId, preferredModuleId = selectedModuleId) => {
     setLoading(true);
     setError("");
 
@@ -302,11 +257,11 @@ export default function SAModuleMaster() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedModuleId, selectedProjectId]);
 
   useEffect(() => {
     void loadWorkspace();
-  }, []);
+  }, [loadWorkspace]);
 
   async function handleSave() {
     const normalizedProjectId = selectedProjectId.trim();
@@ -382,53 +337,6 @@ export default function SAModuleMaster() {
         detail
           ? `Module ${editorMode === "edit" ? "update" : "create"} blocked. ${(detail.message && String(detail.message).includes("Failed to fetch")) ? detail.code ?? "NETWORK_ERROR" : decisionTrace ?? detail.code ?? "REQUEST_BLOCKED"}${gateId ? ` | Gate ${gateId}` : ""}${requestId ? ` | Req ${requestId}` : ""}`
           : `Module could not be ${editorMode === "edit" ? "updated" : "created"} right now.`,
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleStateChange(nextState) {
-    const selectedModule = modules.find((row) => row.module_id === selectedModuleId) ?? null;
-
-    if (!selectedModule) {
-      return;
-    }
-
-    const currentState = selectedModule.is_active ? "ACTIVE" : "INACTIVE";
-    if (currentState === nextState) {
-      return;
-    }
-
-    const approved = await openActionConfirm({
-      eyebrow: "Module Lifecycle",
-      title: `${nextState === "ACTIVE" ? "Activate" : "Inactivate"} Module`,
-      message: `${nextState === "ACTIVE" ? "Activate" : "Inactivate"} ${selectedModule.module_code} under ${selectedModule.project_code}?`,
-      confirmLabel: nextState === "ACTIVE" ? "Activate" : "Inactivate",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
-      return;
-    }
-
-    setSaving(true);
-    setError("");
-    setNotice("");
-
-    try {
-      await updateModuleState({
-        module_id: selectedModule.module_id,
-        next_state: nextState,
-      });
-      await loadWorkspace(selectedProjectId, selectedModule.module_id);
-      setNotice(`Module ${selectedModule.module_code} is now ${nextState}.`);
-    } catch (err) {
-      const detail = err && typeof err === "object" ? err : null;
-      setError(
-        detail
-          ? `Module state blocked. ${detail.decisionTrace ?? detail.code ?? "REQUEST_BLOCKED"}`
-          : "Module state could not be updated right now.",
       );
     } finally {
       setSaving(false);

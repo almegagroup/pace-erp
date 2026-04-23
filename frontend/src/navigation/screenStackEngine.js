@@ -317,6 +317,23 @@ export function getActiveScreenContext() {
   return normalizeContext(getActiveScreen()?.context);
 }
 
+export function updateActiveScreenContext(contextPatch) {
+  const activeScreen = getActiveScreen();
+  const normalizedPatch = normalizeContext(contextPatch);
+
+  if (!activeScreen || !normalizedPatch) {
+    return activeScreen ?? null;
+  }
+
+  activeScreen.context = {
+    ...(normalizeContext(activeScreen.context) ?? {}),
+    ...normalizedPatch,
+  };
+
+  emitStackChange("CONTEXT_UPDATE");
+  return activeScreen;
+}
+
 export function getScreenContext(screenCode = null) {
   if (!screenCode) {
     return getActiveScreenContext();

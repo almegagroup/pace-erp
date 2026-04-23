@@ -10,15 +10,9 @@ import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../context/useMenu.js";
 import {
-  readViewSnapshotCache,
-  writeViewSnapshotCache,
-} from "../../../store/viewSnapshotCache.js";
-import {
   buildSaMenuSections,
   flattenSaMenuSections,
 } from "../saMenuSections.js";
-
-const SA_HOME_CACHE_KEY = "sa-home-dashboard";
 
 async function readJsonSafe(response) {
   try {
@@ -120,18 +114,11 @@ function HomeActionCard({
 }
 
 export default function SAHome() {
-  const cachedSnapshot = readViewSnapshotCache(SA_HOME_CACHE_KEY);
   const { menu } = useMenu();
-  const [controlPanel, setControlPanel] = useState(
-    () => cachedSnapshot?.controlPanel ?? null
-  );
-  const [systemHealth, setSystemHealth] = useState(
-    () => cachedSnapshot?.systemHealth ?? null
-  );
+  const [_controlPanel, setControlPanel] = useState(null);
+  const [systemHealth, setSystemHealth] = useState(null);
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(
-    () => !cachedSnapshot?.controlPanel || !cachedSnapshot?.systemHealth
-  );
+  const [loading, setLoading] = useState(true);
   const topActionRefs = useRef([]);
   const cardRefs = useRef([]);
 
@@ -148,10 +135,6 @@ export default function SAHome() {
 
       setControlPanel(controlPanelData);
       setSystemHealth(systemHealthData);
-      writeViewSnapshotCache(SA_HOME_CACHE_KEY, {
-        controlPanel: controlPanelData,
-        systemHealth: systemHealthData,
-      });
     } catch {
       setControlPanel(null);
       setSystemHealth(null);

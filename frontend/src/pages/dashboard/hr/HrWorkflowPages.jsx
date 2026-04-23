@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { useMenu } from "../../../context/useMenu.js";
@@ -6,9 +6,10 @@ import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { pushToast } from "../../../store/uiToast.js";
 import { getErrorMessage } from "../../../config/errorMessages.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
-import TransactionCompanySelector, {
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import {
   resolveDefaultTransactionCompanyId,
-} from "../../../components/inputs/TransactionCompanySelector.jsx";
+} from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
@@ -564,7 +565,6 @@ export function LeaveApplyWorkspace() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [lastCreated, setLastCreated] = useState(null);
   const [transactionCompanyId, setTransactionCompanyId] = useState(() =>
     resolveDefaultTransactionCompanyId(runtimeContext),
   );
@@ -650,13 +650,12 @@ export function LeaveApplyWorkspace() {
     setNotice("");
 
     try {
-      const data = await createLeaveRequest({
+      await createLeaveRequest({
         from_date: fromDate,
         to_date: toDate,
         reason: reason.trim(),
       }, transactionCompanyId);
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
-      setLastCreated(data.leave_request ?? null);
       setNotice("Leave request submitted.");
       setReason("");
       setFromDate(todayDefault());
@@ -682,7 +681,7 @@ export function LeaveApplyWorkspace() {
       formTitle="Submit a leave request"
       formContent={
         <div className="grid gap-3">
-          <div data-transaction-company="leave">
+          <div data-transaction-company="leave" tabIndex={0}>
             <TransactionCompanySelector
               runtimeContext={runtimeContext}
               value={transactionCompanyId}
@@ -760,7 +759,6 @@ export function OutWorkApplyWorkspace() {
   const [loadingDestinations, setLoadingDestinations] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [lastCreated, setLastCreated] = useState(null);
   const destinationNameRef = useRef(null);
   const [transactionCompanyId, setTransactionCompanyId] = useState(() =>
     resolveDefaultTransactionCompanyId(runtimeContext),
@@ -831,7 +829,7 @@ export function OutWorkApplyWorkspace() {
     },
   ];
 
-  async function refreshDestinations(preferredDestinationId = "") {
+  const refreshDestinations = useCallback(async (preferredDestinationId = "") => {
     setLoadingDestinations(true);
     try {
       const data = await listOutWorkDestinations(transactionCompanyId);
@@ -849,7 +847,7 @@ export function OutWorkApplyWorkspace() {
     } finally {
       setLoadingDestinations(false);
     }
-  }
+  }, [transactionCompanyId]);
 
   useEffect(() => {
     if (!transactionCompanyId) {
@@ -860,7 +858,7 @@ export function OutWorkApplyWorkspace() {
     }
 
     void refreshDestinations();
-  }, [transactionCompanyId]);
+  }, [transactionCompanyId, refreshDestinations]);
 
   async function handleCreateDestination() {
     if (!transactionCompanyId) {
@@ -909,14 +907,13 @@ export function OutWorkApplyWorkspace() {
     setNotice("");
 
     try {
-      const data = await createOutWorkRequest({
+      await createOutWorkRequest({
         from_date: fromDate,
         to_date: toDate,
         destination_id: destinationId,
         reason: reason.trim(),
       }, transactionCompanyId);
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
-      setLastCreated(data.request ?? null);
       setNotice("Out work request submitted.");
       setReason("");
       setFromDate(todayDefault());
@@ -943,7 +940,7 @@ export function OutWorkApplyWorkspace() {
         formTitle="Submit an out work request"
         formContent={
           <div className="grid gap-3">
-            <div data-transaction-company="outwork">
+            <div data-transaction-company="outwork" tabIndex={0}>
               <TransactionCompanySelector
                 runtimeContext={runtimeContext}
                 value={transactionCompanyId}
@@ -995,10 +992,13 @@ export function OutWorkApplyWorkspace() {
                 </span>
                 <select
                   value={destinationId}
+                  disabled={loadingDestinations || !transactionCompanyId}
                   onChange={(event) => setDestinationId(event.target.value)}
                   className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
                 >
-                  <option value="">Choose destination</option>
+                  <option value="">
+                    {loadingDestinations ? "Loading destination..." : "Choose destination"}
+                  </option>
                   {destinations.map((row) => (
                     <option key={row.destination_id} value={row.destination_id}>
                       {row.destination_name}
@@ -1094,8 +1094,14 @@ function useHrQueryLoader(loader, args = []) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const argsRef = useRef(args);
+  const argKey = JSON.stringify(args ?? []);
 
-  const refresh = async (...nextArgs) => {
+  useEffect(() => {
+    argsRef.current = args;
+  }, [args]);
+
+  const refresh = useCallback(async (...nextArgs) => {
     setLoading(true);
     setError("");
 
@@ -1108,11 +1114,11 @@ function useHrQueryLoader(loader, args = []) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [loader]);
 
   useEffect(() => {
-    void refresh(...args);
-  }, []);
+    void refresh(...argsRef.current);
+  }, [argKey, refresh]);
 
   return {
     rows,
@@ -1517,10 +1523,6 @@ function HrApprovalInboxWorkspace({
   // Company filter for MULTI users: "*" = All Companies (default), or specific company ID
   const [companyFilter, setCompanyFilter] = useState("*");
   const [showColumnPicker, setShowColumnPicker] = useState(false);
-  const [decisionTally, setDecisionTally] = useState({
-    approved: 0,
-    rejected: 0,
-  });
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.approvalInbox`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
@@ -1571,10 +1573,6 @@ function HrApprovalInboxWorkspace({
 
     try {
       await submitWorkflowDecision(request.workflow_request_id, decision, companyId);
-      setDecisionTally((current) => ({
-        approved: current.approved + (decision === "APPROVED" ? 1 : 0),
-        rejected: current.rejected + (decision === "REJECTED" ? 1 : 0),
-      }));
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       await refresh();
     } catch (err) {

@@ -21,15 +21,9 @@ import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useMenu } from "../../../context/useMenu.js";
 import {
-  readViewSnapshotCache,
-  writeViewSnapshotCache,
-} from "../../../store/viewSnapshotCache.js";
-import {
   buildSaMenuSections,
   flattenSaMenuSections,
 } from "../saMenuSections.js";
-
-const SA_CONTROL_PANEL_CACHE_KEY = "sa-control-panel";
 
 async function readJsonSafe(response) {
   try {
@@ -185,16 +179,11 @@ function DataTableCard({
 }
 
 export default function SAControlPanel() {
-  const cachedSnapshot = readViewSnapshotCache(SA_CONTROL_PANEL_CACHE_KEY);
   const { menu } = useMenu();
-  const [loading, setLoading] = useState(
-    () => !cachedSnapshot?.controlPanel
-  );
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [controlPanel, setControlPanel] = useState(
-    () => cachedSnapshot?.controlPanel ?? null
-  );
-  const [health, setHealth] = useState(() => cachedSnapshot?.health ?? null);
+  const [controlPanel, setControlPanel] = useState(null);
+  const [health, setHealth] = useState(null);
   const [detailDrawer, setDetailDrawer] = useState("");
   const topActionRefs = useRef([]);
   const quickLaunchRefs = useRef([]);
@@ -229,10 +218,6 @@ export default function SAControlPanel() {
 
       setControlPanel(controlPanelJson.data ?? null);
       setHealth(healthJson?.ok ? healthJson.data ?? null : null);
-      writeViewSnapshotCache(SA_CONTROL_PANEL_CACHE_KEY, {
-        controlPanel: controlPanelJson.data ?? null,
-        health: healthJson?.ok ? healthJson.data ?? null : null,
-      });
     } catch {
       setError("Unable to load the SA control panel right now.");
     } finally {

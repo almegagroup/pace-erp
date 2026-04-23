@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -100,7 +100,7 @@ export default function SAGovernanceSummaryReport() {
   const actionRefs = useRef([]);
   const searchRef = useRef(null);
 
-  async function loadAll(nextCompanyId = companyId) {
+  const loadAll = useCallback(async (nextCompanyId = companyId) => {
     setLoading(true);
     setError("");
     try {
@@ -119,11 +119,11 @@ export default function SAGovernanceSummaryReport() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [companyId]);
 
   useEffect(() => {
     void loadAll("");
-  }, []);
+  }, [loadAll]);
 
   const filteredRows = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();

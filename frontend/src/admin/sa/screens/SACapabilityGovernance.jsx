@@ -124,10 +124,15 @@ export default function SACapabilityGovernance(){
       setBindingLoading(false);
     }
   }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{void loadBootstrap(); void loadCatalog();},[]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{void loadCapRows(capCode);},[capCode]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{void loadCompanyState(companyId);},[companyId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{void loadCtxCaps(ctxId);},[ctxId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{void loadContextCapabilityMap(contexts);},[contexts]);
 
   const capMap=useMemo(()=>new Map(capRows.map((r)=>[r.resource_code,r])),[capRows]);

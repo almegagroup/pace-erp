@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
@@ -169,7 +169,7 @@ export default function SARolePermissions() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  async function loadPermissions(roleCode = selectedRoleCode) {
+  const loadPermissions = useCallback(async (roleCode = selectedRoleCode) => {
     setLoading(true);
     setError("");
     setPermissions([]);
@@ -196,7 +196,7 @@ export default function SARolePermissions() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedRoleCode]);
 
   async function loadResourceCatalog() {
     setCatalogLoading(true);
@@ -225,7 +225,7 @@ export default function SARolePermissions() {
   useEffect(() => {
     void loadPermissions(selectedRoleCode);
     void loadResourceCatalog();
-  }, [selectedRoleCode]);
+  }, [loadPermissions, selectedRoleCode]);
 
   const permissionMap = useMemo(
     () => new Map(permissions.map((row) => [row.resource_code, row])),

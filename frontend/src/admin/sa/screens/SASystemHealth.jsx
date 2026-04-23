@@ -16,12 +16,6 @@ import ErpScreenScaffold, {
 } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
-import {
-  readViewSnapshotCache,
-  writeViewSnapshotCache,
-} from "../../../store/viewSnapshotCache.js";
-
-const SA_SYSTEM_HEALTH_CACHE_KEY = "sa-system-health";
 
 async function readJsonSafe(response) {
   try {
@@ -31,32 +25,10 @@ async function readJsonSafe(response) {
   }
 }
 
-function formatSystemVersion(value) {
-  if (!value) return "N/A";
-
-  if (typeof value === "string") {
-    return value;
-  }
-
-  if (typeof value === "object") {
-    const system = typeof value.system === "string" ? value.system : "PACE-ERP";
-    const version = typeof value.version === "string" ? value.version : "N/A";
-    const buildGate =
-      typeof value.build_gate === "string" ? value.build_gate : null;
-
-    return buildGate
-      ? `${system} ${version} (${buildGate})`
-      : `${system} ${version}`;
-  }
-
-  return String(value);
-}
-
 export default function SASystemHealth() {
-  const cachedSnapshot = readViewSnapshotCache(SA_SYSTEM_HEALTH_CACHE_KEY);
   const actionBarRefs = useRef([]);
-  const [health, setHealth] = useState(() => cachedSnapshot?.health ?? null);
-  const [loading, setLoading] = useState(() => !cachedSnapshot?.health);
+  const [health, setHealth] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   async function loadHealth({ userInitiated = false } = {}) {
@@ -84,9 +56,6 @@ export default function SASystemHealth() {
       }
 
       setHealth(json.data ?? null);
-      writeViewSnapshotCache(SA_SYSTEM_HEALTH_CACHE_KEY, {
-        health: json.data ?? null,
-      });
     } catch {
       setError(
         userInitiated
@@ -119,7 +88,6 @@ export default function SASystemHealth() {
   const dbStatus = health?.db_status ?? "N/A";
   const aclStatus = health?.acl_snapshot_status ?? "N/A";
   const menuStatus = health?.menu_snapshot_status ?? "N/A";
-  const systemVersion = formatSystemVersion(health?.system_version);
 
   const alerts = [
     dbStatus === "DOWN"

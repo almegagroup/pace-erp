@@ -460,7 +460,7 @@ Find all files importing `DrawerBase`. Review each:
 
 ---
 
-### Phase UX-8 — Drill-Through Navigation Foundation
+### Phase UX-8 � Drill-Through Navigation Foundation
 **Status:** ✅ Complete  
 **Scope:** `screenStackEngine.js` + navigation utilities  
 **Effort:** High — architectural addition  
@@ -513,7 +513,7 @@ Every screen must have complete keyboard coverage per Rule 13.
 
 ---
 
-### Phase UX-8 — Drill-Through Navigation Foundation
+#### UX-8 Original Design Note
 **Status:** ✅ Complete  
 **Scope:** `screenStackEngine.js` + navigation utilities  
 **Effort:** High — architectural addition  
@@ -554,7 +554,7 @@ PO List refreshes → shows updated PO-001
 
 ---
 
-### Phase UX-9 — Transaction Company Selector Component
+### Phase UX-10 — Transaction Company Selector Component
 **Status:** ✅ Complete  
 **Scope:** New reusable component  
 **Effort:** Low — one component, used everywhere  
@@ -592,7 +592,7 @@ Placed in the form header area, same row as other header fields (date, reference
 
 ---
 
-### Phase UX-6 — ErpFieldPreview Audit
+### Phase UX-11 — ErpFieldPreview Audit
 **Status:** ✅ Complete  
 **Scope:** All `ErpFieldPreview` usages  
 **Effort:** Low  
@@ -687,7 +687,7 @@ A screen is **done** when all of the following are true:
 7. ✅ Save/error feedback appears as toast only (no inline banner in header)
 8. ✅ Multi-company banner is gone (removed, not dismissed)
 
-**Foundation Rules (UX-7 to UX-9):**
+**Foundation Rules (UX-7 to UX-11):**
 9. ✅ Every action button has a working keyboard shortcut (Alt+X)
 10. ✅ Esc always goes back or closes — never does nothing
 11. ✅ Enter on a table row drills through to detail (where detail exists)
@@ -762,5 +762,6 @@ A screen is **done** when all of the following are true:
 | 2026-04-23 | UX-8 | `screenStackEngine.js` | Added stack-entry context, `openScreenWithContext`, `openRouteWithContext`, `getScreenContext`, `registerScreenRefreshCallback`, strict `DRILL_THROUGH` refresh gating, and remount-safe pending return-refresh delivery on `popScreen()` | ✅ |
 | 2026-04-23 | UX-8 | `SAUsers.jsx`, `SAUserScope.jsx` | Wired first live drill-through pair: user directory row → scope detail, context-based record resolution, parent auto-refresh on return, and list-state restore (`filter/search/page/focus`) | ✅ |
 | 2026-04-23 | UX-9 | `ErpEntryFormTemplate.jsx`, `ErpMasterListTemplate.jsx`, `ErpApprovalReviewTemplate.jsx`, `ErpReportFilterTemplate.jsx`, `HrWorkflowPages.jsx`, `HrRegisterReports.jsx` | Standardized footer hints and route-level hotkeys so save/refresh/search/primary focus are documented and wired on current HR workflow surfaces | ✅ |
-| 2026-04-23 | UX-9 | `TransactionCompanySelector.jsx`, `hrApi.js`, `shared.ts`, `leave.handlers.ts`, `out_work.handlers.ts`, `HrWorkflowPages.jsx` | Added reusable transaction-level company selector, explicit company-aware HR API calls, and validated backend company resolution for leave/out-work transactions and destination creation | ✅ |
-| 2026-04-23 | UX-6 | `HrRegisterReports.jsx` | Removed documentation-style `ErpFieldPreview` cards from report criteria and kept only real result-state previews | ✅ |
+| 2026-04-23 | UX-10 | `TransactionCompanySelector.jsx`, `hrApi.js`, `shared.ts`, `leave.handlers.ts`, `out_work.handlers.ts`, `HrWorkflowPages.jsx` | Added reusable transaction-level company selector, explicit company-aware HR API calls, and validated backend company resolution for leave/out-work transactions and destination creation | ✅ |
+| 2026-04-23 | UX-11 | `HrRegisterReports.jsx` | Removed documentation-style `ErpFieldPreview` cards from report criteria and kept only real result-state previews | ✅ |
+

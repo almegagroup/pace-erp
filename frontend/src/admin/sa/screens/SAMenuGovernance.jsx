@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
 import ErpScreenScaffold, {
@@ -289,7 +289,7 @@ export default function SAMenuGovernance() {
     parent_menu_code: "",
   });
 
-  async function loadRegistry(nextUniverse = universe) {
+  const loadRegistry = useCallback(async (nextUniverse = universe) => {
     setLoading(true);
     setError("");
 
@@ -309,11 +309,11 @@ export default function SAMenuGovernance() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedMenuCode, universe]);
 
   useEffect(() => {
     void loadRegistry(universe);
-  }, [universe]);
+  }, [loadRegistry, universe]);
 
   const selectedMenu = useMemo(
     () => menus.find((item) => item.menu_code === selectedMenuCode) ?? null,
@@ -376,12 +376,12 @@ export default function SAMenuGovernance() {
 
   const suggestedCreateOrder = useMemo(
     () => getNextAvailableOrder(createForm.parent_menu_code || ""),
-    [createForm.parent_menu_code, menus]
+    [createForm.parent_menu_code, getNextAvailableOrder]
   );
 
   const selectedGroupSuggestedOrder = useMemo(
     () => getNextAvailableOrder(editForm.parent_menu_code || "", selectedMenuCode),
-    [editForm.parent_menu_code, menus, selectedMenuCode]
+    [editForm.parent_menu_code, selectedMenuCode, getNextAvailableOrder]
   );
 
   const selectedGroupOrderConflict = useMemo(() => {
@@ -471,7 +471,7 @@ export default function SAMenuGovernance() {
       pageEditor
         ? getNextAvailableOrder(pageEditor.parent_menu_code || "", pageEditor.menu_code)
         : 0,
-    [menus, pageEditor]
+    [pageEditor, getNextAvailableOrder]
   );
 
   const pageEditorBlockingGroupConflict = useMemo(() => {
@@ -964,7 +964,7 @@ export default function SAMenuGovernance() {
     },
   ];
 
-  function getNextAvailableOrder(parentMenuCode = "", excludeMenuCode = "") {
+  const getNextAvailableOrder = useCallback((parentMenuCode = "", excludeMenuCode = "") => {
     const takenOrders = menus
       .filter((item) => (item.parent_menu_code ?? "") === parentMenuCode)
       .filter((item) => item.menu_code !== excludeMenuCode)
@@ -976,7 +976,7 @@ export default function SAMenuGovernance() {
     }
 
     return Math.max(...takenOrders) + 1;
-  }
+  }, [menus]);
 
   function openPageEditor(page) {
     const safeParent =

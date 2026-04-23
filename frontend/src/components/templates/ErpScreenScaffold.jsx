@@ -284,13 +284,11 @@ export function ErpSectionCard({
 export default function ErpScreenScaffold({
   eyebrow,
   title,
-  description,
   actions = [],
   topActions = [],
   notices = [],
   error = "",
   notice = "",
-  metrics = [],
   footerHints = [],
   children,
 }) {
