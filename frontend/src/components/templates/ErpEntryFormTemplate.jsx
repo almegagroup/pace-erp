@@ -13,11 +13,11 @@ import ErpScreenScaffold, {
 } from "./ErpScreenScaffold.jsx";
 
 const DEFAULT_FOOTER_HINTS = Object.freeze([
+  "Tab Or Shift+Tab Move Field Focus",
   "Enter Next Field",
   "Shift+Enter Previous Field",
-  "Alt+PageDown Next Section",
-  "Alt+PageUp Previous Section",
   "Ctrl+S Or F2 Save Action",
+  "Esc Back",
   "Alt+Shift+P Or F7 Primary Target",
 ]);
 

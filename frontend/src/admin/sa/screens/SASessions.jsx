@@ -477,7 +477,6 @@ export default function SASessions() {
     <ErpMasterListTemplate
       eyebrow="SA Session Governance"
       title="ERP Sessions"
-      description="This keyboard-native list keeps session filters, quick search, and revoke actions in one structured operating surface."
       actions={topActions}
       notices={
         error

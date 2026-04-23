@@ -172,7 +172,6 @@ function buildEditDraft(context) {
 export default function SAWorkContextMaster() {
   const navigate = useNavigate();
   const topActionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const companySelectRef = useRef(null);
   const searchRef = useRef(null);
   const drawerPrimaryRef = useRef(null);
@@ -776,7 +775,6 @@ export default function SAWorkContextMaster() {
             <ErpSectionCard
               eyebrow="Inventory"
               title="Work Scope Table"
-              description="System scopes stay visible for clarity. Manual scopes are the ones SA creates for Production split, QA split, SCM, Management, Audit, or any other exact runtime slice."
             >
               <div className="overflow-x-auto border border-slate-300 bg-white">
                 {loading ? (
@@ -825,19 +823,9 @@ export default function SAWorkContextMaster() {
                           >
                             <td className="border-b border-slate-200 px-4 py-3 align-top">
                               <button
-                                ref={(element) => {
-                                  rowRefs.current[index] = element;
-                                }}
                                 type="button"
                                 onClick={() => setSelectedContextId(context.work_context_id)}
                                 onDoubleClick={() => openInspector(context)}
-                                onKeyDown={(event) =>
-                                  handleLinearNavigation(event, {
-                                    index,
-                                    refs: rowRefs.current,
-                                    orientation: "vertical",
-                                  })
-                                }
                                 className="w-full text-left"
                               >
                                 <div className="font-semibold text-slate-900">
@@ -923,7 +911,6 @@ export default function SAWorkContextMaster() {
                   ? `${selectedContext.work_context_code} | ${selectedContext.work_context_name}`
                   : "Choose A Work Scope"
               }
-              description="Department remains org structure. Work scope remains runtime business area. Keep these separate for clean governance."
             >
               {selectedContext ? (
                 <div className="grid gap-3">
@@ -997,7 +984,6 @@ export default function SAWorkContextMaster() {
             <ErpSectionCard
               eyebrow="Operating Rule"
               title="When To Create Manual Business Areas"
-              description="Do not overload Department Master. Create manual business areas only when runtime access needs a finer slice than the team structure gives you."
               tone="warning"
             >
               <div className="grid gap-2">

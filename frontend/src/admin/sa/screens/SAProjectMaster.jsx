@@ -371,7 +371,6 @@ export default function SAProjectMaster() {
               ? "Loading project rows"
               : `${filteredProjects.length} visible project${filteredProjects.length === 1 ? "" : "s"}`
           }
-          description="The list below comes from the global project master endpoint."
         >
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">

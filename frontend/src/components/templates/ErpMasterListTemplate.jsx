@@ -15,9 +15,11 @@ import ErpScreenScaffold, {
 const DEFAULT_FOOTER_HINTS = Object.freeze([
   "Alt+Shift+F Or F3 Search Target",
   "Arrow Keys Move Through Lists",
+  "Enter Open Row",
   "Alt+A Action Rail",
   "Alt+C Work Canvas",
   "Alt+R Or F4 Refresh",
+  "Esc Back",
   "Ctrl+K Or F9 Command Bar",
 ]);
 

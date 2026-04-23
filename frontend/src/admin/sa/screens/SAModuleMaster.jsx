@@ -802,7 +802,6 @@ export default function SAModuleMaster() {
               ? "Loading module rows"
               : `${filteredModules.length} visible module${filteredModules.length === 1 ? "" : "s"}`
           }
-          description="Modules stay global under a project. Company-level operational rollout happens separately."
         >
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">

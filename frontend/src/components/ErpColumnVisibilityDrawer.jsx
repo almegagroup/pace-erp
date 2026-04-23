@@ -3,7 +3,6 @@ import DrawerBase from "./layer/DrawerBase.jsx";
 export default function ErpColumnVisibilityDrawer({
   visible,
   title = "Choose Visible Columns",
-  description = "Hide low-value fields and keep only the columns needed for the current task.",
   columns = [],
   visibleColumnKeys = [],
   onToggleColumn,
@@ -36,7 +35,6 @@ export default function ErpColumnVisibilityDrawer({
       }
     >
       <div className="grid gap-4">
-        <p className="text-sm leading-6 text-slate-600">{description}</p>
         <div className="grid gap-2">
           {columns.map((column) => {
             const checked = visibleColumnKeys.includes(column.key);

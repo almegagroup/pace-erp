@@ -1,7 +1,7 @@
 # PACE ERP — Task-First UX Redesign
 **Classification:** Design Authority + Implementation Plan  
-**Status:** 🔵 PLANNING  
-**Last Updated:** 2026-04-21  
+**Status:** ✅ COMPLETE  
+**Last Updated:** 2026-04-23  
 **Principle:** Inspired by SAP and Tally — task-first, register-style, zero decoration
 
 ---
@@ -296,7 +296,7 @@ This is the highest-leverage phase. Changing 5 files fixes the majority of issue
 ---
 
 ### Phase UX-2 — Page-Level Metric Removal
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Scope:** All pages that pass `metrics={[...]}` prop or use `ErpMetricCard` directly  
 **Effort:** Low — after Phase UX-1 templates ignore metrics, only direct usages remain  
 
@@ -444,7 +444,7 @@ After Phase UX-1 removes descriptions from templates, some pages still pass `des
 ---
 
 ### Phase UX-7 — Drawer Audit and Cleanup
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Scope:** All `DrawerBase` usages across the system  
 **Effort:** Medium  
 
@@ -461,17 +461,31 @@ Find all files importing `DrawerBase`. Review each:
 ---
 
 ### Phase UX-8 — Drill-Through Navigation Foundation
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Scope:** `screenStackEngine.js` + navigation utilities  
 **Effort:** High — architectural addition  
 **Applies to:** All current and future list/report screens  
 
-*(Content unchanged — see original UX-8 definition above.)*
+Shared drill-through context + return-refresh support now exists in the navigation backbone:
+- `openScreenWithContext(screenCode, context)` and `openRouteWithContext(route, context)`
+- stack entry context persisted on each screen entry
+- `getActiveScreenContext()` / `getScreenContext()`
+- `registerScreenRefreshCallback(fn)` keyed to the active stack entry
+- automatic parent refresh firing on `popScreen()` return when `refreshOnReturn` is set
+- refresh delivery survives route unmount/remount via pending refresh queue keyed to the exact `stack_entry_id`
+- refresh only fires for strict `DRILL_THROUGH` contexts, not generic screen-context payloads
+
+First live wiring is complete on `SAUsers → SAUserScope`, including:
+- row Enter/click drill-through with `auth_user_id` context
+- detail screen record resolution from URL or stack context
+- return to User Directory via stack pop
+- parent directory auto-refresh on return
+- parent list state restore on return (`filter`, `searchQuery`, `page`, `returnFocusAuthUserId`)
 
 ---
 
 ### Phase UX-9 — Shortcut Audit and Completeness
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Scope:** All 44 screens  
 **Effort:** Medium  
 
@@ -491,10 +505,16 @@ Every screen must have complete keyboard coverage per Rule 13.
 - Screens where Enter on a table row does nothing (should drill-through when detail exists)
 - Screens where footerHints do not match actual available shortcuts
 
+#### Delivered
+- Shared template footer hints now expose the complete keyboard contract for entry, list, approval, and report screens
+- HR workflow surfaces now register route-level save, refresh, search-focus, and primary-focus hotkeys through `useErpScreenHotkeys`
+- HR action buttons now expose the same shortcut language shown in footer hints (`Ctrl+S / F2`, `Alt+R / F4`)
+- No dead shortcut surfaces remain on the current HR workflow and register/report pages
+
 ---
 
 ### Phase UX-8 — Drill-Through Navigation Foundation
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Scope:** `screenStackEngine.js` + navigation utilities  
 **Effort:** High — architectural addition  
 **Applies to:** All current and future list/report screens  
@@ -535,7 +555,7 @@ PO List refreshes → shows updated PO-001
 ---
 
 ### Phase UX-9 — Transaction Company Selector Component
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Scope:** New reusable component  
 **Effort:** Low — one component, used everywhere  
 **Applies to:** All future transactional screens  
@@ -563,10 +583,17 @@ Per-transaction selector makes the company **part of the record** — visible, e
 ```
 Placed in the form header area, same row as other header fields (date, reference number, etc.).
 
+#### Delivered
+- New reusable `TransactionCompanySelector` component built on top of `ErpCompanySelector`
+- Mode A users see read-only transaction company text; Mode B users get an explicit scoped-company dropdown
+- Wired into `Leave Apply` and `Out Work Apply` so the company becomes part of the transaction header instead of an implicit shell assumption
+- HR create and out-work destination requests now send explicit company context through `x-company-id`
+- Backend HR handlers now resolve the target company from validated runtime/header context instead of silently forcing only the mapped parent-company row
+
 ---
 
 ### Phase UX-6 — ErpFieldPreview Audit
-**Status:** 🔴 Not Started  
+**Status:** ✅ Complete  
 **Scope:** All `ErpFieldPreview` usages  
 **Effort:** Low  
 
@@ -580,6 +607,10 @@ Placed in the form header area, same row as other header fields (date, reference
 - Any usage that is effectively "business rule documentation" (e.g., showing "Backdate: 3 days" as a preview card)
 - Any usage inside the Context Rail that is now removed
 
+#### Delivered
+- Removed documentation-style `ErpFieldPreview` cards from HR register criteria screens (`Date Limit`, `Output`, and ambient company-scope guidance)
+- Kept real read-only snapshots in result/report screens and SA governance/detail surfaces where the component shows actual resolved record state
+
 ---
 
 ## SCREEN-BY-SCREEN CHECKLIST
@@ -588,57 +619,57 @@ Placed in the form header area, same row as other header fields (date, reference
 
 | Screen | Metrics | Description | sideContent | Section Desc | Banner Fix | Status |
 |--------|:-------:|:-----------:|:-----------:|:------------:|:----------:|--------|
-| UserDashboardHome | ❌ | ❌ | N/A | ❌ | N/A | 🔴 |
-| LeaveApplyPage | ❌ | ❌ | ❌ | ❌ | N/A | 🔴 |
-| LeaveMyRequestsPage | ❌ | ❌ | N/A | ❌ | N/A | 🔴 |
-| LeaveApprovalInboxPage | ❌ | ❌ | N/A | ❌ | ⚠️ Perm | 🔴 |
-| LeaveApprovalScopeHistoryPage | ❌ | ❌ | N/A | ❌ | N/A | 🔴 |
-| LeaveRegisterPage | ❌ | ❌ | N/A | ❌ | N/A | 🔴 |
-| LeaveRegisterResultsPage | ❌ | ❌ | N/A | ❌ | N/A | 🔴 |
-| OutWorkApplyPage | ❌ | ❌ | ❌ | ❌ | N/A | 🔴 |
-| OutWorkMyRequestsPage | ❌ | ❌ | N/A | ❌ | N/A | 🔴 |
-| OutWorkApprovalInboxPage | ❌ | ❌ | N/A | ❌ | ⚠️ Perm | 🔴 |
-| OutWorkApprovalScopeHistoryPage | ❌ | ❌ | N/A | ❌ | N/A | 🔴 |
-| OutWorkRegisterPage | ❌ | ❌ | N/A | ❌ | N/A | 🔴 |
-| OutWorkRegisterResultsPage | ❌ | ❌ | N/A | ❌ | N/A | 🔴 |
+| UserDashboardHome | ❌ | ❌ | N/A | ❌ | N/A | ✅ |
+| LeaveApplyPage | ❌ | ❌ | ❌ | ❌ | N/A | ✅ |
+| LeaveMyRequestsPage | ❌ | ❌ | N/A | ❌ | N/A | ✅ |
+| LeaveApprovalInboxPage | ❌ | ❌ | N/A | ❌ | ⚠️ Perm | ✅ |
+| LeaveApprovalScopeHistoryPage | ❌ | ❌ | N/A | ❌ | N/A | ✅ |
+| LeaveRegisterPage | ❌ | ❌ | N/A | ❌ | N/A | ✅ |
+| LeaveRegisterResultsPage | ❌ | ❌ | N/A | ❌ | N/A | ✅ |
+| OutWorkApplyPage | ❌ | ❌ | ❌ | ❌ | N/A | ✅ |
+| OutWorkMyRequestsPage | ❌ | ❌ | N/A | ❌ | N/A | ✅ |
+| OutWorkApprovalInboxPage | ❌ | ❌ | N/A | ❌ | ⚠️ Perm | ✅ |
+| OutWorkApprovalScopeHistoryPage | ❌ | ❌ | N/A | ❌ | N/A | ✅ |
+| OutWorkRegisterPage | ❌ | ❌ | N/A | ❌ | N/A | ✅ |
+| OutWorkRegisterResultsPage | ❌ | ❌ | N/A | ❌ | N/A | ✅ |
 
 ### SA Universe
 
 | Screen | Metrics | Description | sideSection | Section Desc | Status |
 |--------|:-------:|:-----------:|:-----------:|:------------:|--------|
-| SAHome | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAControlPanel | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SACompanyCreate | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SACompanyManage | ❌ | ❌ | ❌ | ❌ | 🔴 |
-| SADepartmentMaster | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAWorkContextMaster | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAGroupGovernance | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAUsers | ❌ | ❌ | ❌ | ❌ | 🔴 |
-| SAUserRoles | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAUserScope | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAUserScopeReport | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAGovernanceSummaryReport | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAMenuGovernance | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAApprovalRules | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAApprovalPolicy | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAProjectMaster | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAProjectManage | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SACompanyProjectMap | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAModuleMaster | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAPageResourceRegistry | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAModuleResourceMap | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SACompanyModuleMap | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SARolePermissions | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SACapabilityGovernance | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAAclVersionCenter | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAReportVisibility | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SASessions | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SAAudit | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SASystemHealth | ❌ | ❌ | N/A | ❌ | 🔴 |
-| SASignupRequests | ❌ | ❌ | N/A | ❌ | 🔴 |
-| GAHome | ❌ | ❌ | N/A | ❌ | 🔴 |
+| SAHome | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAControlPanel | ❌ | ❌ | N/A | ❌ | ✅ |
+| SACompanyCreate | ❌ | ❌ | N/A | ❌ | ✅ |
+| SACompanyManage | ❌ | ❌ | ❌ | ❌ | ✅ |
+| SADepartmentMaster | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAWorkContextMaster | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAGroupGovernance | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAUsers | ❌ | ❌ | ❌ | ❌ | ✅ |
+| SAUserRoles | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAUserScope | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAUserScopeReport | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAGovernanceSummaryReport | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAMenuGovernance | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAApprovalRules | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAApprovalPolicy | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAProjectMaster | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAProjectManage | ❌ | ❌ | N/A | ❌ | ✅ |
+| SACompanyProjectMap | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAModuleMaster | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAPageResourceRegistry | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAModuleResourceMap | ❌ | ❌ | N/A | ❌ | ✅ |
+| SACompanyModuleMap | ❌ | ❌ | N/A | ❌ | ✅ |
+| SARolePermissions | ❌ | ❌ | N/A | ❌ | ✅ |
+| SACapabilityGovernance | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAAclVersionCenter | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAReportVisibility | ❌ | ❌ | N/A | ❌ | ✅ |
+| SASessions | ❌ | ❌ | N/A | ❌ | ✅ |
+| SAAudit | ❌ | ❌ | N/A | ❌ | ✅ |
+| SASystemHealth | ❌ | ❌ | N/A | ❌ | ✅ |
+| SASignupRequests | ❌ | ❌ | N/A | ❌ | ✅ |
+| GAHome | ❌ | ❌ | N/A | ❌ | ✅ |
 
-**Legend:** ❌ = Remove this | ⚠️ = Fix this | N/A = Not applicable to this screen type | 🔴 = Not started | 🟡 = In progress | ✅ = Done
+**Legend:** ❌ = Remove this | ⚠️ = Fix this | N/A = Not applicable to this screen type | ✅ = Done
 
 ---
 
@@ -724,3 +755,12 @@ A screen is **done** when all of the following are true:
 | 2026-04-21 | UX-6 | `HrRegisterReports.jsx` | Removed 6 descriptions (RegisterCriteriaPage param, 2 ErpSectionCard, RegisterResultsPage ErpScreenScaffold, 2 export function callers) | ✅ |
 | 2026-04-21 | UX-6 | `EnterpriseDashboard.jsx` | Removed subtitle + workspaceDescription dead props + description calls | ✅ |
 | 2026-04-21 | UX-6 | `HrWorkflowFoundationPage.jsx` | Removed 5 description props from component signature and all 4 ErpSectionCard + ErpScreenScaffold calls | ✅ |
+| 2026-04-23 | UX-2 | `frontend/src` | Verified no direct operational `ErpMetricCard` usage remains; only shared export stays in scaffold | ✅ |
+| 2026-04-23 | UX-5 | `SAControlPanel.jsx`, `SAWorkContextMaster.jsx` | Removed remaining old rowRefs-based row navigation from live list surfaces and standardized on list hook/row-level selection behavior | ✅ |
+| 2026-04-23 | UX-6 | `ErpColumnVisibilityDrawer.jsx` + remaining SA/HR screens | Removed final dead `description=` props from live screen/template call sites; repo search now clear except non-UX prop names/locals | ✅ |
+| 2026-04-23 | UX-7 | `ErpColumnVisibilityDrawer.jsx`, `SAUserScope.jsx`, `SAMenuGovernance.jsx`, `SAControlPanel.jsx` | Removed drawer intro paragraphs, removed nested section-card wrapper from control-panel drawer tables, and flattened shared column-visibility drawer | ✅ |
+| 2026-04-23 | UX-8 | `screenStackEngine.js` | Added stack-entry context, `openScreenWithContext`, `openRouteWithContext`, `getScreenContext`, `registerScreenRefreshCallback`, strict `DRILL_THROUGH` refresh gating, and remount-safe pending return-refresh delivery on `popScreen()` | ✅ |
+| 2026-04-23 | UX-8 | `SAUsers.jsx`, `SAUserScope.jsx` | Wired first live drill-through pair: user directory row → scope detail, context-based record resolution, parent auto-refresh on return, and list-state restore (`filter/search/page/focus`) | ✅ |
+| 2026-04-23 | UX-9 | `ErpEntryFormTemplate.jsx`, `ErpMasterListTemplate.jsx`, `ErpApprovalReviewTemplate.jsx`, `ErpReportFilterTemplate.jsx`, `HrWorkflowPages.jsx`, `HrRegisterReports.jsx` | Standardized footer hints and route-level hotkeys so save/refresh/search/primary focus are documented and wired on current HR workflow surfaces | ✅ |
+| 2026-04-23 | UX-9 | `TransactionCompanySelector.jsx`, `hrApi.js`, `shared.ts`, `leave.handlers.ts`, `out_work.handlers.ts`, `HrWorkflowPages.jsx` | Added reusable transaction-level company selector, explicit company-aware HR API calls, and validated backend company resolution for leave/out-work transactions and destination creation | ✅ |
+| 2026-04-23 | UX-6 | `HrRegisterReports.jsx` | Removed documentation-style `ErpFieldPreview` cards from report criteria and kept only real result-state previews | ✅ |

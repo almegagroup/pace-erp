@@ -213,7 +213,6 @@ export default function SAUserScopeReport() {
   return (
     <ErpScreenScaffold
       title="SA User Scope Report"
-      description="One user per row, with separate columns for role, rank, identity, work companies, projects, and work areas so the export stays readable."
       actions={[
         {
           key: "refresh",
@@ -255,7 +254,7 @@ export default function SAUserScopeReport() {
           <ErpFieldPreview label="Visible Columns" value={String(visibleColumns.length)} />
         </div>
 
-        <ErpSectionCard title="Report Filters" description="Filter by company before download, then search the loaded rows in-page.">
+        <ErpSectionCard title="Report Filters">
           <div className="grid gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
             <label className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -295,7 +294,6 @@ export default function SAUserScopeReport() {
 
         <ErpSectionCard
           title="Visible Columns"
-          description="Hide columns you do not want on screen or in the downloaded Excel CSV."
         >
           <div className="grid gap-2 md:grid-cols-3">
             {REPORT_COLUMNS.map((column) => {
@@ -324,7 +322,6 @@ export default function SAUserScopeReport() {
 
         <ErpSectionCard
           title={loading ? "Loading user scope report" : `${filteredRows.length} user row${filteredRows.length === 1 ? "" : "s"}`}
-          description="Each user stays on one row while project reach is split into direct overrides, inherited projects, and effective projects."
         >
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">

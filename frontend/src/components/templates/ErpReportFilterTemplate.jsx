@@ -20,6 +20,14 @@ export default function ErpReportFilterTemplate({
   filterSection = null,
   reportSection = null,
   bottomSection = null,
+  footerHints = [
+    "Alt+Shift+F Or F3 Filter Target",
+    "Arrow Keys Traverse Reports",
+    "Enter Open Row",
+    "Alt+R Or F4 Refresh Report",
+    "Esc Back",
+    "Ctrl+K Or F9 Command Bar",
+  ],
 }) {
   return (
     <ErpScreenScaffold
@@ -27,12 +35,7 @@ export default function ErpReportFilterTemplate({
       title={title}
       actions={actions}
       notices={notices}
-      footerHints={[
-        "Alt+Shift+F Or F3 Filter Target",
-        "Arrow Keys Traverse Reports",
-        "Alt+R Or F4 Refresh Report",
-        "Ctrl+K Or F9 Command Bar",
-      ]}
+      footerHints={footerHints}
     >
       <div className="grid gap-4">
         {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}

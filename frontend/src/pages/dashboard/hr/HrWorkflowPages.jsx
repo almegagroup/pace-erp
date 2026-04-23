@@ -2,9 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { useMenu } from "../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { pushToast } from "../../../store/uiToast.js";
 import { getErrorMessage } from "../../../config/errorMessages.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import TransactionCompanySelector, {
+  resolveDefaultTransactionCompanyId,
+} from "../../../components/inputs/TransactionCompanySelector.jsx";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
@@ -43,6 +47,22 @@ const STATUS_TONE_CLASS = Object.freeze({
   REJECTED: "border-rose-200 bg-rose-50 text-rose-900",
   CANCELLED: "border-slate-200 bg-slate-50 text-slate-700",
 });
+
+const HR_ENTRY_FOOTER_HINTS = Object.freeze([
+  "Tab Or Shift+Tab Move Field Focus",
+  "Ctrl+S Or F2 Submit Transaction",
+  "Esc Back",
+  "Alt+Shift+P Or F7 Primary Target",
+]);
+
+const HR_LIST_FOOTER_HINTS = Object.freeze([
+  "Alt+Shift+F Or F3 Search Target",
+  "Arrow Keys Move Through Lists",
+  "Enter Open Row",
+  "Alt+R Or F4 Refresh",
+  "Esc Back",
+  "Ctrl+K Or F9 Command Bar",
+]);
 
 function todayDefault() {
   return new Date().toISOString().slice(0, 10);
@@ -459,7 +479,6 @@ function HrRequestColumnPickerModal({
     <ErpColumnVisibilityDrawer
       visible={visible}
       title="Choose Visible Columns"
-      description="Show only the request fields needed for this HR sheet. Hidden columns can be restored anytime."
       columns={HR_REQUEST_COLUMN_DEFS}
       visibleColumnKeys={visibleColumnKeys}
       onToggleColumn={onToggleColumn}
@@ -538,7 +557,7 @@ export function HrRequestCard({
 
 export function LeaveApplyWorkspace() {
   const navigate = useNavigate();
-  const { menu } = useMenu();
+  const { menu, runtimeContext } = useMenu();
   const [fromDate, setFromDate] = useState(todayDefault());
   const [toDate, setToDate] = useState(todayDefault());
   const [reason, setReason] = useState("");
@@ -546,6 +565,9 @@ export function LeaveApplyWorkspace() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [lastCreated, setLastCreated] = useState(null);
+  const [transactionCompanyId, setTransactionCompanyId] = useState(() =>
+    resolveDefaultTransactionCompanyId(runtimeContext),
+  );
 
   const totalDays = calculateInclusiveDays(fromDate, toDate);
   const earliestBackdate = getHrEarliestBackdate();
@@ -558,6 +580,26 @@ export function LeaveApplyWorkspace() {
       ),
     [menu],
   );
+
+  useEffect(() => {
+    const nextCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    setTransactionCompanyId((current) => current || nextCompanyId);
+  }, [runtimeContext]);
+
+  useErpScreenHotkeys({
+    save: {
+      disabled: saving,
+      perform: () => void handleSubmit(),
+    },
+    focusPrimary: {
+      perform: () => {
+        const companyField = globalThis.document?.querySelector(
+          "[data-transaction-company='leave'] select, [data-transaction-company='leave']",
+        );
+        companyField?.focus?.();
+      },
+    },
+  });
 
   const actions = [
     {
@@ -585,7 +627,7 @@ export function LeaveApplyWorkspace() {
     {
       key: "submit",
       label: saving ? "Submitting..." : "Send Request",
-      hint: "Ctrl+S",
+      hint: "Ctrl+S / F2",
       tone: "primary",
       disabled: saving,
       onClick: () => void handleSubmit(),
@@ -593,8 +635,13 @@ export function LeaveApplyWorkspace() {
   ];
 
   async function handleSubmit() {
+    if (!transactionCompanyId) {
+      setError("Transaction company is required.");
+      return;
+    }
+
     if (!fromDate || !toDate || !reason.trim()) {
-      setError("From date, to date, and reason are required.");
+      setError("Transaction company, from date, to date, and reason are required.");
       return;
     }
 
@@ -607,7 +654,7 @@ export function LeaveApplyWorkspace() {
         from_date: fromDate,
         to_date: toDate,
         reason: reason.trim(),
-      });
+      }, transactionCompanyId);
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       setLastCreated(data.leave_request ?? null);
       setNotice("Leave request submitted.");
@@ -630,10 +677,18 @@ export function LeaveApplyWorkspace() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
+      footerHints={HR_ENTRY_FOOTER_HINTS}
       formEyebrow="Leave Request"
       formTitle="Submit a leave request"
       formContent={
         <div className="grid gap-3">
+          <div data-transaction-company="leave">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={transactionCompanyId}
+              onChange={setTransactionCompanyId}
+            />
+          </div>
           <div className="grid gap-3 md:grid-cols-3">
             <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -692,7 +747,7 @@ export function LeaveApplyWorkspace() {
 
 export function OutWorkApplyWorkspace() {
   const navigate = useNavigate();
-  const { menu } = useMenu();
+  const { menu, runtimeContext } = useMenu();
   const [fromDate, setFromDate] = useState(todayDefault());
   const [toDate, setToDate] = useState(todayDefault());
   const [reason, setReason] = useState("");
@@ -707,6 +762,9 @@ export function OutWorkApplyWorkspace() {
   const [notice, setNotice] = useState("");
   const [lastCreated, setLastCreated] = useState(null);
   const destinationNameRef = useRef(null);
+  const [transactionCompanyId, setTransactionCompanyId] = useState(() =>
+    resolveDefaultTransactionCompanyId(runtimeContext),
+  );
 
   const totalDays = calculateInclusiveDays(fromDate, toDate);
   const earliestBackdate = getHrEarliestBackdate();
@@ -719,6 +777,26 @@ export function OutWorkApplyWorkspace() {
       ),
     [menu],
   );
+
+  useEffect(() => {
+    const nextCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    setTransactionCompanyId((current) => current || nextCompanyId);
+  }, [runtimeContext]);
+
+  useErpScreenHotkeys({
+    save: {
+      disabled: saving,
+      perform: () => void handleSubmit(),
+    },
+    focusPrimary: {
+      perform: () => {
+        const companyField = globalThis.document?.querySelector(
+          "[data-transaction-company='outwork'] select, [data-transaction-company='outwork']",
+        );
+        companyField?.focus?.();
+      },
+    },
+  });
 
   const actions = [
     {
@@ -746,7 +824,7 @@ export function OutWorkApplyWorkspace() {
     {
       key: "submit",
       label: saving ? "Submitting..." : "Send Request",
-      hint: "Ctrl+S",
+      hint: "Ctrl+S / F2",
       tone: "primary",
       disabled: saving,
       onClick: () => void handleSubmit(),
@@ -756,7 +834,7 @@ export function OutWorkApplyWorkspace() {
   async function refreshDestinations(preferredDestinationId = "") {
     setLoadingDestinations(true);
     try {
-      const data = await listOutWorkDestinations();
+      const data = await listOutWorkDestinations(transactionCompanyId);
       const rows = data.destinations ?? [];
       setDestinations(rows);
       const nextDestinationId =
@@ -774,10 +852,22 @@ export function OutWorkApplyWorkspace() {
   }
 
   useEffect(() => {
+    if (!transactionCompanyId) {
+      setDestinations([]);
+      setDestinationId("");
+      setLoadingDestinations(false);
+      return;
+    }
+
     void refreshDestinations();
-  }, []);
+  }, [transactionCompanyId]);
 
   async function handleCreateDestination() {
+    if (!transactionCompanyId) {
+      setError("Transaction company is required before creating a destination.");
+      return;
+    }
+
     if (!destinationName.trim() || !destinationAddress.trim()) {
       setError("Destination name and address are required.");
       return;
@@ -790,7 +880,7 @@ export function OutWorkApplyWorkspace() {
       const data = await createOutWorkDestination({
         destination_name: destinationName.trim(),
         destination_address: destinationAddress.trim(),
-      });
+      }, transactionCompanyId);
       setShowDestinationModal(false);
       setDestinationName("");
       setDestinationAddress("");
@@ -804,8 +894,13 @@ export function OutWorkApplyWorkspace() {
   }
 
   async function handleSubmit() {
+    if (!transactionCompanyId) {
+      setError("Transaction company is required.");
+      return;
+    }
+
     if (!fromDate || !toDate || !reason.trim() || !destinationId) {
-      setError("From date, to date, destination, and reason are required.");
+      setError("Transaction company, from date, to date, destination, and reason are required.");
       return;
     }
 
@@ -819,7 +914,7 @@ export function OutWorkApplyWorkspace() {
         to_date: toDate,
         destination_id: destinationId,
         reason: reason.trim(),
-      });
+      }, transactionCompanyId);
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       setLastCreated(data.request ?? null);
       setNotice("Out work request submitted.");
@@ -843,10 +938,18 @@ export function OutWorkApplyWorkspace() {
           ...(error ? [{ key: "error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
         ]}
+        footerHints={HR_ENTRY_FOOTER_HINTS}
         formEyebrow="Out Work Request"
         formTitle="Submit an out work request"
         formContent={
           <div className="grid gap-3">
+            <div data-transaction-company="outwork">
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={transactionCompanyId}
+                onChange={setTransactionCompanyId}
+              />
+            </div>
             <div className="grid gap-3 md:grid-cols-3">
               <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -906,8 +1009,9 @@ export function OutWorkApplyWorkspace() {
               <div className="flex items-end">
                 <button
                   type="button"
+                  disabled={!transactionCompanyId}
                   onClick={() => setShowDestinationModal(true)}
-                  className="border border-cyan-300 bg-white px-4 py-2 text-sm font-semibold text-cyan-700"
+                  className="border border-cyan-300 bg-white px-4 py-2 text-sm font-semibold text-cyan-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Create Destination
                 </button>
@@ -933,7 +1037,7 @@ export function OutWorkApplyWorkspace() {
         visible={showDestinationModal}
         eyebrow="Out Work"
         title="Create Destination"
-        message="Add a new destination for this parent company. It will appear in the dropdown after save."
+        message="Add a new destination for the selected transaction company. It will appear in the dropdown after save."
         onEscape={() => setShowDestinationModal(false)}
         initialFocusRef={destinationNameRef}
         width="min(560px, calc(100vw - 32px))"
@@ -1068,6 +1172,16 @@ function HrRequestListWorkspace({
       ]),
     [rows, searchQuery],
   );
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void refresh(),
+    },
+    focusSearch: {
+      perform: () => searchRef.current?.focus?.(),
+    },
+  });
 
   async function loadEditDestinations(preferredDestinationId = "") {
     if (kind !== "outWork") {
@@ -1214,7 +1328,7 @@ function HrRequestListWorkspace({
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
-          hint: "Alt+R",
+          hint: "Alt+R / F4",
           tone: "primary",
           onClick: () => void refresh(),
         },
@@ -1223,6 +1337,7 @@ function HrRequestListWorkspace({
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
+      footerHints={HR_LIST_FOOTER_HINTS}
       filterSection={{
         eyebrow: "Request Search",
         title: "Find request history rows",
@@ -1430,6 +1545,16 @@ function HrApprovalInboxWorkspace({
     return result;
   }, [rows, searchQuery, isMulti, companyFilter]);
 
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void refresh(),
+    },
+    focusSearch: {
+      perform: () => searchRef.current?.focus?.(),
+    },
+  });
+
   async function handleDecision(request, decision) {
     const approved = await openActionConfirm({
       eyebrow: kind === "leave" ? "Leave Approval" : "Out Work Approval",
@@ -1511,12 +1636,13 @@ function HrApprovalInboxWorkspace({
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
-          hint: "Alt+R",
+          hint: "Alt+R / F4",
           tone: "primary",
           onClick: () => void refresh(),
         },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
+      footerHints={HR_LIST_FOOTER_HINTS}
       filterSection={{
         eyebrow: "Queue Search",
         title: "Filter approval inbox",
@@ -1637,6 +1763,19 @@ function HrApprovalHistoryWorkspace({
     }
   }
 
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void handleRefresh(),
+    },
+    focusSearch: {
+      perform: () => searchRef.current?.focus?.(),
+    },
+    focusPrimary: {
+      perform: () => requesterRef.current?.focus?.(),
+    },
+  });
+
   return (
     <ErpApprovalReviewTemplate
       eyebrow="HR Management"
@@ -1651,12 +1790,13 @@ function HrApprovalHistoryWorkspace({
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
-          hint: "Alt+R",
+          hint: "Alt+R / F4",
           tone: "primary",
           onClick: () => void handleRefresh(),
         },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
+      footerHints={HR_LIST_FOOTER_HINTS}
       filterSection={{
         eyebrow: "Scope Filter",
         title: "Filter approver scope history",
@@ -1763,6 +1903,19 @@ function HrRegisterWorkspace({
     }
   }
 
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void handleRefresh(),
+    },
+    focusSearch: {
+      perform: () => searchRef.current?.focus?.(),
+    },
+    focusPrimary: {
+      perform: () => requesterRef.current?.focus?.(),
+    },
+  });
+
   return (
     <ErpReportFilterTemplate
       eyebrow="HR Management"
@@ -1777,12 +1930,13 @@ function HrRegisterWorkspace({
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
-          hint: "Alt+R",
+          hint: "Alt+R / F4",
           tone: "primary",
           onClick: () => void handleRefresh(),
         },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
+      footerHints={HR_LIST_FOOTER_HINTS}
       filterSection={{
         eyebrow: "Register Filters",
         title: "Filter register rows",

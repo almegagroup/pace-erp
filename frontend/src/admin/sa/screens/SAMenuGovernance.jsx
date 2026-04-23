@@ -1189,7 +1189,6 @@ export default function SAMenuGovernance() {
     <ErpScreenScaffold
       eyebrow="Menu Governance"
       title="Super Admin Menu Governance"
-      description="Govern menu registry, tree position, publish state, and preview output without direct SQL edits."
       actions={topActions}
       notices={[
         ...(error
@@ -1215,7 +1214,6 @@ export default function SAMenuGovernance() {
       <ErpSectionCard
         eyebrow="Universe"
         title="Choose Universe"
-        description="Switch between SA and ACL menu governance."
         aside={
           <div className="flex gap-2">
             {["SA", "ACL"].map((value) => (
@@ -1240,7 +1238,6 @@ export default function SAMenuGovernance() {
         <ErpSectionCard
           eyebrow="Groups"
           title="1. Groups: Create, Select, Manage"
-          description="Group means drawer bucket. Left side only creates and edits groups. Pages are handled on the right."
         >
           <div className="grid gap-6">
             <div className="grid gap-3">
@@ -1291,7 +1288,6 @@ export default function SAMenuGovernance() {
             <ErpSectionCard
               eyebrow="Selected Group"
               title={selectedMenu ? selectedMenu.title : "Choose a group"}
-              description="Only group settings change from this card. Page publish/reassign happens from the right-side page catalog."
             >
               {selectedMenu && selectedMenu.menu_type === "GROUP" ? (
                 <div className="grid gap-3">
@@ -1484,7 +1480,6 @@ export default function SAMenuGovernance() {
             <ErpSectionCard
               eyebrow="Create Group"
               title="Create New Group"
-              description="Use this only for drawer groups. Do not create actual screens here; publish screens from the right side."
             >
               <div className="grid gap-3">
                 <div className="border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
@@ -1520,7 +1515,6 @@ export default function SAMenuGovernance() {
         <ErpSectionCard
           eyebrow="Pages"
           title="2. Pages: Publish, Move, Enable"
-          description="Right side is only for actual screen pages. Publish a page into a group, move it, or enable/disable it."
         >
           <div className="grid gap-3">
             <label className="grid gap-1 text-sm text-slate-700">
@@ -2230,9 +2224,6 @@ export default function SAMenuGovernance() {
         }
       >
         <div className="grid gap-3">
-          <p className="text-sm text-slate-600">
-            Select the parent group where this page should appear. Keep grouping clean so users can find the page without scanning the whole tree.
-          </p>
           <div className="grid gap-2">
             {groupRows.map((group, index) => (
               <button

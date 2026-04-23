@@ -194,6 +194,12 @@ function RegisterCriteriaPage({ kind, title, resultScreenCode }) {
   return (
     <ErpScreenScaffold
       title={title}
+      footerHints={[
+        "Alt+Shift+P Or F7 Primary Target",
+        "Ctrl+S Or F2 Run Report",
+        "Esc Back",
+        "Ctrl+K Or F9 Command Bar",
+      ]}
       actions={[
         {
           key: "run",
@@ -209,19 +215,6 @@ function RegisterCriteriaPage({ kind, title, resultScreenCode }) {
       ]}
     >
       <div className="grid gap-4">
-        <div className="grid gap-3 md:grid-cols-4">
-          <ErpFieldPreview label="Date Limit" value="Max 1 Year" />
-          <ErpFieldPreview
-            label="Company Scope"
-            value={criteria.companyId ? resolveCompanyLabel(availableCompanies, criteria.companyId) : "Choose company or *"}
-          />
-          <ErpFieldPreview
-            label="Company Address"
-            value={criteria.companyId ? resolveCompanyAddress(availableCompanies, criteria.companyId) : "Choose company first"}
-          />
-          <ErpFieldPreview label="Output" value="Separate results page + Excel CSV" />
-        </div>
-
         <ErpSectionCard
           title="Report Criteria"
         >
@@ -373,6 +366,12 @@ function RegisterResultsPage({ kind, title, loader, criteriaScreenCode }) {
   return (
     <ErpScreenScaffold
       title={title}
+      footerHints={[
+        "Alt+Shift+F Or F3 Search Target",
+        "Ctrl+S Or F2 Download Report",
+        "Esc Back",
+        "Ctrl+K Or F9 Command Bar",
+      ]}
       actions={[
         {
           key: "back",

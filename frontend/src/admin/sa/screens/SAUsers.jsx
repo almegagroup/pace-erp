@@ -8,9 +8,14 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
+import {
+  openRoute,
+  openScreen,
+  openScreenWithContext,
+  registerScreenRefreshCallback,
+} from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { useMenu } from "../../../context/useMenu.js";
 import {
@@ -206,7 +211,7 @@ export default function SAUsers() {
     };
   }, []);
 
-  async function handleRefresh() {
+  const handleRefresh = useCallback(async () => {
     setLoading(true);
     setError("");
 
@@ -222,7 +227,7 @@ export default function SAUsers() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   async function handleStateChange(user, nextState) {
     if (!user?.auth_user_id || user.state === nextState) {
@@ -331,8 +336,16 @@ export default function SAUsers() {
     10,
     viewSnapshot.page ?? 1
   );
+  const {
+    page: userPage,
+    setPage: setUserPage,
+    totalPages: userTotalPages,
+    pageItems: userPageItems,
+    startIndex: userStartIndex,
+    endIndex: userEndIndex,
+  } = userPagination;
 
-  const { getRowProps } = useErpListNavigation(userPagination.pageItems, {
+  const { getRowProps } = useErpListNavigation(userPageItems, {
     onActivate: (row) => handleOpenScope(row),
   });
 
@@ -340,17 +353,41 @@ export default function SAUsers() {
     writeViewSnapshotCache(USER_VIEW_SNAPSHOT_KEY, {
       filter,
       searchQuery,
-      page: userPagination.page,
+      page: userPage,
       returnFocusAuthUserId,
     });
-  }, [filter, searchQuery, userPagination.page, returnFocusAuthUserId]);
+  }, [filter, searchQuery, userPage, returnFocusAuthUserId]);
+
+  useEffect(
+    () =>
+      registerScreenRefreshCallback((meta) => {
+        const returnState = meta?.context?.returnState ?? {};
+        if (typeof returnState.filter === "string") {
+          setFilter(returnState.filter);
+        }
+        if (typeof returnState.searchQuery === "string") {
+          setSearchQuery(returnState.searchQuery);
+        }
+        if (Number.isFinite(returnState.page) && returnState.page > 0) {
+          setUserPage(returnState.page);
+        }
+
+        const returnFocusId = meta?.context?.auth_user_id ?? "";
+        if (returnFocusId) {
+          setReturnFocusAuthUserId(returnFocusId);
+        }
+
+        void handleRefresh();
+      }),
+    [handleRefresh, setUserPage]
+  );
 
   useEffect(() => {
     if (!returnFocusAuthUserId) {
       return;
     }
 
-    const pageIndex = userPagination.pageItems.findIndex(
+    const pageIndex = userPageItems.findIndex(
       (user) => user.auth_user_id === returnFocusAuthUserId
     );
 
@@ -369,7 +406,7 @@ export default function SAUsers() {
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [returnFocusAuthUserId, userPagination.pageItems]);
+  }, [returnFocusAuthUserId, userPageItems]);
 
   function handleOpenScope(user) {
     if (!user?.auth_user_id) {
@@ -379,11 +416,19 @@ export default function SAUsers() {
     writeViewSnapshotCache(USER_VIEW_SNAPSHOT_KEY, {
       filter,
       searchQuery,
-      page: userPagination.page,
+      page: userPage,
       returnFocusAuthUserId: user.auth_user_id,
     });
 
-    openScreen("SA_USER_SCOPE");
+    openScreenWithContext("SA_USER_SCOPE", {
+      auth_user_id: user.auth_user_id,
+      returnState: {
+        filter,
+        searchQuery,
+        page: userPage,
+      },
+      refreshOnReturn: true,
+    });
     navigate(`/sa/users/scope?auth_user_id=${encodeURIComponent(user.auth_user_id)}`);
   }
 
@@ -625,11 +670,11 @@ export default function SAUsers() {
     ) : (
       <div className="overflow-x-auto">
         <ErpPaginationStrip
-          page={userPagination.page}
-          setPage={userPagination.setPage}
-          totalPages={userPagination.totalPages}
-          startIndex={userPagination.startIndex}
-          endIndex={userPagination.endIndex}
+          page={userPage}
+          setPage={setUserPage}
+          totalPages={userTotalPages}
+          startIndex={userStartIndex}
+          endIndex={userEndIndex}
           totalItems={filteredUsers.length}
         />
         <table className="erp-grid-table min-w-full">
@@ -649,7 +694,7 @@ export default function SAUsers() {
             </tr>
           </thead>
           <tbody>
-            {userPagination.pageItems.map((user, rowIndex) => {
+            {userPageItems.map((user, rowIndex) => {
               const actionLabel =
                 user.state === "ACTIVE" ? "Disable" : "Activate";
               const nextState =
@@ -774,7 +819,6 @@ export default function SAUsers() {
       <ErpMasterListTemplate
         eyebrow="SA User Governance"
         title="ERP User Directory"
-        description="Search, filter, hide noise, and execute role or lifecycle actions from one dense user register."
         actions={topActions}
         notices={
           error
@@ -794,7 +838,6 @@ export default function SAUsers() {
       <ErpColumnVisibilityDrawer
         visible={showColumnDrawer}
         title="User Directory Columns"
-        description="Hide low-value fields and keep the user register aligned with the current review task."
         columns={USER_COLUMN_DEFS}
         visibleColumnKeys={visibleColumnKeys}
         onToggleColumn={toggleColumn}

@@ -18,6 +18,7 @@ import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js"
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useMenu } from "../../../context/useMenu.js";
 import {
   readViewSnapshotCache,
@@ -120,10 +121,18 @@ function DataTableCard({
   footer,
   actions,
 }) {
-  const rowRefs = useRef([]);
+  const { getRowProps } = useErpListNavigation(rows);
 
   return (
-    <ErpSectionCard eyebrow={eyebrow} title={title}>
+    <div className="grid gap-4">
+      <div className="border border-slate-300 bg-slate-50 px-4 py-3">
+        {eyebrow ? (
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            {eyebrow}
+          </div>
+        ) : null}
+        <div className="mt-1 text-base font-semibold text-slate-900">{title}</div>
+      </div>
       {rows.length === 0 ? (
         <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
           {emptyMessage}
@@ -147,17 +156,7 @@ function DataTableCard({
               {rows.map((row, index) => (
                 <tr
                   key={row.id ?? `${title}-${index}`}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
-                  tabIndex={0}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: rowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
+                  {...getRowProps(index)}
                   className="border-b border-slate-200 bg-white"
                 >
                   {columns.map((column) => (
@@ -181,7 +180,7 @@ function DataTableCard({
           {actions}
         </div>
       ) : null}
-    </ErpSectionCard>
+    </div>
   );
 }
 

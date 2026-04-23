@@ -728,7 +728,6 @@ export default function SAUserRoles() {
       <ErpMasterListTemplate
         eyebrow="SA Role Governance"
         title="ERP User Role Assignment"
-        description="Role and role rank define the authority ladder here. Role alone does not finalize approval power; explicit approver mapping still decides who can approve what."
         actions={topActions}
         notices={
           error
@@ -748,7 +747,6 @@ export default function SAUserRoles() {
       <ErpColumnVisibilityDrawer
         visible={showColumnDrawer}
         title="Role Assignment Columns"
-        description="Show only the user identity fields you need while assigning roles in bulk."
         columns={ROLE_COLUMN_DEFS}
         visibleColumnKeys={visibleColumnKeys}
         onToggleColumn={toggleColumn}

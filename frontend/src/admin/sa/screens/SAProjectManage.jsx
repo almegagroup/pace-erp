@@ -259,7 +259,6 @@ export default function SAProjectManage() {
     <ErpScreenScaffold
       eyebrow="Project Governance"
       title="Project Manage"
-      description="Review reusable projects, control lifecycle, and move into company mapping when a project is ready for operational use."
       actions={[
         {
           key: "project-master",
@@ -325,7 +324,6 @@ export default function SAProjectManage() {
         <ErpSectionCard
           eyebrow="Inventory"
           title="Project roster"
-          description="Choose the project you want to manage, then move into lifecycle or company mapping."
         >
           <div className="grid gap-4">
             <QuickFilterInput
@@ -380,7 +378,6 @@ export default function SAProjectManage() {
           <ErpSectionCard
             eyebrow="Selected Project"
             title={selectedProject ? `${selectedProject.project_code} | ${selectedProject.project_name}` : "No project selected"}
-            description="Keep project lifecycle separate from company mapping. First stabilize the reusable project, then attach it to operational companies."
           >
             {selectedProject ? (
               <div className="grid gap-4 md:grid-cols-2">

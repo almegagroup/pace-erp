@@ -230,7 +230,6 @@ export default function SAPageResourceRegistry() {
     <ErpScreenScaffold
       eyebrow="Page Registry"
       title="ACL Page And Resource Registry"
-      description="Only future ACL/business pages belong here. Admin governance pages are intentionally excluded from project and module ownership."
       notices={error ? [{ tone: "error", message: error }] : []}
       actions={[
         {
@@ -314,7 +313,6 @@ export default function SAPageResourceRegistry() {
         <ErpSectionCard
           eyebrow="Inventory"
           title="Registered ACL Pages"
-          description="This is the source list of publishable ACL/business screens only. Menu placement still happens from Menu Governance, not here."
         >
           <label className="grid gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -380,7 +378,6 @@ export default function SAPageResourceRegistry() {
           <ErpSectionCard
             eyebrow="Selected Page"
             title={selectedRow ? `${selectedRow.title}` : "Choose A Page"}
-            description="This read model keeps page identity, route identity, and menu placement visible in one place."
           >
             {selectedRow ? (
               <div className="grid gap-3">
@@ -459,7 +456,6 @@ export default function SAPageResourceRegistry() {
           <ErpSectionCard
             eyebrow="Rule"
             title="What Happens Here"
-            description="This screen is intentionally read-first. It avoids hidden writes and keeps placement changes inside Menu Governance."
           >
             <div className="grid gap-2 text-sm text-slate-700">
               <p>1. Page exists in frontend registry first.</p>

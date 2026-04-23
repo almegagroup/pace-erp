@@ -10,7 +10,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { openScreen } from "../../../navigation/screenStackEngine.js";
+import {
+  getActiveScreenContext,
+  getPreviousScreen,
+  openScreen,
+  popScreen,
+} from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
@@ -273,7 +278,6 @@ function ScopeSummaryCard({
   eyebrow,
   title,
   count,
-  description,
   preview,
   status,
   onOpen,
@@ -298,7 +302,6 @@ function ScopeSummaryCard({
         </div>
         <span className="text-lg font-semibold text-slate-900">{count}</span>
       </div>
-      <p className="text-sm leading-6 text-slate-600">{description}</p>
       <div className="border border-slate-200 bg-white px-3 py-3">
         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
           Current Selection
@@ -324,7 +327,11 @@ function ScopeSummaryCard({
 export default function SAUserScope() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const authUserId = searchParams.get("auth_user_id") ?? "";
+  const activeScreenContext = useMemo(() => getActiveScreenContext(), []);
+  const authUserId =
+    searchParams.get("auth_user_id") ??
+    activeScreenContext?.auth_user_id ??
+    "";
 
   const actionBarRefs = useRef([]);
   const parentCompanyButtonRef = useRef(null);
@@ -355,6 +362,18 @@ export default function SAUserScope() {
   const [workContextSearch, setWorkContextSearch] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [departmentSearch, setDepartmentSearch] = useState("");
+
+  function handleReturnToUserDirectory() {
+    const previousScreen = getPreviousScreen();
+
+    if (previousScreen?.screen_code === "SA_USERS") {
+      popScreen();
+      return;
+    }
+
+    openScreen("SA_USERS", { mode: "replace" });
+    navigate("/sa/users");
+  }
 
   useEffect(() => {
     let alive = true;
@@ -830,10 +849,7 @@ export default function SAUserScope() {
       group: "Current Screen",
       label: "Go to user directory",
       keywords: ["users", "directory", "sa users"],
-      perform: () => {
-        openScreen("SA_USERS", { mode: "replace" });
-        navigate("/sa/users");
-      },
+      perform: () => handleReturnToUserDirectory(),
       order: 10,
     },
     {
@@ -907,10 +923,7 @@ export default function SAUserScope() {
       buttonRef: (element) => {
         actionBarRefs.current[0] = element;
       },
-      onClick: () => {
-        openScreen("SA_USERS", { mode: "replace" });
-        navigate("/sa/users");
-      },
+      onClick: () => handleReturnToUserDirectory(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 0,
@@ -1006,7 +1019,6 @@ export default function SAUserScope() {
     <ErpSectionCard
       eyebrow="Selection Required"
       title="Open this screen from the User Directory"
-      description="A governed user must be selected before scope mapping can begin."
     >
       <div className="border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-sm text-slate-500">
         Open this screen from the ERP User Directory so a governed user can be selected for scope mapping.
@@ -1024,7 +1036,6 @@ export default function SAUserScope() {
         <ErpSectionCard
           eyebrow="Parent Company"
           title="HR Identity Binding"
-          description="This is the HR authority source for the user. It is not the same thing as operational work scope."
         >
           <label className="block">
             <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -1072,7 +1083,6 @@ export default function SAUserScope() {
         <ErpSectionCard
           eyebrow="Current Snapshot"
           title="Selected user and readiness"
-          description="Keep HR identity and operational scope visible together while editing."
         >
           <div className="space-y-3">
             <div className="border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
@@ -1116,14 +1126,12 @@ export default function SAUserScope() {
         <ErpSectionCard
           eyebrow="Scope Editors"
           title="Edit one scope at a time"
-          description="Operational scope now opens in focused drawers instead of filling the full page with long checkbox lists."
         >
           <div className="grid gap-3 md:grid-cols-2">
             <ScopeSummaryCard
               eyebrow="Work Companies"
               title="Operational Company Scope"
               count={String(workCompanyIds.length)}
-              description="Use this drawer to choose which companies the user can operate inside."
               preview={formatSelectionPreview(
                 selectedWorkCompanies,
                 (company) => `${company.company_code} - ${company.company_name}`,
@@ -1138,7 +1146,6 @@ export default function SAUserScope() {
               eyebrow="Work Contexts"
               title="Runtime Functional Context"
               count={String(workContextIds.length)}
-              description="Context selection decides which runtime capability packs are available after sign-in."
               preview={formatSelectionPreview(
                 selectedWorkContexts,
                 (workContext) =>
@@ -1160,7 +1167,6 @@ export default function SAUserScope() {
               eyebrow="Project Overrides"
               title="Direct Project Override"
               count={String(projectIds.length)}
-              description="Use direct project overrides only for exception cases. Normal project reach now comes from the selected work areas."
               preview={formatSelectionPreview(
                 selectedProjectOverrides,
                 (project) => `${project.project_code} - ${project.project_name}`,
@@ -1175,7 +1181,6 @@ export default function SAUserScope() {
               eyebrow="Departments"
               title="Department Mapping"
               count={String(departmentIds.length)}
-              description="Department scope stays available for HR readiness without crowding the main screen."
               preview={formatSelectionPreview(
                 selectedDepartments,
                 (department) => formatDepartmentLabel(department),
@@ -1192,7 +1197,6 @@ export default function SAUserScope() {
         <ErpSectionCard
           eyebrow="Selection Preview"
           title="Current assignment snapshot"
-          description="This panel keeps the selected scope understandable without forcing the operator to scan every checkbox on the page."
         >
           <div className="grid gap-3">
             <div className="grid gap-3 md:grid-cols-2">
@@ -1285,7 +1289,6 @@ export default function SAUserScope() {
     <ErpScreenScaffold
       eyebrow="SA User Scope Governance"
       title="ERP User Scope Mapping"
-      description="Bind one team identity through Parent Company and Department, then assign Work Companies and Work Scopes separately so SA does not mix HR truth with runtime access."
       actions={topActions}
       notices={notices}
     >
@@ -1392,11 +1395,6 @@ export default function SAUserScope() {
         )}
       >
         <div className="grid gap-4">
-          <p className="text-sm leading-6 text-slate-600">
-            Select only the companies where this user actually works. This choice
-            only narrows which work contexts appear in the next drawer. Runtime
-            contexts save exactly as checked there.
-          </p>
           <QuickFilterInput
             label="Filter Work Companies"
             value={workCompanySearch}
@@ -1506,11 +1504,6 @@ export default function SAUserScope() {
         )}
       >
         <div className="grid gap-4">
-          <p className="text-sm leading-6 text-slate-600">
-            Context choices stay tied to the selected work companies, but nothing
-            here is auto-added on save. Only the checked runtime scopes will persist.
-            Department identity stays separate from these operational work areas.
-          </p>
           <QuickFilterInput
             label="Filter Work Contexts"
             value={workContextSearch}
@@ -1604,11 +1597,6 @@ export default function SAUserScope() {
         )}
       >
         <div className="grid gap-4">
-          <p className="text-sm leading-6 text-slate-600">
-            Direct project mapping is now override-only. In normal cases, project
-            reach should come from the selected work areas. Use this drawer only
-            when a user truly needs a one-off project exception.
-          </p>
           <QuickFilterInput
             label="Filter Projects"
             value={projectSearch}
@@ -1686,11 +1674,6 @@ export default function SAUserScope() {
         )}
       >
         <div className="grid gap-4">
-          <p className="text-sm leading-6 text-slate-600">
-            Department mapping is single-select HR identity truth. It records the
-            user&apos;s home department, but it no longer auto-adds or removes
-            operational work areas from the work-context drawer.
-          </p>
           <QuickFilterInput
             label="Filter Departments"
             value={departmentSearch}

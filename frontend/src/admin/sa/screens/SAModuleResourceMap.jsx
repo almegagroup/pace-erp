@@ -310,7 +310,6 @@ export default function SAModuleResourceMap() {
     <ErpScreenScaffold
       eyebrow="Module Page Map"
       title="Module To Page Resource Ownership"
-      description="Only ACL/business pages belong here. Admin governance pages are intentionally excluded from module ownership."
       notices={[
         ...(error ? [{ tone: "error", message: error }] : []),
         ...(notice ? [{ tone: "success", message: notice }] : []),
@@ -379,7 +378,6 @@ export default function SAModuleResourceMap() {
         <ErpSectionCard
           eyebrow="Published Resources"
           title="ACL Page Resource Inventory"
-          description="If an ACL/business page is not yet published into menu, it will not appear here. Publish first, then assign ownership."
         >
           <label className="grid gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -445,7 +443,6 @@ export default function SAModuleResourceMap() {
           <ErpSectionCard
             eyebrow="Selected Resource"
             title={selectedResource ? selectedResource.title : "Choose A Published Page"}
-            description="One published page resource belongs to one module. That keeps project hierarchy clean and makes later approval policy exact."
           >
             {selectedResource ? (
               <div className="grid gap-3">
@@ -517,7 +514,6 @@ export default function SAModuleResourceMap() {
           <ErpSectionCard
             eyebrow="Rule"
             title="Why This Layer Exists"
-            description="Project -> Module -> Page stays explicit here. Company rollout remains separate."
           >
             <div className="grid gap-2 text-sm text-slate-700">
               <p>1. Publish a page into menu first.</p>

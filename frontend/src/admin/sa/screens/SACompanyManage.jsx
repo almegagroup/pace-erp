@@ -445,7 +445,6 @@ export default function SACompanyManage() {
       <ErpColumnVisibilityDrawer
         visible={showColumnDrawer}
         title="Company Register Columns"
-        description="Hide columns that are not needed for the current company review session."
         columns={COMPANY_COLUMN_DEFS}
         visibleColumnKeys={visibleColumnKeys}
         onToggleColumn={toggleColumn}

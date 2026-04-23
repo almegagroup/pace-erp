@@ -256,7 +256,6 @@ export default function SASystemHealth() {
     <ErpScreenScaffold
       eyebrow="SA Diagnostics"
       title="ERP System Health"
-      description="This diagnostics surface now follows the same keyboard-native shell grammar while keeping runtime health, alerts, and operator guidance in predictable zones."
       actions={topActions}
       notices={
         error
@@ -273,7 +272,6 @@ export default function SASystemHealth() {
       <ErpSectionCard
         eyebrow="Diagnostics Interpretation"
         title="What SA should do next"
-        description="Use these operator notes as the immediate response rail after checking the live health metrics above."
       >
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="border border-slate-300 bg-white px-4 py-3">
