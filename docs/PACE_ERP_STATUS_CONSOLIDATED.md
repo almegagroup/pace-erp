@@ -46,6 +46,28 @@ This file is a **lossless, gate‑wise consolidated view** of the latest *effect
 
 ---
 
+## Security Hardening Rule (Locked)
+
+The following rule is constitutional for all future database and auth changes:
+
+1. Every new table created in any schema exposed to PostgREST must enable RLS in the **same migration** that creates it.
+2. Every such RLS-enabled table must ship in the **same migration** with explicit `service_role` policy coverage required by backend/runtime flows.
+3. Every new or replaced database function must set a fixed `search_path` in the **same migration** that creates or replaces it.
+4. Any Supabase Auth dashboard-only protection that cannot be enforced by SQL migration must be treated as an operational invariant and must remain enabled in production.
+
+### Mandatory Advisor Checklist For Every New Migration
+- If a migration creates a new exposed table: `ENABLE ROW LEVEL SECURITY` must be included immediately.
+- If a migration creates or replaces a backend-used function: `ALTER FUNCTION ... SET search_path = ...` must be included immediately unless the function definition already pins it.
+- If a migration introduces a backend-owned table under RLS: an explicit `service_role` policy must be included immediately.
+- After applying any security-relevant migration, Security Advisor must be checked before the migration is considered closed.
+
+### Recurring Failure Pattern (Locked)
+- Security Advisor regressions are considered a process failure, not an isolated patch event.
+- If a new migration reintroduces `RLS Disabled in Public` or `Function Search Path Mutable`, that means the migration was incomplete at creation time.
+- These findings must be prevented at authoring time, not cleaned up later by separate hardening passes.
+
+---
+
 ## Gate-0 — FOUNDATION & GOVERNANCE
 
 | Gate | ID | Domain | Short_Name | Effective_Status | Effective_Note |
@@ -74,7 +96,7 @@ This file is a **lossless, gate‑wise consolidated view** of the latest *effect
 | 0 | ID-0.5A | SECURITY | Service role usage | ✅ DONE | Backend-only proven |
 | 0 | ID-0.6 | DB | Schema namespace | 🔒 FROZEN | Base schemas |
 | 0 | ID-0.6A | DB | RLS philosophy | 🔒 FROZEN | Default deny |
-| 0 | ID-0.6B | DB | Enable RLS | 🟡 HALF-DONE | Gate-13 |
+| 0 | ID-0.6B | DB | Enable RLS | 🟡 HALF-DONE | Every new exposed table must enable RLS in the same migration; later catch-up is invalid process |
 | 0 | ID-0.6C | DB | Default deny policies | 🔒 FROZEN | CRUD denied |
 | 0 | ID-0.6D | DB | Service role bypass | 🔒 FROZEN | Locked |
 | 0 | ID-0.6E | DB | anon/auth lockdown | 🔒 FROZEN | Fully blocked |
@@ -116,7 +138,7 @@ This file is a **lossless, gate‑wise consolidated view** of the latest *effect
 | 1    | ID‑10  | OBSERVABILITY | Request ID propagation        | 🔒 FROZEN        | request_id everywhere           |
 | 1    | ID‑10A | OBSERVABILITY | Structured error logging      | 🔒 FROZEN        | Deterministic logs              |
 | 1    | ID‑12  | DB‑CONTRACT   | RLS assertion helper          | 🔒 FROZEN        | Contract‑only                   |
-| 1    | ID‑12A | DB‑CONTRACT   | Service role authority        | 🟡 HALF‑DONE     | Table‑level RLS proof pending   |
+| 1    | ID‑12A | DB‑CONTRACT   | Service role authority        | 🟡 HALF‑DONE     | Every backend-owned RLS table must ship with same-migration service_role policy proof |
 | 1    | ID‑13  | DOCS          | Gate‑1 freeze                 | 🔒 FROZEN        | Gate‑1 frozen                   |
 
 ---
@@ -126,7 +148,7 @@ This file is a **lossless, gate‑wise consolidated view** of the latest *effect
 | Gate | ID      | Domain        | Short_Name            | Effective_Status | Effective_Note       |
 | ---- | ------- | ------------- | --------------------- | ---------------- | -------------------- |
 | 2    | ID‑2.1  | AUTH          | Login parent          | 🔒 FROZEN        | Login flow locked    |
-| 2    | ID‑2.1A | AUTH          | Credential validation | 🔒 FROZEN        | Supabase Auth only   |
+| 2    | ID‑2.1A | AUTH          | Credential validation | 🔒 FROZEN        | Supabase Auth only; leaked-password protection must remain enabled operationally |
 | 2    | ID‑2.1B | AUTH          | Account state         | 🔒 FROZEN        | ACTIVE only          |
 | 2    | ID‑2.1C | SESSION       | Session create        | 🔒 FROZEN        | Server‑side only     |
 | 2    | ID‑2.1D | AUTH          | Identifier resolver   | 🔒 FROZEN        | ERP→Auth mapping     |
@@ -211,7 +233,7 @@ This file is a **lossless, gate‑wise consolidated view** of the latest *effect
 | 5    | ID‑5.5A | SECURITY      | Bypass isolation guard        | 🟡 HALF‑DONE     | ACL universe pending  |
 | 5    | ID‑5.6  | SECURITY      | Context invariant enforcement | 🔒 FROZEN        | UNRESOLVED blocks     |
 | 5    | ID‑5.6A | SECURITY      | Context error codes           | 🔒 FROZEN        | CONTEXT_* returned    |
-| 5    | ID‑5.7  | DB            | RLS context alignment         | 🟡 HALF‑DONE     | Table RLS pending     |
+| 5    | ID‑5.7  | DB            | RLS context alignment         | 🟡 HALF‑DONE     | New ACL/runtime tables must satisfy RLS + service_role + advisor clean check in the creating migration |
 | 5    | ID‑5.7A | DB            | Context mismatch block        | 🟡 HALF‑DONE     | Policies unused       |
 | 5    | ID‑5.8  | OBSERVABILITY | Context logs                  | ⏸ DEFERRED       | Deferred by design    |
 | 5    | ID‑5.9  | DOCS          | Gate‑5 freeze                 | 🔒 FROZEN        | Gate‑5 frozen         |
