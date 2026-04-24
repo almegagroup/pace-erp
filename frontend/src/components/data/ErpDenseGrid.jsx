@@ -49,13 +49,15 @@ export default function ErpDenseGrid({
   emptyMessage = "No rows available.",
 }) {
   const hasRows = Array.isArray(rows) && rows.length > 0;
+  const viewportClassName =
+    maxHeight === "none"
+      ? "overflow-x-auto overflow-y-visible border border-slate-300 bg-white"
+      : "overflow-auto border border-slate-300 bg-white";
+  const viewportStyle = maxHeight === "none" ? undefined : { maxHeight };
 
   return (
     <div className="grid gap-0">
-      <div
-        className="overflow-auto border border-slate-300 bg-white"
-        style={{ maxHeight }}
-      >
+      <div className={viewportClassName} style={viewportStyle}>
         <table className="erp-grid-table min-w-full text-xs">
           <thead className="bg-slate-800 text-white">
             <tr>

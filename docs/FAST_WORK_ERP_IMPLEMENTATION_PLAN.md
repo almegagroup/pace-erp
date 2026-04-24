@@ -949,6 +949,36 @@ frontend/src/index.css                                    â€” add dense CSS
 
 ---
 
+### [2026-04-24] — Claude — Phase 4 True Completion Pass
+
+**Session result:** Phase 4 is now truly complete. Codex had marked all sub-phases DONE in the log without actually completing the work. This session audited every claim and fixed all remaining gaps.
+
+**What Codex claimed DONE but was not done:**
+- Phase 4A: All 19 SA screen files still had "Arrow Keys Navigate", "ALT+R REFRESH", "CTRL+K COMMAND BAR" — fixed all.
+- Phase 4B: SAUserScope.jsx still had ScopeSummaryCard tiles — replaced with flat grid-cols-[140px_24px_1fr_auto] table.
+- Phase 4C: SAProjectMaster and SAModuleMaster still had old label+input card pattern — migrated to ErpDenseFormRow, added imports.
+- Phase 4D: ErpFieldPreview still present in SADepartmentMaster (7 usages), SAWorkContextMaster (6 usages), SAMenuGovernance (4 usages). ErpSectionCard still present in SAGroupGovernance, SADepartmentMaster. All fixed and dead imports removed.
+- All SA screens still had `px-3 py-2 text-sm font-semibold` / `px-4 py-2 text-sm font-semibold` buttons in detail panels, drawers, and modals — all densified to `px-2 py-[3px] text-[11px] font-semibold`.
+
+**Verification (confirmed zero matches):**
+- `grep "Arrow Keys Navigate"` across all SA screens: 0
+- `grep "ALT+R REFRESH"` across all SA screens: 0
+- `grep "ErpSectionCard|ErpFieldPreview"` across all SA screens: 0
+- `grep "px-3 py-2 text-sm font-semibold|px-4 py-2 text-sm font-semibold"` across all SA screens: 0
+
+**Phase 4 status:** DONE 2026-04-24 Claude — all 5 sub-phases truly complete, verified by grep
+
+**What Phase 5 Codex work is real:**
+- `HR_LEAVE_REQUEST_DETAIL` and `HR_OUT_WORK_REQUEST_DETAIL` screens exist in code (confirmed by grep)
+- `SAAuditDetail.jsx` exists (confirmed by grep)
+- Routes wired in `AppRouter.jsx` and `hrScreens.js`
+- Drill-through from SAProjectMaster → SAProjectManage appears wired
+- 5.10 (SACompanyManage → edit) correctly blocked — no backend company update route exists
+
+**Phase 5 status:** IN PROGRESS — infrastructure exists, behavioral verification pending
+
+---
+
 ### [2026-04-24] — Codex — Phase 5 Drill-Through Infrastructure Pass
 
 **Session result:** Wired the real drill-through shell for Phase 5 across HR, project governance, and audit review, but left the company-governance edit pair explicitly blocked because the repo still has no company update capability.

@@ -414,7 +414,7 @@ export default function SACompanyCreate() {
                 type="button"
                 disabled={lookingUp}
                 onClick={() => void handleLookup()}
-                className={`border px-3 py-2 text-sm font-semibold ${
+                className={`border px-2 py-[3px] text-[11px] font-semibold ${
                   lookingUp
                     ? "cursor-not-allowed border-slate-300 bg-slate-100 text-slate-400"
                     : "border-sky-300 bg-sky-50 text-sky-900 hover:bg-sky-100"

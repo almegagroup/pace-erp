@@ -11,15 +11,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
-import { SCREEN_REGISTRY } from "../../../navigation/screenRegistry.js";
+import { PROJECT_SCREENS } from "../../../navigation/screens/projects/projectScreens.js";
+import { HR_SCREENS } from "../../../navigation/screens/projects/hrModule/hrScreens.js";
+import { OPERATION_SCREENS } from "../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { WORKFLOW_SCREENS } from "../../../navigation/screens/workflowScreens.js";
+import { REPORTING_SCREENS } from "../../../navigation/screens/reportingScreens.js";
+import { ADMIN_SCREENS } from "../../../navigation/screens/adminScreens.js";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+
+const MENU_GOVERNANCE_SCREEN_REGISTRY = Object.freeze({
+  ...ADMIN_SCREENS,
+  ...PROJECT_SCREENS,
+  ...HR_SCREENS,
+  ...OPERATION_SCREENS,
+  ...WORKFLOW_SCREENS,
+  ...REPORTING_SCREENS,
+});
 
 function inputClassName() {
   return "w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500";
@@ -214,7 +226,7 @@ function pickDefaultGroup(menus, universe, selectedMenuCode) {
 function findReservedScreenByCode(screenCode, universe) {
   const normalizedCode = normalizeMenuCode(screenCode);
 
-  return Object.values(SCREEN_REGISTRY).find(
+  return Object.values(MENU_GOVERNANCE_SCREEN_REGISTRY).find(
     (screen) =>
       resolveGovernanceUniverse(screen) === universe &&
       normalizeMenuCode(screen?.screen_code) === normalizedCode
@@ -288,6 +300,20 @@ export default function SAMenuGovernance() {
     display_order: "0",
     parent_menu_code: "",
   });
+
+  const getNextAvailableOrder = useCallback((parentMenuCode = "", excludeMenuCode = "") => {
+    const takenOrders = menus
+      .filter((item) => (item.parent_menu_code ?? "") === parentMenuCode)
+      .filter((item) => item.menu_code !== excludeMenuCode)
+      .map((item) => Number(item.tree_display_order ?? item.display_order ?? 0))
+      .filter((value) => Number.isFinite(value));
+
+    if (takenOrders.length === 0) {
+      return 0;
+    }
+
+    return Math.max(...takenOrders) + 1;
+  }, [menus]);
 
   const loadRegistry = useCallback(async (nextUniverse = universe) => {
     setLoading(true);
@@ -559,7 +585,7 @@ export default function SAMenuGovernance() {
   );
 
   const catalogBasePages = useMemo(() => {
-    return Object.values(SCREEN_REGISTRY)
+    return Object.values(MENU_GOVERNANCE_SCREEN_REGISTRY)
       .filter((screen) => resolveGovernanceUniverse(screen) === universe)
       .filter((screen) => screen.publishableInMenu !== false)
       .filter((screen) => Boolean(screen?.screen_code) && Boolean(screen?.route))
@@ -964,20 +990,6 @@ export default function SAMenuGovernance() {
     },
   ];
 
-  const getNextAvailableOrder = useCallback((parentMenuCode = "", excludeMenuCode = "") => {
-    const takenOrders = menus
-      .filter((item) => (item.parent_menu_code ?? "") === parentMenuCode)
-      .filter((item) => item.menu_code !== excludeMenuCode)
-      .map((item) => Number(item.tree_display_order ?? item.display_order ?? 0))
-      .filter((value) => Number.isFinite(value));
-
-    if (takenOrders.length === 0) {
-      return 0;
-    }
-
-    return Math.max(...takenOrders) + 1;
-  }, [menus]);
-
   function openPageEditor(page) {
     const safeParent =
       page.parent_menu_code && page.parent_menu_code !== page.screen_code
@@ -1220,7 +1232,7 @@ export default function SAMenuGovernance() {
               key={value}
               type="button"
               onClick={() => setUniverse(value)}
-              className={`border px-3 py-2 text-sm font-semibold ${
+              className={`border px-2 py-[3px] text-[11px] font-semibold ${
                 universe === value
                   ? "border-sky-300 bg-sky-50 text-sky-900"
                   : "border-slate-300 bg-white text-slate-700"
@@ -1380,12 +1392,12 @@ export default function SAMenuGovernance() {
                     </label>
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1">
                     <button
                       type="button"
                       disabled={saving}
                       onClick={() => void handleSaveSelectedMenu()}
-                      className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+                      className="border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold text-sky-900"
                     >
                       Save Group
                     </button>
@@ -1393,7 +1405,7 @@ export default function SAMenuGovernance() {
                       type="button"
                       disabled={saving}
                       onClick={() => void handleToggleSelectedMenuState()}
-                      className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                      className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
                     >
                       {selectedMenu.is_active ? "Disable Group" : "Enable Group"}
                     </button>
@@ -1402,7 +1414,7 @@ export default function SAMenuGovernance() {
                         type="button"
                         disabled={saving}
                         onClick={() => void handleDeleteSelectedMenu()}
-                        className="border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700"
+                        className="border border-rose-300 bg-rose-50 px-2 py-[3px] text-[11px] font-semibold text-rose-700"
                       >
                         Remove Group
                       </button>
@@ -1453,17 +1465,15 @@ export default function SAMenuGovernance() {
                     </div>
                   ) : null}
 
-                  <div className="grid gap-2 md:grid-cols-2">
-                    <ErpFieldPreview
-                      label="Parent Binding"
-                      value={selectedMenu.parent_menu_code || "No parent"}
-                      caption="Tree location currently driving menu projection."
-                    />
-                    <ErpFieldPreview
-                      label="Child Count"
-                      value={String(selectedGroupChildren.length)}
-                      caption="Move these out before removing this group."
-                    />
+                  <div className="border border-slate-300 bg-white">
+                    <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                      <span className="text-[11px] text-slate-500">Parent Binding</span>
+                      <span className="text-[11px] font-semibold text-slate-900">{selectedMenu.parent_menu_code || "No parent"}</span>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
+                      <span className="text-[11px] text-slate-500">Child Count</span>
+                      <span className="text-[11px] font-semibold text-slate-900">{String(selectedGroupChildren.length)}</span>
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -1480,24 +1490,20 @@ export default function SAMenuGovernance() {
                   Open the group-create modal only when you need a new drawer bucket.
                   The main registry stays focused on selection and maintenance now.
                 </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <ErpFieldPreview
-                    label="Prepared Code"
-                    value={normalizedCreateMenuCode || "Not started"}
-                    caption="Group codes stay separate from page screen codes."
-                    tone={normalizedCreateMenuCode ? "sky" : "default"}
-                  />
-                  <ErpFieldPreview
-                    label="Next Order"
-                    value={String(suggestedCreateOrder)}
-                    caption={`Suggested under ${createForm.parent_menu_code || "root"}.`}
-                    tone="default"
-                  />
+                <div className="border border-slate-300 bg-white">
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Prepared Code</span>
+                    <span className={`text-[11px] font-semibold ${normalizedCreateMenuCode ? "text-sky-800" : "text-slate-400"}`}>{normalizedCreateMenuCode || "Not started"}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Next Order</span>
+                    <span className="text-[11px] font-semibold text-slate-900">{String(suggestedCreateOrder)}</span>
+                  </div>
                 </div>
                 <button
                   type="button"
                   onClick={openCreateGroupModal}
-                  className="w-fit border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+                  className="w-fit border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold text-sky-900"
                 >
                   Open Create Group Modal
                 </button>
@@ -1595,7 +1601,7 @@ export default function SAMenuGovernance() {
                             type="button"
                             disabled={saving}
                             onClick={() => void handleTogglePageState(page)}
-                            className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                            className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
                           >
                             {page.is_active ? "Disable" : "Enable"}
                           </button>
@@ -1604,7 +1610,7 @@ export default function SAMenuGovernance() {
                           type="button"
                           disabled={saving}
                           onClick={() => openPageEditor(page)}
-                          className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+                          className="border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold text-sky-900"
                         >
                           {page.registeredMenu ? "Page Settings" : "Publish Page"}
                         </button>
@@ -1646,7 +1652,7 @@ export default function SAMenuGovernance() {
                     setGroupPickerOpen(false);
                     setPageEditor(null);
                   }}
-                  className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                  className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
                 >
                   Close
                 </button>
@@ -1766,7 +1772,7 @@ export default function SAMenuGovernance() {
                     type="button"
                     disabled={saving}
                     onClick={() => void handleSavePageEditor()}
-                    className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+                    className="border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold text-sky-900"
                   >
                     Save Page Placement
                   </button>
@@ -1777,7 +1783,7 @@ export default function SAMenuGovernance() {
                       setGroupPickerOpen(false);
                       setPageEditor(null);
                     }}
-                    className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                    className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
                   >
                     Cancel
                   </button>
@@ -1888,7 +1894,7 @@ export default function SAMenuGovernance() {
               type="button"
               disabled={saving}
               onClick={closeCreateGroupModal}
-              className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-700"
             >
               Cancel
             </button>
@@ -1896,7 +1902,7 @@ export default function SAMenuGovernance() {
               type="button"
               disabled={saving}
               onClick={() => void handleCreateMenu()}
-              className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-sky-950"
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-950"
             >
               {saving ? "Creating..." : "Create Group"}
             </button>
@@ -2049,7 +2055,7 @@ export default function SAMenuGovernance() {
               type="button"
               disabled={saving}
               onClick={closePageEditor}
-              className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-700"
             >
               Cancel
             </button>
@@ -2057,7 +2063,7 @@ export default function SAMenuGovernance() {
               type="button"
               disabled={saving || !pageEditor}
               onClick={() => void handleSavePageEditor()}
-              className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-sky-950"
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-950"
             >
               {saving ? "Saving..." : "Save Page Placement"}
             </button>
@@ -2209,7 +2215,7 @@ export default function SAMenuGovernance() {
               setGroupPickerOpen(false);
               pageTitleRef.current?.focus();
             }}
-            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-slate-700"
+            className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-700"
           >
             Close
           </button>

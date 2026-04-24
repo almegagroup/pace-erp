@@ -6,7 +6,7 @@ import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
-import ErpScreenScaffold, { ErpFieldPreview } from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import {
   formatCompanyAddress,
@@ -609,34 +609,27 @@ export default function SADepartmentMaster() {
             />
             {selectedDepartment ? (
               <>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <ErpFieldPreview
-                    label="Department Status"
-                    value={selectedDepartment.status}
-                    caption="Inactive departments also push their derived work context inactive."
-                  />
-                  <ErpFieldPreview
-                    label="Created"
-                    value={
-                      selectedDepartment.created_at
-                        ? new Date(selectedDepartment.created_at).toLocaleDateString()
-                        : "Unknown"
-                    }
-                    caption="Canonical department row create date."
-                  />
-                  <ErpFieldPreview
-                    label="Assigned Users"
-                    value={selectedDepartment.derived_work_context?.assigned_user_count ?? 0}
-                    caption="Users currently bound to this department-derived context."
-                  />
+                <div className="border border-slate-300 bg-white">
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Department Status</span>
+                    <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.status}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Created</span>
+                    <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.created_at ? new Date(selectedDepartment.created_at).toLocaleDateString() : "Unknown"}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Assigned Users</span>
+                    <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context?.assigned_user_count ?? 0}</span>
+                  </div>
                 </div>
 
-                <div className="mt-4 flex flex-wrap gap-2">
+                <div className="mt-2 flex flex-wrap gap-1">
                   <button
                     type="button"
                     disabled={saving || selectedDepartment.status === "ACTIVE"}
                     onClick={() => void handleDepartmentStateChange("ACTIVE")}
-                    className="border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-emerald-300 bg-emerald-50 px-2 py-[3px] text-[11px] font-semibold text-emerald-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Activate
                   </button>
@@ -644,7 +637,7 @@ export default function SADepartmentMaster() {
                     type="button"
                     disabled={saving || selectedDepartment.status === "INACTIVE"}
                     onClick={() => void handleDepartmentStateChange("INACTIVE")}
-                    className="border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-rose-300 bg-rose-50 px-2 py-[3px] text-[11px] font-semibold text-rose-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Inactivate
                   </button>
@@ -660,31 +653,23 @@ export default function SADepartmentMaster() {
           <div className="grid gap-1">
             <ErpSelectionSection label="Derived Work Context" />
             {selectedDepartment?.derived_work_context ? (
-              <div className="grid gap-3 md:grid-cols-2">
-                <ErpFieldPreview
-                  label="Work Context Code"
-                  value={selectedDepartment.derived_work_context.work_context_code}
-                  caption="Auto-derived from the department code."
-                  tone="success"
-                />
-                <ErpFieldPreview
-                  label="Work Context State"
-                  value={
-                    selectedDepartment.derived_work_context.is_active ? "ACTIVE" : "INACTIVE"
-                  }
-                  caption="Synced from company + department lifecycle."
-                  tone="success"
-                />
-                <ErpFieldPreview
-                  label="Capability Count"
-                  value={selectedDepartment.derived_work_context.capability_count}
-                  caption="Can stay zero for now until business pages and capability packs are ready."
-                />
-                <ErpFieldPreview
-                  label="Assigned Users"
-                  value={selectedDepartment.derived_work_context.assigned_user_count}
-                  caption="User Scope binds people into this runtime context."
-                />
+              <div className="border border-slate-300 bg-white">
+                <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Work Context Code</span>
+                  <span className="text-[11px] font-semibold text-emerald-800">{selectedDepartment.derived_work_context.work_context_code}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Work Context State</span>
+                  <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context.is_active ? "ACTIVE" : "INACTIVE"}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Capability Count</span>
+                  <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context.capability_count}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Assigned Users</span>
+                  <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context.assigned_user_count}</span>
+                </div>
               </div>
             ) : (
               <p className="text-sm text-slate-500">

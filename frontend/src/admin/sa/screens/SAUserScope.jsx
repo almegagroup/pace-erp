@@ -18,6 +18,7 @@ import {
 } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
@@ -31,6 +32,25 @@ import {
   sortProjects,
 } from "../../../shared/erpCollections.js";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
+
+const USER_SCOPE_PREVIEW_COLUMN_DEFS = Object.freeze([
+  { key: "workCompanies", label: "Work Companies" },
+  { key: "workContexts", label: "Work Contexts" },
+  { key: "projectOverrides", label: "Project Overrides" },
+  { key: "departments", label: "Departments" },
+  { key: "inheritedProjects", label: "Inherited Projects" },
+  { key: "effectiveProjects", label: "Effective Projects" },
+]);
+
+const DEFAULT_USER_SCOPE_PREVIEW_COLUMNS = Object.freeze([
+  "workCompanies",
+  "workContexts",
+  "projectOverrides",
+  "departments",
+  "inheritedProjects",
+  "effectiveProjects",
+]);
 
 async function readJsonSafe(response) {
   try {
@@ -306,11 +326,17 @@ export default function SAUserScope() {
   const [departmentIds, setDepartmentIds] = useState([]);
   const [companyPickerOpen, setCompanyPickerOpen] = useState(false);
   const [activeScopeEditor, setActiveScopeEditor] = useState("");
+  const [showColumnDrawer, setShowColumnDrawer] = useState(false);
   const [companySearch, setCompanySearch] = useState("");
   const [workCompanySearch, setWorkCompanySearch] = useState("");
   const [workContextSearch, setWorkContextSearch] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [departmentSearch, setDepartmentSearch] = useState("");
+  const { visibleColumnKeys, toggleColumn, resetColumns } = useErpVisibleColumns({
+    storageKey: "erp.sa.userScope.previewColumns",
+    columnDefs: USER_SCOPE_PREVIEW_COLUMN_DEFS,
+    defaultColumnKeys: DEFAULT_USER_SCOPE_PREVIEW_COLUMNS,
+  });
 
   function handleReturnToUserDirectory() {
     const previousScreen = getPreviousScreen();
@@ -841,6 +867,14 @@ export default function SAUserScope() {
       order: 65,
     },
     {
+      id: "sa-user-scope-columns",
+      group: "Current Screen",
+      label: "Choose scope preview columns",
+      keywords: ["columns", "preview", "selection preview"],
+      perform: () => setShowColumnDrawer(true),
+      order: 67,
+    },
+    {
       id: "sa-user-scope-save",
       group: "Current Screen",
       label: saving ? "Saving scope..." : "Save user scope",
@@ -904,18 +938,34 @@ export default function SAUserScope() {
         }),
     },
     {
+      key: "columns",
+      label: "Columns",
+      tone: "neutral",
+      disabled: loading,
+      buttonRef: (element) => {
+        actionBarRefs.current[3] = element;
+      },
+      onClick: () => setShowColumnDrawer(true),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 3,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
+    {
       key: "save-scope",
       label: saving ? "Saving..." : "Save Scope",
       hint: "Ctrl+S | F2",
       tone: "primary",
       disabled: saving || loading || !authUserId,
       buttonRef: (element) => {
-        actionBarRefs.current[3] = element;
+        actionBarRefs.current[4] = element;
       },
       onClick: () => void handleSave(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
-          index: 3,
+          index: 4,
           refs: actionBarRefs.current,
           orientation: "horizontal",
         }),
@@ -1040,6 +1090,7 @@ export default function SAUserScope() {
           <div className="border border-slate-300 bg-white">
             {[
               {
+                key: "workCompanies",
                 label: "Work Companies",
                 count: workCompanyIds.length,
                 summary: formatSelectionPreview(
@@ -1051,6 +1102,7 @@ export default function SAUserScope() {
                 required: true,
               },
               {
+                key: "workContexts",
                 label: "Work Contexts",
                 count: workContextIds.length,
                 summary: formatSelectionPreview(
@@ -1065,6 +1117,7 @@ export default function SAUserScope() {
                 required: true,
               },
               {
+                key: "projectOverrides",
                 label: "Project Overrides",
                 count: projectIds.length,
                 summary: formatSelectionPreview(
@@ -1076,6 +1129,7 @@ export default function SAUserScope() {
                 required: false,
               },
               {
+                key: "departments",
                 label: "Departments",
                 count: departmentIds.length,
                 summary: formatSelectionPreview(
@@ -1138,14 +1192,16 @@ export default function SAUserScope() {
                 value: formatSelectionPreview(selectedDepartments, formatDepartmentLabel, "None selected"),
               },
               {
+                key: "inheritedProjects",
                 label: "Inherited Projects",
                 value: formatSelectionPreview(inheritedProjects, (p) => `${p.project_code} — ${p.project_name}`, "No inherited reach yet"),
               },
               {
+                key: "effectiveProjects",
                 label: "Effective Projects",
                 value: formatSelectionPreview(effectiveProjects, (p) => `${p.project_code} — ${p.project_name}`, "No effective reach yet"),
               },
-            ].map(({ label, value }) => (
+            ].filter(({ key }) => visibleColumnKeys.includes(key)).map(({ label, value }) => (
               <div key={label} className="border-b border-slate-200 px-2 py-[3px] last:border-b-0">
                 <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
                 <p className="whitespace-pre-wrap text-[11px] leading-[1.5] text-slate-800">{value}</p>
@@ -1153,7 +1209,7 @@ export default function SAUserScope() {
             ))}
           </div>
           <p className="text-[9px] uppercase tracking-[0.12em] text-slate-400">
-            F3 or summary buttons open the editor drawers
+            F3 opens scope editors | Columns opens preview field chooser
           </p>
         </div>
       </div>
@@ -1572,6 +1628,16 @@ export default function SAUserScope() {
           </div>
         </div>
       </DrawerBase>
+
+      <ErpColumnVisibilityDrawer
+        visible={showColumnDrawer}
+        title="User Scope Preview Columns"
+        columns={USER_SCOPE_PREVIEW_COLUMN_DEFS}
+        visibleColumnKeys={visibleColumnKeys}
+        onToggleColumn={toggleColumn}
+        onResetColumns={resetColumns}
+        onClose={() => setShowColumnDrawer(false)}
+      />
     </ErpScreenScaffold>
   );
 }

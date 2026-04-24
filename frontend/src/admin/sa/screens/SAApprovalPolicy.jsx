@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
@@ -68,23 +69,31 @@ export default function SAApprovalPolicy() {
   const [notice, setNotice] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedResourceCode, setSelectedResourceCode] = useState("");
+  const [policyEditorOpen, setPolicyEditorOpen] = useState(false);
   const [actionCode, setActionCode] = useState("VIEW");
   const [approvalRequired, setApprovalRequired] = useState(false);
   const [approvalType, setApprovalType] = useState("ANYONE");
   const [minApprovers, setMinApprovers] = useState(MIN_REQUIRED_APPROVERS);
   const [maxApprovers, setMaxApprovers] = useState(MAX_ALLOWED_APPROVERS);
 
-  const loadWorkspace = useCallback(async (preferredResourceCode = selectedResourceCode) => {
+  const selectedResourceCodeRef = useRef("");
+
+  useEffect(() => {
+    selectedResourceCodeRef.current = selectedResourceCode;
+  }, [selectedResourceCode]);
+
+  const loadWorkspace = useCallback(async (preferredResourceCode = null) => {
     setLoading(true);
     setError("");
 
     try {
       const data = await fetchWorkspace();
       const nextResources = data?.resources ?? [];
+      const preferredCode = preferredResourceCode ?? selectedResourceCodeRef.current;
       setResources(nextResources);
 
       const nextSelectedResourceCode =
-        nextResources.find((row) => row.resource_code === preferredResourceCode)?.resource_code ??
+        nextResources.find((row) => row.resource_code === preferredCode)?.resource_code ??
         nextResources[0]?.resource_code ??
         "";
       setSelectedResourceCode(nextSelectedResourceCode);
@@ -105,7 +114,7 @@ export default function SAApprovalPolicy() {
     } finally {
       setLoading(false);
     }
-  }, [selectedResourceCode]);
+  }, []);
 
   useEffect(() => {
     void loadWorkspace();
@@ -143,7 +152,7 @@ export default function SAApprovalPolicy() {
     null;
 
   const { getRowProps } = useErpListNavigation(filteredResources, {
-    onActivate: (row) => setSelectedResourceCode(row?.resource_code ?? ""),
+    onActivate: (row) => handleOpenPolicyEditor(row),
   });
 
   const selectedPolicy =
@@ -169,6 +178,11 @@ export default function SAApprovalPolicy() {
     setMinApprovers(MIN_REQUIRED_APPROVERS);
     setMaxApprovers(MAX_ALLOWED_APPROVERS);
   }, [selectedPolicy]);
+
+  function handleOpenPolicyEditor(row) {
+    setSelectedResourceCode(row?.resource_code ?? "");
+    setPolicyEditorOpen(true);
+  }
 
   async function handleSave() {
     if (!selectedResource || !actionCode) {
@@ -219,7 +233,8 @@ export default function SAApprovalPolicy() {
   }
 
   return (
-    <ErpApprovalReviewTemplate
+    <>
+      <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
       title="Exact Resource Approval Policy"
       actions={[
@@ -228,7 +243,7 @@ export default function SAApprovalPolicy() {
           label: "Approver Rules",
           tone: "neutral",
           onClick: () => {
-            openScreen("SA_APPROVAL_RULES", { mode: "replace" });
+            openScreen("SA_APPROVAL_RULES");
             navigate("/sa/approval-rules");
           },
         },
@@ -237,7 +252,7 @@ export default function SAApprovalPolicy() {
           label: "Report Visibility",
           tone: "neutral",
           onClick: () => {
-            openScreen("SA_REPORT_VISIBILITY", { mode: "replace" });
+            openScreen("SA_REPORT_VISIBILITY");
             navigate("/sa/report-visibility");
           },
         },
@@ -277,7 +292,7 @@ export default function SAApprovalPolicy() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      footerHints={["↑↓ Navigate", "Enter Inspect", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "Enter Open Editor", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={{
         eyebrow: "Resource Search",
         title: "Filter business resources",
@@ -341,10 +356,10 @@ export default function SAApprovalPolicy() {
             rowKey={(row) => row.resource_code}
             getRowProps={(row, index) => ({
               ...getRowProps(index),
-              onClick: () => setSelectedResourceCode(row.resource_code),
+              onClick: () => handleOpenPolicyEditor(row),
               className: row.resource_code === selectedResourceCode ? "bg-sky-50" : "",
             })}
-            onRowActivate={(row) => setSelectedResourceCode(row.resource_code)}
+            onRowActivate={(row) => handleOpenPolicyEditor(row)}
             maxHeight="none"
           />
         ),
@@ -378,88 +393,17 @@ export default function SAApprovalPolicy() {
                 </div>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="grid gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Action
-                  </span>
-                  <select
-                    value={actionCode}
-                    onChange={(event) => setActionCode(event.target.value)}
-                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
-                  >
-                    {(selectedResource.available_actions ?? []).map((code) => (
-                      <option key={code} value={code}>
-                        {code}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="grid gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Approval Required
-                  </span>
-                  <span className="flex items-center gap-3 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
-                    <input
-                      type="checkbox"
-                      checked={approvalRequired}
-                      onChange={(event) => setApprovalRequired(event.target.checked)}
-                      className="h-4 w-4"
-                    />
-                    Approval gate active for the selected action
-                  </span>
-                </label>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-3">
-                <label className="grid gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Approval Type
-                  </span>
-                  <select
-                    value={approvalType}
-                    disabled={!approvalRequired}
-                    onChange={(event) => setApprovalType(event.target.value)}
-                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
-                  >
-                    {APPROVAL_TYPE_OPTIONS.map((code) => (
-                      <option key={code} value={code}>
-                        {code}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="grid gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Min Approvers
-                  </span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="3"
-                    value={minApprovers}
-                    disabled={!approvalRequired}
-                    onChange={(event) => setMinApprovers(event.target.value)}
-                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
-                  />
-                </label>
-
-                <label className="grid gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Max Approvers
-                  </span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="3"
-                    value={maxApprovers}
-                    disabled={!approvalRequired}
-                    onChange={(event) => setMaxApprovers(event.target.value)}
-                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
-                  />
-                </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPolicyEditorOpen(true)}
+                  className="border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-sky-800"
+                >
+                  Open Policy Editor
+                </button>
+                <p className="text-xs text-slate-500">
+                  Press Enter on a resource row to open the exact action policy editor drawer.
+                </p>
               </div>
             </div>
           ) : (
@@ -469,6 +413,100 @@ export default function SAApprovalPolicy() {
           )}
         </section>
       }
-    />
+      />
+      {selectedResource ? (
+        <DrawerBase
+          visible={policyEditorOpen}
+          title={`Policy Editor | ${selectedResource.title}`}
+          onClose={() => setPolicyEditorOpen(false)}
+        >
+          <div className="grid gap-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="grid gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Action
+                </span>
+                <select
+                  value={actionCode}
+                  onChange={(event) => setActionCode(event.target.value)}
+                  className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+                >
+                  {(selectedResource.available_actions ?? []).map((code) => (
+                    <option key={code} value={code}>
+                      {code}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Approval Required
+                </span>
+                <span className="flex items-center gap-3 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
+                  <input
+                    type="checkbox"
+                    checked={approvalRequired}
+                    onChange={(event) => setApprovalRequired(event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Approval gate active for the selected action
+                </span>
+              </label>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="grid gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Approval Type
+                </span>
+                <select
+                  value={approvalType}
+                  disabled={!approvalRequired}
+                  onChange={(event) => setApprovalType(event.target.value)}
+                  className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
+                >
+                  {APPROVAL_TYPE_OPTIONS.map((code) => (
+                    <option key={code} value={code}>
+                      {code}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Min Approvers
+                </span>
+                <input
+                  type="number"
+                  min="1"
+                  max="3"
+                  value={minApprovers}
+                  disabled={!approvalRequired}
+                  onChange={(event) => setMinApprovers(event.target.value)}
+                  className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
+                />
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Max Approvers
+                </span>
+                <input
+                  type="number"
+                  min="1"
+                  max="3"
+                  value={maxApprovers}
+                  disabled={!approvalRequired}
+                  onChange={(event) => setMaxApprovers(event.target.value)}
+                  className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
+                />
+              </label>
+            </div>
+          </div>
+        </DrawerBase>
+      ) : null}
+    </>
   );
 }

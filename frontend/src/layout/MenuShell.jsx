@@ -1007,6 +1007,21 @@ export default function MenuShell() {
     }
 
     if (stackDepth <= 1) {
+      const homePath = location.pathname.startsWith("/sa")
+        ? "/sa/home"
+        : location.pathname.startsWith("/ga")
+          ? "/ga/home"
+          : "/dashboard";
+      const canBrowserBack =
+        typeof window !== "undefined" &&
+        Number.isFinite(window.history?.state?.idx) &&
+        window.history.state.idx > 0;
+
+      if (location.pathname !== homePath && canBrowserBack) {
+        window.history.back();
+        return;
+      }
+
       await confirmAndRequestLogout();
       return;
     }
@@ -1017,7 +1032,7 @@ export default function MenuShell() {
     }
 
     popScreen();
-  }, [drawerTrail, drawerVisible, resolvedMenuFocusIndex, sidebarRoots, stackDepth]);
+  }, [drawerTrail, drawerVisible, location.pathname, resolvedMenuFocusIndex, sidebarRoots, stackDepth]);
 
   const handleGoHome = useCallback(async () => {
     const target = location.pathname.startsWith("/sa")

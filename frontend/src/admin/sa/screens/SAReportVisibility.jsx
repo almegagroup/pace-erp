@@ -11,7 +11,6 @@ import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 import {
   formatCompanyAddress,
   formatCompanyLabel,
-  formatCompanyOptionLabel,
 } from "../../../shared/companyDisplay.js";
 import {
   deleteViewerRule,
@@ -101,6 +100,7 @@ export default function SAReportVisibility() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
   const searchRef = useRef(null);
+  const draftRef = useRef(createEmptyDraft());
   const [workspace, setWorkspace] = useState({
     companies: [],
     projects: [],
@@ -117,12 +117,17 @@ export default function SAReportVisibility() {
   const [searchQuery, setSearchQuery] = useState("");
   const [draft, setDraft] = useState(createEmptyDraft);
 
-  const loadWorkspace = useCallback(async (preferred = draft) => {
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  const loadWorkspace = useCallback(async (preferred = null) => {
     setLoading(true);
     setError("");
 
     try {
       const data = await fetchReportVisibilityWorkspace();
+      const nextDraft = preferred ?? draftRef.current;
       setWorkspace({
         companies: data?.companies ?? [],
         projects: data?.projects ?? [],
@@ -132,7 +137,7 @@ export default function SAReportVisibility() {
         users: data?.users ?? [],
         viewer_rules: data?.viewer_rules ?? [],
       });
-      setDraft((current) => ({ ...current, ...preferred }));
+      setDraft((current) => ({ ...current, ...nextDraft }));
     } catch (err) {
       console.error("REPORT_VISIBILITY_WORKSPACE_LOAD_FAILED", {
         code: err?.code ?? null,
@@ -148,7 +153,7 @@ export default function SAReportVisibility() {
     } finally {
       setLoading(false);
     }
-  }, [draft]);
+  }, []);
 
   useEffect(() => {
     void loadWorkspace();
@@ -451,7 +456,7 @@ export default function SAReportVisibility() {
           label: "Approver Rules",
           tone: "neutral",
           onClick: () => {
-            openScreen("SA_APPROVAL_RULES", { mode: "replace" });
+            openScreen("SA_APPROVAL_RULES");
             navigate("/sa/approval-rules");
           },
         },
@@ -517,7 +522,7 @@ export default function SAReportVisibility() {
                   <option value="">Choose company</option>
                   {companyOptions.map((row) => (
                     <option key={row.id} value={row.id}>
-                      {formatCompanyOptionLabel(row)}
+                      {formatCompanyLabel(row)}
                     </option>
                   ))}
                 </select>
@@ -605,14 +610,18 @@ export default function SAReportVisibility() {
                   Selected Company
                 </p>
                 <p className="mt-2 text-sm font-semibold text-slate-900">
-                  {selectedCompany ? formatCompanyLabel(selectedCompany) : "Choose company"}
+                  <span className="break-words">
+                    {selectedCompany ? formatCompanyLabel(selectedCompany) : "Choose company"}
+                  </span>
                 </p>
               </div>
               <div className="border border-slate-300 bg-slate-50 px-4 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Company Address
                 </p>
-                <p className="mt-2 text-sm text-slate-700">{formatCompanyAddress(selectedCompany)}</p>
+                <p className="mt-2 break-words text-sm text-slate-700">
+                  {formatCompanyAddress(selectedCompany)}
+                </p>
               </div>
             </div>
           </div>

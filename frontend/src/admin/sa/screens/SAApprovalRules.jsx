@@ -11,7 +11,6 @@ import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 import {
   formatCompanyAddress,
   formatCompanyLabel,
-  formatCompanyOptionLabel,
 } from "../../../shared/companyDisplay.js";
 import {
   deleteApproverRule,
@@ -102,6 +101,7 @@ export default function SAApprovalRules() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
   const searchRef = useRef(null);
+  const draftRef = useRef(createEmptyDraft());
   const [workspace, setWorkspace] = useState({
     companies: [],
     projects: [],
@@ -118,12 +118,17 @@ export default function SAApprovalRules() {
   const [searchQuery, setSearchQuery] = useState("");
   const [draft, setDraft] = useState(createEmptyDraft);
 
-  const loadWorkspace = useCallback(async (preferred = draft) => {
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  const loadWorkspace = useCallback(async (preferred = null) => {
     setLoading(true);
     setError("");
 
     try {
       const data = await fetchApprovalWorkspace();
+      const nextDraft = preferred ?? draftRef.current;
       setWorkspace({
         companies: data?.companies ?? [],
         projects: data?.projects ?? [],
@@ -135,7 +140,7 @@ export default function SAApprovalRules() {
       });
       setDraft((current) => ({
         ...current,
-        ...preferred,
+        ...nextDraft,
       }));
     } catch (err) {
       console.error("APPROVAL_WORKSPACE_LOAD_FAILED", {
@@ -152,7 +157,7 @@ export default function SAApprovalRules() {
     } finally {
       setLoading(false);
     }
-  }, [draft]);
+  }, []);
 
   useEffect(() => {
     void loadWorkspace();
@@ -487,7 +492,7 @@ export default function SAApprovalRules() {
           label: "Approval Policy",
           tone: "neutral",
           onClick: () => {
-            openScreen("SA_APPROVAL_POLICY", { mode: "replace" });
+            openScreen("SA_APPROVAL_POLICY");
             navigate("/sa/approval-policy");
           },
         },
@@ -496,7 +501,7 @@ export default function SAApprovalRules() {
           label: "Report Visibility",
           tone: "neutral",
           onClick: () => {
-            openScreen("SA_REPORT_VISIBILITY", { mode: "replace" });
+            openScreen("SA_REPORT_VISIBILITY");
             navigate("/sa/report-visibility");
           },
         },
@@ -562,7 +567,7 @@ export default function SAApprovalRules() {
                   <option value="">Choose company</option>
                   {companyOptions.map((row) => (
                     <option key={row.id} value={row.id}>
-                      {formatCompanyOptionLabel(row)}
+                      {formatCompanyLabel(row)}
                     </option>
                   ))}
                 </select>
@@ -652,14 +657,18 @@ export default function SAApprovalRules() {
                   Selected Company
                 </p>
                 <p className="mt-2 text-sm font-semibold text-slate-900">
-                  {selectedCompany ? formatCompanyLabel(selectedCompany) : "Choose company"}
+                  <span className="break-words">
+                    {selectedCompany ? formatCompanyLabel(selectedCompany) : "Choose company"}
+                  </span>
                 </p>
               </div>
               <div className="border border-slate-300 bg-slate-50 px-4 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Company Address
                 </p>
-                <p className="mt-2 text-sm text-slate-700">{formatCompanyAddress(selectedCompany)}</p>
+                <p className="mt-2 break-words text-sm text-slate-700">
+                  {formatCompanyAddress(selectedCompany)}
+                </p>
               </div>
             </div>
           </div>

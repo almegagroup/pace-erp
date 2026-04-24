@@ -681,7 +681,7 @@ export default function SAControlPanel() {
           <button
             type="button"
             onClick={() => setDetailDrawer("")}
-            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+            className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
           >
             Close
           </button>
@@ -736,7 +736,7 @@ export default function SAControlPanel() {
           <button
             type="button"
             onClick={() => setDetailDrawer("")}
-            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+            className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
           >
             Close
           </button>

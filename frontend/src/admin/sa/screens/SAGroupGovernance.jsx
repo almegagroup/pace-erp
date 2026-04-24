@@ -587,7 +587,7 @@ export default function SAGroupGovernance() {
                 type="button"
                 disabled={saving}
                 onClick={() => void handleCreateGroup()}
-                className="self-end border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                className="self-end border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold text-sky-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
               >
                 Create Group
               </button>
@@ -771,7 +771,7 @@ export default function SAGroupGovernance() {
                             type="button"
                             disabled={saving}
                             onClick={() => void handleUnmapCompany(company)}
-                            className="border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                            className="border border-rose-300 bg-rose-50 px-2 py-[3px] text-[11px] font-semibold text-rose-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                           >
                             Unmap
                           </button>
@@ -780,7 +780,7 @@ export default function SAGroupGovernance() {
                             type="button"
                             disabled={saving || !selectedGroup || selectedGroup.state !== "ACTIVE" || company.status !== "ACTIVE"}
                             onClick={() => void handleMapCompany(company)}
-                            className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                            className="border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold text-sky-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                           >
                             {company.group_id ? "Move Here" : "Map Here"}
                           </button>

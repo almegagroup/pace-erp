@@ -395,7 +395,7 @@ export default function SAProjectManage() {
                   {selectedProject.status === "ACTIVE" ? (
                     <button
                       type="button"
-                      className="border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700"
+                      className="border border-rose-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-rose-700"
                       onClick={() => void handleStateChange("INACTIVE")}
                       disabled={saving}
                     >
@@ -404,7 +404,7 @@ export default function SAProjectManage() {
                   ) : (
                     <button
                       type="button"
-                      className="border border-emerald-300 bg-white px-4 py-2 text-sm font-semibold text-emerald-700"
+                      className="border border-emerald-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-emerald-700"
                       onClick={() => void handleStateChange("ACTIVE")}
                       disabled={saving}
                     >
@@ -414,7 +414,7 @@ export default function SAProjectManage() {
 
                   <button
                     type="button"
-                    className="border border-sky-300 bg-white px-4 py-2 text-sm font-semibold text-sky-700"
+                    className="border border-sky-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-sky-700"
                     onClick={() => {
                       openScreen("SA_COMPANY_PROJECT_MAP", { mode: "replace" });
                       navigate(`/sa/projects/map?project_id=${encodeURIComponent(selectedProject.id)}`);
