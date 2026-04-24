@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
-import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -11,6 +10,7 @@ import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
@@ -273,21 +273,6 @@ export default function SAModuleMaster() {
     const project = projects.find((row) => row.id === normalizedProjectId) ?? null;
     if (!project || project.status !== "ACTIVE") {
       setError("Choose an active project before creating a module.");
-      return;
-    }
-
-    const approved = await openActionConfirm({
-      eyebrow: "Module Master",
-      title: editorMode === "edit" ? "Update Module" : "Create Module",
-      message:
-        editorMode === "edit"
-          ? `Update module ${selectedModule?.module_code ?? "selected module"} under project ${project.project_code}?`
-          : `Create module ${generateModuleCodePreview(projects, normalizedProjectId, normalizedModuleName)} under project ${project.project_code}?`,
-      confirmLabel: editorMode === "edit" ? "Update Module" : "Create Module",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
       return;
     }
 
@@ -566,15 +551,12 @@ export default function SAModuleMaster() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      footerHints={["Tab Next Field", "Ctrl+S Save", "Arrow Keys Navigate", "Enter Select", "Esc Cancel", "Ctrl+K Command Bar"]}
+      footerHints={["Tab Next Field", "↑↓ Navigate", "Enter Select", "Ctrl+S Save", "Esc Cancel", "Ctrl+K Command Bar"]}
       formEyebrow={editorMode === "edit" ? "Edit" : "Create"}
       formTitle={editorMode === "edit" ? "Edit selected module" : "Create a new project module"}
       formContent={
-        <div ref={formContainerRef} className="grid gap-3">
-          <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Project
-            </span>
+        <div ref={formContainerRef} className="grid gap-[var(--erp-form-gap)]">
+          <ErpDenseFormRow label="Project" required>
             <select
               ref={projectRef}
               data-workspace-primary-focus="true"
@@ -582,7 +564,7 @@ export default function SAModuleMaster() {
               value={selectedProjectId}
               onChange={(event) => setSelectedProjectId(event.target.value)}
               disabled={editorMode === "edit"}
-              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+              className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white disabled:bg-slate-100"
             >
               <option value="">Choose active project</option>
               {projects.map((project) => (
@@ -591,115 +573,100 @@ export default function SAModuleMaster() {
                 </option>
               ))}
             </select>
-          </label>
+          </ErpDenseFormRow>
 
-            <div className="grid gap-3 md:grid-cols-2">
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Module Name
-              </span>
-              <input
-                ref={moduleCodeRef}
-                data-erp-form-field="true"
-                type="text"
-                value={moduleName}
-                onChange={(event) => setModuleName(event.target.value)}
-                placeholder="Procurement"
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
-              />
-            </label>
+          <ErpDenseFormRow label="Module Name" required>
+            <input
+              ref={moduleCodeRef}
+              data-erp-form-field="true"
+              type="text"
+              value={moduleName}
+              onChange={(event) => setModuleName(event.target.value)}
+              placeholder="Procurement"
+              className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+            />
+          </ErpDenseFormRow>
 
-            <label className="grid gap-2 border border-slate-300 bg-slate-50 px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                {editorMode === "edit" ? "Locked Module Code" : "Auto Module Code"}
-              </span>
-              <input
-                type="text"
-                readOnly
-                value={
-                  editorMode === "edit" && selectedModule
-                    ? selectedModule.module_code
-                    : generateModuleCodePreview(projects, selectedProjectId, moduleName)
-                }
-                className="w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
-              />
-            </label>
-          </div>
+          <ErpDenseFormRow label={editorMode === "edit" ? "Locked Module Code" : "Auto Module Code"}>
+            <input
+              type="text"
+              readOnly
+              value={
+                editorMode === "edit" && selectedModule
+                  ? selectedModule.module_code
+                  : generateModuleCodePreview(projects, selectedProjectId, moduleName)
+              }
+              className="h-7 w-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[12px] text-slate-700 outline-none"
+            />
+          </ErpDenseFormRow>
 
           {editorMode === "edit" ? (
-            <div className="flex flex-wrap gap-3">
+            <div className="ml-[172px]">
               <button
                 type="button"
                 onClick={() => resetEditor(selectedProjectId)}
-                className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+                className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
               >
                 Switch To Create
               </button>
             </div>
           ) : null}
 
-          <label className="flex items-center gap-3 border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
-            <input
-              data-erp-form-field="true"
-              type="checkbox"
-              checked={approvalRequired}
-              onChange={(event) => setApprovalRequired(event.target.checked)}
-              className="h-4 w-4 border border-slate-300"
-            />
-            This module needs intrinsic approval policy
-          </label>
-
-          <div className="grid gap-3 md:grid-cols-3">
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Approval Type
-              </span>
-              <select
+          <ErpDenseFormRow label="Approval Policy">
+            <label className="flex items-center gap-2 text-[12px] text-slate-700">
+              <input
                 data-erp-form-field="true"
-                value={approvalType}
-                onChange={(event) => setApprovalType(event.target.value)}
-                disabled={!approvalRequired}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
-              >
-                <option value="ANYONE">ANYONE</option>
-                <option value="SEQUENTIAL">SEQUENTIAL</option>
-                <option value="MUST_ALL">MUST_ALL</option>
-              </select>
+                type="checkbox"
+                checked={approvalRequired}
+                onChange={(event) => setApprovalRequired(event.target.checked)}
+                className="h-3 w-3 border border-slate-300"
+              />
+              Requires intrinsic approval
             </label>
+          </ErpDenseFormRow>
 
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Min Approvers
-              </span>
+          <ErpDenseFormRow label="Approval Type">
+            <select
+              data-erp-form-field="true"
+              value={approvalType}
+              onChange={(event) => setApprovalType(event.target.value)}
+              disabled={!approvalRequired}
+              className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
+            >
+              <option value="ANYONE">ANYONE</option>
+              <option value="SEQUENTIAL">SEQUENTIAL</option>
+              <option value="MUST_ALL">MUST_ALL</option>
+            </select>
+          </ErpDenseFormRow>
+
+          <div className="grid grid-cols-2 gap-[var(--erp-form-gap)]">
+            <ErpDenseFormRow label="Min Approvers">
               <select
                 data-erp-form-field="true"
                 value={minApprovers}
                 onChange={(event) => setMinApprovers(event.target.value)}
                 disabled={!approvalRequired}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
+                className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
               >
                 <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
               </select>
-            </label>
+            </ErpDenseFormRow>
 
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Max Approvers
-              </span>
+            <ErpDenseFormRow label="Max Approvers">
               <select
                 data-erp-form-field="true"
                 value={maxApprovers}
                 onChange={(event) => setMaxApprovers(event.target.value)}
                 disabled={!approvalRequired}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
+                className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
               >
                 <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
               </select>
-            </label>
+            </ErpDenseFormRow>
           </div>
         </div>
       }

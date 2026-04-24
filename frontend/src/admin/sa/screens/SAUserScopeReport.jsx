@@ -225,7 +225,7 @@ export default function SAUserScopeReport() {
   return (
     <ErpScreenScaffold
       title="SA User Scope Report"
-      footerHints={["ALT+R REFRESH", "CTRL+S DOWNLOAD", "ALT+SHIFT+F SEARCH", "CTRL+K COMMAND BAR"]}
+      footerHints={["↑↓ Navigate", "Ctrl+S Export", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       actions={[
         {
           key: "refresh",

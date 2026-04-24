@@ -272,55 +272,6 @@ function isBenignDerivedDepartmentContext(adjustments) {
   );
 }
 
-function ScopeSummaryCard({
-  eyebrow,
-  title,
-  count,
-  preview,
-  status,
-  onOpen,
-  actionLabel,
-  tone = "default",
-}) {
-  const toneClass =
-    tone === "warning"
-      ? "border-amber-200 bg-[#fffaf2]"
-      : tone === "success"
-        ? "border-emerald-200 bg-[#f5fffa]"
-        : "border-slate-200 bg-white";
-
-  return (
-    <article className={`grid gap-3 border px-4 py-4 ${toneClass}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-            {eyebrow}
-          </p>
-          <h3 className="mt-2 text-sm font-semibold text-slate-900">{title}</h3>
-        </div>
-        <span className="text-lg font-semibold text-slate-900">{count}</span>
-      </div>
-      <div className="border border-slate-200 bg-white px-3 py-3">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-          Current Selection
-        </p>
-        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-          {preview}
-        </p>
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs leading-5 text-slate-500">{status}</p>
-        <button
-          type="button"
-          onClick={onOpen}
-          className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
-        >
-          {actionLabel}
-        </button>
-      </div>
-    </article>
-  );
-}
 
 export default function SAUserScope() {
   const navigate = useNavigate();
@@ -643,18 +594,6 @@ export default function SAUserScope() {
       project_ids: [...projectIds],
       department_ids: [...departmentIds],
     };
-
-    const approved = await openActionConfirm({
-      eyebrow: "SA User Scope Governance",
-      title: "Save ERP User Scope",
-      message: `Persist Parent Company and operational scope for ${user?.user_code ?? authUserId} ${formatIdentityName(user)} now?`,
-      confirmLabel: "Save Scope",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
-      return;
-    }
 
     setSaving(true);
     setError("");
@@ -1029,11 +968,11 @@ export default function SAUserScope() {
     </div>
   ) : !payload ? null : (
     <>
-      <div className="grid gap-6 xl:grid-cols-[1.1fr,1fr]">
-        <div className="grid gap-3">
+      <div className="grid gap-[var(--erp-section-gap)] xl:grid-cols-[1.1fr,1fr]">
+        <div className="grid gap-1">
           <ErpSelectionSection label="Parent Company" />
           <label className="block">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">
               Select Parent Company
             </span>
             <button
@@ -1051,204 +990,171 @@ export default function SAUserScope() {
                   openParentCompanyPicker();
                 }
               }}
-              className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-4 py-3 text-left text-sm text-slate-700 outline-none transition focus:border-sky-500 focus:bg-white"
+              className="mt-1 w-full border border-slate-300 bg-white px-2 py-1.5 text-left text-[12px] text-slate-700 outline-none transition focus:border-sky-500"
             >
               <span className="block font-semibold text-slate-900">
                 {selectedParentCompany
-                  ? `${selectedParentCompany.company_code} - ${selectedParentCompany.company_name}`
+                  ? `${selectedParentCompany.company_code} — ${selectedParentCompany.company_name}`
                   : "Choose Parent Company"}
               </span>
-              <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
+              <span className="block text-[10px] uppercase tracking-[0.14em] text-slate-500">
                 {selectedParentCompany
                   ? formatCompanyMeta(selectedParentCompany)
-                  : "Press Enter to open company picker"}
+                  : "Enter = open picker"}
               </span>
-              <span className="mt-1 block text-xs leading-5 text-slate-600">
-                {selectedParentCompany
-                  ? formatCompanyAddress(selectedParentCompany)
-                  : "State, address, and PIN stay visible during selection."}
-              </span>
+              {selectedParentCompany ? (
+                <span className="block text-[10px] text-slate-500">
+                  {formatCompanyAddress(selectedParentCompany)}
+                </span>
+              ) : null}
             </button>
-            <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Enter = open picker | F2 or Ctrl+S = save scope
+            <p className="mt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+              Enter = open picker | Ctrl+S = save scope
             </p>
           </label>
         </div>
 
-        <div className="grid gap-3">
+        <div className="grid gap-1">
           <ErpSelectionSection label="Current Snapshot" />
-          <div className="space-y-3">
-            <div className="border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
-              <span className="font-semibold text-slate-900">
-                {user?.user_code ?? "N/A"}
-              </span>
-              {" - "}
-              {formatIdentityName(user)}
-            </div>
-            <div className="border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
-              Role: {user?.role_code ?? "UNASSIGNED"}
-            </div>
-            <div className="border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
-              Parent company: {scope?.parent_company?.company_name ?? "Unset"}
-            </div>
-            <div className="border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
-              Readiness:{" "}
-              {readinessFlags.length === 0
-                ? "Ready"
-                : readinessFlags.join(" | ")}
-            </div>
-            <div className="grid gap-2 md:grid-cols-2">
-              <div className="border border-slate-300 bg-white px-3 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Work Company Scope</p>
-                <p className="mt-1 text-sm font-semibold text-slate-900">{workCompanyIds.length} selected</p>
-                <p className="mt-1 text-xs text-slate-500">Operational company selection is edited in a drawer so the main screen stays readable.</p>
+          <div className="border border-slate-300 bg-white">
+            {[
+              [`${user?.user_code ?? "N/A"} — ${formatIdentityName(user)}`, ""],
+              ["Role", user?.role_code ?? "UNASSIGNED"],
+              ["Parent Company", scope?.parent_company?.company_name ?? "Unset"],
+              ["Readiness", readinessFlags.length === 0 ? "Ready" : readinessFlags.join(" | ")],
+              ["Work Companies", `${workCompanyIds.length} selected`],
+              ["Work Contexts", `${workContextIds.length} selected`],
+            ].map(([label, value], i) => (
+              <div key={i} className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px] last:border-b-0">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</span>
+                {value ? <span className="text-[11px] font-semibold text-slate-900">{value}</span> : null}
               </div>
-              <div className="border border-slate-300 bg-white px-3 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Work Context Scope</p>
-                <p className="mt-1 text-sm font-semibold text-slate-900">{workContextIds.length} selected</p>
-                <p className="mt-1 text-xs text-slate-500">Contexts stay filtered by the chosen work companies.</p>
-              </div>
-            </div>
+            ))}
           </div>
         </div>
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[1.15fr,0.85fr]">
-        <div className="grid gap-3">
-          <ErpSelectionSection label="Scope Editors" />
-          <div className="grid gap-3 md:grid-cols-2">
-            <ScopeSummaryCard
-              eyebrow="Work Companies"
-              title="Operational Company Scope"
-              count={String(workCompanyIds.length)}
-              preview={formatSelectionPreview(
-                selectedWorkCompanies,
-                (company) => `${company.company_code} - ${company.company_name}`,
-                "No work company selected yet."
-              )}
-              status="Work context choices stay constrained by the selected companies."
-              onOpen={() => openScopeEditor("work-companies")}
-              actionLabel="Edit Companies"
-              tone={workCompanyIds.length > 0 ? "success" : "warning"}
-            />
-            <ScopeSummaryCard
-              eyebrow="Work Contexts"
-              title="Runtime Functional Context"
-              count={String(workContextIds.length)}
-              preview={formatSelectionPreview(
-                selectedWorkContexts,
-                (workContext) =>
-                  `${workContext.work_context_code} - ${workContext.work_context_name}`,
-                workCompanyIds.length === 0
-                  ? "Select work companies first."
-                  : "No work context selected yet."
-              )}
-              status={
-                workCompanyIds.length === 0
-                  ? "Choose at least one work company first so context options become available."
-                  : "Only contexts from the chosen companies are shown in the drawer."
-              }
-              onOpen={() => openScopeEditor("work-contexts")}
-              actionLabel="Edit Contexts"
-              tone={workContextIds.length > 0 ? "success" : "warning"}
-            />
-            <ScopeSummaryCard
-              eyebrow="Project Overrides"
-              title="Direct Project Override"
-              count={String(projectIds.length)}
-              preview={formatSelectionPreview(
-                selectedProjectOverrides,
-                (project) => `${project.project_code} - ${project.project_name}`,
-                "No direct override selected."
-              )}
-              status="Leave this empty when work-area inheritance already gives the correct project reach."
-              onOpen={() => openScopeEditor("projects")}
-              actionLabel="Edit Overrides"
-              tone={projectIds.length > 0 ? "success" : "default"}
-            />
-            <ScopeSummaryCard
-              eyebrow="Departments"
-              title="Department Mapping"
-              count={String(departmentIds.length)}
-              preview={formatSelectionPreview(
-                selectedDepartments,
-                (department) => formatDepartmentLabel(department),
-                "No department selected yet."
-              )}
-              status="Department assignment stays visible, but editing happens in its own drawer."
-              onOpen={() => openScopeEditor("departments")}
-              actionLabel="Edit Departments"
-              tone={departmentIds.length > 0 ? "success" : "default"}
-            />
-          </div>
-        </div>
-
-        <div className="grid gap-3">
-          <ErpSelectionSection label="Selection Preview" />
-          <div className="grid gap-3">
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="border border-slate-300 bg-white px-3 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Selected Work Companies</p>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
+      <div className="grid gap-[var(--erp-section-gap)] xl:grid-cols-[1.15fr,0.85fr]">
+        <div className="grid gap-1">
+          <ErpSelectionSection label="Work Scope" />
+          <div className="border border-slate-300 bg-white">
+            {[
+              {
+                label: "Work Companies",
+                count: workCompanyIds.length,
+                summary: formatSelectionPreview(
                   selectedWorkCompanies,
                   (company) => `${company.company_code} - ${company.company_name}`,
                   "No work company selected yet."
-                )}</p>
-              </div>
-              <div className="border border-slate-300 bg-white px-3 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Selected Work Contexts</p>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
+                ),
+                scopeKey: "work-companies",
+                required: true,
+              },
+              {
+                label: "Work Contexts",
+                count: workContextIds.length,
+                summary: formatSelectionPreview(
                   selectedWorkContexts,
                   (workContext) =>
                     `${workContext.work_context_code} - ${workContext.work_context_name}`,
                   workCompanyIds.length === 0
                     ? "Select work companies first."
                     : "No work context selected yet."
-                )}</p>
-              </div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="border border-slate-300 bg-white px-3 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Direct Project Overrides</p>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
+                ),
+                scopeKey: "work-contexts",
+                required: true,
+              },
+              {
+                label: "Project Overrides",
+                count: projectIds.length,
+                summary: formatSelectionPreview(
                   selectedProjectOverrides,
                   (project) => `${project.project_code} - ${project.project_name}`,
                   "No direct override selected."
-                )}</p>
-              </div>
-              <div className="border border-slate-300 bg-white px-3 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Selected Departments</p>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
+                ),
+                scopeKey: "projects",
+                required: false,
+              },
+              {
+                label: "Departments",
+                count: departmentIds.length,
+                summary: formatSelectionPreview(
                   selectedDepartments,
                   (department) => formatDepartmentLabel(department),
                   "No department selected yet."
-                )}</p>
+                ),
+                scopeKey: "departments",
+                required: false,
+              },
+            ].map(({ label, count, summary, scopeKey, required }) => (
+              <div
+                key={scopeKey}
+                className="grid grid-cols-[140px_24px_1fr_auto] items-center gap-2 border-b border-slate-200 px-2 py-[3px] last:border-b-0"
+              >
+                <span className="text-[11px] text-slate-600">{label}</span>
+                <span
+                  className={`text-[11px] font-bold ${
+                    count > 0
+                      ? "text-emerald-700"
+                      : required
+                        ? "text-amber-600"
+                        : "text-slate-400"
+                  }`}
+                >
+                  {count}
+                </span>
+                <span className="truncate text-[11px] text-slate-700">{summary}</span>
+                <button
+                  type="button"
+                  onClick={() => openScopeEditor(scopeKey)}
+                  disabled={loading || !authUserId}
+                  className="border border-sky-300 bg-sky-50 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-[0.1em] text-sky-900 disabled:opacity-50"
+                >
+                  Edit
+                </button>
               </div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="border border-slate-300 bg-white px-3 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Inherited Projects</p>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
-                  inheritedProjects,
-                  (project) => `${project.project_code} - ${project.project_name}`,
-                  "No inherited project reach yet."
-                )}</p>
-              </div>
-              <div className="border border-slate-300 bg-white px-3 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Effective Projects</p>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
-                  effectiveProjects,
-                  (project) => `${project.project_code} - ${project.project_name}`,
-                  "No effective project reach yet."
-                )}</p>
-              </div>
-            </div>
-            <div className="border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              Use <span className="font-semibold text-slate-900">F3</span> or the
-              summary buttons to open a focused editor drawer. The main screen keeps
-              only the operational snapshot now.
-            </div>
+            ))}
           </div>
+        </div>
+
+        <div className="grid gap-1">
+          <ErpSelectionSection label="Selection Preview" />
+          <div className="border border-slate-300 bg-white">
+            {[
+              {
+                label: "Work Companies",
+                value: formatSelectionPreview(selectedWorkCompanies, (c) => `${c.company_code} — ${c.company_name}`, "None selected"),
+              },
+              {
+                label: "Work Contexts",
+                value: formatSelectionPreview(selectedWorkContexts, (wc) => `${wc.work_context_code} — ${wc.work_context_name}`, workCompanyIds.length === 0 ? "Select work companies first" : "None selected"),
+              },
+              {
+                label: "Project Overrides",
+                value: formatSelectionPreview(selectedProjectOverrides, (p) => `${p.project_code} — ${p.project_name}`, "No direct override"),
+              },
+              {
+                label: "Departments",
+                value: formatSelectionPreview(selectedDepartments, formatDepartmentLabel, "None selected"),
+              },
+              {
+                label: "Inherited Projects",
+                value: formatSelectionPreview(inheritedProjects, (p) => `${p.project_code} — ${p.project_name}`, "No inherited reach yet"),
+              },
+              {
+                label: "Effective Projects",
+                value: formatSelectionPreview(effectiveProjects, (p) => `${p.project_code} — ${p.project_name}`, "No effective reach yet"),
+              },
+            ].map(({ label, value }) => (
+              <div key={label} className="border-b border-slate-200 px-2 py-[3px] last:border-b-0">
+                <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+                <p className="whitespace-pre-wrap text-[11px] leading-[1.5] text-slate-800">{value}</p>
+              </div>
+            ))}
+          </div>
+          <p className="text-[9px] uppercase tracking-[0.12em] text-slate-400">
+            F3 or summary buttons open the editor drawers
+          </p>
         </div>
       </div>
     </>
@@ -1260,7 +1166,7 @@ export default function SAUserScope() {
       title="ERP User Scope Mapping"
       actions={topActions}
       notices={notices}
-      footerHints={["CTRL+S SAVE", "ESC CANCEL", "CTRL+K COMMAND BAR"]}
+      footerHints={["↑↓ Navigate", "Ctrl+S Save Scope", "F3 Edit Scope", "Esc Back", "Ctrl+K Command Bar"]}
     >
       {mainContent}
 
@@ -1274,7 +1180,7 @@ export default function SAUserScope() {
           <button
             type="button"
             onClick={closeCompanyPicker}
-            className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
           >
             Close
           </button>
@@ -1314,20 +1220,17 @@ export default function SAUserScope() {
                       type="button"
                       data-erp-nav-item="true"
                       onClick={() => selectParentCompany(company.id)}
-                      className={`w-full border px-4 py-4 text-left text-sm transition ${
+                      className={`w-full border px-2 py-1 text-left text-[12px] transition ${
                         selected
-                          ? "border-cyan-300 bg-cyan-50 text-cyan-900"
-                          : "border-slate-300 bg-white text-slate-700"
+                          ? "border-cyan-400 bg-cyan-50 text-cyan-900"
+                          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                       }`}
                     >
-                      <span className="block font-semibold">
-                        {company.company_code} - {company.company_name}
+                      <span className="block font-semibold text-slate-900">
+                        {company.company_code} — {company.company_name}
                       </span>
-                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                      <span className="block text-[10px] uppercase tracking-[0.14em] text-slate-500">
                         {formatCompanyMeta(company)}
-                      </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-500">
-                        {formatCompanyAddress(company)}
                       </span>
                     </button>
                   );
@@ -1349,7 +1252,7 @@ export default function SAUserScope() {
             <button
               type="button"
               onClick={() => void closeScopeEditor()}
-              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
             >
               Close
             </button>
@@ -1357,7 +1260,7 @@ export default function SAUserScope() {
               type="button"
               disabled={saving || loading || !authUserId}
               onClick={() => void handleSave()}
-              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold text-sky-950"
             >
               {saving ? "Saving..." : "Save Scope"}
             </button>
@@ -1387,13 +1290,13 @@ export default function SAUserScope() {
                 return (
                   <div
                     key={company.id}
-                    className={`border px-4 py-3 text-sm ${
+                    className={`border px-2 py-1 text-[12px] ${
                       selected
                         ? "border-cyan-300 bg-cyan-50 text-cyan-900"
-                        : "border-slate-300 bg-white text-slate-700"
+                        : "border-slate-200 bg-white text-slate-700"
                     }`}
                   >
-                    <label className="flex items-start gap-3 cursor-pointer">
+                    <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         {...getWorkCompanyRowProps(index)}
                         data-erp-nav-item="true"
@@ -1402,24 +1305,19 @@ export default function SAUserScope() {
                         onChange={() =>
                           toggleSelection(company.id, workCompanyIds, setWorkCompanyIds)
                         }
-                        className="mt-1 h-4 w-4 border-slate-300 bg-white text-cyan-600"
+                        className="h-3 w-3 border-slate-300 bg-white text-cyan-600"
                       />
                       <span className="flex-1">
                         <span className="font-semibold">{company.company_code}</span>
-                        {" - "}
+                        {" — "}
                         {company.company_name}
-                        <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                        <span className="ml-2 text-[10px] uppercase tracking-[0.12em] text-slate-500">
                           {formatCompanyMeta(company)}
                         </span>
-                        <span className="mt-1 block text-xs leading-5 text-slate-600">
-                          {formatCompanyAddress(company)}
-                        </span>
                       </span>
-                    </label>
-                    {selected ? (
-                      <div className="mt-2 flex items-center gap-2 pl-7">
-                        {isPrimary ? (
-                          <span className="border border-emerald-300 bg-emerald-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-800">
+                      {selected ? (
+                        isPrimary ? (
+                          <span className="border border-emerald-300 bg-emerald-50 px-1.5 py-[1px] text-[9px] font-semibold uppercase tracking-[0.12em] text-emerald-800">
                             Primary
                           </span>
                         ) : (
@@ -1427,18 +1325,13 @@ export default function SAUserScope() {
                             type="button"
                             disabled={settingPrimary || !authUserId}
                             onClick={() => void handleSetPrimaryCompany(company.id)}
-                            className="border border-slate-300 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="border border-slate-300 bg-white px-1.5 py-[1px] text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-700 hover:border-sky-300 hover:text-sky-800 disabled:opacity-50"
                           >
-                            {settingPrimary ? "Setting..." : "Set as Primary"}
+                            {settingPrimary ? "..." : "Set Primary"}
                           </button>
-                        )}
-                        <span className="text-[10px] text-slate-400">
-                          {isPrimary
-                            ? "Default company at next login"
-                            : "Click to make this the default login company"}
-                        </span>
-                      </div>
-                    ) : null}
+                        )
+                      ) : null}
+                    </label>
                   </div>
                 );
               })
@@ -1458,7 +1351,7 @@ export default function SAUserScope() {
             <button
               type="button"
               onClick={() => void closeScopeEditor()}
-              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
             >
               Close
             </button>
@@ -1466,7 +1359,7 @@ export default function SAUserScope() {
               type="button"
               disabled={saving || loading || !authUserId}
               onClick={() => void handleSave()}
-              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold text-sky-950"
             >
               {saving ? "Saving..." : "Save Scope"}
             </button>
@@ -1497,10 +1390,10 @@ export default function SAUserScope() {
                 return (
                   <label
                     key={workContext.id}
-                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                    className={`flex items-center gap-2 border px-2 py-1 text-[12px] cursor-pointer ${
                       selected
                         ? "border-violet-300 bg-violet-50 text-violet-900"
-                        : "border-slate-300 bg-white text-slate-700"
+                        : "border-slate-200 bg-white text-slate-700"
                     }`}
                   >
                     <input
@@ -1515,21 +1408,15 @@ export default function SAUserScope() {
                           setWorkContextIds
                         )
                       }
-                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-violet-600"
+                      className="h-3 w-3 border-slate-300 bg-white text-violet-600"
                     />
-                    <span>
-                      <span className="font-semibold">
-                        {workContext.work_context_code}
-                      </span>
-                      {" - "}
+                    <span className="flex-1 min-w-0">
+                      <span className="font-semibold">{workContext.work_context_code}</span>
+                      {" — "}
                       {workContext.work_context_name}
-                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
-                        {workContext.company_code} | {workContext.company_name}
-                      </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-600">
-                        {workContext.department_code
-                          ? `${workContext.department_code} | ${workContext.department_name}`
-                          : "Company-wide functional context"}
+                      <span className="ml-2 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                        {workContext.company_code}
+                        {workContext.department_code ? ` | ${workContext.department_code}` : ""}
                       </span>
                     </span>
                   </label>
@@ -1551,7 +1438,7 @@ export default function SAUserScope() {
             <button
               type="button"
               onClick={() => void closeScopeEditor()}
-              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
             >
               Close
             </button>
@@ -1559,7 +1446,7 @@ export default function SAUserScope() {
               type="button"
               disabled={saving || loading || !authUserId}
               onClick={() => void handleSave()}
-              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold text-sky-950"
             >
               {saving ? "Saving..." : "Save Scope"}
             </button>
@@ -1588,10 +1475,10 @@ export default function SAUserScope() {
                 return (
                   <label
                     key={project.id}
-                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                    className={`flex items-center gap-2 border px-2 py-1 text-[12px] cursor-pointer ${
                       selected
                         ? "border-emerald-300 bg-emerald-50 text-emerald-900"
-                        : "border-slate-300 bg-white text-slate-700"
+                        : "border-slate-200 bg-white text-slate-700"
                     }`}
                   >
                     <input
@@ -1602,13 +1489,11 @@ export default function SAUserScope() {
                       onChange={() =>
                         toggleSelection(project.id, projectIds, setProjectIds)
                       }
-                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-emerald-600"
+                      className="h-3 w-3 border-slate-300 bg-white text-emerald-600"
                     />
-                    <span>
-                      <span className="font-semibold">{project.project_code}</span>
-                      {" - "}
-                      {project.project_name}
-                    </span>
+                    <span className="font-semibold">{project.project_code}</span>
+                    {" — "}
+                    {project.project_name}
                   </label>
                 );
               })
@@ -1628,7 +1513,7 @@ export default function SAUserScope() {
             <button
               type="button"
               onClick={() => void closeScopeEditor()}
-              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
             >
               Close
             </button>
@@ -1636,7 +1521,7 @@ export default function SAUserScope() {
               type="button"
               disabled={saving || loading || !authUserId}
               onClick={() => void handleSave()}
-              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold text-sky-950"
             >
               {saving ? "Saving..." : "Save Scope"}
             </button>
@@ -1665,10 +1550,10 @@ export default function SAUserScope() {
                 return (
                   <label
                     key={department.id}
-                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                    className={`flex items-center gap-2 border px-2 py-1 text-[12px] cursor-pointer ${
                       selected
                         ? "border-amber-300 bg-amber-50 text-amber-900"
-                        : "border-slate-300 bg-white text-slate-700"
+                        : "border-slate-200 bg-white text-slate-700"
                     }`}
                   >
                     <input
@@ -1677,13 +1562,9 @@ export default function SAUserScope() {
                       type="checkbox"
                       checked={selected}
                       onChange={() => toggleSingleDepartment(department.id)}
-                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-amber-600"
+                      className="h-3 w-3 border-slate-300 bg-white text-amber-600"
                     />
-                      <span>
-                        <span className="font-semibold">
-                          {formatDepartmentLabel(department)}
-                        </span>
-                      </span>
+                    <span className="font-semibold">{formatDepartmentLabel(department)}</span>
                   </label>
                 );
               })

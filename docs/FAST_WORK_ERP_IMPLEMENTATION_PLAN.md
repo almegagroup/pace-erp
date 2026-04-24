@@ -300,64 +300,431 @@ The HR screens are organized across three files:
 
 | # | File | Target Pattern | Key Changes | Status |
 |---|------|----------------|-------------|--------|
-| 4.1 | `SAHome.jsx` | Operator Home | Dense action list, ErpCommandStrip, accurate hints | ? DONE 2026-04-24 Codex |
-| 4.2 | `SAControlPanel.jsx` | Operator Dashboard | Dense layout, no metric cards, keyboard navigation | ? DONE 2026-04-24 Codex |
-| 4.3 | `SASystemHealth.jsx` | Report/Status | Dense status grid, refresh F8/Alt+R | ? DONE 2026-04-24 Codex |
+| 4.1 | `SAHome.jsx` | Operator Home | Dense action list, ErpCommandStrip, accurate hints | DONE 2026-04-24 Codex |
+| 4.2 | `SAControlPanel.jsx` | Operator Dashboard | Dense layout, no metric cards, keyboard navigation | DONE 2026-04-24 Codex |
+| 4.3 | `SASystemHealth.jsx` | Report/Status | Dense status grid, refresh F8/Alt+R | DONE 2026-04-24 Codex |
 
 ### User Governance
 
 | # | File | Target Pattern | Key Changes | Status |
 |---|------|----------------|-------------|--------|
-| 4.4 | `SAUsers.jsx` | Register + Drill-Through | ErpDenseGrid, keyboard row nav, Enter->SAUserScope | ? DONE 2026-04-24 Codex |
-| 4.5 | `SAUserScope.jsx` | Detail/Alter | ErpDenseFormRow, Ctrl+S save, Esc back to SAUsers (already wired â€” densify) | ? DONE 2026-04-24 Codex |
-| 4.6 | `SAUserRoles.jsx` | Register | ErpDenseGrid, row nav, Enter focuses inline role edit | ? DONE 2026-04-24 Codex |
-| 4.7 | `SASignupRequests.jsx` | Approval Inbox | ErpInlineApprovalRow pattern, A/R keys, non-blocking approval flow | ? DONE 2026-04-24 Codex |
-| 4.8 | `SASessions.jsx` | Report | Dense session list, inline filter, F8 refresh, Enter focuses revoke action | ? DONE 2026-04-24 Codex |
+| 4.4 | `SAUsers.jsx` | Register + Drill-Through | ErpDenseGrid, keyboard row nav, Enter->SAUserScope | DONE 2026-04-24 Codex |
+| 4.5 | `SAUserScope.jsx` | Detail/Alter | ErpDenseFormRow, Ctrl+S save, Esc back to SAUsers (already wired â€” densify) | DONE 2026-04-24 Codex |
+| 4.6 | `SAUserRoles.jsx` | Register | ErpDenseGrid, row nav, Enter focuses inline role edit | DONE 2026-04-24 Codex |
+| 4.7 | `SASignupRequests.jsx` | Approval Inbox | ErpInlineApprovalRow pattern, A/R keys, non-blocking approval flow | DONE 2026-04-24 Codex |
+| 4.8 | `SASessions.jsx` | Report | Dense session list, inline filter, F8 refresh, Enter focuses revoke action | DONE 2026-04-24 Codex |
 
 ### Company & Structure Governance
 
 | # | File | Target Pattern | Key Changes | Status |
 |---|------|----------------|-------------|--------|
-| 4.9 | `SACompanyManage.jsx` | Register | ErpDenseGrid, keyboard nav, Enter focuses lifecycle action | ? DONE 2026-04-24 Codex |
-| 4.10 | `SACompanyCreate.jsx` | Transaction Entry | ErpDenseFormRow, company header, Ctrl+S, Esc cancel (footerHints already added â€” now densify form) | IN PROGRESS 2026-04-24 Codex (dense form done; routine save confirm still present) |
-| 4.11 | `SACompanyModuleMap.jsx` | Register + Mapping | Dense list, inline check/uncheck, keyboard | â¬œ NOT STARTED |
-| 4.12 | `SACompanyProjectMap.jsx` | Register + Mapping | Dense list, inline check/uncheck, keyboard | â¬œ NOT STARTED |
-| 4.13 | `SADepartmentMaster.jsx` | Register | ErpDenseGrid, add/edit dense, Ctrl+S | â¬œ NOT STARTED |
-| 4.14 | `SAProjectMaster.jsx` | Register | ErpDenseGrid, dense | IN PROGRESS 2026-04-24 Codex (dense grid done; routine save confirm still present) |
-| 4.15 | `SAProjectManage.jsx` | Detail/Alter | ErpDenseFormRow, Ctrl+S, Esc back | â¬œ NOT STARTED |
-| 4.16 | `SAModuleMaster.jsx` | Register | ErpDenseGrid, dense | IN PROGRESS 2026-04-24 Codex (dense grid done; search/filter surface missing, routine save confirm still present) |
+| 4.9 | `SACompanyManage.jsx` | Register | ErpDenseGrid, keyboard nav, Enter focuses lifecycle action | DONE 2026-04-24 Codex |
+| 4.10 | `SACompanyCreate.jsx` | Transaction Entry | ErpDenseFormRow, company header, Ctrl+S, Esc cancel (footerHints already added â€” now densify form) | DONE 2026-04-24 Codex |
+| 4.11 | `SACompanyModuleMap.jsx` | Register + Mapping | Dense list, inline check/uncheck, keyboard | DONE 2026-04-24 Codex |
+| 4.12 | `SACompanyProjectMap.jsx` | Register + Mapping | Dense list, inline check/uncheck, keyboard | DONE 2026-04-24 Codex |
+| 4.13 | `SADepartmentMaster.jsx` | Register | ErpDenseGrid, add/edit dense, Ctrl+S | DONE 2026-04-24 Codex |
+| 4.14 | `SAProjectMaster.jsx` | Register | ErpDenseGrid, dense | DONE 2026-04-24 Codex |
+| 4.15 | `SAProjectManage.jsx` | Detail/Alter | ErpDenseFormRow, Ctrl+S, Esc back | DONE 2026-04-24 Codex |
+| 4.16 | `SAModuleMaster.jsx` | Register | ErpDenseGrid, dense | DONE 2026-04-24 Codex |
 | 4.17 | `SAWorkContextMaster.jsx` | Register | ErpDenseGrid, dense | DONE 2026-04-24 Codex |
 
 ### Permissions & Governance
 
 | # | File | Target Pattern | Key Changes | Status |
 |---|------|----------------|-------------|--------|
-| 4.18 | `SAGroupGovernance.jsx` | Register | ErpDenseGrid, keyboard nav | â¬œ NOT STARTED |
+| 4.18 | `SAGroupGovernance.jsx` | Register | ErpDenseGrid, keyboard nav | DONE 2026-04-24 Codex |
 | 4.19 | `SACapabilityGovernance.jsx` | Register | ErpDenseGrid, keyboard nav | DONE 2026-04-24 Codex |
 | 4.20 | `SARolePermissions.jsx` | Register + Mapping | Dense permission grid | DONE 2026-04-24 Codex |
 | 4.21 | `SAApprovalPolicy.jsx` | Register | ErpDenseGrid, keyboard nav | DONE 2026-04-24 Codex |
 | 4.22 | `SAApprovalRules.jsx` | Register | ErpDenseGrid, keyboard nav | DONE 2026-04-24 Codex |
-| 4.23 | `SAMenuGovernance.jsx` | Register | ErpDenseGrid, keyboard nav | â¬œ NOT STARTED |
-| 4.24 | `SAModuleResourceMap.jsx` | Register + Mapping | Dense, keyboard | â¬œ NOT STARTED |
-| 4.25 | `SAPageResourceRegistry.jsx` | Register | ErpDenseGrid, keyboard nav | â¬œ NOT STARTED |
+| 4.23 | `SAMenuGovernance.jsx` | Register | ErpDenseGrid, keyboard nav | DONE 2026-04-24 Codex |
+| 4.24 | `SAModuleResourceMap.jsx` | Register + Mapping | Dense, keyboard | DONE 2026-04-24 Codex |
+| 4.25 | `SAPageResourceRegistry.jsx` | Register | ErpDenseGrid, keyboard nav | DONE 2026-04-24 Codex |
 | 4.26 | `SAReportVisibility.jsx` | Register | ErpDenseGrid, keyboard nav | DONE 2026-04-24 Codex |
-| 4.27 | `SAAclVersionCenter.jsx` | Report/Version List | Dense version list, keyboard | â¬œ NOT STARTED |
+| 4.27 | `SAAclVersionCenter.jsx` | Report/Version List | Dense version list, keyboard | DONE 2026-04-24 Codex |
 
 ### Audit & Reports
 
 | # | File | Target Pattern | Key Changes | Status |
 |---|------|----------------|-------------|--------|
-| 4.28 | `SAAudit.jsx` | Report | Dense audit log, inline filter, Enter opens audit detail pane | ? DONE 2026-04-24 Codex |
-| 4.29 | `SAGovernanceSummaryReport.jsx` | Report | Dense report, export Ctrl+S, inline filter | ? DONE 2026-04-24 Codex |
-| 4.30 | `SAUserScopeReport.jsx` | Report | Dense report, export Ctrl+S | ? DONE 2026-04-24 Codex |
+| 4.28 | `SAAudit.jsx` | Report | Dense audit log, inline filter, Enter opens audit detail pane | DONE 2026-04-24 Codex |
+| 4.29 | `SAGovernanceSummaryReport.jsx` | Report | Dense report, export Ctrl+S, inline filter | DONE 2026-04-24 Codex |
+| 4.30 | `SAUserScopeReport.jsx` | Report | Dense report, export Ctrl+S | DONE 2026-04-24 Codex |
 
 ### Phase 4 Completion Criteria
 
-- [ ] SA admin can onboard a new user (create â†’ assign role â†’ set scope) keyboard-only
-- [ ] SA admin can review sessions and audit log keyboard-only
-- [ ] Governance and permission screens: all rows navigable by Arrow keys
-- [ ] All SA screens: footer command strip accurate, dark, sticky
-- [ ] No mouse needed for any primary SA operation
+- [x] SA admin can onboard a new user (create â†’ assign role â†’ set scope) keyboard-only
+- [x] SA admin can review sessions and audit log keyboard-only
+- [x] Governance and permission screens: all rows navigable by Arrow keys
+- [x] All SA screens: footer command strip accurate, dark, sticky
+- [x] No mouse needed for any primary SA operation
+
+---
+
+## Phase 4 Sub-Phases â€” Remaining Work
+
+> **CODEX CRITICAL RULES â€” Read before starting ANY sub-phase:**
+> 1. Read the COMPLETE file before making any change.
+> 2. Mark a sub-phase DONE only when EVERY verification criterion passes â€” not before.
+> 3. `npm run lint` and `npm run build` must pass after every sub-phase.
+> 4. If a criterion says “grep must return 0 matches”, actually run that grep and confirm 0 before marking done.
+> 5. Do NOT mark DONE if you only did part of the work. Partial = IN PROGRESS.
+> 6. The arrow symbol in footer hints is always `â†’â†”` (Unicode up-down arrows) â€” NEVER write “Arrow Keys Navigate” or “ArrowUp ArrowDown”. Copy-paste the exact strings given below.
+
+---
+
+### Phase 4A â€” Footer Vocabulary Fix
+
+**Status:** DONE 2026-04-24
+**Files:** 8 files â€” ONLY footerHints array changes, nothing else in the file
+**Rule:** Change ONLY the `footerHints={[...]}` prop value on the root template component. Do NOT reformat, do NOT change imports, do NOT touch any other code.
+
+#### Exact replacement values â€” copy these exactly including Unicode symbols:
+
+**1. `SAHome.jsx`**
+Find: the `footerHints={[...]}` prop (may contain “ALT+R REFRESH” or similar old format).
+Replace the array value with exactly:
+```
+[“â†’â†” Navigate”, “Enter Open”, “F8 Refresh”, “Esc Back”, “Ctrl+K Command Bar”]
+```
+
+**2. `SAControlPanel.jsx`**
+Find: `footerHints={[...]}` containing old format.
+Replace with:
+```
+[“â†’â†” Navigate”, “Enter Open”, “F8 Refresh”, “Esc Back”, “Ctrl+K Command Bar”]
+```
+
+**3. `SASystemHealth.jsx`**
+Find: `footerHints={[...]}` containing old format.
+Replace with:
+```
+[“F8 Refresh”, “Esc Back”, “Ctrl+K Command Bar”]
+```
+
+**4. `SAGovernanceSummaryReport.jsx`**
+Find: `footerHints={[...]}` containing old format.
+Replace with:
+```
+[“â†’â†” Navigate”, “Ctrl+S Export”, “F8 Refresh”, “Esc Back”, “Ctrl+K Command Bar”]
+```
+
+**5. `SAUserScopeReport.jsx`**
+Find: `footerHints={[...]}` containing old format.
+Replace with:
+```
+[“â†’â†” Navigate”, “Ctrl+S Export”, “F8 Refresh”, “Esc Back”, “Ctrl+K Command Bar”]
+```
+
+**6. `SAWorkContextMaster.jsx`**
+Find: `footerHints` containing the text `”Arrow Keys Navigate”`.
+Replace the entire array with:
+```
+[“â†’â†” Navigate”, “Enter Inspect”, “Ctrl+S Save”, “F8 Refresh”, “Esc Back”, “Ctrl+K Command Bar”]
+```
+
+**7. `SARolePermissions.jsx`**
+Find: `footerHints` containing the text `”Arrow Keys Navigate”`.
+Replace with:
+```
+[“â†’â†” Navigate”, “Enter Select”, “Ctrl+S Save Matrix”, “F8 Refresh”, “Esc Back”, “Ctrl+K Command Bar”]
+```
+
+**8. `SAApprovalPolicy.jsx`**
+Find: `footerHints` containing the text `”Arrow Keys Navigate”`.
+Replace with:
+```
+[“â†’â†” Navigate”, “Enter Inspect”, “Ctrl+S Save”, “F8 Refresh”, “Esc Back”, “Ctrl+K Command Bar”]
+```
+
+#### Phase 4A â€” Verification (run these before marking DONE):
+```
+grep -r “ALT+R” frontend/src/admin/sa/screens/            # must return 0 files
+grep -r “Arrow Keys Navigate” frontend/src/admin/sa/screens/   # must return 0 files
+grep -r “CTRL+S” frontend/src/admin/sa/screens/           # must return 0 files
+grep -r “ESC CANCEL” frontend/src/admin/sa/screens/       # must return 0 files
+```
+
+---
+
+### Phase 4B â€” SAUserScope SAP Flat Layout
+
+**Status:** DONE 2026-04-24
+**File:** `SAUserScope.jsx` only
+**Goal:** Replace the 2Ã—2 `ScopeSummaryCard` tile grid with a flat SAP-style form row table. Drawers stay exactly as they are.
+
+#### What the screen must look like after this change:
+```
+Work Scope
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Work Companies  â”‚ 3 â”‚ ASCL | ACES | ACPL           â”‚ [Edit] â”‚
+â”‚ Work Contexts   â”‚ 5 â”‚ ASCL_PROD | SCM_OPS | +3     â”‚ [Edit] â”‚
+â”‚ Project Overrides â”‚ 0 â”‚ Work-scope inheritance active â”‚ [Edit] â”‚
+â”‚ Department      â”‚ 1 â”‚ PROD_QC â€” Production QC       â”‚ [Edit] â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+```
+Grid columns: `grid-cols-[140px_24px_1fr_auto]` â€” label | count | summary | Edit button.
+
+#### Step 1 â€” Delete the ScopeSummaryCard function:
+Find the block starting with `function ScopeSummaryCard({` and ending with the closing `}` before `export default function SAUserScope`.
+Delete the entire function.
+
+#### Step 2 â€” Replace the Scope Editors section in mainContent:
+Find:
+```jsx
+<ErpSelectionSection label=”Scope Editors” />
+<div className=”grid gap-3 md:grid-cols-2”>
+  <ScopeSummaryCard ... />
+  <ScopeSummaryCard ... />
+  <ScopeSummaryCard ... />
+  <ScopeSummaryCard ... />
+</div>
+```
+Replace with:
+```jsx
+<ErpSelectionSection label=”Work Scope” />
+<div className=”border border-slate-300 bg-white”>
+  {[
+    {
+      label: “Work Companies”,
+      count: workCompanyIds.length,
+      summary: selectedWorkCompanies.length > 0
+        ? selectedWorkCompanies.slice(0, 4).map((c) => c.company_code).join(“ | “)
+          + (selectedWorkCompanies.length > 4 ? ` +${selectedWorkCompanies.length - 4}` : “”)
+        : “None selected”,
+      scopeKey: “work-companies”,
+      required: true,
+    },
+    {
+      label: “Work Contexts”,
+      count: workContextIds.length,
+      summary: selectedWorkContexts.length > 0
+        ? selectedWorkContexts.slice(0, 3).map((wc) => wc.work_context_code).join(“ | “)
+          + (selectedWorkContexts.length > 3 ? ` +${selectedWorkContexts.length - 3}` : “”)
+        : workCompanyIds.length === 0 ? “Select work companies first” : “None selected”,
+      scopeKey: “work-contexts”,
+      required: true,
+    },
+    {
+      label: “Project Overrides”,
+      count: projectIds.length,
+      summary: selectedProjectOverrides.length > 0
+        ? selectedProjectOverrides.slice(0, 4).map((p) => p.project_code).join(“ | “)
+          + (selectedProjectOverrides.length > 4 ? ` +${selectedProjectOverrides.length - 4}` : “”)
+        : “Work-scope inheritance active”,
+      scopeKey: “projects”,
+      required: false,
+    },
+    {
+      label: “Department”,
+      count: departmentIds.length,
+      summary: selectedDepartments.length > 0
+        ? formatDepartmentLabel(selectedDepartments[0])
+        : “None selected”,
+      scopeKey: “departments”,
+      required: false,
+    },
+  ].map(({ label, count, summary, scopeKey, required }) => (
+    <div
+      key={scopeKey}
+      className=”grid grid-cols-[140px_24px_1fr_auto] items-center gap-2 border-b border-slate-200 px-2 py-[3px] last:border-b-0”
+    >
+      <span className=”text-[11px] text-slate-600”>{label}</span>
+      <span
+        className={`text-[11px] font-bold ${
+          count > 0 ? “text-emerald-700” : required ? “text-amber-600” : “text-slate-400”
+        }`}
+      >
+        {count}
+      </span>
+      <span className=”truncate text-[11px] text-slate-700”>{summary}</span>
+      <button
+        type=”button”
+        onClick={() => openScopeEditor(scopeKey)}
+        disabled={loading || !authUserId}
+        className=”border border-sky-300 bg-sky-50 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-[0.1em] text-sky-900 disabled:opacity-50”
+      >
+        Edit
+      </button>
+    </div>
+  ))}
+</div>
+```
+
+#### Step 3 â€” Remove the two-column wrapper from the bottom section:
+Find: `<div className=”grid gap-[var(--erp-section-gap)] xl:grid-cols-[1.15fr,0.85fr]”>`
+Replace with: `<div className=”grid gap-[var(--erp-section-gap)]”>`
+
+#### Phase 4B â€” Verification (run before marking DONE):
+```
+grep “ScopeSummaryCard” SAUserScope.jsx         # must return 0 matches
+grep “md:grid-cols-2” SAUserScope.jsx           # must return 0 matches in the main scope editors section
+```
+Visual: main screen shows a compact flat 4-row table. No large tiles.
+
+---
+
+### Phase 4C â€” Entry Form ErpDenseFormRow Migration
+
+**Status:** DONE 2026-04-24
+**Files:** `SACompanyCreate.jsx`, `SAProjectMaster.jsx`, `SAModuleMaster.jsx`
+
+#### Add this import to each file:
+```jsx
+import ErpDenseFormRow from “../../../components/forms/ErpDenseFormRow.jsx”;
+```
+
+#### Find this pattern in each file (label+input or label+select):
+```jsx
+<label className=”grid gap-2”>
+  <span className=”text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500”>
+    Field Label
+  </span>
+  <input className=”border border-slate-300 bg-white px-3 py-2 text-sm ...” ... />
+</label>
+```
+
+#### Replace each pair with:
+```jsx
+<ErpDenseFormRow label=”Field Label” required={true or false}>
+  <input
+    className=”w-full border border-slate-300 bg-white px-2 py-[3px] text-[12px] text-slate-900 outline-none focus:border-sky-400”
+    ...
+  />
+</ErpDenseFormRow>
+```
+
+For `<select>`: same transformation, replace className with `w-full border border-slate-300 bg-white px-2 py-[3px] text-[12px] outline-none focus:border-sky-400`
+For `<textarea>`: use `px-2 py-1 text-[12px]` and keep rows attribute.
+
+#### Wrap all form rows:
+The div containing all ErpDenseFormRow elements must use `gap-[var(--erp-form-gap)]`:
+```jsx
+<div className=”grid gap-[var(--erp-form-gap)]”>
+  <ErpDenseFormRow ...>...</ErpDenseFormRow>
+  ...
+</div>
+```
+
+#### Remove routine save confirm dialog (Law 10):
+Find any `openActionConfirm` call that fires before a normal create/save operation.
+Delete it â€” the save should proceed immediately (call setSaving(true) directly).
+KEEP `openActionConfirm` only if the action is destructive (deactivate, delete, set inactive).
+
+#### Phase 4C â€” Verification:
+```
+grep “px-3 py-2 text-sm” SACompanyCreate.jsx    # 0 matches on input/select elements
+grep “px-3 py-2 text-sm” SAProjectMaster.jsx    # 0 matches
+grep “px-3 py-2 text-sm” SAModuleMaster.jsx     # 0 matches
+grep “className=\”grid gap-2\”” SACompanyCreate.jsx  # 0 matches on label elements
+```
+
+---
+
+### Phase 4D â€” Web-App Card Removal from Split-Pane Screens
+
+**Status:** DONE 2026-04-24
+**Files:** `SAGroupGovernance.jsx`, `SADepartmentMaster.jsx`, `SAMenuGovernance.jsx`, `SAModuleResourceMap.jsx`, `SAPageResourceRegistry.jsx`, `SAAclVersionCenter.jsx`, `SAWorkContextMaster.jsx` (right-side detail panel only), `SACapabilityGovernance.jsx` (detail/binding panel only)
+
+#### The card pattern to find and remove:
+**Type A â€” section wrapper with background:**
+```jsx
+<div className=”border border-slate-300 bg-white px-4 py-4”>...</div>
+<div className=”border border-slate-300 bg-white px-3 py-3”>...</div>
+<div className=”border border-slate-300 bg-slate-50 px-3 py-3”>...</div>
+<div className=”border border-slate-300 bg-slate-50 px-4 py-4”>...</div>
+```
+**Type B â€” ErpSectionCard component:**
+```jsx
+<ErpSectionCard eyebrow=”...” title=”...”>...</ErpSectionCard>
+```
+
+#### Transformation for Type A:
+Remove the outer div. Keep all content inside. If the div has a text heading, move it to `<ErpSelectionSection label=”heading text” />`.
+Example:
+```jsx
+// BEFORE:
+<div className=”border border-slate-300 bg-white px-4 py-4”>
+  <div className=”text-[10px] font-semibold uppercase text-slate-500”>Company Info</div>
+  <div className=”mt-2 text-sm text-slate-900”>{company.name}</div>
+</div>
+
+// AFTER:
+<div className=”grid gap-1”>
+  <ErpSelectionSection label=”Company Info” />
+  <div className=”text-[12px] text-slate-900”>{company.name}</div>
+</div>
+```
+
+#### Transformation for Type B (ErpSectionCard):
+```jsx
+// BEFORE:
+<ErpSectionCard eyebrow=”Governance” title=”Role Mapping”>
+  content
+</ErpSectionCard>
+
+// AFTER:
+<div className=”grid gap-1”>
+  <ErpSelectionSection label=”Role Mapping” />
+  content
+</div>
+```
+Remove `ErpSectionCard` from the ErpScreenScaffold import in the screen file.
+Add `import ErpSelectionSection from “../../../components/forms/ErpSelectionSection.jsx”` if not already imported.
+
+#### Scope: LEFT panel vs RIGHT panel
+In split-pane screens (xl:grid-cols-2 layout):
+- LEFT panel: usually has the ErpDenseGrid list. DO NOT touch this side.
+- RIGHT panel: has the detail/inspector sections. THIS is where cards must be removed.
+
+#### Phase 4D â€” Verification:
+```
+grep -r “ErpSectionCard” frontend/src/admin/sa/screens/   # 0 matches
+grep “px-4 py-4” SAGroupGovernance.jsx     # 0 matches
+grep “px-4 py-4” SADepartmentMaster.jsx    # 0 matches
+grep “px-3 py-3” SAMenuGovernance.jsx      # 0 matches
+grep “px-3 py-3” SAModuleResourceMap.jsx   # 0 matches
+grep “px-3 py-3” SAPageResourceRegistry.jsx  # 0 matches
+grep “px-3 py-3” SAAclVersionCenter.jsx    # 0 matches
+```
+
+---
+
+### Phase 4E â€” Unverified Screen Completion
+
+**Status:** DONE 2026-04-24
+**Files:** `SACompanyModuleMap.jsx`, `SACompanyProjectMap.jsx`, `SAProjectManage.jsx`
+
+For EACH file do all of these steps in order:
+
+1. **Read the complete file.**
+2. **Check ErpDenseGrid:** Does a list/table exist in this screen? If yes and no ErpDenseGrid: convert it. Follow the exact pattern in SAUsers.jsx or SACompanyManage.jsx for reference.
+3. **Check footer hints:** If `footerHints` contains old format text (ALT+R, CTRL+S uppercase, ESC), replace with new vocabulary. Use MasterList default if it is a list screen: `[“â†’â†” Navigate”, “Enter Open”, “Space Select”, “F8 Refresh”, “Esc Back”, “Ctrl+K Command Bar”]`
+4. **Check cards:** Apply Phase 4D card removal rule to any card wrappers found.
+5. **Check save dialogs:** Remove any `openActionConfirm` from non-destructive save operations.
+
+#### Phase 4E â€” Verification:
+```
+grep “ALT+R” SACompanyModuleMap.jsx      # 0 matches
+grep “ALT+R” SACompanyProjectMap.jsx     # 0 matches
+grep “ALT+R” SAProjectManage.jsx         # 0 matches
+grep “px-4 py-4” SACompanyModuleMap.jsx  # 0 matches
+grep “px-4 py-4” SACompanyProjectMap.jsx # 0 matches
+```
+
+---
+
+### Phase 4 Sub-Phase Status Tracker
+
+| Sub-Phase | Files | Status |
+|-----------|-------|--------|
+| 4A â€” Footer Vocabulary Fix | 8 files | DONE |
+| 4B â€” SAUserScope SAP Flat Layout | 1 file | DONE |
+| 4C â€” Entry Form ErpDenseFormRow | 3 files | DONE |
+| 4D â€” Web-App Card Removal | 8 files | DONE |
+| 4E â€” Unverified Screen Completion | 3 files | DONE |
+
+**Phase 4 is DONE only when all 5 sub-phases show DONE and `npm run build` passes clean.**
 
 ---
 
@@ -371,18 +738,18 @@ The HR screens are organized across three files:
 
 | # | From Screen | To Screen | State to Restore | Status |
 |---|-------------|-----------|-----------------|--------|
-| 5.1 | Leave My Requests list | Leave Request Detail | filter, searchQuery, page, focusKey | â¬œ NOT STARTED |
-| 5.2 | Leave Approval Inbox | Leave Request Detail (approval view) | focusedRow | â¬œ NOT STARTED |
-| 5.3 | Leave Approval History | Leave Request Detail (read-only) | filter, page, focusKey | â¬œ NOT STARTED |
-| 5.4 | Leave Register Results | Leave Request Detail (read-only) | filter, page, focusKey | â¬œ NOT STARTED |
-| 5.5 | OutWork My Requests list | OutWork Request Detail | filter, searchQuery, page, focusKey | â¬œ NOT STARTED |
-| 5.6 | OutWork Approval Inbox | OutWork Request Detail (approval view) | focusedRow | â¬œ NOT STARTED |
-| 5.7 | OutWork Approval History | OutWork Request Detail (read-only) | filter, page, focusKey | â¬œ NOT STARTED |
-| 5.8 | OutWork Register Results | OutWork Request Detail (read-only) | filter, page, focusKey | â¬œ NOT STARTED |
-| 5.9 | SAUsers â†’ SAUserScope | Already wired â€” verify return-and-refresh still works | filter, searchQuery, focusKey | â¬œ VERIFY |
-| 5.10 | SACompanyManage | SACompanyCreate (edit mode) | focusKey | â¬œ NOT STARTED |
-| 5.11 | SAProjectMaster | SAProjectManage | focusKey | â¬œ NOT STARTED |
-| 5.12 | SAAudit | Audit Detail (if screen exists) | filter, page | â¬œ NOT STARTED |
+| 5.1 | Leave My Requests list | Leave Request Detail | filter, searchQuery, page, focusKey | DONE IN CODE 2026-04-24 Codex |
+| 5.2 | Leave Approval Inbox | Leave Request Detail (approval view) | focusedRow | DONE IN CODE 2026-04-24 Codex |
+| 5.3 | Leave Approval History | Leave Request Detail (read-only) | filter, page, focusKey | DONE IN CODE 2026-04-24 Codex |
+| 5.4 | Leave Register Results | Leave Request Detail (read-only) | filter, page, focusKey | DONE IN CODE 2026-04-24 Codex |
+| 5.5 | OutWork My Requests list | OutWork Request Detail | filter, searchQuery, page, focusKey | DONE IN CODE 2026-04-24 Codex |
+| 5.6 | OutWork Approval Inbox | OutWork Request Detail (approval view) | focusedRow | DONE IN CODE 2026-04-24 Codex |
+| 5.7 | OutWork Approval History | OutWork Request Detail (read-only) | filter, page, focusKey | DONE IN CODE 2026-04-24 Codex |
+| 5.8 | OutWork Register Results | OutWork Request Detail (read-only) | filter, page, focusKey | DONE IN CODE 2026-04-24 Codex |
+| 5.9 | SAUsers â†’ SAUserScope | Already wired â€” verify return-and-refresh still works | filter, searchQuery, focusKey | VERIFIED IN CODE 2026-04-24 Codex |
+| 5.10 | SACompanyManage | SACompanyCreate (edit mode) | focusKey | BLOCKED 2026-04-24 Codex â€” no company edit endpoint / no real edit mode |
+| 5.11 | SAProjectMaster | SAProjectManage | focusKey | DONE IN CODE 2026-04-24 Codex |
+| 5.12 | SAAudit | Audit Detail (if screen exists) | filter, page | DONE IN CODE 2026-04-24 Codex |
 
 ### Drill-Through Verification Checklist (for each pair)
 
@@ -400,6 +767,7 @@ For every wired pair, test:
 - [ ] All 12 drill-through pairs verified per checklist
 - [ ] Return-and-refresh works on every pair
 - [ ] No list screen with a drillable row lacks Enter-to-drill
+- [ ] Explicit blocker resolved for 5.10 (`SACompanyManage` still lacks a true edit-mode target)
 
 ---
 
@@ -581,6 +949,54 @@ frontend/src/index.css                                    â€” add dense CSS
 
 ---
 
+### [2026-04-24] — Codex — Phase 5 Drill-Through Infrastructure Pass
+
+**Session result:** Wired the real drill-through shell for Phase 5 across HR, project governance, and audit review, but left the company-governance edit pair explicitly blocked because the repo still has no company update capability.
+
+**Changes made:**
+
+- `HrWorkflowPages.jsx`
+  - added dedicated drill-through detail route support for leave and out-work request rows
+  - parent screens now persist `searchQuery`, `focusedRow/focusKey`, and relevant filter state into screen context before drilling
+  - parent screens now register return-refresh callbacks so the list/inbox/history/register refreshes after returning from detail
+  - added full-screen request detail workspaces for `myRequests`, `approvalInbox`, `approvalHistory`, and `register` modes
+
+- `HrRegisterReports.jsx`
+  - register results rows now drill into the new HR request detail screens
+  - report results now persist `searchQuery`, `page`, and `focusKey` for return restoration
+
+- `hrScreens.js` + `AppRouter.jsx`
+  - added `HR_LEAVE_REQUEST_DETAIL`
+  - added `HR_OUT_WORK_REQUEST_DETAIL`
+  - wired routes for both detail screens
+
+- `SAProjectMaster.jsx`
+  - Enter on a focused project row now drills into `SAProjectManage`
+  - parent state (`searchQuery`, `focusKey`) now persists and refreshes on return
+
+- `SAProjectManage.jsx`
+  - recognizes drill-through context and offers a true back-to-register return path
+
+- `SAAudit.jsx` + `SAAuditDetail.jsx`
+  - Enter on a focused audit row now drills into a separate audit detail screen
+  - parent filter/page/focus state is restored on return
+
+**Blocked pair:**
+
+- `5.10 SACompanyManage -> SACompanyCreate (edit mode)`
+  - blocked because `SACompanyCreate.jsx` is still create-only
+  - backend has company create + company state change, but no company profile update route / handler
+  - this pair cannot be honestly marked complete without a real company edit capability
+
+**Verification:**
+
+- `npm.cmd run lint` — PASS
+- `npm.cmd run build` — PASS
+
+**Phase 5 status:** IN PROGRESS 2026-04-24 Codex
+
+---
+
 ### [2026-04-24] — Claude — Phase 3 HR Screen Migration — 100% Completion Pass
 
 **Session result:** Completed remaining Phase 3 gaps. All HR workflow screens now fully comply with the Design Authority interaction architecture.
@@ -747,6 +1163,108 @@ frontend/src/index.css                                    â€” add dense CSS
 **Remaining before Phase 4 can be marked complete:**
 - Verify and migrate the remaining template-backed SA admin screens file by file
 - Re-check every SA primary workflow against the Phase 4 completion checklist
+
+**Phase 4 status:** IN PROGRESS 2026-04-24 Codex
+
+---
+### [2026-04-24] — Codex — Phase 4A/4B/4C Reconciliation Pass
+
+**Session result:** Phase 4A, 4B, and 4C are now reconciled to current repo truth. Footer vocabulary verification is clean, `SAUserScope.jsx` remains on the flat SAP-style work-scope table, and the three entry-form files no longer use routine save confirmation before normal create/update.
+
+**Completed in this session:**
+- DONE 2026-04-24 Codex — Phase 4A Footer Vocabulary Fix
+  - `ALT+R`, `Arrow Keys Navigate`, `CTRL+S`, and `ESC CANCEL` grep checks across `frontend/src/admin/sa/screens` are clean
+- DONE 2026-04-24 Codex — Phase 4B SAUserScope SAP Flat Layout
+  - `ScopeSummaryCard` remains removed
+  - compact `Work Scope` table remains active in `frontend/src/admin/sa/screens/SAUserScope.jsx`
+- DONE 2026-04-24 Codex — Phase 4C Entry Form ErpDenseFormRow Migration
+  - `frontend/src/admin/sa/screens/SACompanyCreate.jsx`
+  - `frontend/src/admin/sa/screens/SAProjectMaster.jsx`
+  - `frontend/src/admin/sa/screens/SAModuleMaster.jsx`
+  - routine `openActionConfirm` removed from normal save/create flows
+
+**Verification:**
+- `rg -n "ALT\\+R|Arrow Keys Navigate|CTRL\\+S|ESC CANCEL" frontend/src/admin/sa/screens` -> 0 matches
+- `rg -n "openActionConfirm|px-3 py-2 text-sm|className=\\\"grid gap-2\\\"" frontend/src/admin/sa/screens/SACompanyCreate.jsx frontend/src/admin/sa/screens/SAProjectMaster.jsx frontend/src/admin/sa/screens/SAModuleMaster.jsx` -> 0 matches
+- `npm.cmd run lint` OK
+- `npm.cmd run build` OK
+
+**Phase 4 status:** DONE 2026-04-24 Codex (all sub-phases 4A–4E now show DONE)
+
+---
+### [2026-04-24] — Codex — Phase 4D Completion Pass
+
+**Session result:** Phase 4D is now actually complete and verified. All remaining split-pane card wrappers targeted by the plan have been removed, and the verification grep for `ErpSectionCard`, `px-4 py-4`, and `px-3 py-3` on the 4D target files is clean.
+
+**Completed in this session:**
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SADepartmentMaster.jsx`
+  - Removed remaining type-A wrapper padding hits from the right-side detail surface
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAGroupGovernance.jsx`
+  - Removed remaining split-pane card-style empty-state wrappers
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAMenuGovernance.jsx`
+  - Removed remaining `ErpSectionCard` usage
+  - Replaced nested group/page sections with `ErpSelectionSection` + plain content
+  - Removed all remaining `px-3 py-3` and `px-4 py-4` card-style wrappers targeted by Phase 4D
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAModuleResourceMap.jsx`
+  - Verified clean against Phase 4D grep targets
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAPageResourceRegistry.jsx`
+  - Verified clean against Phase 4D grep targets
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAAclVersionCenter.jsx`
+  - Removed remaining type-A publish desk and empty-state wrappers
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAWorkContextMaster.jsx`
+  - Removed remaining right-side detail and drawer card-style wrappers
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SACapabilityGovernance.jsx`
+  - Removed remaining detail/binding panel card-style wrappers
+
+**Verification:**
+- `rg -n "ErpSectionCard|px-4 py-4|px-3 py-3"` across all 4D target files returned 0 matches
+- `npm.cmd run lint` OK
+- `npm.cmd run build` OK
+
+**Phase 4 status:** IN PROGRESS 2026-04-24 Codex
+
+---
+### [2026-04-24] — Codex — Phase 4D Partial Progress + Phase 4E Complete
+
+**Session result:** Phase 4E is now actually complete and verified. Phase 4D has moved from not started to partial implementation, but it is not done yet.
+
+**Completed in this session:**
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SACompanyModuleMap.jsx`
+  - Converted company/module lists to `ErpDenseGrid`
+  - Removed split-pane `ErpSectionCard` wrappers
+  - Updated footer hints to fast-work vocabulary
+  - Removed routine confirmation dialog from module enable/disable save flow
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SACompanyProjectMap.jsx`
+  - Converted project/company lists to `ErpDenseGrid`
+  - Removed split-pane `ErpSectionCard` wrappers
+  - Updated footer hints to fast-work vocabulary
+  - Removed routine confirmation dialog from company map/unmap save flow
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAProjectManage.jsx`
+  - Converted project roster to `ErpDenseGrid`
+  - Removed split-pane `ErpSectionCard` wrappers
+  - Updated footer hints to fast-work vocabulary
+  - Removed routine confirmation dialog from project state save flow
+- IN PROGRESS 2026-04-24 Codex — `frontend/src/admin/sa/screens/SADepartmentMaster.jsx`
+  - `ErpSectionCard` wrappers removed and replaced by `ErpSelectionSection` groups
+- IN PROGRESS 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAGroupGovernance.jsx`
+  - `ErpSectionCard` wrappers removed and replaced by `ErpSelectionSection` groups
+- IN PROGRESS 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAModuleResourceMap.jsx`
+  - `ErpSectionCard` wrappers removed and replaced by `ErpSelectionSection` groups
+- IN PROGRESS 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAPageResourceRegistry.jsx`
+  - `ErpSectionCard` wrappers removed and replaced by `ErpSelectionSection` groups
+- IN PROGRESS 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAAclVersionCenter.jsx`
+  - Outer `ErpSectionCard` wrappers removed and replaced by `ErpSelectionSection` groups
+
+**Still pending before 4D can be marked DONE:**
+- `frontend/src/admin/sa/screens/SAMenuGovernance.jsx`
+- `frontend/src/admin/sa/screens/SAWorkContextMaster.jsx` (right-side detail panel only)
+- `frontend/src/admin/sa/screens/SACapabilityGovernance.jsx` (detail/binding panel only)
+- Final type-A wrapper cleanup inside `frontend/src/admin/sa/screens/SAAclVersionCenter.jsx`
+- Final grep-style verification for all 4D targets
+
+**Verification:**
+- `npm.cmd run lint` OK
+- `npm.cmd run build` OK
 
 **Phase 4 status:** IN PROGRESS 2026-04-24 Codex
 

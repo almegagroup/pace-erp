@@ -325,7 +325,7 @@ export default function SACompanyManage() {
           ...(error ? [{ key: "error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
         ]}
-        footerHints={["Arrow Keys Navigate", "Enter Focus Action", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+        footerHints={["↑↓ Navigate", "Enter Inspect", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
         filterSection={{
           eyebrow: "Registry Filter",
           title: "Search company inventory",

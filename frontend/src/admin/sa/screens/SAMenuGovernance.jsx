@@ -13,8 +13,8 @@ import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
 import ErpScreenScaffold, {
   ErpFieldPreview,
-  ErpSectionCard,
 } from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import { SCREEN_REGISTRY } from "../../../navigation/screenRegistry.js";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
@@ -1212,34 +1212,29 @@ export default function SAMenuGovernance() {
           : []),
       ]}
     >
-      <ErpSectionCard
-        eyebrow="Universe"
-        title="Choose Universe"
-        aside={
-          <div className="flex gap-2">
-            {["SA", "ACL"].map((value) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setUniverse(value)}
-                className={`border px-3 py-2 text-sm font-semibold ${
-                  universe === value
-                    ? "border-sky-300 bg-sky-50 text-sky-900"
-                    : "border-slate-300 bg-white text-slate-700"
-                }`}
-              >
-                {value}
-              </button>
-            ))}
-          </div>
-        }
-      />
+      <div className="grid gap-1">
+        <ErpSelectionSection label="Choose Universe" />
+        <div className="flex gap-2">
+          {["SA", "ACL"].map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setUniverse(value)}
+              className={`border px-3 py-2 text-sm font-semibold ${
+                universe === value
+                  ? "border-sky-300 bg-sky-50 text-sky-900"
+                  : "border-slate-300 bg-white text-slate-700"
+              }`}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-        <ErpSectionCard
-          eyebrow="Groups"
-          title="1. Groups: Create, Select, Manage"
-        >
+        <div className="grid gap-1">
+          <ErpSelectionSection label="1. Groups: Create, Select, Manage" />
           <div className="grid gap-6">
             <div className="grid gap-3">
               {groupRows.map((item) => (
@@ -1247,7 +1242,7 @@ export default function SAMenuGovernance() {
                   key={item.menu_code}
                   type="button"
                   onClick={() => setSelectedMenuCode(item.menu_code)}
-                  className={`grid w-full grid-cols-[1fr_120px] gap-3 border px-3 py-3 text-left ${
+                  className={`grid w-full grid-cols-[1fr_120px] gap-3 border px-3 py-2 text-left ${
                     item.menu_code === selectedMenuCode
                       ? "border-sky-300 bg-sky-50"
                       : "border-slate-300 bg-white hover:bg-slate-50"
@@ -1286,10 +1281,10 @@ export default function SAMenuGovernance() {
               ) : null}
             </div>
 
-            <ErpSectionCard
-              eyebrow="Selected Group"
-              title={selectedMenu ? selectedMenu.title : "Choose a group"}
-            >
+            <div className="grid gap-1">
+              <ErpSelectionSection
+                label={selectedMenu ? selectedMenu.title : "Choose A Group"}
+              />
               {selectedMenu && selectedMenu.menu_type === "GROUP" ? (
                 <div className="grid gap-3">
                   <div className="grid gap-2 md:grid-cols-2">
@@ -1476,12 +1471,10 @@ export default function SAMenuGovernance() {
                   Select a group to edit its settings.
                 </div>
               )}
-            </ErpSectionCard>
+            </div>
 
-            <ErpSectionCard
-              eyebrow="Create Group"
-              title="Create New Group"
-            >
+            <div className="grid gap-1">
+              <ErpSelectionSection label="Create New Group" />
               <div className="grid gap-3">
                 <div className="border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                   Open the group-create modal only when you need a new drawer bucket.
@@ -1509,14 +1502,12 @@ export default function SAMenuGovernance() {
                   Open Create Group Modal
                 </button>
               </div>
-            </ErpSectionCard>
+            </div>
           </div>
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          eyebrow="Pages"
-          title="2. Pages: Publish, Move, Enable"
-        >
+        <div className="grid gap-1">
+          <ErpSelectionSection label="2. Pages: Publish, Move, Enable" />
           <div className="grid gap-3">
             <label className="grid gap-1 text-sm text-slate-700">
               <span className="font-semibold">Search Pages</span>
@@ -1562,7 +1553,7 @@ export default function SAMenuGovernance() {
               {availablePages.map((page) => (
                 <div
                   key={page.screen_code}
-                  className="border border-slate-300 bg-white px-3 py-3"
+                  className="border border-slate-300 bg-white px-3 py-2"
                 >
                   <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
                     <div className="min-w-0">
@@ -1630,7 +1621,7 @@ export default function SAMenuGovernance() {
               ) : null}
             </div>
           </div>
-        </ErpSectionCard>
+        </div>
       </div>
 
       {showLegacyPageEditor && pageEditor ? (
@@ -1735,7 +1726,7 @@ export default function SAMenuGovernance() {
                   </label>
                 </div>
 
-                <div className="grid gap-2 border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+                <div className="grid gap-2 border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
                   <div>
                     Suggested next free order under {pageEditor.parent_menu_code || "root"}:{" "}
                     <span className="font-semibold text-slate-900">{pageEditorSuggestedOrder}</span>
@@ -1795,7 +1786,7 @@ export default function SAMenuGovernance() {
             </div>
 
             <aside className="border-l border-slate-200 bg-[#eef4fb]">
-              <div className="border-b border-slate-200 px-4 py-4">
+              <div className="border-b border-slate-200 px-4 py-3">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
                   Group Drawer
                 </div>
@@ -1806,7 +1797,7 @@ export default function SAMenuGovernance() {
                 </div>
               </div>
 
-              <div className="max-h-[72vh] overflow-y-auto px-3 py-3">
+              <div className="max-h-[72vh] overflow-y-auto px-3 py-2">
                 {groupPickerOpen ? (
                   <div className="grid gap-2">
                     {groupRows.map((group, index) => (
@@ -2009,7 +2000,7 @@ export default function SAMenuGovernance() {
             </label>
           </div>
 
-          <div className="grid gap-2 border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+          <div className="grid gap-2 border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
             <div>
               Suggested next free order under {createForm.parent_menu_code || "root"}:{" "}
               <span className="font-semibold text-slate-900">{suggestedCreateOrder}</span>
@@ -2164,7 +2155,7 @@ export default function SAMenuGovernance() {
               </label>
             </div>
 
-            <div className="grid gap-2 border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+            <div className="grid gap-2 border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
               <div>
                 Suggested next free order under {pageEditor.parent_menu_code || "root"}:{" "}
                 <span className="font-semibold text-slate-900">

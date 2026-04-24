@@ -462,7 +462,7 @@ export default function SAControlPanel() {
       title="ERP Control Panel"
       actions={topActions}
       notices={notices}
-      footerHints={["CTRL+K COMMAND BAR", "ALT+R REFRESH"]}
+      footerHints={["↑↓ Navigate", "Enter Open", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
         <DataTableCard

@@ -772,7 +772,7 @@ export default function SAUsers() {
               ]
             : []
         }
-        footerHints={["Arrow Keys Navigate", "Enter Open", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+        footerHints={["↑↓ Navigate", "Enter Open", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
         filterSection={filterSection}
         listSection={listSection}
       />

@@ -208,12 +208,16 @@ export function ErpFieldPreview({
 
 export function ErpActionStrip({ actions = [] }) {
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-1">
       {actions.map((action, index) => {
         const toneClass =
           action.disabled
             ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
             : ACTION_TONE_CLASS[action.tone] ?? ACTION_TONE_CLASS.neutral;
+
+        const hintTokens = [action.hint, action.mnemonicHint]
+          .filter(Boolean)
+          .filter((value, i, arr) => arr.indexOf(value) === i);
 
         return (
           <button
@@ -223,20 +227,14 @@ export function ErpActionStrip({ actions = [] }) {
             disabled={action.disabled}
             onClick={action.onClick}
             onKeyDown={action.onKeyDown}
-            className={`min-w-[132px] border px-3 py-2 text-left transition ${toneClass}`}
+            className={`border px-2 py-[3px] text-left transition ${toneClass}`}
           >
-            <span className="block text-[13px] font-semibold uppercase tracking-[0.04em]">
+            <span className="block text-[11px] font-semibold uppercase tracking-[0.06em]">
               {renderMnemonicLabel(action.label, action.mnemonic)}
             </span>
-            {[action.hint, action.mnemonicHint]
-              .filter(Boolean)
-              .filter((value, index, values) => values.indexOf(value) === index)
-              .length > 0 ? (
-              <span className="mt-1 block text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                {[action.hint, action.mnemonicHint]
-                  .filter(Boolean)
-                  .filter((value, index, values) => values.indexOf(value) === index)
-                  .join(" | ")}
+            {hintTokens.length > 0 ? (
+              <span className="block text-[9px] uppercase tracking-[0.12em] text-slate-500">
+                {hintTokens.join(" | ")}
               </span>
             ) : null}
           </button>
@@ -365,30 +363,25 @@ export default function ErpScreenScaffold({
 
   return (
     <section className="min-h-full text-slate-900">
-      <div className="mx-auto flex max-w-none flex-col gap-4">
-        <div className="sticky top-0 z-20 overflow-hidden border border-slate-400 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.06)]">
-          <div className="border-b border-slate-300 bg-[linear-gradient(180deg,#f5f8fb_0%,#e8eef5_100%)] px-4 py-2">
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
-              <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-sky-700">
-                  {eyebrow}
-                </p>
-                <h1 className="mt-1 text-[1.35rem] font-semibold tracking-tight text-slate-900">
-                  {title}
-                </h1>
-              </div>
-
-              {resolvedActions.length > 0 ? (
-                <div className="xl:justify-self-end">
-                  <ErpActionStrip actions={resolvedActions} />
-                </div>
-              ) : null}
+      <div className="mx-auto flex max-w-none flex-col gap-[var(--erp-section-gap)]">
+        <div className="sticky top-0 z-20 overflow-hidden border-b border-slate-300 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-1.5">
+            <div className="min-w-0">
+              <p className="text-[9px] font-semibold uppercase tracking-[0.24em] text-sky-700">
+                {eyebrow}
+              </p>
+              <h1 className="text-[13px] font-bold tracking-tight text-slate-900">
+                {title}
+              </h1>
             </div>
-          </div>
 
+            {resolvedActions.length > 0 ? (
+              <ErpActionStrip actions={resolvedActions} />
+            ) : null}
+          </div>
         </div>
 
-        <div className="grid gap-4">{children}</div>
+        <div className="grid gap-[var(--erp-section-gap)]">{children}</div>
 
         <ErpCommandStrip hints={footerHints} />
       </div>

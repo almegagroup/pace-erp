@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   openScreen,
+  openScreenWithContext,
   popScreen,
   getActiveScreenContext,
   updateActiveScreenContext,
+  registerScreenRefreshCallback,
 } from "../../../navigation/screenStackEngine.js";
 import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpReportFilterTemplate from "../../../components/templates/ErpReportFilterTemplate.jsx";
@@ -116,6 +119,20 @@ function normalizeCellValue(columnKey, value) {
   if (columnKey === "created_at") return formatDateTime(value);
   if (columnKey === "from_date" || columnKey === "to_date") return formatIsoDate(value);
   return value ?? "-";
+}
+
+function getHrDetailScreenCode(kind) {
+  return kind === "leave" ? "HR_LEAVE_REQUEST_DETAIL" : "HR_OUT_WORK_REQUEST_DETAIL";
+}
+
+function getHrDetailRoute(kind) {
+  return kind === "leave"
+    ? "/dashboard/hr/leave/request-detail"
+    : "/dashboard/hr/out-work/request-detail";
+}
+
+function getHrRequestKey(row) {
+  return row?.workflow_request_id ?? row?.leave_request_id ?? row?.out_work_request_id ?? "";
 }
 
 function buildDownloadRows(columns, rows) {
@@ -244,13 +261,16 @@ function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCod
 }
 
 function RegisterResultsPage({ kind, title, loader }) {
+  const navigate = useNavigate();
+  const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchRef = useRef(null);
+  const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
   const { runtimeContext } = useMenu();
   const [rows, setRows] = useState([]);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(initialContext.parentState?.page ?? 1);
   const criteria = useMemo(
     () => normalizeCriteria(getActiveScreenContext()?.criteria),
     []
@@ -315,11 +335,67 @@ function RegisterResultsPage({ kind, title, loader }) {
         filteredRows.reduce((sum, row) => sum + Number(row?.total_days ?? 0), 0) || "",
     },
   }), [filteredRows]);
-  const { getRowProps } = useErpListNavigation(pagedRows);
+  function openDetail(row) {
+    const nextFocusKey = getHrRequestKey(row);
+    const parentState = { searchQuery, page: safePage, focusKey: nextFocusKey };
+    setFocusKey(nextFocusKey);
+    updateActiveScreenContext({ parentState, criteria });
+    openScreenWithContext(getHrDetailScreenCode(kind), {
+      request: row,
+      kind,
+      mode: "register",
+      parentState,
+      refreshOnReturn: true,
+    });
+    navigate(getHrDetailRoute(kind));
+  }
+
+  const { getRowProps, focusRow } = useErpListNavigation(pagedRows, {
+    onActivate: (row) => openDetail(row),
+  });
 
   useEffect(() => {
     setPage(1);
   }, [searchQuery, rows]);
+
+  useEffect(
+    () =>
+      registerScreenRefreshCallback(() => {
+        void (async () => {
+          setLoading(true);
+          try {
+            const reportRows = await loader(criteria);
+            setRows(reportRows);
+          } catch (loadError) {
+            setError(loadError instanceof Error ? loadError.message : "REGISTER_REPORT_FAILED");
+          } finally {
+            setLoading(false);
+          }
+        })();
+      }),
+    [criteria, loader],
+  );
+
+  useEffect(() => {
+    updateActiveScreenContext({ criteria, parentState: { searchQuery, page: safePage, focusKey } });
+  }, [criteria, searchQuery, safePage, focusKey]);
+
+  useEffect(() => {
+    if (!focusKey || filteredRows.length === 0) {
+      return;
+    }
+    const globalIndex = filteredRows.findIndex((row) => getHrRequestKey(row) === focusKey);
+    if (globalIndex < 0) {
+      return;
+    }
+    const desiredPage = Math.floor(globalIndex / PAGE_SIZE) + 1;
+    if (safePage !== desiredPage) {
+      setPage(desiredPage);
+      return;
+    }
+    const pageIndex = globalIndex - (safePage - 1) * PAGE_SIZE;
+    queueMicrotask(() => focusRow(pageIndex));
+  }, [filteredRows, focusKey, safePage, focusRow]);
 
   useErpScreenCommands([
     {
@@ -427,6 +503,7 @@ function RegisterResultsPage({ kind, title, loader }) {
               rows={pagedRows}
               rowKey={(row) => `${row.workflow_request_id}-${row.requester_auth_user_id}`}
               getRowProps={(_row, index) => getRowProps(index)}
+              onRowActivate={(row) => openDetail(row)}
               summaryRow={summaryRow}
               maxHeight="60vh"
               emptyMessage="No row matches the current report criteria."

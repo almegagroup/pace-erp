@@ -18,6 +18,14 @@ export const HR_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  HR_LEAVE_REQUEST_DETAIL: {
+    screen_code: "HR_LEAVE_REQUEST_DETAIL",
+    route: "/dashboard/hr/leave/request-detail",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   HR_LEAVE_APPROVAL_INBOX: {
     screen_code: "HR_LEAVE_APPROVAL_INBOX",
     route: "/dashboard/hr/leave/approval-inbox",
@@ -61,6 +69,14 @@ export const HR_SCREENS = Object.freeze({
   HR_OUT_WORK_MY_REQUESTS: {
     screen_code: "HR_OUT_WORK_MY_REQUESTS",
     route: "/dashboard/hr/out-work/my-requests",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  HR_OUT_WORK_REQUEST_DETAIL: {
+    screen_code: "HR_OUT_WORK_REQUEST_DETAIL",
+    route: "/dashboard/hr/out-work/request-detail",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

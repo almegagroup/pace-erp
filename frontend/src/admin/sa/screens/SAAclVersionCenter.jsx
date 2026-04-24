@@ -6,9 +6,8 @@ import {
   clearNavigationLeaveGuard,
   setNavigationLeaveGuard,
 } from "../../../store/navigationLeaveGuard.js";
-import ErpScreenScaffold, {
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -551,11 +550,9 @@ export default function SAAclVersionCenter() {
       ]}
     >
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <ErpSectionCard
-          eyebrow="Company Status"
-          title="Publish recommendation by company"
-        >
-          <div className="grid gap-3 border border-slate-300 bg-slate-50 px-4 py-4">
+        <div className="grid gap-1">
+          <ErpSelectionSection label="Publish Recommendation By Company" />
+          <div className="grid gap-3 border border-slate-300 bg-slate-50 px-4 py-3">
             <div className="grid gap-3 md:grid-cols-[1fr_220px]">
               <label className="block">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -611,7 +608,7 @@ export default function SAAclVersionCenter() {
 
           <div className="mt-4 border border-slate-300 bg-white">
             {filteredCompanies.length === 0 ? (
-              <div className="px-4 py-4 text-sm text-slate-500">
+              <div className="px-4 py-3 text-sm text-slate-500">
                 {loading
                   ? "Loading company publish status."
                   : "No company matches the current search or status filter."}
@@ -626,7 +623,7 @@ export default function SAAclVersionCenter() {
                     {...getCompanyRowProps(index)}
                     type="button"
                     onClick={() => setSelectedCompanyId(company.company_id)}
-                    className={`grid w-full gap-2 border-b px-4 py-4 text-left last:border-b-0 ${
+                    className={`grid w-full gap-2 border-b px-4 py-3 text-left last:border-b-0 ${
                       selected ? "border-sky-200 bg-sky-50" : "border-slate-200 bg-white"
                     }`}
                   >
@@ -667,14 +664,12 @@ export default function SAAclVersionCenter() {
               })
             )}
           </div>
-        </ErpSectionCard>
+        </div>
         <div className="grid gap-6">
-          <ErpSectionCard
-            eyebrow="Selected Company"
-            title={selectedCompany ? `${selectedCompany.company_code} publish desk` : "Choose one company"}
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label={selectedCompany ? `${selectedCompany.company_code} Publish Desk` : "Choose One Company"} />
             {!selectedCompany ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
                 Choose one company from the left list.
               </div>
             ) : (
@@ -768,18 +763,16 @@ export default function SAAclVersionCenter() {
                 </div>
               </div>
             )}
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Pending Reasons"
-            title="Why publish is recommended"
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Why Publish Is Recommended" />
             {!selectedCompany ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
                 Choose one company first.
               </div>
             ) : selectedCompany.pending_reasons.length === 0 ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
                 No unpublished tracked access-governance change is waiting for this company.
               </div>
             ) : (
@@ -803,18 +796,16 @@ export default function SAAclVersionCenter() {
                 ))}
               </div>
             )}
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Published Ledger"
-            title="Existing versions"
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Existing Versions" />
             {!selectedCompany ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
                 Choose one company first.
               </div>
             ) : selectedVersions.length === 0 ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
                 No ACL version exists for this company yet.
               </div>
             ) : (
@@ -870,7 +861,7 @@ export default function SAAclVersionCenter() {
                 ))}
               </div>
             )}
-          </ErpSectionCard>
+          </div>
         </div>
       </div>
     </ErpScreenScaffold>

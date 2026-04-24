@@ -8,6 +8,7 @@ import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpScreenScaffold, {
   ErpFieldPreview,
@@ -714,7 +715,7 @@ export default function SAWorkContextMaster() {
               }),
           },
         ]}
-        footerHints={["Arrow Keys Navigate", "Enter Select", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+        footerHints={["↑↓ Navigate", "Enter Inspect", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       >
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.65fr)]">
           <div className="grid gap-3">
@@ -914,50 +915,39 @@ export default function SAWorkContextMaster() {
               </div>
               {selectedContext ? (
                 <div className="grid gap-3">
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="border border-slate-300 bg-white">
                     {[
                       {
                         label: "Scope Type",
                         value: selectedContext.is_system ? "SYSTEM" : "MANUAL",
-                        caption: selectedContext.is_system
-                          ? "Derived from company or department foundation."
-                          : "Created manually for exact business slices.",
                       },
                       {
                         label: "Department Link",
                         value: selectedContext.department_code
                           ? `${selectedContext.department_code} | ${selectedContext.department_name ?? ""}`
                           : "No department link",
-                        caption:
-                          "Optional for manual scopes. Useful when one runtime slice still belongs to one team.",
                       },
                       {
                         label: "Lifecycle",
                         value: selectedContext.is_active ? "ACTIVE" : "INACTIVE",
-                        caption:
-                          "Inactive manual scopes stay out of new user assignments until re-enabled.",
                       },
                       {
                         label: "Foundation",
                         value: formatCompanyLabel(selectedCompany),
-                        caption: formatCompanyAddress(selectedCompany),
                       },
                     ].map((item) => (
-                      <div key={item.label} className="border border-slate-300 bg-slate-50 px-3 py-3">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                          {item.label}
-                        </div>
-                        <div className="mt-2 text-sm font-semibold text-slate-900">{item.value}</div>
-                        <div className="mt-1 text-xs text-slate-500">{item.caption}</div>
+                      <div key={item.label} className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px] last:border-b-0">
+                        <span className="min-w-[110px] text-[11px] text-slate-500">{item.label}</span>
+                        <span className="text-right text-[11px] font-semibold text-slate-900">{item.value}</span>
                       </div>
                     ))}
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1">
                     <button
                       type="button"
                       onClick={() => openInspector(selectedContext)}
-                      className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                      className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
                     >
                       Inspect Scope
                     </button>
@@ -965,7 +955,7 @@ export default function SAWorkContextMaster() {
                       type="button"
                       disabled={selectedContext.is_system === true}
                       onClick={() => openEditDrawer(selectedContext)}
-                      className={`border px-3 py-2 text-sm font-semibold ${
+                      className={`border px-2 py-[3px] text-[11px] font-semibold ${
                         selectedContext.is_system
                           ? "border-slate-200 bg-slate-100 text-slate-400"
                           : "border-sky-300 bg-sky-50 text-sky-800"
@@ -976,7 +966,7 @@ export default function SAWorkContextMaster() {
                     <button
                       type="button"
                       onClick={() => void openProjectDrawer(selectedContext)}
-                      className="border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-800"
+                      className="border border-violet-300 bg-violet-50 px-2 py-[3px] text-[11px] font-semibold text-violet-800"
                     >
                       Manage Inherited Projects
                     </button>
@@ -1006,7 +996,7 @@ export default function SAWorkContextMaster() {
                 ].map((line) => (
                   <div
                     key={line}
-                    className="border border-amber-200 bg-white px-3 py-3 text-sm text-slate-700"
+                    className="border border-amber-200 bg-white px-3 py-2 text-sm text-slate-700"
                   >
                     {line}
                   </div>
@@ -1137,7 +1127,7 @@ export default function SAWorkContextMaster() {
             />
           </label>
 
-          <label className="flex items-center gap-3 border border-slate-300 bg-white px-3 py-3 text-sm text-slate-700">
+          <label className="flex items-center gap-3 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
             <input
               type="checkbox"
               checked={formDraft.is_active !== false}
@@ -1216,7 +1206,8 @@ export default function SAWorkContextMaster() {
               />
             </div>
 
-            <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <div className="grid gap-1 text-sm text-slate-700">
+              <ErpSelectionSection label="Description" />
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Description
               </div>
@@ -1225,21 +1216,17 @@ export default function SAWorkContextMaster() {
               </div>
             </div>
 
-            <div className="border border-slate-300 bg-white">
-              <div className="border-b border-slate-300 bg-slate-50 px-4 py-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Linked Screen Packs
-                </div>
-                <div className="mt-1 text-sm text-slate-600">
-                  Capability Governance decides which screen packs this work scope can carry.
-                </div>
+            <div className="grid gap-1">
+              <ErpSelectionSection label="Linked Screen Packs" />
+              <div className="text-sm text-slate-600">
+                Capability Governance decides which screen packs this work scope can carry.
               </div>
               {inspectorLoading ? (
-                <div className="px-4 py-4 text-sm text-slate-500">
+                <div className="px-4 py-3 text-sm text-slate-500">
                   Loading linked screen packs...
                 </div>
               ) : linkedCapabilities.length === 0 ? (
-                <div className="px-4 py-4 text-sm text-slate-500">
+                <div className="px-4 py-3 text-sm text-slate-500">
                   No screen pack is attached yet.
                 </div>
               ) : (
@@ -1259,16 +1246,12 @@ export default function SAWorkContextMaster() {
               )}
             </div>
 
-            <div className="border border-slate-300 bg-white">
-              <div className="border-b border-slate-300 bg-slate-50 px-4 py-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Project Inheritance
-                </div>
-                <div className="mt-1 text-sm text-slate-600">
-                  Project reach now comes from work-scope inheritance first, then optional user overrides.
-                </div>
+            <div className="grid gap-1">
+              <ErpSelectionSection label="Project Inheritance" />
+              <div className="text-sm text-slate-600">
+                Project reach now comes from work-scope inheritance first, then optional user overrides.
               </div>
-              <div className="px-4 py-4">
+              <div className="px-4 py-3">
                 <button
                   type="button"
                   onClick={() => void openProjectDrawer(selectedContext)}
@@ -1313,7 +1296,8 @@ export default function SAWorkContextMaster() {
         }
       >
         <div className="grid gap-4">
-          <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="grid gap-1 text-sm text-slate-600">
+            <ErpSelectionSection label="Selected Work Scope" />
             <div className="font-semibold text-slate-900">
               {selectedContext
                 ? `${selectedContext.work_context_code} | ${selectedContext.work_context_name}`
@@ -1338,11 +1322,11 @@ export default function SAWorkContextMaster() {
               Available Company Projects
             </div>
             {projectDrawerLoading ? (
-              <div className="px-4 py-4 text-sm text-slate-500">
+              <div className="px-4 py-3 text-sm text-slate-500">
                 Loading inherited project options...
               </div>
             ) : filteredProjects.length === 0 ? (
-              <div className="px-4 py-4 text-sm text-slate-500">
+              <div className="px-4 py-3 text-sm text-slate-500">
                 No active company project matched the current filter.
               </div>
             ) : (

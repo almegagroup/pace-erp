@@ -232,7 +232,7 @@ export default function SAGovernanceSummaryReport() {
             handleLinearNavigation(event, { index: 1, refs: actionRefs.current }),
         },
       ]}
-      footerHints={["ALT+R REFRESH", "CTRL+S DOWNLOAD", "ALT+SHIFT+F SEARCH", "CTRL+K COMMAND BAR"]}
+      footerHints={["↑↓ Navigate", "Ctrl+S Export", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-4">
         <div className="grid gap-3 md:grid-cols-4">

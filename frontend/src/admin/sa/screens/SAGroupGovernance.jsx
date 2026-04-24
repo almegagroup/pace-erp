@@ -6,10 +6,8 @@ import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import {
   formatCompanyAddress,
   formatCompanyLabel,
@@ -569,10 +567,8 @@ export default function SAGroupGovernance() {
     >
       <div className="grid gap-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <div className="grid gap-3">
-          <ErpSectionCard
-            eyebrow="Create"
-            title="Create Global Group"
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Create Global Group" />
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
               <label className="grid gap-2">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -596,12 +592,10 @@ export default function SAGroupGovernance() {
                 Create Group
               </button>
             </div>
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Inventory"
-            title="Group Roster"
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Group Roster" />
             <label className="grid gap-2">
               <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Filter Groups
@@ -617,7 +611,7 @@ export default function SAGroupGovernance() {
 
             <div className="mt-4 grid gap-2">
               {filteredGroups.length === 0 ? (
-                <p className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                <p className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
                   No group matches the current filter.
                 </p>
               ) : (
@@ -647,52 +641,45 @@ export default function SAGroupGovernance() {
                 })
               )}
             </div>
-          </ErpSectionCard>
+          </div>
         </div>
 
         <div className="grid gap-3">
-          <ErpSectionCard
-            eyebrow="Selected Group"
-            title={selectedGroup ? `${selectedGroup.group_code} | ${selectedGroup.name}` : "Choose A Group"}
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label={selectedGroup ? `${selectedGroup.group_code} | ${selectedGroup.name}` : "Choose A Group"} />
             {selectedGroup ? (
               <>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <ErpFieldPreview
-                    label="State"
-                    value={selectedGroup.state ?? "UNKNOWN"}
-                    caption="ACTIVE groups are ready for mapping."
-                  />
-                  <ErpFieldPreview
-                    label="Company Count"
-                    value={selectedGroup.company_count ?? 0}
-                    caption="Current companies attached to this group."
-                  />
-                  <ErpFieldPreview
-                    label="Created"
-                    value={selectedGroup.created_at ? new Date(selectedGroup.created_at).toLocaleDateString() : "Unknown"}
-                    caption="Global master record creation date."
-                  />
+                <div className="border border-slate-300 bg-white">
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">State</span>
+                    <span className="text-[11px] font-semibold text-slate-900">{selectedGroup.state ?? "UNKNOWN"}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Company Count</span>
+                    <span className="text-[11px] font-semibold text-slate-900">{selectedGroup.company_count ?? 0}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Created</span>
+                    <span className="text-[11px] font-semibold text-slate-900">{selectedGroup.created_at ? new Date(selectedGroup.created_at).toLocaleDateString() : "Unknown"}</span>
+                  </div>
                 </div>
 
-                <label className="mt-4 grid gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Group Name
-                  </span>
+                <label className="mt-2 grid grid-cols-[100px_1fr] items-center gap-x-2">
+                  <span className="text-[11px] text-slate-600">Group Name</span>
                   <input
                     value={selectedGroupNameDraft}
                     onChange={(event) => setSelectedGroupNameDraft(event.target.value)}
-                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
+                    className="h-7 border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-400 focus:bg-white"
                     placeholder="Edit group name"
                   />
                 </label>
 
-                <div className="mt-4 flex flex-wrap gap-2">
+                <div className="mt-2 flex flex-wrap gap-1">
                   <button
                     type="button"
                     disabled={saving}
                     onClick={() => void handleUpdateGroup()}
-                    className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold text-sky-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Save Name
                   </button>
@@ -700,7 +687,7 @@ export default function SAGroupGovernance() {
                     type="button"
                     disabled={saving || selectedGroup.state === "ACTIVE"}
                     onClick={() => void handleGroupStateChange("ACTIVE")}
-                    className="border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-emerald-300 bg-emerald-50 px-2 py-[3px] text-[11px] font-semibold text-emerald-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Activate
                   </button>
@@ -708,7 +695,7 @@ export default function SAGroupGovernance() {
                     type="button"
                     disabled={saving || selectedGroup.state === "INACTIVE"}
                     onClick={() => void handleGroupStateChange("INACTIVE")}
-                    className="border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-rose-300 bg-rose-50 px-2 py-[3px] text-[11px] font-semibold text-rose-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Inactivate
                   </button>
@@ -716,7 +703,7 @@ export default function SAGroupGovernance() {
                     type="button"
                     disabled={saving}
                     onClick={() => void handleDeleteGroup()}
-                    className="border border-slate-400 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-slate-400 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Remove Group
                   </button>
@@ -727,12 +714,10 @@ export default function SAGroupGovernance() {
                 Select a group from the roster to manage it.
               </p>
             )}
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Mapping"
-            title="Company To Group Mapping"
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Company To Group Mapping" />
             <label className="grid gap-2">
               <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Filter Companies
@@ -748,7 +733,7 @@ export default function SAGroupGovernance() {
 
             <div className="mt-4 grid gap-2">
               {filteredCompanies.length === 0 ? (
-                <p className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                <p className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
                   No company matches the current filter.
                 </p>
               ) : (
@@ -806,12 +791,10 @@ export default function SAGroupGovernance() {
                 })
               )}
             </div>
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Selected Group"
-            title="Mapped Company Read Model"
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Mapped Company Read Model" />
             {selectedGroup ? (
               mappedCompanies.length === 0 ? (
                 <p className="text-sm text-slate-500">
@@ -836,7 +819,7 @@ export default function SAGroupGovernance() {
                 Select a group to see its mapped companies.
               </p>
             )}
-          </ErpSectionCard>
+          </div>
         </div>
       </div>
     </ErpScreenScaffold>

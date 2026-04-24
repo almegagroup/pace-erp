@@ -265,7 +265,7 @@ export default function SASystemHealth() {
             ]
           : alerts
       }
-      footerHints={["CTRL+K COMMAND BAR", "ALT+R REFRESH"]}
+      footerHints={["F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-3">
         <ErpSelectionSection label="Diagnostics Interpretation" />

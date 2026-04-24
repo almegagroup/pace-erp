@@ -533,15 +533,7 @@ export default function SASignupRequests() {
             ]
           : []),
       ]}
-      footerHints={[
-        "Arrow Keys Navigate",
-        "Enter Focus Action",
-        "A Approve",
-        "R Reject",
-        "F8 Refresh",
-        "Esc Back",
-        "Ctrl+K Command Bar",
-      ]}
+      footerHints={["↑↓ Navigate", "A Approve", "R Reject", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={filterSection}
       reviewSection={reviewSection}
     />

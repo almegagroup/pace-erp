@@ -585,7 +585,7 @@ export default function SARolePermissions() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      footerHints={["Arrow Keys Navigate", "Enter Select", "Ctrl+S Save Matrix", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "Enter Select", "Ctrl+S Save Matrix", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={{
         eyebrow: "Role Filter",
         title: "Choose role, project, module, and search resources",

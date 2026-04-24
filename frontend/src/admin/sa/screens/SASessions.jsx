@@ -474,7 +474,7 @@ export default function SASessions() {
             ]
           : []
       }
-      footerHints={["Arrow Keys Navigate", "Enter Focus Action", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "Enter Inspect", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={filterSection}
       listSection={listSection}
     />

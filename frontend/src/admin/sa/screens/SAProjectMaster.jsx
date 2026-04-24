@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { openScreen } from "../../../navigation/screenStackEngine.js";
-import { openActionConfirm } from "../../../store/actionConfirm.js";
+import {
+  openScreen,
+  openScreenWithContext,
+  getActiveScreenContext,
+  updateActiveScreenContext,
+  registerScreenRefreshCallback,
+} from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -11,6 +16,7 @@ import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import { applyQuickFilter, sortProjects } from "../../../shared/erpCollections.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
@@ -71,6 +77,7 @@ function formatDateTime(value) {
 }
 
 export default function SAProjectMaster() {
+  const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const navigate = useNavigate();
   const actionBarRefs = useRef([]);
   const formContainerRef = useRef(null);
@@ -78,8 +85,8 @@ export default function SAProjectMaster() {
   const searchInputRef = useRef(null);
   const [projects, setProjects] = useState([]);
   const [projectName, setProjectName] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
+  const [selectedProjectId, setSelectedProjectId] = useState(initialContext.parentState?.focusKey ?? "");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -108,18 +115,6 @@ export default function SAProjectMaster() {
 
     if (!normalizedName) {
       setError("Enter a project name before saving.");
-      return;
-    }
-
-    const approved = await openActionConfirm({
-      eyebrow: "Project Master",
-      title: "Create Project",
-      message: `Create project master row for ${normalizedName}?`,
-      confirmLabel: "Create Project",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
       return;
     }
 
@@ -165,9 +160,46 @@ export default function SAProjectMaster() {
     }
   }, [filteredProjects, selectedProjectId]);
 
-  const { getRowProps } = useErpListNavigation(projectPagination.pageItems, {
-    onActivate: (row) => setSelectedProjectId(row?.id ?? ""),
+  function openDetail(row) {
+    const parentState = {
+      searchQuery,
+      focusKey: row?.id ?? "",
+    };
+    setSelectedProjectId(row?.id ?? "");
+    updateActiveScreenContext({ parentState });
+    openScreenWithContext("SA_PROJECT_MANAGE", {
+      projectId: row?.id ?? "",
+      parentState,
+      refreshOnReturn: true,
+    });
+    navigate(`/sa/projects/manage?project_id=${encodeURIComponent(row?.id ?? "")}`);
+  }
+
+  const { getRowProps, focusRow } = useErpListNavigation(projectPagination.pageItems, {
+    onActivate: (row) => openDetail(row),
   });
+
+  useEffect(
+    () =>
+      registerScreenRefreshCallback(() => {
+        void loadProjects();
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    updateActiveScreenContext({ parentState: { searchQuery, focusKey: selectedProjectId } });
+  }, [searchQuery, selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProjectId || projectPagination.pageItems.length === 0) {
+      return;
+    }
+    const targetIndex = projectPagination.pageItems.findIndex((row) => row.id === selectedProjectId);
+    if (targetIndex >= 0) {
+      queueMicrotask(() => focusRow(targetIndex));
+    }
+  }, [projectPagination.pageItems, selectedProjectId, focusRow]);
 
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
@@ -349,15 +381,12 @@ export default function SAProjectMaster() {
             ]
           : []),
       ]}
-      footerHints={["Tab Next Field", "Ctrl+S Save", "Arrow Keys Navigate", "Enter Select", "Esc Cancel", "Ctrl+K Command Bar"]}
+      footerHints={["Tab Next Field", "↑↓ Navigate", "Enter Open", "Ctrl+S Save", "Esc Back", "Ctrl+K Command Bar"]}
       formEyebrow="Create"
       formTitle="Create a new project"
       formContent={
-        <div ref={formContainerRef} className="grid gap-3">
-          <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Project Name
-            </span>
+        <div ref={formContainerRef} className="grid gap-[var(--erp-form-gap)]">
+          <ErpDenseFormRow label="Project Name" required>
             <input
               ref={projectNameRef}
               data-workspace-primary-focus="true"
@@ -366,12 +395,9 @@ export default function SAProjectMaster() {
               value={projectName}
               onChange={(event) => setProjectName(event.target.value)}
               placeholder="Project name"
-              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+              className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
             />
-            <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
-              Enter moves forward | Ctrl+S creates the project
-            </p>
-          </label>
+          </ErpDenseFormRow>
         </div>
       }
       bottomContent={
@@ -436,7 +462,7 @@ export default function SAProjectMaster() {
                   onClick: () => setSelectedProjectId(project.id),
                   className: project.id === selectedProjectId ? "bg-sky-50" : "",
                 })}
-                onRowActivate={(project) => setSelectedProjectId(project.id)}
+                onRowActivate={(project) => openDetail(project)}
                 maxHeight="none"
               />
               {selectedProject ? (

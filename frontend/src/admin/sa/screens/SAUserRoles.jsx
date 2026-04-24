@@ -697,7 +697,7 @@ export default function SAUserRoles() {
               ]
             : []
         }
-        footerHints={["Arrow Keys Navigate", "Enter Edit", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+        footerHints={["↑↓ Navigate", "Enter Edit", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
         filterSection={filterSection}
         listSection={listSection}
       />

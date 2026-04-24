@@ -11,7 +11,6 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
-import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -75,7 +74,7 @@ export default function SACompanyCreate() {
   const companyNameInputRef = useRef(null);
   const [gstNumber, setGstNumber] = useState("");
   const [companyName, setCompanyName] = useState("");
-  const [gstProfile, setGstProfile] = useState(null);
+  const [, setGstProfile] = useState(null);
   const [createdCompany, setCreatedCompany] = useState(null);
   const [lookingUp, setLookingUp] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -223,18 +222,6 @@ export default function SACompanyCreate() {
     if (hasExistingCompany) {
       setError("");
       setNotice(`Company already exists in master as ${createdCompany.company_code}. No second create is needed.`);
-      return;
-    }
-
-    const approved = await openActionConfirm({
-      eyebrow: "SA Company Governance",
-      title: "Create ERP Company",
-      message: `Create company ${trimmedCompanyName || gstProfile?.legal_name || normalizedGst} now?`,
-      confirmLabel: "Create Company",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
       return;
     }
 

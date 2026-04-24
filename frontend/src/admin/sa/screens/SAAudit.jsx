@@ -9,7 +9,14 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { useNavigate } from "react-router-dom";
+import {
+  openScreen,
+  openScreenWithContext,
+  getActiveScreenContext,
+  updateActiveScreenContext,
+  registerScreenRefreshCallback,
+} from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import ErpCompactFilterSelect from "../../../components/inputs/ErpCompactFilterSelect.jsx";
@@ -68,12 +75,16 @@ function getStatusTone(status) {
 }
 
 export default function SAAudit() {
+  const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const navigate = useNavigate();
   const [auditRows, setAuditRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [filter, setFilter] = useState("ALL");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [filter, setFilter] = useState(initialContext.parentState?.filter ?? "ALL");
+  const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
   const [selectedAuditRow, setSelectedAuditRow] = useState(null);
+  const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
+  const [page, setPage] = useState(initialContext.parentState?.page ?? 1);
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
   const searchInputRef = useRef(null);
@@ -167,11 +178,68 @@ export default function SAAudit() {
     [searchQuery, statusFilteredRows]
   );
   const auditPagination = useErpPagination(filteredRows, 10);
-  const { getRowProps } = useErpListNavigation(auditPagination.pageItems, {
+  const auditPage = auditPagination.page;
+  const setAuditPage = auditPagination.setPage;
+
+  function openDetail(row) {
+    const nextFocusKey = row?.audit_id ?? "";
+    const parentState = {
+      filter,
+      searchQuery,
+      page: auditPage,
+      focusKey: nextFocusKey,
+    };
+    setSelectedAuditRow(row ?? null);
+    setFocusKey(nextFocusKey);
+    updateActiveScreenContext({ parentState });
+    openScreenWithContext("SA_AUDIT_DETAIL", {
+      auditRow: row,
+      parentState,
+      refreshOnReturn: true,
+    });
+    navigate("/sa/audit/detail");
+  }
+
+  const { getRowProps, focusRow } = useErpListNavigation(auditPagination.pageItems, {
     onActivate: (row) => {
-      setSelectedAuditRow(row ?? null);
+      openDetail(row);
     },
   });
+
+  useEffect(
+    () =>
+      registerScreenRefreshCallback(() => {
+        void handleRefresh();
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    updateActiveScreenContext({
+      parentState: {
+        filter,
+        searchQuery,
+        page: auditPage,
+        focusKey,
+      },
+    });
+  }, [filter, searchQuery, auditPage, focusKey]);
+
+  useEffect(() => {
+    if (auditPage !== page) {
+      setAuditPage(page);
+    }
+  }, [page, auditPage, setAuditPage]);
+
+  useEffect(() => {
+    if (!focusKey || auditPagination.pageItems.length === 0) {
+      return;
+    }
+    const targetIndex = auditPagination.pageItems.findIndex((row) => row.audit_id === focusKey);
+    if (targetIndex >= 0) {
+      queueMicrotask(() => focusRow(targetIndex));
+    }
+  }, [auditPagination.pageItems, focusKey, focusRow]);
 
   useErpScreenCommands([
     {
@@ -291,8 +359,11 @@ export default function SAAudit() {
       ) : (
         <>
           <ErpPaginationStrip
-            page={auditPagination.page}
-            setPage={auditPagination.setPage}
+            page={auditPage}
+            setPage={(nextPage) => {
+              setPage(nextPage);
+              setAuditPage(nextPage);
+            }}
             totalPages={auditPagination.totalPages}
             startIndex={auditPagination.startIndex}
             endIndex={auditPagination.endIndex}
@@ -362,7 +433,12 @@ export default function SAAudit() {
             ]}
             rows={auditPagination.pageItems}
             rowKey={(row) => row.audit_id}
-            getRowProps={(_row, index) => getRowProps(index)}
+            getRowProps={(row, index) => ({
+              ...getRowProps(index),
+              onClick: () => setSelectedAuditRow(row),
+              className: row.audit_id === focusKey ? "bg-sky-50" : "",
+            })}
+            onRowActivate={(row) => openDetail(row)}
             emptyMessage="No audit rows match the selected filter right now."
           />
         </>
@@ -385,7 +461,7 @@ export default function SAAudit() {
             ]
           : []
       }
-      footerHints={["Arrow Keys Navigate", "Enter Detail", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "Enter Open", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={filterSection}
       listSection={listSection}
       bottomSection={
@@ -425,5 +501,3 @@ export default function SAAudit() {
     />
   );
 }
-
-
