@@ -1,15 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 import {
   formatCompanyAddress,
   formatCompanyLabel,
-  formatCompanyOptionLabel,
 } from "../../../shared/companyDisplay.js";
 import {
   deleteApproverRule,
@@ -78,13 +80,6 @@ const APPROVAL_SCOPE_OPTIONS = [
   },
 ];
 
-function buildApprovalScopeLabel(scopeType) {
-  return (
-    APPROVAL_SCOPE_OPTIONS.find((option) => option.value === String(scopeType ?? "").trim().toUpperCase())
-      ?.label ?? "Company-wide"
-  );
-}
-
 function createEmptyDraft() {
   return {
     approver_id: null,
@@ -106,8 +101,8 @@ function createEmptyDraft() {
 export default function SAApprovalRules() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchRef = useRef(null);
+  const draftRef = useRef(createEmptyDraft());
   const [workspace, setWorkspace] = useState({
     companies: [],
     projects: [],
@@ -124,12 +119,17 @@ export default function SAApprovalRules() {
   const [searchQuery, setSearchQuery] = useState("");
   const [draft, setDraft] = useState(createEmptyDraft);
 
-  async function loadWorkspace(preferred = draft) {
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  const loadWorkspace = useCallback(async (preferred = null) => {
     setLoading(true);
     setError("");
 
     try {
       const data = await fetchApprovalWorkspace();
+      const nextDraft = preferred ?? draftRef.current;
       setWorkspace({
         companies: data?.companies ?? [],
         projects: data?.projects ?? [],
@@ -141,7 +141,7 @@ export default function SAApprovalRules() {
       });
       setDraft((current) => ({
         ...current,
-        ...preferred,
+        ...nextDraft,
       }));
     } catch (err) {
       console.error("APPROVAL_WORKSPACE_LOAD_FAILED", {
@@ -158,11 +158,11 @@ export default function SAApprovalRules() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void loadWorkspace();
-  }, []);
+  }, [loadWorkspace]);
 
   const companyOptions = useMemo(
     () =>
@@ -217,9 +217,13 @@ export default function SAApprovalRules() {
     [resourceOptions, draft.resource_code],
   );
 
-  const actionOptions = selectedResource?.available_actions?.includes("APPROVE")
-    ? selectedResource.available_actions
-    : ["APPROVE"];
+  const actionOptions = useMemo(
+    () =>
+      selectedResource?.available_actions?.includes("APPROVE")
+        ? selectedResource.available_actions
+        : ["APPROVE"],
+    [selectedResource]
+  );
 
   useEffect(() => {
     if (draft.resource_code && !resourceOptions.some((row) => row.resource_code === draft.resource_code)) {
@@ -279,7 +283,7 @@ export default function SAApprovalRules() {
       }),
       (row) => buildUserLabel(row),
     );
-  }, [workspace.users, draft.company_id, searchQuery]);
+  }, [workspace.users, searchQuery]);
 
   const filteredRules = useMemo(() => {
     const needle = normalizeText(searchQuery).toLowerCase();
@@ -323,6 +327,10 @@ export default function SAApprovalRules() {
     draft.subject_work_context_id,
     searchQuery,
   ]);
+
+  const { getRowProps } = useErpListNavigation(filteredRules, {
+    onActivate: (row) => handleRulePick(row),
+  });
 
   async function handleSave() {
     if (!draft.company_id || !draft.module_code || !draft.resource_code) {
@@ -479,14 +487,13 @@ export default function SAApprovalRules() {
     <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
       title="Who Approves What"
-      description="Bind exact approvers to exact company, module, resource, action, and requester work scope. Role rank still matters in governance, but stage design stays business-driven."
       actions={[
         {
           key: "policy",
           label: "Approval Policy",
           tone: "neutral",
           onClick: () => {
-            openScreen("SA_APPROVAL_POLICY", { mode: "replace" });
+            openScreen("SA_APPROVAL_POLICY");
             navigate("/sa/approval-policy");
           },
         },
@@ -495,7 +502,7 @@ export default function SAApprovalRules() {
           label: "Report Visibility",
           tone: "neutral",
           onClick: () => {
-            openScreen("SA_REPORT_VISIBILITY", { mode: "replace" });
+            openScreen("SA_REPORT_VISIBILITY");
             navigate("/sa/report-visibility");
           },
         },
@@ -535,40 +542,7 @@ export default function SAApprovalRules() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "rules",
-          label: "Approver Rules",
-          value: loading ? "..." : String(workspace.approver_rules.length),
-          tone: "sky",
-          caption: "All saved scoped approver rows.",
-        },
-        {
-          key: "visible",
-          label: "Visible",
-          value: loading ? "..." : String(filteredRules.length),
-          tone: "emerald",
-          caption: "Rules matching the current filters.",
-        },
-        {
-          key: "scope",
-          label: "Requester Scope",
-          value: buildApprovalScopeLabel(draft.scope_type),
-          tone: draft.scope_type === "COMPANY_WIDE" || draft.scope_type === "DIRECTOR" ? "slate" : "amber",
-          caption:
-            APPROVAL_SCOPE_OPTIONS.find((option) => option.value === draft.scope_type)?.description ??
-            "Choose how narrowly or broadly this approver should match.",
-        },
-        {
-          key: "target",
-          label: "Target",
-          value: draft.target_mode === "user" ? "Specific User" : "Role",
-          tone: "slate",
-          caption: draft.target_mode === "user"
-            ? buildUserLabel(workspace.users.find((row) => row.auth_user_id === draft.approver_user_id) ?? null)
-            : ERP_ROLE_LABELS[draft.approver_role_code] ?? draft.approver_role_code,
-        },
-      ]}
+      footerHints={["↑↓ Navigate", "Enter Select", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={{
         eyebrow: "Scope Filters",
         title: "Choose approval pool boundaries",
@@ -594,7 +568,7 @@ export default function SAApprovalRules() {
                   <option value="">Choose company</option>
                   {companyOptions.map((row) => (
                     <option key={row.id} value={row.id}>
-                      {formatCompanyOptionLabel(row)}
+                      {formatCompanyLabel(row)}
                     </option>
                   ))}
                 </select>
@@ -684,14 +658,18 @@ export default function SAApprovalRules() {
                   Selected Company
                 </p>
                 <p className="mt-2 text-sm font-semibold text-slate-900">
-                  {selectedCompany ? formatCompanyLabel(selectedCompany) : "Choose company"}
+                  <span className="break-words">
+                    {selectedCompany ? formatCompanyLabel(selectedCompany) : "Choose company"}
+                  </span>
                 </p>
               </div>
               <div className="border border-slate-300 bg-slate-50 px-4 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Company Address
                 </p>
-                <p className="mt-2 text-sm text-slate-700">{formatCompanyAddress(selectedCompany)}</p>
+                <p className="mt-2 break-words text-sm text-slate-700">
+                  {formatCompanyAddress(selectedCompany)}
+                </p>
               </div>
             </div>
           </div>
@@ -700,7 +678,7 @@ export default function SAApprovalRules() {
       reviewSection={{
         eyebrow: "Existing Rules",
         title: loading ? "Loading approver rules" : `${filteredRules.length} visible approver rule${filteredRules.length === 1 ? "" : "s"}`,
-      description: "Pick a row to edit it, or delete rows that should no longer route approvals.",
+        count: filteredRules.length,
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading scoped approver rules.
@@ -710,83 +688,90 @@ export default function SAApprovalRules() {
             No approver rule matches the current filter.
           </div>
         ) : (
-          <div className="grid gap-3">
-            {filteredRules.map((row, index) => {
-              const user = workspace.users.find((item) => item.auth_user_id === row.approver_user_id) ?? null;
-              const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id) ?? null;
-              const resource = workspace.resources.find((item) => item.resource_code === row.resource_code) ?? null;
-              const requesterUser = workspace.users.find((item) => item.auth_user_id === row.subject_user_id) ?? null;
-
-              return (
-                <button
-                  key={row.approver_id}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
-                  type="button"
-                  onClick={() => handleRulePick(row)}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: rowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
-                  className={`border px-4 py-4 text-left ${
-                    draft.approver_id === row.approver_id ? "border-sky-400 bg-sky-50" : "border-slate-300 bg-white"
-                  }`}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+          <ErpDenseGrid
+            columns={[
+              {
+                key: "resource",
+                label: "Resource",
+                render: (row) => {
+                  const resource = workspace.resources.find((item) => item.resource_code === row.resource_code) ?? null;
+                  return (
                     <div>
-                      <div className="text-sm font-semibold text-slate-900">
+                      <div className="font-semibold text-slate-900">
                         {resource?.title ?? row.resource_code ?? row.module_code}
                       </div>
-                      <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                      <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
                         {row.module_code} | {row.resource_code ?? "MODULE_SCOPE"} | {row.action_code ?? "ALL"}
                       </div>
-                      <div className="mt-2 text-xs text-slate-600">
-                        Stage {row.approval_stage} | {user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.approver_role_code] ?? row.approver_role_code}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        Scope: {buildApprovalScopeLabel(row.scope_type)}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {row.scope_type === "USER_EXCEPTION"
-                          ? `Requester user: ${buildUserLabel(requesterUser)}`
-                          : scope
-                            ? `Requester lane: ${buildWorkContextLabel(scope)}`
-                            : row.scope_type === "DIRECTOR"
-                              ? "Requester lane: director broad coverage"
-                              : "Requester lane: company-wide broad coverage"}
-                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void handleDelete(row);
-                      }}
-                      className="border border-rose-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-rose-700"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </button>
-              );
+                  );
+                },
+              },
+              {
+                key: "stage",
+                label: "Stage",
+                align: "center",
+                render: (row) => row.approval_stage,
+              },
+              {
+                key: "approver",
+                label: "Approver",
+                render: (row) => {
+                  const user = workspace.users.find((item) => item.auth_user_id === row.approver_user_id) ?? null;
+                  return user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.approver_role_code] ?? row.approver_role_code;
+                },
+              },
+              {
+                key: "scope",
+                label: "Scope",
+                render: (row) => {
+                  const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id) ?? null;
+                  const requesterUser = workspace.users.find((item) => item.auth_user_id === row.subject_user_id) ?? null;
+                  if (row.scope_type === "USER_EXCEPTION") {
+                    return `User | ${buildUserLabel(requesterUser)}`;
+                  }
+                  if (scope) {
+                    return buildWorkContextLabel(scope);
+                  }
+                  return row.scope_type === "DIRECTOR" ? "Director broad coverage" : "Company-wide broad coverage";
+                },
+              },
+              {
+                key: "delete",
+                label: "Delete",
+                align: "center",
+                render: (row) => (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleDelete(row);
+                    }}
+                    className="border border-rose-300 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-rose-700"
+                  >
+                    Delete
+                  </button>
+                ),
+              },
+            ]}
+            rows={filteredRules}
+            rowKey={(row) => row.approver_id}
+            getRowProps={(row, index) => ({
+              ...getRowProps(index),
+              onClick: () => handleRulePick(row),
+              className: draft.approver_id === row.approver_id ? "bg-sky-50" : "",
             })}
-          </div>
+            onRowActivate={(row) => handleRulePick(row)}
+            maxHeight="none"
+          />
         ),
       }}
-      sideSection={{
-        eyebrow: "Rule Editor",
-        title: draft.approver_id ? "Edit approver rule" : "Create approver rule",
-        description: "Use explicit scope type so company-wide, director, department, lane, and requester-user exception rules stay deterministic. Stages stay flexible for your business chain design.",
-        children: (
-          <div className="grid gap-4">
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Action
-              </span>
+      bottomSection={
+        <section className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Rule Editor</div>
+          <div className="text-sm font-semibold text-slate-900">{draft.approver_id ? "Edit approver rule" : "Create approver rule"}</div>
+          <div className="grid gap-[var(--erp-form-gap)] md:grid-cols-2 md:gap-x-6">
+            <ErpDenseFormRow label="Action">
               <select
                 value={draft.action_code}
                 onChange={(event) =>
@@ -795,7 +780,7 @@ export default function SAApprovalRules() {
                     action_code: event.target.value,
                   }))
                 }
-                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
               >
                 {actionOptions.map((action) => (
                   <option key={action} value={action}>
@@ -803,12 +788,9 @@ export default function SAApprovalRules() {
                   </option>
                 ))}
               </select>
-            </label>
+            </ErpDenseFormRow>
 
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Scope Type
-              </span>
+            <ErpDenseFormRow label="Scope Type">
               <select
                 value={draft.scope_type}
                 onChange={(event) =>
@@ -822,7 +804,7 @@ export default function SAApprovalRules() {
                     subject_user_id: event.target.value === "USER_EXCEPTION" ? current.subject_user_id : "",
                   }))
                 }
-                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
               >
                 {APPROVAL_SCOPE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -830,13 +812,12 @@ export default function SAApprovalRules() {
                   </option>
                 ))}
               </select>
-            </label>
+            </ErpDenseFormRow>
 
             {(draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT") ? (
-              <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                {draft.scope_type === "DEPARTMENT" ? "Requester Department Lane" : "Requester Work Context"}
-              </span>
+              <ErpDenseFormRow
+                label={draft.scope_type === "DEPARTMENT" ? "Requester Department Lane" : "Requester Work Context"}
+              >
               <select
                 value={draft.subject_work_context_id}
                 onChange={(event) =>
@@ -845,7 +826,7 @@ export default function SAApprovalRules() {
                     subject_work_context_id: event.target.value,
                   }))
                 }
-                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
               >
                 <option value="">
                   {draft.scope_type === "DEPARTMENT" ? "Choose requester department lane" : "Choose requester work context"}
@@ -854,16 +835,13 @@ export default function SAApprovalRules() {
                   <option key={row.work_context_id} value={row.work_context_id}>
                     {buildWorkContextLabel(row)}
                   </option>
-                ))}
+                  ))}
               </select>
-            </label>
+            </ErpDenseFormRow>
             ) : null}
 
             {draft.scope_type === "USER_EXCEPTION" ? (
-              <label className="grid gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Requester User Exception
-                </span>
+              <ErpDenseFormRow label="Requester User Exception">
                 <select
                   value={draft.subject_user_id}
                   onChange={(event) =>
@@ -872,22 +850,19 @@ export default function SAApprovalRules() {
                       subject_user_id: event.target.value,
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
                 >
                   <option value="">Choose requester user</option>
                   {userOptions.map((row) => (
                     <option key={row.auth_user_id} value={row.auth_user_id}>
                       {buildUserLabel(row)}
                     </option>
-                  ))}
+                    ))}
                 </select>
-              </label>
+              </ErpDenseFormRow>
             ) : null}
 
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Approval Stage
-              </span>
+            <ErpDenseFormRow label="Approval Stage">
               <select
                 value={draft.approval_stage}
                 onChange={(event) =>
@@ -896,23 +871,20 @@ export default function SAApprovalRules() {
                     approval_stage: event.target.value,
                   }))
                 }
-                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
               >
                 <option value="1">Stage 1</option>
                 <option value="2">Stage 2</option>
                 <option value="3">Stage 3</option>
               </select>
-            </label>
+            </ErpDenseFormRow>
 
-            <div className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Target Mode
-              </span>
-              <div className="grid gap-2 md:grid-cols-2">
+            <ErpDenseFormRow label="Target Mode">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => setDraft((current) => ({ ...current, target_mode: "user" }))}
-                  className={`border px-3 py-2 text-sm ${
+                  className={`border px-2 py-[5px] text-[12px] font-medium ${
                     draft.target_mode === "user" ? "border-sky-400 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"
                   }`}
                 >
@@ -921,20 +893,17 @@ export default function SAApprovalRules() {
                 <button
                   type="button"
                   onClick={() => setDraft((current) => ({ ...current, target_mode: "role" }))}
-                  className={`border px-3 py-2 text-sm ${
+                  className={`border px-2 py-[5px] text-[12px] font-medium ${
                     draft.target_mode === "role" ? "border-sky-400 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"
                   }`}
                 >
                   Role
                 </button>
               </div>
-            </div>
+            </ErpDenseFormRow>
 
             {draft.target_mode === "user" ? (
-              <label className="grid gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Approver User
-                </span>
+              <ErpDenseFormRow label="Approver User">
                 <select
                   value={draft.approver_user_id}
                   onChange={(event) =>
@@ -943,21 +912,18 @@ export default function SAApprovalRules() {
                       approver_user_id: event.target.value,
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
                 >
                   <option value="">Choose user</option>
                   {userOptions.map((row) => (
                     <option key={row.auth_user_id} value={row.auth_user_id}>
                       {buildUserLabel(row)}
                     </option>
-                  ))}
+                    ))}
                 </select>
-              </label>
+              </ErpDenseFormRow>
             ) : (
-              <label className="grid gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Approver Role
-                </span>
+              <ErpDenseFormRow label="Approver Role">
                 <select
                   value={draft.approver_role_code}
                   onChange={(event) =>
@@ -966,24 +932,24 @@ export default function SAApprovalRules() {
                       approver_role_code: event.target.value,
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
                 >
                   {ERP_ROLE_OPTIONS.map((row) => (
                     <option key={row.code} value={row.code}>
                       {row.code} | {row.label}
                     </option>
-                  ))}
+                    ))}
                 </select>
-              </label>
+              </ErpDenseFormRow>
             )}
 
-            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-xs text-slate-600">
+            <div className="md:col-span-2 border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
               Use exact resource `*_APPROVAL_INBOX` with action `APPROVE` for approver routing.
               Company-wide and director rows are broad participants, not weak fallback rows. Department, lane, and user-exception rows can coexist in the same effective approver pool.
             </div>
           </div>
-        ),
-      }}
+        </section>
+      }
     />
   );
 }

@@ -9,12 +9,21 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { useNavigate } from "react-router-dom";
+import {
+  openScreen,
+  openScreenWithContext,
+  getActiveScreenContext,
+  updateActiveScreenContext,
+  registerScreenRefreshCallback,
+} from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import ErpCompactFilterSelect from "../../../components/inputs/ErpCompactFilterSelect.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -66,14 +75,18 @@ function getStatusTone(status) {
 }
 
 export default function SAAudit() {
+  const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const navigate = useNavigate();
   const [auditRows, setAuditRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [filter, setFilter] = useState("ALL");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [filter, setFilter] = useState(initialContext.parentState?.filter ?? "ALL");
+  const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
+  const [selectedAuditRow, setSelectedAuditRow] = useState(null);
+  const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
+  const [page, setPage] = useState(initialContext.parentState?.page ?? 1);
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchInputRef = useRef(null);
 
   useEffect(() => {
@@ -165,10 +178,68 @@ export default function SAAudit() {
     [searchQuery, statusFilteredRows]
   );
   const auditPagination = useErpPagination(filteredRows, 10);
+  const auditPage = auditPagination.page;
+  const setAuditPage = auditPagination.setPage;
 
-  const successCount = auditRows.filter((row) => row.status === "SUCCESS").length;
-  const failedCount = auditRows.filter((row) => row.status === "FAILED").length;
-  const companyScopedCount = auditRows.filter((row) => row.company_id).length;
+  function openDetail(row) {
+    const nextFocusKey = row?.audit_id ?? "";
+    const parentState = {
+      filter,
+      searchQuery,
+      page: auditPage,
+      focusKey: nextFocusKey,
+    };
+    setSelectedAuditRow(row ?? null);
+    setFocusKey(nextFocusKey);
+    updateActiveScreenContext({ parentState });
+    openScreenWithContext("SA_AUDIT_DETAIL", {
+      auditRow: row,
+      parentState,
+      refreshOnReturn: true,
+    });
+    navigate("/sa/audit/detail");
+  }
+
+  const { getRowProps, focusRow } = useErpListNavigation(auditPagination.pageItems, {
+    onActivate: (row) => {
+      openDetail(row);
+    },
+  });
+
+  useEffect(
+    () =>
+      registerScreenRefreshCallback(() => {
+        void handleRefresh();
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    updateActiveScreenContext({
+      parentState: {
+        filter,
+        searchQuery,
+        page: auditPage,
+        focusKey,
+      },
+    });
+  }, [filter, searchQuery, auditPage, focusKey]);
+
+  useEffect(() => {
+    if (auditPage !== page) {
+      setAuditPage(page);
+    }
+  }, [page, auditPage, setAuditPage]);
+
+  useEffect(() => {
+    if (!focusKey || auditPagination.pageItems.length === 0) {
+      return;
+    }
+    const targetIndex = auditPagination.pageItems.findIndex((row) => row.audit_id === focusKey);
+    if (targetIndex >= 0) {
+      queueMicrotask(() => focusRow(targetIndex));
+    }
+  }, [auditPagination.pageItems, focusKey, focusRow]);
 
   useErpScreenCommands([
     {
@@ -245,39 +316,6 @@ export default function SAAudit() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "all-events",
-      label: "All Events",
-      value: loading ? "..." : String(auditRows.length),
-      tone: "sky",
-      caption:
-        "Full admin action history currently returned by the backend audit endpoint.",
-    },
-    {
-      key: "successful-events",
-      label: "Successful",
-      value: loading ? "..." : String(successCount),
-      tone: "emerald",
-      caption: "Administrative actions that completed successfully.",
-    },
-    {
-      key: "failed-events",
-      label: "Failed",
-      value: loading ? "..." : String(failedCount),
-      tone: "rose",
-      caption:
-        "Administrative actions that ended in failed status and may require review.",
-    },
-    {
-      key: "company-scoped",
-      label: "Company Scoped",
-      value: loading ? "..." : String(companyScopedCount),
-      tone: "amber",
-      caption: "Audit rows that explicitly bind to a company scope.",
-    },
-  ];
-
   const filterSection = {
     eyebrow: "Audit Filter",
     title: "Admin Action Inventory",
@@ -319,116 +357,91 @@ export default function SAAudit() {
             : "No audit rows match the selected filter right now."}
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        <>
           <ErpPaginationStrip
-            page={auditPagination.page}
-            setPage={auditPagination.setPage}
+            page={auditPage}
+            setPage={(nextPage) => {
+              setPage(nextPage);
+              setAuditPage(nextPage);
+            }}
             totalPages={auditPagination.totalPages}
             startIndex={auditPagination.startIndex}
             endIndex={auditPagination.endIndex}
             totalItems={filteredRows.length}
           />
-          <table className="min-w-full border-collapse">
-            <thead>
-              <tr>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Action
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Actor
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Resource
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Company
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Request
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Performed
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Status
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {auditPagination.pageItems.map((row, index) => (
-                <tr
-                  key={row.audit_id}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
-                  tabIndex={0}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: rowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
-                  className="border-b border-slate-200 bg-white"
-                >
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {row.action_code ?? "N/A"}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {row.resource_type ?? "RESOURCE_UNKNOWN"}
-                      </p>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {shortId(row.admin_user_id)}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {row.admin_user_id ?? "N/A"}
-                      </p>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {row.resource_type ?? "N/A"}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {row.resource_id ?? "N/A"}
-                      </p>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    {row.company_id ? shortId(row.company_id) : "Global"}
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {shortId(row.request_id)}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {row.request_id ?? "N/A"}
-                      </p>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    {formatDateTime(row.performed_at)}
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <span
-                      className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStatusTone(row.status)}`}
-                    >
-                      {row.status ?? "UNKNOWN"}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+          <ErpDenseGrid
+            columns={[
+              {
+                key: "action",
+                label: "Action",
+                render: (row) => (
+                  <div>
+                    <p className="font-medium leading-tight">{row.action_code ?? "N/A"}</p>
+                    <p className="text-[10px] text-slate-500">{row.resource_type ?? "RESOURCE_UNKNOWN"}</p>
+                  </div>
+                ),
+              },
+              {
+                key: "actor",
+                label: "Actor",
+                render: (row) => (
+                  <div>
+                    <p className="font-medium leading-tight">{shortId(row.admin_user_id)}</p>
+                    <p className="text-[10px] text-slate-500 truncate max-w-[120px]">{row.admin_user_id ?? "N/A"}</p>
+                  </div>
+                ),
+              },
+              {
+                key: "resource",
+                label: "Resource",
+                render: (row) => (
+                  <div>
+                    <p className="font-medium leading-tight">{row.resource_type ?? "N/A"}</p>
+                    <p className="text-[10px] text-slate-500 truncate max-w-[120px]">{row.resource_id ?? "N/A"}</p>
+                  </div>
+                ),
+              },
+              {
+                key: "company",
+                label: "Company",
+                render: (row) => row.company_id ? shortId(row.company_id) : "Global",
+              },
+              {
+                key: "request",
+                label: "Request",
+                render: (row) => (
+                  <div>
+                    <p className="font-medium leading-tight">{shortId(row.request_id)}</p>
+                    <p className="text-[10px] text-slate-500 truncate max-w-[100px]">{row.request_id ?? "N/A"}</p>
+                  </div>
+                ),
+              },
+              {
+                key: "performed",
+                label: "Performed",
+                render: (row) => formatDateTime(row.performed_at),
+              },
+              {
+                key: "status",
+                label: "Status",
+                render: (row) => (
+                  <span className={`inline-flex border px-2 py-[1px] text-[10px] font-semibold uppercase tracking-[0.14em] ${getStatusTone(row.status)}`}>
+                    {row.status ?? "UNKNOWN"}
+                  </span>
+                ),
+              },
+            ]}
+            rows={auditPagination.pageItems}
+            rowKey={(row) => row.audit_id}
+            getRowProps={(row, index) => ({
+              ...getRowProps(index),
+              onClick: () => setSelectedAuditRow(row),
+              className: row.audit_id === focusKey ? "bg-sky-50" : "",
+            })}
+            onRowActivate={(row) => openDetail(row)}
+            emptyMessage="No audit rows match the selected filter right now."
+          />
+        </>
       ),
   };
 
@@ -436,7 +449,6 @@ export default function SAAudit() {
     <ErpMasterListTemplate
       eyebrow="SA Audit Viewer"
       title="Admin Audit Trail"
-      description="This keyboard-native list keeps audit filters, quick search, and dense review rows in one structured operating surface."
       actions={topActions}
       notices={
         error
@@ -449,9 +461,43 @@ export default function SAAudit() {
             ]
           : []
       }
-      metrics={metrics}
+      footerHints={["↑↓ Navigate", "Enter Open", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={filterSection}
       listSection={listSection}
+      bottomSection={
+        selectedAuditRow ? (
+          <section className="grid gap-2 border-t border-slate-300 pt-3">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Selected Audit Detail
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {[
+                ["Action", selectedAuditRow.action_code ?? "N/A"],
+                ["Status", selectedAuditRow.status ?? "UNKNOWN"],
+                ["Performed", formatDateTime(selectedAuditRow.performed_at)],
+                ["Actor", selectedAuditRow.admin_user_id ?? "N/A"],
+                ["Request", selectedAuditRow.request_id ?? "N/A"],
+                ["Resource Type", selectedAuditRow.resource_type ?? "N/A"],
+                ["Resource Id", selectedAuditRow.resource_id ?? "N/A"],
+                ["Company", selectedAuditRow.company_id ?? "Global"],
+                ["Audit Id", selectedAuditRow.audit_id ?? "N/A"],
+              ].map(([label, value]) => (
+                <div
+                  key={label}
+                  className="border border-slate-200 bg-white px-3 py-2"
+                >
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    {label}
+                  </div>
+                  <div className="mt-1 break-all text-xs text-slate-900">
+                    {value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null
+      }
     />
   );
 }

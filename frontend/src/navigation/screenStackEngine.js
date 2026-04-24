@@ -20,27 +20,84 @@ function assert(condition, message) {
 
 const screenStack = [];
 const stackListeners = new Set();
+const screenRefreshCallbacks = new Map();
+const pendingScreenRefreshes = new Map();
 
 const ROUTE_TO_SCREEN_CODE = new Map(
   Object.values(SCREEN_REGISTRY).map((screen) => [screen.route, screen.screen_code])
 );
 
-function buildScreenEntry(screenCode) {
+function generateStackEntryId() {
+  if (typeof globalThis?.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `stack-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizeContext(context) {
+  if (!context || typeof context !== "object" || Array.isArray(context)) {
+    return null;
+  }
+
+  return { ...context };
+}
+
+function buildScreenEntry(screenCode, extras = {}) {
   const screen = SCREEN_REGISTRY[screenCode];
   assert(screen, `Unknown screen: ${screenCode}`);
 
   return {
+    stack_entry_id: extras.stack_entry_id ?? generateStackEntryId(),
     screen_code: screen.screen_code,
     route: screen.route,
     type: screen.type,
     keepAlive: screen.keepAlive,
     universe: screen.universe,
+    context: normalizeContext(extras.context),
   };
+}
+
+function pruneRefreshCallbacks() {
+  const activeEntryIds = new Set(
+    screenStack.map((entry) => entry?.stack_entry_id).filter(Boolean)
+  );
+
+  Array.from(screenRefreshCallbacks.keys()).forEach((entryId) => {
+    if (!activeEntryIds.has(entryId)) {
+      screenRefreshCallbacks.delete(entryId);
+    }
+  });
+
+  Array.from(pendingScreenRefreshes.keys()).forEach((entryId) => {
+    if (!activeEntryIds.has(entryId)) {
+      pendingScreenRefreshes.delete(entryId);
+    }
+  });
+}
+
+function dispatchRefreshSignal(targetEntryId, meta) {
+  if (!targetEntryId || !meta) {
+    return;
+  }
+
+  const refreshCallback = screenRefreshCallbacks.get(targetEntryId);
+
+  if (typeof refreshCallback === "function") {
+    queueMicrotask(() => {
+      refreshCallback(meta);
+    });
+    return;
+  }
+
+  pendingScreenRefreshes.set(targetEntryId, meta);
 }
 
 function emitStackChange(action) {
   const snapshot = [...screenStack];
   const active = snapshot[snapshot.length - 1] ?? null;
+
+  pruneRefreshCallbacks();
 
   if (snapshot.length > 0) {
     persistNavigationStack();
@@ -103,12 +160,14 @@ export function initNavigation(rootScreenCode) {
 /**
  * Push a new screen onto the stack.
  */
-export function pushScreen(screenCode) {
+export function pushScreen(screenCode, options = {}) {
   if (screenStack.length === 0) {
-    return resetToScreen(screenCode);
+    return resetToScreen(screenCode, options);
   }
 
-  const nextScreen = buildScreenEntry(screenCode);
+  const nextScreen = buildScreenEntry(screenCode, {
+    context: options.context,
+  });
   const active = getActiveScreen();
 
   if (active?.screen_code === nextScreen.screen_code) {
@@ -124,8 +183,10 @@ export function pushScreen(screenCode) {
  * Replace current screen with another.
  * Root screen cannot be replaced.
  */
-export function replaceScreen(screenCode) {
-  const nextScreen = buildScreenEntry(screenCode);
+export function replaceScreen(screenCode, options = {}) {
+  const nextScreen = buildScreenEntry(screenCode, {
+    context: options.context,
+  });
 
   if (screenStack.length === 0) {
     screenStack.push(nextScreen);
@@ -137,8 +198,10 @@ export function replaceScreen(screenCode) {
   return nextScreen;
 }
 
-export function resetToScreen(screenCode) {
-  const rootScreen = buildScreenEntry(screenCode);
+export function resetToScreen(screenCode, options = {}) {
+  const rootScreen = buildScreenEntry(screenCode, {
+    context: options.context,
+  });
 
   screenStack.length = 0;
   screenStack.push(rootScreen);
@@ -152,12 +215,36 @@ export function openScreen(screenCode, options = {}) {
 
   switch (mode) {
     case "replace":
-      return replaceScreen(screenCode);
+      return replaceScreen(screenCode, options);
     case "reset":
-      return resetToScreen(screenCode);
+      return resetToScreen(screenCode, options);
     default:
-      return pushScreen(screenCode);
+      return pushScreen(screenCode, options);
   }
+}
+
+export function openScreenWithContext(screenCode, context = {}, options = {}) {
+  const active = getActiveScreen();
+  const normalizedContext = normalizeContext(context) ?? {};
+
+  return openScreen(screenCode, {
+    ...options,
+    context: {
+      ...normalizedContext,
+      contextKind:
+        normalizedContext.contextKind ??
+        (normalizedContext.refreshOnReturn ||
+        normalizedContext.returnScreenCode ||
+        normalizedContext.returnStackEntryId
+          ? "DRILL_THROUGH"
+          : "SCREEN_CONTEXT"),
+      returnScreenCode:
+        normalizedContext.returnScreenCode ?? active?.screen_code ?? null,
+      returnStackEntryId:
+        normalizedContext.returnStackEntryId ?? active?.stack_entry_id ?? null,
+      refreshOnReturn: Boolean(normalizedContext.refreshOnReturn),
+    },
+  });
 }
 
 export function openRoute(route, options = {}) {
@@ -167,15 +254,52 @@ export function openRoute(route, options = {}) {
   return openScreen(screenCode, options);
 }
 
+export function openRouteWithContext(route, context = {}, options = {}) {
+  const screenCode = getScreenCodeForRoute(route);
+  assert(screenCode, `Unknown route: ${route}`);
+
+  return openScreenWithContext(screenCode, context, options);
+}
+
+function maybeRefreshParentAfterReturn(poppedScreen, nextActiveScreen) {
+  if (
+    poppedScreen?.context?.contextKind !== "DRILL_THROUGH" ||
+    !poppedScreen?.context?.refreshOnReturn
+  ) {
+    return;
+  }
+
+  const expectedEntryId = poppedScreen.context.returnStackEntryId ?? null;
+  const expectedScreenCode = poppedScreen.context.returnScreenCode ?? null;
+
+  const matchesExpectedEntry =
+    !expectedEntryId || expectedEntryId === nextActiveScreen?.stack_entry_id;
+  const matchesExpectedScreen =
+    !expectedScreenCode || expectedScreenCode === nextActiveScreen?.screen_code;
+
+  if (!matchesExpectedEntry || !matchesExpectedScreen) {
+    return;
+  }
+
+  dispatchRefreshSignal(nextActiveScreen?.stack_entry_id, {
+    source: "return-refresh",
+    fromScreen: poppedScreen.screen_code,
+    toScreen: nextActiveScreen.screen_code,
+    context: normalizeContext(poppedScreen.context),
+  });
+}
+
 /**
  * Pop current screen.
  * Root screen cannot be popped.
  */
 export function popScreen() {
   assert(screenStack.length > 1, "Cannot pop root screen");
-  screenStack.pop();
+  const poppedScreen = screenStack.pop();
   emitStackChange("POP");
-  return getActiveScreen();
+  const nextActiveScreen = getActiveScreen();
+  maybeRefreshParentAfterReturn(poppedScreen, nextActiveScreen);
+  return nextActiveScreen;
 }
 
 /**
@@ -183,6 +307,43 @@ export function popScreen() {
  */
 export function getActiveScreen() {
   return screenStack[screenStack.length - 1] ?? null;
+}
+
+export function getActiveScreenEntryId() {
+  return getActiveScreen()?.stack_entry_id ?? null;
+}
+
+export function getActiveScreenContext() {
+  return normalizeContext(getActiveScreen()?.context);
+}
+
+export function updateActiveScreenContext(contextPatch) {
+  const activeScreen = getActiveScreen();
+  const normalizedPatch = normalizeContext(contextPatch);
+
+  if (!activeScreen || !normalizedPatch) {
+    return activeScreen ?? null;
+  }
+
+  activeScreen.context = {
+    ...(normalizeContext(activeScreen.context) ?? {}),
+    ...normalizedPatch,
+  };
+
+  emitStackChange("CONTEXT_UPDATE");
+  return activeScreen;
+}
+
+export function getScreenContext(screenCode = null) {
+  if (!screenCode) {
+    return getActiveScreenContext();
+  }
+
+  const matchingScreen = [...screenStack]
+    .reverse()
+    .find((entry) => entry.screen_code === screenCode);
+
+  return normalizeContext(matchingScreen?.context);
 }
 
 export function getPreviousScreen() {
@@ -199,6 +360,37 @@ export function getStackDepth() {
  */
 export function getStackSnapshot() {
   return [...screenStack];
+}
+
+export function registerScreenRefreshCallback(callback, options = {}) {
+  assert(
+    typeof callback === "function",
+    "Refresh callback must be a function"
+  );
+
+  const targetEntryId =
+    options.screenEntryId ?? getActiveScreen()?.stack_entry_id ?? null;
+
+  if (!targetEntryId) {
+    return () => {};
+  }
+
+  screenRefreshCallbacks.set(targetEntryId, callback);
+
+  const pendingMeta = pendingScreenRefreshes.get(targetEntryId);
+  if (pendingMeta) {
+    pendingScreenRefreshes.delete(targetEntryId);
+    queueMicrotask(() => {
+      callback(pendingMeta);
+    });
+  }
+
+  return () => {
+    const activeCallback = screenRefreshCallbacks.get(targetEntryId);
+    if (activeCallback === callback) {
+      screenRefreshCallbacks.delete(targetEntryId);
+    }
+  };
 }
 /**
  * Replace entire navigation stack.
@@ -218,9 +410,14 @@ export function replaceStack(newStack) {
   assert(valid, "Stack restore contains invalid screen");
 
   screenStack.length = 0;
-  newStack.forEach((screen) => screenStack.push({
-    ...buildScreenEntry(screen.screen_code),
-  }));
+  newStack.forEach((screen) =>
+    screenStack.push({
+      ...buildScreenEntry(screen.screen_code, {
+        stack_entry_id: screen.stack_entry_id,
+        context: screen.context,
+      }),
+    })
+  );
   emitStackChange("RESTORE");
 }
 
@@ -230,6 +427,8 @@ export function replaceStack(newStack) {
  */
 export function resetStack() {
   screenStack.length = 0;
+  screenRefreshCallbacks.clear();
+  pendingScreenRefreshes.clear();
   logNavigationEvent({
     type: "CLEAR",
     active_screen: null,

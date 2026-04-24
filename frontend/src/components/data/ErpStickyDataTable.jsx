@@ -12,6 +12,7 @@ export default function ErpStickyDataTable({
   rows,
   rowKey,
   renderCell,
+  getRowProps,
   emptyCellValue = "-",
   maxBodyHeightClass = "max-h-[65vh]",
   tableClassName = "min-w-full border-collapse text-xs",
@@ -112,7 +113,7 @@ export default function ErpStickyDataTable({
           </thead>
           <tbody>
             {normalizedRows.map((row, index) => (
-              <tr key={rowKey ? rowKey(row, index) : index}>
+              <tr key={rowKey ? rowKey(row, index) : index} {...(getRowProps ? getRowProps(row, index) : {})}>
                 {normalizedColumns.map((column) => (
                   <td key={column.key} className="border border-slate-200 px-2 py-2 text-slate-700">
                     {renderCell

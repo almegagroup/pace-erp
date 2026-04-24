@@ -61,6 +61,12 @@ Phase 3-D — Frontend
 
 **This is Phase 3-D scope** — SA user management page → companies list → "Set as Primary" action.
 
+**Plain-language behavior rule:**
+- Checking/selecting a work company only adds that company to the user's work-company scope
+- It does **not** auto-change the primary company
+- Primary company changes only when SA clicks the separate **Set as Primary** action
+- This is correct because one user can work in many companies, but only one company should act as the default company on the next login
+
 ### Verification
 - [ ] P0003 logs in → session has `workspace_mode: SINGLE`
 - [ ] P0004 logs in → session has `workspace_mode: MULTI`

@@ -8,59 +8,73 @@
  * Authority: Frontend
  */
 
-import ErpScreenScaffold, {
-  ErpSectionCard,
-} from "./ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "./ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../forms/ErpSelectionSection.jsx";
+import ErpRegisterHeader from "../data/ErpRegisterHeader.jsx";
 
 export default function ErpReportFilterTemplate({
   eyebrow,
   title,
-  description,
   actions = [],
   notices = [],
-  metrics = [],
-  summarySection = null,
   filterSection = null,
   reportSection = null,
-  sideSection = null,
   bottomSection = null,
+  footerHints = [
+    "↑↓ Navigate",
+    "Enter Open",
+    "Ctrl+S Export",
+    "F8 Refresh",
+    "Esc Back",
+    "Ctrl+K Command Bar",
+  ],
 }) {
   return (
     <ErpScreenScaffold
       eyebrow={eyebrow}
       title={title}
-      description={description}
       actions={actions}
       notices={notices}
-      metrics={metrics}
-      footerHints={[
-        "Alt+Shift+F Or F3 Filter Target",
-        "Arrow Keys Traverse Reports",
-        "Alt+R Or F4 Refresh Report",
-        "Ctrl+K Or F9 Command Bar",
-      ]}
+      footerHints={footerHints}
     >
-      <div className="grid gap-4">
-        {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
-        <div
-          className={`grid gap-4 ${
-            summarySection || sideSection
-              ? "xl:grid-cols-[minmax(0,1.45fr)_360px]"
-              : "grid-cols-1"
-          }`}
-        >
-          <div className="min-w-0">
-            {reportSection ? (
-              <ErpSectionCard {...reportSection} className="min-h-[560px]" />
+      <div className="grid gap-[var(--erp-section-gap)]">
+        {filterSection ? (
+          <section className="grid gap-2 border-b border-slate-300 pb-3">
+            {filterSection.eyebrow ? (
+              <ErpSelectionSection label={filterSection.eyebrow} />
             ) : null}
-          </div>
-          {summarySection || sideSection ? (
-            <div className="grid gap-4">
-              {summarySection ? <ErpSectionCard {...summarySection} /> : null}
-              {sideSection ? <ErpSectionCard {...sideSection} /> : null}
-            </div>
-          ) : null}
-        </div>
+            {filterSection.title ? (
+              <div className="text-sm font-semibold text-slate-900">
+                {filterSection.title}
+              </div>
+            ) : null}
+            {filterSection.aside ? (
+              <div className="justify-self-start">{filterSection.aside}</div>
+            ) : null}
+            <div>{filterSection.children}</div>
+          </section>
+        ) : null}
+        {reportSection ? (
+          <section className="grid gap-2">
+            {reportSection.eyebrow ? (
+              <ErpSelectionSection label={reportSection.eyebrow} />
+            ) : null}
+            {reportSection.title != null ? (
+              <ErpRegisterHeader
+                title={reportSection.title}
+                count={reportSection.count}
+                filterValue={reportSection.filterValue}
+                onFilterChange={reportSection.onFilterChange}
+                filterRef={reportSection.filterRef}
+                filterPlaceholder={reportSection.filterPlaceholder}
+              />
+            ) : null}
+            {reportSection.aside ? (
+              <div className="justify-self-start">{reportSection.aside}</div>
+            ) : null}
+            <div>{reportSection.children}</div>
+          </section>
+        ) : null}
         {bottomSection ? <div>{bottomSection}</div> : null}
       </div>
     </ErpScreenScaffold>

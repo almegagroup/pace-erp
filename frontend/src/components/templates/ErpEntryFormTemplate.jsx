@@ -8,31 +8,24 @@
  * Authority: Frontend
  */
 
-import ErpScreenScaffold, {
-  ErpSectionCard,
-} from "./ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "./ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../forms/ErpSelectionSection.jsx";
 
 const DEFAULT_FOOTER_HINTS = Object.freeze([
-  "Enter Next Field",
-  "Shift+Enter Previous Field",
-  "Alt+PageDown Next Section",
-  "Alt+PageUp Previous Section",
-  "Ctrl+S Or F2 Save Action",
-  "Alt+Shift+P Or F7 Primary Target",
+  "Tab Next Field",
+  "Ctrl+S Save",
+  "Esc Cancel",
+  "Ctrl+K Command Bar",
 ]);
 
 export default function ErpEntryFormTemplate({
   eyebrow,
   title,
-  description,
   actions = [],
   notices = [],
-  metrics = [],
   formEyebrow = "Entry Form",
   formTitle,
-  formDescription,
   formContent,
-  sideContent,
   bottomContent,
   footerHints = DEFAULT_FOOTER_HINTS,
 }) {
@@ -40,37 +33,22 @@ export default function ErpEntryFormTemplate({
     <ErpScreenScaffold
       eyebrow={eyebrow}
       title={title}
-      description={description}
       actions={actions}
       notices={notices}
-      metrics={metrics}
       footerHints={footerHints}
     >
-      <div className="grid gap-4">
-        <div
-          className={`grid gap-4 ${
-            sideContent ? "xl:grid-cols-[minmax(0,1.5fr)_360px]" : "grid-cols-1"
-          }`}
-        >
-          <ErpSectionCard
-            eyebrow={formEyebrow}
-            title={formTitle}
-            description={formDescription}
-            tone="accent"
-          >
-            {formContent}
-          </ErpSectionCard>
-
-          {sideContent ? (
-            <ErpSectionCard
-              eyebrow="Workspace Tools"
-              title="Context Rail"
-              description="Keep helper data, search anchors, and last action context beside the worksheet."
-            >
-              <div className="grid gap-2">{sideContent}</div>
-            </ErpSectionCard>
+      <div className="grid gap-[var(--erp-section-gap)]">
+        <section className="grid gap-2 border-b border-slate-300 pb-3">
+          {formEyebrow ? <ErpSelectionSection label={formEyebrow} /> : null}
+          {formTitle ? (
+            <div className="text-sm font-semibold text-slate-900">
+              {formTitle}
+            </div>
           ) : null}
-        </div>
+          <div className="grid gap-[var(--erp-form-gap)]">
+            {formContent}
+          </div>
+        </section>
 
         {bottomContent ? <div>{bottomContent}</div> : null}
       </div>

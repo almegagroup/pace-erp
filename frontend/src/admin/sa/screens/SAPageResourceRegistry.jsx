@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { PROJECT_SCREENS } from "../../../navigation/screens/projects/projectScreens.js";
 import { HR_SCREENS } from "../../../navigation/screens/projects/hrModule/hrScreens.js";
 import { OPERATION_SCREENS } from "../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -13,6 +12,7 @@ import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 
 async function readJsonSafe(response) {
   try {
@@ -105,7 +105,6 @@ function createPageRows(menus) {
 export default function SAPageResourceRegistry() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchRef = useRef(null);
   const [menus, setMenus] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -169,18 +168,9 @@ export default function SAPageResourceRegistry() {
     filteredRows[0] ??
     null;
 
-  const metrics = useMemo(() => {
-    const total = pageRows.length;
-    const published = pageRows.filter((row) => row.is_published).length;
-    const active = pageRows.filter((row) => row.is_active).length;
-
-    return {
-      total,
-      published,
-      unpublished: total - published,
-      active,
-    };
-  }, [pageRows]);
+  const { getRowProps } = useErpListNavigation(filteredRows, {
+    onActivate: (row) => setSelectedScreenCode(row.screen_code),
+  });
 
   useErpScreenCommands([
     {
@@ -241,7 +231,6 @@ export default function SAPageResourceRegistry() {
     <ErpScreenScaffold
       eyebrow="Page Registry"
       title="ACL Page And Resource Registry"
-      description="Only future ACL/business pages belong here. Admin governance pages are intentionally excluded from project and module ownership."
       notices={error ? [{ tone: "error", message: error }] : []}
       actions={[
         {
@@ -314,45 +303,11 @@ export default function SAPageResourceRegistry() {
             }),
         },
       ]}
-      metrics={[
-        {
-          label: "Total Pages",
-          value: loading ? "..." : metrics.total,
-          caption: "Codemade ACL/business pages available for governance.",
-          tone: "sky",
-        },
-        {
-          label: "Published",
-          value: loading ? "..." : metrics.published,
-          caption: "Pages already placed into a menu group.",
-          tone: "emerald",
-        },
-        {
-          label: "Unpublished",
-          value: loading ? "..." : metrics.unpublished,
-          caption: "Pages still outside menu and waiting for placement.",
-          tone: "amber",
-        },
-        {
-          label: "Active Pages",
-          value: loading ? "..." : metrics.active,
-          caption: "Published pages currently enabled in menu.",
-          tone: "slate",
-        },
-      ]}
-      footerHints={[
-        "ALT+R REFRESH",
-        "ALT+SHIFT+F SEARCH",
-        "ENTER SELECT PAGE",
-        "CTRL+K COMMAND BAR",
-      ]}
+      footerHints={["↑↓ Navigate", "Enter Select", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-        <ErpSectionCard
-          eyebrow="Inventory"
-          title="Registered ACL Pages"
-          description="This is the source list of publishable ACL/business screens only. Menu placement still happens from Menu Governance, not here."
-        >
+        <div className="grid gap-1">
+          <ErpSelectionSection label="Registered ACL Pages" />
           <label className="grid gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
               Search Pages
@@ -366,7 +321,7 @@ export default function SAPageResourceRegistry() {
             />
           </label>
 
-          <div className="mt-4 grid gap-2">
+          <div className="mt-2 grid gap-2">
             {loading ? (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                 Loading ACL page registry.
@@ -376,100 +331,93 @@ export default function SAPageResourceRegistry() {
                 No ACL/business page exists yet. Build the real business screens first, then they will appear here.
               </div>
             ) : (
-              filteredRows.map((row, index) => {
-                const selected = row.screen_code === selectedRow?.screen_code;
-
-                return (
-                  <button
-                    key={row.screen_code}
-                    ref={(element) => {
-                      rowRefs.current[index] = element;
-                    }}
-                    type="button"
-                    onClick={() => setSelectedScreenCode(row.screen_code)}
-                    onKeyDown={(event) =>
-                      handleLinearNavigation(event, {
-                        index,
-                        refs: rowRefs.current,
-                        orientation: "vertical",
-                      })
-                    }
-                    className={`border px-4 py-3 text-left ${
-                      selected
-                        ? "border-sky-300 bg-sky-50 text-sky-900"
-                        : "border-slate-300 bg-white text-slate-700"
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold">{row.title}</span>
-                      <span className="border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
-                        {row.is_published ? (row.is_active ? "Published" : "Disabled") : "Not In Menu"}
+              <ErpDenseGrid
+                columns={[
+                  {
+                    key: "title",
+                    label: "Page",
+                    render: (row) => (
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold">{row.title}</span>
+                          <span className="border border-slate-200 bg-slate-50 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                            {row.is_published ? (row.is_active ? "Published" : "Disabled") : "Not In Menu"}
+                          </span>
+                        </div>
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                          {row.screen_code}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "route_path",
+                    label: "Route",
+                    render: (row) => (
+                      <span className="block max-w-[26rem] truncate text-[11px] text-slate-600">
+                        {row.route_path}
                       </span>
-                    </div>
-                    <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-slate-500">
-                      {row.screen_code}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {row.route_path}
-                    </div>
-                    <div className="mt-2 text-xs text-slate-600">
-                      Resource {row.resource_code} | Group {row.parent_menu_code || "unassigned"} | Order {row.display_order ?? "-"}
-                    </div>
-                  </button>
-                );
-              })
+                    ),
+                  },
+                  {
+                    key: "placement",
+                    label: "Registry Status",
+                    render: (row) => (
+                      <span className="text-[11px] text-slate-600">
+                        {row.parent_menu_code || "Unassigned"} / {row.display_order ?? "-"}
+                      </span>
+                    ),
+                  },
+                ]}
+                rows={filteredRows}
+                rowKey={(row) => row.screen_code}
+                getRowProps={(_row, index) => getRowProps(index)}
+                onRowActivate={(row) => setSelectedScreenCode(row.screen_code)}
+                maxHeight="none"
+                emptyMessage="No ACL/business page exists yet. Build the real business screens first, then they will appear here."
+              />
             )}
           </div>
-        </ErpSectionCard>
+        </div>
 
-        <div className="grid gap-3">
-          <ErpSectionCard
-            eyebrow="Selected Page"
-            title={selectedRow ? `${selectedRow.title}` : "Choose A Page"}
-            description="This read model keeps page identity, route identity, and menu placement visible in one place."
-          >
+        <div className="grid gap-2">
+          <div className="grid gap-1">
+            <ErpSelectionSection label={selectedRow ? `${selectedRow.title}` : "Choose A Page"} />
             {selectedRow ? (
-              <div className="grid gap-3">
-                <ErpFieldPreview
-                  label="Screen Code"
-                  value={selectedRow.screen_code}
-                  caption="Frontend registry identity."
-                />
-                <ErpFieldPreview
-                  label="Route"
-                  value={selectedRow.route_path}
-                  caption="Actual route path of the page."
-                />
-                <ErpFieldPreview
-                  label="Resource Code"
-                  value={selectedRow.resource_code}
-                  caption="ACL resource identity currently attached to this page."
-                />
-                <ErpFieldPreview
-                  label="Menu Placement"
-                  value={selectedRow.parent_menu_code || "Unassigned"}
-                  caption={
-                    selectedRow.is_published
-                      ? `Published at order ${selectedRow.display_order ?? "-"}`
-                      : "Not yet published into menu."
-                  }
-                />
-                <ErpFieldPreview
-                  label="Module Ownership"
-                  value="Pending next step"
-                  caption="Next layer will bind each resource to exactly one module."
-                />
+              <div className="grid gap-[var(--erp-form-gap)]">
+                <div className="border border-slate-300 bg-white">
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Screen Code</span>
+                    <span className="break-all text-right text-[11px] font-semibold text-slate-900">{selectedRow.screen_code}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Route</span>
+                    <span className="break-all text-right text-[11px] font-semibold text-slate-900">{selectedRow.route_path}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Resource Code</span>
+                    <span className="break-all text-right text-[11px] font-semibold text-slate-900">{selectedRow.resource_code}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Menu Placement</span>
+                    <span className="text-right text-[11px] font-semibold text-slate-900">{selectedRow.parent_menu_code || "Unassigned"}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Module Ownership</span>
+                    <span className="text-right text-[11px] font-semibold text-slate-900">Pending next step</span>
+                  </div>
+                </div>
 
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1">
                   <button
                     type="button"
                     onClick={() => {
                       openScreen("SA_MENU_GOVERNANCE", { mode: "replace" });
                       navigate("/sa/menu");
                     }}
-                    className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+                    className="h-8 border border-sky-300 bg-sky-50 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-900"
                   >
-                    Open In Menu Governance
+                    Menu Governance
                   </button>
 
                   <button
@@ -478,9 +426,9 @@ export default function SAPageResourceRegistry() {
                       openScreen("SA_MODULE_RESOURCE_MAP", { mode: "replace" });
                       navigate("/sa/module-pages");
                     }}
-                    className="border border-cyan-300 bg-cyan-50 px-3 py-2 text-sm font-semibold text-cyan-700"
+                    className="h-8 border border-cyan-300 bg-cyan-50 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700"
                   >
-                    Open Module Page Map
+                    Module Page Map
                   </button>
 
                   <button
@@ -489,9 +437,9 @@ export default function SAPageResourceRegistry() {
                       openScreen(selectedRow.screen_code, { mode: "replace" });
                       navigate(selectedRow.route_path);
                     }}
-                    className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                    className="h-8 border border-slate-300 bg-white px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700"
                   >
-                    Open Page
+                    Open Screen
                   </button>
                 </div>
               </div>
@@ -500,20 +448,14 @@ export default function SAPageResourceRegistry() {
                 Select a page from the registry to inspect it.
               </p>
             )}
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Rule"
-            title="What Happens Here"
-            description="This screen is intentionally read-first. It avoids hidden writes and keeps placement changes inside Menu Governance."
-          >
-            <div className="grid gap-2 text-sm text-slate-700">
-              <p>1. Page exists in frontend registry first.</p>
-              <p>2. Then it gets published into a menu group.</p>
-              <p>3. Then it will be bound to one owning module.</p>
-              <p>4. Then approval and ACL will hang off that exact resource.</p>
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Operator Rule" />
+            <div className="border border-slate-300 bg-white px-3 py-2 text-[11px] text-slate-700">
+              Registry first. Then menu placement. Then module ownership. Approval and ACL hang off this exact resource code.
             </div>
-          </ErpSectionCard>
+          </div>
         </div>
       </div>
     </ErpScreenScaffold>

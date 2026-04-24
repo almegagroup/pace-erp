@@ -1,18 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
-import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
-import {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
@@ -140,31 +138,6 @@ async function updateModule(payload) {
   return json.data.module;
 }
 
-async function updateModuleState(payload) {
-  let response;
-
-  try {
-    response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/module/state`, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    throw createNetworkError(error, "NETWORK_ERROR_MODULE_STATE");
-  }
-
-  const json = await readJsonSafe(response);
-
-  if (!response.ok || !json?.ok) {
-    throw createDebugError(json, "MODULE_STATE_UPDATE_FAILED");
-  }
-
-  return json.data;
-}
-
 function sortModules(rows) {
   return [...rows].sort((left, right) => {
     const projectCompare = String(left.project_code ?? "").localeCompare(
@@ -215,7 +188,6 @@ export default function SAModuleMaster() {
   const projectRef = useRef(null);
   const moduleCodeRef = useRef(null);
   const searchInputRef = useRef(null);
-  const rowRefs = useRef([]);
   const [projects, setProjects] = useState([]);
   const [modules, setModules] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -225,17 +197,12 @@ export default function SAModuleMaster() {
   const [minApprovers, setMinApprovers] = useState(MIN_REQUIRED_APPROVERS);
   const [maxApprovers, setMaxApprovers] = useState(MAX_ALLOWED_APPROVERS);
   const [selectedModuleId, setSelectedModuleId] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, _setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editorMode, setEditorMode] = useState("create");
-
-  const activeProjects = useMemo(
-    () => projects.filter((row) => row.status === "ACTIVE"),
-    [projects],
-  );
 
   function resetEditor(preferredProjectId = selectedProjectId) {
     setEditorMode("create");
@@ -247,22 +214,7 @@ export default function SAModuleMaster() {
     setMaxApprovers(MAX_ALLOWED_APPROVERS);
   }
 
-  function loadSelectedModuleIntoEditor(moduleRow) {
-    if (!moduleRow) {
-      return;
-    }
-
-    setEditorMode("edit");
-    setSelectedModuleId(moduleRow.module_id);
-    setSelectedProjectId(moduleRow.project_id);
-    setModuleName(moduleRow.module_name ?? "");
-    setApprovalRequired(moduleRow.approval_required === true);
-    setApprovalType(moduleRow.approval_type ?? "SEQUENTIAL");
-    setMinApprovers(String(moduleRow.min_approvers ?? MIN_REQUIRED_APPROVERS));
-    setMaxApprovers(String(moduleRow.max_approvers ?? MAX_ALLOWED_APPROVERS));
-  }
-
-  async function loadWorkspace(preferredProjectId = selectedProjectId, preferredModuleId = selectedModuleId) {
+  const loadWorkspace = useCallback(async (preferredProjectId = selectedProjectId, preferredModuleId = selectedModuleId) => {
     setLoading(true);
     setError("");
 
@@ -303,11 +255,11 @@ export default function SAModuleMaster() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedModuleId, selectedProjectId]);
 
   useEffect(() => {
     void loadWorkspace();
-  }, []);
+  }, [loadWorkspace]);
 
   async function handleSave() {
     const normalizedProjectId = selectedProjectId.trim();
@@ -321,21 +273,6 @@ export default function SAModuleMaster() {
     const project = projects.find((row) => row.id === normalizedProjectId) ?? null;
     if (!project || project.status !== "ACTIVE") {
       setError("Choose an active project before creating a module.");
-      return;
-    }
-
-    const approved = await openActionConfirm({
-      eyebrow: "Module Master",
-      title: editorMode === "edit" ? "Update Module" : "Create Module",
-      message:
-        editorMode === "edit"
-          ? `Update module ${selectedModule?.module_code ?? "selected module"} under project ${project.project_code}?`
-          : `Create module ${generateModuleCodePreview(projects, normalizedProjectId, normalizedModuleName)} under project ${project.project_code}?`,
-      confirmLabel: editorMode === "edit" ? "Update Module" : "Create Module",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
       return;
     }
 
@@ -389,53 +326,6 @@ export default function SAModuleMaster() {
     }
   }
 
-  async function handleStateChange(nextState) {
-    const selectedModule = modules.find((row) => row.module_id === selectedModuleId) ?? null;
-
-    if (!selectedModule) {
-      return;
-    }
-
-    const currentState = selectedModule.is_active ? "ACTIVE" : "INACTIVE";
-    if (currentState === nextState) {
-      return;
-    }
-
-    const approved = await openActionConfirm({
-      eyebrow: "Module Lifecycle",
-      title: `${nextState === "ACTIVE" ? "Activate" : "Inactivate"} Module`,
-      message: `${nextState === "ACTIVE" ? "Activate" : "Inactivate"} ${selectedModule.module_code} under ${selectedModule.project_code}?`,
-      confirmLabel: nextState === "ACTIVE" ? "Activate" : "Inactivate",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
-      return;
-    }
-
-    setSaving(true);
-    setError("");
-    setNotice("");
-
-    try {
-      await updateModuleState({
-        module_id: selectedModule.module_id,
-        next_state: nextState,
-      });
-      await loadWorkspace(selectedProjectId, selectedModule.module_id);
-      setNotice(`Module ${selectedModule.module_code} is now ${nextState}.`);
-    } catch (err) {
-      const detail = err && typeof err === "object" ? err : null;
-      setError(
-        detail
-          ? `Module state blocked. ${detail.decisionTrace ?? detail.code ?? "REQUEST_BLOCKED"}`
-          : "Module state could not be updated right now.",
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
   const filteredModules = useMemo(
     () =>
       applyQuickFilter(modules, searchQuery, [
@@ -461,6 +351,9 @@ export default function SAModuleMaster() {
   }, [filteredModules, selectedModuleId]);
 
   const modulePagination = useErpPagination(filteredModules, 10);
+  const { getRowProps } = useErpListNavigation(modulePagination.pageItems, {
+    onActivate: (row) => setSelectedModuleId(row?.module_id ?? ""),
+  });
 
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
@@ -653,57 +546,17 @@ export default function SAModuleMaster() {
     <ErpEntryFormTemplate
       eyebrow="Module Master"
       title="Module Master Manage"
-      description="Create project-bound global modules here. Company rollout happens later from the dedicated company module map surface, and module approval counts stay between 1 and 3."
       actions={topActions}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "projects",
-          label: "Active Projects",
-          value: loading ? "..." : String(activeProjects.length),
-          tone: "sky",
-          caption: "Only active projects should receive new modules.",
-        },
-        {
-          key: "modules",
-          label: "Modules",
-          value: loading ? "..." : String(modules.length),
-          tone: "emerald",
-          caption: "Global module rows currently registered under reusable projects.",
-        },
-        {
-          key: "approval",
-          label: "Approval Required",
-          value: loading ? "..." : String(modules.filter((row) => row.approval_required).length),
-          tone: "amber",
-          caption: "Modules carrying intrinsic approval policy at the registry layer.",
-        },
-        {
-          key: "mapped-companies",
-          label: "Selected Rollout",
-          value: selectedModule ? String(selectedModule.mapped_company_count ?? 0) : "0",
-          tone: "slate",
-          caption: selectedModule
-            ? "Companies currently using the selected module."
-            : "Select a module to inspect rollout count.",
-        },
-      ]}
+      footerHints={["Tab Next Field", "↑↓ Navigate", "Enter Select", "Ctrl+S Save", "Esc Back", "Ctrl+K Command Bar"]}
       formEyebrow={editorMode === "edit" ? "Edit" : "Create"}
       formTitle={editorMode === "edit" ? "Edit selected module" : "Create a new project module"}
-      formDescription={
-        editorMode === "edit"
-          ? "Module code stays fixed after creation. You can change the display name and intrinsic approval law here."
-          : "Each module belongs to one project. Companies can only receive this module after the project itself has been mapped to them."
-      }
       formContent={
-        <div ref={formContainerRef} className="grid gap-3">
-          <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Project
-            </span>
+        <div ref={formContainerRef} className="grid gap-[var(--erp-form-gap)]">
+          <ErpDenseFormRow label="Project" required>
             <select
               ref={projectRef}
               data-workspace-primary-focus="true"
@@ -711,247 +564,130 @@ export default function SAModuleMaster() {
               value={selectedProjectId}
               onChange={(event) => setSelectedProjectId(event.target.value)}
               disabled={editorMode === "edit"}
-              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+              className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white disabled:bg-slate-100"
             >
               <option value="">Choose active project</option>
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
-                  {project.project_code} | {project.project_name} | {project.status}
+                  {project.project_code} | {project.project_name}
                 </option>
               ))}
             </select>
-          </label>
+          </ErpDenseFormRow>
 
-            <div className="grid gap-3 md:grid-cols-2">
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Module Name
-              </span>
-              <input
-                ref={moduleCodeRef}
-                data-erp-form-field="true"
-                type="text"
-                value={moduleName}
-                onChange={(event) => setModuleName(event.target.value)}
-                placeholder="Procurement"
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
-              />
-            </label>
+          <ErpDenseFormRow label="Module Name" required>
+            <input
+              ref={moduleCodeRef}
+              data-erp-form-field="true"
+              type="text"
+              value={moduleName}
+              onChange={(event) => setModuleName(event.target.value)}
+              placeholder="Procurement"
+              className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+            />
+          </ErpDenseFormRow>
 
-            <label className="grid gap-2 border border-slate-300 bg-slate-50 px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                {editorMode === "edit" ? "Locked Module Code" : "Auto Module Code"}
-              </span>
-              <input
-                type="text"
-                readOnly
-                value={
-                  editorMode === "edit" && selectedModule
-                    ? selectedModule.module_code
-                    : generateModuleCodePreview(projects, selectedProjectId, moduleName)
-                }
-                className="w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
-              />
-            </label>
-          </div>
+          <ErpDenseFormRow label={editorMode === "edit" ? "Locked Module Code" : "Auto Module Code"}>
+            <input
+              type="text"
+              readOnly
+              value={
+                editorMode === "edit" && selectedModule
+                  ? selectedModule.module_code
+                  : generateModuleCodePreview(projects, selectedProjectId, moduleName)
+              }
+              className="h-7 w-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[12px] text-slate-700 outline-none"
+            />
+          </ErpDenseFormRow>
 
           {editorMode === "edit" ? (
-            <div className="flex flex-wrap gap-3">
+            <div className="ml-[172px]">
               <button
                 type="button"
                 onClick={() => resetEditor(selectedProjectId)}
-                className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+                className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
               >
                 Switch To Create
               </button>
             </div>
           ) : null}
 
-          <label className="flex items-center gap-3 border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
-            <input
-              data-erp-form-field="true"
-              type="checkbox"
-              checked={approvalRequired}
-              onChange={(event) => setApprovalRequired(event.target.checked)}
-              className="h-4 w-4 border border-slate-300"
-            />
-            This module needs intrinsic approval policy
-          </label>
-
-          <div className="grid gap-3 md:grid-cols-3">
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Approval Type
-              </span>
-              <select
+          <ErpDenseFormRow label="Approval Policy">
+            <label className="flex items-center gap-2 text-[12px] text-slate-700">
+              <input
                 data-erp-form-field="true"
-                value={approvalType}
-                onChange={(event) => setApprovalType(event.target.value)}
-                disabled={!approvalRequired}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
-              >
-                <option value="ANYONE">ANYONE</option>
-                <option value="SEQUENTIAL">SEQUENTIAL</option>
-                <option value="MUST_ALL">MUST_ALL</option>
-              </select>
+                type="checkbox"
+                checked={approvalRequired}
+                onChange={(event) => setApprovalRequired(event.target.checked)}
+                className="h-3 w-3 border border-slate-300"
+              />
+              Requires intrinsic approval
             </label>
+          </ErpDenseFormRow>
 
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Min Approvers
-              </span>
+          <ErpDenseFormRow label="Approval Type">
+            <select
+              data-erp-form-field="true"
+              value={approvalType}
+              onChange={(event) => setApprovalType(event.target.value)}
+              disabled={!approvalRequired}
+              className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
+            >
+              <option value="ANYONE">ANYONE</option>
+              <option value="SEQUENTIAL">SEQUENTIAL</option>
+              <option value="MUST_ALL">MUST_ALL</option>
+            </select>
+          </ErpDenseFormRow>
+
+          <div className="grid grid-cols-2 gap-[var(--erp-form-gap)]">
+            <ErpDenseFormRow label="Min Approvers">
               <select
                 data-erp-form-field="true"
                 value={minApprovers}
                 onChange={(event) => setMinApprovers(event.target.value)}
                 disabled={!approvalRequired}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
+                className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
               >
                 <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
               </select>
-            </label>
+            </ErpDenseFormRow>
 
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Max Approvers
-              </span>
+            <ErpDenseFormRow label="Max Approvers">
               <select
                 data-erp-form-field="true"
                 value={maxApprovers}
                 onChange={(event) => setMaxApprovers(event.target.value)}
                 disabled={!approvalRequired}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
+                className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
               >
                 <option value="1">1</option>
                 <option value="2">2</option>
                 <option value="3">3</option>
               </select>
-            </label>
+            </ErpDenseFormRow>
           </div>
         </div>
       }
-      sideContent={
-        <>
-          <ErpSectionCard
-            eyebrow="Search"
-            title="Module quick filter"
-            description="Filter the registered module inventory without leaving the create form."
-          >
-            <QuickFilterInput
-              label="Find Module"
-              value={searchQuery}
-              onChange={setSearchQuery}
-              inputRef={searchInputRef}
-              placeholder="Filter by module code, module name, or project"
-              hint="Alt+Shift+F focuses this filter."
-            />
-          </ErpSectionCard>
-
-          <ErpSectionCard
-            eyebrow="Selected"
-            title="Module preview"
-            description="Use this read model to confirm intrinsic approval law before rolling the module out to companies."
-          >
-            <div className="grid gap-3">
-              <ErpFieldPreview
-                label="Module"
-                value={
-                  selectedModule
-                    ? `${selectedModule.module_code} | ${selectedModule.module_name}`
-                    : "No module selected"
-                }
-                caption={
-                  selectedModule
-                    ? `${selectedModule.project_code} | ${selectedModule.project_name}`
-                    : "Select a module from the inventory."
-                }
-                tone={selectedModule ? "success" : "default"}
-              />
-              <ErpFieldPreview
-                label="Approval"
-                value={
-                  selectedModule
-                    ? selectedModule.approval_required
-                      ? "Required"
-                      : "Not required"
-                    : "N/A"
-                }
-                caption={selectedModule ? formatApprovalCaption(selectedModule) : "No module selected."}
-              />
-              <ErpFieldPreview
-                label="Mapped Companies"
-                  value={selectedModule ? String(selectedModule.mapped_company_count ?? 0) : "0"}
-                  caption="Rollout count across company-module map."
-              />
-              {selectedModule ? (
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    disabled={saving}
-                    onClick={() => loadSelectedModuleIntoEditor(selectedModule)}
-                    className="border border-cyan-300 bg-white px-4 py-2 text-sm font-semibold text-cyan-700"
-                  >
-                    Edit Selected Module
-                  </button>
-
-                  {selectedModule.is_active ? (
-                    <button
-                      type="button"
-                      disabled={saving}
-                      onClick={() => void handleStateChange("INACTIVE")}
-                      className="border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700"
-                    >
-                      Inactivate Module
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={saving}
-                      onClick={() => void handleStateChange("ACTIVE")}
-                      className="border border-emerald-300 bg-white px-4 py-2 text-sm font-semibold text-emerald-700"
-                    >
-                      Activate Module
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    className="border border-sky-300 bg-white px-4 py-2 text-sm font-semibold text-sky-700"
-                    onClick={() => {
-                      openScreen("SA_COMPANY_MODULE_MAP", { mode: "replace" });
-                      navigate("/sa/acl/company-modules");
-                    }}
-                  >
-                    Open Company Module Map
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </ErpSectionCard>
-        </>
-      }
       bottomContent={
-        <ErpSectionCard
-          eyebrow="Module Inventory"
-          title={
-            loading
+        <section className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Module Inventory</div>
+          <div className="text-sm font-semibold text-slate-900">
+            {loading
               ? "Loading module rows"
-              : `${filteredModules.length} visible module${filteredModules.length === 1 ? "" : "s"}`
-          }
-          description="Modules stay global under a project. Company-level operational rollout happens separately."
-        >
+              : `${filteredModules.length} visible module${filteredModules.length === 1 ? "" : "s"}`}
+          </div>
           {loading ? (
-            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
               Loading module rows.
             </div>
           ) : filteredModules.length === 0 ? (
-            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
               No module matches the current filter.
             </div>
           ) : (
-            <div className="space-y-0 border border-slate-300">
+            <div className="grid gap-3">
               <ErpPaginationStrip
                 page={modulePagination.page}
                 setPage={modulePagination.setPage}
@@ -960,44 +696,46 @@ export default function SAModuleMaster() {
                 endIndex={modulePagination.endIndex}
                 totalItems={filteredModules.length}
               />
-              {modulePagination.pageItems.map((row, index) => (
-                <button
-                  key={row.module_id}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
-                  type="button"
-                  onClick={() => setSelectedModuleId(row.module_id)}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: rowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
-                  className={`w-full border-b border-slate-300 px-4 py-3 text-left text-sm transition last:border-b-0 ${
-                    row.module_id === selectedModuleId
-                      ? "bg-sky-50 text-slate-900"
-                      : "bg-white text-slate-700"
-                  }`}
-                >
-                  <span className="block font-semibold">
-                    {row.module_code} - {row.module_name}
-                  </span>
-                  <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
-                    {row.project_code} | {row.is_active ? "ACTIVE" : "INACTIVE"}
-                  </span>
-                  <span className="mt-1 block text-xs text-slate-500">
-                    {formatApprovalCaption(row)} | {row.mapped_company_count ?? 0} company mapped
-                  </span>
-                  <span className="mt-2 block text-[10px] uppercase tracking-[0.14em] text-cyan-700">
-                    Open the selected preview pane to edit this module.
-                  </span>
-                </button>
-              ))}
+              <ErpDenseGrid
+                columns={[
+                  {
+                    key: "module",
+                    label: "Module",
+                    render: (row) => (
+                      <div>
+                        <div className="font-semibold text-slate-900">
+                          {row.module_code} - {row.module_name}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {formatApprovalCaption(row)} | {row.mapped_company_count ?? 0} company mapped
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "project",
+                    label: "Project",
+                    render: (row) => row.project_code,
+                  },
+                  {
+                    key: "state",
+                    label: "State",
+                    render: (row) => (row.is_active ? "ACTIVE" : "INACTIVE"),
+                  },
+                ]}
+                rows={modulePagination.pageItems}
+                rowKey={(row) => row.module_id}
+                getRowProps={(row, index) => ({
+                  ...getRowProps(index),
+                  onClick: () => setSelectedModuleId(row.module_id),
+                  className: row.module_id === selectedModuleId ? "bg-sky-50" : "",
+                })}
+                onRowActivate={(row) => setSelectedModuleId(row.module_id)}
+                maxHeight="none"
+              />
             </div>
           )}
-        </ErpSectionCard>
+        </section>
       }
     />
   );

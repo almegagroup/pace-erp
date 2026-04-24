@@ -288,6 +288,8 @@ export async function createLeaveRequestHandler(
     const fromDate = normalizeIsoDate(body?.from_date);
     const toDate = normalizeIsoDate(body?.to_date);
     const reason = String(body?.reason ?? "").trim();
+    const requestedCompanyId =
+      String(body?.parent_company_id ?? ctx.context.companyId ?? "").trim() || null;
 
     if (!reason) {
       return errorResponse(
@@ -338,7 +340,7 @@ export async function createLeaveRequestHandler(
     }
 
     const totalDays = calculateInclusiveDays(fromDate, toDate);
-    const parentCompany = await getParentCompanyScope(ctx.auth_user_id);
+    const parentCompany = await getParentCompanyScope(ctx.auth_user_id, requestedCompanyId);
     const explicitRequesterWorkContextId =
       String(body?.requester_work_context_id ?? "").trim() || null;
     const requesterWorkContext = await resolveRequesterSubjectWorkContext({

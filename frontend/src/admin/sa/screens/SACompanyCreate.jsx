@@ -11,16 +11,12 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
-import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
+import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
-import {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
 
 async function readJsonSafe(response) {
   try {
@@ -78,7 +74,7 @@ export default function SACompanyCreate() {
   const companyNameInputRef = useRef(null);
   const [gstNumber, setGstNumber] = useState("");
   const [companyName, setCompanyName] = useState("");
-  const [gstProfile, setGstProfile] = useState(null);
+  const [, setGstProfile] = useState(null);
   const [createdCompany, setCreatedCompany] = useState(null);
   const [lookingUp, setLookingUp] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -229,18 +225,6 @@ export default function SACompanyCreate() {
       return;
     }
 
-    const approved = await openActionConfirm({
-      eyebrow: "SA Company Governance",
-      title: "Create ERP Company",
-      message: `Create company ${trimmedCompanyName || gstProfile?.legal_name || normalizedGst} now?`,
-      confirmLabel: "Create Company",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
-      return;
-    }
-
     setCreating(true);
     setError("");
     setNotice("");
@@ -323,40 +307,6 @@ export default function SACompanyCreate() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "gst-source",
-      label: "GST Source",
-      value: gstProfile?.source ?? "Pending",
-      caption: "GST lookup checks cache first. A miss falls through to Applyflow.",
-      tone: "sky",
-    },
-    {
-      key: "resolved-state",
-      label: "Resolved State",
-      value: gstProfile?.state_name ?? "Pending",
-      caption: "Geographic company state derived from the GST profile.",
-      tone: "amber",
-    },
-    {
-      key: "pin-code",
-      label: "PIN Code",
-      value: gstProfile?.pin_code ?? "Pending",
-      caption: "Postal code captured separately for the company master.",
-      tone: "slate",
-    },
-    {
-      key: "created-company",
-      label: "Created Company",
-      value: createdCompany?.company_code ?? "Not Created",
-      caption: createdCompany
-        ? `${createdCompany.company_name}${createdCompany.state_name ? ` | ${createdCompany.state_name}` : ""}`
-        : "The company code appears here after a successful create.",
-      tone: createdCompany ? "emerald" : "sky",
-      badge: createdCompany ? "Ready" : "Pending",
-    },
-  ];
-
   const notices = [
     notice
       ? {
@@ -374,96 +324,47 @@ export default function SACompanyCreate() {
       : null,
   ].filter(Boolean);
 
-  const sideContent = (
-    <>
-      <ErpFieldPreview
-        label="Legal Name"
-        value={gstProfile?.legal_name ?? companyName}
-        caption="GST legal name is preferred and also becomes the default company name."
-      />
-      <ErpFieldPreview
-        label="Trade Name"
-        value={gstProfile?.trade_name}
-        caption="Visible for review, but company master still uses the legal name as the canonical title."
-      />
-      <ErpFieldPreview
-        label="Company State"
-        value={gstProfile?.state_name}
-        caption="Derived from the GST address payload and stored as a dedicated company field."
-      />
-      <ErpFieldPreview
-        label="PIN Code"
-        value={gstProfile?.pin_code}
-        caption="Captured separately so postal filters and reporting can use a clean field."
-      />
-      <ErpFieldPreview
-        label="Full Address"
-        value={gstProfile?.full_address}
-        caption="Stored as a single human-readable address field on company master."
-        multiline
-      />
-    </>
-  );
-
   const bottomContent = createdCompany ? (
-    <ErpSectionCard
-      eyebrow={hasExistingCompany ? "Existing Company" : "Created"}
-      title={
-        hasExistingCompany
+    <section className="grid gap-2">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
+        {hasExistingCompany ? "Existing Company" : "Created"}
+      </div>
+      <div className="text-sm font-semibold text-slate-900">
+        {hasExistingCompany
           ? "Company master row already exists for this GST"
-          : "Company master row created successfully"
-      }
-      tone="success"
-    >
+          : "Company master row created successfully"}
+      </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <ErpFieldPreview
-          label="Company Code"
-          value={createdCompany.company_code}
-          caption="Auto-generated canonical company code."
-          tone="success"
-        />
-        <ErpFieldPreview
-          label="Company Name"
-          value={createdCompany.company_name}
-          caption="Canonical legal company name saved in ERP master."
-          tone="success"
-        />
-        <ErpFieldPreview
-          label="State"
-          value={createdCompany.state_name}
-          caption="Saved from GST-derived company state."
-          tone="success"
-        />
-        <ErpFieldPreview
-          label="PIN Code"
-          value={createdCompany.pin_code}
-          caption="Saved as a dedicated postal field."
-          tone="success"
-        />
+        {[
+          ["Company Code", createdCompany.company_code, "Auto-generated canonical company code."],
+          ["Company Name", createdCompany.company_name, "Canonical legal company name saved in ERP master."],
+          ["State", createdCompany.state_name, "Saved from GST-derived company state."],
+          ["PIN Code", createdCompany.pin_code, "Saved as a dedicated postal field."],
+        ].map(([label, value, caption]) => (
+          <div key={label} className="border border-emerald-300 bg-emerald-50 px-3 py-3">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-800">{label}</div>
+            <div className="mt-2 text-sm font-semibold text-slate-900">{value}</div>
+            <div className="mt-1 text-xs text-slate-600">{caption}</div>
+          </div>
+        ))}
       </div>
-      <div className="mt-4">
-        <ErpFieldPreview
-          label="Saved Address"
-          value={createdCompany.full_address}
-          caption="The single-field address stored on company master."
-          multiline
-          tone="success"
-        />
+      <div className="border border-emerald-300 bg-emerald-50 px-3 py-3">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-800">Saved Address</div>
+        <div className="mt-2 whitespace-pre-wrap text-sm font-semibold text-slate-900">{createdCompany.full_address}</div>
+        <div className="mt-1 text-xs text-slate-600">The single-field address stored on company master.</div>
       </div>
-    </ErpSectionCard>
+    </section>
   ) : null;
 
   return (
     <ErpEntryFormTemplate
       eyebrow="SA Company Governance"
       title="Create Business Company"
-      description="This worksheet keeps GST lookup, company identity review, and final create action in one direct keyboard path."
       actions={topActions}
       notices={notices}
-      metrics={metrics}
+      footerHints={["Tab Next Field", "Ctrl+S Save", "Enter Check GST", "Esc Cancel", "Ctrl+K Command Bar"]}
       formEyebrow="Entry Form"
       formTitle="GST-driven company setup"
-      formDescription="Start at GST, confirm the canonical company name, then save directly without leaving the worksheet flow."
       formContent={(
         <div ref={formContainerRef} className="grid gap-3">
           <div
@@ -482,39 +383,38 @@ export default function SACompanyCreate() {
               </p>
             </div>
 
-            <label className="grid gap-2 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                GST Number
-              </span>
-              <input
-                ref={gstInputRef}
-                data-erp-form-field="true"
-                data-workspace-primary-focus="true"
-                value={gstNumber}
-                onChange={(event) => {
-                  setGstNumber(event.target.value.toUpperCase());
-                  setGstProfile(null);
-                  setError("");
-                  setNotice("");
-                  setCreatedCompany(null);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void handleLookup();
-                  }
-                }}
-                placeholder="29ABCDE1234F1Z5"
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
-              />
-            </label>
+            <div className="bg-white px-4 py-3">
+              <ErpDenseFormRow label="GST Number" required>
+                <input
+                  ref={gstInputRef}
+                  data-erp-form-field="true"
+                  data-workspace-primary-focus="true"
+                  value={gstNumber}
+                  onChange={(event) => {
+                    setGstNumber(event.target.value.toUpperCase());
+                    setGstProfile(null);
+                    setError("");
+                    setNotice("");
+                    setCreatedCompany(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void handleLookup();
+                    }
+                  }}
+                  placeholder="29ABCDE1234F1Z5"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
+                />
+              </ErpDenseFormRow>
+            </div>
 
             <div className="flex flex-wrap items-center gap-3 border-t border-slate-300 bg-slate-50 px-4 py-2">
               <button
                 type="button"
                 disabled={lookingUp}
                 onClick={() => void handleLookup()}
-                className={`border px-3 py-2 text-sm font-semibold ${
+                className={`border px-2 py-[3px] text-[11px] font-semibold ${
                   lookingUp
                     ? "cursor-not-allowed border-slate-300 bg-slate-100 text-slate-400"
                     : "border-sky-300 bg-sky-50 text-sky-900 hover:bg-sky-100"
@@ -544,19 +444,18 @@ export default function SACompanyCreate() {
               </p>
             </div>
 
-            <label className="grid gap-2 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Company Name
-              </span>
-              <input
-                ref={companyNameInputRef}
-                data-erp-form-field="true"
-                value={companyName}
-                onChange={(event) => setCompanyName(event.target.value)}
-                placeholder="Company legal name"
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
-              />
-            </label>
+            <div className="bg-white px-4 py-3">
+              <ErpDenseFormRow label="Company Name" required>
+                <input
+                  ref={companyNameInputRef}
+                  data-erp-form-field="true"
+                  value={companyName}
+                  onChange={(event) => setCompanyName(event.target.value)}
+                  placeholder="Company legal name"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
+                />
+              </ErpDenseFormRow>
+            </div>
 
             <div className="grid gap-2 border-t border-slate-300 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -572,7 +471,6 @@ export default function SACompanyCreate() {
           </div>
         </div>
       )}
-      sideContent={sideContent}
       bottomContent={bottomContent}
     />
   );

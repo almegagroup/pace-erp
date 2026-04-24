@@ -1,19 +1,31 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { openScreen } from "../../../navigation/screenStackEngine.js";
+import {
+  openScreen,
+  openScreenWithContext,
+  popScreen,
+  getActiveScreenContext,
+  updateActiveScreenContext,
+  registerScreenRefreshCallback,
+} from "../../../navigation/screenStackEngine.js";
 import { useMenu } from "../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { pushToast } from "../../../store/uiToast.js";
 import { getErrorMessage } from "../../../config/errorMessages.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import {
+  resolveDefaultTransactionCompanyId,
+} from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
 import ErpReportFilterTemplate from "../../../components/templates/ErpReportFilterTemplate.jsx";
-import {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpInlineApprovalRow from "../../../components/data/ErpInlineApprovalRow.jsx";
+import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
@@ -48,6 +60,30 @@ const STATUS_TONE_CLASS = Object.freeze({
   CANCELLED: "border-slate-200 bg-slate-50 text-slate-700",
 });
 
+const HR_ENTRY_FOOTER_HINTS = Object.freeze([
+  "Tab Next Field",
+  "Ctrl+S Submit",
+  "Esc Cancel",
+]);
+
+const HR_LIST_FOOTER_HINTS = Object.freeze([
+  "↑↓ Navigate",
+  "Enter Open",
+  "Space Select",
+  "F8 Refresh",
+  "Esc Back",
+  "Ctrl+K Command Bar",
+]);
+
+const HR_APPROVAL_FOOTER_HINTS = Object.freeze([
+  "↑↓ Navigate",
+  "Enter View",
+  "A Approve",
+  "R Reject",
+  "F8 Refresh",
+  "Esc Back",
+]);
+
 function todayDefault() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -72,6 +108,25 @@ function canOpenHrResource(menuSnapshot, resourceCode, routePath) {
 
   return rows.some(
     (row) => row?.resource_code === resourceCode || row?.route_path === routePath,
+  );
+}
+
+function getHrDetailScreenCode(kind) {
+  return kind === "leave" ? "HR_LEAVE_REQUEST_DETAIL" : "HR_OUT_WORK_REQUEST_DETAIL";
+}
+
+function getHrDetailRoute(kind) {
+  return kind === "leave"
+    ? "/dashboard/hr/leave/request-detail"
+    : "/dashboard/hr/out-work/request-detail";
+}
+
+function getHrRequestKey(request) {
+  return (
+    request?.workflow_request_id ??
+    request?.leave_request_id ??
+    request?.out_work_request_id ??
+    ""
   );
 }
 
@@ -271,10 +326,6 @@ function saveHrVisibleColumnKeys(storageKey, columnKeys) {
   window.localStorage.setItem(storageKey, JSON.stringify(columnKeys));
 }
 
-function buildHrRequestGridTemplate(columns) {
-  return columns.map((column) => column.width).join(" ");
-}
-
 function useHrVisibleColumns(storageKey) {
   const [visibleColumnKeys, setVisibleColumnKeys] = useState(() =>
     loadHrVisibleColumnKeys(storageKey),
@@ -365,7 +416,7 @@ function HrRequestRowActions({ mode, request, onEdit, onCancel, onApprove, onRej
   return null;
 }
 
-function HrRequestColumnCell({ request, kind, column }) {
+function renderHrRequestColumnValue(request, kind, columnKey) {
   const requesterParts = splitDisplay(
     request.requester_display,
     request.requester_auth_user_id,
@@ -422,34 +473,29 @@ function HrRequestColumnCell({ request, kind, column }) {
     workflow: <div className="text-xs text-slate-700">{request.workflow_request_id ?? "-"}</div>,
   };
 
-  return (
-    <div>
-      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
-        {column.label}
-      </div>
-      {contentByColumn[column.key] ?? <div className="text-sm text-slate-700">-</div>}
-    </div>
-  );
+  return contentByColumn[columnKey] ?? <div className="text-sm text-slate-700">-</div>;
 }
 
-function HrRequestMatrixHeader({ columns }) {
-  const templateColumns = buildHrRequestGridTemplate(columns);
+function buildHrDenseColumns(visibleColumns, kind) {
+  return visibleColumns.map((column) => ({
+    key: column.key,
+    label: column.label,
+    width: column.width,
+    align: column.key === "days" ? "right" : "left",
+    render: (row) => renderHrRequestColumnValue(row, kind, column.key),
+  }));
+}
 
-  return (
-    <div
-      className="hidden min-w-max border border-slate-300 bg-slate-100 px-3 py-2 lg:grid lg:gap-3"
-      style={{ gridTemplateColumns: templateColumns }}
-    >
-      {columns.map((column) => (
-        <div
-          key={column.key}
-          className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-        >
-          {column.label}
-        </div>
-      ))}
-    </div>
-  );
+function buildHrSummaryRow(rows = []) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const totalDays = safeRows.reduce((sum, row) => sum + Number(row?.total_days ?? 0), 0);
+
+  return {
+    label: `Total Rows: ${safeRows.length}`,
+    values: {
+      days: totalDays > 0 ? `${totalDays}` : "",
+    },
+  };
 }
 
 function HrRequestColumnPickerModal({
@@ -463,7 +509,6 @@ function HrRequestColumnPickerModal({
     <ErpColumnVisibilityDrawer
       visible={visible}
       title="Choose Visible Columns"
-      description="Show only the request fields needed for this HR sheet. Hidden columns can be restored anytime."
       columns={HR_REQUEST_COLUMN_DEFS}
       visibleColumnKeys={visibleColumnKeys}
       onToggleColumn={onToggleColumn}
@@ -473,83 +518,539 @@ function HrRequestColumnPickerModal({
   );
 }
 
-export function HrRequestCard({
+function HrRequestDetailModal({
+  visible,
   request,
   kind,
   mode,
-  visibleColumns,
+  onClose,
   onEdit,
   onCancel,
   onApprove,
   onReject,
 }) {
-  const templateColumns = buildHrRequestGridTemplate(visibleColumns);
-  const actions = (
-    <HrRequestRowActions
-      mode={mode}
-      request={request}
-      onEdit={onEdit}
-      onCancel={onCancel}
-      onApprove={onApprove}
-      onReject={onReject}
-    />
+  if (!request) {
+    return null;
+  }
+
+  const requesterParts = splitDisplay(
+    request.requester_display,
+    request.requester_auth_user_id,
+    request.requester_display,
   );
+  const companyLabel =
+    request.parent_company_name ??
+    request.parent_company_code ??
+    request.parent_company_id ??
+    "-";
+  const departmentLabel =
+    request.department_name ??
+    request.department_code ??
+    "-";
 
   return (
-    <div className="border border-slate-300 bg-white">
-      <div
-        className="grid gap-3 px-3 py-3 lg:min-w-max lg:gap-3"
-        style={{ gridTemplateColumns: templateColumns }}
-      >
-        {visibleColumns.map((column) => (
-          <HrRequestColumnCell
-            key={column.key}
+    <ModalBase
+      visible={visible}
+      eyebrow={kind === "leave" ? "Leave Request Detail" : "Out Work Request Detail"}
+      title={requesterParts.name}
+      message="Use this detail view to inspect the row and take routine actions without leaving the queue."
+      onEscape={onClose}
+      width="min(960px, calc(100vw - 32px))"
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+          >
+            Back
+          </button>
+          <HrRequestRowActions
+            mode={mode}
             request={request}
-            kind={kind}
-            column={column}
+            onEdit={onEdit}
+            onCancel={onCancel}
+            onApprove={onApprove}
+            onReject={onReject}
           />
-        ))}
-      </div>
-
-      <div className="border-t border-slate-200 bg-slate-50 px-3 py-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Workflow
-            </div>
-            <div className="mt-1 text-xs text-slate-700">
-              {request.workflow_request_id ?? "-"}
-              {kind === "leave" ? ` | ${request.leave_request_id ?? "-"}` : ` | ${request.out_work_request_id ?? "-"}`}
-            </div>
-          </div>
-          {actions}
         </div>
+      }
+    >
+      <div className="grid gap-4">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Requester</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900">{requesterParts.name}</div>
+            <div className="text-xs text-slate-600">{requesterParts.code}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Company</div>
+            <div className="mt-1 text-sm text-slate-900">{companyLabel}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Department</div>
+            <div className="mt-1 text-sm text-slate-900">{departmentLabel}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Status</div>
+            <div className="mt-1"><RequestStatusBadge state={request.current_state} /></div>
+          </div>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">From Date</div>
+            <div className="mt-1">{formatIsoDate(request.from_date)}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">To Date</div>
+            <div className="mt-1">{formatIsoDate(request.to_date)}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Days</div>
+            <div className="mt-1">{request.total_days ?? "-"}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Workflow</div>
+            <div className="mt-1">{request.workflow_request_id ?? "-"}</div>
+          </div>
+        </div>
+        {kind === "outWork" ? (
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Destination</div>
+            <div className="mt-1 text-sm text-slate-900">{request.destination_name ?? "-"}</div>
+            <div className="text-xs text-slate-600">{request.destination_address ?? "-"}</div>
+          </div>
+        ) : null}
+        <div className="border border-slate-300 bg-white px-3 py-3">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Reason</div>
+          <div className="mt-2 whitespace-pre-wrap text-sm text-slate-800">{request.reason || "-"}</div>
+        </div>
+        <div className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+            Decision History
+          </div>
+          <RequestDecisionHistory history={request.decision_history} />
+        </div>
+      </div>
+    </ModalBase>
+  );
+}
 
-        {Array.isArray(request.decision_history) && request.decision_history.length > 0 ? (
-          <div className="mt-3">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Decision History
-            </p>
-            <div className="mt-2">
+function HrRequestDetailWorkspace({ kind }) {
+  const context = getActiveScreenContext() ?? {};
+  const request = context.request ?? null;
+  const mode = context.mode ?? "register";
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [editingRequest, setEditingRequest] = useState(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editFromDate, setEditFromDate] = useState(todayDefault());
+  const [editToDate, setEditToDate] = useState(todayDefault());
+  const [editReason, setEditReason] = useState("");
+  const [editDestinationId, setEditDestinationId] = useState("");
+  const [editDestinations, setEditDestinations] = useState([]);
+  const [editDestinationsLoading, setEditDestinationsLoading] = useState(false);
+  const earliestBackdate = getHrEarliestBackdate();
+  const editTotalDays = calculateInclusiveDays(editFromDate, editToDate);
+
+  async function loadEditDestinations(preferredDestinationId = "") {
+    if (kind !== "outWork") {
+      return;
+    }
+
+    setEditDestinationsLoading(true);
+    try {
+      const data = await listOutWorkDestinations();
+      const destinationRows = data.destinations ?? [];
+      setEditDestinations(destinationRows);
+      setEditDestinationId(
+        destinationRows.find((row) => row.destination_id === preferredDestinationId)?.destination_id ??
+          destinationRows[0]?.destination_id ??
+          "",
+      );
+    } catch (err) {
+      setEditDestinations([]);
+      setEditDestinationId("");
+      setError(formatError(err, "Destination list could not be loaded."));
+    } finally {
+      setEditDestinationsLoading(false);
+    }
+  }
+
+  async function handleEdit(row) {
+    setNotice("");
+    setEditFromDate(row.from_date ?? todayDefault());
+    setEditToDate(row.to_date ?? todayDefault());
+    setEditReason(row.reason ?? "");
+    setEditingRequest(row);
+
+    if (kind === "outWork") {
+      await loadEditDestinations(row.destination_id ?? "");
+    }
+  }
+
+  async function handleCancel(row) {
+    const approved = await openActionConfirm({
+      eyebrow: kind === "leave" ? "Leave Request" : "Out Work Request",
+      title: "Cancel Pending Request",
+      message: `Cancel request ${row.workflow_request_id}?`,
+      confirmLabel: "Cancel Request",
+      cancelLabel: "Keep",
+    });
+
+    if (!approved) return;
+
+    try {
+      if (kind === "leave") {
+        await cancelLeaveRequest(row.leave_request_id);
+      } else {
+        await cancelOutWorkRequest(row.out_work_request_id);
+      }
+      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
+      popScreen();
+    } catch (err) {
+      setError(formatError(err, "Request could not be cancelled."));
+    }
+  }
+
+  async function handleEditSave() {
+    if (!editingRequest) {
+      return;
+    }
+
+    if (!editFromDate || !editToDate || !editReason.trim()) {
+      setError("From date, to date, and reason are required.");
+      return;
+    }
+
+    if (kind === "outWork" && !editDestinationId) {
+      setError("Destination is required.");
+      return;
+    }
+
+    setEditSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      if (kind === "leave") {
+        await updateLeaveRequest({
+          leave_request_id: editingRequest.leave_request_id,
+          from_date: editFromDate,
+          to_date: editToDate,
+          reason: editReason.trim(),
+        });
+      } else {
+        await updateOutWorkRequest({
+          out_work_request_id: editingRequest.out_work_request_id,
+          from_date: editFromDate,
+          to_date: editToDate,
+          destination_id: editDestinationId,
+          reason: editReason.trim(),
+        });
+      }
+
+      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
+      popScreen();
+    } catch (err) {
+      setError(formatError(err, "Request could not be updated."));
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function handleDecision(row, decision) {
+    try {
+      await submitWorkflowDecision(row.workflow_request_id, decision, row.parent_company_id ?? null);
+      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
+      popScreen();
+    } catch (err) {
+      setError(formatError(err, "Decision could not be submitted."));
+    }
+  }
+
+  return (
+    <>
+      <ErpScreenScaffold
+        eyebrow="HR Management"
+        title={kind === "leave" ? "Leave Request Detail" : "Out Work Request Detail"}
+        actions={[
+          {
+            key: "back",
+            label: "Back",
+            tone: "neutral",
+            onClick: () => popScreen(),
+          },
+        ]}
+        notices={[
+          ...(error ? [{ key: "error", tone: "error", message: error }] : []),
+          ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
+        ]}
+        footerHints={mode === "approvalInbox" ? HR_APPROVAL_FOOTER_HINTS : ["Esc Back", "Ctrl+K Command Bar"]}
+      >
+        {!request ? (
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            Request detail context is missing. Return to the previous list and open the row again.
+          </div>
+        ) : (
+          <div className="grid gap-4">
+            <div className="flex flex-wrap gap-2">
+              <HrRequestRowActions
+                mode={mode}
+                request={request}
+                onEdit={(row) => void handleEdit(row)}
+                onCancel={(row) => void handleCancel(row)}
+                onApprove={(row) => void handleDecision(row, "APPROVED")}
+                onReject={(row) => void handleDecision(row, "REJECTED")}
+              />
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="border border-slate-300 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Requester</div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">
+                  {splitDisplay(
+                    request.requester_display,
+                    request.requester_auth_user_id,
+                    request.requester_display,
+                  ).name}
+                </div>
+                <div className="text-xs text-slate-600">{request.requester_auth_user_id ?? "-"}</div>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Company</div>
+                <div className="mt-1 text-sm text-slate-900">
+                  {request.parent_company_name ?? request.parent_company_code ?? request.parent_company_id ?? "-"}
+                </div>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Department</div>
+                <div className="mt-1 text-sm text-slate-900">
+                  {request.department_name ?? request.department_code ?? "-"}
+                </div>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Status</div>
+                <div className="mt-1"><RequestStatusBadge state={request.current_state} /></div>
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">From Date</div>
+                <div className="mt-1">{formatIsoDate(request.from_date)}</div>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">To Date</div>
+                <div className="mt-1">{formatIsoDate(request.to_date)}</div>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Days</div>
+                <div className="mt-1">{request.total_days ?? "-"}</div>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Workflow</div>
+                <div className="mt-1">{request.workflow_request_id ?? "-"}</div>
+              </div>
+            </div>
+            {kind === "outWork" ? (
+              <div className="border border-slate-300 bg-white px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Destination</div>
+                <div className="mt-1 text-sm text-slate-900">{request.destination_name ?? "-"}</div>
+                <div className="text-xs text-slate-600">{request.destination_address ?? "-"}</div>
+              </div>
+            ) : null}
+            <div className="border border-slate-300 bg-white px-3 py-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Reason</div>
+              <div className="mt-2 whitespace-pre-wrap text-sm text-slate-800">{request.reason || "-"}</div>
+            </div>
+            <div className="grid gap-2">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Decision History
+              </div>
               <RequestDecisionHistory history={request.decision_history} />
             </div>
           </div>
-        ) : null}
-      </div>
+        )}
+      </ErpScreenScaffold>
+      <ModalBase
+        visible={Boolean(editingRequest)}
+        eyebrow={kind === "leave" ? "Leave Request" : "Out Work Request"}
+        title={kind === "leave" ? "Edit Pending Leave" : "Edit Pending Out Work"}
+        message="Edit is allowed only until the first approver decision arrives."
+        onEscape={() => setEditingRequest(null)}
+        width="min(720px, calc(100vw - 32px))"
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() => setEditingRequest(null)}
+              className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={editSaving}
+              onClick={() => void handleEditSave()}
+              className="border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900"
+            >
+              {editSaving ? "Saving..." : "Save Changes"}
+            </button>
+          </>
+        }
+      >
+        <div className="grid gap-3">
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="grid gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                From Date
+              </span>
+              <input
+                type="date"
+                value={editFromDate}
+                min={earliestBackdate}
+                onChange={(event) => setEditFromDate(event.target.value)}
+                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+              />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                To Date
+              </span>
+              <input
+                type="date"
+                value={editToDate}
+                min={editFromDate || earliestBackdate}
+                onChange={(event) => setEditToDate(event.target.value)}
+                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+              />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Number Of Days
+              </span>
+              <input
+                type="text"
+                readOnly
+                value={editTotalDays > 0 ? `${editTotalDays}` : "-"}
+                className="w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
+              />
+            </label>
+          </div>
+
+          {kind === "outWork" ? (
+            <label className="grid gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Destination
+              </span>
+              <select
+                value={editDestinationId}
+                disabled={editDestinationsLoading}
+                onChange={(event) => setEditDestinationId(event.target.value)}
+                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+              >
+                <option value="">{editDestinationsLoading ? "Loading..." : "Choose destination"}</option>
+                {editDestinations.map((row) => (
+                  <option key={row.destination_id} value={row.destination_id}>
+                    {row.destination_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          <label className="grid gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Reason
+            </span>
+            <textarea
+              rows={4}
+              value={editReason}
+              onChange={(event) => setEditReason(event.target.value)}
+              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+          </label>
+        </div>
+      </ModalBase>
+    </>
+  );
+}
+
+function HrApprovalDenseTable({
+  rows,
+  columns,
+  getRowProps,
+  onApprove,
+  onReject,
+  onActivate,
+  emptyMessage,
+}) {
+  const [focusedIndex, setFocusedIndex] = useState(-1);
+
+  return (
+    <div className="overflow-auto border border-slate-300 bg-white" style={{ maxHeight: "calc(100vh - 240px)" }}>
+      <table className="erp-grid-table min-w-full text-xs">
+        <thead className="bg-slate-800 text-white">
+          <tr>
+            {columns.map((column) => (
+              <th
+                key={column.key}
+                className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.14em] text-white"
+                style={column.width ? { width: column.width } : undefined}
+              >
+                {column.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length > 0 ? (
+            rows.map((row, index) => {
+              const baseRowProps = getRowProps(row, index);
+              return (
+                <ErpInlineApprovalRow
+                  key={row.workflow_request_id ?? `${index}`}
+                  row={row}
+                  index={index}
+                  columns={columns}
+                  isFocused={focusedIndex === index}
+                  onApprove={onApprove}
+                  onReject={onReject}
+                  onActivate={onActivate}
+                  rowProps={{
+                    ...baseRowProps,
+                    onFocus: (event) => {
+                      baseRowProps.onFocus?.(event);
+                      setFocusedIndex(index);
+                    },
+                  }}
+                />
+              );
+            })
+          ) : (
+            <tr>
+              <td colSpan={Math.max(columns.length, 1)} className="px-3 py-6 text-left text-sm text-slate-500">
+                {emptyMessage}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
 
 export function LeaveApplyWorkspace() {
   const navigate = useNavigate();
-  const { menu } = useMenu();
+  const { menu, runtimeContext } = useMenu();
   const [fromDate, setFromDate] = useState(todayDefault());
   const [toDate, setToDate] = useState(todayDefault());
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [lastCreated, setLastCreated] = useState(null);
+  const [transactionCompanyId, setTransactionCompanyId] = useState(() =>
+    resolveDefaultTransactionCompanyId(runtimeContext),
+  );
 
   const totalDays = calculateInclusiveDays(fromDate, toDate);
   const earliestBackdate = getHrEarliestBackdate();
@@ -562,6 +1063,26 @@ export function LeaveApplyWorkspace() {
       ),
     [menu],
   );
+
+  useEffect(() => {
+    const nextCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    setTransactionCompanyId((current) => current || nextCompanyId);
+  }, [runtimeContext]);
+
+  useErpScreenHotkeys({
+    save: {
+      disabled: saving,
+      perform: () => void handleSubmit(),
+    },
+    focusPrimary: {
+      perform: () => {
+        const companyField = globalThis.document?.querySelector(
+          "[data-transaction-company='leave'] select, [data-transaction-company='leave']",
+        );
+        companyField?.focus?.();
+      },
+    },
+  });
 
   const actions = [
     {
@@ -589,7 +1110,7 @@ export function LeaveApplyWorkspace() {
     {
       key: "submit",
       label: saving ? "Submitting..." : "Send Request",
-      hint: "Ctrl+S",
+      hint: "Ctrl+S / F2",
       tone: "primary",
       disabled: saving,
       onClick: () => void handleSubmit(),
@@ -597,8 +1118,13 @@ export function LeaveApplyWorkspace() {
   ];
 
   async function handleSubmit() {
+    if (!transactionCompanyId) {
+      setError("Transaction company is required.");
+      return;
+    }
+
     if (!fromDate || !toDate || !reason.trim()) {
-      setError("From date, to date, and reason are required.");
+      setError("Transaction company, from date, to date, and reason are required.");
       return;
     }
 
@@ -607,13 +1133,12 @@ export function LeaveApplyWorkspace() {
     setNotice("");
 
     try {
-      const data = await createLeaveRequest({
+      await createLeaveRequest({
         from_date: fromDate,
         to_date: toDate,
         reason: reason.trim(),
-      });
+      }, transactionCompanyId);
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
-      setLastCreated(data.leave_request ?? null);
       setNotice("Leave request submitted.");
       setReason("");
       setFromDate(todayDefault());
@@ -629,89 +1154,52 @@ export function LeaveApplyWorkspace() {
     <ErpEntryFormTemplate
       eyebrow="HR Management"
       title="Leave Apply"
-      description="Users submit leave requests in the parent-company HR universe. Current date theke maximum 3 days back apply allowed."
       actions={actions}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "backdate",
-          label: "Backdate Window",
-          value: "3 Days",
-          tone: "amber",
-          caption: `Earliest allowed from-date: ${formatIsoDate(earliestBackdate)}`,
-        },
-        {
-          key: "days",
-          label: "Total Days",
-          value: totalDays > 0 ? String(totalDays) : "-",
-          tone: "sky",
-          caption: "Days auto-calculated from selected range.",
-        },
-        {
-          key: "scope",
-          label: "Company Scope",
-          value: "Parent HR",
-          tone: "emerald",
-          caption: "Leave never uses work-company transaction truth.",
-        },
-        {
-          key: "cancel",
-          label: "Cancel Rule",
-          value: "Pending Only",
-          tone: "slate",
-          caption: "Requester can cancel until first approver decision arrives.",
-        },
-      ]}
+      footerHints={HR_ENTRY_FOOTER_HINTS}
       formEyebrow="Leave Request"
       formTitle="Submit a leave request"
-      formDescription="Choose date range, let day count auto-calculate, write a reason, then send into the approval queue."
       formContent={
-        <div className="grid gap-3">
-          <div className="grid gap-3 md:grid-cols-3">
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                From Date
-              </span>
-              <input
-                type="date"
-                value={fromDate}
-                min={earliestBackdate}
-                onChange={(event) => setFromDate(event.target.value)}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+        <div className="grid gap-[var(--erp-form-gap)]">
+          <ErpDenseFormRow label="Company" required>
+            <div data-transaction-company="leave" tabIndex={0}>
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={transactionCompanyId}
+                onChange={setTransactionCompanyId}
               />
-            </label>
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                To Date
-              </span>
-              <input
-                type="date"
-                value={toDate}
-                min={fromDate || earliestBackdate}
-                onChange={(event) => setToDate(event.target.value)}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-              />
-            </label>
-            <label className="grid gap-2 border border-slate-300 bg-slate-50 px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Number Of Days
-              </span>
-              <input
-                type="text"
-                readOnly
-                value={totalDays > 0 ? `${totalDays}` : "-"}
-                className="w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
-              />
-            </label>
-          </div>
-
-          <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Reason
-            </span>
+            </div>
+          </ErpDenseFormRow>
+          <ErpDenseFormRow label="From Date" required>
+            <input
+              type="date"
+              value={fromDate}
+              min={earliestBackdate}
+              onChange={(event) => setFromDate(event.target.value)}
+              className="w-full max-w-[220px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+          </ErpDenseFormRow>
+          <ErpDenseFormRow label="To Date" required>
+            <input
+              type="date"
+              value={toDate}
+              min={fromDate || earliestBackdate}
+              onChange={(event) => setToDate(event.target.value)}
+              className="w-full max-w-[220px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+          </ErpDenseFormRow>
+          <ErpDenseFormRow label="Number Of Days">
+            <input
+              type="text"
+              readOnly
+              value={totalDays > 0 ? `${totalDays}` : "-"}
+              className="w-full max-w-[220px] border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
+            />
+          </ErpDenseFormRow>
+          <ErpDenseFormRow label="Reason" required>
             <textarea
               value={reason}
               onChange={(event) => setReason(event.target.value)}
@@ -719,54 +1207,8 @@ export function LeaveApplyWorkspace() {
               placeholder="Write why you need leave."
               className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
             />
-          </label>
+          </ErpDenseFormRow>
         </div>
-      }
-      sideContent={
-        <>
-          <ErpSectionCard
-            eyebrow="Rule"
-            title="Business law"
-            description="Leave request uses parent-company HR truth and is stored against a governed business work scope. GENERAL_OPS personal workspace never drives approval routing."
-          >
-            <div className="grid gap-2">
-              <ErpFieldPreview
-                label="Backdate Limit"
-                value="Current date - 3 days"
-                caption="Older leave request will be blocked."
-              />
-              <ErpFieldPreview
-                label="Approval Queue"
-                value="Business-scope driven"
-                caption="If no explicit business scope is sent, backend derives the mapped department scope before routing."
-              />
-            </div>
-          </ErpSectionCard>
-          <ErpSectionCard
-            eyebrow="Latest Result"
-            title="Last submitted request"
-            description="Most recent create result from this screen."
-          >
-            {lastCreated ? (
-              <div className="grid gap-2">
-                <ErpFieldPreview
-                  label="Request"
-                  value={`${formatIsoDate(lastCreated.from_date)} to ${formatIsoDate(lastCreated.to_date)}`}
-                  caption={`${lastCreated.total_days} day(s) | ${lastCreated.current_state}`}
-                />
-                <ErpFieldPreview
-                  label="Workflow"
-                  value={lastCreated.workflow_request_id}
-                  caption={lastCreated.parent_company_name ?? lastCreated.parent_company_id}
-                />
-              </div>
-            ) : (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                Submit a request to see the latest create result here.
-              </div>
-            )}
-          </ErpSectionCard>
-        </>
       }
     />
   );
@@ -774,7 +1216,7 @@ export function LeaveApplyWorkspace() {
 
 export function OutWorkApplyWorkspace() {
   const navigate = useNavigate();
-  const { menu } = useMenu();
+  const { menu, runtimeContext } = useMenu();
   const [fromDate, setFromDate] = useState(todayDefault());
   const [toDate, setToDate] = useState(todayDefault());
   const [reason, setReason] = useState("");
@@ -787,8 +1229,10 @@ export function OutWorkApplyWorkspace() {
   const [loadingDestinations, setLoadingDestinations] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [lastCreated, setLastCreated] = useState(null);
   const destinationNameRef = useRef(null);
+  const [transactionCompanyId, setTransactionCompanyId] = useState(() =>
+    resolveDefaultTransactionCompanyId(runtimeContext),
+  );
 
   const totalDays = calculateInclusiveDays(fromDate, toDate);
   const earliestBackdate = getHrEarliestBackdate();
@@ -801,6 +1245,26 @@ export function OutWorkApplyWorkspace() {
       ),
     [menu],
   );
+
+  useEffect(() => {
+    const nextCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    setTransactionCompanyId((current) => current || nextCompanyId);
+  }, [runtimeContext]);
+
+  useErpScreenHotkeys({
+    save: {
+      disabled: saving,
+      perform: () => void handleSubmit(),
+    },
+    focusPrimary: {
+      perform: () => {
+        const companyField = globalThis.document?.querySelector(
+          "[data-transaction-company='outwork'] select, [data-transaction-company='outwork']",
+        );
+        companyField?.focus?.();
+      },
+    },
+  });
 
   const actions = [
     {
@@ -828,17 +1292,17 @@ export function OutWorkApplyWorkspace() {
     {
       key: "submit",
       label: saving ? "Submitting..." : "Send Request",
-      hint: "Ctrl+S",
+      hint: "Ctrl+S / F2",
       tone: "primary",
       disabled: saving,
       onClick: () => void handleSubmit(),
     },
   ];
 
-  async function refreshDestinations(preferredDestinationId = "") {
+  const refreshDestinations = useCallback(async (preferredDestinationId = "") => {
     setLoadingDestinations(true);
     try {
-      const data = await listOutWorkDestinations();
+      const data = await listOutWorkDestinations(transactionCompanyId);
       const rows = data.destinations ?? [];
       setDestinations(rows);
       const nextDestinationId =
@@ -853,13 +1317,25 @@ export function OutWorkApplyWorkspace() {
     } finally {
       setLoadingDestinations(false);
     }
-  }
+  }, [transactionCompanyId]);
 
   useEffect(() => {
+    if (!transactionCompanyId) {
+      setDestinations([]);
+      setDestinationId("");
+      setLoadingDestinations(false);
+      return;
+    }
+
     void refreshDestinations();
-  }, []);
+  }, [transactionCompanyId, refreshDestinations]);
 
   async function handleCreateDestination() {
+    if (!transactionCompanyId) {
+      setError("Transaction company is required before creating a destination.");
+      return;
+    }
+
     if (!destinationName.trim() || !destinationAddress.trim()) {
       setError("Destination name and address are required.");
       return;
@@ -872,7 +1348,7 @@ export function OutWorkApplyWorkspace() {
       const data = await createOutWorkDestination({
         destination_name: destinationName.trim(),
         destination_address: destinationAddress.trim(),
-      });
+      }, transactionCompanyId);
       setShowDestinationModal(false);
       setDestinationName("");
       setDestinationAddress("");
@@ -886,8 +1362,13 @@ export function OutWorkApplyWorkspace() {
   }
 
   async function handleSubmit() {
+    if (!transactionCompanyId) {
+      setError("Transaction company is required.");
+      return;
+    }
+
     if (!fromDate || !toDate || !reason.trim() || !destinationId) {
-      setError("From date, to date, destination, and reason are required.");
+      setError("Transaction company, from date, to date, destination, and reason are required.");
       return;
     }
 
@@ -896,14 +1377,13 @@ export function OutWorkApplyWorkspace() {
     setNotice("");
 
     try {
-      const data = await createOutWorkRequest({
+      await createOutWorkRequest({
         from_date: fromDate,
         to_date: toDate,
         destination_id: destinationId,
         reason: reason.trim(),
-      });
+      }, transactionCompanyId);
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
-      setLastCreated(data.request ?? null);
       setNotice("Out work request submitted.");
       setReason("");
       setFromDate(todayDefault());
@@ -920,118 +1400,79 @@ export function OutWorkApplyWorkspace() {
       <ErpEntryFormTemplate
         eyebrow="HR Management"
         title="Out Work Apply"
-        description="Use this flow when the user is outside office for company work. Destination stays company-reusable for later observation and reporting."
         actions={actions}
         notices={[
           ...(error ? [{ key: "error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
         ]}
-        metrics={[
-          {
-            key: "destinations",
-            label: "Destinations",
-            value: loadingDestinations ? "..." : String(destinations.length),
-            tone: "sky",
-            caption: "Parent-company reusable destination master rows.",
-          },
-          {
-            key: "days",
-            label: "Total Days",
-            value: totalDays > 0 ? String(totalDays) : "-",
-            tone: "amber",
-            caption: "Auto-calculated from selected range.",
-          },
-          {
-            key: "backdate",
-            label: "Backdate Window",
-            value: "3 Days",
-            tone: "slate",
-            caption: `Earliest allowed from-date: ${formatIsoDate(earliestBackdate)}`,
-          },
-          {
-            key: "cancel",
-            label: "Cancel Rule",
-            value: "Pending Only",
-            tone: "emerald",
-            caption: "Requester can cancel until first approver decision arrives.",
-          },
-        ]}
+        footerHints={HR_ENTRY_FOOTER_HINTS}
         formEyebrow="Out Work Request"
         formTitle="Submit an out work request"
-        formDescription="Choose destination, date range, and reason. If destination is missing, create it once and reuse it later. Approval routing uses governed business scope, not the current personal workspace."
         formContent={
-          <div className="grid gap-3">
-            <div className="grid gap-3 md:grid-cols-3">
-              <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  From Date
-                </span>
-                <input
-                  type="date"
-                  value={fromDate}
-                  min={earliestBackdate}
-                  onChange={(event) => setFromDate(event.target.value)}
-                  className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+          <div className="grid gap-[var(--erp-form-gap)]">
+            <ErpDenseFormRow label="Company" required>
+              <div data-transaction-company="outwork" tabIndex={0}>
+                <TransactionCompanySelector
+                  runtimeContext={runtimeContext}
+                  value={transactionCompanyId}
+                  onChange={setTransactionCompanyId}
                 />
-              </label>
-              <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  To Date
-                </span>
-                <input
-                  type="date"
-                  value={toDate}
-                  min={fromDate || earliestBackdate}
-                  onChange={(event) => setToDate(event.target.value)}
-                  className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-                />
-              </label>
-              <label className="grid gap-2 border border-slate-300 bg-slate-50 px-4 py-3">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Number Of Days
-                </span>
-                <input
-                  type="text"
-                  readOnly
-                  value={totalDays > 0 ? `${totalDays}` : "-"}
-                  className="w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
-                />
-              </label>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-              <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Destination
-                </span>
+              </div>
+            </ErpDenseFormRow>
+            <ErpDenseFormRow label="From Date" required>
+              <input
+                type="date"
+                value={fromDate}
+                min={earliestBackdate}
+                onChange={(event) => setFromDate(event.target.value)}
+                className="w-full max-w-[220px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+              />
+            </ErpDenseFormRow>
+            <ErpDenseFormRow label="To Date" required>
+              <input
+                type="date"
+                value={toDate}
+                min={fromDate || earliestBackdate}
+                onChange={(event) => setToDate(event.target.value)}
+                className="w-full max-w-[220px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+              />
+            </ErpDenseFormRow>
+            <ErpDenseFormRow label="Number Of Days">
+              <input
+                type="text"
+                readOnly
+                value={totalDays > 0 ? `${totalDays}` : "-"}
+                className="w-full max-w-[220px] border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
+              />
+            </ErpDenseFormRow>
+            <ErpDenseFormRow label="Destination" required>
+              <div className="flex flex-wrap items-center gap-2">
                 <select
                   value={destinationId}
+                  disabled={loadingDestinations || !transactionCompanyId}
                   onChange={(event) => setDestinationId(event.target.value)}
-                  className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  className="min-w-[280px] flex-1 border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
                 >
-                  <option value="">Choose destination</option>
+                  <option value="">
+                    {loadingDestinations ? "Loading destination..." : "Choose destination"}
+                  </option>
                   {destinations.map((row) => (
                     <option key={row.destination_id} value={row.destination_id}>
                       {row.destination_name}
                     </option>
                   ))}
                 </select>
-              </label>
-              <div className="flex items-end">
                 <button
                   type="button"
+                  disabled={!transactionCompanyId}
                   onClick={() => setShowDestinationModal(true)}
-                  className="border border-cyan-300 bg-white px-4 py-2 text-sm font-semibold text-cyan-700"
+                  className="border border-cyan-300 bg-white px-4 py-2 text-sm font-semibold text-cyan-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Create Destination
                 </button>
               </div>
-            </div>
-
-            <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Reason
-              </span>
+            </ErpDenseFormRow>
+            <ErpDenseFormRow label="Reason" required>
               <textarea
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
@@ -1039,67 +1480,15 @@ export function OutWorkApplyWorkspace() {
                 placeholder="Write why you are outside office for company work."
                 className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
               />
-            </label>
+            </ErpDenseFormRow>
           </div>
-        }
-        sideContent={
-          <>
-            <ErpSectionCard
-              eyebrow="Destination Law"
-              title="Reusable destination memory"
-              description="If preferred destination is not in the list, create it once and the same company will be able to reuse it later."
-            >
-              <div className="grid gap-2">
-                <ErpFieldPreview
-                  label="Storage Scope"
-                  value="Per Parent Company"
-                  caption="Destination master stays company specific."
-                />
-                <ErpFieldPreview
-                  label="Selection"
-                  value={
-                    destinations.find((row) => row.destination_id === destinationId)?.destination_name ??
-                    "No destination selected"
-                  }
-                  caption={
-                    destinations.find((row) => row.destination_id === destinationId)?.destination_address ??
-                    "Choose or create a destination."
-                  }
-                />
-              </div>
-            </ErpSectionCard>
-            <ErpSectionCard
-              eyebrow="Latest Result"
-              title="Last submitted request"
-              description="Most recent create result from this screen."
-            >
-              {lastCreated ? (
-                <div className="grid gap-2">
-                  <ErpFieldPreview
-                    label="Destination"
-                    value={lastCreated.destination_name}
-                    caption={lastCreated.destination_address}
-                  />
-                  <ErpFieldPreview
-                    label="Workflow"
-                    value={lastCreated.workflow_request_id}
-                    caption={`${lastCreated.total_days} day(s) | ${lastCreated.current_state}`}
-                  />
-                </div>
-              ) : (
-                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                  Submit a request to see the latest create result here.
-                </div>
-              )}
-            </ErpSectionCard>
-          </>
         }
       />
       <ModalBase
         visible={showDestinationModal}
         eyebrow="Out Work"
         title="Create Destination"
-        message="Add a new destination for this parent company. It will appear in the dropdown after save."
+        message="Add a new destination for the selected transaction company. It will appear in the dropdown after save."
         onEscape={() => setShowDestinationModal(false)}
         initialFocusRef={destinationNameRef}
         width="min(560px, calc(100vw - 32px))"
@@ -1156,8 +1545,14 @@ function useHrQueryLoader(loader, args = []) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const argsRef = useRef(args);
+  const argKey = JSON.stringify(args ?? []);
 
-  const refresh = async (...nextArgs) => {
+  useEffect(() => {
+    argsRef.current = args;
+  }, [args]);
+
+  const refresh = useCallback(async (...nextArgs) => {
     setLoading(true);
     setError("");
 
@@ -1170,11 +1565,11 @@ function useHrQueryLoader(loader, args = []) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [loader]);
 
   useEffect(() => {
-    void refresh(...args);
-  }, []);
+    void refresh(...argsRef.current);
+  }, [argKey, refresh]);
 
   return {
     rows,
@@ -1185,68 +1580,23 @@ function useHrQueryLoader(loader, args = []) {
   };
 }
 
-function buildListMetrics(rows) {
-  return [
-    {
-      key: "total",
-      label: "Total",
-      value: String(rows.length),
-      tone: "sky",
-      caption: "Rows returned by the current business flow.",
-    },
-    {
-      key: "pending",
-      label: "Pending",
-      value: String(rows.filter((row) => row.current_state === "PENDING").length),
-      tone: "amber",
-      caption: "Still waiting for approval decision.",
-    },
-    {
-      key: "approved",
-      label: "Approved",
-      value: String(rows.filter((row) => row.current_state === "APPROVED").length),
-      tone: "emerald",
-      caption: "Cases already approved in workflow.",
-    },
-    {
-      key: "rejected",
-      label: "Rejected/Cancelled",
-      value: String(
-        rows.filter((row) => ["REJECTED", "CANCELLED"].includes(row.current_state)).length,
-      ),
-      tone: "slate",
-      caption: "Closed requests no longer in pending lane.",
-    },
-  ];
-}
-
 function HrRequestListWorkspace({
   kind,
   title,
-  description,
   loader,
   openApply,
   openInbox,
 }) {
   const navigate = useNavigate();
+  const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const { menu } = useMenu();
   const searchRef = useRef(null);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
+  const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.myRequests`);
-  const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
-  const [notice, setNotice] = useState("");
-  const [editingRequest, setEditingRequest] = useState(null);
-  const [editSaving, setEditSaving] = useState(false);
-  const [editFromDate, setEditFromDate] = useState(todayDefault());
-  const [editToDate, setEditToDate] = useState(todayDefault());
-  const [editReason, setEditReason] = useState("");
-  const [editDestinationId, setEditDestinationId] = useState("");
-  const [editDestinations, setEditDestinations] = useState([]);
-  const [editDestinationsLoading, setEditDestinationsLoading] = useState(false);
-  const earliestBackdate = getHrEarliestBackdate();
-  const editTotalDays = calculateInclusiveDays(editFromDate, editToDate);
+  const { rows, loading, error, refresh } = useHrQueryLoader(loader);
   const approvalInboxRoute =
     kind === "leave"
       ? "/dashboard/hr/leave/approval-inbox"
@@ -1270,121 +1620,62 @@ function HrRequestListWorkspace({
       ]),
     [rows, searchQuery],
   );
-
-  async function loadEditDestinations(preferredDestinationId = "") {
-    if (kind !== "outWork") {
-      return;
-    }
-
-    setEditDestinationsLoading(true);
-    try {
-      const data = await listOutWorkDestinations();
-      const destinationRows = data.destinations ?? [];
-      setEditDestinations(destinationRows);
-      setEditDestinationId(
-        destinationRows.find((row) => row.destination_id === preferredDestinationId)?.destination_id ??
-          destinationRows[0]?.destination_id ??
-          "",
-      );
-    } catch (err) {
-      setEditDestinations([]);
-      setEditDestinationId("");
-      setError(formatError(err, "Destination list could not be loaded."));
-    } finally {
-      setEditDestinationsLoading(false);
-    }
-  }
-
-  async function handleEdit(request) {
-    setNotice("");
-    setEditFromDate(request.from_date ?? todayDefault());
-    setEditToDate(request.to_date ?? todayDefault());
-    setEditReason(request.reason ?? "");
-    setEditingRequest(request);
-
-    if (kind === "outWork") {
-      await loadEditDestinations(request.destination_id ?? "");
-    }
-  }
-
-  async function handleCancel(request) {
-    const approved = await openActionConfirm({
-      eyebrow: kind === "leave" ? "Leave Request" : "Out Work Request",
-      title: "Cancel Pending Request",
-      message: `Cancel request ${request.workflow_request_id}?`,
-      confirmLabel: "Cancel Request",
-      cancelLabel: "Keep",
+  const denseColumns = useMemo(
+    () => buildHrDenseColumns(visibleColumns, kind),
+    [visibleColumns, kind],
+  );
+  const summaryRow = useMemo(() => buildHrSummaryRow(filteredRows), [filteredRows]);
+  function openDetail(row) {
+    const nextFocusKey = getHrRequestKey(row);
+    const parentState = { searchQuery, focusKey: nextFocusKey };
+    setFocusKey(nextFocusKey);
+    updateActiveScreenContext({ parentState });
+    openScreenWithContext(getHrDetailScreenCode(kind), {
+      request: row,
+      kind,
+      mode: "myRequests",
+      parentState,
+      refreshOnReturn: true,
     });
-
-    if (!approved) return;
-
-    try {
-      if (kind === "leave") {
-        await cancelLeaveRequest(request.leave_request_id);
-      } else {
-        await cancelOutWorkRequest(request.out_work_request_id);
-      }
-      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
-      await refresh();
-      setNotice("Request cancelled.");
-    } catch (err) {
-      setError(formatError(err, "Request could not be cancelled."));
-    }
+    navigate(getHrDetailRoute(kind));
   }
 
-  async function handleEditSave() {
-    if (!editingRequest) {
+  const { getRowProps, focusRow } = useErpListNavigation(filteredRows, {
+    onActivate: (row) => openDetail(row),
+  });
+
+  useEffect(() => registerScreenRefreshCallback(() => {
+    void refresh();
+  }), [refresh]);
+
+  useEffect(() => {
+    updateActiveScreenContext({ parentState: { searchQuery, focusKey } });
+  }, [searchQuery, focusKey]);
+
+  useEffect(() => {
+    if (!focusKey || filteredRows.length === 0) {
       return;
     }
-
-    if (!editFromDate || !editToDate || !editReason.trim()) {
-      setError("From date, to date, and reason are required.");
-      return;
+    const targetIndex = filteredRows.findIndex((row) => getHrRequestKey(row) === focusKey);
+    if (targetIndex >= 0) {
+      queueMicrotask(() => focusRow(targetIndex));
     }
+  }, [filteredRows, focusKey, focusRow]);
 
-    if (kind === "outWork" && !editDestinationId) {
-      setError("Destination is required.");
-      return;
-    }
-
-    setEditSaving(true);
-    setError("");
-    setNotice("");
-
-    try {
-      if (kind === "leave") {
-        await updateLeaveRequest({
-          leave_request_id: editingRequest.leave_request_id,
-          from_date: editFromDate,
-          to_date: editToDate,
-          reason: editReason.trim(),
-        });
-      } else {
-        await updateOutWorkRequest({
-          out_work_request_id: editingRequest.out_work_request_id,
-          from_date: editFromDate,
-          to_date: editToDate,
-          destination_id: editDestinationId,
-          reason: editReason.trim(),
-        });
-      }
-
-      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
-      setEditingRequest(null);
-      await refresh();
-      setNotice(kind === "leave" ? "Leave request updated." : "Out work request updated.");
-    } catch (err) {
-      setError(formatError(err, "Request could not be updated."));
-    } finally {
-      setEditSaving(false);
-    }
-  }
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void refresh(),
+    },
+    focusSearch: {
+      perform: () => searchRef.current?.focus?.(),
+    },
+  });
 
   return (
     <ErpMasterListTemplate
       eyebrow="HR Management"
       title={title}
-      description={description}
       actions={[
         {
           key: "apply",
@@ -1417,16 +1708,15 @@ function HrRequestListWorkspace({
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
-          hint: "Alt+R",
+          hint: "Alt+R / F4",
           tone: "primary",
           onClick: () => void refresh(),
         },
       ]}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
-        ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={buildListMetrics(rows)}
+      footerHints={HR_LIST_FOOTER_HINTS}
       filterSection={{
         eyebrow: "Request Search",
         title: "Find request history rows",
@@ -1445,7 +1735,6 @@ function HrRequestListWorkspace({
         title: loading
           ? "Loading request rows"
           : `${filteredRows.length} visible request${filteredRows.length === 1 ? "" : "s"}`,
-        description: "Pending rows stay cancellable until no approver decision exists.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading request history.
@@ -1455,24 +1744,15 @@ function HrRequestListWorkspace({
             No request matches the current filter.
           </div>
         ) : (
-          <div className="grid gap-3">
-            <div className="overflow-x-auto pb-2">
-              <div className="grid min-w-max gap-3">
-                <HrRequestMatrixHeader columns={visibleColumns} />
-                {filteredRows.map((request) => (
-                  <HrRequestCard
-                    key={request.workflow_request_id}
-                    request={request}
-                    kind={kind}
-                    mode="myRequests"
-                    visibleColumns={visibleColumns}
-                    onEdit={handleEdit}
-                    onCancel={handleCancel}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
+          <ErpDenseGrid
+            columns={denseColumns}
+            rows={filteredRows}
+            rowKey={(row) => row.workflow_request_id ?? row.leave_request_id ?? row.out_work_request_id}
+            getRowProps={(_row, index) => getRowProps(index)}
+            onRowActivate={(row) => openDetail(row)}
+            summaryRow={summaryRow}
+            emptyMessage="No request matches the current filter."
+          />
         ),
       }}
       bottomSection={
@@ -1484,106 +1764,6 @@ function HrRequestListWorkspace({
             onToggleColumn={toggleColumn}
             onResetColumns={resetColumns}
           />
-          <ModalBase
-            visible={Boolean(editingRequest)}
-            eyebrow={kind === "leave" ? "Leave Request" : "Out Work Request"}
-            title={kind === "leave" ? "Edit Pending Leave" : "Edit Pending Out Work"}
-            message="Edit is allowed only until the first approver decision arrives."
-            onEscape={() => setEditingRequest(null)}
-            width="min(720px, calc(100vw - 32px))"
-            actions={
-              <>
-                <button
-                  type="button"
-                  onClick={() => setEditingRequest(null)}
-                  className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={editSaving}
-                  onClick={() => void handleEditSave()}
-                  className="border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900"
-                >
-                  {editSaving ? "Saving..." : "Save Changes"}
-                </button>
-              </>
-            }
-          >
-            <div className="grid gap-3">
-              <div className="grid gap-3 md:grid-cols-3">
-                <label className="grid gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    From Date
-                  </span>
-                  <input
-                    type="date"
-                    value={editFromDate}
-                    min={earliestBackdate}
-                    onChange={(event) => setEditFromDate(event.target.value)}
-                    className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-                  />
-                </label>
-                <label className="grid gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    To Date
-                  </span>
-                  <input
-                    type="date"
-                    value={editToDate}
-                    min={editFromDate || earliestBackdate}
-                    onChange={(event) => setEditToDate(event.target.value)}
-                    className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-                  />
-                </label>
-                <label className="grid gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Number Of Days
-                  </span>
-                  <input
-                    type="text"
-                    readOnly
-                    value={editTotalDays > 0 ? `${editTotalDays}` : "-"}
-                    className="w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
-                  />
-                </label>
-              </div>
-
-              {kind === "outWork" ? (
-                <label className="grid gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Destination
-                  </span>
-                  <select
-                    value={editDestinationId}
-                    disabled={editDestinationsLoading}
-                    onChange={(event) => setEditDestinationId(event.target.value)}
-                    className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-                  >
-                    <option value="">{editDestinationsLoading ? "Loading..." : "Choose destination"}</option>
-                    {editDestinations.map((row) => (
-                      <option key={row.destination_id} value={row.destination_id}>
-                        {row.destination_name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-
-              <label className="grid gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Reason
-                </span>
-                <textarea
-                  rows={4}
-                  value={editReason}
-                  onChange={(event) => setEditReason(event.target.value)}
-                  className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-                />
-              </label>
-            </div>
-          </ModalBase>
         </>
       }
     />
@@ -1593,25 +1773,22 @@ function HrRequestListWorkspace({
 function HrApprovalInboxWorkspace({
   kind,
   title,
-  description,
   loader,
   openHistory,
 }) {
   const navigate = useNavigate();
+  const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const { runtimeContext } = useMenu();
   const isMulti = runtimeContext?.workspaceMode === "MULTI";
   const availableCompanies = Array.isArray(runtimeContext?.availableCompanies)
     ? runtimeContext.availableCompanies
     : [];
   const searchRef = useRef(null);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
   // Company filter for MULTI users: "*" = All Companies (default), or specific company ID
-  const [companyFilter, setCompanyFilter] = useState("*");
+  const [companyFilter, setCompanyFilter] = useState(initialContext.parentState?.companyFilter ?? "*");
   const [showColumnPicker, setShowColumnPicker] = useState(false);
-  const [decisionTally, setDecisionTally] = useState({
-    approved: 0,
-    rejected: 0,
-  });
+  const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.approvalInbox`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
@@ -1635,27 +1812,64 @@ function HrApprovalInboxWorkspace({
     }
     return result;
   }, [rows, searchQuery, isMulti, companyFilter]);
+  const denseColumns = useMemo(
+    () => buildHrDenseColumns(visibleColumns, kind),
+    [visibleColumns, kind],
+  );
+  function openDetail(row) {
+    const nextFocusKey = getHrRequestKey(row);
+    const parentState = { searchQuery, companyFilter, focusKey: nextFocusKey };
+    setFocusKey(nextFocusKey);
+    updateActiveScreenContext({ parentState });
+    openScreenWithContext(getHrDetailScreenCode(kind), {
+      request: row,
+      kind,
+      mode: "approvalInbox",
+      parentState,
+      refreshOnReturn: true,
+    });
+    navigate(getHrDetailRoute(kind));
+  }
+
+  const { getRowProps, focusRow } = useErpListNavigation(filteredRows, {
+    onActivate: (row) => openDetail(row),
+  });
+
+  useEffect(() => registerScreenRefreshCallback(() => {
+    void refresh();
+  }), [refresh]);
+
+  useEffect(() => {
+    updateActiveScreenContext({ parentState: { searchQuery, companyFilter, focusKey } });
+  }, [searchQuery, companyFilter, focusKey]);
+
+  useEffect(() => {
+    if (!focusKey || filteredRows.length === 0) {
+      return;
+    }
+    const targetIndex = filteredRows.findIndex((row) => getHrRequestKey(row) === focusKey);
+    if (targetIndex >= 0) {
+      queueMicrotask(() => focusRow(targetIndex));
+    }
+  }, [filteredRows, focusKey, focusRow]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void refresh(),
+    },
+    focusSearch: {
+      perform: () => searchRef.current?.focus?.(),
+    },
+  });
 
   async function handleDecision(request, decision) {
-    const approved = await openActionConfirm({
-      eyebrow: kind === "leave" ? "Leave Approval" : "Out Work Approval",
-      title: `${decision === "APPROVED" ? "Approve" : "Reject"} Request`,
-      message: `${decision === "APPROVED" ? "Approve" : "Reject"} workflow ${request.workflow_request_id}?`,
-      confirmLabel: decision === "APPROVED" ? "Approve" : "Reject",
-      cancelLabel: "Back",
-    });
-
-    if (!approved) return;
-
-    // For MULTI users: pass the request's company so the backend context pipeline resolves correctly.
+    // Design Authority Law 10: Approval and rejection are immediate — no confirmation dialog.
+    // Feedback is delivered via toast only. Dialog is reserved for destructive actions (cancel/delete).
     const companyId = isMulti ? (request.parent_company_id ?? null) : null;
 
     try {
       await submitWorkflowDecision(request.workflow_request_id, decision, companyId);
-      setDecisionTally((current) => ({
-        approved: current.approved + (decision === "APPROVED" ? 1 : 0),
-        rejected: current.rejected + (decision === "REJECTED" ? 1 : 0),
-      }));
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       await refresh();
     } catch (err) {
@@ -1694,7 +1908,6 @@ function HrApprovalInboxWorkspace({
     <ErpApprovalReviewTemplate
       eyebrow="HR Management"
       title={title}
-      description={description}
       actions={[
         {
           key: "history",
@@ -1718,42 +1931,13 @@ function HrApprovalInboxWorkspace({
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
-          hint: "Alt+R",
+          hint: "Alt+R / F4",
           tone: "primary",
           onClick: () => void refresh(),
         },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
-      metrics={[
-        {
-          key: "queue",
-          label: "Queue",
-          value: String(rows.length),
-          tone: "sky",
-          caption: "Rows still actionable for the current approver.",
-        },
-        {
-          key: "pending",
-          label: "Pending",
-          value: String(rows.filter((row) => row.current_state === "PENDING").length),
-          tone: "amber",
-          caption: "Still waiting for your decision.",
-        },
-        {
-          key: "approved",
-          label: "Approved",
-          value: String(decisionTally.approved),
-          tone: "emerald",
-          caption: "Approved from this inbox during the current session.",
-        },
-        {
-          key: "rejected",
-          label: "Rejected",
-          value: String(decisionTally.rejected),
-          tone: "slate",
-          caption: "Rejected from this inbox during the current session.",
-        },
-      ]}
+      footerHints={HR_APPROVAL_FOOTER_HINTS}
       filterSection={{
         eyebrow: "Queue Search",
         title: "Filter approval inbox",
@@ -1793,7 +1977,6 @@ function HrApprovalInboxWorkspace({
         title: loading
           ? "Loading approval inbox"
           : `${filteredRows.length} actionable request${filteredRows.length === 1 ? "" : "s"}`,
-        description: "Only requests currently actionable for the logged-in approver stay in this queue.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading approval inbox.
@@ -1803,34 +1986,27 @@ function HrApprovalInboxWorkspace({
             No pending request is currently actionable for this approver.
           </div>
         ) : (
-          <div className="grid gap-3">
-            <div className="overflow-x-auto pb-2">
-              <div className="grid min-w-max gap-3">
-                <HrRequestMatrixHeader columns={visibleColumns} />
-                {filteredRows.map((request) => (
-                  <HrRequestCard
-                    key={request.workflow_request_id}
-                    request={request}
-                    kind={kind}
-                    mode="approvalInbox"
-                    visibleColumns={visibleColumns}
-                    onApprove={(row) => void handleDecision(row, "APPROVED")}
-                    onReject={(row) => void handleDecision(row, "REJECTED")}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
+          <HrApprovalDenseTable
+            rows={filteredRows}
+            columns={denseColumns}
+            getRowProps={(_row, index) => getRowProps(index)}
+            onApprove={(row) => void handleDecision(row, "APPROVED")}
+            onReject={(row) => void handleDecision(row, "REJECTED")}
+            onActivate={(row) => openDetail(row)}
+            emptyMessage="No pending request is currently actionable for this approver."
+          />
         ),
       }}
       bottomSection={
-        <HrRequestColumnPickerModal
-          visible={showColumnPicker}
-          visibleColumnKeys={visibleColumnKeys}
-          onClose={() => setShowColumnPicker(false)}
-          onToggleColumn={toggleColumn}
-          onResetColumns={resetColumns}
-        />
+        <>
+          <HrRequestColumnPickerModal
+            visible={showColumnPicker}
+            visibleColumnKeys={visibleColumnKeys}
+            onClose={() => setShowColumnPicker(false)}
+            onToggleColumn={toggleColumn}
+            onResetColumns={resetColumns}
+          />
+        </>
       }
     />
   );
@@ -1839,14 +2015,16 @@ function HrApprovalInboxWorkspace({
 function HrApprovalHistoryWorkspace({
   kind,
   title,
-  description,
   loader,
 }) {
+  const navigate = useNavigate();
+  const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchRef = useRef(null);
   const requesterRef = useRef(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [requesterAuthUserId, setRequesterAuthUserId] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
+  const [requesterAuthUserId, setRequesterAuthUserId] = useState(initialContext.parentState?.requesterAuthUserId ?? "");
   const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.approvalHistory`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader, [
@@ -1867,20 +2045,77 @@ function HrApprovalHistoryWorkspace({
       ]),
     [rows, searchQuery],
   );
+  const denseColumns = useMemo(
+    () => buildHrDenseColumns(visibleColumns, kind),
+    [visibleColumns, kind],
+  );
+  const summaryRow = useMemo(() => buildHrSummaryRow(filteredRows), [filteredRows]);
+  function openDetail(row) {
+    const nextFocusKey = getHrRequestKey(row);
+    const parentState = { searchQuery, requesterAuthUserId, focusKey: nextFocusKey };
+    setFocusKey(nextFocusKey);
+    updateActiveScreenContext({ parentState });
+    openScreenWithContext(getHrDetailScreenCode(kind), {
+      request: row,
+      kind,
+      mode: "approvalHistory",
+      parentState,
+      refreshOnReturn: true,
+    });
+    navigate(getHrDetailRoute(kind));
+  }
 
-  async function handleRefresh() {
+  const { getRowProps, focusRow } = useErpListNavigation(filteredRows, {
+    onActivate: (row) => openDetail(row),
+  });
+
+  const handleRefresh = useCallback(async () => {
     try {
       await refresh(requesterAuthUserId);
     } catch (err) {
       setError(formatError(err, "Approval history could not be loaded."));
     }
-  }
+  }, [refresh, requesterAuthUserId, setError]);
+
+  useEffect(
+    () =>
+      registerScreenRefreshCallback(() => {
+        void handleRefresh();
+      }),
+    [handleRefresh],
+  );
+
+  useEffect(() => {
+    updateActiveScreenContext({ parentState: { searchQuery, requesterAuthUserId, focusKey } });
+  }, [searchQuery, requesterAuthUserId, focusKey]);
+
+  useEffect(() => {
+    if (!focusKey || filteredRows.length === 0) {
+      return;
+    }
+    const targetIndex = filteredRows.findIndex((row) => getHrRequestKey(row) === focusKey);
+    if (targetIndex >= 0) {
+      queueMicrotask(() => focusRow(targetIndex));
+    }
+  }, [filteredRows, focusKey, focusRow]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void handleRefresh(),
+    },
+    focusSearch: {
+      perform: () => searchRef.current?.focus?.(),
+    },
+    focusPrimary: {
+      perform: () => requesterRef.current?.focus?.(),
+    },
+  });
 
   return (
     <ErpApprovalReviewTemplate
       eyebrow="HR Management"
       title={title}
-      description={description}
       actions={[
         {
           key: "columns",
@@ -1891,13 +2126,13 @@ function HrApprovalHistoryWorkspace({
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
-          hint: "Alt+R",
+          hint: "Alt+R / F4",
           tone: "primary",
           onClick: () => void handleRefresh(),
         },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
-      metrics={buildListMetrics(rows)}
+      footerHints={HR_LIST_FOOTER_HINTS}
       filterSection={{
         eyebrow: "Scope Filter",
         title: "Filter approver scope history",
@@ -1925,7 +2160,6 @@ function HrApprovalHistoryWorkspace({
         title: loading
           ? "Loading approval scope history"
           : `${filteredRows.length} visible request${filteredRows.length === 1 ? "" : "s"}`,
-        description: "This page shows all cases where the logged-in user belongs to the approver scope, even if somebody else already decided.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading approval scope history.
@@ -1935,32 +2169,27 @@ function HrApprovalHistoryWorkspace({
             No request is visible in the current approval scope history.
           </div>
         ) : (
-          <div className="grid gap-3">
-            <div className="overflow-x-auto pb-2">
-              <div className="grid min-w-max gap-3">
-                <HrRequestMatrixHeader columns={visibleColumns} />
-                {filteredRows.map((request) => (
-                  <HrRequestCard
-                    key={request.workflow_request_id}
-                    request={request}
-                    kind={kind}
-                    mode="approvalHistory"
-                    visibleColumns={visibleColumns}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
+          <ErpDenseGrid
+            columns={denseColumns}
+            rows={filteredRows}
+            rowKey={(row) => row.workflow_request_id ?? row.leave_request_id ?? row.out_work_request_id}
+            getRowProps={(_row, index) => getRowProps(index)}
+            onRowActivate={(row) => openDetail(row)}
+            summaryRow={summaryRow}
+            emptyMessage="No request is visible in the current approval scope history."
+          />
         ),
       }}
       bottomSection={
-        <HrRequestColumnPickerModal
-          visible={showColumnPicker}
-          visibleColumnKeys={visibleColumnKeys}
-          onClose={() => setShowColumnPicker(false)}
-          onToggleColumn={toggleColumn}
-          onResetColumns={resetColumns}
-        />
+        <>
+          <HrRequestColumnPickerModal
+            visible={showColumnPicker}
+            visibleColumnKeys={visibleColumnKeys}
+            onClose={() => setShowColumnPicker(false)}
+            onToggleColumn={toggleColumn}
+            onResetColumns={resetColumns}
+          />
+        </>
       }
     />
   );
@@ -1969,14 +2198,16 @@ function HrApprovalHistoryWorkspace({
 function HrRegisterWorkspace({
   kind,
   title,
-  description,
   loader,
 }) {
+  const navigate = useNavigate();
+  const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchRef = useRef(null);
   const requesterRef = useRef(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [requesterAuthUserId, setRequesterAuthUserId] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
+  const [requesterAuthUserId, setRequesterAuthUserId] = useState(initialContext.parentState?.requesterAuthUserId ?? "");
   const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.register`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader, [
@@ -1997,20 +2228,77 @@ function HrRegisterWorkspace({
       ]),
     [rows, searchQuery],
   );
+  const denseColumns = useMemo(
+    () => buildHrDenseColumns(visibleColumns, kind),
+    [visibleColumns, kind],
+  );
+  const summaryRow = useMemo(() => buildHrSummaryRow(filteredRows), [filteredRows]);
+  function openDetail(row) {
+    const nextFocusKey = getHrRequestKey(row);
+    const parentState = { searchQuery, requesterAuthUserId, focusKey: nextFocusKey };
+    setFocusKey(nextFocusKey);
+    updateActiveScreenContext({ parentState });
+    openScreenWithContext(getHrDetailScreenCode(kind), {
+      request: row,
+      kind,
+      mode: "register",
+      parentState,
+      refreshOnReturn: true,
+    });
+    navigate(getHrDetailRoute(kind));
+  }
 
-  async function handleRefresh() {
+  const { getRowProps, focusRow } = useErpListNavigation(filteredRows, {
+    onActivate: (row) => openDetail(row),
+  });
+
+  const handleRefresh = useCallback(async () => {
     try {
       await refresh(requesterAuthUserId);
     } catch (err) {
       setError(formatError(err, "Register could not be loaded."));
     }
-  }
+  }, [refresh, requesterAuthUserId, setError]);
+
+  useEffect(
+    () =>
+      registerScreenRefreshCallback(() => {
+        void handleRefresh();
+      }),
+    [handleRefresh],
+  );
+
+  useEffect(() => {
+    updateActiveScreenContext({ parentState: { searchQuery, requesterAuthUserId, focusKey } });
+  }, [searchQuery, requesterAuthUserId, focusKey]);
+
+  useEffect(() => {
+    if (!focusKey || filteredRows.length === 0) {
+      return;
+    }
+    const targetIndex = filteredRows.findIndex((row) => getHrRequestKey(row) === focusKey);
+    if (targetIndex >= 0) {
+      queueMicrotask(() => focusRow(targetIndex));
+    }
+  }, [filteredRows, focusKey, focusRow]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void handleRefresh(),
+    },
+    focusSearch: {
+      perform: () => searchRef.current?.focus?.(),
+    },
+    focusPrimary: {
+      perform: () => requesterRef.current?.focus?.(),
+    },
+  });
 
   return (
     <ErpReportFilterTemplate
       eyebrow="HR Management"
       title={title}
-      description={description}
       actions={[
         {
           key: "columns",
@@ -2021,13 +2309,13 @@ function HrRegisterWorkspace({
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
-          hint: "Alt+R",
+          hint: "Alt+R / F4",
           tone: "primary",
           onClick: () => void handleRefresh(),
         },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
-      metrics={buildListMetrics(rows)}
+      footerHints={HR_LIST_FOOTER_HINTS}
       filterSection={{
         eyebrow: "Register Filters",
         title: "Filter register rows",
@@ -2055,7 +2343,6 @@ function HrRegisterWorkspace({
         title: loading
           ? "Loading register"
           : `${filteredRows.length} visible request${filteredRows.length === 1 ? "" : "s"}`,
-        description: "HR and reporting visibility lane for the selected company universe.",
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading register.
@@ -2065,32 +2352,27 @@ function HrRegisterWorkspace({
             No request matches the current register filter.
           </div>
         ) : (
-          <div className="grid gap-3">
-            <div className="overflow-x-auto pb-2">
-              <div className="grid min-w-max gap-3">
-                <HrRequestMatrixHeader columns={visibleColumns} />
-                {filteredRows.map((request) => (
-                  <HrRequestCard
-                    key={request.workflow_request_id}
-                    request={request}
-                    kind={kind}
-                    mode="register"
-                    visibleColumns={visibleColumns}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
+          <ErpDenseGrid
+            columns={denseColumns}
+            rows={filteredRows}
+            rowKey={(row) => row.workflow_request_id ?? row.leave_request_id ?? row.out_work_request_id}
+            getRowProps={(_row, index) => getRowProps(index)}
+            onRowActivate={(row) => openDetail(row)}
+            summaryRow={summaryRow}
+            emptyMessage="No request matches the current register filter."
+          />
         ),
       }}
       bottomSection={
-        <HrRequestColumnPickerModal
-          visible={showColumnPicker}
-          visibleColumnKeys={visibleColumnKeys}
-          onClose={() => setShowColumnPicker(false)}
-          onToggleColumn={toggleColumn}
-          onResetColumns={resetColumns}
-        />
+        <>
+          <HrRequestColumnPickerModal
+            visible={showColumnPicker}
+            visibleColumnKeys={visibleColumnKeys}
+            onClose={() => setShowColumnPicker(false)}
+            onToggleColumn={toggleColumn}
+            onResetColumns={resetColumns}
+          />
+        </>
       }
     />
   );
@@ -2101,7 +2383,6 @@ export function LeaveMyRequestsWorkspace() {
     <HrRequestListWorkspace
       kind="leave"
       title="My Leave Requests"
-      description="See own leave request history with current workflow status. Pending rows stay cancellable only until the first approver acts."
       loader={() => listMyLeaveRequests()}
       openApply="HR_LEAVE_APPLY"
       openInbox="HR_LEAVE_APPROVAL_INBOX"
@@ -2114,7 +2395,6 @@ export function LeaveApprovalInboxWorkspace() {
     <HrApprovalInboxWorkspace
       kind="leave"
       title="Leave Approval Inbox"
-      description="Approvers see only the currently actionable leave requests here and can approve or reject without leaving the queue."
       loader={() => listLeaveApprovalInbox()}
       openHistory="HR_LEAVE_APPROVAL_SCOPE_HISTORY"
     />
@@ -2126,7 +2406,6 @@ export function LeaveApprovalScopeHistoryWorkspace() {
     <HrApprovalHistoryWorkspace
       kind="leave"
       title="Leave Approval Scope History"
-      description="See every leave request where the logged-in user belongs to the approver scope, whether or not the logged-in user gave the decision."
       loader={(requesterAuthUserId) => listLeaveApprovalHistory(requesterAuthUserId)}
     />
   );
@@ -2137,7 +2416,6 @@ export function LeaveRegisterWorkspace() {
     <HrRegisterWorkspace
       kind="leave"
       title="HR Leave Register"
-      description="Parent-company HR and reporting viewers can inspect cross-user leave request history here."
       loader={(requesterAuthUserId) => listLeaveRegister({ requesterAuthUserId })}
     />
   );
@@ -2148,7 +2426,6 @@ export function OutWorkMyRequestsWorkspace() {
     <HrRequestListWorkspace
       kind="outWork"
       title="My Out Work Requests"
-      description="See own out work request history with current workflow status. Pending rows stay cancellable only until the first approver acts."
       loader={() => listMyOutWorkRequests()}
       openApply="HR_OUT_WORK_APPLY"
       openInbox="HR_OUT_WORK_APPROVAL_INBOX"
@@ -2161,7 +2438,6 @@ export function OutWorkApprovalInboxWorkspace() {
     <HrApprovalInboxWorkspace
       kind="outWork"
       title="Out Work Approval Inbox"
-      description="Approvers see only the currently actionable out work requests here and can approve or reject without leaving the queue."
       loader={() => listOutWorkApprovalInbox()}
       openHistory="HR_OUT_WORK_APPROVAL_SCOPE_HISTORY"
     />
@@ -2173,7 +2449,6 @@ export function OutWorkApprovalScopeHistoryWorkspace() {
     <HrApprovalHistoryWorkspace
       kind="outWork"
       title="Out Work Approval Scope History"
-      description="See every out work request where the logged-in user belongs to the approver scope, whether or not the logged-in user gave the decision."
       loader={(requesterAuthUserId) => listOutWorkApprovalHistory(requesterAuthUserId)}
     />
   );
@@ -2184,8 +2459,15 @@ export function OutWorkRegisterWorkspace() {
     <HrRegisterWorkspace
       kind="outWork"
       title="Out Work Register"
-      description="Parent-company HR and reporting viewers can inspect cross-user out work request history here."
       loader={(requesterAuthUserId) => listOutWorkRegister({ requesterAuthUserId })}
     />
   );
+}
+
+export function LeaveRequestDetailWorkspace() {
+  return <HrRequestDetailWorkspace kind="leave" />;
+}
+
+export function OutWorkRequestDetailWorkspace() {
+  return <HrRequestDetailWorkspace kind="outWork" />;
 }

@@ -77,7 +77,10 @@ export default function ErpCommandPalette({
     };
   }, []);
 
-  const screenCommands = screenRegistry.get(activeRoute) ?? [];
+  const screenCommands = useMemo(
+    () => screenRegistry.get(activeRoute) ?? [],
+    [activeRoute, screenRegistry]
+  );
 
   const commands = useMemo(() => {
     const combined = [...screenCommands, ...shellCommands, ...menuCommands].filter(

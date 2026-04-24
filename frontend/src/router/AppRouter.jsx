@@ -31,6 +31,7 @@ import SADashboardShell from "../admin/sa/SADashboardShell.jsx";
 import GADashboardShell from "../admin/ga/GADashboardShell.jsx";
 import SAControlPanel from "../admin/sa/screens/SAControlPanel.jsx";
 import SAAudit from "../admin/sa/screens/SAAudit.jsx";
+import SAAuditDetail from "../admin/sa/screens/SAAuditDetail.jsx";
 import SACompanyCreate from "../admin/sa/screens/SACompanyCreate.jsx";
 import SACompanyManage from "../admin/sa/screens/SACompanyManage.jsx";
 import SADepartmentMaster from "../admin/sa/screens/SADepartmentMaster.jsx";
@@ -64,12 +65,14 @@ import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
 import LeaveApplyPage from "../pages/dashboard/hr/leave/LeaveApplyPage.jsx";
 import LeaveMyRequestsPage from "../pages/dashboard/hr/leave/LeaveMyRequestsPage.jsx";
 import LeaveApprovalInboxPage from "../pages/dashboard/hr/leave/LeaveApprovalInboxPage.jsx";
+import LeaveRequestDetailPage from "../pages/dashboard/hr/leave/LeaveRequestDetailPage.jsx";
 import LeaveApprovalScopeHistoryPage from "../pages/dashboard/hr/leave/LeaveApprovalScopeHistoryPage.jsx";
 import LeaveRegisterPage from "../pages/dashboard/hr/leave/LeaveRegisterPage.jsx";
 import LeaveRegisterResultsPage from "../pages/dashboard/hr/leave/LeaveRegisterResultsPage.jsx";
 import OutWorkApplyPage from "../pages/dashboard/hr/outWork/OutWorkApplyPage.jsx";
 import OutWorkMyRequestsPage from "../pages/dashboard/hr/outWork/OutWorkMyRequestsPage.jsx";
 import OutWorkApprovalInboxPage from "../pages/dashboard/hr/outWork/OutWorkApprovalInboxPage.jsx";
+import OutWorkRequestDetailPage from "../pages/dashboard/hr/outWork/OutWorkRequestDetailPage.jsx";
 import OutWorkApprovalScopeHistoryPage from "../pages/dashboard/hr/outWork/OutWorkApprovalScopeHistoryPage.jsx";
 import OutWorkRegisterPage from "../pages/dashboard/hr/outWork/OutWorkRegisterPage.jsx";
 import OutWorkRegisterResultsPage from "../pages/dashboard/hr/outWork/OutWorkRegisterResultsPage.jsx";
@@ -120,6 +123,7 @@ export default function AppRouter() {
                       element={<SAControlPanel />}
                     />
                     <Route path="audit" element={<SAAudit />} />
+                    <Route path="audit/detail" element={<SAAuditDetail />} />
                     <Route path="sessions" element={<SASessions />} />
                     <Route
                       path="system-health"
@@ -226,6 +230,10 @@ export default function AppRouter() {
                     element={<LeaveMyRequestsPage />}
                   />
                   <Route
+                    path="hr/leave/request-detail"
+                    element={<LeaveRequestDetailPage />}
+                  />
+                  <Route
                     path="hr/leave/approval-inbox"
                     element={<LeaveApprovalInboxPage />}
                   />
@@ -245,6 +253,10 @@ export default function AppRouter() {
                   <Route
                     path="hr/out-work/my-requests"
                     element={<OutWorkMyRequestsPage />}
+                  />
+                  <Route
+                    path="hr/out-work/request-detail"
+                    element={<OutWorkRequestDetailPage />}
                   />
                   <Route
                     path="hr/out-work/approval-inbox"

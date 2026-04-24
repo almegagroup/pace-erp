@@ -1,18 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { openScreen } from "../../../navigation/screenStackEngine.js";
-import { openActionConfirm } from "../../../store/actionConfirm.js";
+import {
+  openScreen,
+  openScreenWithContext,
+  getActiveScreenContext,
+  updateActiveScreenContext,
+  registerScreenRefreshCallback,
+} from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
-import {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import { applyQuickFilter, sortProjects } from "../../../shared/erpCollections.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
@@ -73,20 +77,20 @@ function formatDateTime(value) {
 }
 
 export default function SAProjectMaster() {
+  const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const navigate = useNavigate();
   const actionBarRefs = useRef([]);
   const formContainerRef = useRef(null);
   const projectNameRef = useRef(null);
   const searchInputRef = useRef(null);
-  const projectRowRefs = useRef([]);
   const [projects, setProjects] = useState([]);
   const [projectName, setProjectName] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
+  const [selectedProjectId, setSelectedProjectId] = useState(initialContext.parentState?.focusKey ?? "");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [recentProject, setRecentProject] = useState(null);
 
   async function loadProjects() {
     setLoading(true);
@@ -114,18 +118,6 @@ export default function SAProjectMaster() {
       return;
     }
 
-    const approved = await openActionConfirm({
-      eyebrow: "Project Master",
-      title: "Create Project",
-      message: `Create project master row for ${normalizedName}?`,
-      confirmLabel: "Create Project",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
-      return;
-    }
-
     setSaving(true);
     setError("");
     setNotice("");
@@ -136,7 +128,6 @@ export default function SAProjectMaster() {
       });
       const refreshed = await fetchProjects();
       setProjects(sortProjects(refreshed));
-      setRecentProject(created);
       setProjectName("");
       setNotice(`Project ${created.project_code} created successfully.`);
       projectNameRef.current?.focus();
@@ -158,6 +149,57 @@ export default function SAProjectMaster() {
     [projects, searchQuery]
   );
   const projectPagination = useErpPagination(filteredProjects, 10);
+  const selectedProject =
+    filteredProjects.find((row) => row.id === selectedProjectId) ??
+    projectPagination.pageItems[0] ??
+    null;
+
+  useEffect(() => {
+    if (!filteredProjects.some((row) => row.id === selectedProjectId)) {
+      setSelectedProjectId(filteredProjects[0]?.id ?? "");
+    }
+  }, [filteredProjects, selectedProjectId]);
+
+  function openDetail(row) {
+    const parentState = {
+      searchQuery,
+      focusKey: row?.id ?? "",
+    };
+    setSelectedProjectId(row?.id ?? "");
+    updateActiveScreenContext({ parentState });
+    openScreenWithContext("SA_PROJECT_MANAGE", {
+      projectId: row?.id ?? "",
+      parentState,
+      refreshOnReturn: true,
+    });
+    navigate(`/sa/projects/manage?project_id=${encodeURIComponent(row?.id ?? "")}`);
+  }
+
+  const { getRowProps, focusRow } = useErpListNavigation(projectPagination.pageItems, {
+    onActivate: (row) => openDetail(row),
+  });
+
+  useEffect(
+    () =>
+      registerScreenRefreshCallback(() => {
+        void loadProjects();
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    updateActiveScreenContext({ parentState: { searchQuery, focusKey: selectedProjectId } });
+  }, [searchQuery, selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProjectId || projectPagination.pageItems.length === 0) {
+      return;
+    }
+    const targetIndex = projectPagination.pageItems.findIndex((row) => row.id === selectedProjectId);
+    if (targetIndex >= 0) {
+      queueMicrotask(() => focusRow(targetIndex));
+    }
+  }, [projectPagination.pageItems, selectedProjectId, focusRow]);
 
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
@@ -314,42 +356,10 @@ export default function SAProjectMaster() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "total",
-      label: "Projects",
-      value: loading ? "..." : String(projects.length),
-      tone: "sky",
-      caption: "Project rows currently returned by the global master list flow.",
-    },
-    {
-      key: "active",
-      label: "Active",
-      value: loading ? "..." : String(projects.filter((row) => row.status === "ACTIVE").length),
-      tone: "emerald",
-      caption: "Active project masters from the global backend list endpoint.",
-    },
-    {
-      key: "filtered",
-      label: "Visible",
-      value: loading ? "..." : String(filteredProjects.length),
-      tone: "amber",
-      caption: "Rows matching the current quick filter.",
-    },
-    {
-      key: "recent",
-      label: "Recent Create",
-      value: recentProject?.project_code ?? "None",
-      tone: "slate",
-      caption: recentProject?.project_name ?? "No project created in this session yet.",
-    },
-  ];
-
   return (
     <ErpEntryFormTemplate
       eyebrow="Project Master"
       title="Project Master Manage"
-      description="Create reusable global project rows here, then move into dedicated lifecycle and company mapping surfaces when the project is ready."
       actions={topActions}
       notices={[
         ...(error
@@ -371,16 +381,12 @@ export default function SAProjectMaster() {
             ]
           : []),
       ]}
-      metrics={metrics}
+      footerHints={["Tab Next Field", "↑↓ Navigate", "Enter Open", "Ctrl+S Save", "Esc Back", "Ctrl+K Command Bar"]}
       formEyebrow="Create"
       formTitle="Create a new project"
-      formDescription="Create a reusable global project row here. Company rollout now happens from the dedicated company project map screen."
       formContent={
-        <div ref={formContainerRef} className="grid gap-3">
-          <label className="grid gap-2 border border-slate-300 bg-white px-4 py-3">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Project Name
-            </span>
+        <div ref={formContainerRef} className="grid gap-[var(--erp-form-gap)]">
+          <ErpDenseFormRow label="Project Name" required>
             <input
               ref={projectNameRef}
               data-workspace-primary-focus="true"
@@ -389,63 +395,26 @@ export default function SAProjectMaster() {
               value={projectName}
               onChange={(event) => setProjectName(event.target.value)}
               placeholder="Project name"
-              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
+              className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
             />
-            <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
-              Enter moves forward | Ctrl+S creates the project
-            </p>
-          </label>
+          </ErpDenseFormRow>
         </div>
       }
-      sideContent={
-        <>
-          <ErpSectionCard
-            eyebrow="Search"
-            title="Project quick filter"
-            description="Filter the current global project list without leaving the create form."
-          >
-            <QuickFilterInput
-              label="Find Project"
-              value={searchQuery}
-              onChange={setSearchQuery}
-              inputRef={searchInputRef}
-              placeholder="Filter by code, name, status, or created time"
-              hint="Alt+Shift+F focuses this filter."
-            />
-          </ErpSectionCard>
-
-          <ErpSectionCard
-            eyebrow="Recent"
-            title="Last created project"
-            description="The most recent project created in this session stays visible here."
-          >
-            <ErpFieldPreview
-              label="Project"
-              value={
-                recentProject
-                  ? `${recentProject.project_code} | ${recentProject.project_name}`
-                  : "No project created yet"
-              }
-              caption={
-                recentProject
-                  ? `Status ${recentProject.status ?? "ACTIVE"}`
-                  : "Create a project to populate this preview."
-              }
-              tone={recentProject ? "success" : "default"}
-            />
-          </ErpSectionCard>
-        </>
-      }
       bottomContent={
-        <ErpSectionCard
-          eyebrow="Project List"
-          title={
-            loading
+        <section className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Project Register</div>
+          <div className="text-sm font-semibold text-slate-900">
+            {loading
               ? "Loading project rows"
-              : `${filteredProjects.length} visible project${filteredProjects.length === 1 ? "" : "s"}`
-          }
-          description="The list below comes from the global project master endpoint."
-        >
+              : `${filteredProjects.length} visible project${filteredProjects.length === 1 ? "" : "s"}`}
+          </div>
+          <QuickFilterInput
+            label="Search Projects"
+            value={searchQuery}
+            onChange={setSearchQuery}
+            inputRef={searchInputRef}
+            placeholder="Search by code, name, state, or created time"
+          />
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
               Loading project master rows.
@@ -455,7 +424,7 @@ export default function SAProjectMaster() {
               No project matches the current filter.
             </div>
           ) : (
-            <div className="space-y-0 border border-slate-300">
+            <div className="grid gap-3">
               <ErpPaginationStrip
                 page={projectPagination.page}
                 setPage={projectPagination.setPage}
@@ -464,36 +433,46 @@ export default function SAProjectMaster() {
                 endIndex={projectPagination.endIndex}
                 totalItems={filteredProjects.length}
               />
-              {projectPagination.pageItems.map((project, index) => (
-                <button
-                  key={project.id}
-                  ref={(element) => {
-                    projectRowRefs.current[index] = element;
-                  }}
-                  type="button"
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: projectRowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
-                  className="w-full border-b border-slate-300 bg-white px-4 py-3 text-left text-sm text-slate-700 transition last:border-b-0 focus:bg-sky-50"
-                >
-                  <span className="block font-semibold text-slate-900">
-                    {project.project_code} - {project.project_name}
-                  </span>
-                  <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
-                    {project.status ?? "UNKNOWN"}
-                  </span>
-                  <span className="mt-1 block text-xs text-slate-500">
-                    Created {formatDateTime(project.created_at)}
-                  </span>
-                </button>
-              ))}
+              <ErpDenseGrid
+                columns={[
+                  {
+                    key: "project",
+                    label: "Project",
+                    render: (project) => (
+                      <div>
+                        <div className="font-semibold text-slate-900">
+                          {project.project_code} - {project.project_name}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Created {formatDateTime(project.created_at)}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "status",
+                    label: "Status",
+                    render: (project) => project.status ?? "UNKNOWN",
+                  },
+                ]}
+                rows={projectPagination.pageItems}
+                rowKey={(project) => project.id}
+                getRowProps={(project, index) => ({
+                  ...getRowProps(index),
+                  onClick: () => setSelectedProjectId(project.id),
+                  className: project.id === selectedProjectId ? "bg-sky-50" : "",
+                })}
+                onRowActivate={(project) => openDetail(project)}
+                maxHeight="none"
+              />
+              {selectedProject ? (
+                <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                  Selected: <span className="font-semibold text-slate-900">{selectedProject.project_code} - {selectedProject.project_name}</span>
+                </div>
+              ) : null}
             </div>
           )}
-        </ErpSectionCard>
+        </section>
       }
     />
   );

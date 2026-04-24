@@ -5,16 +5,15 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import {
   formatCompanyAddress,
   formatCompanyLabel,
-  formatCompanyOptionLabel,
 } from "../../../shared/companyDisplay.js";
 
 function normalize(value) {
@@ -171,7 +170,6 @@ function buildEditDraft(context) {
 export default function SAWorkContextMaster() {
   const navigate = useNavigate();
   const topActionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const companySelectRef = useRef(null);
   const searchRef = useRef(null);
   const drawerPrimaryRef = useRef(null);
@@ -378,18 +376,9 @@ export default function SAWorkContextMaster() {
     });
   }, [search, typeFilter, workContexts]);
 
-  const metrics = useMemo(() => {
-    const systemCount = workContexts.filter((row) => row.is_system === true).length;
-    const manualCount = workContexts.length - systemCount;
-    const activeCount = workContexts.filter((row) => row.is_active === true).length;
-
-    return {
-      total: workContexts.length,
-      manual: manualCount,
-      system: systemCount,
-      active: activeCount,
-    };
-  }, [workContexts]);
+  const { getRowProps } = useErpListNavigation(filteredContexts, {
+    onActivate: (row) => setSelectedContextId(row?.work_context_id ?? ""),
+  });
 
   const notices = [
     error ? { tone: "error", message: error } : null,
@@ -654,7 +643,6 @@ export default function SAWorkContextMaster() {
       <ErpScreenScaffold
         eyebrow="Work Scope Foundation"
         title="Work Context Master"
-        description="Keep company-wide and department-derived system scopes visible, then create manual business areas like PROD_POWDER, QA_ADMIX, SCM_OPERATIONS, or MGMT_ALL. Business rule: department is org structure, work scope is runtime business area."
         notices={notices}
         actions={[
           {
@@ -724,46 +712,15 @@ export default function SAWorkContextMaster() {
               }),
           },
         ]}
-        metrics={[
-          {
-            label: "Total Scopes",
-            value: metrics.total,
-            caption: "All work scopes currently defined in the selected company.",
-            tone: "sky",
-          },
-          {
-            label: "Manual Scopes",
-            value: metrics.manual,
-            caption: "Business slices created manually for Powder, Admix, SCM, Management, or Audit.",
-            tone: "emerald",
-          },
-          {
-            label: "System Scopes",
-            value: metrics.system,
-            caption: "GENERAL_OPS plus DEPT_* scopes derived from company and department foundations.",
-            tone: "amber",
-          },
-          {
-            label: "Active",
-            value: metrics.active,
-            caption: "Scopes currently available for capability wiring and user assignment.",
-            tone: "slate",
-          },
-        ]}
-        footerHints={[
-          "ALT+R REFRESH",
-          "ALT+S SEARCH",
-          "ENTER INSPECT",
-          "CTRL+K COMMAND BAR",
-        ]}
+        footerHints={["↑↓ Navigate", "Enter Inspect", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       >
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.65fr)]">
           <div className="grid gap-3">
-            <ErpSectionCard
-              eyebrow="Company Scope"
-              title="Select Company"
-              description="Work scopes remain company-bound. Change company first, then inspect or create manual runtime slices."
-            >
+            <section className="grid gap-2 border-b border-slate-300 pb-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Company Scope
+              </div>
+              <div className="text-sm font-semibold text-slate-900">Select Company</div>
               <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_150px]">
                 <label className="grid gap-2">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -778,7 +735,7 @@ export default function SAWorkContextMaster() {
                     <option value="">Select company</option>
                     {companies.map((company) => (
                       <option key={company.id} value={company.id}>
-                        {formatCompanyOptionLabel(company)}
+                        {formatCompanyLabel(company)}
                       </option>
                     ))}
                   </select>
@@ -805,17 +762,17 @@ export default function SAWorkContextMaster() {
                   onChange={setSearch}
                   inputRef={searchRef}
                   placeholder="Search code, name, or department"
-                  hint="Keep the table readable. Dense inspection and editing happen in drawers."
+                  hint="Keep the table readable. Deep inspection and editing stay in drawers."
                   className="md:col-span-2"
                 />
               </div>
-            </ErpSectionCard>
+            </section>
 
-            <ErpSectionCard
-              eyebrow="Inventory"
-              title="Work Scope Table"
-              description="System scopes stay visible for clarity. Manual scopes are the ones SA creates for Production split, QA split, SCM, Management, Audit, or any other exact runtime slice."
-            >
+            <section className="grid gap-2">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Inventory
+              </div>
+              <div className="text-sm font-semibold text-slate-900">Work Scope Register</div>
               <div className="overflow-x-auto border border-slate-300 bg-white">
                 {loading ? (
                   <div className="px-4 py-6 text-sm text-slate-500">
@@ -826,180 +783,168 @@ export default function SAWorkContextMaster() {
                     No work scope matched the current company and filter selection.
                   </div>
                 ) : (
-                  <table className="min-w-full border-collapse text-sm text-slate-700">
-                    <thead className="bg-slate-50 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                      <tr>
-                        <th className="border-b border-slate-300 px-4 py-3 text-left">
-                          Code
-                        </th>
-                        <th className="border-b border-l border-slate-300 px-4 py-3 text-left">
-                          Name
-                        </th>
-                        <th className="border-b border-l border-slate-300 px-4 py-3 text-left">
-                          Type
-                        </th>
-                        <th className="border-b border-l border-slate-300 px-4 py-3 text-left">
-                          Department
-                        </th>
-                        <th className="border-b border-l border-slate-300 px-4 py-3 text-left">
-                          State
-                        </th>
-                        <th className="border-b border-l border-slate-300 px-4 py-3 text-left">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredContexts.map((context, index) => {
-                        const selected =
-                          context.work_context_id === selectedContextId;
-                        const isSystem = context.is_system === true;
-
-                        return (
-                          <tr
-                            key={context.work_context_id}
-                            className={selected ? "bg-sky-50" : "bg-white"}
+                  <ErpDenseGrid
+                    columns={[
+                      {
+                        key: "code",
+                        label: "Code",
+                        render: (context) => (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedContextId(context.work_context_id)}
+                            className="w-full text-left"
                           >
-                            <td className="border-b border-slate-200 px-4 py-3 align-top">
+                            <div className="font-semibold text-slate-900">
+                              {context.work_context_code}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {context.description || "No description saved yet."}
+                            </div>
+                          </button>
+                        ),
+                      },
+                      {
+                        key: "name",
+                        label: "Name",
+                        render: (context) => (
+                          <div className="font-semibold text-slate-900">
+                            {context.work_context_name}
+                          </div>
+                        ),
+                      },
+                      {
+                        key: "type",
+                        label: "Type",
+                        render: (context) => {
+                          const isSystem = context.is_system === true;
+                          return (
+                            <span
+                              className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                isSystem
+                                  ? "border-amber-300 bg-amber-50 text-amber-800"
+                                  : "border-emerald-300 bg-emerald-50 text-emerald-800"
+                              }`}
+                            >
+                              {isSystem ? "System" : "Manual"}
+                            </span>
+                          );
+                        },
+                      },
+                      {
+                        key: "department",
+                        label: "Department",
+                        render: (context) =>
+                          context.department_code
+                            ? `${context.department_code} | ${context.department_name ?? ""}`
+                            : "Company-wide / no team link",
+                      },
+                      {
+                        key: "state",
+                        label: "State",
+                        render: (context) => (
+                          <span
+                            className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                              context.is_active
+                                ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                                : "border-rose-300 bg-rose-50 text-rose-700"
+                            }`}
+                          >
+                            {context.is_active ? "Active" : "Inactive"}
+                          </span>
+                        ),
+                      },
+                      {
+                        key: "actions",
+                        label: "Actions",
+                        render: (context) => {
+                          const isSystem = context.is_system === true;
+                          return (
+                            <div className="flex flex-wrap gap-2">
                               <button
-                                ref={(element) => {
-                                  rowRefs.current[index] = element;
-                                }}
                                 type="button"
-                                onClick={() => setSelectedContextId(context.work_context_id)}
-                                onDoubleClick={() => openInspector(context)}
-                                onKeyDown={(event) =>
-                                  handleLinearNavigation(event, {
-                                    index,
-                                    refs: rowRefs.current,
-                                    orientation: "vertical",
-                                  })
-                                }
-                                className="w-full text-left"
+                                onClick={() => openInspector(context)}
+                                className="border border-slate-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700"
                               >
-                                <div className="font-semibold text-slate-900">
-                                  {context.work_context_code}
-                                </div>
-                                <div className="mt-1 text-xs text-slate-500">
-                                  {context.description || "No description saved yet."}
-                                </div>
+                                Inspect
                               </button>
-                            </td>
-                            <td className="border-b border-l border-slate-200 px-4 py-3 align-top">
-                              <div className="font-semibold text-slate-900">
-                                {context.work_context_name}
-                              </div>
-                            </td>
-                            <td className="border-b border-l border-slate-200 px-4 py-3 align-top">
-                              <span
-                                className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                              <button
+                                type="button"
+                                disabled={isSystem}
+                                onClick={() => openEditDrawer(context)}
+                                className={`border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
                                   isSystem
-                                    ? "border-amber-300 bg-amber-50 text-amber-800"
-                                    : "border-emerald-300 bg-emerald-50 text-emerald-800"
+                                    ? "border-slate-200 bg-slate-100 text-slate-400"
+                                    : "border-sky-300 bg-sky-50 text-sky-800"
                                 }`}
                               >
-                                {isSystem ? "System" : "Manual"}
-                              </span>
-                            </td>
-                            <td className="border-b border-l border-slate-200 px-4 py-3 align-top">
-                              <div className="text-sm text-slate-700">
-                                {context.department_code
-                                  ? `${context.department_code} | ${context.department_name ?? ""}`
-                                  : "Company-wide / no team link"}
-                              </div>
-                            </td>
-                            <td className="border-b border-l border-slate-200 px-4 py-3 align-top">
-                              <span
-                                className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                                  context.is_active
-                                    ? "border-emerald-300 bg-emerald-50 text-emerald-800"
-                                    : "border-rose-300 bg-rose-50 text-rose-700"
-                                }`}
-                              >
-                                {context.is_active ? "Active" : "Inactive"}
-                              </span>
-                            </td>
-                            <td className="border-b border-l border-slate-200 px-4 py-3 align-top">
-                              <div className="flex flex-wrap gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => openInspector(context)}
-                                  className="border border-slate-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700"
-                                >
-                                  Inspect
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isSystem}
-                                  onClick={() => openEditDrawer(context)}
-                                  className={`border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                                    isSystem
-                                      ? "border-slate-200 bg-slate-100 text-slate-400"
-                                      : "border-sky-300 bg-sky-50 text-sky-800"
-                                  }`}
-                                >
-                                  {isSystem ? "Locked" : "Edit"}
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                                {isSystem ? "Locked" : "Edit"}
+                              </button>
+                            </div>
+                          );
+                        },
+                      },
+                    ]}
+                    rows={filteredContexts}
+                    rowKey={(context) => context.work_context_id}
+                    getRowProps={(context, index) => ({
+                      ...getRowProps(index),
+                      onClick: () => setSelectedContextId(context.work_context_id),
+                      className:
+                        context.work_context_id === selectedContextId ? "bg-sky-50" : "",
+                    })}
+                    onRowActivate={(context) => setSelectedContextId(context.work_context_id)}
+                    maxHeight="none"
+                  />
                 )}
               </div>
-            </ErpSectionCard>
+            </section>
           </div>
 
           <div className="grid gap-3">
-            <ErpSectionCard
-              eyebrow="Selected Scope"
-              title={
-                selectedContext
+            <section className="grid gap-2">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Selected Scope
+              </div>
+              <div className="break-words text-sm font-semibold text-slate-900">
+                {selectedContext
                   ? `${selectedContext.work_context_code} | ${selectedContext.work_context_name}`
-                  : "Choose A Work Scope"
-              }
-              description="Department remains org structure. Work scope remains runtime business area. Keep these separate for clean governance."
-            >
+                  : "Choose A Work Scope"}
+              </div>
               {selectedContext ? (
                 <div className="grid gap-3">
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <ErpFieldPreview
-                      label="Scope Type"
-                      value={selectedContext.is_system ? "SYSTEM" : "MANUAL"}
-                      caption={
-                        selectedContext.is_system
-                          ? "Derived from company or department foundation."
-                          : "Created manually for exact business slices."
-                      }
-                    />
-                    <ErpFieldPreview
-                      label="Department Link"
-                      value={
-                        selectedContext.department_code
+                  <div className="border border-slate-300 bg-white">
+                    {[
+                      {
+                        label: "Scope Type",
+                        value: selectedContext.is_system ? "SYSTEM" : "MANUAL",
+                      },
+                      {
+                        label: "Department Link",
+                        value: selectedContext.department_code
                           ? `${selectedContext.department_code} | ${selectedContext.department_name ?? ""}`
-                          : "No department link"
-                      }
-                      caption="Optional for manual scopes. Useful when a runtime slice still belongs to one team."
-                    />
-                    <ErpFieldPreview
-                      label="Lifecycle"
-                      value={selectedContext.is_active ? "ACTIVE" : "INACTIVE"}
-                      caption="Inactive manual scopes stay out of new user assignments until re-enabled."
-                    />
-                    <ErpFieldPreview
-                      label="Foundation"
-                      value={formatCompanyLabel(selectedCompany)}
-                      caption={formatCompanyAddress(selectedCompany)}
-                    />
+                          : "No department link",
+                      },
+                      {
+                        label: "Lifecycle",
+                        value: selectedContext.is_active ? "ACTIVE" : "INACTIVE",
+                      },
+                      {
+                        label: "Foundation",
+                        value: formatCompanyLabel(selectedCompany),
+                      },
+                    ].map((item) => (
+                      <div key={item.label} className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px] last:border-b-0">
+                        <span className="min-w-[110px] text-[11px] text-slate-500">{item.label}</span>
+                        <span className="min-w-0 break-words text-right text-[11px] font-semibold text-slate-900">{item.value}</span>
+                      </div>
+                    ))}
                   </div>
 
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => openInspector(selectedContext)}
-                    className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                  <div className="flex flex-wrap gap-1">
+                    <button
+                      type="button"
+                      onClick={() => openInspector(selectedContext)}
+                      className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
                     >
                       Inspect Scope
                     </button>
@@ -1007,7 +952,7 @@ export default function SAWorkContextMaster() {
                       type="button"
                       disabled={selectedContext.is_system === true}
                       onClick={() => openEditDrawer(selectedContext)}
-                      className={`border px-3 py-2 text-sm font-semibold ${
+                      className={`border px-2 py-[3px] text-[11px] font-semibold ${
                         selectedContext.is_system
                           ? "border-slate-200 bg-slate-100 text-slate-400"
                           : "border-sky-300 bg-sky-50 text-sky-800"
@@ -1018,7 +963,7 @@ export default function SAWorkContextMaster() {
                     <button
                       type="button"
                       onClick={() => void openProjectDrawer(selectedContext)}
-                      className="border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-800"
+                      className="border border-violet-300 bg-violet-50 px-2 py-[3px] text-[11px] font-semibold text-violet-800"
                     >
                       Manage Inherited Projects
                     </button>
@@ -1026,17 +971,18 @@ export default function SAWorkContextMaster() {
                 </div>
               ) : (
                 <p className="text-sm text-slate-500">
-                  Pick a row from the table to inspect one work scope at a time.
+                  Pick a row from the register to inspect one work scope at a time.
                 </p>
               )}
-            </ErpSectionCard>
+            </section>
 
-            <ErpSectionCard
-              eyebrow="Operating Rule"
-              title="When To Create Manual Business Areas"
-              description="Do not overload Department Master. Create manual business areas only when runtime access needs a finer slice than the team structure gives you."
-              tone="warning"
-            >
+            <section className="grid gap-2">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700">
+                Operating Rule
+              </div>
+              <div className="text-sm font-semibold text-slate-900">
+                When To Create Manual Business Areas
+              </div>
               <div className="grid gap-2">
                 {[
                   "Use GENERAL_OPS and DEPT_* as system foundation only.",
@@ -1047,13 +993,13 @@ export default function SAWorkContextMaster() {
                 ].map((line) => (
                   <div
                     key={line}
-                    className="border border-amber-200 bg-white px-3 py-3 text-sm text-slate-700"
+                    className="border border-amber-200 bg-white px-3 py-2 text-sm text-slate-700"
                   >
                     {line}
                   </div>
                 ))}
               </div>
-            </ErpSectionCard>
+            </section>
           </div>
         </div>
       </ErpScreenScaffold>
@@ -1073,7 +1019,7 @@ export default function SAWorkContextMaster() {
             <button
               type="button"
               onClick={closeEditor}
-              className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
             >
               Close
             </button>
@@ -1082,7 +1028,7 @@ export default function SAWorkContextMaster() {
               type="button"
               disabled={saving}
               onClick={() => void handleSaveContext()}
-              className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
+              className="border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold text-sky-900"
             >
               {saving ? "Saving..." : editorMode === "create" ? "Create Scope" : "Save Scope"}
             </button>
@@ -1178,7 +1124,7 @@ export default function SAWorkContextMaster() {
             />
           </label>
 
-          <label className="flex items-center gap-3 border border-slate-300 bg-white px-3 py-3 text-sm text-slate-700">
+          <label className="flex items-center gap-3 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
             <input
               type="checkbox"
               checked={formDraft.is_active !== false}
@@ -1204,7 +1150,7 @@ export default function SAWorkContextMaster() {
           <button
             type="button"
             onClick={closeInspector}
-            className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+            className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
           >
             Close
           </button>
@@ -1212,52 +1158,34 @@ export default function SAWorkContextMaster() {
       >
         {selectedContext ? (
           <div className="grid gap-4">
-            <div className="grid gap-3 md:grid-cols-2">
-              <ErpFieldPreview
-                label="Work Scope Code"
-                value={selectedContext.work_context_code}
-                caption="Use this code when defining business slices and naming conventions."
-              />
-              <ErpFieldPreview
-                label="Work Scope Name"
-                value={selectedContext.work_context_name}
-                caption="Human-readable label for SA and governance surfaces."
-              />
-              <ErpFieldPreview
-                label="Type"
-                value={selectedContext.is_system ? "SYSTEM" : "MANUAL"}
-                caption={
-                  selectedContext.is_system
-                    ? "Derived automatically from company or department setup."
-                    : "Managed here for runtime access slicing."
-                }
-              />
-              <ErpFieldPreview
-                label="State"
-                value={selectedContext.is_active ? "ACTIVE" : "INACTIVE"}
-                caption="Inactive scopes stay visible in governance but should not be assigned casually."
-              />
-              <ErpFieldPreview
-                label="Company"
-                value={
-                  selectedCompany
+            <div className="border border-slate-300 bg-white">
+              {[
+                { label: "Work Scope Code", value: selectedContext.work_context_code },
+                { label: "Work Scope Name", value: selectedContext.work_context_name },
+                { label: "Type", value: selectedContext.is_system ? "SYSTEM" : "MANUAL" },
+                { label: "State", value: selectedContext.is_active ? "ACTIVE" : "INACTIVE" },
+                {
+                  label: "Company",
+                  value: selectedCompany
                     ? `${selectedCompany.company_code} | ${selectedCompany.company_name}`
-                    : "Unknown"
-                }
-                caption="One work scope belongs to one company only."
-              />
-              <ErpFieldPreview
-                label="Department Link"
-                value={
-                  selectedContext.department_code
+                    : "Unknown",
+                },
+                {
+                  label: "Department Link",
+                  value: selectedContext.department_code
                     ? `${selectedContext.department_code} | ${selectedContext.department_name ?? ""}`
-                    : "No department link"
-                }
-                caption="Optional for manual scopes. Mandatory only for system DEPT_* foundations."
-              />
+                    : "No department link",
+                },
+              ].map((item) => (
+                <div key={item.label} className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px] last:border-b-0">
+                  <span className="min-w-[120px] text-[11px] text-slate-500">{item.label}</span>
+                  <span className="text-right text-[11px] font-semibold text-slate-900">{item.value}</span>
+                </div>
+              ))}
             </div>
 
-            <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <div className="grid gap-1 text-sm text-slate-700">
+              <ErpSelectionSection label="Description" />
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Description
               </div>
@@ -1266,21 +1194,17 @@ export default function SAWorkContextMaster() {
               </div>
             </div>
 
-            <div className="border border-slate-300 bg-white">
-              <div className="border-b border-slate-300 bg-slate-50 px-4 py-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Linked Screen Packs
-                </div>
-                <div className="mt-1 text-sm text-slate-600">
-                  Capability Governance decides which screen packs this work scope can carry.
-                </div>
+            <div className="grid gap-1">
+              <ErpSelectionSection label="Linked Screen Packs" />
+              <div className="text-sm text-slate-600">
+                Capability Governance decides which screen packs this work scope can carry.
               </div>
               {inspectorLoading ? (
-                <div className="px-4 py-4 text-sm text-slate-500">
+                <div className="px-4 py-3 text-sm text-slate-500">
                   Loading linked screen packs...
                 </div>
               ) : linkedCapabilities.length === 0 ? (
-                <div className="px-4 py-4 text-sm text-slate-500">
+                <div className="px-4 py-3 text-sm text-slate-500">
                   No screen pack is attached yet.
                 </div>
               ) : (
@@ -1300,20 +1224,16 @@ export default function SAWorkContextMaster() {
               )}
             </div>
 
-            <div className="border border-slate-300 bg-white">
-              <div className="border-b border-slate-300 bg-slate-50 px-4 py-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Project Inheritance
-                </div>
-                <div className="mt-1 text-sm text-slate-600">
-                  Project reach now comes from work-scope inheritance first, then optional user overrides.
-                </div>
+            <div className="grid gap-1">
+              <ErpSelectionSection label="Project Inheritance" />
+              <div className="text-sm text-slate-600">
+                Project reach now comes from work-scope inheritance first, then optional user overrides.
               </div>
-              <div className="px-4 py-4">
+              <div className="px-4 py-3">
                 <button
                   type="button"
                   onClick={() => void openProjectDrawer(selectedContext)}
-                  className="border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-800"
+                  className="border border-violet-300 bg-violet-50 px-2 py-[3px] text-[11px] font-semibold text-violet-800"
                 >
                   Manage Inherited Projects
                 </button>
@@ -1338,7 +1258,7 @@ export default function SAWorkContextMaster() {
             <button
               type="button"
               onClick={closeProjectDrawer}
-              className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
             >
               Close
             </button>
@@ -1346,7 +1266,7 @@ export default function SAWorkContextMaster() {
               type="button"
               disabled={projectDrawerLoading}
               onClick={() => void handleSaveProjects()}
-              className="border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-900"
+              className="border border-violet-300 bg-violet-50 px-2 py-[3px] text-[11px] font-semibold text-violet-900"
             >
               {projectDrawerLoading ? "Saving..." : "Save Inherited Projects"}
             </button>
@@ -1354,7 +1274,8 @@ export default function SAWorkContextMaster() {
         }
       >
         <div className="grid gap-4">
-          <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <div className="grid gap-1 text-sm text-slate-600">
+            <ErpSelectionSection label="Selected Work Scope" />
             <div className="font-semibold text-slate-900">
               {selectedContext
                 ? `${selectedContext.work_context_code} | ${selectedContext.work_context_name}`
@@ -1379,11 +1300,11 @@ export default function SAWorkContextMaster() {
               Available Company Projects
             </div>
             {projectDrawerLoading ? (
-              <div className="px-4 py-4 text-sm text-slate-500">
+              <div className="px-4 py-3 text-sm text-slate-500">
                 Loading inherited project options...
               </div>
             ) : filteredProjects.length === 0 ? (
-              <div className="px-4 py-4 text-sm text-slate-500">
+              <div className="px-4 py-3 text-sm text-slate-500">
                 No active company project matched the current filter.
               </div>
             ) : (

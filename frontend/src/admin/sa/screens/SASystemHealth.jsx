@@ -11,17 +11,11 @@
 import { useEffect, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
-import ErpScreenScaffold, {
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
-import {
-  readViewSnapshotCache,
-  writeViewSnapshotCache,
-} from "../../../store/viewSnapshotCache.js";
-
-const SA_SYSTEM_HEALTH_CACHE_KEY = "sa-system-health";
 
 async function readJsonSafe(response) {
   try {
@@ -31,32 +25,10 @@ async function readJsonSafe(response) {
   }
 }
 
-function formatSystemVersion(value) {
-  if (!value) return "N/A";
-
-  if (typeof value === "string") {
-    return value;
-  }
-
-  if (typeof value === "object") {
-    const system = typeof value.system === "string" ? value.system : "PACE-ERP";
-    const version = typeof value.version === "string" ? value.version : "N/A";
-    const buildGate =
-      typeof value.build_gate === "string" ? value.build_gate : null;
-
-    return buildGate
-      ? `${system} ${version} (${buildGate})`
-      : `${system} ${version}`;
-  }
-
-  return String(value);
-}
-
 export default function SASystemHealth() {
-  const cachedSnapshot = readViewSnapshotCache(SA_SYSTEM_HEALTH_CACHE_KEY);
   const actionBarRefs = useRef([]);
-  const [health, setHealth] = useState(() => cachedSnapshot?.health ?? null);
-  const [loading, setLoading] = useState(() => !cachedSnapshot?.health);
+  const [health, setHealth] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   async function loadHealth({ userInitiated = false } = {}) {
@@ -84,9 +56,6 @@ export default function SASystemHealth() {
       }
 
       setHealth(json.data ?? null);
-      writeViewSnapshotCache(SA_SYSTEM_HEALTH_CACHE_KEY, {
-        health: json.data ?? null,
-      });
     } catch {
       setError(
         userInitiated
@@ -119,7 +88,35 @@ export default function SASystemHealth() {
   const dbStatus = health?.db_status ?? "N/A";
   const aclStatus = health?.acl_snapshot_status ?? "N/A";
   const menuStatus = health?.menu_snapshot_status ?? "N/A";
-  const systemVersion = formatSystemVersion(health?.system_version);
+  const statusRows = [
+    {
+      key: "database",
+      surface: "Database",
+      status: dbStatus,
+      action:
+        dbStatus === "DOWN"
+          ? "Stop new governance actions and investigate runtime immediately."
+          : "Runtime data layer is accepting health probes.",
+    },
+    {
+      key: "acl",
+      surface: "ACL Snapshot",
+      status: aclStatus,
+      action:
+        aclStatus === "UNAVAILABLE"
+          ? "Review ACL projection chain before changing access scope."
+          : "Permission projection is ready for current runtime.",
+    },
+    {
+      key: "menu",
+      surface: "Menu Snapshot",
+      status: menuStatus,
+      action:
+        menuStatus === "UNAVAILABLE"
+          ? "Review menu governance before operators depend on route exposure."
+          : "Navigation projection is currently healthy.",
+    },
+  ];
 
   const alerts = [
     dbStatus === "DOWN"
@@ -252,46 +249,10 @@ export default function SASystemHealth() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "system-version",
-      label: "System Version",
-      value: loading ? "..." : systemVersion,
-      tone: "sky",
-      caption:
-        "Current backend system version reported by the diagnostics endpoint.",
-    },
-    {
-      key: "database-status",
-      label: "Database",
-      value: loading ? "..." : dbStatus,
-      tone: dbStatus === "DOWN" ? "rose" : "emerald",
-      caption:
-        "Authoritative database connectivity check against ERP session storage.",
-    },
-    {
-      key: "acl-status",
-      label: "ACL Snapshot",
-      value: loading ? "..." : aclStatus,
-      tone: aclStatus === "UNAVAILABLE" ? "amber" : "emerald",
-      caption:
-        "Readiness of the permission projection layer used by controlled access flow.",
-    },
-    {
-      key: "menu-status",
-      label: "Menu Snapshot",
-      value: loading ? "..." : menuStatus,
-      tone: menuStatus === "UNAVAILABLE" ? "amber" : "emerald",
-      caption:
-        "Readiness of the menu projection layer that feeds controlled navigation.",
-    },
-  ];
-
   return (
     <ErpScreenScaffold
       eyebrow="SA Diagnostics"
       title="ERP System Health"
-      description="This diagnostics surface now follows the same keyboard-native shell grammar while keeping runtime health, alerts, and operator guidance in predictable zones."
       actions={topActions}
       notices={
         error
@@ -304,40 +265,29 @@ export default function SASystemHealth() {
             ]
           : alerts
       }
-      metrics={metrics}
+      footerHints={["F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
-      <ErpSectionCard
-        eyebrow="Diagnostics Interpretation"
-        title="What SA should do next"
-        description="Use these operator notes as the immediate response rail after checking the live health metrics above."
-      >
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div className="border border-slate-300 bg-white px-4 py-3">
-            <p className="text-sm font-semibold text-slate-900">
-              If Database is DOWN
-            </p>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Treat this as operationally urgent. Avoid provisioning new governance actions until the core runtime is stable again.
-            </p>
-          </div>
-          <div className="border border-slate-300 bg-white px-4 py-3">
-            <p className="text-sm font-semibold text-slate-900">
-              If ACL Snapshot is UNAVAILABLE
-            </p>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Review access-governance inputs and upcoming ACL administration surfaces before expanding user scope.
-            </p>
-          </div>
-          <div className="border border-slate-300 bg-white px-4 py-3">
-            <p className="text-sm font-semibold text-slate-900">
-              If Menu Snapshot is UNAVAILABLE
-            </p>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Review menu-governance readiness because route visibility and navigation projection may be incomplete.
-            </p>
-          </div>
-        </div>
-      </ErpSectionCard>
+      <div className="grid gap-3">
+        <ErpSelectionSection label="Diagnostics Interpretation" />
+        <ErpDenseGrid
+          columns={[
+            { key: "surface", label: "Surface", width: "180px" },
+            { key: "status", label: "Status", width: "180px" },
+            { key: "action", label: "Operator Action" },
+          ]}
+          rows={statusRows}
+          rowKey={(row) => row.key}
+          renderCell={(row, column) => row[column.key]}
+          maxHeight="none"
+          summaryRow={{
+            label: "Summary",
+            values: {
+              status: [dbStatus, aclStatus, menuStatus].join(" | "),
+              action: "Refresh after each governance change that could affect runtime projection.",
+            },
+          }}
+        />
+      </div>
     </ErpScreenScaffold>
   );
 }

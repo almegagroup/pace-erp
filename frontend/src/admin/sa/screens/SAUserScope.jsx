@@ -10,15 +10,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { openScreen } from "../../../navigation/screenStackEngine.js";
+import {
+  getActiveScreenContext,
+  getPreviousScreen,
+  openScreen,
+  popScreen,
+} from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import {
@@ -27,6 +31,26 @@ import {
   sortDepartments,
   sortProjects,
 } from "../../../shared/erpCollections.js";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
+
+const USER_SCOPE_PREVIEW_COLUMN_DEFS = Object.freeze([
+  { key: "workCompanies", label: "Work Companies" },
+  { key: "workContexts", label: "Work Contexts" },
+  { key: "projectOverrides", label: "Project Overrides" },
+  { key: "departments", label: "Departments" },
+  { key: "inheritedProjects", label: "Inherited Projects" },
+  { key: "effectiveProjects", label: "Effective Projects" },
+]);
+
+const DEFAULT_USER_SCOPE_PREVIEW_COLUMNS = Object.freeze([
+  "workCompanies",
+  "workContexts",
+  "projectOverrides",
+  "departments",
+  "inheritedProjects",
+  "effectiveProjects",
+]);
 
 async function readJsonSafe(response) {
   try {
@@ -268,62 +292,15 @@ function isBenignDerivedDepartmentContext(adjustments) {
   );
 }
 
-function ScopeSummaryCard({
-  eyebrow,
-  title,
-  count,
-  description,
-  preview,
-  status,
-  onOpen,
-  actionLabel,
-  tone = "default",
-}) {
-  const toneClass =
-    tone === "warning"
-      ? "border-amber-200 bg-[#fffaf2]"
-      : tone === "success"
-        ? "border-emerald-200 bg-[#f5fffa]"
-        : "border-slate-200 bg-white";
-
-  return (
-    <article className={`grid gap-3 border px-4 py-4 ${toneClass}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-            {eyebrow}
-          </p>
-          <h3 className="mt-2 text-sm font-semibold text-slate-900">{title}</h3>
-        </div>
-        <span className="text-lg font-semibold text-slate-900">{count}</span>
-      </div>
-      <p className="text-sm leading-6 text-slate-600">{description}</p>
-      <div className="border border-slate-200 bg-white px-3 py-3">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-          Current Selection
-        </p>
-        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-          {preview}
-        </p>
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs leading-5 text-slate-500">{status}</p>
-        <button
-          type="button"
-          onClick={onOpen}
-          className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900"
-        >
-          {actionLabel}
-        </button>
-      </div>
-    </article>
-  );
-}
 
 export default function SAUserScope() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const authUserId = searchParams.get("auth_user_id") ?? "";
+  const activeScreenContext = useMemo(() => getActiveScreenContext(), []);
+  const authUserId =
+    searchParams.get("auth_user_id") ??
+    activeScreenContext?.auth_user_id ??
+    "";
 
   const actionBarRefs = useRef([]);
   const parentCompanyButtonRef = useRef(null);
@@ -332,11 +309,6 @@ export default function SAUserScope() {
   const workContextSearchRef = useRef(null);
   const projectSearchRef = useRef(null);
   const departmentSearchRef = useRef(null);
-  const companyOptionRefs = useRef([]);
-  const workCompanyRefs = useRef([]);
-  const workContextRefs = useRef([]);
-  const projectRefs = useRef([]);
-  const departmentRefs = useRef([]);
 
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -347,6 +319,7 @@ export default function SAUserScope() {
 
   const [parentCompanyId, setParentCompanyId] = useState("");
   const [primaryWorkCompanyId, setPrimaryWorkCompanyId] = useState("");
+  const [primaryCompanyCandidateId, setPrimaryCompanyCandidateId] = useState("");
   const [settingPrimary, setSettingPrimary] = useState(false);
   const [workCompanyIds, setWorkCompanyIds] = useState([]);
   const [workContextIds, setWorkContextIds] = useState([]);
@@ -354,11 +327,29 @@ export default function SAUserScope() {
   const [departmentIds, setDepartmentIds] = useState([]);
   const [companyPickerOpen, setCompanyPickerOpen] = useState(false);
   const [activeScopeEditor, setActiveScopeEditor] = useState("");
+  const [showColumnDrawer, setShowColumnDrawer] = useState(false);
   const [companySearch, setCompanySearch] = useState("");
   const [workCompanySearch, setWorkCompanySearch] = useState("");
   const [workContextSearch, setWorkContextSearch] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [departmentSearch, setDepartmentSearch] = useState("");
+  const { visibleColumnKeys, toggleColumn, resetColumns } = useErpVisibleColumns({
+    storageKey: "erp.sa.userScope.previewColumns",
+    columnDefs: USER_SCOPE_PREVIEW_COLUMN_DEFS,
+    defaultColumnKeys: DEFAULT_USER_SCOPE_PREVIEW_COLUMNS,
+  });
+
+  function handleReturnToUserDirectory() {
+    const previousScreen = getPreviousScreen();
+
+    if (previousScreen?.screen_code === "SA_USERS") {
+      popScreen();
+      return;
+    }
+
+    openScreen("SA_USERS", { mode: "replace" });
+    navigate("/sa/users");
+  }
 
   useEffect(() => {
     let alive = true;
@@ -543,6 +534,12 @@ export default function SAUserScope() {
     [availableWorkContexts, workContextSearch]
   );
 
+  const { getRowProps: getCompanyRowProps } = useErpListNavigation(filteredCompanies);
+  const { getRowProps: getWorkCompanyRowProps } = useErpListNavigation(filteredWorkCompanies);
+  const { getRowProps: getWorkContextRowProps } = useErpListNavigation(filteredWorkContexts);
+  const { getRowProps: getProjectRowProps } = useErpListNavigation(filteredProjects);
+  const { getRowProps: getDepartmentRowProps } = useErpListNavigation(filteredDepartments);
+
   const readinessFlags = useMemo(
     () =>
       [
@@ -575,6 +572,26 @@ export default function SAUserScope() {
 
     setProjectIds((current) => current.filter((projectId) => allowedProjectIds.has(projectId)));
   }, [options.projects, eligibleProjectCompanyIds]);
+
+  useEffect(() => {
+    const selectedIds = selectedWorkCompanies.map((company) => company.id);
+
+    if (selectedIds.length === 0) {
+      setPrimaryCompanyCandidateId("");
+      return;
+    }
+
+    if (primaryWorkCompanyId && selectedIds.includes(primaryWorkCompanyId)) {
+      setPrimaryCompanyCandidateId((current) =>
+        current && selectedIds.includes(current) ? current : primaryWorkCompanyId,
+      );
+      return;
+    }
+
+    setPrimaryCompanyCandidateId((current) =>
+      current && selectedIds.includes(current) ? current : selectedIds[0],
+    );
+  }, [primaryWorkCompanyId, selectedWorkCompanies]);
 
   const isScopeDirty = useMemo(() => {
     if (!payload?.scope) {
@@ -624,18 +641,6 @@ export default function SAUserScope() {
       project_ids: [...projectIds],
       department_ids: [...departmentIds],
     };
-
-    const approved = await openActionConfirm({
-      eyebrow: "SA User Scope Governance",
-      title: "Save ERP User Scope",
-      message: `Persist Parent Company and operational scope for ${user?.user_code ?? authUserId} ${formatIdentityName(user)} now?`,
-      confirmLabel: "Save Scope",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
-      return;
-    }
 
     setSaving(true);
     setError("");
@@ -828,10 +833,7 @@ export default function SAUserScope() {
       group: "Current Screen",
       label: "Go to user directory",
       keywords: ["users", "directory", "sa users"],
-      perform: () => {
-        openScreen("SA_USERS", { mode: "replace" });
-        navigate("/sa/users");
-      },
+      perform: () => handleReturnToUserDirectory(),
       order: 10,
     },
     {
@@ -886,6 +888,14 @@ export default function SAUserScope() {
       order: 65,
     },
     {
+      id: "sa-user-scope-columns",
+      group: "Current Screen",
+      label: "Choose scope preview columns",
+      keywords: ["columns", "preview", "selection preview"],
+      perform: () => setShowColumnDrawer(true),
+      order: 67,
+    },
+    {
       id: "sa-user-scope-save",
       group: "Current Screen",
       label: saving ? "Saving scope..." : "Save user scope",
@@ -905,10 +915,7 @@ export default function SAUserScope() {
       buttonRef: (element) => {
         actionBarRefs.current[0] = element;
       },
-      onClick: () => {
-        openScreen("SA_USERS", { mode: "replace" });
-        navigate("/sa/users");
-      },
+      onClick: () => handleReturnToUserDirectory(),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 0,
@@ -952,15 +959,14 @@ export default function SAUserScope() {
         }),
     },
     {
-      key: "save-scope",
-      label: saving ? "Saving..." : "Save Scope",
-      hint: "Ctrl+S | F2",
-      tone: "primary",
-      disabled: saving || loading || !authUserId,
+      key: "columns",
+      label: "Columns",
+      tone: "neutral",
+      disabled: loading,
       buttonRef: (element) => {
         actionBarRefs.current[3] = element;
       },
-      onClick: () => void handleSave(),
+      onClick: () => setShowColumnDrawer(true),
       onKeyDown: (event) =>
         handleLinearNavigation(event, {
           index: 3,
@@ -968,55 +974,24 @@ export default function SAUserScope() {
           orientation: "horizontal",
         }),
     },
+    {
+      key: "save-scope",
+      label: saving ? "Saving..." : "Save Scope",
+      hint: "Ctrl+S | F2",
+      tone: "primary",
+      disabled: saving || loading || !authUserId,
+      buttonRef: (element) => {
+        actionBarRefs.current[4] = element;
+      },
+      onClick: () => void handleSave(),
+      onKeyDown: (event) =>
+        handleLinearNavigation(event, {
+          index: 4,
+          refs: actionBarRefs.current,
+          orientation: "horizontal",
+        }),
+    },
   ];
-
-  const metrics =
-    authUserId && payload
-      ? [
-          {
-            key: "user",
-            label: "User",
-            value: user?.user_code ?? "N/A",
-            caption: `${formatIdentityName(user)}${user?.designation_hint ? ` | ${user.designation_hint}` : ""}`,
-            tone: "sky",
-          },
-          {
-            key: "parent-company",
-            label: "Parent Company",
-            value: scope?.parent_company?.company_code ?? "Unset",
-            caption:
-              scope?.parent_company?.company_name ??
-              "HR identity truth is not yet mapped.",
-            tone: scope?.parent_company?.company_code ? "emerald" : "amber",
-          },
-          {
-            key: "work-companies",
-            label: "Work Companies",
-            value: String(workCompanyIds.length),
-            caption:
-              "Operational company scope currently assigned to this user.",
-            tone: workCompanyIds.length > 0 ? "emerald" : "amber",
-          },
-          {
-            key: "work-contexts",
-            label: "Work Contexts",
-            value: String(workContextIds.length),
-            caption:
-              "Runtime functional contexts currently available to this user.",
-            tone: workContextIds.length > 0 ? "emerald" : "amber",
-          },
-          {
-            key: "readiness",
-            label: "Readiness",
-            value: readinessFlags.length === 0 ? "Ready" : "Attention",
-            caption:
-              readinessFlags.length === 0
-                ? "Parent, role, and operational company scope are present."
-                : readinessFlags.join(" | "),
-            tone: readinessFlags.length === 0 ? "emerald" : "rose",
-          },
-        ]
-      : [];
 
   const notices = [
     ...(error
@@ -1049,31 +1024,26 @@ export default function SAUserScope() {
   ];
 
   const mainContent = !authUserId ? (
-    <ErpSectionCard
-      eyebrow="Selection Required"
-      title="Open this screen from the User Directory"
-      description="A governed user must be selected before scope mapping can begin."
-    >
+    <div className="grid gap-3">
+      <ErpSelectionSection label="Selection Required" />
       <div className="border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-sm text-slate-500">
         Open this screen from the ERP User Directory so a governed user can be selected for scope mapping.
       </div>
-    </ErpSectionCard>
+    </div>
   ) : loading ? (
-    <ErpSectionCard eyebrow="Loading" title="Fetching scope payload">
+    <div className="grid gap-3">
+      <ErpSelectionSection label="Loading" />
       <div className="border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-sm text-slate-500">
         Loading user scope from the admin governance endpoint.
       </div>
-    </ErpSectionCard>
+    </div>
   ) : !payload ? null : (
     <>
-      <div className="grid gap-6 xl:grid-cols-[1.1fr,1fr]">
-        <ErpSectionCard
-          eyebrow="Parent Company"
-          title="HR Identity Binding"
-          description="This is the HR authority source for the user. It is not the same thing as operational work scope."
-        >
+      <div className="grid gap-[var(--erp-section-gap)] xl:grid-cols-[1.1fr,1fr]">
+        <div className="grid gap-1">
+          <ErpSelectionSection label="Parent Company" />
           <label className="block">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">
               Select Parent Company
             </span>
             <button
@@ -1091,238 +1061,178 @@ export default function SAUserScope() {
                   openParentCompanyPicker();
                 }
               }}
-              className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-4 py-3 text-left text-sm text-slate-700 outline-none transition focus:border-sky-500 focus:bg-white"
+              className="mt-1 w-full border border-slate-300 bg-white px-2 py-1.5 text-left text-[12px] text-slate-700 outline-none transition focus:border-sky-500"
             >
               <span className="block font-semibold text-slate-900">
                 {selectedParentCompany
-                  ? `${selectedParentCompany.company_code} - ${selectedParentCompany.company_name}`
+                  ? `${selectedParentCompany.company_code} — ${selectedParentCompany.company_name}`
                   : "Choose Parent Company"}
               </span>
-              <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
+              <span className="block text-[10px] uppercase tracking-[0.14em] text-slate-500">
                 {selectedParentCompany
                   ? formatCompanyMeta(selectedParentCompany)
-                  : "Press Enter to open company picker"}
+                  : "Enter = open picker"}
               </span>
-              <span className="mt-1 block text-xs leading-5 text-slate-600">
-                {selectedParentCompany
-                  ? formatCompanyAddress(selectedParentCompany)
-                  : "State, address, and PIN stay visible during selection."}
-              </span>
+              {selectedParentCompany ? (
+                <span className="block text-[10px] text-slate-500">
+                  {formatCompanyAddress(selectedParentCompany)}
+                </span>
+              ) : null}
             </button>
-            <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Enter = open picker | F2 or Ctrl+S = save scope
+            <p className="mt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+              Enter = open picker | Ctrl+S = save scope
             </p>
           </label>
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          eyebrow="Current Snapshot"
-          title="Selected user and readiness"
-          description="Keep HR identity and operational scope visible together while editing."
-        >
-          <div className="space-y-3">
-            <div className="border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
-              <span className="font-semibold text-slate-900">
-                {user?.user_code ?? "N/A"}
-              </span>
-              {" - "}
-              {formatIdentityName(user)}
-            </div>
-            <div className="border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
-              Role: {user?.role_code ?? "UNASSIGNED"}
-            </div>
-            <div className="border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
-              Parent company: {scope?.parent_company?.company_name ?? "Unset"}
-            </div>
-            <div className="border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
-              Readiness:{" "}
-              {readinessFlags.length === 0
-                ? "Ready"
-                : readinessFlags.join(" | ")}
-            </div>
-            <div className="grid gap-2 md:grid-cols-2">
-              <ErpFieldPreview
-                label="Work Company Scope"
-                value={`${workCompanyIds.length} selected`}
-                caption="Operational company selection is edited in a drawer so the main screen stays readable."
-                tone={workCompanyIds.length > 0 ? "success" : "amber"}
-              />
-              <ErpFieldPreview
-                label="Work Context Scope"
-                value={`${workContextIds.length} selected`}
-                caption="Contexts stay filtered by the chosen work companies."
-                tone={workContextIds.length > 0 ? "success" : "amber"}
-              />
-            </div>
+        <div className="grid gap-1">
+          <ErpSelectionSection label="Current Snapshot" />
+          <div className="border border-slate-300 bg-white">
+            {[
+              [`${user?.user_code ?? "N/A"} — ${formatIdentityName(user)}`, ""],
+              ["Role", user?.role_code ?? "UNASSIGNED"],
+              ["Parent Company", scope?.parent_company?.company_name ?? "Unset"],
+              ["Readiness", readinessFlags.length === 0 ? "Ready" : readinessFlags.join(" | ")],
+              ["Work Companies", `${workCompanyIds.length} selected`],
+              ["Work Contexts", `${workContextIds.length} selected`],
+            ].map(([label, value], i) => (
+              <div key={i} className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px] last:border-b-0">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</span>
+                {value ? <span className="text-[11px] font-semibold text-slate-900">{value}</span> : null}
+              </div>
+            ))}
           </div>
-        </ErpSectionCard>
+        </div>
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[1.15fr,0.85fr]">
-        <ErpSectionCard
-          eyebrow="Scope Editors"
-          title="Edit one scope at a time"
-          description="Operational scope now opens in focused drawers instead of filling the full page with long checkbox lists."
-        >
-          <div className="grid gap-3 md:grid-cols-2">
-            <ScopeSummaryCard
-              eyebrow="Work Companies"
-              title="Operational Company Scope"
-              count={String(workCompanyIds.length)}
-              description="Use this drawer to choose which companies the user can operate inside."
-              preview={formatSelectionPreview(
-                selectedWorkCompanies,
-                (company) => `${company.company_code} - ${company.company_name}`,
-                "No work company selected yet."
-              )}
-              status="Work context choices stay constrained by the selected companies."
-              onOpen={() => openScopeEditor("work-companies")}
-              actionLabel="Edit Companies"
-              tone={workCompanyIds.length > 0 ? "success" : "warning"}
-            />
-            <ScopeSummaryCard
-              eyebrow="Work Contexts"
-              title="Runtime Functional Context"
-              count={String(workContextIds.length)}
-              description="Context selection decides which runtime capability packs are available after sign-in."
-              preview={formatSelectionPreview(
-                selectedWorkContexts,
-                (workContext) =>
-                  `${workContext.work_context_code} - ${workContext.work_context_name}`,
-                workCompanyIds.length === 0
-                  ? "Select work companies first."
-                  : "No work context selected yet."
-              )}
-              status={
-                workCompanyIds.length === 0
-                  ? "Choose at least one work company first so context options become available."
-                  : "Only contexts from the chosen companies are shown in the drawer."
-              }
-              onOpen={() => openScopeEditor("work-contexts")}
-              actionLabel="Edit Contexts"
-              tone={workContextIds.length > 0 ? "success" : "warning"}
-            />
-            <ScopeSummaryCard
-              eyebrow="Project Overrides"
-              title="Direct Project Override"
-              count={String(projectIds.length)}
-              description="Use direct project overrides only for exception cases. Normal project reach now comes from the selected work areas."
-              preview={formatSelectionPreview(
-                selectedProjectOverrides,
-                (project) => `${project.project_code} - ${project.project_name}`,
-                "No direct override selected."
-              )}
-              status="Leave this empty when work-area inheritance already gives the correct project reach."
-              onOpen={() => openScopeEditor("projects")}
-              actionLabel="Edit Overrides"
-              tone={projectIds.length > 0 ? "success" : "default"}
-            />
-            <ScopeSummaryCard
-              eyebrow="Departments"
-              title="Department Mapping"
-              count={String(departmentIds.length)}
-              description="Department scope stays available for HR readiness without crowding the main screen."
-              preview={formatSelectionPreview(
-                selectedDepartments,
-                (department) => formatDepartmentLabel(department),
-                "No department selected yet."
-              )}
-              status="Department assignment stays visible, but editing happens in its own drawer."
-              onOpen={() => openScopeEditor("departments")}
-              actionLabel="Edit Departments"
-              tone={departmentIds.length > 0 ? "success" : "default"}
-            />
-          </div>
-        </ErpSectionCard>
-
-        <ErpSectionCard
-          eyebrow="Selection Preview"
-          title="Current assignment snapshot"
-          description="This panel keeps the selected scope understandable without forcing the operator to scan every checkbox on the page."
-        >
-          <div className="grid gap-3">
-            <div className="grid gap-3 md:grid-cols-2">
-              <ErpFieldPreview
-                label="Selected Work Companies"
-                value={formatSelectionPreview(
+      <div className="grid gap-[var(--erp-section-gap)] xl:grid-cols-[1.15fr,0.85fr]">
+        <div className="grid gap-1">
+          <ErpSelectionSection label="Work Scope" />
+          <div className="border border-slate-300 bg-white">
+            {[
+              {
+                key: "workCompanies",
+                label: "Work Companies",
+                count: workCompanyIds.length,
+                summary: formatSelectionPreview(
                   selectedWorkCompanies,
                   (company) => `${company.company_code} - ${company.company_name}`,
                   "No work company selected yet."
-                )}
-                caption="These companies define the operating perimeter."
-                multiline
-                tone={workCompanyIds.length > 0 ? "success" : "default"}
-              />
-              <ErpFieldPreview
-                label="Selected Work Contexts"
-                value={formatSelectionPreview(
+                ),
+                scopeKey: "work-companies",
+                required: true,
+              },
+              {
+                key: "workContexts",
+                label: "Work Contexts",
+                count: workContextIds.length,
+                summary: formatSelectionPreview(
                   selectedWorkContexts,
                   (workContext) =>
                     `${workContext.work_context_code} - ${workContext.work_context_name}`,
                   workCompanyIds.length === 0
                     ? "Select work companies first."
                     : "No work context selected yet."
-                )}
-                caption="Contexts stay filtered only from the selected companies. Department identity does not auto-limit operational work areas."
-                multiline
-                tone={workContextIds.length > 0 ? "success" : "default"}
-              />
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <ErpFieldPreview
-                label="Direct Project Overrides"
-                value={formatSelectionPreview(
+                ),
+                scopeKey: "work-contexts",
+                required: true,
+              },
+              {
+                key: "projectOverrides",
+                label: "Project Overrides",
+                count: projectIds.length,
+                summary: formatSelectionPreview(
                   selectedProjectOverrides,
                   (project) => `${project.project_code} - ${project.project_name}`,
                   "No direct override selected."
-                )}
-                caption="Only exception cases should need a direct project override."
-                multiline
-                tone={projectIds.length > 0 ? "success" : "default"}
-              />
-              <ErpFieldPreview
-                label="Selected Departments"
-                value={formatSelectionPreview(
+                ),
+                scopeKey: "projects",
+                required: false,
+              },
+              {
+                key: "departments",
+                label: "Departments",
+                count: departmentIds.length,
+                summary: formatSelectionPreview(
                   selectedDepartments,
                   (department) => formatDepartmentLabel(department),
                   "No department selected yet."
-                )}
-                caption="Department readiness stays visible without overcrowding the page."
-                multiline
-                tone={departmentIds.length > 0 ? "success" : "default"}
-              />
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <ErpFieldPreview
-                label="Inherited Projects"
-                value={formatSelectionPreview(
-                  inheritedProjects,
-                  (project) => `${project.project_code} - ${project.project_name}`,
-                  "No inherited project reach yet."
-                )}
-                caption="These projects come automatically from the selected work areas."
-                multiline
-                tone={inheritedProjects.length > 0 ? "success" : "default"}
-              />
-              <ErpFieldPreview
-                label="Effective Projects"
-                value={formatSelectionPreview(
-                  effectiveProjects,
-                  (project) => `${project.project_code} - ${project.project_name}`,
-                  "No effective project reach yet."
-                )}
-                caption="Runtime project reach = inherited projects plus any direct overrides."
-                multiline
-                tone={effectiveProjects.length > 0 ? "success" : "default"}
-              />
-            </div>
-            <div className="border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              Use <span className="font-semibold text-slate-900">F3</span> or the
-              summary buttons to open a focused editor drawer. The main screen keeps
-              only the operational snapshot now.
-            </div>
+                ),
+                scopeKey: "departments",
+                required: false,
+              },
+            ].map(({ label, count, summary, scopeKey, required }) => (
+              <div
+                key={scopeKey}
+                className="grid grid-cols-[140px_24px_1fr_auto] items-center gap-2 border-b border-slate-200 px-2 py-[3px] last:border-b-0"
+              >
+                <span className="text-[11px] text-slate-600">{label}</span>
+                <span
+                  className={`text-[11px] font-bold ${
+                    count > 0
+                      ? "text-emerald-700"
+                      : required
+                        ? "text-amber-600"
+                        : "text-slate-400"
+                  }`}
+                >
+                  {count}
+                </span>
+                <span className="truncate text-[11px] text-slate-700">{summary}</span>
+                <button
+                  type="button"
+                  onClick={() => openScopeEditor(scopeKey)}
+                  disabled={loading || !authUserId}
+                  className="border border-sky-300 bg-sky-50 px-1.5 py-[1px] text-[10px] font-semibold uppercase tracking-[0.1em] text-sky-900 disabled:opacity-50"
+                >
+                  Edit
+                </button>
+              </div>
+            ))}
           </div>
-        </ErpSectionCard>
+        </div>
+
+        <div className="grid gap-1">
+          <ErpSelectionSection label="Selection Preview" />
+          <div className="border border-slate-300 bg-white">
+            {[
+              {
+                label: "Work Companies",
+                value: formatSelectionPreview(selectedWorkCompanies, (c) => `${c.company_code} — ${c.company_name}`, "None selected"),
+              },
+              {
+                label: "Work Contexts",
+                value: formatSelectionPreview(selectedWorkContexts, (wc) => `${wc.work_context_code} — ${wc.work_context_name}`, workCompanyIds.length === 0 ? "Select work companies first" : "None selected"),
+              },
+              {
+                label: "Project Overrides",
+                value: formatSelectionPreview(selectedProjectOverrides, (p) => `${p.project_code} — ${p.project_name}`, "No direct override"),
+              },
+              {
+                label: "Departments",
+                value: formatSelectionPreview(selectedDepartments, formatDepartmentLabel, "None selected"),
+              },
+              {
+                key: "inheritedProjects",
+                label: "Inherited Projects",
+                value: formatSelectionPreview(inheritedProjects, (p) => `${p.project_code} — ${p.project_name}`, "No inherited reach yet"),
+              },
+              {
+                key: "effectiveProjects",
+                label: "Effective Projects",
+                value: formatSelectionPreview(effectiveProjects, (p) => `${p.project_code} — ${p.project_name}`, "No effective reach yet"),
+              },
+            ].filter(({ key }) => visibleColumnKeys.includes(key)).map(({ label, value }) => (
+              <div key={label} className="border-b border-slate-200 px-2 py-[3px] last:border-b-0">
+                <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+                <p className="whitespace-pre-wrap text-[11px] leading-[1.5] text-slate-800">{value}</p>
+              </div>
+            ))}
+          </div>
+          <p className="text-[9px] uppercase tracking-[0.12em] text-slate-400">
+            F3 opens scope editors | Columns opens preview field chooser
+          </p>
+        </div>
       </div>
     </>
   );
@@ -1331,10 +1241,9 @@ export default function SAUserScope() {
     <ErpScreenScaffold
       eyebrow="SA User Scope Governance"
       title="ERP User Scope Mapping"
-      description="Bind one team identity through Parent Company and Department, then assign Work Companies and Work Scopes separately so SA does not mix HR truth with runtime access."
       actions={topActions}
       notices={notices}
-      metrics={metrics}
+      footerHints={["↑↓ Navigate", "Ctrl+S Save Scope", "F3 Edit Scope", "Esc Back", "Ctrl+K Command Bar"]}
     >
       {mainContent}
 
@@ -1348,7 +1257,7 @@ export default function SAUserScope() {
           <button
             type="button"
             onClick={closeCompanyPicker}
-            className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
           >
             Close
           </button>
@@ -1362,14 +1271,6 @@ export default function SAUserScope() {
             inputRef={companySearchRef}
             placeholder="Search by code, name, state, pin, or address"
             hint="Arrow Down moves into the results. Enter selects the focused company."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (event.key === "ArrowDown" && filteredCompanies.length > 0) {
-                  event.preventDefault();
-                  companyOptionRefs.current[0]?.focus();
-                }
-              },
-            }}
           />
 
           <div
@@ -1392,33 +1293,21 @@ export default function SAUserScope() {
                   return (
                     <button
                       key={company.id}
-                      ref={(element) => {
-                        companyOptionRefs.current[index] = element;
-                      }}
+                      {...getCompanyRowProps(index)}
                       type="button"
                       data-erp-nav-item="true"
                       onClick={() => selectParentCompany(company.id)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: companyOptionRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className={`w-full border px-4 py-4 text-left text-sm transition ${
+                      className={`w-full border px-2 py-1 text-left text-[12px] transition ${
                         selected
-                          ? "border-cyan-300 bg-cyan-50 text-cyan-900"
-                          : "border-slate-300 bg-white text-slate-700"
+                          ? "border-cyan-400 bg-cyan-50 text-cyan-900"
+                          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                       }`}
                     >
-                      <span className="block font-semibold">
-                        {company.company_code} - {company.company_name}
+                      <span className="block font-semibold text-slate-900">
+                        {company.company_code} — {company.company_name}
                       </span>
-                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                      <span className="block text-[10px] uppercase tracking-[0.14em] text-slate-500">
                         {formatCompanyMeta(company)}
-                      </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-500">
-                        {formatCompanyAddress(company)}
                       </span>
                     </button>
                   );
@@ -1440,7 +1329,7 @@ export default function SAUserScope() {
             <button
               type="button"
               onClick={() => void closeScopeEditor()}
-              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
             >
               Close
             </button>
@@ -1448,7 +1337,7 @@ export default function SAUserScope() {
               type="button"
               disabled={saving || loading || !authUserId}
               onClick={() => void handleSave()}
-              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold text-sky-950"
             >
               {saving ? "Saving..." : "Save Scope"}
             </button>
@@ -1456,11 +1345,6 @@ export default function SAUserScope() {
         )}
       >
         <div className="grid gap-4">
-          <p className="text-sm leading-6 text-slate-600">
-            Select only the companies where this user actually works. This choice
-            only narrows which work contexts appear in the next drawer. Runtime
-            contexts save exactly as checked there.
-          </p>
           <QuickFilterInput
             label="Filter Work Companies"
             value={workCompanySearch}
@@ -1468,17 +1352,6 @@ export default function SAUserScope() {
             inputRef={workCompanySearchRef}
             placeholder="Filter by code, name, state, pin, or address"
             hint="Arrow Down moves into the company checkbox list."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (
-                  event.key === "ArrowDown" &&
-                  filteredWorkCompanies.length > 0
-                ) {
-                  event.preventDefault();
-                  workCompanyRefs.current[0]?.focus();
-                }
-              },
-            }}
           />
 
           <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
@@ -1494,71 +1367,81 @@ export default function SAUserScope() {
                 return (
                   <div
                     key={company.id}
-                    className={`border px-4 py-3 text-sm ${
+                    className={`border px-2 py-1 text-[12px] ${
                       selected
                         ? "border-cyan-300 bg-cyan-50 text-cyan-900"
-                        : "border-slate-300 bg-white text-slate-700"
+                        : "border-slate-200 bg-white text-slate-700"
                     }`}
                   >
-                    <label className="flex items-start gap-3 cursor-pointer">
+                    <label className="flex items-center gap-2 cursor-pointer">
                       <input
-                        ref={(element) => {
-                          workCompanyRefs.current[index] = element;
-                        }}
+                        {...getWorkCompanyRowProps(index)}
                         data-erp-nav-item="true"
                         type="checkbox"
                         checked={selected}
                         onChange={() =>
                           toggleSelection(company.id, workCompanyIds, setWorkCompanyIds)
                         }
-                        onKeyDown={(event) =>
-                          handleLinearNavigation(event, {
-                            index,
-                            refs: workCompanyRefs.current,
-                            orientation: "vertical",
-                          })
-                        }
-                        className="mt-1 h-4 w-4 border-slate-300 bg-white text-cyan-600"
+                        className="h-3 w-3 border-slate-300 bg-white text-cyan-600"
                       />
                       <span className="flex-1">
                         <span className="font-semibold">{company.company_code}</span>
-                        {" - "}
+                        {" — "}
                         {company.company_name}
-                        <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                        <span className="ml-2 text-[10px] uppercase tracking-[0.12em] text-slate-500">
                           {formatCompanyMeta(company)}
                         </span>
-                        <span className="mt-1 block text-xs leading-5 text-slate-600">
-                          {formatCompanyAddress(company)}
-                        </span>
                       </span>
-                    </label>
-                    {selected ? (
-                      <div className="mt-2 flex items-center gap-2 pl-7">
-                        {isPrimary ? (
-                          <span className="border border-emerald-300 bg-emerald-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-800">
-                            Primary
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={settingPrimary || !authUserId}
-                            onClick={() => void handleSetPrimaryCompany(company.id)}
-                            className="border border-slate-300 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {settingPrimary ? "Setting..." : "Set as Primary"}
-                          </button>
-                        )}
-                        <span className="text-[10px] text-slate-400">
-                          {isPrimary
-                            ? "Default company at next login"
-                            : "Click to make this the default login company"}
+                      {selected && isPrimary ? (
+                        <span className="border border-emerald-300 bg-emerald-50 px-1.5 py-[1px] text-[9px] font-semibold uppercase tracking-[0.12em] text-emerald-800">
+                          Primary
                         </span>
-                      </div>
-                    ) : null}
+                      ) : null}
+                    </label>
                   </div>
                 );
               })
             )}
+          </div>
+          <div className="grid gap-[var(--erp-form-gap)] border border-slate-300 bg-white p-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-700">
+                Primary Work Company
+              </span>
+              <span className="text-[10px] text-slate-500">
+                Selecting a company adds it to work scope only. Primary changes only when you press Set Primary.
+              </span>
+            </div>
+            <div className="grid gap-[var(--erp-form-gap)] md:grid-cols-[minmax(0,1fr)_auto]">
+              <select
+                value={primaryCompanyCandidateId}
+                onChange={(event) => setPrimaryCompanyCandidateId(event.target.value)}
+                disabled={selectedWorkCompanies.length === 0 || settingPrimary}
+                className="h-8 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none"
+              >
+                {selectedWorkCompanies.length === 0 ? (
+                  <option value="">Select work companies first</option>
+                ) : null}
+                {selectedWorkCompanies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.company_code} — {company.company_name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={
+                  settingPrimary ||
+                  !authUserId ||
+                  !primaryCompanyCandidateId ||
+                  primaryCompanyCandidateId === primaryWorkCompanyId
+                }
+                onClick={() => void handleSetPrimaryCompany(primaryCompanyCandidateId)}
+                className="h-8 border border-slate-300 bg-white px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 hover:border-sky-300 hover:text-sky-800 disabled:opacity-50"
+              >
+                {settingPrimary ? "Updating..." : "Set Primary"}
+              </button>
+            </div>
           </div>
         </div>
       </DrawerBase>
@@ -1574,7 +1457,7 @@ export default function SAUserScope() {
             <button
               type="button"
               onClick={() => void closeScopeEditor()}
-              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
             >
               Close
             </button>
@@ -1582,7 +1465,7 @@ export default function SAUserScope() {
               type="button"
               disabled={saving || loading || !authUserId}
               onClick={() => void handleSave()}
-              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold text-sky-950"
             >
               {saving ? "Saving..." : "Save Scope"}
             </button>
@@ -1590,11 +1473,6 @@ export default function SAUserScope() {
         )}
       >
         <div className="grid gap-4">
-          <p className="text-sm leading-6 text-slate-600">
-            Context choices stay tied to the selected work companies, but nothing
-            here is auto-added on save. Only the checked runtime scopes will persist.
-            Department identity stays separate from these operational work areas.
-          </p>
           <QuickFilterInput
             label="Filter Work Contexts"
             value={workContextSearch}
@@ -1602,17 +1480,6 @@ export default function SAUserScope() {
             inputRef={workContextSearchRef}
             placeholder="Filter by company, context, or department"
             hint="Arrow Down moves into the work-context checkbox list."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (
-                  event.key === "ArrowDown" &&
-                  filteredWorkContexts.length > 0
-                ) {
-                  event.preventDefault();
-                  workContextRefs.current[0]?.focus();
-                }
-              },
-            }}
           />
 
           <div className="grid gap-3 md:grid-cols-2">
@@ -1629,16 +1496,14 @@ export default function SAUserScope() {
                 return (
                   <label
                     key={workContext.id}
-                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                    className={`flex items-center gap-2 border px-2 py-1 text-[12px] cursor-pointer ${
                       selected
                         ? "border-violet-300 bg-violet-50 text-violet-900"
-                        : "border-slate-300 bg-white text-slate-700"
+                        : "border-slate-200 bg-white text-slate-700"
                     }`}
                   >
                     <input
-                      ref={(element) => {
-                        workContextRefs.current[index] = element;
-                      }}
+                      {...getWorkContextRowProps(index)}
                       data-erp-nav-item="true"
                       type="checkbox"
                       checked={selected}
@@ -1649,28 +1514,15 @@ export default function SAUserScope() {
                           setWorkContextIds
                         )
                       }
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: workContextRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-violet-600"
+                      className="h-3 w-3 border-slate-300 bg-white text-violet-600"
                     />
-                    <span>
-                      <span className="font-semibold">
-                        {workContext.work_context_code}
-                      </span>
-                      {" - "}
+                    <span className="flex-1 min-w-0">
+                      <span className="font-semibold">{workContext.work_context_code}</span>
+                      {" — "}
                       {workContext.work_context_name}
-                      <span className="mt-1 block text-[10px] uppercase tracking-[0.16em] text-slate-500">
-                        {workContext.company_code} | {workContext.company_name}
-                      </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-600">
-                        {workContext.department_code
-                          ? `${workContext.department_code} | ${workContext.department_name}`
-                          : "Company-wide functional context"}
+                      <span className="ml-2 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                        {workContext.company_code}
+                        {workContext.department_code ? ` | ${workContext.department_code}` : ""}
                       </span>
                     </span>
                   </label>
@@ -1692,7 +1544,7 @@ export default function SAUserScope() {
             <button
               type="button"
               onClick={() => void closeScopeEditor()}
-              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
             >
               Close
             </button>
@@ -1700,7 +1552,7 @@ export default function SAUserScope() {
               type="button"
               disabled={saving || loading || !authUserId}
               onClick={() => void handleSave()}
-              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold text-sky-950"
             >
               {saving ? "Saving..." : "Save Scope"}
             </button>
@@ -1708,11 +1560,6 @@ export default function SAUserScope() {
         )}
       >
         <div className="grid gap-4">
-          <p className="text-sm leading-6 text-slate-600">
-            Direct project mapping is now override-only. In normal cases, project
-            reach should come from the selected work areas. Use this drawer only
-            when a user truly needs a one-off project exception.
-          </p>
           <QuickFilterInput
             label="Filter Projects"
             value={projectSearch}
@@ -1720,14 +1567,6 @@ export default function SAUserScope() {
             inputRef={projectSearchRef}
             placeholder="Filter by project code or project name"
             hint="Arrow Down moves into the override checkbox list."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (event.key === "ArrowDown" && filteredProjects.length > 0) {
-                  event.preventDefault();
-                  projectRefs.current[0]?.focus();
-                }
-              },
-            }}
           />
 
           <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
@@ -1742,36 +1581,25 @@ export default function SAUserScope() {
                 return (
                   <label
                     key={project.id}
-                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                    className={`flex items-center gap-2 border px-2 py-1 text-[12px] cursor-pointer ${
                       selected
                         ? "border-emerald-300 bg-emerald-50 text-emerald-900"
-                        : "border-slate-300 bg-white text-slate-700"
+                        : "border-slate-200 bg-white text-slate-700"
                     }`}
                   >
                     <input
-                      ref={(element) => {
-                        projectRefs.current[index] = element;
-                      }}
+                      {...getProjectRowProps(index)}
                       data-erp-nav-item="true"
                       type="checkbox"
                       checked={selected}
                       onChange={() =>
                         toggleSelection(project.id, projectIds, setProjectIds)
                       }
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: projectRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-emerald-600"
+                      className="h-3 w-3 border-slate-300 bg-white text-emerald-600"
                     />
-                    <span>
-                      <span className="font-semibold">{project.project_code}</span>
-                      {" - "}
-                      {project.project_name}
-                    </span>
+                    <span className="font-semibold">{project.project_code}</span>
+                    {" — "}
+                    {project.project_name}
                   </label>
                 );
               })
@@ -1791,7 +1619,7 @@ export default function SAUserScope() {
             <button
               type="button"
               onClick={() => void closeScopeEditor()}
-              className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+              className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
             >
               Close
             </button>
@@ -1799,7 +1627,7 @@ export default function SAUserScope() {
               type="button"
               disabled={saving || loading || !authUserId}
               onClick={() => void handleSave()}
-              className="border border-sky-700 bg-sky-100 px-4 py-3 text-sm font-semibold text-sky-950"
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold text-sky-950"
             >
               {saving ? "Saving..." : "Save Scope"}
             </button>
@@ -1807,11 +1635,6 @@ export default function SAUserScope() {
         )}
       >
         <div className="grid gap-4">
-          <p className="text-sm leading-6 text-slate-600">
-            Department mapping is single-select HR identity truth. It records the
-            user&apos;s home department, but it no longer auto-adds or removes
-            operational work areas from the work-context drawer.
-          </p>
           <QuickFilterInput
             label="Filter Departments"
             value={departmentSearch}
@@ -1819,17 +1642,6 @@ export default function SAUserScope() {
             inputRef={departmentSearchRef}
             placeholder="Filter by department code or department name"
             hint="Arrow Down moves into the department list. Only one department can stay selected."
-            inputProps={{
-              onKeyDown: (event) => {
-                if (
-                  event.key === "ArrowDown" &&
-                  filteredDepartments.length > 0
-                ) {
-                  event.preventDefault();
-                  departmentRefs.current[0]?.focus();
-                }
-              },
-            }}
           />
 
           <div className="grid gap-3 md:grid-cols-2">
@@ -1844,34 +1656,21 @@ export default function SAUserScope() {
                 return (
                   <label
                     key={department.id}
-                    className={`flex items-start gap-3 border px-4 py-3 text-sm ${
+                    className={`flex items-center gap-2 border px-2 py-1 text-[12px] cursor-pointer ${
                       selected
                         ? "border-amber-300 bg-amber-50 text-amber-900"
-                        : "border-slate-300 bg-white text-slate-700"
+                        : "border-slate-200 bg-white text-slate-700"
                     }`}
                   >
                     <input
-                      ref={(element) => {
-                        departmentRefs.current[index] = element;
-                      }}
+                      {...getDepartmentRowProps(index)}
                       data-erp-nav-item="true"
                       type="checkbox"
                       checked={selected}
                       onChange={() => toggleSingleDepartment(department.id)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: departmentRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className="mt-1 h-4 w-4 border-slate-300 bg-white text-amber-600"
+                      className="h-3 w-3 border-slate-300 bg-white text-amber-600"
                     />
-                      <span>
-                        <span className="font-semibold">
-                          {formatDepartmentLabel(department)}
-                        </span>
-                      </span>
+                    <span className="font-semibold">{formatDepartmentLabel(department)}</span>
                   </label>
                 );
               })
@@ -1879,6 +1678,16 @@ export default function SAUserScope() {
           </div>
         </div>
       </DrawerBase>
+
+      <ErpColumnVisibilityDrawer
+        visible={showColumnDrawer}
+        title="User Scope Preview Columns"
+        columns={USER_SCOPE_PREVIEW_COLUMN_DEFS}
+        visibleColumnKeys={visibleColumnKeys}
+        onToggleColumn={toggleColumn}
+        onResetColumns={resetColumns}
+        onClose={() => setShowColumnDrawer(false)}
+      />
     </ErpScreenScaffold>
   );
 }

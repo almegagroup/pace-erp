@@ -91,13 +91,26 @@ function createNetworkError(error, fallbackCode, fallbackMessage) {
   };
 }
 
-async function apiJson(path, options = {}, fallbackCode = "REQUEST_FAILED", fallbackMessage = "Request failed") {
+async function apiJson(
+  path,
+  options = {},
+  fallbackCode = "REQUEST_FAILED",
+  fallbackMessage = "Request failed",
+) {
   let response;
+  const headers = {
+    ...(options.headers ?? {}),
+  };
+
+  if (options.companyId) {
+    headers["x-company-id"] = options.companyId;
+  }
 
   try {
     response = await fetch(`${import.meta.env.VITE_API_BASE}${path}`, {
       credentials: "include",
       ...options,
+      headers,
     });
   } catch (error) {
     throw createNetworkError(error, `NETWORK_${fallbackCode}`, fallbackMessage);
@@ -140,7 +153,7 @@ async function apiWorkflowDecision(payload, companyId = null) {
   return json;
 }
 
-export async function createLeaveRequest(payload) {
+export async function createLeaveRequest(payload, companyId = null) {
   return apiJson(
     "/api/hr/leave/request",
     {
@@ -148,6 +161,7 @@ export async function createLeaveRequest(payload) {
       headers: {
         "Content-Type": "application/json",
       },
+      companyId,
       body: JSON.stringify(payload),
     },
     "LEAVE_REQUEST_CREATE_FAILED",
@@ -242,16 +256,16 @@ export async function listLeaveRegister(filters = {}) {
   );
 }
 
-export async function listOutWorkDestinations() {
+export async function listOutWorkDestinations(companyId = null) {
   return apiJson(
     "/api/hr/out-work/destinations",
-    {},
+    { companyId },
     "OUT_WORK_DESTINATION_LIST_FAILED",
     "Destination list could not be loaded.",
   );
 }
 
-export async function createOutWorkDestination(payload) {
+export async function createOutWorkDestination(payload, companyId = null) {
   return apiJson(
     "/api/hr/out-work/destination",
     {
@@ -259,6 +273,7 @@ export async function createOutWorkDestination(payload) {
       headers: {
         "Content-Type": "application/json",
       },
+      companyId,
       body: JSON.stringify(payload),
     },
     "OUT_WORK_DESTINATION_CREATE_FAILED",
@@ -266,7 +281,7 @@ export async function createOutWorkDestination(payload) {
   );
 }
 
-export async function createOutWorkRequest(payload) {
+export async function createOutWorkRequest(payload, companyId = null) {
   return apiJson(
     "/api/hr/out-work/request",
     {
@@ -274,6 +289,7 @@ export async function createOutWorkRequest(payload) {
       headers: {
         "Content-Type": "application/json",
       },
+      companyId,
       body: JSON.stringify(payload),
     },
     "OUT_WORK_REQUEST_CREATE_FAILED",

@@ -1,15 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 import {
   formatCompanyAddress,
   formatCompanyLabel,
-  formatCompanyOptionLabel,
 } from "../../../shared/companyDisplay.js";
 import {
   deleteViewerRule,
@@ -78,13 +80,6 @@ const VISIBILITY_SCOPE_OPTIONS = [
   },
 ];
 
-function buildVisibilityScopeLabel(scopeType) {
-  return (
-    VISIBILITY_SCOPE_OPTIONS.find((option) => option.value === String(scopeType ?? "").trim().toUpperCase())
-      ?.label ?? "Company-wide"
-  );
-}
-
 function createEmptyDraft() {
   return {
     viewer_id: null,
@@ -105,8 +100,8 @@ function createEmptyDraft() {
 export default function SAReportVisibility() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchRef = useRef(null);
+  const draftRef = useRef(createEmptyDraft());
   const [workspace, setWorkspace] = useState({
     companies: [],
     projects: [],
@@ -123,12 +118,17 @@ export default function SAReportVisibility() {
   const [searchQuery, setSearchQuery] = useState("");
   const [draft, setDraft] = useState(createEmptyDraft);
 
-  async function loadWorkspace(preferred = draft) {
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  const loadWorkspace = useCallback(async (preferred = null) => {
     setLoading(true);
     setError("");
 
     try {
       const data = await fetchReportVisibilityWorkspace();
+      const nextDraft = preferred ?? draftRef.current;
       setWorkspace({
         companies: data?.companies ?? [],
         projects: data?.projects ?? [],
@@ -138,7 +138,7 @@ export default function SAReportVisibility() {
         users: data?.users ?? [],
         viewer_rules: data?.viewer_rules ?? [],
       });
-      setDraft((current) => ({ ...current, ...preferred }));
+      setDraft((current) => ({ ...current, ...nextDraft }));
     } catch (err) {
       console.error("REPORT_VISIBILITY_WORKSPACE_LOAD_FAILED", {
         code: err?.code ?? null,
@@ -154,11 +154,11 @@ export default function SAReportVisibility() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void loadWorkspace();
-  }, []);
+  }, [loadWorkspace]);
 
   const companyOptions = useMemo(
     () =>
@@ -295,6 +295,10 @@ export default function SAReportVisibility() {
     draft.subject_work_context_id,
     searchQuery,
   ]);
+
+  const { getRowProps } = useErpListNavigation(filteredRules, {
+    onActivate: (row) => handleRulePick(row),
+  });
 
   async function handleSave() {
     if (!draft.company_id || !draft.module_code || !draft.resource_code) {
@@ -447,14 +451,13 @@ export default function SAReportVisibility() {
     <ErpApprovalReviewTemplate
       eyebrow="Approval Governance"
       title="Who Can See Reports"
-      description="Separate report visibility from approver authority. A reviewer can see registers and details without becoming an approver."
       actions={[
         {
           key: "approver",
           label: "Approver Rules",
           tone: "neutral",
           onClick: () => {
-            openScreen("SA_APPROVAL_RULES", { mode: "replace" });
+            openScreen("SA_APPROVAL_RULES");
             navigate("/sa/approval-rules");
           },
         },
@@ -494,38 +497,7 @@ export default function SAReportVisibility() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "viewerRules",
-          label: "Viewer Rules",
-          value: loading ? "..." : String(workspace.viewer_rules.length),
-          tone: "sky",
-          caption: "All saved report visibility rows.",
-        },
-        {
-          key: "visible",
-          label: "Visible",
-          value: loading ? "..." : String(filteredRules.length),
-          tone: "emerald",
-          caption: "Rules matching the current filter.",
-        },
-        {
-          key: "scope",
-          label: "Visibility Scope",
-          value: buildVisibilityScopeLabel(draft.scope_type),
-          tone: draft.scope_type === "COMPANY_WIDE" || draft.scope_type === "DIRECTOR" ? "slate" : "amber",
-          caption:
-            VISIBILITY_SCOPE_OPTIONS.find((option) => option.value === draft.scope_type)?.description ??
-            "Choose how broadly this report visibility should match.",
-        },
-        {
-          key: "action",
-          label: "Action",
-          value: draft.action_code,
-          tone: "slate",
-          caption: draft.resource_code || "Choose a report resource",
-        },
-      ]}
+      footerHints={["↑↓ Navigate", "Enter Select", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={{
         eyebrow: "Visibility Filters",
         title: "Choose report scope",
@@ -551,7 +523,7 @@ export default function SAReportVisibility() {
                   <option value="">Choose company</option>
                   {companyOptions.map((row) => (
                     <option key={row.id} value={row.id}>
-                      {formatCompanyOptionLabel(row)}
+                      {formatCompanyLabel(row)}
                     </option>
                   ))}
                 </select>
@@ -639,14 +611,18 @@ export default function SAReportVisibility() {
                   Selected Company
                 </p>
                 <p className="mt-2 text-sm font-semibold text-slate-900">
-                  {selectedCompany ? formatCompanyLabel(selectedCompany) : "Choose company"}
+                  <span className="break-words">
+                    {selectedCompany ? formatCompanyLabel(selectedCompany) : "Choose company"}
+                  </span>
                 </p>
               </div>
               <div className="border border-slate-300 bg-slate-50 px-4 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Company Address
                 </p>
-                <p className="mt-2 text-sm text-slate-700">{formatCompanyAddress(selectedCompany)}</p>
+                <p className="mt-2 break-words text-sm text-slate-700">
+                  {formatCompanyAddress(selectedCompany)}
+                </p>
               </div>
             </div>
           </div>
@@ -655,7 +631,7 @@ export default function SAReportVisibility() {
       reviewSection={{
         eyebrow: "Existing Viewer Rules",
         title: loading ? "Loading visibility rules" : `${filteredRules.length} visible viewer rule${filteredRules.length === 1 ? "" : "s"}`,
-        description: "Use these rows to control who can see company-wide or department-scoped register and report pages.",
+        count: filteredRules.length,
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading report visibility rules.
@@ -665,83 +641,84 @@ export default function SAReportVisibility() {
             No report visibility rule matches the current filter.
           </div>
         ) : (
-          <div className="grid gap-3">
-            {filteredRules.map((row, index) => {
-              const user = workspace.users.find((item) => item.auth_user_id === row.viewer_user_id) ?? null;
-              const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id) ?? null;
-              const resource = workspace.resources.find((item) => item.resource_code === row.resource_code) ?? null;
-              const requesterUser = workspace.users.find((item) => item.auth_user_id === row.subject_user_id) ?? null;
-
-              return (
-                <button
-                  key={row.viewer_id}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
-                  type="button"
-                  onClick={() => handleRulePick(row)}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: rowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
-                  className={`border px-4 py-4 text-left ${
-                    draft.viewer_id === row.viewer_id ? "border-sky-400 bg-sky-50" : "border-slate-300 bg-white"
-                  }`}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+          <ErpDenseGrid
+            columns={[
+              {
+                key: "resource",
+                label: "Resource",
+                render: (row) => {
+                  const resource = workspace.resources.find((item) => item.resource_code === row.resource_code) ?? null;
+                  return (
                     <div>
-                      <div className="text-sm font-semibold text-slate-900">
+                      <div className="font-semibold text-slate-900">
                         {resource?.title ?? row.resource_code}
                       </div>
-                      <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                      <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
                         {row.module_code} | {row.resource_code} | {row.action_code}
                       </div>
-                      <div className="mt-2 text-xs text-slate-600">
-                        {user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.viewer_role_code] ?? row.viewer_role_code}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        Scope: {buildVisibilityScopeLabel(row.scope_type)}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {row.scope_type === "USER_EXCEPTION"
-                          ? `Requester user: ${buildUserLabel(requesterUser)}`
-                          : scope
-                            ? `Viewer lane: ${buildWorkContextLabel(scope)}`
-                            : row.scope_type === "DIRECTOR"
-                              ? "Viewer lane: director broad visibility"
-                              : "Viewer lane: company-wide broad visibility"}
-                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void handleDelete(row);
-                      }}
-                      className="border border-rose-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-rose-700"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </button>
-              );
+                  );
+                },
+              },
+              {
+                key: "viewer",
+                label: "Viewer",
+                render: (row) => {
+                  const user = workspace.users.find((item) => item.auth_user_id === row.viewer_user_id) ?? null;
+                  return user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.viewer_role_code] ?? row.viewer_role_code;
+                },
+              },
+              {
+                key: "scope",
+                label: "Scope",
+                render: (row) => {
+                  const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id) ?? null;
+                  const requesterUser = workspace.users.find((item) => item.auth_user_id === row.subject_user_id) ?? null;
+                  if (row.scope_type === "USER_EXCEPTION") {
+                    return `User | ${buildUserLabel(requesterUser)}`;
+                  }
+                  if (scope) {
+                    return buildWorkContextLabel(scope);
+                  }
+                  return row.scope_type === "DIRECTOR" ? "Director broad visibility" : "Company-wide broad visibility";
+                },
+              },
+              {
+                key: "delete",
+                label: "Delete",
+                align: "center",
+                render: (row) => (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleDelete(row);
+                    }}
+                    className="border border-rose-300 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-rose-700"
+                  >
+                    Delete
+                  </button>
+                ),
+              },
+            ]}
+            rows={filteredRules}
+            rowKey={(row) => row.viewer_id}
+            getRowProps={(row, index) => ({
+              ...getRowProps(index),
+              onClick: () => handleRulePick(row),
+              className: draft.viewer_id === row.viewer_id ? "bg-sky-50" : "",
             })}
-          </div>
+            onRowActivate={(row) => handleRulePick(row)}
+            maxHeight="none"
+          />
         ),
       }}
-      sideSection={{
-        eyebrow: "Viewer Rule Editor",
-        title: draft.viewer_id ? "Edit visibility rule" : "Create visibility rule",
-        description: "Use explicit scope type so company-wide, director, department, lane, and requester-user exception visibility stays deterministic.",
-        children: (
-          <div className="grid gap-4">
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Action
-              </span>
+      bottomSection={
+        <section className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Viewer Rule Editor</div>
+          <div className="text-sm font-semibold text-slate-900">{draft.viewer_id ? "Edit visibility rule" : "Create visibility rule"}</div>
+          <div className="grid gap-[var(--erp-form-gap)] md:grid-cols-2 md:gap-x-6">
+            <ErpDenseFormRow label="Action">
               <select
                 value={draft.action_code}
                 onChange={(event) =>
@@ -750,7 +727,7 @@ export default function SAReportVisibility() {
                     action_code: event.target.value,
                   }))
                 }
-                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
               >
                 {actionOptions.map((action) => (
                   <option key={action} value={action}>
@@ -758,12 +735,9 @@ export default function SAReportVisibility() {
                   </option>
                 ))}
               </select>
-            </label>
+            </ErpDenseFormRow>
 
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Scope Type
-              </span>
+            <ErpDenseFormRow label="Scope Type">
               <select
                 value={draft.scope_type}
                 onChange={(event) =>
@@ -777,7 +751,7 @@ export default function SAReportVisibility() {
                     subject_user_id: event.target.value === "USER_EXCEPTION" ? current.subject_user_id : "",
                   }))
                 }
-                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
               >
                 {VISIBILITY_SCOPE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -785,13 +759,12 @@ export default function SAReportVisibility() {
                   </option>
                 ))}
               </select>
-            </label>
+            </ErpDenseFormRow>
 
             {(draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT") ? (
-              <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                {draft.scope_type === "DEPARTMENT" ? "Requester Department Lane" : "Requester Work Context"}
-              </span>
+              <ErpDenseFormRow
+                label={draft.scope_type === "DEPARTMENT" ? "Requester Department Lane" : "Requester Work Context"}
+              >
               <select
                 value={draft.subject_work_context_id}
                 onChange={(event) =>
@@ -800,7 +773,7 @@ export default function SAReportVisibility() {
                     subject_work_context_id: event.target.value,
                   }))
                 }
-                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
               >
                 <option value="">
                   {draft.scope_type === "DEPARTMENT" ? "Choose requester department lane" : "Choose requester work context"}
@@ -809,16 +782,13 @@ export default function SAReportVisibility() {
                   <option key={row.work_context_id} value={row.work_context_id}>
                     {buildWorkContextLabel(row)}
                   </option>
-                ))}
+                  ))}
               </select>
-            </label>
+            </ErpDenseFormRow>
             ) : null}
 
             {draft.scope_type === "USER_EXCEPTION" ? (
-              <label className="grid gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Requester User Exception
-                </span>
+              <ErpDenseFormRow label="Requester User Exception">
                 <select
                   value={draft.subject_user_id}
                   onChange={(event) =>
@@ -827,27 +797,24 @@ export default function SAReportVisibility() {
                       subject_user_id: event.target.value,
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
                 >
                   <option value="">Choose requester user</option>
                   {userOptions.map((row) => (
                     <option key={row.auth_user_id} value={row.auth_user_id}>
                       {buildUserLabel(row)}
                     </option>
-                  ))}
+                    ))}
                 </select>
-              </label>
+              </ErpDenseFormRow>
             ) : null}
 
-            <div className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Target Mode
-              </span>
-              <div className="grid gap-2 md:grid-cols-2">
+            <ErpDenseFormRow label="Target Mode">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => setDraft((current) => ({ ...current, target_mode: "user" }))}
-                  className={`border px-3 py-2 text-sm ${
+                  className={`border px-2 py-[5px] text-[12px] font-medium ${
                     draft.target_mode === "user" ? "border-sky-400 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"
                   }`}
                 >
@@ -856,20 +823,17 @@ export default function SAReportVisibility() {
                 <button
                   type="button"
                   onClick={() => setDraft((current) => ({ ...current, target_mode: "role" }))}
-                  className={`border px-3 py-2 text-sm ${
+                  className={`border px-2 py-[5px] text-[12px] font-medium ${
                     draft.target_mode === "role" ? "border-sky-400 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"
                   }`}
                 >
                   Role
                 </button>
               </div>
-            </div>
+            </ErpDenseFormRow>
 
             {draft.target_mode === "user" ? (
-              <label className="grid gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Viewer User
-                </span>
+              <ErpDenseFormRow label="Viewer User">
                 <select
                   value={draft.viewer_user_id}
                   onChange={(event) =>
@@ -878,21 +842,18 @@ export default function SAReportVisibility() {
                       viewer_user_id: event.target.value,
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
                 >
                   <option value="">Choose user</option>
                   {userOptions.map((row) => (
                     <option key={row.auth_user_id} value={row.auth_user_id}>
                       {buildUserLabel(row)}
                     </option>
-                  ))}
+                    ))}
                 </select>
-              </label>
+              </ErpDenseFormRow>
             ) : (
-              <label className="grid gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Viewer Role
-                </span>
+              <ErpDenseFormRow label="Viewer Role">
                 <select
                   value={draft.viewer_role_code}
                   onChange={(event) =>
@@ -901,23 +862,23 @@ export default function SAReportVisibility() {
                       viewer_role_code: event.target.value,
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
                 >
                   {ERP_ROLE_OPTIONS.map((row) => (
                     <option key={row.code} value={row.code}>
                       {row.code} | {row.label}
                     </option>
-                  ))}
+                    ))}
                 </select>
-              </label>
+              </ErpDenseFormRow>
             )}
 
-            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-xs text-slate-600">
+            <div className="md:col-span-2 border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
               Use company-wide or director viewer rows for broad business visibility. Use department, lane, or user-exception viewer rows when the report must stay tightly scoped.
             </div>
           </div>
-        ),
-      }}
+        </section>
+      }
     />
   );
 }

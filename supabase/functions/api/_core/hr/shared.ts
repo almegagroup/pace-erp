@@ -195,23 +195,69 @@ export function calculateInclusiveDays(fromDate: string, toDate: string): number
 
 export async function getParentCompanyScope(
   authUserId: string,
+  requestedCompanyId?: string | null,
 ): Promise<ParentCompanyScope> {
-  const { data: parentRow, error: parentError } = await serviceRoleClient
-    .schema("erp_map")
-    .from("user_parent_companies")
-    .select("company_id")
-    .eq("auth_user_id", authUserId)
-    .maybeSingle();
+  const normalizedRequestedCompanyId = String(requestedCompanyId ?? "").trim() || null;
+  let resolvedCompanyId: string | null = null;
 
-  if (parentError || !parentRow?.company_id) {
-    throw new Error("HR_PARENT_COMPANY_NOT_FOUND");
+  if (normalizedRequestedCompanyId) {
+    const { data: membershipRows, error: membershipError } = await serviceRoleClient
+      .schema("erp_map")
+      .from("user_companies")
+      .select("company_id")
+      .eq("auth_user_id", authUserId)
+      .eq("company_id", normalizedRequestedCompanyId)
+      .limit(1);
+
+    if (membershipError) {
+      throw new Error("HR_PARENT_COMPANY_LOOKUP_FAILED");
+    }
+
+    if (Array.isArray(membershipRows) && membershipRows.length > 0) {
+      resolvedCompanyId = normalizedRequestedCompanyId;
+    } else {
+      const { data: parentRow, error: parentError } = await serviceRoleClient
+        .schema("erp_map")
+        .from("user_parent_companies")
+        .select("company_id")
+        .eq("auth_user_id", authUserId)
+        .eq("company_id", normalizedRequestedCompanyId)
+        .maybeSingle();
+
+      if (parentError) {
+        throw new Error("HR_PARENT_COMPANY_LOOKUP_FAILED");
+      }
+
+      if (parentRow?.company_id) {
+        resolvedCompanyId = parentRow.company_id;
+      }
+    }
+
+    if (!resolvedCompanyId) {
+      throw new Error("HR_PARENT_COMPANY_FORBIDDEN");
+    }
+  }
+
+  if (!resolvedCompanyId) {
+    const { data: parentRow, error: parentError } = await serviceRoleClient
+      .schema("erp_map")
+      .from("user_parent_companies")
+      .select("company_id")
+      .eq("auth_user_id", authUserId)
+      .maybeSingle();
+
+    if (parentError || !parentRow?.company_id) {
+      throw new Error("HR_PARENT_COMPANY_NOT_FOUND");
+    }
+
+    resolvedCompanyId = parentRow.company_id;
   }
 
   const { data: companyRow, error: companyError } = await serviceRoleClient
     .schema("erp_master")
     .from("companies")
     .select("company_code, company_name")
-    .eq("id", parentRow.company_id)
+    .eq("id", resolvedCompanyId)
     .maybeSingle();
 
   if (companyError) {
@@ -219,7 +265,7 @@ export async function getParentCompanyScope(
   }
 
   return {
-    company_id: parentRow.company_id,
+    company_id: resolvedCompanyId,
     company_code: companyRow?.company_code ?? null,
     company_name: companyRow?.company_name ?? null,
   };

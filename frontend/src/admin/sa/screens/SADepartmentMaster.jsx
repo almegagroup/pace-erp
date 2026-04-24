@@ -5,10 +5,9 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import {
   formatCompanyAddress,
   formatCompanyLabel,
@@ -120,7 +119,6 @@ export default function SADepartmentMaster() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
   const createInputRef = useRef(null);
-  const departmentRefs = useRef([]);
   const companySelectRef = useRef(null);
   const selectedCompanyIdRef = useRef("");
   const selectedDepartmentIdRef = useRef("");
@@ -152,22 +150,6 @@ export default function SADepartmentMaster() {
   useEffect(() => {
     selectedDepartmentIdRef.current = selectedDepartmentId;
   }, [selectedDepartmentId]);
-
-  const readiness = useMemo(() => {
-    const activeDepartments = departments.filter((row) => row.status === "ACTIVE").length;
-    const readyContexts = departments.filter((row) => row.derived_work_context).length;
-    const totalAssignedUsers = departments.reduce(
-      (sum, row) => sum + Number(row.derived_work_context?.assigned_user_count ?? 0),
-      0
-    );
-
-    return {
-      departments: departments.length,
-      activeDepartments,
-      readyContexts,
-      totalAssignedUsers,
-    };
-  }, [departments]);
 
   const loadCompaniesAndDepartments = useCallback(
     async (preferredCompanyId = "", preferredDepartmentId = "") => {
@@ -347,6 +329,8 @@ export default function SADepartmentMaster() {
     }
   }
 
+  const { getRowProps: getDepartmentRowProps } = useErpListNavigation(departments);
+
   useErpScreenCommands([
     {
       id: "sa-department-master-refresh",
@@ -430,7 +414,6 @@ export default function SADepartmentMaster() {
     <ErpScreenScaffold
       eyebrow="Department Foundation"
       title="Department Master"
-      description="Create company-bound departments now, let the backend derive `DEPT_*` work contexts automatically, and leave detailed business-page capability wiring for later."
       notices={notices}
       actions={[
         {
@@ -503,56 +486,20 @@ export default function SADepartmentMaster() {
             }),
         },
       ]}
-      metrics={[
-        {
-          label: "Departments",
-          value: readiness.departments,
-          caption: "Departments created inside the selected company.",
-          tone: "sky",
-        },
-        {
-          label: "Active",
-          value: readiness.activeDepartments,
-          caption: "Departments currently available for user mapping.",
-          tone: "emerald",
-        },
-        {
-          label: "Derived Contexts",
-          value: readiness.readyContexts,
-          caption: "Department rows already carrying their `DEPT_*` work context.",
-          tone: readiness.readyContexts === readiness.departments ? "emerald" : "amber",
-        },
-        {
-          label: "Assigned Users",
-          value: readiness.totalAssignedUsers,
-          caption: "Users already bound into department-derived contexts.",
-          tone: "slate",
-        },
-      ]}
-      footerHints={[
-        "ALT+R REFRESH",
-        "ALT+S COMPANY",
-        "CTRL+K COMMAND BAR",
-        "ENTER CREATE",
-      ]}
+      footerHints={["↑↓ Navigate", "Enter Select", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-3 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
         <div className="grid gap-3">
-          <ErpSectionCard
-            eyebrow="Context"
-            title="Selected Company"
-            description="Departments remain per-company. Pick the business company you want to structure."
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Selected Company" />
             <div className="grid gap-3">
-              <label className="grid gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Company
-                </span>
+              <label className="grid grid-cols-[100px_1fr] items-center gap-x-2">
+                <span className="text-[11px] text-slate-600">Company</span>
                 <select
                   ref={companySelectRef}
                   value={selectedCompanyId}
                   onChange={(event) => setSelectedCompanyId(event.target.value)}
-                  className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
+                  className="h-7 border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-400 focus:bg-white"
                 >
                   <option value="">Select company</option>
                   {companies.map((company) => (
@@ -563,45 +510,37 @@ export default function SADepartmentMaster() {
                 </select>
               </label>
 
-              <div className="grid gap-3 md:grid-cols-3">
-                <ErpFieldPreview
-                  label="Company Status"
-                  value={selectedCompany?.status ?? "Unknown"}
-                  caption="Department activation follows company lifecycle."
-                />
-                <ErpFieldPreview
-                  label="Company Address"
-                  value={formatCompanyAddress(selectedCompany)}
-                  caption="Keep the registered office visible while creating departments."
-                />
-                <ErpFieldPreview
-                  label="Mapped Group"
-                  value={
-                    selectedCompany?.group_code
+              <div className="border border-slate-300 bg-white">
+                <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Company Status</span>
+                  <span className="text-[11px] font-semibold text-slate-900">{selectedCompany?.status ?? "Unknown"}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Company Address</span>
+                  <span className="max-w-[60%] text-right text-[11px] font-semibold text-slate-900">{formatCompanyAddress(selectedCompany)}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Mapped Group</span>
+                  <span className="text-[11px] font-semibold text-slate-900">
+                    {selectedCompany?.group_code
                       ? `${selectedCompany.group_code} | ${selectedCompany.group_name ?? ""}`
-                      : "Not mapped"
-                  }
-                  caption="Useful later for governance grouping, but not required for department create."
-                />
+                      : "Not mapped"}
+                  </span>
+                </div>
               </div>
             </div>
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Create"
-            title="Create Department"
-            description="This creates the department row first. The backend immediately derives the matching `DEPT_*` work context."
-          >
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-              <label className="grid gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Department Name
-                </span>
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Create Department" />
+            <div className="grid grid-cols-[1fr_auto] items-center gap-2">
+              <label className="grid grid-cols-[100px_1fr] items-center gap-x-2">
+                <span className="text-[11px] text-slate-600">Department Name</span>
                 <input
                   ref={createInputRef}
                   value={departmentName}
                   onChange={(event) => setDepartmentName(event.target.value)}
-                  className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
+                  className="h-7 border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-400 focus:bg-white"
                   placeholder="QA, HR, Accounts, Purchase"
                 />
               </label>
@@ -610,25 +549,22 @@ export default function SADepartmentMaster() {
                 type="button"
                 disabled={saving || !selectedCompanyId}
                 onClick={() => void handleCreateDepartment()}
-                className="self-end border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                className="border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold text-sky-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
               >
                 Create Department
               </button>
             </div>
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Roster"
-            title="Department Inventory"
-            description="Choose a department to inspect its derived work context and lifecycle readiness."
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Department Inventory" />
             <div className="grid gap-2">
               {loading ? (
-                <p className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                <p className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
                   Loading department inventory...
                 </p>
               ) : departments.length === 0 ? (
-                <p className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                <p className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
                   No departments created for the selected company yet.
                 </p>
               ) : (
@@ -638,18 +574,9 @@ export default function SADepartmentMaster() {
                   return (
                     <button
                       key={department.id}
-                      ref={(element) => {
-                        departmentRefs.current[index] = element;
-                      }}
+                      {...getDepartmentRowProps(index)}
                       type="button"
                       onClick={() => setSelectedDepartmentId(department.id)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: departmentRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
                       className={`border px-4 py-3 text-left ${
                         isSelected
                           ? "border-sky-300 bg-sky-50 text-sky-900"
@@ -668,49 +595,41 @@ export default function SADepartmentMaster() {
                 })
               )}
             </div>
-          </ErpSectionCard>
+          </div>
         </div>
 
         <div className="grid gap-3">
-          <ErpSectionCard
-            eyebrow="Selected Department"
-            title={
-              selectedDepartment
-                ? `${selectedDepartment.department_code} | ${selectedDepartment.department_name}`
-                : "Choose A Department"
-            }
-            description="Department is the business identity layer. The derived work context is the runtime access layer."
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection
+              label={
+                selectedDepartment
+                  ? `${selectedDepartment.department_code} | ${selectedDepartment.department_name}`
+                  : "Choose A Department"
+              }
+            />
             {selectedDepartment ? (
               <>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <ErpFieldPreview
-                    label="Department Status"
-                    value={selectedDepartment.status}
-                    caption="Inactive departments also push their derived work context inactive."
-                  />
-                  <ErpFieldPreview
-                    label="Created"
-                    value={
-                      selectedDepartment.created_at
-                        ? new Date(selectedDepartment.created_at).toLocaleDateString()
-                        : "Unknown"
-                    }
-                    caption="Canonical department row create date."
-                  />
-                  <ErpFieldPreview
-                    label="Assigned Users"
-                    value={selectedDepartment.derived_work_context?.assigned_user_count ?? 0}
-                    caption="Users currently bound to this department-derived context."
-                  />
+                <div className="border border-slate-300 bg-white">
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Department Status</span>
+                    <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.status}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Created</span>
+                    <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.created_at ? new Date(selectedDepartment.created_at).toLocaleDateString() : "Unknown"}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Assigned Users</span>
+                    <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context?.assigned_user_count ?? 0}</span>
+                  </div>
                 </div>
 
-                <div className="mt-4 flex flex-wrap gap-2">
+                <div className="mt-2 flex flex-wrap gap-1">
                   <button
                     type="button"
                     disabled={saving || selectedDepartment.status === "ACTIVE"}
                     onClick={() => void handleDepartmentStateChange("ACTIVE")}
-                    className="border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-emerald-300 bg-emerald-50 px-2 py-[3px] text-[11px] font-semibold text-emerald-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Activate
                   </button>
@@ -718,7 +637,7 @@ export default function SADepartmentMaster() {
                     type="button"
                     disabled={saving || selectedDepartment.status === "INACTIVE"}
                     onClick={() => void handleDepartmentStateChange("INACTIVE")}
-                    className="border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-rose-300 bg-rose-50 px-2 py-[3px] text-[11px] font-semibold text-rose-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Inactivate
                   </button>
@@ -729,54 +648,38 @@ export default function SADepartmentMaster() {
                 Select a department from the roster to inspect its runtime foundation.
               </p>
             )}
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Runtime Layer"
-            title="Derived Work Context"
-            description="This is the runtime work scope ACL will evaluate later. Business pages can be assigned after the team foundation already exists."
-            tone="accent"
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Derived Work Context" />
             {selectedDepartment?.derived_work_context ? (
-              <div className="grid gap-3 md:grid-cols-2">
-                <ErpFieldPreview
-                  label="Work Context Code"
-                  value={selectedDepartment.derived_work_context.work_context_code}
-                  caption="Auto-derived from the department code."
-                  tone="success"
-                />
-                <ErpFieldPreview
-                  label="Work Context State"
-                  value={
-                    selectedDepartment.derived_work_context.is_active ? "ACTIVE" : "INACTIVE"
-                  }
-                  caption="Synced from company + department lifecycle."
-                  tone="success"
-                />
-                <ErpFieldPreview
-                  label="Capability Count"
-                  value={selectedDepartment.derived_work_context.capability_count}
-                  caption="Can stay zero for now until business pages and capability packs are ready."
-                />
-                <ErpFieldPreview
-                  label="Assigned Users"
-                  value={selectedDepartment.derived_work_context.assigned_user_count}
-                  caption="User Scope binds people into this runtime context."
-                />
+              <div className="border border-slate-300 bg-white">
+                <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Work Context Code</span>
+                  <span className="text-[11px] font-semibold text-emerald-800">{selectedDepartment.derived_work_context.work_context_code}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Work Context State</span>
+                  <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context.is_active ? "ACTIVE" : "INACTIVE"}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Capability Count</span>
+                  <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context.capability_count}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Assigned Users</span>
+                  <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context.assigned_user_count}</span>
+                </div>
               </div>
             ) : (
               <p className="text-sm text-slate-500">
                 No derived work context found yet for this department.
               </p>
             )}
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Next Step"
-            title="How To Use This Foundation"
-            description="You can safely create team foundations now even before business pages exist."
-            tone="warning"
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label="How To Use This Foundation" />
             <div className="grid gap-2">
               {[ 
                 "Create the department now so the company team structure is real.",
@@ -787,13 +690,13 @@ export default function SADepartmentMaster() {
               ].map((line) => (
                 <div
                   key={line}
-                  className="border border-amber-200 bg-white px-3 py-3 text-sm text-slate-700"
+                  className="border border-amber-200 bg-white px-3 py-2 text-sm text-slate-700"
                 >
                   {line}
                 </div>
               ))}
             </div>
-          </ErpSectionCard>
+          </div>
         </div>
       </div>
     </ErpScreenScaffold>

@@ -10,6 +10,7 @@
 
 import { Fragment, useEffect, useMemo, useRef } from "react";
 import { pushToast } from "../../store/uiToast.js";
+import ErpCommandStrip from "../layout/ErpCommandStrip.jsx";
 
 const ACTION_TONE_CLASS = Object.freeze({
   primary:
@@ -207,12 +208,16 @@ export function ErpFieldPreview({
 
 export function ErpActionStrip({ actions = [] }) {
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-1">
       {actions.map((action, index) => {
         const toneClass =
           action.disabled
             ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
             : ACTION_TONE_CLASS[action.tone] ?? ACTION_TONE_CLASS.neutral;
+
+        const hintTokens = [action.hint, action.mnemonicHint]
+          .filter(Boolean)
+          .filter((value, i, arr) => arr.indexOf(value) === i);
 
         return (
           <button
@@ -222,20 +227,14 @@ export function ErpActionStrip({ actions = [] }) {
             disabled={action.disabled}
             onClick={action.onClick}
             onKeyDown={action.onKeyDown}
-            className={`min-w-[132px] border px-3 py-2 text-left transition ${toneClass}`}
+            className={`border px-2 py-[3px] text-left transition ${toneClass}`}
           >
-            <span className="block text-[13px] font-semibold uppercase tracking-[0.04em]">
+            <span className="block text-[11px] font-semibold uppercase tracking-[0.06em]">
               {renderMnemonicLabel(action.label, action.mnemonic)}
             </span>
-            {[action.hint, action.mnemonicHint]
-              .filter(Boolean)
-              .filter((value, index, values) => values.indexOf(value) === index)
-              .length > 0 ? (
-              <span className="mt-1 block text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                {[action.hint, action.mnemonicHint]
-                  .filter(Boolean)
-                  .filter((value, index, values) => values.indexOf(value) === index)
-                  .join(" | ")}
+            {hintTokens.length > 0 ? (
+              <span className="block text-[9px] uppercase tracking-[0.12em] text-slate-500">
+                {hintTokens.join(" | ")}
               </span>
             ) : null}
           </button>
@@ -248,7 +247,6 @@ export function ErpActionStrip({ actions = [] }) {
 export function ErpSectionCard({
   eyebrow,
   title,
-  description,
   aside,
   children,
   className = "",
@@ -258,7 +256,7 @@ export function ErpSectionCard({
     <section
       className={`overflow-hidden border shadow-[0_4px_12px_rgba(15,23,42,0.04)] ${SECTION_TONE_CLASS[tone] ?? SECTION_TONE_CLASS.default} ${className}`.trim()}
     >
-      {(eyebrow || title || description || aside) ? (
+      {(eyebrow || title || aside) ? (
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-4 py-3">
           <div className="min-w-0">
             {eyebrow ? (
@@ -271,16 +269,11 @@ export function ErpSectionCard({
                 {title}
               </h2>
             ) : null}
-            {description ? (
-              <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
-                {description}
-              </p>
-            ) : null}
           </div>
           {aside ? <Fragment>{aside}</Fragment> : null}
         </div>
       ) : null}
-      <div className={eyebrow || title || description || aside ? "px-4 py-4" : "px-4 py-4"}>
+      <div className="px-4 py-4">
         {children}
       </div>
     </section>
@@ -290,13 +283,11 @@ export function ErpSectionCard({
 export default function ErpScreenScaffold({
   eyebrow,
   title,
-  description,
   actions = [],
   topActions = [],
   notices = [],
   error = "",
   notice = "",
-  metrics = [],
   footerHints = [],
   children,
 }) {
@@ -372,81 +363,27 @@ export default function ErpScreenScaffold({
 
   return (
     <section className="min-h-full text-slate-900">
-      <div className="mx-auto flex max-w-none flex-col gap-4">
-        <div className="sticky top-0 z-20 overflow-hidden border border-slate-400 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.06)]">
-          <div className="border-b border-slate-300 bg-[linear-gradient(180deg,#f5f8fb_0%,#e8eef5_100%)] px-4 py-3">
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
-              <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-sky-700">
-                  {eyebrow}
-                </p>
-                <h1 className="mt-2 text-[1.7rem] font-semibold tracking-tight text-slate-900">
-                  {title}
-                </h1>
-                {description ? (
-                  <p className="mt-2 max-w-5xl text-sm leading-6 text-slate-600">
-                    {description}
-                  </p>
-                ) : null}
-              </div>
-
-              {resolvedActions.length > 0 ? (
-                <div className="xl:justify-self-end">
-                  <ErpActionStrip actions={resolvedActions} />
-                </div>
-              ) : null}
+      <div className="mx-auto flex max-w-none flex-col gap-[var(--erp-section-gap)]">
+        <div className="sticky top-0 z-20 overflow-hidden border-b border-slate-300 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-1.5">
+            <div className="min-w-0">
+              <p className="text-[9px] font-semibold uppercase tracking-[0.24em] text-sky-700">
+                {eyebrow}
+              </p>
+              <h1 className="text-[13px] font-bold tracking-tight text-slate-900">
+                {title}
+              </h1>
             </div>
+
+            {resolvedActions.length > 0 ? (
+              <ErpActionStrip actions={resolvedActions} />
+            ) : null}
           </div>
-
-          {metrics.length > 0 ? (
-            <div className="grid gap-2 border-b border-slate-300 bg-[#f6f8fb] px-4 py-3 md:grid-cols-2 xl:grid-cols-4">
-              {metrics.map((metric, index) => (
-                <ErpMetricCard
-                  key={metric.key ?? `${metric.label}-${index}`}
-                  {...metric}
-                />
-              ))}
-            </div>
-          ) : null}
-
-          {mergedNotices.length > 0 ? (
-            <div className="grid gap-2 border-b border-slate-300 bg-white px-4 py-3">
-              {mergedNotices.map((notice, index) => {
-                if (!notice?.message) {
-                  return null;
-                }
-
-                return (
-                  <div
-                    key={notice.key ?? `${notice.tone}-${index}`}
-                    className={`border px-3 py-3 text-sm ${NOTICE_TONE_CLASS[notice.tone] ?? NOTICE_TONE_CLASS.info}`}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70">
-                          {NOTICE_TONE_LABEL[notice.tone] ?? NOTICE_TONE_LABEL.info}
-                        </div>
-                        <div className="mt-1 leading-6">{notice.message}</div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
         </div>
 
-        <div className="grid gap-4">{children}</div>
+        <div className="grid gap-[var(--erp-section-gap)]">{children}</div>
 
-        {footerHints.length > 0 ? (
-          <div className="border border-slate-300 bg-[#eef3f7] px-4 py-2 shadow-[0_4px_10px_rgba(15,23,42,0.04)]">
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-              {footerHints.map((hint) => (
-                <span key={hint}>{hint}</span>
-              ))}
-            </div>
-          </div>
-        ) : null}
+        <ErpCommandStrip hints={footerHints} />
       </div>
     </section>
   );

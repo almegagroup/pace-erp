@@ -1,15 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
-import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import { applyQuickFilter, sortProjects } from "../../../shared/erpCollections.js";
 import {
   formatCompanyAddress,
@@ -76,8 +75,6 @@ export default function SACompanyProjectMap() {
   const [searchParams] = useSearchParams();
   const initialProjectId = searchParams.get("project_id") ?? "";
   const actionRefs = useRef([]);
-  const projectRefs = useRef([]);
-  const companyRefs = useRef([]);
   const projectSearchRef = useRef(null);
   const companySearchRef = useRef(null);
   const [projects, setProjects] = useState([]);
@@ -91,7 +88,7 @@ export default function SACompanyProjectMap() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  async function loadProjects(preferredProjectId = selectedProjectId) {
+  const loadProjects = useCallback(async (preferredProjectId = selectedProjectId) => {
     setLoading(true);
     setError("");
 
@@ -120,9 +117,9 @@ export default function SACompanyProjectMap() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedProjectId]);
 
-  async function loadCompanyMap(projectId = selectedProjectId) {
+  const loadCompanyMap = useCallback(async (projectId = selectedProjectId) => {
     if (!projectId) {
       setProjectDetail(null);
       setCompanies([]);
@@ -147,15 +144,15 @@ export default function SACompanyProjectMap() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedProjectId]);
 
   useEffect(() => {
     void loadProjects(initialProjectId);
-  }, [initialProjectId]);
+  }, [initialProjectId, loadProjects]);
 
   useEffect(() => {
     void loadCompanyMap(selectedProjectId);
-  }, [selectedProjectId]);
+  }, [loadCompanyMap, selectedProjectId]);
 
   const filteredProjects = useMemo(
     () =>
@@ -186,6 +183,9 @@ export default function SACompanyProjectMap() {
   );
 
   const mappedCompanies = companies.filter((row) => row.is_mapped);
+
+  const { getRowProps: getProjectRowProps } = useErpListNavigation(filteredProjects);
+  const { getRowProps: getCompanyRowProps } = useErpListNavigation(filteredCompanies);
 
   useErpScreenHotkeys({
     refresh: {
@@ -233,17 +233,6 @@ export default function SACompanyProjectMap() {
     }
 
     const isMapped = Boolean(company.is_mapped);
-    const approved = await openActionConfirm({
-      eyebrow: "Company Project Map",
-      title: `${isMapped ? "Unmap" : "Map"} Company`,
-      message: `${isMapped ? "Unmap" : "Map"} ${company.company_code} ${isMapped ? "from" : "to"} ${projectDetail.project_code}?`,
-      confirmLabel: isMapped ? "Unmap" : "Map",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
-      return;
-    }
 
     setSaving(true);
     setError("");
@@ -288,7 +277,6 @@ export default function SACompanyProjectMap() {
     <ErpScreenScaffold
       eyebrow="Project Mapping"
       title="Company Project Map"
-      description="Attach reusable projects to business companies only after the project itself is stable. Mapping is where a project enters operational scope."
       actions={[
         {
           key: "project-manage",
@@ -313,7 +301,6 @@ export default function SACompanyProjectMap() {
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
-          hint: "Alt+R",
           tone: "neutral",
           buttonRef: (element) => {
             actionRefs.current[1] = element;
@@ -331,201 +318,148 @@ export default function SACompanyProjectMap() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "projects",
-          label: "Projects",
-          value: loading ? "..." : String(projects.length),
-          tone: "sky",
-          caption: "Reusable projects available for operational mapping.",
-        },
-        {
-          key: "mapped",
-          label: "Mapped Companies",
-          value: projectDetail ? String(mappedCompanies.length) : "0",
-          tone: "emerald",
-          caption: projectDetail
-            ? "Business companies currently attached to the selected project."
-            : "Select a project to inspect mappings.",
-        },
-        {
-          key: "available",
-          label: "Available Companies",
-          value: projectDetail ? String(companies.length) : "0",
-          tone: "amber",
-          caption: "Business companies eligible for this project universe.",
-        },
-        {
-          key: "state",
-          label: "Project State",
-          value: projectDetail?.status ?? "N/A",
-          tone: "slate",
-          caption: "Lifecycle should be stable before broad company rollout.",
-        },
-      ]}
+      footerHints={["↑↓ Navigate", "Enter Select", "Space Select", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <ErpSectionCard
-          eyebrow="Projects"
-          title="Choose project"
-          description="Project selection happens on the left; company assignment happens on the right."
-        >
-          <div className="grid gap-4">
-            <QuickFilterInput
-              label="Find project"
-              value={projectSearch}
-              onChange={setProjectSearch}
-              inputRef={projectSearchRef}
-              placeholder="Filter by project code or project name"
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Choose Project" />
+          <QuickFilterInput
+            label="Find project"
+            value={projectSearch}
+            onChange={setProjectSearch}
+            inputRef={projectSearchRef}
+            placeholder="Filter by project code or project name"
+          />
+
+          {loading ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              Loading projects.
+            </div>
+          ) : filteredProjects.length === 0 ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              No project matches the current filter.
+            </div>
+          ) : (
+            <ErpDenseGrid
+              columns={[
+                {
+                  key: "project",
+                  label: "Project",
+                  render: (project) => (
+                    <div>
+                      <div className="font-semibold text-slate-900">{project.project_code} - {project.project_name}</div>
+                      <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{project.status ?? "UNKNOWN"}</div>
+                    </div>
+                  ),
+                },
+              ]}
+              rows={filteredProjects}
+              rowKey={(project) => project.id}
+              getRowProps={(project, index) => ({
+                ...getProjectRowProps(index),
+                onClick: () => setSelectedProjectId(project.id),
+                className: project.id === selectedProjectId ? "bg-sky-50" : "",
+              })}
+              onRowActivate={(project) => setSelectedProjectId(project.id)}
+              emptyMessage="No project matches the current filter."
+              maxHeight="340px"
             />
-
-            {loading ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                Loading projects.
-              </div>
-            ) : filteredProjects.length === 0 ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                No project matches the current filter.
-              </div>
-            ) : (
-              <div className="space-y-0 border border-slate-300">
-                {filteredProjects.map((project, index) => {
-                  const isSelected = project.id === selectedProjectId;
-
-                  return (
-                    <button
-                      key={project.id}
-                      ref={(element) => {
-                        projectRefs.current[index] = element;
-                      }}
-                      type="button"
-                      onClick={() => setSelectedProjectId(project.id)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: projectRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className={`w-full border-b border-slate-300 px-4 py-3 text-left text-sm transition last:border-b-0 ${
-                        isSelected
-                          ? "bg-sky-50 text-slate-900"
-                          : "bg-white text-slate-700"
-                      }`}
-                    >
-                      <span className="block font-semibold">
-                        {project.project_code} - {project.project_name}
-                      </span>
-                      <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
-                        {project.status ?? "UNKNOWN"}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </ErpSectionCard>
+          )}
+        </div>
 
         <div className="grid gap-6">
-          <ErpSectionCard
-            eyebrow="Selected Project"
-            title={
-              projectDetail
-                ? `${projectDetail.project_code} | ${projectDetail.project_name}`
-                : "No project selected"
-            }
-            description="Mapping does not change the project master itself. It only decides which business companies can operate inside this project universe."
-          >
+          <div className="grid gap-3">
+            <ErpSelectionSection
+              label={
+                projectDetail
+                  ? `${projectDetail.project_code} | ${projectDetail.project_name}`
+                  : "No Project Selected"
+              }
+            />
             {projectDetail ? (
-              <div className="grid gap-4 md:grid-cols-2">
-                <ErpFieldPreview
-                  label="Status"
-                  value={projectDetail.status ?? "UNKNOWN"}
-                  caption="Project lifecycle from the global registry."
-                />
-                <ErpFieldPreview
-                  label="Mapped companies"
-                  value={String(mappedCompanies.length)}
-                  caption="Current operational rollout count."
-                />
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Status</div>
+                  <div className="text-sm text-slate-900">{projectDetail.status ?? "UNKNOWN"}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Mapped Companies</div>
+                  <div className="text-sm text-slate-900">{mappedCompanies.length}</div>
+                </div>
               </div>
             ) : (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
                 Select a project to begin company mapping.
               </div>
             )}
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Companies"
-            title="Business company rollout"
-            description="Map or unmap companies one by one. A project stays reusable; this surface only decides where it is operationally allowed."
-          >
-            <div className="grid gap-4">
-              <QuickFilterInput
-                label="Find company"
-                value={companySearch}
-                onChange={setCompanySearch}
-                inputRef={companySearchRef}
-                placeholder="Filter by company code, name, GST, or state"
-              />
+          <div className="grid gap-3">
+            <ErpSelectionSection label="Business Company Rollout" />
+            <QuickFilterInput
+              label="Find company"
+              value={companySearch}
+              onChange={setCompanySearch}
+              inputRef={companySearchRef}
+              placeholder="Filter by company code, name, GST, or state"
+            />
 
-              {loading ? (
-                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                  Loading company rollout rows.
-                </div>
-              ) : filteredCompanies.length === 0 ? (
-                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                  No company matches the current filter.
-                </div>
-              ) : (
-                <div className="space-y-0 border border-slate-300">
-                  {filteredCompanies.map((company, index) => (
-                    <div
-                      key={company.id}
-                      ref={(element) => {
-                        companyRefs.current[index] = element;
-                      }}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: companyRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className="border-b border-slate-300 bg-white px-4 py-3 last:border-b-0"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <span className="block font-semibold text-slate-900">
-                            {formatCompanyLabel(company, { separator: " - " })}
-                          </span>
-                          <span className="mt-1 block text-xs text-slate-500">{formatCompanyAddress(company)}</span>
-                          <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
-                            {company.status ?? "UNKNOWN"} | {company.gst_number ?? "GST not captured"}
-                          </span>
-                        </div>
-
-                        <button
-                          type="button"
-                          disabled={!projectDetail || saving}
-                          className={`border px-3 py-2 text-sm font-semibold ${
-                            company.is_mapped
-                              ? "border-rose-300 bg-white text-rose-700"
-                              : "border-sky-300 bg-white text-sky-700"
-                          }`}
-                          onClick={() => void handleMapToggle(company)}
-                        >
-                          {company.is_mapped ? "Unmap" : "Map"}
-                        </button>
+            {loading ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                Loading company rollout rows.
+              </div>
+            ) : filteredCompanies.length === 0 ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                No company matches the current filter.
+              </div>
+            ) : (
+              <ErpDenseGrid
+                columns={[
+                  {
+                    key: "company",
+                    label: "Company",
+                    render: (company) => (
+                      <div>
+                        <div className="font-semibold text-slate-900">{formatCompanyLabel(company, { separator: " - " })}</div>
+                        <div className="text-[10px] text-slate-500">{formatCompanyAddress(company)}</div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </ErpSectionCard>
+                    ),
+                  },
+                  {
+                    key: "state",
+                    label: "State",
+                    render: (company) => `${company.status ?? "UNKNOWN"} | ${company.gst_number ?? "GST not captured"}`,
+                  },
+                  {
+                    key: "action",
+                    label: "Action",
+                    render: (company) => (
+                      <button
+                        type="button"
+                        disabled={!projectDetail || saving}
+                        className={`border px-3 py-1 text-xs font-semibold ${
+                          company.is_mapped
+                            ? "border-rose-300 bg-white text-rose-700"
+                            : "border-sky-300 bg-white text-sky-700"
+                        }`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleMapToggle(company);
+                        }}
+                      >
+                        {company.is_mapped ? "Unmap" : "Map"}
+                      </button>
+                    ),
+                  },
+                ]}
+                rows={filteredCompanies}
+                rowKey={(company) => company.id}
+                getRowProps={(_company, index) => getCompanyRowProps(index)}
+                emptyMessage="No company matches the current filter."
+                maxHeight="380px"
+              />
+            )}
+          </div>
         </div>
       </div>
     </ErpScreenScaffold>

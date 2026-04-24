@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import ErpScreenScaffold, {
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import {
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
@@ -10,15 +9,9 @@ import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../context/useMenu.js";
 import {
-  readViewSnapshotCache,
-  writeViewSnapshotCache,
-} from "../../../store/viewSnapshotCache.js";
-import {
   buildSaMenuSections,
   flattenSaMenuSections,
 } from "../saMenuSections.js";
-
-const SA_HOME_CACHE_KEY = "sa-home-dashboard";
 
 async function readJsonSafe(response) {
   try {
@@ -120,18 +113,11 @@ function HomeActionCard({
 }
 
 export default function SAHome() {
-  const cachedSnapshot = readViewSnapshotCache(SA_HOME_CACHE_KEY);
   const { menu } = useMenu();
-  const [controlPanel, setControlPanel] = useState(
-    () => cachedSnapshot?.controlPanel ?? null
-  );
-  const [systemHealth, setSystemHealth] = useState(
-    () => cachedSnapshot?.systemHealth ?? null
-  );
+  const [_controlPanel, setControlPanel] = useState(null);
+  const [systemHealth, setSystemHealth] = useState(null);
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(
-    () => !cachedSnapshot?.controlPanel || !cachedSnapshot?.systemHealth
-  );
+  const [loading, setLoading] = useState(true);
   const topActionRefs = useRef([]);
   const cardRefs = useRef([]);
 
@@ -148,10 +134,6 @@ export default function SAHome() {
 
       setControlPanel(controlPanelData);
       setSystemHealth(systemHealthData);
-      writeViewSnapshotCache(SA_HOME_CACHE_KEY, {
-        controlPanel: controlPanelData,
-        systemHealth: systemHealthData,
-      });
     } catch {
       setControlPanel(null);
       setSystemHealth(null);
@@ -237,41 +219,6 @@ export default function SAHome() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "companies",
-      label: "Companies",
-      value: String(controlPanel?.company_count ?? "..."),
-      caption: "Current company inventory visible inside the SA control plane.",
-      tone: "sky",
-      badge: "Live",
-    },
-    {
-      key: "users",
-      label: "Users",
-      value: String(controlPanel?.erp_user_count ?? "..."),
-      caption: "Mapped ERP users currently available to governance workflows.",
-      tone: "emerald",
-      badge: "ERP",
-    },
-    {
-      key: "pending-signups",
-      label: "Pending Signups",
-      value: String(controlPanel?.pending_signup_count ?? "..."),
-      caption: "Onboarding queue items still waiting for SA decision.",
-      tone: "amber",
-      badge: "Queue",
-    },
-    {
-      key: "snapshot-health",
-      label: "Snapshot Health",
-      value: deriveSnapshotHealth(systemHealth),
-      caption: "Combined health view over DB, ACL snapshot, and menu snapshot readiness.",
-      tone: deriveSnapshotHealth(systemHealth) === "READY" ? "emerald" : "rose",
-      badge: systemHealth?.db_status ?? "Runtime",
-    },
-  ];
-
   const commands = useMemo(
     () => [
       {
@@ -317,7 +264,6 @@ export default function SAHome() {
     <ErpScreenScaffold
       eyebrow="Super Admin Command"
       title="Super Admin Dashboard"
-      description="Follow the setup flow from organization foundations to runtime checks. Each section groups the next safe SA step without mixing advanced governance into the first pass."
       actions={topActions}
       notices={
         error
@@ -330,52 +276,46 @@ export default function SAHome() {
             ]
           : []
       }
-      metrics={metrics}
+      footerHints={["↑↓ Navigate", "Enter Open", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
-      <ErpSectionCard
-        eyebrow="Setup Flow"
-        title="Complete setup in the right order"
-        description="Move left to right through the governance cycle. Start with company and team structure, then wire access, then onboard users, then finish approval and reporting rules."
-      >
-        <div className="grid gap-6">
+      <div className="grid gap-6">
+        <div>
+          <ErpSelectionSection label="Setup Flow" />
           {launchSections.map((section) => (
             <div key={section.key} className="grid gap-2">
-              <div className="border border-slate-300 bg-[#eef4fb] px-3 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+              <div className="border-b border-slate-300 px-1 py-2">
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-700">
                   {section.title}
                 </p>
-                <p className="mt-1 text-sm text-slate-600">
+                <p className="mt-1 text-xs text-slate-500">
                   {section.description || "Open the next published workspace from this section."}
                 </p>
               </div>
-                <div className="grid gap-2">
-                  {section.pages.map((action) => {
-                    const flatIndex = launchIndexByMenuCode.get(action.menuCode) ?? 0;
+              <div className="grid gap-2">
+                {section.pages.map((action) => {
+                  const flatIndex = launchIndexByMenuCode.get(action.menuCode) ?? 0;
 
-                    return (
-                      <HomeActionCard
-                        key={`${section.key}-${action.title}`}
-                        action={action}
-                        index={flatIndex}
-                        refs={cardRefs}
-                        registerRef={(element) => {
-                          cardRefs.current[flatIndex] = element;
-                        }}
-                      />
-                    );
-                  })}
-                </div>
+                  return (
+                    <HomeActionCard
+                      key={`${section.key}-${action.title}`}
+                      action={action}
+                      index={flatIndex}
+                      refs={cardRefs}
+                      registerRef={(element) => {
+                        cardRefs.current[flatIndex] = element;
+                      }}
+                    />
+                  );
+                })}
               </div>
-            ))}
+            </div>
+          ))}
         </div>
-      </ErpSectionCard>
+      </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <ErpSectionCard
-          eyebrow="Working Rule"
-          title="How SA Should Move"
-          description="This dashboard is a runbook, not a free-form launchpad."
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Working Rule" />
           <div className="grid gap-2">
             <div className="grid grid-cols-[140px_minmax(0,1fr)] border border-slate-200 bg-white px-3 py-3">
               <p className="text-sm font-semibold text-slate-900">Step 1</p>
@@ -396,13 +336,10 @@ export default function SAHome() {
               </p>
             </div>
           </div>
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          eyebrow="Readiness"
-          title="Current runtime health"
-          description="These checks come from the same backend projections that power the deeper SA workspaces."
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Readiness" />
           <div className="grid gap-2">
             {[
               `System health: ${deriveSnapshotHealth(systemHealth)}`,
@@ -418,7 +355,7 @@ export default function SAHome() {
               </div>
             ))}
           </div>
-        </ErpSectionCard>
+        </div>
       </div>
     </ErpScreenScaffold>
   );

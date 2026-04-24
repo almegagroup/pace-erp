@@ -13,13 +13,14 @@ import { useNavigate } from "react-router-dom";
 import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
-import { formatCompanyAddress } from "../../../shared/companyDisplay.js";
 
 async function readJsonSafe(response) {
   try {
@@ -97,8 +98,8 @@ const DEFAULT_VISIBLE_COMPANY_COLUMNS = Object.freeze([
 export default function SACompanyManage() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchRef = useRef(null);
+  const rowActionRefs = useRef([]);
   const [companies, setCompanies] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -141,17 +142,11 @@ export default function SACompanyManage() {
     return companies.filter((row) => companySearchValue(row).includes(needle));
   }, [companies, search]);
 
-  const metrics = useMemo(() => {
-    const activeCount = companies.filter((row) => row.status === "ACTIVE").length;
-    const inactiveCount = companies.filter((row) => row.status === "INACTIVE").length;
-
-    return {
-      total: companies.length,
-      active: activeCount,
-      inactive: inactiveCount,
-      mapped: companies.filter((row) => row.group_id).length,
-    };
-  }, [companies]);
+  const { getRowProps } = useErpListNavigation(filteredCompanies, {
+    onActivate: (_row, index) => {
+      rowActionRefs.current[index]?.focus();
+    },
+  });
 
   useErpScreenHotkeys({
     refresh: {
@@ -325,46 +320,12 @@ export default function SACompanyManage() {
       <ErpMasterListTemplate
         eyebrow="Company Governance"
         title="Manage Business Companies"
-        description="Business company lifecycle should behave like a compact operating register. Search fast, hide unnecessary columns, and change state without leaving the sheet."
         actions={topActions}
         notices={[
           ...(error ? [{ key: "error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
         ]}
-        metrics={[
-          {
-            key: "total",
-            label: "Total Companies",
-            value: String(metrics.total),
-            caption: "Business companies visible in company master.",
-            tone: "sky",
-            badge: "Live",
-          },
-          {
-            key: "active",
-            label: "Active",
-            value: String(metrics.active),
-            caption: "Currently enabled companies.",
-            tone: "emerald",
-            badge: "Ready",
-          },
-          {
-            key: "inactive",
-            label: "Inactive",
-            value: String(metrics.inactive),
-            caption: "Companies currently disabled.",
-            tone: "amber",
-            badge: "Paused",
-          },
-          {
-            key: "mapped",
-            label: "Mapped To Group",
-            value: String(metrics.mapped),
-            caption: "Companies already linked to a group.",
-            tone: "slate",
-            badge: "Map",
-          },
-        ]}
+        footerHints={["↑↓ Navigate", "Enter Inspect", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
         filterSection={{
           eyebrow: "Registry Filter",
           title: "Search company inventory",
@@ -390,7 +351,6 @@ export default function SACompanyManage() {
           title: loading
             ? "Refreshing company register"
             : `${filteredCompanies.length} visible compan${filteredCompanies.length === 1 ? "y" : "ies"}`,
-          description: "Action column stays visible so lifecycle change remains one move away.",
           children: loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
               Loading company inventory...
@@ -400,118 +360,71 @@ export default function SACompanyManage() {
               No company matched the current search.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="erp-grid-table min-w-full">
-                <thead>
-                  <tr>
-                    {visibleColumns.map((column) => (
-                      <th
-                        key={column.key}
-                        className="border-b border-slate-300 bg-[#e8eef4] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-                      >
-                        {column.label}
-                      </th>
-                    ))}
-                    <th className="border-b border-slate-300 bg-[#e8eef4] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      Action
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredCompanies.map((row, index) => {
+            <ErpDenseGrid
+              columns={[
+                ...visibleColumns.map((column) => ({
+                  key: column.key,
+                  label: column.label,
+                  render: (row) => {
+                    const isActive = normalize(row.status).toUpperCase() === "ACTIVE";
+                    if (column.key === "company") {
+                      return (
+                        <div>
+                          <p className="font-medium leading-tight">{row.company_code}</p>
+                          <p className="text-[10px] text-slate-500">{row.company_name}</p>
+                        </div>
+                      );
+                    }
+                    if (column.key === "gst") return row.gst_number || "Not linked";
+                    if (column.key === "group") {
+                      return row.group_code
+                        ? `${row.group_code}${row.group_name ? ` | ${row.group_name}` : ""}`
+                        : "Not mapped";
+                    }
+                    if (column.key === "status") {
+                      return (
+                        <span className={`inline-flex border px-2 py-[1px] text-[10px] font-semibold uppercase tracking-[0.12em] ${isActive ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-amber-300 bg-amber-50 text-amber-700"}`}>
+                          {row.status || "Unknown"}
+                        </span>
+                      );
+                    }
+                    return null;
+                  },
+                })),
+                {
+                  key: "action",
+                  label: "Action",
+                  render: (row, index) => {
                     const isSaving = savingCompanyId === row.id;
                     const isActive = normalize(row.status).toUpperCase() === "ACTIVE";
-
                     return (
-                      <tr
-                        key={row.id}
+                      <button
                         ref={(element) => {
-                          rowRefs.current[index] = element;
+                          rowActionRefs.current[index] = element;
                         }}
-                        tabIndex={0}
+                        type="button"
+                        disabled={isSaving}
+                        onClick={() => void handleStateChange(row, isActive ? "INACTIVE" : "ACTIVE")}
                         onKeyDown={(event) =>
                           handleLinearNavigation(event, {
                             index,
-                            refs: rowRefs.current,
+                            refs: rowActionRefs.current,
                             orientation: "vertical",
                           })
                         }
-                        className="border-b border-slate-200"
+                        className={`border px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.12em] ${isActive ? "border-amber-300 bg-amber-50 text-amber-700" : "border-emerald-300 bg-emerald-50 text-emerald-700"} disabled:cursor-not-allowed disabled:opacity-60`}
                       >
-                        {visibleColumns.map((column) => (
-                          <td key={column.key} className="px-3 py-2 text-sm text-slate-700">
-                            {column.key === "company" ? (
-                              <div>
-                                <div className="font-semibold text-slate-900">
-                                  {row.company_code}
-                                </div>
-                                <div className="text-xs text-slate-500">
-                                  {row.company_name}
-                                </div>
-                                <div className="text-xs text-slate-500">
-                                  {formatCompanyAddress(row)}
-                                </div>
-                              </div>
-                            ) : null}
-                            {column.key === "gst" ? row.gst_number || "Not linked" : null}
-                            {column.key === "group"
-                              ? row.group_code
-                                ? `${row.group_code}${row.group_name ? ` | ${row.group_name}` : ""}`
-                                : "Not mapped"
-                              : null}
-                            {column.key === "status" ? (
-                              <span
-                                className={`inline-flex min-w-[92px] justify-center border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${
-                                  isActive
-                                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                                    : "border-amber-300 bg-amber-50 text-amber-700"
-                                }`}
-                              >
-                                {row.status || "Unknown"}
-                              </span>
-                            ) : null}
-                          </td>
-                        ))}
-                        <td className="px-3 py-2 text-sm text-slate-700">
-                          <button
-                            type="button"
-                            disabled={isSaving}
-                            onClick={() =>
-                              void handleStateChange(row, isActive ? "INACTIVE" : "ACTIVE")
-                            }
-                            className={`border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] ${
-                              isActive
-                                ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
-                                : "border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                            } disabled:cursor-not-allowed disabled:opacity-60`}
-                          >
-                            {isSaving ? "Saving..." : isActive ? "Disable" : "Enable"}
-                          </button>
-                        </td>
-                      </tr>
+                        {isSaving ? "Saving..." : isActive ? "Disable" : "Enable"}
+                      </button>
                     );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ),
-        }}
-        sideSection={{
-          eyebrow: "View Control",
-          title: "Operator notes",
-          description: "Keep the sheet dense and task-focused like a real ERP register.",
-          children: (
-            <div className="grid gap-2 text-sm text-slate-700">
-              <div className="border border-slate-200 bg-white px-3 py-3">
-                Columns can be hidden without losing data or workflow actions.
-              </div>
-              <div className="border border-slate-200 bg-white px-3 py-3">
-                Lifecycle change stays explicit. No hard delete path exists on this screen.
-              </div>
-              <div className="border border-slate-200 bg-white px-3 py-3">
-                Search works across code, company, GST, group, and current state.
-              </div>
-            </div>
+                  },
+                },
+              ]}
+              rows={filteredCompanies}
+              rowKey={(row) => row.id}
+              getRowProps={(_row, index) => getRowProps(index)}
+              emptyMessage="No company matched the current search."
+            />
           ),
         }}
       />
@@ -519,7 +432,6 @@ export default function SACompanyManage() {
       <ErpColumnVisibilityDrawer
         visible={showColumnDrawer}
         title="Company Register Columns"
-        description="Hide columns that are not needed for the current company review session."
         columns={COMPANY_COLUMN_DEFS}
         visibleColumnKeys={visibleColumnKeys}
         onToggleColumn={toggleColumn}
@@ -529,3 +441,5 @@ export default function SACompanyManage() {
     </>
   );
 }
+
+

@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import {
   buildMenuTree,
@@ -228,6 +228,7 @@ async function fetchLiveRuntimeSnapshot() {
 
 export default function MenuShell() {
   const location = useLocation();
+  const navigate = useNavigate();
   const {
     menu,
     loading,
@@ -258,26 +259,6 @@ export default function MenuShell() {
     active: false,
     label: "",
   });
-  const [modeBHintDismissed, setModeBHintDismissed] = useState(() => {
-    try {
-      return window.localStorage.getItem("pace.erp.hint.modeb.v1") === "dismissed";
-    } catch {
-      return false;
-    }
-  });
-
-  const showModeBHint =
-    runtimeContext?.workspaceMode === "MULTI" && !modeBHintDismissed;
-
-  const dismissModeBHint = () => {
-    try {
-      window.localStorage.setItem("pace.erp.hint.modeb.v1", "dismissed");
-    } catch {
-      // Best-effort only.
-    }
-    setModeBHintDismissed(true);
-  };
-
   const menuButtonRefs = useRef([]);
   const drawerButtonRefs = useRef([]);
   const actionButtonRefs = useRef([]);
@@ -1027,6 +1008,16 @@ export default function MenuShell() {
     }
 
     if (stackDepth <= 1) {
+      const homePath = location.pathname.startsWith("/sa")
+        ? "/sa/home"
+        : location.pathname.startsWith("/ga")
+          ? "/ga/home"
+          : "/dashboard";
+      if (location.pathname !== homePath) {
+        navigate(-1);
+        return;
+      }
+
       await confirmAndRequestLogout();
       return;
     }
@@ -1037,7 +1028,7 @@ export default function MenuShell() {
     }
 
     popScreen();
-  }, [drawerTrail, drawerVisible, resolvedMenuFocusIndex, sidebarRoots, stackDepth]);
+  }, [drawerTrail, drawerVisible, location.pathname, navigate, resolvedMenuFocusIndex, sidebarRoots, stackDepth]);
 
   const handleGoHome = useCallback(async () => {
     const target = location.pathname.startsWith("/sa")
@@ -1350,7 +1341,13 @@ export default function MenuShell() {
     {
       key: "back",
       code: "Esc",
-      title: stackDepth <= 1 ? "Logout" : "Back",
+      title:
+        stackDepth <= 1 &&
+        (location.pathname.startsWith("/sa/home") ||
+          location.pathname.startsWith("/ga/home") ||
+          location.pathname === "/dashboard")
+          ? "Logout"
+          : "Back",
       onClick: () => void handleBack(),
     },
     {
@@ -1694,21 +1691,6 @@ export default function MenuShell() {
             </div>
           ) : null}
 
-          {showModeBHint ? (
-            <div className="flex items-start justify-between gap-3 border-b border-sky-200 bg-sky-50 px-4 py-2">
-              <p className="text-sm text-sky-800">
-                <span className="font-semibold">Multi-company access enabled.</span>{" "}
-                Your menu covers all assigned companies. Use the company selector on each transaction to work across companies.
-              </p>
-              <button
-                type="button"
-                onClick={dismissModeBHint}
-                className="shrink-0 border border-sky-300 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 hover:bg-sky-50"
-              >
-                Dismiss
-              </button>
-            </div>
-          ) : null}
         </div>
 
         <div

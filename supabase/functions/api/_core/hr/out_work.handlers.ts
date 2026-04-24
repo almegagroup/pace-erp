@@ -314,7 +314,10 @@ export async function listOutWorkDestinationsHandler(
 ): Promise<Response> {
   try {
     assertHrBusinessContext(ctx);
-    const parentCompany = await getParentCompanyScope(ctx.auth_user_id);
+    const parentCompany = await getParentCompanyScope(
+      ctx.auth_user_id,
+      ctx.context.companyId,
+    );
     const destinations = await loadDestinationRows(parentCompany.company_id);
 
     return okResponse({ destinations }, ctx.request_id);
@@ -339,6 +342,8 @@ export async function createOutWorkDestinationHandler(
     const body = await req.json().catch(() => ({}));
     const destinationName = String(body?.destination_name ?? "").trim();
     const destinationAddress = String(body?.destination_address ?? "").trim();
+    const requestedCompanyId =
+      String(body?.parent_company_id ?? ctx.context.companyId ?? "").trim() || null;
 
     if (destinationName.length < 2) {
       return errorResponse(
@@ -356,7 +361,7 @@ export async function createOutWorkDestinationHandler(
       );
     }
 
-    const parentCompany = await getParentCompanyScope(ctx.auth_user_id);
+    const parentCompany = await getParentCompanyScope(ctx.auth_user_id, requestedCompanyId);
     const { data, error } = await serviceRoleClient
       .schema("erp_hr")
       .from("out_work_destinations")
@@ -431,6 +436,8 @@ export async function createOutWorkRequestHandler(
     const destinationId = String(body?.destination_id ?? "").trim();
     const inlineDestinationName = String(body?.destination_name ?? "").trim();
     const inlineDestinationAddress = String(body?.destination_address ?? "").trim();
+    const requestedCompanyId =
+      String(body?.parent_company_id ?? ctx.context.companyId ?? "").trim() || null;
 
     if (!reason) {
       return errorResponse(
@@ -459,7 +466,7 @@ export async function createOutWorkRequestHandler(
       );
     }
 
-    const parentCompany = await getParentCompanyScope(ctx.auth_user_id);
+    const parentCompany = await getParentCompanyScope(ctx.auth_user_id, requestedCompanyId);
     let resolvedDestinationId: string | null = null;
     let resolvedDestinationName = "";
     let resolvedDestinationAddress = "";

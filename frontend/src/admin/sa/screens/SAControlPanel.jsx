@@ -10,25 +10,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useMenu } from "../../../context/useMenu.js";
-import {
-  readViewSnapshotCache,
-  writeViewSnapshotCache,
-} from "../../../store/viewSnapshotCache.js";
 import {
   buildSaMenuSections,
   flattenSaMenuSections,
 } from "../saMenuSections.js";
-
-const SA_CONTROL_PANEL_CACHE_KEY = "sa-control-panel";
 
 async function readJsonSafe(response) {
   try {
@@ -120,59 +114,30 @@ function DataTableCard({
   footer,
   actions,
 }) {
-  const rowRefs = useRef([]);
+  const { getRowProps } = useErpListNavigation(rows);
 
   return (
-    <ErpSectionCard eyebrow={eyebrow} title={title}>
+    <div className="grid gap-4">
+      <div className="border border-slate-300 bg-slate-50 px-4 py-3">
+        {eyebrow ? (
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            {eyebrow}
+          </div>
+        ) : null}
+        <div className="mt-1 text-base font-semibold text-slate-900">{title}</div>
+      </div>
       {rows.length === 0 ? (
         <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
           {emptyMessage}
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="erp-grid-table min-w-full">
-            <thead>
-              <tr>
-                {columns.map((column) => (
-                  <th
-                    key={column.key}
-                    className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-                  >
-                    {column.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => (
-                <tr
-                  key={row.id ?? `${title}-${index}`}
-                  ref={(element) => {
-                    rowRefs.current[index] = element;
-                  }}
-                  tabIndex={0}
-                  onKeyDown={(event) =>
-                    handleLinearNavigation(event, {
-                      index,
-                      refs: rowRefs.current,
-                      orientation: "vertical",
-                    })
-                  }
-                  className="border-b border-slate-200 bg-white"
-                >
-                  {columns.map((column) => (
-                    <td
-                      key={column.key}
-                      className="px-3 py-2 text-sm text-slate-700"
-                    >
-                      {column.render(row)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ErpDenseGrid
+          columns={columns}
+          rows={rows}
+          rowKey={(row, index) => row.id ?? `${title}-${index}`}
+          getRowProps={(_row, index) => getRowProps(index)}
+          maxHeight="none"
+        />
       )}
 
       {footer || actions ? (
@@ -181,21 +146,16 @@ function DataTableCard({
           {actions}
         </div>
       ) : null}
-    </ErpSectionCard>
+    </div>
   );
 }
 
 export default function SAControlPanel() {
-  const cachedSnapshot = readViewSnapshotCache(SA_CONTROL_PANEL_CACHE_KEY);
   const { menu } = useMenu();
-  const [loading, setLoading] = useState(
-    () => !cachedSnapshot?.controlPanel
-  );
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [controlPanel, setControlPanel] = useState(
-    () => cachedSnapshot?.controlPanel ?? null
-  );
-  const [health, setHealth] = useState(() => cachedSnapshot?.health ?? null);
+  const [controlPanel, setControlPanel] = useState(null);
+  const [health, setHealth] = useState(null);
   const [detailDrawer, setDetailDrawer] = useState("");
   const topActionRefs = useRef([]);
   const quickLaunchRefs = useRef([]);
@@ -230,10 +190,6 @@ export default function SAControlPanel() {
 
       setControlPanel(controlPanelJson.data ?? null);
       setHealth(healthJson?.ok ? healthJson.data ?? null : null);
-      writeViewSnapshotCache(SA_CONTROL_PANEL_CACHE_KEY, {
-        controlPanel: controlPanelJson.data ?? null,
-        health: healthJson?.ok ? healthJson.data ?? null : null,
-      });
     } catch {
       setError("Unable to load the SA control panel right now.");
     } finally {
@@ -474,47 +430,6 @@ export default function SAControlPanel() {
     },
   ];
 
-  const metrics = [
-    {
-      key: "database",
-      label: "Database",
-      value: loading ? "..." : health?.db_status ?? controlPanel?.db_status ?? "N/A",
-      tone: health?.db_status === "DOWN" ? "rose" : "emerald",
-      caption: "Live database probe from the admin diagnostics layer.",
-    },
-    {
-      key: "mapped-users",
-      label: "Mapped Users",
-      value: loading ? "..." : String(controlPanel?.user_count ?? 0),
-      tone: "sky",
-      caption:
-        "Current user-company role mappings visible to the admin control plane.",
-    },
-    {
-      key: "recent-sessions",
-      label: "Recent Active Sessions",
-      value: loading ? "..." : String(recentSessions.length),
-      tone: "amber",
-      caption:
-        "Preview count from the current active-session diagnostics payload.",
-    },
-    {
-      key: "recent-audit",
-      label: "Recent Admin Activity",
-      value: loading ? "..." : String(recentAudit.length),
-      tone: "slate",
-      caption:
-        "Most recent admin control-plane audit entries returned by backend.",
-    },
-    {
-      key: "system-version",
-      label: "System Build",
-      value: loading ? "..." : systemVersion,
-      tone: "slate",
-      caption: "Current ERP build signature reported by diagnostics payload.",
-    },
-  ];
-
   const notices = [
     ...(error
       ? [
@@ -545,10 +460,9 @@ export default function SAControlPanel() {
     <ErpScreenScaffold
       eyebrow="SA Command Center"
       title="ERP Control Panel"
-      description="Use this screen to assess ERP health, review recent activity, and launch the next SA governance surface without leaving the control plane."
       actions={topActions}
       notices={notices}
-      metrics={metrics}
+      footerHints={["↑↓ Navigate", "Enter Open", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
         <DataTableCard
@@ -655,46 +569,47 @@ export default function SAControlPanel() {
             )}
           />
 
-          <ErpSectionCard
-            eyebrow="Snapshot Readiness"
-            title="Access Projection Status"
-          >
+          <div className="grid gap-3">
+            <ErpSelectionSection label="Snapshot Readiness" />
             <div className="grid gap-3 sm:grid-cols-2">
-              <ErpFieldPreview
-                label="ACL Snapshot"
-                value={loading ? "..." : health?.acl_snapshot_status ?? "N/A"}
-                caption="Permission projection readiness from the backend snapshot service."
-                tone={
-                  health?.acl_snapshot_status === "READY" ? "success" : "amber"
-                }
-              />
-              <ErpFieldPreview
-                label="Menu Snapshot"
-                value={loading ? "..." : health?.menu_snapshot_status ?? "N/A"}
-                caption="Navigation snapshot integrity for the protected ERP shell."
-                tone={
-                  health?.menu_snapshot_status === "READY" ? "success" : "amber"
-                }
-              />
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  ACL Snapshot
+                </p>
+                <p className="mt-1 text-sm font-semibold text-slate-900">
+                  {loading ? "..." : health?.acl_snapshot_status ?? "N/A"}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Permission projection readiness from the backend snapshot service.
+                </p>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Menu Snapshot
+                </p>
+                <p className="mt-1 text-sm font-semibold text-slate-900">
+                  {loading ? "..." : health?.menu_snapshot_status ?? "N/A"}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Navigation snapshot integrity for the protected ERP shell.
+                </p>
+              </div>
             </div>
-          </ErpSectionCard>
+          </div>
         </div>
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <ErpSectionCard
-          eyebrow="Quick Launch"
-          title="Open the next SA workspace"
-          description="Use the same setup sequence as the sidebar: foundations first, advanced governance later."
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Quick Launch" />
           <div className="grid gap-6">
             {quickLaunchSections.map((section) => (
               <div key={section.key} className="grid gap-2">
-                <div className="border border-slate-300 bg-[#eef4fb] px-3 py-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+                <div className="border-b border-slate-300 px-1 py-2">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-700">
                     {section.title}
                   </p>
-                  <p className="mt-1 text-sm text-slate-600">
+                  <p className="mt-1 text-xs text-slate-500">
                     {section.description || "Open the next governance workspace in this section."}
                   </p>
                 </div>
@@ -725,28 +640,36 @@ export default function SAControlPanel() {
               </div>
             ))}
           </div>
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          eyebrow="System Snapshot"
-          title="Diagnostic context"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="System Snapshot" />
           <div className="grid gap-3">
-            <ErpFieldPreview
-              label="ERP Build"
-              value={loading ? "..." : systemVersion}
-              caption="Build signature shown in one place so operators do not need to scan raw payload data."
-              tone="sky"
-            />
-            <ErpFieldPreview
-              label="Launch Program"
-              value={launchSummary.join("\n")}
-              caption="Active governance workspaces available from the quick launch rail."
-              multiline
-              tone="default"
-            />
+            <div className="border border-slate-300 bg-white px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                ERP Build
+              </p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {loading ? "..." : systemVersion}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Build signature shown in one place so operators do not need to scan raw payload data.
+              </p>
+            </div>
+            <div className="border border-slate-300 bg-white px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Launch Program
+              </p>
+              <div className="mt-2 grid gap-2">
+                {launchSummary.map((item) => (
+                  <div key={item} className="border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    {item}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-        </ErpSectionCard>
+        </div>
       </div>
 
       <DrawerBase
@@ -758,7 +681,7 @@ export default function SAControlPanel() {
           <button
             type="button"
             onClick={() => setDetailDrawer("")}
-            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+            className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
           >
             Close
           </button>
@@ -813,7 +736,7 @@ export default function SAControlPanel() {
           <button
             type="button"
             onClick={() => setDetailDrawer("")}
-            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+            className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
           >
             Close
           </button>

@@ -147,12 +147,15 @@ export default function GAHome() {
     <EnterpriseDashboard
       eyebrow="Group Admin View"
       title="Group Admin Dashboard"
-      subtitle="Keep a simple view of portfolio status, shared standards, and exception follow-up."
       stats={stats}
       actions={actions}
       topActions={topActions}
+      footerHints={[
+        "ALT+SHIFT+P FOCUS QUEUE",
+        "ENTER OPEN",
+        "CTRL+K COMMAND BAR",
+      ]}
       workspaceTitle="Keyboard-Native Portfolio Queue"
-      workspaceDescription="GA work now follows the same deterministic scaffold used by the rebuilt SA control plane."
       noteTitle="GA Keyboard Pattern"
       noteItems={[
         "Alt+Shift+P returns focus to the first GA action card.",

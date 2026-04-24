@@ -1,16 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { openScreen } from "../../../navigation/screenStackEngine.js";
-import { openActionConfirm } from "../../../store/actionConfirm.js";
+import { openScreen, getActiveScreenContext, popScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import { applyQuickFilter, sortProjects } from "../../../shared/erpCollections.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 
 async function readJsonSafe(response) {
   try {
@@ -83,11 +82,12 @@ function formatDateTime(value) {
 }
 
 export default function SAProjectManage() {
+  const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const initialProjectId = searchParams.get("project_id") ?? "";
+  const initialProjectId = initialContext.projectId ?? searchParams.get("project_id") ?? "";
+  const isDrillThrough = initialContext.contextKind === "DRILL_THROUGH";
   const actionRefs = useRef([]);
-  const projectRefs = useRef([]);
   const searchRef = useRef(null);
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId);
@@ -98,7 +98,7 @@ export default function SAProjectManage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  async function loadProjects(preferredProjectId = selectedProjectId) {
+  const loadProjects = useCallback(async (preferredProjectId = selectedProjectId) => {
     setLoading(true);
     setError("");
 
@@ -124,11 +124,11 @@ export default function SAProjectManage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedProjectId]);
 
   useEffect(() => {
     void loadProjects(initialProjectId);
-  }, [initialProjectId]);
+  }, [initialProjectId, loadProjects]);
 
   useEffect(() => {
     let cancelled = false;
@@ -178,15 +178,7 @@ export default function SAProjectManage() {
   const selectedProject =
     projects.find((row) => row.id === selectedProjectId) ?? null;
 
-  const metrics = useMemo(
-    () => ({
-      total: projects.length,
-      active: projects.filter((row) => row.status === "ACTIVE").length,
-      inactive: projects.filter((row) => row.status === "INACTIVE").length,
-      mappedCompanies: mappedCompanyCount,
-    }),
-    [projects, mappedCompanyCount]
-  );
+  const { getRowProps } = useErpListNavigation(filteredProjects);
 
   useErpScreenHotkeys({
     refresh: {
@@ -205,9 +197,13 @@ export default function SAProjectManage() {
     {
       id: "sa-project-manage-master",
       group: "Current Screen",
-      label: "Open project master",
+      label: isDrillThrough ? "Back to project register" : "Open project master",
       keywords: ["project master", "create project"],
       perform: () => {
+        if (isDrillThrough) {
+          popScreen();
+          return;
+        }
         openScreen("SA_PROJECT_MASTER", { mode: "replace" });
         navigate("/sa/project-master");
       },
@@ -233,18 +229,6 @@ export default function SAProjectManage() {
       return;
     }
 
-    const approved = await openActionConfirm({
-      eyebrow: "Project Lifecycle",
-      title: `${nextState === "ACTIVE" ? "Activate" : "Inactivate"} Project`,
-      message: `${nextState === "ACTIVE" ? "Activate" : "Inactivate"} ${selectedProject.project_code} | ${selectedProject.project_name}?`,
-      confirmLabel: nextState === "ACTIVE" ? "Activate" : "Inactivate",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
-      return;
-    }
-
     setSaving(true);
     setError("");
     setNotice("");
@@ -267,16 +251,19 @@ export default function SAProjectManage() {
     <ErpScreenScaffold
       eyebrow="Project Governance"
       title="Project Manage"
-      description="Review reusable projects, control lifecycle, and move into company mapping when a project is ready for operational use."
       actions={[
         {
           key: "project-master",
-          label: "Project Master",
+          label: isDrillThrough ? "Back To Project Register" : "Project Master",
           tone: "neutral",
           buttonRef: (element) => {
             actionRefs.current[0] = element;
           },
           onClick: () => {
+            if (isDrillThrough) {
+              popScreen();
+              return;
+            }
             openScreen("SA_PROJECT_MASTER", { mode: "replace" });
             navigate("/sa/project-master");
           },
@@ -290,7 +277,6 @@ export default function SAProjectManage() {
         {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
-          hint: "Alt+R",
           tone: "neutral",
           buttonRef: (element) => {
             actionRefs.current[1] = element;
@@ -328,138 +314,88 @@ export default function SAProjectManage() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "total",
-          label: "Projects",
-          value: loading ? "..." : String(metrics.total),
-          tone: "sky",
-          caption: "Reusable project masters currently available in the global registry.",
-        },
-        {
-          key: "active",
-          label: "Active",
-          value: loading ? "..." : String(metrics.active),
-          tone: "emerald",
-          caption: "Projects ready to be mapped into company operations.",
-        },
-        {
-          key: "inactive",
-          label: "Inactive",
-          value: loading ? "..." : String(metrics.inactive),
-          tone: "amber",
-          caption: "Projects currently parked from operational use.",
-        },
-        {
-          key: "mapped",
-          label: "Mapped Companies",
-          value: selectedProject ? String(metrics.mappedCompanies) : "0",
-          tone: "slate",
-          caption: selectedProject
-            ? "Business companies currently attached to the selected project."
-            : "Select a project to inspect company usage.",
-        },
-      ]}
+      footerHints={["↑↓ Navigate", "Enter Select", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <ErpSectionCard
-          eyebrow="Inventory"
-          title="Project roster"
-          description="Choose the project you want to manage, then move into lifecycle or company mapping."
-        >
-          <div className="grid gap-4">
-            <QuickFilterInput
-              label="Find project"
-              value={search}
-              onChange={setSearch}
-              inputRef={searchRef}
-              placeholder="Filter by code, name, or state"
-              hint="Alt+Shift+F focuses this filter."
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Project Roster" />
+          <QuickFilterInput
+            label="Find project"
+            value={search}
+            onChange={setSearch}
+            inputRef={searchRef}
+            placeholder="Filter by code, name, or state"
+            hint="Alt+Shift+F focuses this filter."
+          />
+
+          {loading ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              Loading project governance rows.
+            </div>
+          ) : filteredProjects.length === 0 ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              No project matches the current filter.
+            </div>
+          ) : (
+            <ErpDenseGrid
+              columns={[
+                {
+                  key: "project",
+                  label: "Project",
+                  render: (project) => (
+                    <div>
+                      <div className="font-semibold text-slate-900">{project.project_code} - {project.project_name}</div>
+                      <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{project.status ?? "UNKNOWN"}</div>
+                    </div>
+                  ),
+                },
+                {
+                  key: "created",
+                  label: "Created",
+                  render: (project) => formatDateTime(project.created_at),
+                },
+              ]}
+              rows={filteredProjects}
+              rowKey={(project) => project.id}
+              getRowProps={(project, index) => ({
+                ...getRowProps(index),
+                onClick: () => setSelectedProjectId(project.id),
+                className: project.id === selectedProjectId ? "bg-sky-50" : "",
+              })}
+              onRowActivate={(project) => setSelectedProjectId(project.id)}
+              emptyMessage="No project matches the current filter."
+              maxHeight="380px"
             />
-
-            {loading ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                Loading project governance rows.
-              </div>
-            ) : filteredProjects.length === 0 ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                No project matches the current filter.
-              </div>
-            ) : (
-              <div className="space-y-0 border border-slate-300">
-                {filteredProjects.map((project, index) => {
-                  const isSelected = project.id === selectedProjectId;
-
-                  return (
-                    <button
-                      key={project.id}
-                      ref={(element) => {
-                        projectRefs.current[index] = element;
-                      }}
-                      type="button"
-                      onClick={() => setSelectedProjectId(project.id)}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: projectRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className={`w-full border-b border-slate-300 px-4 py-3 text-left text-sm transition last:border-b-0 ${
-                        isSelected
-                          ? "bg-sky-50 text-slate-900"
-                          : "bg-white text-slate-700"
-                      }`}
-                    >
-                      <span className="block font-semibold">
-                        {project.project_code} - {project.project_name}
-                      </span>
-                      <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
-                        {project.status ?? "UNKNOWN"}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </ErpSectionCard>
+          )}
+        </div>
 
         <div className="grid gap-6">
-          <ErpSectionCard
-            eyebrow="Selected Project"
-            title={selectedProject ? `${selectedProject.project_code} | ${selectedProject.project_name}` : "No project selected"}
-            description="Keep project lifecycle separate from company mapping. First stabilize the reusable project, then attach it to operational companies."
-          >
+          <div className="grid gap-3">
+            <ErpSelectionSection label={selectedProject ? `${selectedProject.project_code} | ${selectedProject.project_name}` : "No Project Selected"} />
             {selectedProject ? (
-              <div className="grid gap-4 md:grid-cols-2">
-                <ErpFieldPreview
-                  label="Status"
-                  value={selectedProject.status ?? "UNKNOWN"}
-                  tone={selectedProject.status === "ACTIVE" ? "success" : "warning"}
-                  caption="Lifecycle state from the project master registry."
-                />
-                <ErpFieldPreview
-                  label="Created"
-                  value={formatDateTime(selectedProject.created_at)}
-                  caption="Registry timestamp."
-                />
-                <ErpFieldPreview
-                  label="Mapped Companies"
-                  value={String(mappedCompanyCount)}
-                  caption="Companies currently using this project."
-                />
-                <ErpFieldPreview
-                  label="Handling Rule"
-                  value="Global Project"
-                  caption="Same project can be reused across many companies."
-                />
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Status</div>
+                  <div className="text-sm text-slate-900">{selectedProject.status ?? "UNKNOWN"}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Created</div>
+                  <div className="text-sm text-slate-900">{formatDateTime(selectedProject.created_at)}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Mapped Companies</div>
+                  <div className="text-sm text-slate-900">{mappedCompanyCount}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Handling Rule</div>
+                  <div className="text-sm text-slate-900">Global Project</div>
+                </div>
 
                 <div className="md:col-span-2 flex flex-wrap gap-3">
                   {selectedProject.status === "ACTIVE" ? (
                     <button
                       type="button"
-                      className="border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700"
+                      className="border border-rose-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-rose-700"
                       onClick={() => void handleStateChange("INACTIVE")}
                       disabled={saving}
                     >
@@ -468,7 +404,7 @@ export default function SAProjectManage() {
                   ) : (
                     <button
                       type="button"
-                      className="border border-emerald-300 bg-white px-4 py-2 text-sm font-semibold text-emerald-700"
+                      className="border border-emerald-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-emerald-700"
                       onClick={() => void handleStateChange("ACTIVE")}
                       disabled={saving}
                     >
@@ -478,7 +414,7 @@ export default function SAProjectManage() {
 
                   <button
                     type="button"
-                    className="border border-sky-300 bg-white px-4 py-2 text-sm font-semibold text-sky-700"
+                    className="border border-sky-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-sky-700"
                     onClick={() => {
                       openScreen("SA_COMPANY_PROJECT_MAP", { mode: "replace" });
                       navigate(`/sa/projects/map?project_id=${encodeURIComponent(selectedProject.id)}`);
@@ -493,7 +429,7 @@ export default function SAProjectManage() {
                 Select a project from the roster to manage its lifecycle and company usage.
               </div>
             )}
-          </ErpSectionCard>
+          </div>
         </div>
       </div>
     </ErpScreenScaffold>

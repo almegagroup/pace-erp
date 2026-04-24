@@ -1,14 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 
 async function readJsonSafe(response) {
   try {
@@ -87,7 +86,6 @@ function sortResources(rows) {
 export default function SAModuleResourceMap() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const rowRefs = useRef([]);
   const searchRef = useRef(null);
   const [modules, setModules] = useState([]);
   const [resources, setResources] = useState([]);
@@ -99,7 +97,7 @@ export default function SAModuleResourceMap() {
   const [selectedResourceCode, setSelectedResourceCode] = useState("");
   const [targetModuleCode, setTargetModuleCode] = useState("");
 
-  async function loadWorkspace(preferredResourceCode = selectedResourceCode) {
+  const loadWorkspace = useCallback(async (preferredResourceCode = selectedResourceCode) => {
     setLoading(true);
     setError("");
 
@@ -133,11 +131,11 @@ export default function SAModuleResourceMap() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedResourceCode]);
 
   useEffect(() => {
     void loadWorkspace();
-  }, []);
+  }, [loadWorkspace]);
 
   const filteredResources = useMemo(() => {
     const needle = String(searchQuery ?? "").trim().toLowerCase();
@@ -170,6 +168,8 @@ export default function SAModuleResourceMap() {
     filteredResources.find((row) => row.resource_code === selectedResourceCode) ??
     filteredResources[0] ??
     null;
+
+  const { getRowProps } = useErpListNavigation(filteredResources);
 
   useEffect(() => {
     setTargetModuleCode(selectedResource?.owner_module_code ?? "");
@@ -260,17 +260,6 @@ export default function SAModuleResourceMap() {
     }
   }
 
-  const metrics = useMemo(() => {
-    const assigned = resources.filter((row) => row.owner_module_code).length;
-
-    return {
-      resources: resources.length,
-      assigned,
-      unassigned: resources.length - assigned,
-      modules: modules.length,
-    };
-  }, [modules.length, resources]);
-
   useErpScreenCommands([
     {
       id: "sa-module-page-map-refresh",
@@ -319,7 +308,6 @@ export default function SAModuleResourceMap() {
     <ErpScreenScaffold
       eyebrow="Module Page Map"
       title="Module To Page Resource Ownership"
-      description="Only ACL/business pages belong here. Admin governance pages are intentionally excluded from module ownership."
       notices={[
         ...(error ? [{ tone: "error", message: error }] : []),
         ...(notice ? [{ tone: "success", message: notice }] : []),
@@ -377,45 +365,11 @@ export default function SAModuleResourceMap() {
             }),
         },
       ]}
-      metrics={[
-        {
-          label: "Published Pages",
-          value: loading ? "..." : metrics.resources,
-          caption: "Only ACL/business pages are eligible for module ownership.",
-          tone: "sky",
-        },
-        {
-          label: "Assigned",
-          value: loading ? "..." : metrics.assigned,
-          caption: "Published pages already owned by a module.",
-          tone: "emerald",
-        },
-        {
-          label: "Unassigned",
-          value: loading ? "..." : metrics.unassigned,
-          caption: "Published pages still waiting for module ownership.",
-          tone: "amber",
-        },
-        {
-          label: "Modules",
-          value: loading ? "..." : metrics.modules,
-          caption: "Global modules available to own resources.",
-          tone: "slate",
-        },
-      ]}
-      footerHints={[
-        "ALT+R REFRESH",
-        "ALT+SHIFT+F SEARCH",
-        "ENTER SELECT RESOURCE",
-        "CTRL+K COMMAND BAR",
-      ]}
+      footerHints={["↑↓ Navigate", "Enter Select", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)]">
-        <ErpSectionCard
-          eyebrow="Published Resources"
-          title="ACL Page Resource Inventory"
-          description="If an ACL/business page is not yet published into menu, it will not appear here. Publish first, then assign ownership."
-        >
+        <div className="grid gap-1">
+          <ErpSelectionSection label="ACL Page Resource Inventory" />
           <label className="grid gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
               Search Published Pages
@@ -445,18 +399,9 @@ export default function SAModuleResourceMap() {
                 return (
                   <button
                     key={row.resource_code}
-                    ref={(element) => {
-                      rowRefs.current[index] = element;
-                    }}
+                    {...getRowProps(index)}
                     type="button"
                     onClick={() => setSelectedResourceCode(row.resource_code)}
-                    onKeyDown={(event) =>
-                      handleLinearNavigation(event, {
-                        index,
-                        refs: rowRefs.current,
-                        orientation: "vertical",
-                      })
-                    }
                     className={`border px-4 py-3 text-left ${
                       selected
                         ? "border-sky-300 bg-sky-50 text-sky-900"
@@ -483,44 +428,34 @@ export default function SAModuleResourceMap() {
               })
             )}
           </div>
-        </ErpSectionCard>
+        </div>
 
         <div className="grid gap-3">
-          <ErpSectionCard
-            eyebrow="Selected Resource"
-            title={selectedResource ? selectedResource.title : "Choose A Published Page"}
-            description="One published page resource belongs to one module. That keeps project hierarchy clean and makes later approval policy exact."
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label={selectedResource ? selectedResource.title : "Choose A Published Page"} />
             {selectedResource ? (
-              <div className="grid gap-3">
-                <ErpFieldPreview
-                  label="Resource Code"
-                  value={selectedResource.resource_code}
-                  caption={selectedResource.route_path || "No route path"}
-                />
-                <ErpFieldPreview
-                  label="Current Owner"
-                  value={selectedResource.owner_module_code || "Unassigned"}
-                  caption={
-                    selectedResource.owner_module_code
-                      ? `${selectedResource.owner_project_code || ""} | ${selectedResource.owner_module_name || ""}`
-                      : "This page has not yet been bound to a module."
-                  }
-                />
-                <ErpFieldPreview
-                  label="Menu Placement"
-                  value={selectedResource.parent_menu_code || "Unassigned"}
-                  caption={`Order ${selectedResource.display_order ?? "-"}`}
-                />
+              <div className="grid gap-[var(--erp-form-gap)]">
+                <div className="border border-slate-300 bg-white">
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Resource Code</span>
+                    <span className="text-right text-[11px] font-semibold text-slate-900">{selectedResource.resource_code}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Current Owner</span>
+                    <span className="text-right text-[11px] font-semibold text-slate-900">{selectedResource.owner_module_code || "Unassigned"}</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
+                    <span className="text-[11px] text-slate-500">Menu Placement</span>
+                    <span className="text-right text-[11px] font-semibold text-slate-900">{selectedResource.parent_menu_code || "Unassigned"}</span>
+                  </div>
+                </div>
 
-                <label className="grid gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Target Module
-                  </span>
+                <label className="grid grid-cols-[100px_1fr] items-center gap-x-2">
+                  <span className="text-[11px] text-slate-600">Target Module</span>
                   <select
                     value={targetModuleCode}
                     onChange={(event) => setTargetModuleCode(event.target.value)}
-                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
+                    className="h-7 border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-400 focus:bg-white"
                   >
                     <option value="">Choose module</option>
                     {modules.map((moduleRow) => (
@@ -531,12 +466,12 @@ export default function SAModuleResourceMap() {
                   </select>
                 </label>
 
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1">
                   <button
                     type="button"
                     disabled={saving || !targetModuleCode}
                     onClick={() => void handleAssign()}
-                    className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold text-sky-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     {selectedResource.owner_module_code ? "Move To Module" : "Assign To Module"}
                   </button>
@@ -545,7 +480,7 @@ export default function SAModuleResourceMap() {
                     type="button"
                     disabled={saving || !selectedResource.owner_module_code}
                     onClick={() => void handleUnassign()}
-                    className="border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-rose-300 bg-rose-50 px-2 py-[3px] text-[11px] font-semibold text-rose-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Unassign
                   </button>
@@ -556,20 +491,17 @@ export default function SAModuleResourceMap() {
                 Pick a published page from the left to manage module ownership.
               </p>
             )}
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Rule"
-            title="Why This Layer Exists"
-            description="Project -> Module -> Page stays explicit here. Company rollout remains separate."
-          >
+          <div className="grid gap-1">
+            <ErpSelectionSection label="Why This Layer Exists" />
             <div className="grid gap-2 text-sm text-slate-700">
               <p>1. Publish a page into menu first.</p>
               <p>2. Bind that published resource to one module here.</p>
               <p>3. Later approval policy will target the exact resource/action.</p>
               <p>4. Company enablement stays in company-module map, not here.</p>
             </div>
-          </ErpSectionCard>
+          </div>
         </div>
       </div>
     </ErpScreenScaffold>

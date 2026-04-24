@@ -1,15 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
-import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import {
   formatCompanyAddress,
@@ -101,8 +100,6 @@ function sortModules(rows) {
 export default function SACompanyModuleMap() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
-  const companyRefs = useRef([]);
-  const moduleRefs = useRef([]);
   const companySearchRef = useRef(null);
   const moduleSearchRef = useRef(null);
   const [companies, setCompanies] = useState([]);
@@ -117,7 +114,7 @@ export default function SACompanyModuleMap() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  async function loadCompanies(preferredCompanyId = selectedCompanyId) {
+  const loadCompanies = useCallback(async (preferredCompanyId = selectedCompanyId) => {
     setLoadingCompanies(true);
     setError("");
 
@@ -143,9 +140,9 @@ export default function SACompanyModuleMap() {
     } finally {
       setLoadingCompanies(false);
     }
-  }
+  }, [selectedCompanyId]);
 
-  async function loadModules(companyId = selectedCompanyId, preferredModuleCode = selectedModuleCode) {
+  const loadModules = useCallback(async (companyId = selectedCompanyId, preferredModuleCode = selectedModuleCode) => {
     if (!companyId) {
       setModulePayload(null);
       setSelectedModuleCode("");
@@ -180,15 +177,15 @@ export default function SACompanyModuleMap() {
     } finally {
       setLoadingModules(false);
     }
-  }
+  }, [selectedCompanyId, selectedModuleCode]);
 
   useEffect(() => {
     void loadCompanies();
-  }, []);
+  }, [loadCompanies]);
 
   useEffect(() => {
     void loadModules(selectedCompanyId);
-  }, [selectedCompanyId]);
+  }, [loadModules, selectedCompanyId]);
 
   const filteredCompanies = useMemo(
     () =>
@@ -209,7 +206,7 @@ export default function SACompanyModuleMap() {
     }
   }, [filteredCompanies, selectedCompanyId]);
 
-  const modules = modulePayload?.modules ?? [];
+  const modules = useMemo(() => modulePayload?.modules ?? [], [modulePayload]);
 
   const filteredModules = useMemo(
     () =>
@@ -235,6 +232,9 @@ export default function SACompanyModuleMap() {
     filteredModules.find((row) => row.module_code === selectedModuleCode) ??
     modules.find((row) => row.module_code === selectedModuleCode) ??
     null;
+
+  const { getRowProps: getCompanyRowProps } = useErpListNavigation(filteredCompanies);
+  const { getRowProps: getModuleRowProps } = useErpListNavigation(filteredModules);
 
   const enabledModules = modules.filter((row) => row.enabled);
   const uniqueProjects = new Set(modules.map((row) => row.project_code).filter(Boolean));
@@ -283,17 +283,6 @@ export default function SACompanyModuleMap() {
     }
 
     const nextAction = row.enabled ? "disable" : "enable";
-    const approved = await openActionConfirm({
-      eyebrow: "Company Module Map",
-      title: `${row.enabled ? "Disable" : "Enable"} Module`,
-      message: `${row.enabled ? "Disable" : "Enable"} ${row.module_code} for ${selectedCompany.company_code}?`,
-      confirmLabel: row.enabled ? "Disable" : "Enable",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
-      return;
-    }
 
     setSaving(true);
     setError("");
@@ -341,7 +330,6 @@ export default function SACompanyModuleMap() {
     <ErpScreenScaffold
       eyebrow="Company Module Rollout"
       title="Company Module Map"
-      description="Modules stay under projects. A company only sees modules from projects already mapped to it, and SA decides module rollout one company at a time."
       actions={[
         {
           key: "module-master",
@@ -382,7 +370,6 @@ export default function SACompanyModuleMap() {
         {
           key: "refresh",
           label: loadingModules ? "Refreshing..." : "Refresh",
-          hint: "Alt+R",
           tone: "primary",
           buttonRef: (element) => {
             actionRefs.current[2] = element;
@@ -400,266 +387,217 @@ export default function SACompanyModuleMap() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      metrics={[
-        {
-          key: "companies",
-          label: "Companies",
-          value: loadingCompanies ? "..." : String(companies.length),
-          tone: "sky",
-          caption: "Business companies available for module rollout governance.",
-        },
-        {
-          key: "projects",
-          label: "Mapped Projects",
-          value: loadingModules ? "..." : String(uniqueProjects.size),
-          tone: "emerald",
-          caption: selectedCompany
-            ? "Projects already attached to the selected company."
-            : "Choose a company to inspect project-backed module availability.",
-        },
-        {
-          key: "modules",
-          label: "Available Modules",
-          value: loadingModules ? "..." : String(modules.length),
-          tone: "amber",
-          caption: "Modules eligible for the selected company because their project is already mapped.",
-        },
-        {
-          key: "enabled",
-          label: "Enabled",
-          value: loadingModules ? "..." : String(enabledModules.length),
-          tone: "slate",
-          caption: "Modules currently operational for the selected company.",
-        },
-      ]}
+      footerHints={["↑↓ Navigate", "Enter Select", "Space Select", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
-        <ErpSectionCard
-          eyebrow="Companies"
-          title="Choose business company"
-          description="Select one company first. This screen only shows modules from projects already mapped into that company."
-        >
-          <div className="grid gap-4">
-            <QuickFilterInput
-              label="Find company"
-              value={companySearch}
-              onChange={setCompanySearch}
-              inputRef={companySearchRef}
-              placeholder="Filter by company code, company name, or group"
-            />
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Choose Business Company" />
+          <QuickFilterInput
+            label="Find company"
+            value={companySearch}
+            onChange={setCompanySearch}
+            inputRef={companySearchRef}
+            placeholder="Filter by company code, company name, or group"
+          />
 
-            {loadingCompanies ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                Loading business companies.
-              </div>
-            ) : filteredCompanies.length === 0 ? (
-              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                No company matches the current filter.
-              </div>
-            ) : (
-              <div className="space-y-0 border border-slate-300">
-                {filteredCompanies.map((row, index) => (
-                  <button
-                    key={row.id}
-                    ref={(element) => {
-                      companyRefs.current[index] = element;
-                    }}
-                    type="button"
-                    onClick={() => setSelectedCompanyId(row.id)}
-                    onKeyDown={(event) =>
-                      handleLinearNavigation(event, {
-                        index,
-                        refs: companyRefs.current,
-                        orientation: "vertical",
-                      })
-                    }
-                    className={`w-full border-b border-slate-300 px-4 py-3 text-left text-sm transition last:border-b-0 ${
-                      row.id === selectedCompanyId
-                        ? "bg-sky-50 text-slate-900"
-                        : "bg-white text-slate-700"
-                    }`}
-                  >
-                    <span className="block font-semibold">
-                      {formatCompanyLabel(row, { separator: " - " })}
-                    </span>
-                    <span className="mt-1 block text-xs text-slate-500">{formatCompanyAddress(row)}</span>
-                    <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
-                      {row.status ?? "UNKNOWN"} | {row.group_code ?? "No group"}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </ErpSectionCard>
+          {loadingCompanies ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              Loading business companies.
+            </div>
+          ) : filteredCompanies.length === 0 ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              No company matches the current filter.
+            </div>
+          ) : (
+            <ErpDenseGrid
+              columns={[
+                {
+                  key: "company",
+                  label: "Company",
+                  render: (row) => (
+                    <div>
+                      <div className="font-semibold text-slate-900">
+                        {formatCompanyLabel(row, { separator: " - " })}
+                      </div>
+                      <div className="text-[10px] text-slate-500">{formatCompanyAddress(row)}</div>
+                    </div>
+                  ),
+                },
+                {
+                  key: "group",
+                  label: "Group",
+                  render: (row) =>
+                    row.group_code ? `${row.group_code}${row.group_name ? ` | ${row.group_name}` : ""}` : "No group",
+                },
+                {
+                  key: "status",
+                  label: "Status",
+                  render: (row) => row.status ?? "UNKNOWN",
+                },
+              ]}
+              rows={filteredCompanies}
+              rowKey={(row) => row.id}
+              getRowProps={(row, index) => ({
+                ...getCompanyRowProps(index),
+                onClick: () => setSelectedCompanyId(row.id),
+                className: row.id === selectedCompanyId ? "bg-sky-50" : "",
+              })}
+              onRowActivate={(row) => setSelectedCompanyId(row.id)}
+              emptyMessage="No company matches the current filter."
+              maxHeight="360px"
+            />
+          )}
+        </div>
 
         <div className="grid gap-6">
-          <ErpSectionCard
-            eyebrow="Selected Company"
-            title={
-              selectedCompany
-                ? `${selectedCompany.company_code} | ${selectedCompany.company_name}`
-                : "No company selected"
-            }
-            description="Project mapping is the gate. If a project is removed from a company, its modules disappear from this rollout screen automatically."
-          >
+          <div className="grid gap-3">
+            <ErpSelectionSection
+              label={
+                selectedCompany
+                  ? `${selectedCompany.company_code} | ${selectedCompany.company_name}`
+                  : "No Company Selected"
+              }
+            />
             {selectedCompany ? (
-              <div className="grid gap-4 md:grid-cols-2">
-                <ErpFieldPreview
-                  label="Company"
-                  value={formatCompanyLabel(selectedCompany)}
-                  caption={formatCompanyAddress(selectedCompany)}
-                />
-                <ErpFieldPreview
-                  label="Company State"
-                  value={selectedCompany.status ?? "UNKNOWN"}
-                  caption="Business company lifecycle."
-                />
-                <ErpFieldPreview
-                  label="Mapped Group"
-                  value={selectedCompany.group_code ?? "Not mapped"}
-                  caption={selectedCompany.group_name ?? "Group optional for module rollout."}
-                />
-                <ErpFieldPreview
-                  label="Available Projects"
-                  value={String(uniqueProjects.size)}
-                  caption="Project-backed module universes currently visible here."
-                />
-                <ErpFieldPreview
-                  label="Enabled Modules"
-                  value={String(enabledModules.length)}
-                  caption="Operational modules currently switched on for this company."
-                />
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Company</div>
+                  <div className="text-sm font-semibold text-slate-900">{formatCompanyLabel(selectedCompany)}</div>
+                  <div className="text-[12px] text-slate-600">{formatCompanyAddress(selectedCompany)}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">State</div>
+                  <div className="text-sm text-slate-900">{selectedCompany.status ?? "UNKNOWN"}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Mapped Group</div>
+                  <div className="text-sm text-slate-900">{selectedCompany.group_code ?? "Not mapped"}</div>
+                  <div className="text-[12px] text-slate-600">{selectedCompany.group_name ?? "Group optional for rollout."}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Coverage</div>
+                  <div className="text-sm text-slate-900">{uniqueProjects.size} project lanes | {enabledModules.length} enabled modules</div>
+                </div>
               </div>
             ) : (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
                 Select a company to inspect project-backed module rollout.
               </div>
             )}
-          </ErpSectionCard>
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Modules"
-            title="Project-backed module rollout"
-            description="Modules shown here already belong to a mapped project. SA now decides whether each module becomes operational for the selected company."
-          >
-            <div className="grid gap-4">
-              <QuickFilterInput
-                label="Find module"
-                value={moduleSearch}
-                onChange={setModuleSearch}
-                inputRef={moduleSearchRef}
-                placeholder="Filter by module code, module name, or project"
-              />
+          <div className="grid gap-3">
+            <ErpSelectionSection label="Project-Backed Module Rollout" />
+            <QuickFilterInput
+              label="Find module"
+              value={moduleSearch}
+              onChange={setModuleSearch}
+              inputRef={moduleSearchRef}
+              placeholder="Filter by module code, module name, or project"
+            />
 
-              {loadingModules ? (
-                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                  Loading company module rows.
-                </div>
-              ) : !selectedCompany ? (
-                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                  Select a company first.
-                </div>
-              ) : filteredModules.length === 0 ? (
-                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                  No module is currently available. First map a project to this company, then modules from that project will appear here.
-                </div>
-              ) : (
-                <div className="space-y-0 border border-slate-300">
-                  {filteredModules.map((row, index) => (
-                    <div
-                      key={row.module_code}
-                      ref={(element) => {
-                        moduleRefs.current[index] = element;
-                      }}
-                      onKeyDown={(event) =>
-                        handleLinearNavigation(event, {
-                          index,
-                          refs: moduleRefs.current,
-                          orientation: "vertical",
-                        })
-                      }
-                      className={`border-b border-slate-300 px-4 py-3 last:border-b-0 ${
-                        row.module_code === selectedModuleCode ? "bg-sky-50" : "bg-white"
-                      }`}
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedModuleCode(row.module_code)}
-                          className="min-w-0 flex-1 text-left"
-                        >
-                          <span className="block font-semibold text-slate-900">
-                            {row.module_code} - {row.module_name}
-                          </span>
-                          <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
-                            {row.project_code} | {row.module_active ? "MODULE ACTIVE" : "MODULE INACTIVE"} | {row.enabled ? "ENABLED" : "DISABLED"}
-                          </span>
-                          <span className="mt-1 block text-xs text-slate-500">
-                            {row.approval_required
-                              ? `${row.approval_type ?? "UNKNOWN"} | ${row.min_approvers}-${row.max_approvers} approver slot`
-                              : "No intrinsic approval required"}
-                          </span>
-                        </button>
-
-                        <button
-                          type="button"
-                          disabled={saving || row.module_active !== true}
-                          className={`border px-3 py-2 text-sm font-semibold ${
-                            row.enabled
-                              ? "border-rose-300 bg-white text-rose-700"
-                              : "border-sky-300 bg-white text-sky-700"
-                          } disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-400`}
-                          onClick={() => void handleToggle(row)}
-                        >
-                          {row.enabled ? "Disable" : "Enable"}
-                        </button>
+            {loadingModules ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                Loading company module rows.
+              </div>
+            ) : !selectedCompany ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                Select a company first.
+              </div>
+            ) : filteredModules.length === 0 ? (
+              <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                No module is currently available. First map a project to this company, then modules from that project will appear here.
+              </div>
+            ) : (
+              <ErpDenseGrid
+                columns={[
+                  {
+                    key: "module",
+                    label: "Module",
+                    render: (row) => (
+                      <div>
+                        <div className="font-semibold text-slate-900">{row.module_code} - {row.module_name}</div>
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                          {row.project_code} | {row.module_active ? "MODULE ACTIVE" : "MODULE INACTIVE"} | {row.enabled ? "ENABLED" : "DISABLED"}
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </ErpSectionCard>
+                    ),
+                  },
+                  {
+                    key: "approval",
+                    label: "Approval",
+                    render: (row) =>
+                      row.approval_required
+                        ? `${row.approval_type ?? "UNKNOWN"} | ${row.min_approvers}-${row.max_approvers} approver slot`
+                        : "No intrinsic approval required",
+                  },
+                  {
+                    key: "action",
+                    label: "Action",
+                    render: (row) => (
+                      <button
+                        type="button"
+                        disabled={saving || row.module_active !== true}
+                        className={`border px-3 py-1 text-xs font-semibold ${
+                          row.enabled
+                            ? "border-rose-300 bg-white text-rose-700"
+                            : "border-sky-300 bg-white text-sky-700"
+                        } disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-400`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleToggle(row);
+                        }}
+                      >
+                        {row.enabled ? "Disable" : "Enable"}
+                      </button>
+                    ),
+                  },
+                ]}
+                rows={filteredModules}
+                rowKey={(row) => row.module_code}
+                getRowProps={(row, index) => ({
+                  ...getModuleRowProps(index),
+                  onClick: () => setSelectedModuleCode(row.module_code),
+                  className: row.module_code === selectedModuleCode ? "bg-sky-50" : "",
+                })}
+                onRowActivate={(row) => setSelectedModuleCode(row.module_code)}
+                emptyMessage="No module is currently available."
+                maxHeight="380px"
+              />
+            )}
+          </div>
 
-          <ErpSectionCard
-            eyebrow="Selected Module"
-            title={selectedModule ? `${selectedModule.module_code} | ${selectedModule.module_name}` : "No module selected"}
-            description="This panel explains the rollout law for the currently selected module."
-          >
+          <div className="grid gap-3">
+            <ErpSelectionSection label={selectedModule ? `${selectedModule.module_code} | ${selectedModule.module_name}` : "No Module Selected"} />
             {selectedModule ? (
-              <div className="grid gap-4 md:grid-cols-2">
-                <ErpFieldPreview
-                  label="Project"
-                  value={`${selectedModule.project_code} | ${selectedModule.project_name}`}
-                  caption="Module inherits this project universe."
-                />
-                <ErpFieldPreview
-                  label="Operational State"
-                  value={selectedModule.enabled ? "Enabled" : "Disabled"}
-                  caption="Company-specific rollout flag."
-                />
-                <ErpFieldPreview
-                  label="Module Lifecycle"
-                  value={selectedModule.module_active ? "ACTIVE" : "INACTIVE"}
-                  caption="Global module state from Module Master."
-                />
-                <ErpFieldPreview
-                  label="Approval Law"
-                  value={selectedModule.approval_required ? "Required" : "Not required"}
-                  caption={
-                    selectedModule.approval_required
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Project</div>
+                  <div className="text-sm text-slate-900">{selectedModule.project_code} | {selectedModule.project_name}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Operational State</div>
+                  <div className="text-sm text-slate-900">{selectedModule.enabled ? "Enabled" : "Disabled"}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Module Lifecycle</div>
+                  <div className="text-sm text-slate-900">{selectedModule.module_active ? "ACTIVE" : "INACTIVE"}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Approval Law</div>
+                  <div className="text-sm text-slate-900">
+                    {selectedModule.approval_required
                       ? `${selectedModule.approval_type ?? "UNKNOWN"} | ${selectedModule.min_approvers}-${selectedModule.max_approvers} approver slot`
-                      : "Company cannot override this at rollout layer."
-                  }
-                />
+                      : "Company cannot override this at rollout layer."}
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
                 Select a module row to inspect rollout details.
               </div>
             )}
-          </ErpSectionCard>
+          </div>
         </div>
       </div>
     </ErpScreenScaffold>

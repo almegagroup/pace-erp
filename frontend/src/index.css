@@ -38,6 +38,9 @@ TEMP_UI_BOOT_LOG.md
   --erp-danger-soft: #fde7ea;
   --erp-grid-stripe: #f4f7fa;
   --erp-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+  --erp-row-height: 30px;
+  --erp-form-gap: 6px;
+  --erp-section-gap: 12px;
 }
 
 /* ============================================================
@@ -189,6 +192,33 @@ body[data-workspace-mode="protected"] *::-webkit-scrollbar-thumb {
 
 .erp-grid-table tbody tr:focus-within {
   background: #e3edf9;
+}
+
+/* ============================================================
+   ERP LIST NAVIGATION — Row focus and selection states
+   Driven by useErpListNavigation hook (UX-4)
+   ============================================================ */
+
+/* Focused row — keyboard focus lands on the <tr> itself */
+.erp-grid-table tbody tr:focus-visible {
+  background: #d6eaf9;
+  outline: 2px solid var(--erp-accent);
+  outline-offset: -2px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Selected row — Space toggles, multi-select supported */
+.erp-grid-table tbody tr[data-erp-row-selected="true"] {
+  background: #bdd9f5;
+  border-left: 3px solid var(--erp-accent);
+}
+
+/* Selected + focused */
+.erp-grid-table tbody tr[data-erp-row-selected="true"]:focus-visible {
+  background: #a8cef0;
+  outline: 2px solid var(--erp-accent);
+  outline-offset: -2px;
 }
 
 @keyframes loader {
