@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
@@ -716,11 +717,8 @@ export default function SAReportVisibility() {
         <section className="grid gap-2">
           <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Viewer Rule Editor</div>
           <div className="text-sm font-semibold text-slate-900">{draft.viewer_id ? "Edit visibility rule" : "Create visibility rule"}</div>
-          <div className="grid gap-4">
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Action
-              </span>
+          <div className="grid gap-[var(--erp-form-gap)] md:grid-cols-2 md:gap-x-6">
+            <ErpDenseFormRow label="Action">
               <select
                 value={draft.action_code}
                 onChange={(event) =>
@@ -729,7 +727,7 @@ export default function SAReportVisibility() {
                     action_code: event.target.value,
                   }))
                 }
-                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
               >
                 {actionOptions.map((action) => (
                   <option key={action} value={action}>
@@ -737,12 +735,9 @@ export default function SAReportVisibility() {
                   </option>
                 ))}
               </select>
-            </label>
+            </ErpDenseFormRow>
 
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Scope Type
-              </span>
+            <ErpDenseFormRow label="Scope Type">
               <select
                 value={draft.scope_type}
                 onChange={(event) =>
@@ -756,7 +751,7 @@ export default function SAReportVisibility() {
                     subject_user_id: event.target.value === "USER_EXCEPTION" ? current.subject_user_id : "",
                   }))
                 }
-                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
               >
                 {VISIBILITY_SCOPE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -764,13 +759,12 @@ export default function SAReportVisibility() {
                   </option>
                 ))}
               </select>
-            </label>
+            </ErpDenseFormRow>
 
             {(draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT") ? (
-              <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                {draft.scope_type === "DEPARTMENT" ? "Requester Department Lane" : "Requester Work Context"}
-              </span>
+              <ErpDenseFormRow
+                label={draft.scope_type === "DEPARTMENT" ? "Requester Department Lane" : "Requester Work Context"}
+              >
               <select
                 value={draft.subject_work_context_id}
                 onChange={(event) =>
@@ -779,7 +773,7 @@ export default function SAReportVisibility() {
                     subject_work_context_id: event.target.value,
                   }))
                 }
-                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
               >
                 <option value="">
                   {draft.scope_type === "DEPARTMENT" ? "Choose requester department lane" : "Choose requester work context"}
@@ -788,16 +782,13 @@ export default function SAReportVisibility() {
                   <option key={row.work_context_id} value={row.work_context_id}>
                     {buildWorkContextLabel(row)}
                   </option>
-                ))}
+                  ))}
               </select>
-            </label>
+            </ErpDenseFormRow>
             ) : null}
 
             {draft.scope_type === "USER_EXCEPTION" ? (
-              <label className="grid gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Requester User Exception
-                </span>
+              <ErpDenseFormRow label="Requester User Exception">
                 <select
                   value={draft.subject_user_id}
                   onChange={(event) =>
@@ -806,27 +797,24 @@ export default function SAReportVisibility() {
                       subject_user_id: event.target.value,
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
                 >
                   <option value="">Choose requester user</option>
                   {userOptions.map((row) => (
                     <option key={row.auth_user_id} value={row.auth_user_id}>
                       {buildUserLabel(row)}
                     </option>
-                  ))}
+                    ))}
                 </select>
-              </label>
+              </ErpDenseFormRow>
             ) : null}
 
-            <div className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Target Mode
-              </span>
-              <div className="grid gap-2 md:grid-cols-2">
+            <ErpDenseFormRow label="Target Mode">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => setDraft((current) => ({ ...current, target_mode: "user" }))}
-                  className={`border px-3 py-2 text-sm ${
+                  className={`border px-2 py-[5px] text-[12px] font-medium ${
                     draft.target_mode === "user" ? "border-sky-400 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"
                   }`}
                 >
@@ -835,20 +823,17 @@ export default function SAReportVisibility() {
                 <button
                   type="button"
                   onClick={() => setDraft((current) => ({ ...current, target_mode: "role" }))}
-                  className={`border px-3 py-2 text-sm ${
+                  className={`border px-2 py-[5px] text-[12px] font-medium ${
                     draft.target_mode === "role" ? "border-sky-400 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"
                   }`}
                 >
                   Role
                 </button>
               </div>
-            </div>
+            </ErpDenseFormRow>
 
             {draft.target_mode === "user" ? (
-              <label className="grid gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Viewer User
-                </span>
+              <ErpDenseFormRow label="Viewer User">
                 <select
                   value={draft.viewer_user_id}
                   onChange={(event) =>
@@ -857,21 +842,18 @@ export default function SAReportVisibility() {
                       viewer_user_id: event.target.value,
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
                 >
                   <option value="">Choose user</option>
                   {userOptions.map((row) => (
                     <option key={row.auth_user_id} value={row.auth_user_id}>
                       {buildUserLabel(row)}
                     </option>
-                  ))}
+                    ))}
                 </select>
-              </label>
+              </ErpDenseFormRow>
             ) : (
-              <label className="grid gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Viewer Role
-                </span>
+              <ErpDenseFormRow label="Viewer Role">
                 <select
                   value={draft.viewer_role_code}
                   onChange={(event) =>
@@ -880,18 +862,18 @@ export default function SAReportVisibility() {
                       viewer_role_code: event.target.value,
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
                 >
                   {ERP_ROLE_OPTIONS.map((row) => (
                     <option key={row.code} value={row.code}>
                       {row.code} | {row.label}
                     </option>
-                  ))}
+                    ))}
                 </select>
-              </label>
+              </ErpDenseFormRow>
             )}
 
-            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-xs text-slate-600">
+            <div className="md:col-span-2 border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
               Use company-wide or director viewer rows for broad business visibility. Use department, lane, or user-exception viewer rows when the report must stay tightly scoped.
             </div>
           </div>

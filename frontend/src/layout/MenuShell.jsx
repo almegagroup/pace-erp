@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import {
   buildMenuTree,
@@ -228,6 +228,7 @@ async function fetchLiveRuntimeSnapshot() {
 
 export default function MenuShell() {
   const location = useLocation();
+  const navigate = useNavigate();
   const {
     menu,
     loading,
@@ -1012,13 +1013,8 @@ export default function MenuShell() {
         : location.pathname.startsWith("/ga")
           ? "/ga/home"
           : "/dashboard";
-      const canBrowserBack =
-        typeof window !== "undefined" &&
-        Number.isFinite(window.history?.state?.idx) &&
-        window.history.state.idx > 0;
-
-      if (location.pathname !== homePath && canBrowserBack) {
-        window.history.back();
+      if (location.pathname !== homePath) {
+        navigate(-1);
         return;
       }
 
@@ -1032,7 +1028,7 @@ export default function MenuShell() {
     }
 
     popScreen();
-  }, [drawerTrail, drawerVisible, location.pathname, resolvedMenuFocusIndex, sidebarRoots, stackDepth]);
+  }, [drawerTrail, drawerVisible, location.pathname, navigate, resolvedMenuFocusIndex, sidebarRoots, stackDepth]);
 
   const handleGoHome = useCallback(async () => {
     const target = location.pathname.startsWith("/sa")
@@ -1345,7 +1341,13 @@ export default function MenuShell() {
     {
       key: "back",
       code: "Esc",
-      title: stackDepth <= 1 ? "Logout" : "Back",
+      title:
+        stackDepth <= 1 &&
+        (location.pathname.startsWith("/sa/home") ||
+          location.pathname.startsWith("/ga/home") ||
+          location.pathname === "/dashboard")
+          ? "Logout"
+          : "Back",
       onClick: () => void handleBack(),
     },
     {

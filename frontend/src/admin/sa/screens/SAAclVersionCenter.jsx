@@ -8,6 +8,8 @@ import {
 } from "../../../store/navigationLeaveGuard.js";
 import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
+import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -549,58 +551,48 @@ export default function SAAclVersionCenter() {
           : []),
       ]}
     >
-      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+      <div className="grid gap-[var(--erp-section-gap)] xl:grid-cols-[1.15fr_0.85fr]">
         <div className="grid gap-1">
           <ErpSelectionSection label="Publish Recommendation By Company" />
-          <div className="grid gap-3 border border-slate-300 bg-slate-50 px-4 py-3">
-            <div className="grid gap-3 md:grid-cols-[1fr_220px]">
-              <label className="block">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Search Company Or Reason
-                </span>
-                <input
-                  type="text"
-                  list="acl-version-center-company-suggestions"
-                  value={companySearch}
-                  onChange={(event) => setCompanySearch(event.target.value)}
-                  placeholder="Type company code, company name, reason, or version"
-                  className="mt-2 w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
-                />
-                <datalist id="acl-version-center-company-suggestions">
-                  {companies.map((company) => (
-                    <option
-                      key={company.company_id}
-                      value={company.company_code}
-                    >
-                      {formatCompanyOptionLabel(company)}
-                    </option>
-                  ))}
-                  {companies.map((company) => (
-                    <option
-                      key={`${company.company_id}-name`}
-                      value={company.company_name}
-                    >
-                      {formatCompanyOptionLabel(company)}
-                    </option>
-                  ))}
-                </datalist>
-              </label>
-              <label className="block">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Status Filter
-                </span>
-                <select
-                  value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value)}
-                  className="mt-2 w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+          <div className="grid gap-[var(--erp-form-gap)] border border-slate-300 bg-white p-3">
+            <QuickFilterInput
+              label="Search Company Or Reason"
+              value={companySearch}
+              onChange={setCompanySearch}
+              placeholder="Type company code, company name, reason, or version"
+              hint={`Showing ${filteredCompanies.length} of ${companies.length} companies.`}
+              inputProps={{ list: "acl-version-center-company-suggestions" }}
+            />
+            <datalist id="acl-version-center-company-suggestions">
+              {companies.map((company) => (
+                <option
+                  key={company.company_id}
+                  value={company.company_code}
                 >
-                  <option value="ALL">All Companies</option>
-                  <option value="NO_ACTIVE_VERSION">No Active Version</option>
-                  <option value="PUBLISH_REQUIRED">Publish Required</option>
-                  <option value="CLEAN">Clean</option>
-                </select>
-              </label>
-            </div>
+                  {formatCompanyOptionLabel(company)}
+                </option>
+              ))}
+              {companies.map((company) => (
+                <option
+                  key={`${company.company_id}-name`}
+                  value={company.company_name}
+                >
+                  {formatCompanyOptionLabel(company)}
+                </option>
+              ))}
+            </datalist>
+            <ErpDenseFormRow label="Status Filter">
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value)}
+                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+              >
+                <option value="ALL">All Companies</option>
+                <option value="NO_ACTIVE_VERSION">No Active Version</option>
+                <option value="PUBLISH_REQUIRED">Publish Required</option>
+                <option value="CLEAN">Clean</option>
+              </select>
+            </ErpDenseFormRow>
             <p className="text-xs text-slate-500">
               Showing {filteredCompanies.length} of {companies.length} companies.
             </p>
@@ -623,7 +615,7 @@ export default function SAAclVersionCenter() {
                     {...getCompanyRowProps(index)}
                     type="button"
                     onClick={() => setSelectedCompanyId(company.company_id)}
-                    className={`grid w-full gap-2 border-b px-4 py-3 text-left last:border-b-0 ${
+                    className={`grid w-full gap-1 border-b px-2 py-[6px] text-left last:border-b-0 ${
                       selected ? "border-sky-200 bg-sky-50" : "border-slate-200 bg-white"
                     }`}
                   >
@@ -674,81 +666,31 @@ export default function SAAclVersionCenter() {
               </div>
             ) : (
               <div className="grid gap-4">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="border border-slate-300 bg-slate-50 px-4 py-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      Company
-                    </p>
-                    <p className="mt-2 text-sm font-semibold text-slate-900">
-                      {formatCompanyLabel(selectedCompany)}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">{formatCompanyAddress(selectedCompany)}</p>
-                  </div>
-                  <div className="border border-slate-300 bg-slate-50 px-4 py-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      Status
-                    </p>
-                    <p className="mt-2 text-sm font-semibold text-slate-900">
-                      {statusLabel(selectedCompany.status)}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">{selectedCompany.recommendation}</p>
-                  </div>
-                  <div className="border border-slate-300 bg-slate-50 px-4 py-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      Recommended Action
-                    </p>
-                    <p className="mt-2 text-sm font-semibold text-slate-900">
-                      {selectedCompany.recommended_action?.title ?? "Review versions"}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {selectedCompany.recommended_action?.detail ?? "No recommendation is available."}
-                    </p>
-                  </div>
-                  <div className="border border-slate-300 bg-slate-50 px-4 py-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      Active Version
-                    </p>
-                    <p className="mt-2 text-sm font-semibold text-slate-900">
-                      {selectedCompany.active_version
-                        ? `V${selectedCompany.active_version.version_number} | ${selectedCompany.active_version.description}`
-                        : "None"}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Source frozen {formatDateTime(selectedCompany.active_version?.source_captured_at)}
-                    </p>
-                  </div>
-                  <div className="border border-slate-300 bg-slate-50 px-4 py-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      Published History
-                    </p>
-                    <p className="mt-2 text-sm font-semibold text-slate-900">
-                      {selectedCompany.active_version_count} active | {selectedCompany.inactive_version_count} inactive
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Activate an older inactive version below only if you intentionally need rollback-style recovery.
-                    </p>
-                  </div>
+                <div className="border border-slate-300 bg-white">
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]"><span className="text-[11px] text-slate-500">Company</span><span className="text-[11px] font-semibold text-slate-900">{formatCompanyLabel(selectedCompany)}</span></div>
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]"><span className="text-[11px] text-slate-500">Status</span><span className="text-[11px] font-semibold text-slate-900">{statusLabel(selectedCompany.status)}</span></div>
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]"><span className="text-[11px] text-slate-500">Recommended</span><span className="text-[11px] font-semibold text-slate-900">{selectedCompany.recommended_action?.title ?? "Review versions"}</span></div>
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]"><span className="text-[11px] text-slate-500">Active Version</span><span className="text-[11px] font-semibold text-slate-900">{selectedCompany.active_version ? `V${selectedCompany.active_version.version_number}` : "None"}</span></div>
+                  <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]"><span className="text-[11px] text-slate-500">Published History</span><span className="text-[11px] font-semibold text-slate-900">{selectedCompany.active_version_count} active | {selectedCompany.inactive_version_count} inactive</span></div>
                 </div>
 
-                <label className="block">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Next Version Description
-                  </span>
-                  <input
-                    type="text"
-                    value={versionDescription}
-                    onChange={(event) => setVersionDescription(event.target.value)}
-                    placeholder="Company publish version description"
-                    className="mt-2 w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
-                  />
-                </label>
+                <div className="grid gap-[var(--erp-form-gap)] border border-slate-300 bg-white p-3">
+                  <ErpDenseFormRow label="Next Version Description">
+                    <input
+                      type="text"
+                      value={versionDescription}
+                      onChange={(event) => setVersionDescription(event.target.value)}
+                      placeholder="Company publish version description"
+                      className="w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+                    />
+                  </ErpDenseFormRow>
 
-                <div className="flex flex-wrap gap-3">
+                  <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
                     disabled={saving}
                     onClick={() => void handlePublishNow()}
-                    className="border border-sky-300 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-900"
+                    className="border border-sky-300 bg-sky-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-900"
                   >
                     {saving ? "Publishing..." : versionActionLabel(selectedCompany)}
                   </button>
@@ -756,10 +698,11 @@ export default function SAAclVersionCenter() {
                     type="button"
                     disabled={saving}
                     onClick={() => setVersionDescription(buildVersionDescription(selectedCompany))}
-                    className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                    className="border border-slate-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-700"
                   >
                     Reset Description
                   </button>
+                </div>
                 </div>
               </div>
             )}

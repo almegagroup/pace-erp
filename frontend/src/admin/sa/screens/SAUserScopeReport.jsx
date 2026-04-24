@@ -8,6 +8,8 @@ import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import ErpRegisterHeader from "../../../components/data/ErpRegisterHeader.jsx";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
+import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
+import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
 
 const REPORT_COLUMNS = Object.freeze([
   { key: "user_code", label: "User Code" },
@@ -41,6 +43,22 @@ const REPORT_COLUMNS = Object.freeze([
   { key: "primary_work_area_department_code", label: "Primary Work Area Department Code" },
   { key: "primary_work_area_department_name", label: "Primary Work Area Department Name" },
   { key: "created_at", label: "Created At" },
+]);
+
+const DEFAULT_REPORT_COLUMNS = Object.freeze([
+  "user_code",
+  "user_name",
+  "user_state",
+  "role_code",
+  "designation_hint",
+  "parent_company_code",
+  "parent_company_name",
+  "identity_department_code",
+  "identity_department_name",
+  "work_company_codes",
+  "work_area_codes",
+  "primary_work_area_code",
+  "created_at",
 ]);
 
 async function readJsonSafe(response) {
@@ -101,11 +119,16 @@ export default function SAUserScopeReport() {
   const [companyId, setCompanyId] = useState("");
   const [rows, setRows] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [visibleColumnKeys, setVisibleColumnKeys] = useState(() => REPORT_COLUMNS.map((column) => column.key));
+  const [showColumnDrawer, setShowColumnDrawer] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const actionRefs = useRef([]);
   const searchRef = useRef(null);
+  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } = useErpVisibleColumns({
+    storageKey: "erp.sa.userScopeReport.visibleColumns",
+    columnDefs: REPORT_COLUMNS,
+    defaultColumnKeys: DEFAULT_REPORT_COLUMNS,
+  });
 
   const loadAll = useCallback(async (nextCompanyId = companyId) => {
     setLoading(true);
@@ -158,10 +181,6 @@ export default function SAUserScopeReport() {
     );
   }, [rows, searchQuery]);
 
-  const visibleColumns = useMemo(
-    () => REPORT_COLUMNS.filter((column) => visibleColumnKeys.includes(column.key)),
-    [visibleColumnKeys],
-  );
   const denseColumns = useMemo(
     () =>
       visibleColumns.map((column) => ({
@@ -199,6 +218,13 @@ export default function SAUserScopeReport() {
           columns: visibleColumns,
           rows: filteredRows,
         }),
+    },
+    {
+      id: "sa-user-scope-report-columns",
+      group: "Current Screen",
+      label: "Choose visible report columns",
+      keywords: ["columns", "visible columns", "report columns"],
+      onSelect: () => setShowColumnDrawer(true),
     },
   ]);
 
@@ -239,11 +265,22 @@ export default function SAUserScopeReport() {
             handleLinearNavigation(event, { index: 0, refs: actionRefs.current }),
         },
         {
+          key: "columns",
+          label: "Columns",
+          tone: "neutral",
+          buttonRef: (element) => {
+            actionRefs.current[1] = element;
+          },
+          onClick: () => setShowColumnDrawer(true),
+          onKeyDown: (event) =>
+            handleLinearNavigation(event, { index: 1, refs: actionRefs.current }),
+        },
+        {
           key: "export",
           label: "Download Excel CSV",
           tone: "primary",
           buttonRef: (element) => {
-            actionRefs.current[1] = element;
+            actionRefs.current[2] = element;
           },
           onClick: () =>
             downloadCsvFile({
@@ -252,7 +289,7 @@ export default function SAUserScopeReport() {
               rows: filteredRows,
             }),
           onKeyDown: (event) =>
-            handleLinearNavigation(event, { index: 1, refs: actionRefs.current }),
+            handleLinearNavigation(event, { index: 2, refs: actionRefs.current }),
         },
       ]}
     >
@@ -307,33 +344,6 @@ export default function SAUserScopeReport() {
         </div>
 
         <div className="grid gap-3">
-          <ErpSelectionSection label="Visible Columns" />
-          <div className="grid gap-2 md:grid-cols-3">
-            {REPORT_COLUMNS.map((column) => {
-              const checked = visibleColumnKeys.includes(column.key);
-              return (
-                <label key={column.key} className="flex items-center gap-2 border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(event) => {
-                      if (event.target.checked) {
-                        setVisibleColumnKeys((current) =>
-                          REPORT_COLUMNS.map((item) => item.key).filter((key) => key === column.key || current.includes(key)),
-                        );
-                        return;
-                      }
-                      setVisibleColumnKeys((current) => current.filter((key) => key !== column.key));
-                    }}
-                  />
-                  <span>{column.label}</span>
-                </label>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="grid gap-3">
           <ErpRegisterHeader
             title={loading ? "Loading user scope report" : "User scope register"}
             count={filteredRows.length}
@@ -367,6 +377,15 @@ export default function SAUserScopeReport() {
           )}
         </div>
       </div>
+      <ErpColumnVisibilityDrawer
+        visible={showColumnDrawer}
+        title="User Scope Report Columns"
+        columns={REPORT_COLUMNS}
+        visibleColumnKeys={visibleColumnKeys}
+        onToggleColumn={toggleColumn}
+        onResetColumns={resetColumns}
+        onClose={() => setShowColumnDrawer(false)}
+      />
     </ErpScreenScaffold>
   );
 }

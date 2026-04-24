@@ -14,7 +14,6 @@ import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.j
 import {
   formatCompanyAddress,
   formatCompanyLabel,
-  formatCompanyOptionLabel,
 } from "../../../shared/companyDisplay.js";
 
 function normalize(value) {
@@ -736,7 +735,7 @@ export default function SAWorkContextMaster() {
                     <option value="">Select company</option>
                     {companies.map((company) => (
                       <option key={company.id} value={company.id}>
-                        {formatCompanyOptionLabel(company)}
+                        {formatCompanyLabel(company)}
                       </option>
                     ))}
                   </select>
@@ -906,7 +905,7 @@ export default function SAWorkContextMaster() {
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Selected Scope
               </div>
-              <div className="text-sm font-semibold text-slate-900">
+              <div className="break-words text-sm font-semibold text-slate-900">
                 {selectedContext
                   ? `${selectedContext.work_context_code} | ${selectedContext.work_context_name}`
                   : "Choose A Work Scope"}
@@ -936,7 +935,7 @@ export default function SAWorkContextMaster() {
                     ].map((item) => (
                       <div key={item.label} className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px] last:border-b-0">
                         <span className="min-w-[110px] text-[11px] text-slate-500">{item.label}</span>
-                        <span className="text-right text-[11px] font-semibold text-slate-900">{item.value}</span>
+                        <span className="min-w-0 break-words text-right text-[11px] font-semibold text-slate-900">{item.value}</span>
                       </div>
                     ))}
                   </div>

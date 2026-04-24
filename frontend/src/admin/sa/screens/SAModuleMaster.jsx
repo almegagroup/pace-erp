@@ -551,7 +551,7 @@ export default function SAModuleMaster() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      footerHints={["Tab Next Field", "↑↓ Navigate", "Enter Select", "Ctrl+S Save", "Esc Cancel", "Ctrl+K Command Bar"]}
+      footerHints={["Tab Next Field", "↑↓ Navigate", "Enter Select", "Ctrl+S Save", "Esc Back", "Ctrl+K Command Bar"]}
       formEyebrow={editorMode === "edit" ? "Edit" : "Create"}
       formTitle={editorMode === "edit" ? "Edit selected module" : "Create a new project module"}
       formContent={
@@ -569,7 +569,7 @@ export default function SAModuleMaster() {
               <option value="">Choose active project</option>
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
-                  {project.project_code} | {project.project_name} | {project.status}
+                  {project.project_code} | {project.project_name}
                 </option>
               ))}
             </select>
@@ -679,11 +679,11 @@ export default function SAModuleMaster() {
               : `${filteredModules.length} visible module${filteredModules.length === 1 ? "" : "s"}`}
           </div>
           {loading ? (
-            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
               Loading module rows.
             </div>
           ) : filteredModules.length === 0 ? (
-            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
               No module matches the current filter.
             </div>
           ) : (

@@ -24,6 +24,23 @@
 
 import { useCallback, useRef, useState } from "react";
 
+function isInteractiveControl(target) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tagName = target.tagName;
+
+  return (
+    tagName === "INPUT" ||
+    tagName === "SELECT" ||
+    tagName === "TEXTAREA" ||
+    tagName === "BUTTON" ||
+    tagName === "A" ||
+    target.isContentEditable
+  );
+}
+
 export function useErpListNavigation(rows, { onActivate, onEscape } = {}) {
   const rowRefs = useRef([]);
   const [selectedIndices, setSelectedIndices] = useState(() => new Set());
@@ -105,6 +122,9 @@ export function useErpListNavigation(rows, { onActivate, onEscape } = {}) {
               break;
             }
             case " ": {
+              if (isInteractiveControl(event.target)) {
+                break;
+              }
               // Only toggle selection when the row itself is focused,
               // not when a child button/input is active
               if (event.target === event.currentTarget) {
@@ -114,6 +134,9 @@ export function useErpListNavigation(rows, { onActivate, onEscape } = {}) {
               break;
             }
             case "Enter": {
+              if (isInteractiveControl(event.target)) {
+                break;
+              }
               // Only fire activation when the row itself is focused
               if (event.target === event.currentTarget && typeof onActivate === "function") {
                 event.preventDefault();

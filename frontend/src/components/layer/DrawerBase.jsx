@@ -8,17 +8,19 @@ export default function DrawerBase({
   contentProps,
   actionsProps,
   onEscape,
+  onClose,
   initialFocusRef,
   side = "right",
   width = "min(420px, calc(100vw - 24px))",
 }) {
+  const handleEscape = onEscape ?? onClose;
   const justifyContent =
     side === "left" ? "flex-start" : side === "center" ? "center" : "flex-end";
 
   return (
     <BlockingLayer
       visible={visible}
-      onEscape={onEscape}
+      onEscape={handleEscape}
       initialFocusRef={initialFocusRef}
       overlayStyle={{
         ...overlayStyle,
