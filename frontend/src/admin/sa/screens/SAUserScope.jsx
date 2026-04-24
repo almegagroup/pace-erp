@@ -319,6 +319,7 @@ export default function SAUserScope() {
 
   const [parentCompanyId, setParentCompanyId] = useState("");
   const [primaryWorkCompanyId, setPrimaryWorkCompanyId] = useState("");
+  const [primaryCompanyCandidateId, setPrimaryCompanyCandidateId] = useState("");
   const [settingPrimary, setSettingPrimary] = useState(false);
   const [workCompanyIds, setWorkCompanyIds] = useState([]);
   const [workContextIds, setWorkContextIds] = useState([]);
@@ -571,6 +572,26 @@ export default function SAUserScope() {
 
     setProjectIds((current) => current.filter((projectId) => allowedProjectIds.has(projectId)));
   }, [options.projects, eligibleProjectCompanyIds]);
+
+  useEffect(() => {
+    const selectedIds = selectedWorkCompanies.map((company) => company.id);
+
+    if (selectedIds.length === 0) {
+      setPrimaryCompanyCandidateId("");
+      return;
+    }
+
+    if (primaryWorkCompanyId && selectedIds.includes(primaryWorkCompanyId)) {
+      setPrimaryCompanyCandidateId((current) =>
+        current && selectedIds.includes(current) ? current : primaryWorkCompanyId,
+      );
+      return;
+    }
+
+    setPrimaryCompanyCandidateId((current) =>
+      current && selectedIds.includes(current) ? current : selectedIds[0],
+    );
+  }, [primaryWorkCompanyId, selectedWorkCompanies]);
 
   const isScopeDirty = useMemo(() => {
     if (!payload?.scope) {
@@ -1371,27 +1392,56 @@ export default function SAUserScope() {
                           {formatCompanyMeta(company)}
                         </span>
                       </span>
-                      {selected ? (
-                        isPrimary ? (
-                          <span className="border border-emerald-300 bg-emerald-50 px-1.5 py-[1px] text-[9px] font-semibold uppercase tracking-[0.12em] text-emerald-800">
-                            Primary
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={settingPrimary || !authUserId}
-                            onClick={() => void handleSetPrimaryCompany(company.id)}
-                            className="border border-slate-300 bg-white px-1.5 py-[1px] text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-700 hover:border-sky-300 hover:text-sky-800 disabled:opacity-50"
-                          >
-                            {settingPrimary ? "..." : "Set Primary"}
-                          </button>
-                        )
+                      {selected && isPrimary ? (
+                        <span className="border border-emerald-300 bg-emerald-50 px-1.5 py-[1px] text-[9px] font-semibold uppercase tracking-[0.12em] text-emerald-800">
+                          Primary
+                        </span>
                       ) : null}
                     </label>
                   </div>
                 );
               })
             )}
+          </div>
+          <div className="grid gap-[var(--erp-form-gap)] border border-slate-300 bg-white p-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-700">
+                Primary Work Company
+              </span>
+              <span className="text-[10px] text-slate-500">
+                Selecting a company adds it to work scope only. Primary changes only when you press Set Primary.
+              </span>
+            </div>
+            <div className="grid gap-[var(--erp-form-gap)] md:grid-cols-[minmax(0,1fr)_auto]">
+              <select
+                value={primaryCompanyCandidateId}
+                onChange={(event) => setPrimaryCompanyCandidateId(event.target.value)}
+                disabled={selectedWorkCompanies.length === 0 || settingPrimary}
+                className="h-8 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none"
+              >
+                {selectedWorkCompanies.length === 0 ? (
+                  <option value="">Select work companies first</option>
+                ) : null}
+                {selectedWorkCompanies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.company_code} — {company.company_name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={
+                  settingPrimary ||
+                  !authUserId ||
+                  !primaryCompanyCandidateId ||
+                  primaryCompanyCandidateId === primaryWorkCompanyId
+                }
+                onClick={() => void handleSetPrimaryCompany(primaryCompanyCandidateId)}
+                className="h-8 border border-slate-300 bg-white px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 hover:border-sky-300 hover:text-sky-800 disabled:opacity-50"
+              >
+                {settingPrimary ? "Updating..." : "Set Primary"}
+              </button>
+            </div>
           </div>
         </div>
       </DrawerBase>

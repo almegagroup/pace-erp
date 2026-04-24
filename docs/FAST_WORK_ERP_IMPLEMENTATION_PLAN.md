@@ -955,6 +955,62 @@ frontend/src/index.css                                    â€” add dense CSS
 
 ---
 
+### [2026-04-24] — Codex — SA Registry + Primary Scope Clarification Pass
+
+**Session result:** Fixed two operator-facing SA issues and corrected the documentation truth around `Esc/back`.
+
+**Completed in code:**
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAUserScope.jsx`
+  - work-company drawer no longer makes primary selection look automatic
+  - primary company is now managed in a separate explicit control after work companies are selected
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAPageResourceRegistry.jsx`
+  - page registry moved away from stacked web-app cards toward a denser register/detail split
+  - oversized explanatory block compressed into a short operator rule strip
+
+**Documentation updates:**
+- DONE 2026-04-24 Codex — `docs/PHASE3_IMPLEMENTATION_LOG.md`
+  - added plain-language explanation: selecting a work company does not change primary; only explicit `Set as Primary` does
+- DONE 2026-04-24 Codex — `docs/FAST_WORK_ERP_IMPLEMENTATION_PLAN.md`
+  - corrected the earlier `Esc/back` wording: attempted fix exists in code, but the behavior is still not resolved operator-side
+
+**Verification:**
+- `npm.cmd run lint` OK
+- `npm.cmd run build` OK
+
+**Current truth at the end of this session:**
+- Phase 4: DONE and verified
+- Phase 5: IN PROGRESS
+- `Esc/back` behavior is still unresolved in browser/operator reality and must remain tracked as unresolved until manually verified end-to-end
+
+---
+
+### [2026-04-24] — Codex — Immediate SA Stability + Navigation Fix Pass
+
+**Session result:** Landed immediate operator-facing fixes without changing the overall phase truth. Phase 4 remains DONE; Phase 5 remains IN PROGRESS.
+
+**Completed in code:**
+- DONE 2026-04-24 Codex — `frontend/src/layout/MenuShell.jsx`
+  - `Esc` now prefers true route-back behavior instead of collapsing blindly to home / Start Here when the current screen is not a home route
+  - action rail `Esc` label now reflects `Back` vs `Logout` more truthfully
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SACapabilityGovernance.jsx`
+  - capability governance moved closer to row-first ERP register behavior
+  - matrix interaction compressed into a selected-resource editor instead of noisy per-cell web-app style interaction
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAAclVersionCenter.jsx`
+  - search/filter and publish desk tightened into a denser operator surface
+- DONE 2026-04-24 Codex — `frontend/src/admin/sa/screens/SAModuleMaster.jsx`
+  - project option noise reduced and footer grammar corrected
+
+**Verification:**
+- `npm.cmd run lint` OK
+- `npm.cmd run build` OK
+
+**Current truth at the end of this session:**
+- Phase 4: DONE and verified
+- Phase 5: IN PROGRESS
+- Additional browser/operator verification is still required for the full `Esc/back` navigation story across every screen
+
+---
+
 ### [2026-04-24] — Codex — Documentation Reconciliation Pass
 
 **Session result:** Reconciled the implementation plan to the verified reality established after Claude's audit pass and the later immediate SA bug-fix pass.

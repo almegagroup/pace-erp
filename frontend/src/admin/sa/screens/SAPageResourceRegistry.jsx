@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { PROJECT_SCREENS } from "../../../navigation/screens/projects/projectScreens.js";
 import { HR_SCREENS } from "../../../navigation/screens/projects/hrModule/hrScreens.js";
 import { OPERATION_SCREENS } from "../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -167,7 +168,9 @@ export default function SAPageResourceRegistry() {
     filteredRows[0] ??
     null;
 
-  const { getRowProps } = useErpListNavigation(filteredRows);
+  const { getRowProps } = useErpListNavigation(filteredRows, {
+    onActivate: (row) => setSelectedScreenCode(row.screen_code),
+  });
 
   useErpScreenCommands([
     {
@@ -318,7 +321,7 @@ export default function SAPageResourceRegistry() {
             />
           </label>
 
-          <div className="mt-4 grid gap-2">
+          <div className="mt-2 grid gap-2">
             {loading ? (
               <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                 Loading ACL page registry.
@@ -328,44 +331,56 @@ export default function SAPageResourceRegistry() {
                 No ACL/business page exists yet. Build the real business screens first, then they will appear here.
               </div>
             ) : (
-              filteredRows.map((row, index) => {
-                const selected = row.screen_code === selectedRow?.screen_code;
-
-                return (
-                  <button
-                    key={row.screen_code}
-                    {...getRowProps(index)}
-                    type="button"
-                    onClick={() => setSelectedScreenCode(row.screen_code)}
-                    className={`border px-4 py-3 text-left ${
-                      selected
-                        ? "border-sky-300 bg-sky-50 text-sky-900"
-                        : "border-slate-300 bg-white text-slate-700"
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold">{row.title}</span>
-                      <span className="border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
-                        {row.is_published ? (row.is_active ? "Published" : "Disabled") : "Not In Menu"}
+              <ErpDenseGrid
+                columns={[
+                  {
+                    key: "title",
+                    label: "Page",
+                    render: (row) => (
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold">{row.title}</span>
+                          <span className="border border-slate-200 bg-slate-50 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                            {row.is_published ? (row.is_active ? "Published" : "Disabled") : "Not In Menu"}
+                          </span>
+                        </div>
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                          {row.screen_code}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "route_path",
+                    label: "Route",
+                    render: (row) => (
+                      <span className="block max-w-[26rem] truncate text-[11px] text-slate-600">
+                        {row.route_path}
                       </span>
-                    </div>
-                    <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-slate-500">
-                      {row.screen_code}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {row.route_path}
-                    </div>
-                    <div className="mt-2 text-xs text-slate-600">
-                      Resource {row.resource_code} | Group {row.parent_menu_code || "unassigned"} | Order {row.display_order ?? "-"}
-                    </div>
-                  </button>
-                );
-              })
+                    ),
+                  },
+                  {
+                    key: "placement",
+                    label: "Registry Status",
+                    render: (row) => (
+                      <span className="text-[11px] text-slate-600">
+                        {row.parent_menu_code || "Unassigned"} / {row.display_order ?? "-"}
+                      </span>
+                    ),
+                  },
+                ]}
+                rows={filteredRows}
+                rowKey={(row) => row.screen_code}
+                getRowProps={(_row, index) => getRowProps(index)}
+                onRowActivate={(row) => setSelectedScreenCode(row.screen_code)}
+                maxHeight="none"
+                emptyMessage="No ACL/business page exists yet. Build the real business screens first, then they will appear here."
+              />
             )}
           </div>
         </div>
 
-        <div className="grid gap-3">
+        <div className="grid gap-2">
           <div className="grid gap-1">
             <ErpSelectionSection label={selectedRow ? `${selectedRow.title}` : "Choose A Page"} />
             {selectedRow ? (
@@ -373,15 +388,15 @@ export default function SAPageResourceRegistry() {
                 <div className="border border-slate-300 bg-white">
                   <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
                     <span className="text-[11px] text-slate-500">Screen Code</span>
-                    <span className="text-right text-[11px] font-semibold text-slate-900">{selectedRow.screen_code}</span>
+                    <span className="break-all text-right text-[11px] font-semibold text-slate-900">{selectedRow.screen_code}</span>
                   </div>
                   <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
                     <span className="text-[11px] text-slate-500">Route</span>
-                    <span className="text-right text-[11px] font-semibold text-slate-900">{selectedRow.route_path}</span>
+                    <span className="break-all text-right text-[11px] font-semibold text-slate-900">{selectedRow.route_path}</span>
                   </div>
                   <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
                     <span className="text-[11px] text-slate-500">Resource Code</span>
-                    <span className="text-right text-[11px] font-semibold text-slate-900">{selectedRow.resource_code}</span>
+                    <span className="break-all text-right text-[11px] font-semibold text-slate-900">{selectedRow.resource_code}</span>
                   </div>
                   <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
                     <span className="text-[11px] text-slate-500">Menu Placement</span>
@@ -400,9 +415,9 @@ export default function SAPageResourceRegistry() {
                       openScreen("SA_MENU_GOVERNANCE", { mode: "replace" });
                       navigate("/sa/menu");
                     }}
-                    className="border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold text-sky-900"
+                    className="h-8 border border-sky-300 bg-sky-50 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-900"
                   >
-                    Open In Menu Governance
+                    Menu Governance
                   </button>
 
                   <button
@@ -411,9 +426,9 @@ export default function SAPageResourceRegistry() {
                       openScreen("SA_MODULE_RESOURCE_MAP", { mode: "replace" });
                       navigate("/sa/module-pages");
                     }}
-                    className="border border-cyan-300 bg-cyan-50 px-2 py-[3px] text-[11px] font-semibold text-cyan-700"
+                    className="h-8 border border-cyan-300 bg-cyan-50 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700"
                   >
-                    Open Module Page Map
+                    Module Page Map
                   </button>
 
                   <button
@@ -422,9 +437,9 @@ export default function SAPageResourceRegistry() {
                       openScreen(selectedRow.screen_code, { mode: "replace" });
                       navigate(selectedRow.route_path);
                     }}
-                    className="border border-slate-300 bg-white px-2 py-[3px] text-[11px] font-semibold text-slate-700"
+                    className="h-8 border border-slate-300 bg-white px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700"
                   >
-                    Open Page
+                    Open Screen
                   </button>
                 </div>
               </div>
@@ -436,12 +451,9 @@ export default function SAPageResourceRegistry() {
           </div>
 
           <div className="grid gap-1">
-            <ErpSelectionSection label="What Happens Here" />
-            <div className="grid gap-2 text-sm text-slate-700">
-              <p>1. Page exists in frontend registry first.</p>
-              <p>2. Then it gets published into a menu group.</p>
-              <p>3. Then it will be bound to one owning module.</p>
-              <p>4. Then approval and ACL will hang off that exact resource.</p>
+            <ErpSelectionSection label="Operator Rule" />
+            <div className="border border-slate-300 bg-white px-3 py-2 text-[11px] text-slate-700">
+              Registry first. Then menu placement. Then module ownership. Approval and ACL hang off this exact resource code.
             </div>
           </div>
         </div>
