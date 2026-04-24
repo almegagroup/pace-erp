@@ -11,9 +11,9 @@
 import { useEffect, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
-import ErpScreenScaffold, {
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 
@@ -88,6 +88,35 @@ export default function SASystemHealth() {
   const dbStatus = health?.db_status ?? "N/A";
   const aclStatus = health?.acl_snapshot_status ?? "N/A";
   const menuStatus = health?.menu_snapshot_status ?? "N/A";
+  const statusRows = [
+    {
+      key: "database",
+      surface: "Database",
+      status: dbStatus,
+      action:
+        dbStatus === "DOWN"
+          ? "Stop new governance actions and investigate runtime immediately."
+          : "Runtime data layer is accepting health probes.",
+    },
+    {
+      key: "acl",
+      surface: "ACL Snapshot",
+      status: aclStatus,
+      action:
+        aclStatus === "UNAVAILABLE"
+          ? "Review ACL projection chain before changing access scope."
+          : "Permission projection is ready for current runtime.",
+    },
+    {
+      key: "menu",
+      surface: "Menu Snapshot",
+      status: menuStatus,
+      action:
+        menuStatus === "UNAVAILABLE"
+          ? "Review menu governance before operators depend on route exposure."
+          : "Navigation projection is currently healthy.",
+    },
+  ];
 
   const alerts = [
     dbStatus === "DOWN"
@@ -236,38 +265,29 @@ export default function SASystemHealth() {
             ]
           : alerts
       }
+      footerHints={["CTRL+K COMMAND BAR", "ALT+R REFRESH"]}
     >
-      <ErpSectionCard
-        eyebrow="Diagnostics Interpretation"
-        title="What SA should do next"
-      >
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div className="border border-slate-300 bg-white px-4 py-3">
-            <p className="text-sm font-semibold text-slate-900">
-              If Database is DOWN
-            </p>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Treat this as operationally urgent. Avoid provisioning new governance actions until the core runtime is stable again.
-            </p>
-          </div>
-          <div className="border border-slate-300 bg-white px-4 py-3">
-            <p className="text-sm font-semibold text-slate-900">
-              If ACL Snapshot is UNAVAILABLE
-            </p>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Review access-governance inputs and upcoming ACL administration surfaces before expanding user scope.
-            </p>
-          </div>
-          <div className="border border-slate-300 bg-white px-4 py-3">
-            <p className="text-sm font-semibold text-slate-900">
-              If Menu Snapshot is UNAVAILABLE
-            </p>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              Review menu-governance readiness because route visibility and navigation projection may be incomplete.
-            </p>
-          </div>
-        </div>
-      </ErpSectionCard>
+      <div className="grid gap-3">
+        <ErpSelectionSection label="Diagnostics Interpretation" />
+        <ErpDenseGrid
+          columns={[
+            { key: "surface", label: "Surface", width: "180px" },
+            { key: "status", label: "Status", width: "180px" },
+            { key: "action", label: "Operator Action" },
+          ]}
+          rows={statusRows}
+          rowKey={(row) => row.key}
+          renderCell={(row, column) => row[column.key]}
+          maxHeight="none"
+          summaryRow={{
+            label: "Summary",
+            values: {
+              status: [dbStatus, aclStatus, menuStatus].join(" | "),
+              action: "Refresh after each governance change that could affect runtime projection.",
+            },
+          }}
+        />
+      </div>
     </ErpScreenScaffold>
   );
 }

@@ -27,6 +27,7 @@ import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { applyQuickFilter, sortUsers } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -642,7 +643,7 @@ export default function SAUsers() {
         No ERP users match the current governance filter.
       </div>
     ) : (
-      <div className="overflow-x-auto">
+      <>
         <ErpPaginationStrip
           page={userPage}
           setPage={setUserPage}
@@ -651,140 +652,106 @@ export default function SAUsers() {
           endIndex={userEndIndex}
           totalItems={filteredUsers.length}
         />
-        <table className="erp-grid-table min-w-full">
-          <thead>
-            <tr>
-              {visibleColumns.map((column) => (
-                <th
-                  key={column.key}
-                  className="border-b border-slate-300 bg-[#e8eef4] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-                >
-                  {column.label}
-                </th>
-              ))}
-              <th className="border-b border-slate-300 bg-[#e8eef4] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {userPageItems.map((user, rowIndex) => {
-              const actionLabel =
-                user.state === "ACTIVE" ? "Disable" : "Activate";
-              const nextState =
-                user.state === "ACTIVE" ? "DISABLED" : "ACTIVE";
-              const isUpdating = updatingUserId === user.auth_user_id;
-              const scopeEnabled = canOpenScope(user);
-
-              return (
-                <tr key={user.auth_user_id} {...getRowProps(rowIndex)} className="border-b border-slate-200 bg-white align-top">
-                  {visibleColumns.map((column) => (
-                    <td key={column.key} className="px-3 py-3 text-sm text-slate-700">
-                      {column.key === "user" ? (
-                        <div>
-                          <div className="font-semibold text-slate-900">
-                            {user.user_code ?? "Uncoded User"}{" "}
-                            <span className="text-slate-600">
-                              {formatIdentityName(user)}
-                            </span>
-                          </div>
-                          <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                            {user.parent_company_name ?? "Company Not Captured"}
-                          </div>
-                          <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                            {user.designation_hint ?? "Designation Not Captured"}
-                          </div>
-                          <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                            Auth {shortId(user.auth_user_id)}
-                          </div>
-                        </div>
+        <ErpDenseGrid
+          columns={[
+            ...visibleColumns.map((column) => ({
+              key: column.key,
+              label: column.label,
+              render: (user) => {
+                if (column.key === "user") {
+                  return (
+                    <div>
+                      <p className="font-semibold leading-tight">
+                        {user.user_code ?? "Uncoded User"}{" "}
+                        <span className="font-normal text-slate-600">{formatIdentityName(user)}</span>
+                      </p>
+                      <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{user.parent_company_name ?? "Company Not Captured"}</p>
+                      <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{user.designation_hint ?? "Designation Not Captured"}</p>
+                    </div>
+                  );
+                }
+                if (column.key === "role") {
+                  return (
+                    <div className="flex items-center gap-1">
+                      <span className={`inline-flex border px-2 py-[1px] text-[10px] font-semibold uppercase tracking-[0.14em] ${getRoleTone(user.role_code)}`}>
+                        {user.role_code ?? "UNASSIGNED"}
+                      </span>
+                      {typeof user.role_rank === "number" ? (
+                        <span className="text-[10px] text-slate-500">Rank {user.role_rank}</span>
                       ) : null}
-                      {column.key === "role" ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getRoleTone(user.role_code)}`}
-                          >
-                            {user.role_code ?? "UNASSIGNED"}
-                          </span>
-                          {typeof user.role_rank === "number" ? (
-                            <span className="text-[10px] text-slate-500">
-                              Rank {user.role_rank}
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {column.key === "state" ? (
-                        <span
-                          className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}
-                        >
-                          {user.state ?? "UNKNOWN"}
-                        </span>
-                      ) : null}
-                      {column.key === "created" ? formatDateTime(user.created_at) : null}
-                    </td>
-                  ))}
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <div className="flex flex-wrap gap-2">
-                      {scopeEnabled ? (
-                        <button
-                          ref={(element) => {
-                            rowActionRefs.current[rowIndex] ??= [];
-                            rowActionRefs.current[rowIndex][0] = element;
-                          }}
-                          type="button"
-                          onClick={() => handleOpenScope(user)}
-                          onKeyDown={(event) =>
-                            handleGridNavigation(event, {
-                              rowIndex,
-                              columnIndex: 0,
-                              gridRefs: rowActionRefs.current,
-                            })
-                          }
-                          className="border border-cyan-300 bg-cyan-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700"
-                        >
-                          Scope
-                        </button>
-                      ) : (
-                        <span className="border border-slate-300 bg-slate-100 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                          ACL First
-                        </span>
-                      )}
+                    </div>
+                  );
+                }
+                if (column.key === "state") {
+                  return (
+                    <span className={`inline-flex border px-2 py-[1px] text-[10px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}>
+                      {user.state ?? "UNKNOWN"}
+                    </span>
+                  );
+                }
+                if (column.key === "created") return formatDateTime(user.created_at);
+                return null;
+              },
+            })),
+            {
+              key: "actions",
+              label: "Actions",
+              render: (user, rowIndex) => {
+                const actionLabel = user.state === "ACTIVE" ? "Disable" : "Activate";
+                const nextState = user.state === "ACTIVE" ? "DISABLED" : "ACTIVE";
+                const isUpdating = updatingUserId === user.auth_user_id;
+                const scopeEnabled = canOpenScope(user);
+                return (
+                  <div className="flex gap-1">
+                    {scopeEnabled ? (
                       <button
                         ref={(element) => {
                           rowActionRefs.current[rowIndex] ??= [];
-                          rowActionRefs.current[rowIndex][1] = element;
+                          rowActionRefs.current[rowIndex][0] = element;
                         }}
                         type="button"
-                        disabled={isUpdating}
-                        onClick={() => void handleStateChange(user, nextState)}
+                        onClick={() => handleOpenScope(user)}
                         onKeyDown={(event) =>
-                            handleGridNavigation(event, {
-                              rowIndex,
-                              columnIndex: 1,
-                              gridRefs: rowActionRefs.current,
-                            })
-                          }
-                        className={`border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                          user.state === "ACTIVE"
-                            ? "border-rose-300 bg-rose-50 text-rose-700"
-                            : "border-emerald-300 bg-emerald-50 text-emerald-700"
-                        } ${isUpdating ? "cursor-not-allowed opacity-60" : ""}`}
+                          handleGridNavigation(event, { rowIndex, columnIndex: 0, gridRefs: rowActionRefs.current })
+                        }
+                        className="border border-cyan-300 bg-cyan-50 px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700"
                       >
-                        {isUpdating ? "Updating..." : actionLabel}
+                        Scope
                       </button>
-                    </div>
+                    ) : (
+                      <span className="border border-slate-300 bg-slate-100 px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        ACL First
+                      </span>
+                    )}
+                    <button
+                      ref={(element) => {
+                        rowActionRefs.current[rowIndex] ??= [];
+                        rowActionRefs.current[rowIndex][1] = element;
+                      }}
+                      type="button"
+                      disabled={isUpdating}
+                      onClick={() => void handleStateChange(user, nextState)}
+                      onKeyDown={(event) =>
+                        handleGridNavigation(event, { rowIndex, columnIndex: 1, gridRefs: rowActionRefs.current })
+                      }
+                      className={`border px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.14em] ${user.state === "ACTIVE" ? "border-rose-300 bg-rose-50 text-rose-700" : "border-emerald-300 bg-emerald-50 text-emerald-700"} ${isUpdating ? "cursor-not-allowed opacity-60" : ""}`}
+                    >
+                      {isUpdating ? "Updating..." : actionLabel}
+                    </button>
                     {returnFocusAuthUserId === user.auth_user_id ? (
-                      <div className="mt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700">
-                        Current return focus
-                      </div>
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-700 self-center">↩</span>
                     ) : null}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                  </div>
+                );
+              },
+            },
+          ]}
+          rows={userPageItems}
+          rowKey={(user) => user.auth_user_id}
+          getRowProps={(_user, rowIndex) => getRowProps(rowIndex)}
+          emptyMessage="No ERP users match the current governance filter."
+        />
+      </>
     ),
   };
 
@@ -805,6 +772,7 @@ export default function SAUsers() {
               ]
             : []
         }
+        footerHints={["Arrow Keys Navigate", "Enter Open", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
         filterSection={filterSection}
         listSection={listSection}
       />
@@ -821,3 +789,4 @@ export default function SAUsers() {
     </>
   );
 }
+

@@ -1,20 +1,24 @@
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 
-function renderFieldPreviews(fields = []) {
+function renderDenseFieldRows(fields = []) {
   return (
-    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+    <div className="grid gap-1">
       {fields.map((field) => (
-        <ErpFieldPreview
+        <div
           key={field.label}
-          label={field.label}
-          value={field.value}
-          caption={field.caption}
-          multiline={field.multiline}
-          tone={field.tone}
-        />
+          className="grid grid-cols-[180px_1fr] gap-x-3 border-b border-slate-200 py-1 text-sm text-slate-800"
+        >
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+            {field.label}
+          </div>
+          <div className="min-w-0">
+            <div className="font-medium text-slate-900">{field.value}</div>
+            {field.caption ? (
+              <div className="text-xs text-slate-500">{field.caption}</div>
+            ) : null}
+          </div>
+        </div>
       ))}
     </div>
   );
@@ -43,36 +47,28 @@ export default function HrWorkflowFoundationPage({
       actions={actions}
       footerHints={footerHints}
     >
-      <ErpSectionCard
-        eyebrow="Policy Frame"
-        title={policyTitle}
-        tone="accent"
-      >
-        {renderFieldPreviews(policyFields)}
-      </ErpSectionCard>
-
-      <ErpSectionCard
-        eyebrow="Workspace"
-        title={workspaceTitle}
-      >
-        {renderFieldPreviews(workspaceFields)}
-      </ErpSectionCard>
-
-      <ErpSectionCard
-        eyebrow="Approval"
-        title={routingTitle}
-        tone="warning"
-      >
-        {renderFieldPreviews(routingFields)}
-      </ErpSectionCard>
-
-      <ErpSectionCard
-        eyebrow="History"
-        title={historyTitle}
-        tone="success"
-      >
-        {renderFieldPreviews(historyFields)}
-      </ErpSectionCard>
+      <div className="grid gap-[var(--erp-section-gap)]">
+        <section className="grid gap-2">
+          <ErpSelectionSection label="Policy Frame" />
+          <div className="text-sm font-semibold text-slate-900">{policyTitle}</div>
+          {renderDenseFieldRows(policyFields)}
+        </section>
+        <section className="grid gap-2">
+          <ErpSelectionSection label="Workspace" />
+          <div className="text-sm font-semibold text-slate-900">{workspaceTitle}</div>
+          {renderDenseFieldRows(workspaceFields)}
+        </section>
+        <section className="grid gap-2">
+          <ErpSelectionSection label="Approval" />
+          <div className="text-sm font-semibold text-slate-900">{routingTitle}</div>
+          {renderDenseFieldRows(routingFields)}
+        </section>
+        <section className="grid gap-2">
+          <ErpSelectionSection label="History" />
+          <div className="text-sm font-semibold text-slate-900">{historyTitle}</div>
+          {renderDenseFieldRows(historyFields)}
+        </section>
+      </div>
     </ErpScreenScaffold>
   );
 }

@@ -488,12 +488,7 @@ export default function SADepartmentMaster() {
             }),
         },
       ]}
-      footerHints={[
-        "ALT+R REFRESH",
-        "ALT+S COMPANY",
-        "CTRL+K COMMAND BAR",
-        "ENTER CREATE",
-      ]}
+      footerHints={["↑↓ Navigate", "Enter Select", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-3 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
         <div className="grid gap-3">

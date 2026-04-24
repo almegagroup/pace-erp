@@ -10,9 +10,7 @@ import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
-import {
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { applyQuickFilter, sortProjects } from "../../../shared/erpCollections.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
@@ -80,7 +78,8 @@ export default function SAProjectMaster() {
   const searchInputRef = useRef(null);
   const [projects, setProjects] = useState([]);
   const [projectName, setProjectName] = useState("");
-  const [searchQuery, _setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -155,7 +154,20 @@ export default function SAProjectMaster() {
     [projects, searchQuery]
   );
   const projectPagination = useErpPagination(filteredProjects, 10);
-  const { getRowProps } = useErpListNavigation(projectPagination.pageItems);
+  const selectedProject =
+    filteredProjects.find((row) => row.id === selectedProjectId) ??
+    projectPagination.pageItems[0] ??
+    null;
+
+  useEffect(() => {
+    if (!filteredProjects.some((row) => row.id === selectedProjectId)) {
+      setSelectedProjectId(filteredProjects[0]?.id ?? "");
+    }
+  }, [filteredProjects, selectedProjectId]);
+
+  const { getRowProps } = useErpListNavigation(projectPagination.pageItems, {
+    onActivate: (row) => setSelectedProjectId(row?.id ?? ""),
+  });
 
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
@@ -337,6 +349,7 @@ export default function SAProjectMaster() {
             ]
           : []),
       ]}
+      footerHints={["Tab Next Field", "Ctrl+S Save", "Arrow Keys Navigate", "Enter Select", "Esc Cancel", "Ctrl+K Command Bar"]}
       formEyebrow="Create"
       formTitle="Create a new project"
       formContent={
@@ -362,14 +375,20 @@ export default function SAProjectMaster() {
         </div>
       }
       bottomContent={
-        <ErpSectionCard
-          eyebrow="Project List"
-          title={
-            loading
+        <section className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Project Register</div>
+          <div className="text-sm font-semibold text-slate-900">
+            {loading
               ? "Loading project rows"
-              : `${filteredProjects.length} visible project${filteredProjects.length === 1 ? "" : "s"}`
-          }
-        >
+              : `${filteredProjects.length} visible project${filteredProjects.length === 1 ? "" : "s"}`}
+          </div>
+          <QuickFilterInput
+            label="Search Projects"
+            value={searchQuery}
+            onChange={setSearchQuery}
+            inputRef={searchInputRef}
+            placeholder="Search by code, name, state, or created time"
+          />
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
               Loading project master rows.
@@ -379,7 +398,7 @@ export default function SAProjectMaster() {
               No project matches the current filter.
             </div>
           ) : (
-            <div className="space-y-0 border border-slate-300">
+            <div className="grid gap-3">
               <ErpPaginationStrip
                 page={projectPagination.page}
                 setPage={projectPagination.setPage}
@@ -388,27 +407,46 @@ export default function SAProjectMaster() {
                 endIndex={projectPagination.endIndex}
                 totalItems={filteredProjects.length}
               />
-              {projectPagination.pageItems.map((project, index) => (
-                <button
-                  key={project.id}
-                  {...getRowProps(index)}
-                  type="button"
-                  className="w-full border-b border-slate-300 bg-white px-4 py-3 text-left text-sm text-slate-700 transition last:border-b-0 focus:bg-sky-50"
-                >
-                  <span className="block font-semibold text-slate-900">
-                    {project.project_code} - {project.project_name}
-                  </span>
-                  <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
-                    {project.status ?? "UNKNOWN"}
-                  </span>
-                  <span className="mt-1 block text-xs text-slate-500">
-                    Created {formatDateTime(project.created_at)}
-                  </span>
-                </button>
-              ))}
+              <ErpDenseGrid
+                columns={[
+                  {
+                    key: "project",
+                    label: "Project",
+                    render: (project) => (
+                      <div>
+                        <div className="font-semibold text-slate-900">
+                          {project.project_code} - {project.project_name}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Created {formatDateTime(project.created_at)}
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "status",
+                    label: "Status",
+                    render: (project) => project.status ?? "UNKNOWN",
+                  },
+                ]}
+                rows={projectPagination.pageItems}
+                rowKey={(project) => project.id}
+                getRowProps={(project, index) => ({
+                  ...getRowProps(index),
+                  onClick: () => setSelectedProjectId(project.id),
+                  className: project.id === selectedProjectId ? "bg-sky-50" : "",
+                })}
+                onRowActivate={(project) => setSelectedProjectId(project.id)}
+                maxHeight="none"
+              />
+              {selectedProject ? (
+                <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                  Selected: <span className="font-semibold text-slate-900">{selectedProject.project_code} - {selectedProject.project_name}</span>
+                </div>
+              ) : null}
             </div>
           )}
-        </ErpSectionCard>
+        </section>
       }
     />
   );

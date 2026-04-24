@@ -21,6 +21,7 @@ import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { applyQuickFilter, sortUsers } from "../../../shared/erpCollections.js";
 import {
   ERP_ROLE_LABELS,
@@ -363,7 +364,11 @@ export default function SAUserRoles() {
   );
 
   const rolePagination = useErpPagination(filteredUsers, 10);
-  const { getRowProps } = useErpListNavigation(rolePagination.pageItems);
+  const { getRowProps } = useErpListNavigation(rolePagination.pageItems, {
+    onActivate: (_row, index) => {
+      rowControlRefs.current[index]?.[0]?.focus();
+    },
+  });
 
   useErpScreenCommands([
     {
@@ -568,7 +573,7 @@ export default function SAUserRoles() {
         No ERP users match the current role governance filter.
       </div>
     ) : (
-      <div className="overflow-x-auto">
+      <>
         <ErpPaginationStrip
           page={rolePagination.page}
           setPage={rolePagination.setPage}
@@ -577,149 +582,101 @@ export default function SAUserRoles() {
           endIndex={rolePagination.endIndex}
           totalItems={filteredUsers.length}
         />
-        <table className="min-w-full border-collapse">
-          <thead>
-            <tr>
-              {visibleColumns.map((column) => (
-                <th
-                  key={column.key}
-                  className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-                >
-                  {column.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rolePagination.pageItems.map((user, index) => {
+        <ErpDenseGrid
+          columns={visibleColumns.map((column) => ({
+            key: column.key,
+            label: column.label,
+            render: (user, index) => {
               const isUpdating = updatingUserId === user.auth_user_id;
               const selectedRole = draftRoles[user.auth_user_id] ?? "";
 
-              return (
-                <tr
-                  key={user.auth_user_id}
-                  {...getRowProps(index)}
-                  className="border-b border-slate-200 bg-white align-top"
-                >
-                  {visibleColumns.map((column) => (
-                    <td key={column.key} className="px-3 py-3 text-sm text-slate-700">
-                      {column.key === "user_code" ? (
-                        <span className="font-semibold text-slate-900">
-                          {user.user_code ?? "Uncoded User"}
-                        </span>
-                      ) : null}
-                      {column.key === "name" ? formatIdentityName(user) : null}
-                      {column.key === "group" ? (
-                        <span className="text-xs uppercase tracking-[0.14em] text-slate-600">
-                          {formatGroupLabel(user)}
-                        </span>
-                      ) : null}
-                      {column.key === "company" ? (
-                        <span className="text-xs uppercase tracking-[0.14em] text-slate-600">
-                          {formatCompanyLabel(user)}
-                        </span>
-                      ) : null}
-                      {column.key === "designation"
-                        ? user.designation_hint ?? "Designation Not Captured"
-                        : null}
-                      {column.key === "auth" ? `AUTH ${shortId(user.auth_user_id)}` : null}
-                      {column.key === "current_role" ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getRoleTone(user.role_code)}`}
-                          >
-                            {user.role_code ?? "UNASSIGNED"}
-                          </span>
-                          {typeof user.role_rank === "number" ? (
-                            <span className="text-xs text-slate-500">
-                              Rank {user.role_rank}
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {column.key === "next_role" ? (
-                        <select
-                          ref={(element) => {
-                            rowControlRefs.current[index] ??= [];
-                            rowControlRefs.current[index][0] = element;
-                          }}
-                          value={selectedRole}
-                          onChange={(event) =>
-                            setDraftRoles((current) => ({
-                              ...current,
-                              [user.auth_user_id]: event.target.value,
-                            }))
-                          }
-                          onKeyDown={(event) => {
-                            if (
-                              event.key === "ArrowLeft" ||
-                              event.key === "ArrowRight" ||
-                              event.key === "Home" ||
-                              event.key === "End"
-                            ) {
-                              handleGridNavigation(event, {
-                                rowIndex: index,
-                                columnIndex: 0,
-                                gridRefs: rowControlRefs.current,
-                              });
-                            }
-                          }}
-                          className="min-w-[190px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-700 outline-none"
-                        >
-                          <option value="">Select role</option>
-                          {ERP_ROLE_OPTIONS.map((role) => (
-                            <option key={role.code} value={role.code}>
-                              {role.label}
-                            </option>
-                          ))}
-                        </select>
-                      ) : null}
-                      {column.key === "state" ? (
-                        <span
-                          className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}
-                        >
-                          {user.state ?? "UNKNOWN"}
-                        </span>
-                      ) : null}
-                      {column.key === "action" ? (
-                        <button
-                          ref={(element) => {
-                            rowControlRefs.current[index] ??= [];
-                            rowControlRefs.current[index][1] = element;
-                          }}
-                          type="button"
-                          disabled={
-                            isUpdating ||
-                            !selectedRole ||
-                            selectedRole === user.role_code
-                          }
-                          onClick={() => void handleApplyRole(user)}
-                          onKeyDown={(event) =>
-                            handleGridNavigation(event, {
-                              rowIndex: index,
-                              columnIndex: 1,
-                              gridRefs: rowControlRefs.current,
-                            })
-                          }
-                          className={`border border-sky-300 bg-sky-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 ${
-                            isUpdating ||
-                            !selectedRole ||
-                            selectedRole === user.role_code
-                              ? "cursor-not-allowed opacity-60"
-                              : ""
-                          }`}
-                        >
-                          {isUpdating ? "Updating..." : "Apply Role"}
-                        </button>
-                      ) : null}
-                    </td>
-                  ))}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+              if (column.key === "user_code") {
+                return <span className="font-semibold">{user.user_code ?? "Uncoded User"}</span>;
+              }
+              if (column.key === "name") return formatIdentityName(user);
+              if (column.key === "group") {
+                return <span className="text-[10px] uppercase tracking-[0.14em] text-slate-600">{formatGroupLabel(user)}</span>;
+              }
+              if (column.key === "company") {
+                return <span className="text-[10px] uppercase tracking-[0.14em] text-slate-600">{formatCompanyLabel(user)}</span>;
+              }
+              if (column.key === "designation") return user.designation_hint ?? "Designation Not Captured";
+              if (column.key === "auth") return `AUTH ${shortId(user.auth_user_id)}`;
+              if (column.key === "current_role") {
+                return (
+                  <div className="flex items-center gap-1">
+                    <span className={`inline-flex border px-2 py-[1px] text-[10px] font-semibold uppercase tracking-[0.14em] ${getRoleTone(user.role_code)}`}>
+                      {user.role_code ?? "UNASSIGNED"}
+                    </span>
+                    {typeof user.role_rank === "number" ? (
+                      <span className="text-[10px] text-slate-500">Rank {user.role_rank}</span>
+                    ) : null}
+                  </div>
+                );
+              }
+              if (column.key === "next_role") {
+                return (
+                  <select
+                    ref={(element) => {
+                      rowControlRefs.current[index] ??= [];
+                      rowControlRefs.current[index][0] = element;
+                    }}
+                    value={selectedRole}
+                    onChange={(event) =>
+                      setDraftRoles((current) => ({
+                        ...current,
+                        [user.auth_user_id]: event.target.value,
+                      }))
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End") {
+                        handleGridNavigation(event, { rowIndex: index, columnIndex: 0, gridRefs: rowControlRefs.current });
+                      }
+                    }}
+                    className="min-w-[160px] border border-slate-300 bg-[#fffef7] px-2 py-[2px] text-xs text-slate-700 outline-none"
+                  >
+                    <option value="">Select role</option>
+                    {ERP_ROLE_OPTIONS.map((role) => (
+                      <option key={role.code} value={role.code}>{role.label}</option>
+                    ))}
+                  </select>
+                );
+              }
+              if (column.key === "state") {
+                return (
+                  <span className={`inline-flex border px-2 py-[1px] text-[10px] font-semibold uppercase tracking-[0.14em] ${getStateTone(user.state)}`}>
+                    {user.state ?? "UNKNOWN"}
+                  </span>
+                );
+              }
+              if (column.key === "action") {
+                return (
+                  <button
+                    ref={(element) => {
+                      rowControlRefs.current[index] ??= [];
+                      rowControlRefs.current[index][1] = element;
+                    }}
+                    type="button"
+                    disabled={isUpdating || !selectedRole || selectedRole === user.role_code}
+                    onClick={() => void handleApplyRole(user)}
+                    onKeyDown={(event) =>
+                      handleGridNavigation(event, { rowIndex: index, columnIndex: 1, gridRefs: rowControlRefs.current })
+                    }
+                    className={`border border-sky-300 bg-sky-50 px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 ${isUpdating || !selectedRole || selectedRole === user.role_code ? "cursor-not-allowed opacity-60" : ""}`}
+                  >
+                    {isUpdating ? "Updating..." : "Apply Role"}
+                  </button>
+                );
+              }
+              return null;
+            },
+          }))}
+          rows={rolePagination.pageItems}
+          rowKey={(user) => user.auth_user_id}
+          getRowProps={(_user, index) => getRowProps(index)}
+          emptyMessage="No ERP users match the current role governance filter."
+        />
+      </>
     ),
   };
 
@@ -740,6 +697,7 @@ export default function SAUserRoles() {
               ]
             : []
         }
+        footerHints={["Arrow Keys Navigate", "Enter Edit", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
         filterSection={filterSection}
         listSection={listSection}
       />
@@ -756,3 +714,5 @@ export default function SAUserRoles() {
     </>
   );
 }
+
+

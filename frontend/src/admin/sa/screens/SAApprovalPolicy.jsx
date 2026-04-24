@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
@@ -141,7 +142,9 @@ export default function SAApprovalPolicy() {
     filteredResources[0] ??
     null;
 
-  const { getRowProps } = useErpListNavigation(filteredResources);
+  const { getRowProps } = useErpListNavigation(filteredResources, {
+    onActivate: (row) => setSelectedResourceCode(row?.resource_code ?? ""),
+  });
 
   const selectedPolicy =
     selectedResource?.policies?.find((row) => row.action_code === actionCode) ?? null;
@@ -274,6 +277,7 @@ export default function SAApprovalPolicy() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
+      footerHints={["Arrow Keys Navigate", "Enter Select", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={{
         eyebrow: "Resource Search",
         title: "Filter business resources",
@@ -292,6 +296,7 @@ export default function SAApprovalPolicy() {
         title: loading
           ? "Loading resources"
           : `${filteredResources.length} visible resource${filteredResources.length === 1 ? "" : "s"}`,
+        count: filteredResources.length,
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading resource approval workspace.
@@ -301,39 +306,169 @@ export default function SAApprovalPolicy() {
             No mapped business resource matches the current filter.
           </div>
         ) : (
-          <div className="grid gap-3">
-            {filteredResources.map((row, index) => (
-              <button
-                key={row.resource_code}
-                {...getRowProps(index)}
-                type="button"
-                onClick={() => setSelectedResourceCode(row.resource_code)}
-                className={`border px-4 py-4 text-left ${
-                  row.resource_code === selectedResourceCode
-                    ? "border-sky-400 bg-sky-50"
-                    : "border-slate-300 bg-white"
-                }`}
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
+          <ErpDenseGrid
+            columns={[
+              {
+                key: "resource",
+                label: "Resource",
+                render: (row) => (
                   <div>
-                    <div className="text-sm font-semibold text-slate-900">{row.title}</div>
-                    <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                    <div className="font-semibold text-slate-900">{row.title}</div>
+                    <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
                       {row.resource_code}
                     </div>
-                    <div className="mt-2 text-xs text-slate-600">
-                      {row.project_code} | {row.module_code} | {row.route_path ?? "No route"}
+                    <div className="mt-1 text-xs text-slate-500">
+                      {[row.project_code, row.module_code, row.route_path ?? "No route"]
+                        .filter(Boolean)
+                        .join(" | ")}
                     </div>
                   </div>
-                  <div className="text-right text-xs text-slate-500">
-                    <div>{row.policies?.length ?? 0} policy row(s)</div>
-                    <div>{row.available_actions?.join(", ")}</div>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
+                ),
+              },
+              {
+                key: "policies",
+                label: "Policy Rows",
+                align: "center",
+                render: (row) => row.policies?.length ?? 0,
+              },
+              {
+                key: "actions",
+                label: "Actions",
+                render: (row) => row.available_actions?.join(", ") ?? "No action",
+              },
+            ]}
+            rows={filteredResources}
+            rowKey={(row) => row.resource_code}
+            getRowProps={(row, index) => ({
+              ...getRowProps(index),
+              onClick: () => setSelectedResourceCode(row.resource_code),
+              className: row.resource_code === selectedResourceCode ? "bg-sky-50" : "",
+            })}
+            onRowActivate={(row) => setSelectedResourceCode(row.resource_code)}
+            maxHeight="none"
+          />
         ),
       }}
+      bottomSection={
+        <section className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            Selected Resource Policy
+          </div>
+          <div className="text-sm font-semibold text-slate-900">
+            {selectedResource?.title ?? "Choose one business resource"}
+          </div>
+          {selectedResource ? (
+            <div className="grid gap-4 border border-slate-300 bg-white px-4 py-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="border border-slate-300 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                  <div className="font-semibold text-slate-900">{selectedResource.resource_code}</div>
+                  <div className="mt-1">
+                    {[selectedResource.project_code, selectedResource.module_code, selectedResource.route_path]
+                      .filter(Boolean)
+                      .join(" | ")}
+                  </div>
+                </div>
+                <div className="border border-slate-300 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                  <div className="font-semibold text-slate-900">Saved policy summary</div>
+                  <div className="mt-1">
+                    {selectedPolicy
+                      ? `${selectedPolicy.action_code} | ${selectedPolicy.approval_required ? selectedPolicy.approval_type ?? "ANYONE" : "No approval"}`
+                      : "No saved policy for the selected action."}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Action
+                  </span>
+                  <select
+                    value={actionCode}
+                    onChange={(event) => setActionCode(event.target.value)}
+                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+                  >
+                    {(selectedResource.available_actions ?? []).map((code) => (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="grid gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Approval Required
+                  </span>
+                  <span className="flex items-center gap-3 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
+                    <input
+                      type="checkbox"
+                      checked={approvalRequired}
+                      onChange={(event) => setApprovalRequired(event.target.checked)}
+                      className="h-4 w-4"
+                    />
+                    Approval gate active for the selected action
+                  </span>
+                </label>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="grid gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Approval Type
+                  </span>
+                  <select
+                    value={approvalType}
+                    disabled={!approvalRequired}
+                    onChange={(event) => setApprovalType(event.target.value)}
+                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
+                  >
+                    {APPROVAL_TYPE_OPTIONS.map((code) => (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="grid gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Min Approvers
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="3"
+                    value={minApprovers}
+                    disabled={!approvalRequired}
+                    onChange={(event) => setMinApprovers(event.target.value)}
+                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
+                  />
+                </label>
+
+                <label className="grid gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Max Approvers
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="3"
+                    value={maxApprovers}
+                    disabled={!approvalRequired}
+                    onChange={(event) => setMaxApprovers(event.target.value)}
+                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
+                  />
+                </label>
+              </div>
+            </div>
+          ) : (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+              Select one business resource row first, then configure its exact action policy.
+            </div>
+          )}
+        </section>
+      }
     />
   );
 }

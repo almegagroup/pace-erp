@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import ErpScreenScaffold, {
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import {
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
@@ -277,49 +276,46 @@ export default function SAHome() {
             ]
           : []
       }
+      footerHints={["CTRL+K COMMAND BAR", "ALT+R REFRESH"]}
     >
-      <ErpSectionCard
-        eyebrow="Setup Flow"
-        title="Complete setup in the right order"
-      >
-        <div className="grid gap-6">
+      <div className="grid gap-6">
+        <div>
+          <ErpSelectionSection label="Setup Flow" />
           {launchSections.map((section) => (
             <div key={section.key} className="grid gap-2">
-              <div className="border border-slate-300 bg-[#eef4fb] px-3 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+              <div className="border-b border-slate-300 px-1 py-2">
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-700">
                   {section.title}
                 </p>
-                <p className="mt-1 text-sm text-slate-600">
+                <p className="mt-1 text-xs text-slate-500">
                   {section.description || "Open the next published workspace from this section."}
                 </p>
               </div>
-                <div className="grid gap-2">
-                  {section.pages.map((action) => {
-                    const flatIndex = launchIndexByMenuCode.get(action.menuCode) ?? 0;
+              <div className="grid gap-2">
+                {section.pages.map((action) => {
+                  const flatIndex = launchIndexByMenuCode.get(action.menuCode) ?? 0;
 
-                    return (
-                      <HomeActionCard
-                        key={`${section.key}-${action.title}`}
-                        action={action}
-                        index={flatIndex}
-                        refs={cardRefs}
-                        registerRef={(element) => {
-                          cardRefs.current[flatIndex] = element;
-                        }}
-                      />
-                    );
-                  })}
-                </div>
+                  return (
+                    <HomeActionCard
+                      key={`${section.key}-${action.title}`}
+                      action={action}
+                      index={flatIndex}
+                      refs={cardRefs}
+                      registerRef={(element) => {
+                        cardRefs.current[flatIndex] = element;
+                      }}
+                    />
+                  );
+                })}
               </div>
-            ))}
+            </div>
+          ))}
         </div>
-      </ErpSectionCard>
+      </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <ErpSectionCard
-          eyebrow="Working Rule"
-          title="How SA Should Move"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Working Rule" />
           <div className="grid gap-2">
             <div className="grid grid-cols-[140px_minmax(0,1fr)] border border-slate-200 bg-white px-3 py-3">
               <p className="text-sm font-semibold text-slate-900">Step 1</p>
@@ -340,12 +336,10 @@ export default function SAHome() {
               </p>
             </div>
           </div>
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          eyebrow="Readiness"
-          title="Current runtime health"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Readiness" />
           <div className="grid gap-2">
             {[
               `System health: ${deriveSnapshotHealth(systemHealth)}`,
@@ -361,7 +355,7 @@ export default function SAHome() {
               </div>
             ))}
           </div>
-        </ErpSectionCard>
+        </div>
       </div>
     </ErpScreenScaffold>
   );

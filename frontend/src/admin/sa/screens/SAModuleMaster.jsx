@@ -10,9 +10,7 @@ import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
-import {
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpPagination } from "../../../hooks/useErpPagination.js";
 
@@ -368,7 +366,9 @@ export default function SAModuleMaster() {
   }, [filteredModules, selectedModuleId]);
 
   const modulePagination = useErpPagination(filteredModules, 10);
-  const { getRowProps } = useErpListNavigation(modulePagination.pageItems);
+  const { getRowProps } = useErpListNavigation(modulePagination.pageItems, {
+    onActivate: (row) => setSelectedModuleId(row?.module_id ?? ""),
+  });
 
   useErpDenseFormNavigation(formContainerRef, {
     disabled: saving,
@@ -566,6 +566,7 @@ export default function SAModuleMaster() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
+      footerHints={["Tab Next Field", "Ctrl+S Save", "Arrow Keys Navigate", "Enter Select", "Esc Cancel", "Ctrl+K Command Bar"]}
       formEyebrow={editorMode === "edit" ? "Edit" : "Create"}
       formTitle={editorMode === "edit" ? "Edit selected module" : "Create a new project module"}
       formContent={
@@ -703,14 +704,13 @@ export default function SAModuleMaster() {
         </div>
       }
       bottomContent={
-        <ErpSectionCard
-          eyebrow="Module Inventory"
-          title={
-            loading
+        <section className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Module Inventory</div>
+          <div className="text-sm font-semibold text-slate-900">
+            {loading
               ? "Loading module rows"
-              : `${filteredModules.length} visible module${filteredModules.length === 1 ? "" : "s"}`
-          }
-        >
+              : `${filteredModules.length} visible module${filteredModules.length === 1 ? "" : "s"}`}
+          </div>
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
               Loading module rows.
@@ -720,7 +720,7 @@ export default function SAModuleMaster() {
               No module matches the current filter.
             </div>
           ) : (
-            <div className="space-y-0 border border-slate-300">
+            <div className="grid gap-3">
               <ErpPaginationStrip
                 page={modulePagination.page}
                 setPage={modulePagination.setPage}
@@ -729,35 +729,46 @@ export default function SAModuleMaster() {
                 endIndex={modulePagination.endIndex}
                 totalItems={filteredModules.length}
               />
-              {modulePagination.pageItems.map((row, index) => (
-                <button
-                  key={row.module_id}
-                  {...getRowProps(index)}
-                  type="button"
-                  onClick={() => setSelectedModuleId(row.module_id)}
-                  className={`w-full border-b border-slate-300 px-4 py-3 text-left text-sm transition last:border-b-0 ${
-                    row.module_id === selectedModuleId
-                      ? "bg-sky-50 text-slate-900"
-                      : "bg-white text-slate-700"
-                  }`}
-                >
-                  <span className="block font-semibold">
-                    {row.module_code} - {row.module_name}
-                  </span>
-                  <span className="mt-1 block text-xs uppercase tracking-[0.14em] text-slate-500">
-                    {row.project_code} | {row.is_active ? "ACTIVE" : "INACTIVE"}
-                  </span>
-                  <span className="mt-1 block text-xs text-slate-500">
-                    {formatApprovalCaption(row)} | {row.mapped_company_count ?? 0} company mapped
-                  </span>
-                  <span className="mt-2 block text-[10px] uppercase tracking-[0.14em] text-cyan-700">
-                    Open the selected preview pane to edit this module.
-                  </span>
-                </button>
-              ))}
+              <ErpDenseGrid
+                columns={[
+                  {
+                    key: "module",
+                    label: "Module",
+                    render: (row) => (
+                      <div>
+                        <div className="font-semibold text-slate-900">
+                          {row.module_code} - {row.module_name}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {formatApprovalCaption(row)} | {row.mapped_company_count ?? 0} company mapped
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "project",
+                    label: "Project",
+                    render: (row) => row.project_code,
+                  },
+                  {
+                    key: "state",
+                    label: "State",
+                    render: (row) => (row.is_active ? "ACTIVE" : "INACTIVE"),
+                  },
+                ]}
+                rows={modulePagination.pageItems}
+                rowKey={(row) => row.module_id}
+                getRowProps={(row, index) => ({
+                  ...getRowProps(index),
+                  onClick: () => setSelectedModuleId(row.module_id),
+                  className: row.module_id === selectedModuleId ? "bg-sky-50" : "",
+                })}
+                onRowActivate={(row) => setSelectedModuleId(row.module_id)}
+                maxHeight="none"
+              />
             </div>
           )}
-        </ErpSectionCard>
+        </section>
       }
     />
   );

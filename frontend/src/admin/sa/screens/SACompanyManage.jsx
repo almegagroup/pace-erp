@@ -18,9 +18,9 @@ import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
-import { formatCompanyAddress } from "../../../shared/companyDisplay.js";
 
 async function readJsonSafe(response) {
   try {
@@ -99,6 +99,7 @@ export default function SACompanyManage() {
   const navigate = useNavigate();
   const actionRefs = useRef([]);
   const searchRef = useRef(null);
+  const rowActionRefs = useRef([]);
   const [companies, setCompanies] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -141,7 +142,11 @@ export default function SACompanyManage() {
     return companies.filter((row) => companySearchValue(row).includes(needle));
   }, [companies, search]);
 
-  const { getRowProps } = useErpListNavigation(filteredCompanies);
+  const { getRowProps } = useErpListNavigation(filteredCompanies, {
+    onActivate: (_row, index) => {
+      rowActionRefs.current[index]?.focus();
+    },
+  });
 
   useErpScreenHotkeys({
     refresh: {
@@ -320,6 +325,7 @@ export default function SACompanyManage() {
           ...(error ? [{ key: "error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
         ]}
+        footerHints={["Arrow Keys Navigate", "Enter Focus Action", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
         filterSection={{
           eyebrow: "Registry Filter",
           title: "Search company inventory",
@@ -354,90 +360,71 @@ export default function SACompanyManage() {
               No company matched the current search.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="erp-grid-table min-w-full">
-                <thead>
-                  <tr>
-                    {visibleColumns.map((column) => (
-                      <th
-                        key={column.key}
-                        className="border-b border-slate-300 bg-[#e8eef4] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-                      >
-                        {column.label}
-                      </th>
-                    ))}
-                    <th className="border-b border-slate-300 bg-[#e8eef4] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      Action
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredCompanies.map((row, index) => {
+            <ErpDenseGrid
+              columns={[
+                ...visibleColumns.map((column) => ({
+                  key: column.key,
+                  label: column.label,
+                  render: (row) => {
+                    const isActive = normalize(row.status).toUpperCase() === "ACTIVE";
+                    if (column.key === "company") {
+                      return (
+                        <div>
+                          <p className="font-medium leading-tight">{row.company_code}</p>
+                          <p className="text-[10px] text-slate-500">{row.company_name}</p>
+                        </div>
+                      );
+                    }
+                    if (column.key === "gst") return row.gst_number || "Not linked";
+                    if (column.key === "group") {
+                      return row.group_code
+                        ? `${row.group_code}${row.group_name ? ` | ${row.group_name}` : ""}`
+                        : "Not mapped";
+                    }
+                    if (column.key === "status") {
+                      return (
+                        <span className={`inline-flex border px-2 py-[1px] text-[10px] font-semibold uppercase tracking-[0.12em] ${isActive ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-amber-300 bg-amber-50 text-amber-700"}`}>
+                          {row.status || "Unknown"}
+                        </span>
+                      );
+                    }
+                    return null;
+                  },
+                })),
+                {
+                  key: "action",
+                  label: "Action",
+                  render: (row, index) => {
                     const isSaving = savingCompanyId === row.id;
                     const isActive = normalize(row.status).toUpperCase() === "ACTIVE";
-
                     return (
-                      <tr
-                        key={row.id}
-                        {...getRowProps(index)}
-                        className="border-b border-slate-200"
+                      <button
+                        ref={(element) => {
+                          rowActionRefs.current[index] = element;
+                        }}
+                        type="button"
+                        disabled={isSaving}
+                        onClick={() => void handleStateChange(row, isActive ? "INACTIVE" : "ACTIVE")}
+                        onKeyDown={(event) =>
+                          handleLinearNavigation(event, {
+                            index,
+                            refs: rowActionRefs.current,
+                            orientation: "vertical",
+                          })
+                        }
+                        className={`border px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.12em] ${isActive ? "border-amber-300 bg-amber-50 text-amber-700" : "border-emerald-300 bg-emerald-50 text-emerald-700"} disabled:cursor-not-allowed disabled:opacity-60`}
                       >
-                        {visibleColumns.map((column) => (
-                          <td key={column.key} className="px-3 py-2 text-sm text-slate-700">
-                            {column.key === "company" ? (
-                              <div>
-                                <div className="font-semibold text-slate-900">
-                                  {row.company_code}
-                                </div>
-                                <div className="text-xs text-slate-500">
-                                  {row.company_name}
-                                </div>
-                                <div className="text-xs text-slate-500">
-                                  {formatCompanyAddress(row)}
-                                </div>
-                              </div>
-                            ) : null}
-                            {column.key === "gst" ? row.gst_number || "Not linked" : null}
-                            {column.key === "group"
-                              ? row.group_code
-                                ? `${row.group_code}${row.group_name ? ` | ${row.group_name}` : ""}`
-                                : "Not mapped"
-                              : null}
-                            {column.key === "status" ? (
-                              <span
-                                className={`inline-flex min-w-[92px] justify-center border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${
-                                  isActive
-                                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                                    : "border-amber-300 bg-amber-50 text-amber-700"
-                                }`}
-                              >
-                                {row.status || "Unknown"}
-                              </span>
-                            ) : null}
-                          </td>
-                        ))}
-                        <td className="px-3 py-2 text-sm text-slate-700">
-                          <button
-                            type="button"
-                            disabled={isSaving}
-                            onClick={() =>
-                              void handleStateChange(row, isActive ? "INACTIVE" : "ACTIVE")
-                            }
-                            className={`border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] ${
-                              isActive
-                                ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
-                                : "border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                            } disabled:cursor-not-allowed disabled:opacity-60`}
-                          >
-                            {isSaving ? "Saving..." : isActive ? "Disable" : "Enable"}
-                          </button>
-                        </td>
-                      </tr>
+                        {isSaving ? "Saving..." : isActive ? "Disable" : "Enable"}
+                      </button>
                     );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                  },
+                },
+              ]}
+              rows={filteredCompanies}
+              rowKey={(row) => row.id}
+              getRowProps={(_row, index) => getRowProps(index)}
+              emptyMessage="No company matched the current search."
+            />
           ),
         }}
       />
@@ -454,3 +441,5 @@ export default function SACompanyManage() {
     </>
   );
 }
+
+

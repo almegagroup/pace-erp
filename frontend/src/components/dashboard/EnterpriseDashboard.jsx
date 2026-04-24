@@ -66,6 +66,7 @@ export default function EnterpriseDashboard({
   actions = [],
   topActions = [],
   notices = [],
+  footerHints = [],
   workspaceTitle = "Operator Action Queue",
   noteTitle = "Keyboard Grammar",
   noteItems = [],
@@ -90,6 +91,7 @@ export default function EnterpriseDashboard({
       actions={topActions}
       notices={notices}
       metrics={metrics}
+      footerHints={footerHints}
     >
       <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
         <ErpSectionCard

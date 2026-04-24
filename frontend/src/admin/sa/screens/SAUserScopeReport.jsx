@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
-import ErpStickyDataTable from "../../../components/data/ErpStickyDataTable.jsx";
-import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { downloadCsvFile } from "../../../shared/downloadTabularFile.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpRegisterHeader from "../../../components/data/ErpRegisterHeader.jsx";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 
 const REPORT_COLUMNS = Object.freeze([
   { key: "user_code", label: "User Code" },
@@ -163,6 +162,19 @@ export default function SAUserScopeReport() {
     () => REPORT_COLUMNS.filter((column) => visibleColumnKeys.includes(column.key)),
     [visibleColumnKeys],
   );
+  const denseColumns = useMemo(
+    () =>
+      visibleColumns.map((column) => ({
+        key: column.key,
+        label: column.label,
+        render: (row) =>
+          column.key === "created_at"
+            ? formatDateTime(row[column.key])
+            : row[column.key] || "-",
+      })),
+    [visibleColumns]
+  );
+  const { getRowProps } = useErpListNavigation(filteredRows);
 
   const selectedCompanyLabel = companies.find((row) => row.id === companyId)
     ? `${companies.find((row) => row.id === companyId).company_code} | ${companies.find((row) => row.id === companyId).company_name}`
@@ -213,6 +225,7 @@ export default function SAUserScopeReport() {
   return (
     <ErpScreenScaffold
       title="SA User Scope Report"
+      footerHints={["ALT+R REFRESH", "CTRL+S DOWNLOAD", "ALT+SHIFT+F SEARCH", "CTRL+K COMMAND BAR"]}
       actions={[
         {
           key: "refresh",
@@ -245,16 +258,21 @@ export default function SAUserScopeReport() {
     >
       <div className="grid gap-4">
         <div className="grid gap-3 md:grid-cols-4">
-          <ErpFieldPreview label="Selected Company" value={selectedCompanyLabel} />
-          <ErpFieldPreview
-            label="Selected Company Address"
-            value={formatCompanyAddress(companies.find((row) => row.id === companyId) ?? null)}
-          />
-          <ErpFieldPreview label="Report Rows" value={String(filteredRows.length)} />
-          <ErpFieldPreview label="Visible Columns" value={String(visibleColumns.length)} />
+          {[
+            ["Selected Company", selectedCompanyLabel],
+            ["Selected Company Address", formatCompanyAddress(companies.find((row) => row.id === companyId) ?? null)],
+            ["Report Rows", String(filteredRows.length)],
+            ["Visible Columns", String(visibleColumns.length)],
+          ].map(([label, value]) => (
+            <div key={label} className="border border-slate-300 bg-white px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">{value}</p>
+            </div>
+          ))}
         </div>
 
-        <ErpSectionCard title="Report Filters">
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Report Filters" />
           <div className="grid gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
             <label className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -277,24 +295,19 @@ export default function SAUserScopeReport() {
                 ))}
               </select>
             </label>
-            <QuickFilterInput
-              label="Search Loaded Rows"
-              value={searchQuery}
-              onChange={setSearchQuery}
-              inputRef={searchRef}
-              placeholder="Search user, role, company, department, inherited project, override project, or work area"
-            />
+            <div className="border border-slate-300 bg-white px-3 py-3 text-sm text-slate-600">
+              Inline search now lives in the register header so the report stays in one working surface.
+            </div>
           </div>
           {error ? (
             <div className="mt-3 border border-rose-300 bg-rose-50 px-3 py-3 text-sm text-rose-700">
               {error}
             </div>
           ) : null}
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          title="Visible Columns"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Visible Columns" />
           <div className="grid gap-2 md:grid-cols-3">
             {REPORT_COLUMNS.map((column) => {
               const checked = visibleColumnKeys.includes(column.key);
@@ -318,11 +331,17 @@ export default function SAUserScopeReport() {
               );
             })}
           </div>
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          title={loading ? "Loading user scope report" : `${filteredRows.length} user row${filteredRows.length === 1 ? "" : "s"}`}
-        >
+        <div className="grid gap-3">
+          <ErpRegisterHeader
+            title={loading ? "Loading user scope report" : "User scope register"}
+            count={filteredRows.length}
+            filterValue={searchQuery}
+            onFilterChange={setSearchQuery}
+            filterRef={searchRef}
+            filterPlaceholder="Search user, role, company, department, inherited project, override project, or work area"
+          />
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
               Loading report.
@@ -332,18 +351,21 @@ export default function SAUserScopeReport() {
               No report row matches the current filter.
             </div>
           ) : (
-            <ErpStickyDataTable
-              columns={visibleColumns}
+            <ErpDenseGrid
+              columns={denseColumns}
               rows={filteredRows}
               rowKey={(row, index) => `${row.auth_user_id}-${index}`}
-              renderCell={(row, column) =>
-                column.key === "created_at"
-                  ? formatDateTime(row[column.key])
-                  : row[column.key] || "-"
-              }
+              getRowProps={(_row, index) => getRowProps(index)}
+              summaryRow={{
+                label: "Summary",
+                values: {
+                  user_name: `${filteredRows.length} user rows`,
+                  work_area_codes: `${visibleColumns.length} visible columns`,
+                },
+              }}
             />
           )}
-        </ErpSectionCard>
+        </div>
       </div>
     </ErpScreenScaffold>
   );

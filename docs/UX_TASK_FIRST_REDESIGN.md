@@ -460,7 +460,7 @@ Find all files importing `DrawerBase`. Review each:
 
 ---
 
-### Phase UX-8 � Drill-Through Navigation Foundation
+### Phase UX-8 � Drill-Through Navigation Foundation
 **Status:** ✅ Complete  
 **Scope:** `screenStackEngine.js` + navigation utilities  
 **Effort:** High — architectural addition  
@@ -510,6 +510,9 @@ Every screen must have complete keyboard coverage per Rule 13.
 - HR workflow surfaces now register route-level save, refresh, search-focus, and primary-focus hotkeys through `useErpScreenHotkeys`
 - HR action buttons now expose the same shortcut language shown in footer hints (`Ctrl+S / F2`, `Alt+R / F4`)
 - No dead shortcut surfaces remain on the current HR workflow and register/report pages
+- All 24 SA screens + SACompanyCreate now have `footerHints` (list, report, form, complex — type-matched hints)
+- UserDashboardHome, GAHome — footerHints added
+- `EnterpriseDashboard` component updated to accept and pass through `footerHints` prop
 
 ---
 
@@ -764,4 +767,6 @@ A screen is **done** when all of the following are true:
 | 2026-04-23 | UX-9 | `ErpEntryFormTemplate.jsx`, `ErpMasterListTemplate.jsx`, `ErpApprovalReviewTemplate.jsx`, `ErpReportFilterTemplate.jsx`, `HrWorkflowPages.jsx`, `HrRegisterReports.jsx` | Standardized footer hints and route-level hotkeys so save/refresh/search/primary focus are documented and wired on current HR workflow surfaces | ✅ |
 | 2026-04-23 | UX-10 | `TransactionCompanySelector.jsx`, `hrApi.js`, `shared.ts`, `leave.handlers.ts`, `out_work.handlers.ts`, `HrWorkflowPages.jsx` | Added reusable transaction-level company selector, explicit company-aware HR API calls, and validated backend company resolution for leave/out-work transactions and destination creation | ✅ |
 | 2026-04-23 | UX-11 | `HrRegisterReports.jsx` | Removed documentation-style `ErpFieldPreview` cards from report criteria and kept only real result-state previews | ✅ |
+| 2026-04-23 | UX-5 | `ErpStickyDataTable.jsx`, `HrRegisterReports.jsx` | Added `getRowProps` prop to ErpStickyDataTable; wired `useErpListNavigation(pagedRows)` in RegisterResultsPage — Arrow/Space/Enter now works on HR register report rows | ✅ |
+| 2026-04-23 | UX-9 | All 24 SA screens + SACompanyCreate, UserDashboardHome, GAHome, EnterpriseDashboard | Added `footerHints` to every remaining screen; `EnterpriseDashboard` updated to accept and pass through `footerHints` prop | ✅ |
 

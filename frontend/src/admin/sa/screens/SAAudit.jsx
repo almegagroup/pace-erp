@@ -16,6 +16,7 @@ import ErpCompactFilterSelect from "../../../components/inputs/ErpCompactFilterS
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -72,6 +73,7 @@ export default function SAAudit() {
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedAuditRow, setSelectedAuditRow] = useState(null);
   const actionBarRefs = useRef([]);
   const filterRefs = useRef([]);
   const searchInputRef = useRef(null);
@@ -165,7 +167,11 @@ export default function SAAudit() {
     [searchQuery, statusFilteredRows]
   );
   const auditPagination = useErpPagination(filteredRows, 10);
-  const { getRowProps } = useErpListNavigation(auditPagination.pageItems);
+  const { getRowProps } = useErpListNavigation(auditPagination.pageItems, {
+    onActivate: (row) => {
+      setSelectedAuditRow(row ?? null);
+    },
+  });
 
   useErpScreenCommands([
     {
@@ -283,7 +289,7 @@ export default function SAAudit() {
             : "No audit rows match the selected filter right now."}
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        <>
           <ErpPaginationStrip
             page={auditPagination.page}
             setPage={auditPagination.setPage}
@@ -292,97 +298,74 @@ export default function SAAudit() {
             endIndex={auditPagination.endIndex}
             totalItems={filteredRows.length}
           />
-          <table className="min-w-full border-collapse">
-            <thead>
-              <tr>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Action
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Actor
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Resource
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Company
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Request
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Performed
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Status
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {auditPagination.pageItems.map((row, index) => (
-                <tr
-                  key={row.audit_id}
-                  {...getRowProps(index)}
-                  className="border-b border-slate-200 bg-white"
-                >
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {row.action_code ?? "N/A"}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {row.resource_type ?? "RESOURCE_UNKNOWN"}
-                      </p>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {shortId(row.admin_user_id)}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {row.admin_user_id ?? "N/A"}
-                      </p>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {row.resource_type ?? "N/A"}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {row.resource_id ?? "N/A"}
-                      </p>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    {row.company_id ? shortId(row.company_id) : "Global"}
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {shortId(row.request_id)}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {row.request_id ?? "N/A"}
-                      </p>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    {formatDateTime(row.performed_at)}
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <span
-                      className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStatusTone(row.status)}`}
-                    >
-                      {row.status ?? "UNKNOWN"}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+          <ErpDenseGrid
+            columns={[
+              {
+                key: "action",
+                label: "Action",
+                render: (row) => (
+                  <div>
+                    <p className="font-medium leading-tight">{row.action_code ?? "N/A"}</p>
+                    <p className="text-[10px] text-slate-500">{row.resource_type ?? "RESOURCE_UNKNOWN"}</p>
+                  </div>
+                ),
+              },
+              {
+                key: "actor",
+                label: "Actor",
+                render: (row) => (
+                  <div>
+                    <p className="font-medium leading-tight">{shortId(row.admin_user_id)}</p>
+                    <p className="text-[10px] text-slate-500 truncate max-w-[120px]">{row.admin_user_id ?? "N/A"}</p>
+                  </div>
+                ),
+              },
+              {
+                key: "resource",
+                label: "Resource",
+                render: (row) => (
+                  <div>
+                    <p className="font-medium leading-tight">{row.resource_type ?? "N/A"}</p>
+                    <p className="text-[10px] text-slate-500 truncate max-w-[120px]">{row.resource_id ?? "N/A"}</p>
+                  </div>
+                ),
+              },
+              {
+                key: "company",
+                label: "Company",
+                render: (row) => row.company_id ? shortId(row.company_id) : "Global",
+              },
+              {
+                key: "request",
+                label: "Request",
+                render: (row) => (
+                  <div>
+                    <p className="font-medium leading-tight">{shortId(row.request_id)}</p>
+                    <p className="text-[10px] text-slate-500 truncate max-w-[100px]">{row.request_id ?? "N/A"}</p>
+                  </div>
+                ),
+              },
+              {
+                key: "performed",
+                label: "Performed",
+                render: (row) => formatDateTime(row.performed_at),
+              },
+              {
+                key: "status",
+                label: "Status",
+                render: (row) => (
+                  <span className={`inline-flex border px-2 py-[1px] text-[10px] font-semibold uppercase tracking-[0.14em] ${getStatusTone(row.status)}`}>
+                    {row.status ?? "UNKNOWN"}
+                  </span>
+                ),
+              },
+            ]}
+            rows={auditPagination.pageItems}
+            rowKey={(row) => row.audit_id}
+            getRowProps={(_row, index) => getRowProps(index)}
+            emptyMessage="No audit rows match the selected filter right now."
+          />
+        </>
       ),
   };
 
@@ -402,8 +385,45 @@ export default function SAAudit() {
             ]
           : []
       }
+      footerHints={["Arrow Keys Navigate", "Enter Detail", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={filterSection}
       listSection={listSection}
+      bottomSection={
+        selectedAuditRow ? (
+          <section className="grid gap-2 border-t border-slate-300 pt-3">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Selected Audit Detail
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {[
+                ["Action", selectedAuditRow.action_code ?? "N/A"],
+                ["Status", selectedAuditRow.status ?? "UNKNOWN"],
+                ["Performed", formatDateTime(selectedAuditRow.performed_at)],
+                ["Actor", selectedAuditRow.admin_user_id ?? "N/A"],
+                ["Request", selectedAuditRow.request_id ?? "N/A"],
+                ["Resource Type", selectedAuditRow.resource_type ?? "N/A"],
+                ["Resource Id", selectedAuditRow.resource_id ?? "N/A"],
+                ["Company", selectedAuditRow.company_id ?? "Global"],
+                ["Audit Id", selectedAuditRow.audit_id ?? "N/A"],
+              ].map(([label, value]) => (
+                <div
+                  key={label}
+                  className="border border-slate-200 bg-white px-3 py-2"
+                >
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    {label}
+                  </div>
+                  <div className="mt-1 break-all text-xs text-slate-900">
+                    {value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null
+      }
     />
   );
 }
+
+

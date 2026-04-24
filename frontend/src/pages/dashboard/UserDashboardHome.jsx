@@ -348,6 +348,11 @@ export default function UserDashboardHome() {
     <ErpScreenScaffold
       eyebrow="ACL Workspace"
       title="Work Start"
+      footerHints={[
+        "ALT+SHIFT+P FOCUS TASKS",
+        "ENTER OPEN",
+        "CTRL+K COMMAND BAR",
+      ]}
       notices={[
         {
           key: "acl-home-scope",

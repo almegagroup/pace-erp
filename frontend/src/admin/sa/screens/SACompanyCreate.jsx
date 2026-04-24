@@ -16,11 +16,8 @@ import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpDenseFormNavigation } from "../../../hooks/useErpDenseFormNavigation.js";
+import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
-import {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
 
 async function readJsonSafe(response) {
   try {
@@ -341,51 +338,35 @@ export default function SACompanyCreate() {
   ].filter(Boolean);
 
   const bottomContent = createdCompany ? (
-    <ErpSectionCard
-      eyebrow={hasExistingCompany ? "Existing Company" : "Created"}
-      title={
-        hasExistingCompany
+    <section className="grid gap-2">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
+        {hasExistingCompany ? "Existing Company" : "Created"}
+      </div>
+      <div className="text-sm font-semibold text-slate-900">
+        {hasExistingCompany
           ? "Company master row already exists for this GST"
-          : "Company master row created successfully"
-      }
-      tone="success"
-    >
+          : "Company master row created successfully"}
+      </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <ErpFieldPreview
-          label="Company Code"
-          value={createdCompany.company_code}
-          caption="Auto-generated canonical company code."
-          tone="success"
-        />
-        <ErpFieldPreview
-          label="Company Name"
-          value={createdCompany.company_name}
-          caption="Canonical legal company name saved in ERP master."
-          tone="success"
-        />
-        <ErpFieldPreview
-          label="State"
-          value={createdCompany.state_name}
-          caption="Saved from GST-derived company state."
-          tone="success"
-        />
-        <ErpFieldPreview
-          label="PIN Code"
-          value={createdCompany.pin_code}
-          caption="Saved as a dedicated postal field."
-          tone="success"
-        />
+        {[
+          ["Company Code", createdCompany.company_code, "Auto-generated canonical company code."],
+          ["Company Name", createdCompany.company_name, "Canonical legal company name saved in ERP master."],
+          ["State", createdCompany.state_name, "Saved from GST-derived company state."],
+          ["PIN Code", createdCompany.pin_code, "Saved as a dedicated postal field."],
+        ].map(([label, value, caption]) => (
+          <div key={label} className="border border-emerald-300 bg-emerald-50 px-3 py-3">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-800">{label}</div>
+            <div className="mt-2 text-sm font-semibold text-slate-900">{value}</div>
+            <div className="mt-1 text-xs text-slate-600">{caption}</div>
+          </div>
+        ))}
       </div>
-      <div className="mt-4">
-        <ErpFieldPreview
-          label="Saved Address"
-          value={createdCompany.full_address}
-          caption="The single-field address stored on company master."
-          multiline
-          tone="success"
-        />
+      <div className="border border-emerald-300 bg-emerald-50 px-3 py-3">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-800">Saved Address</div>
+        <div className="mt-2 whitespace-pre-wrap text-sm font-semibold text-slate-900">{createdCompany.full_address}</div>
+        <div className="mt-1 text-xs text-slate-600">The single-field address stored on company master.</div>
       </div>
-    </ErpSectionCard>
+    </section>
   ) : null;
 
   return (
@@ -394,6 +375,7 @@ export default function SACompanyCreate() {
       title="Create Business Company"
       actions={topActions}
       notices={notices}
+      footerHints={["Tab Next Field", "Ctrl+S Save", "Enter Check GST", "Esc Cancel", "Ctrl+K Command Bar"]}
       formEyebrow="Entry Form"
       formTitle="GST-driven company setup"
       formContent={(
@@ -414,32 +396,31 @@ export default function SACompanyCreate() {
               </p>
             </div>
 
-            <label className="grid gap-2 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                GST Number
-              </span>
-              <input
-                ref={gstInputRef}
-                data-erp-form-field="true"
-                data-workspace-primary-focus="true"
-                value={gstNumber}
-                onChange={(event) => {
-                  setGstNumber(event.target.value.toUpperCase());
-                  setGstProfile(null);
-                  setError("");
-                  setNotice("");
-                  setCreatedCompany(null);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void handleLookup();
-                  }
-                }}
-                placeholder="29ABCDE1234F1Z5"
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
-              />
-            </label>
+            <div className="bg-white px-4 py-3">
+              <ErpDenseFormRow label="GST Number" required>
+                <input
+                  ref={gstInputRef}
+                  data-erp-form-field="true"
+                  data-workspace-primary-focus="true"
+                  value={gstNumber}
+                  onChange={(event) => {
+                    setGstNumber(event.target.value.toUpperCase());
+                    setGstProfile(null);
+                    setError("");
+                    setNotice("");
+                    setCreatedCompany(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void handleLookup();
+                    }
+                  }}
+                  placeholder="29ABCDE1234F1Z5"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
+                />
+              </ErpDenseFormRow>
+            </div>
 
             <div className="flex flex-wrap items-center gap-3 border-t border-slate-300 bg-slate-50 px-4 py-2">
               <button
@@ -476,19 +457,18 @@ export default function SACompanyCreate() {
               </p>
             </div>
 
-            <label className="grid gap-2 bg-white px-4 py-3">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Company Name
-              </span>
-              <input
-                ref={companyNameInputRef}
-                data-erp-form-field="true"
-                value={companyName}
-                onChange={(event) => setCompanyName(event.target.value)}
-                placeholder="Company legal name"
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
-              />
-            </label>
+            <div className="bg-white px-4 py-3">
+              <ErpDenseFormRow label="Company Name" required>
+                <input
+                  ref={companyNameInputRef}
+                  data-erp-form-field="true"
+                  value={companyName}
+                  onChange={(event) => setCompanyName(event.target.value)}
+                  placeholder="Company legal name"
+                  className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:bg-white"
+                />
+              </ErpDenseFormRow>
+            </div>
 
             <div className="grid gap-2 border-t border-slate-300 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">

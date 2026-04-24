@@ -8,9 +8,9 @@
  * Authority: Frontend
  */
 
-import ErpScreenScaffold, {
-  ErpSectionCard,
-} from "./ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "./ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../forms/ErpSelectionSection.jsx";
+import ErpRegisterHeader from "../data/ErpRegisterHeader.jsx";
 
 export default function ErpReportFilterTemplate({
   eyebrow,
@@ -21,12 +21,12 @@ export default function ErpReportFilterTemplate({
   reportSection = null,
   bottomSection = null,
   footerHints = [
-    "Alt+Shift+F Or F3 Filter Target",
-    "Arrow Keys Traverse Reports",
-    "Enter Open Row",
-    "Alt+R Or F4 Refresh Report",
+    "↑↓ Navigate",
+    "Enter Open",
+    "Ctrl+S Export",
+    "F8 Refresh",
     "Esc Back",
-    "Ctrl+K Or F9 Command Bar",
+    "Ctrl+K Command Bar",
   ],
 }) {
   return (
@@ -37,10 +37,43 @@ export default function ErpReportFilterTemplate({
       notices={notices}
       footerHints={footerHints}
     >
-      <div className="grid gap-4">
-        {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
+      <div className="grid gap-[var(--erp-section-gap)]">
+        {filterSection ? (
+          <section className="grid gap-2 border-b border-slate-300 pb-3">
+            {filterSection.eyebrow ? (
+              <ErpSelectionSection label={filterSection.eyebrow} />
+            ) : null}
+            {filterSection.title ? (
+              <div className="text-sm font-semibold text-slate-900">
+                {filterSection.title}
+              </div>
+            ) : null}
+            {filterSection.aside ? (
+              <div className="justify-self-start">{filterSection.aside}</div>
+            ) : null}
+            <div>{filterSection.children}</div>
+          </section>
+        ) : null}
         {reportSection ? (
-          <ErpSectionCard {...reportSection} className="min-h-[560px]" />
+          <section className="grid gap-2">
+            {reportSection.eyebrow ? (
+              <ErpSelectionSection label={reportSection.eyebrow} />
+            ) : null}
+            {reportSection.title != null ? (
+              <ErpRegisterHeader
+                title={reportSection.title}
+                count={reportSection.count}
+                filterValue={reportSection.filterValue}
+                onFilterChange={reportSection.onFilterChange}
+                filterRef={reportSection.filterRef}
+                filterPlaceholder={reportSection.filterPlaceholder}
+              />
+            ) : null}
+            {reportSection.aside ? (
+              <div className="justify-self-start">{reportSection.aside}</div>
+            ) : null}
+            <div>{reportSection.children}</div>
+          </section>
         ) : null}
         {bottomSection ? <div>{bottomSection}</div> : null}
       </div>

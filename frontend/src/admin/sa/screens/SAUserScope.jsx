@@ -19,10 +19,7 @@ import {
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
@@ -33,6 +30,7 @@ import {
   sortDepartments,
   sortProjects,
 } from "../../../shared/erpCollections.js";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 
 async function readJsonSafe(response) {
   try {
@@ -1016,27 +1014,24 @@ export default function SAUserScope() {
   ];
 
   const mainContent = !authUserId ? (
-    <ErpSectionCard
-      eyebrow="Selection Required"
-      title="Open this screen from the User Directory"
-    >
+    <div className="grid gap-3">
+      <ErpSelectionSection label="Selection Required" />
       <div className="border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-sm text-slate-500">
         Open this screen from the ERP User Directory so a governed user can be selected for scope mapping.
       </div>
-    </ErpSectionCard>
+    </div>
   ) : loading ? (
-    <ErpSectionCard eyebrow="Loading" title="Fetching scope payload">
+    <div className="grid gap-3">
+      <ErpSelectionSection label="Loading" />
       <div className="border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-sm text-slate-500">
         Loading user scope from the admin governance endpoint.
       </div>
-    </ErpSectionCard>
+    </div>
   ) : !payload ? null : (
     <>
       <div className="grid gap-6 xl:grid-cols-[1.1fr,1fr]">
-        <ErpSectionCard
-          eyebrow="Parent Company"
-          title="HR Identity Binding"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Parent Company" />
           <label className="block">
             <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
               Select Parent Company
@@ -1078,12 +1073,10 @@ export default function SAUserScope() {
               Enter = open picker | F2 or Ctrl+S = save scope
             </p>
           </label>
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          eyebrow="Current Snapshot"
-          title="Selected user and readiness"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Current Snapshot" />
           <div className="space-y-3">
             <div className="border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
               <span className="font-semibold text-slate-900">
@@ -1105,28 +1098,24 @@ export default function SAUserScope() {
                 : readinessFlags.join(" | ")}
             </div>
             <div className="grid gap-2 md:grid-cols-2">
-              <ErpFieldPreview
-                label="Work Company Scope"
-                value={`${workCompanyIds.length} selected`}
-                caption="Operational company selection is edited in a drawer so the main screen stays readable."
-                tone={workCompanyIds.length > 0 ? "success" : "amber"}
-              />
-              <ErpFieldPreview
-                label="Work Context Scope"
-                value={`${workContextIds.length} selected`}
-                caption="Contexts stay filtered by the chosen work companies."
-                tone={workContextIds.length > 0 ? "success" : "amber"}
-              />
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Work Company Scope</p>
+                <p className="mt-1 text-sm font-semibold text-slate-900">{workCompanyIds.length} selected</p>
+                <p className="mt-1 text-xs text-slate-500">Operational company selection is edited in a drawer so the main screen stays readable.</p>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Work Context Scope</p>
+                <p className="mt-1 text-sm font-semibold text-slate-900">{workContextIds.length} selected</p>
+                <p className="mt-1 text-xs text-slate-500">Contexts stay filtered by the chosen work companies.</p>
+              </div>
             </div>
           </div>
-        </ErpSectionCard>
+        </div>
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.15fr,0.85fr]">
-        <ErpSectionCard
-          eyebrow="Scope Editors"
-          title="Edit one scope at a time"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Scope Editors" />
           <div className="grid gap-3 md:grid-cols-2">
             <ScopeSummaryCard
               eyebrow="Work Companies"
@@ -1192,87 +1181,67 @@ export default function SAUserScope() {
               tone={departmentIds.length > 0 ? "success" : "default"}
             />
           </div>
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          eyebrow="Selection Preview"
-          title="Current assignment snapshot"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Selection Preview" />
           <div className="grid gap-3">
             <div className="grid gap-3 md:grid-cols-2">
-              <ErpFieldPreview
-                label="Selected Work Companies"
-                value={formatSelectionPreview(
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Selected Work Companies</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
                   selectedWorkCompanies,
                   (company) => `${company.company_code} - ${company.company_name}`,
                   "No work company selected yet."
-                )}
-                caption="These companies define the operating perimeter."
-                multiline
-                tone={workCompanyIds.length > 0 ? "success" : "default"}
-              />
-              <ErpFieldPreview
-                label="Selected Work Contexts"
-                value={formatSelectionPreview(
+                )}</p>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Selected Work Contexts</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
                   selectedWorkContexts,
                   (workContext) =>
                     `${workContext.work_context_code} - ${workContext.work_context_name}`,
                   workCompanyIds.length === 0
                     ? "Select work companies first."
                     : "No work context selected yet."
-                )}
-                caption="Contexts stay filtered only from the selected companies. Department identity does not auto-limit operational work areas."
-                multiline
-                tone={workContextIds.length > 0 ? "success" : "default"}
-              />
+                )}</p>
+              </div>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
-              <ErpFieldPreview
-                label="Direct Project Overrides"
-                value={formatSelectionPreview(
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Direct Project Overrides</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
                   selectedProjectOverrides,
                   (project) => `${project.project_code} - ${project.project_name}`,
                   "No direct override selected."
-                )}
-                caption="Only exception cases should need a direct project override."
-                multiline
-                tone={projectIds.length > 0 ? "success" : "default"}
-              />
-              <ErpFieldPreview
-                label="Selected Departments"
-                value={formatSelectionPreview(
+                )}</p>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Selected Departments</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
                   selectedDepartments,
                   (department) => formatDepartmentLabel(department),
                   "No department selected yet."
-                )}
-                caption="Department readiness stays visible without overcrowding the page."
-                multiline
-                tone={departmentIds.length > 0 ? "success" : "default"}
-              />
+                )}</p>
+              </div>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
-              <ErpFieldPreview
-                label="Inherited Projects"
-                value={formatSelectionPreview(
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Inherited Projects</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
                   inheritedProjects,
                   (project) => `${project.project_code} - ${project.project_name}`,
                   "No inherited project reach yet."
-                )}
-                caption="These projects come automatically from the selected work areas."
-                multiline
-                tone={inheritedProjects.length > 0 ? "success" : "default"}
-              />
-              <ErpFieldPreview
-                label="Effective Projects"
-                value={formatSelectionPreview(
+                )}</p>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Effective Projects</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{formatSelectionPreview(
                   effectiveProjects,
                   (project) => `${project.project_code} - ${project.project_name}`,
                   "No effective project reach yet."
-                )}
-                caption="Runtime project reach = inherited projects plus any direct overrides."
-                multiline
-                tone={effectiveProjects.length > 0 ? "success" : "default"}
-              />
+                )}</p>
+              </div>
             </div>
             <div className="border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
               Use <span className="font-semibold text-slate-900">F3</span> or the
@@ -1280,7 +1249,7 @@ export default function SAUserScope() {
               only the operational snapshot now.
             </div>
           </div>
-        </ErpSectionCard>
+        </div>
       </div>
     </>
   );
@@ -1291,6 +1260,7 @@ export default function SAUserScope() {
       title="ERP User Scope Mapping"
       actions={topActions}
       notices={notices}
+      footerHints={["CTRL+S SAVE", "ESC CANCEL", "CTRL+K COMMAND BAR"]}
     >
       {mainContent}
 

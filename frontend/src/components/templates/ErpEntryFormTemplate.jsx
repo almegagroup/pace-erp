@@ -8,17 +8,14 @@
  * Authority: Frontend
  */
 
-import ErpScreenScaffold, {
-  ErpSectionCard,
-} from "./ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "./ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../forms/ErpSelectionSection.jsx";
 
 const DEFAULT_FOOTER_HINTS = Object.freeze([
-  "Tab Or Shift+Tab Move Field Focus",
-  "Enter Next Field",
-  "Shift+Enter Previous Field",
-  "Ctrl+S Or F2 Save Action",
-  "Esc Back",
-  "Alt+Shift+P Or F7 Primary Target",
+  "Tab Next Field",
+  "Ctrl+S Save",
+  "Esc Cancel",
+  "Ctrl+K Command Bar",
 ]);
 
 export default function ErpEntryFormTemplate({
@@ -40,14 +37,18 @@ export default function ErpEntryFormTemplate({
       notices={notices}
       footerHints={footerHints}
     >
-      <div className="grid gap-4">
-        <ErpSectionCard
-          eyebrow={formEyebrow}
-          title={formTitle}
-          tone="accent"
-        >
-          {formContent}
-        </ErpSectionCard>
+      <div className="grid gap-[var(--erp-section-gap)]">
+        <section className="grid gap-2 border-b border-slate-300 pb-3">
+          {formEyebrow ? <ErpSelectionSection label={formEyebrow} /> : null}
+          {formTitle ? (
+            <div className="text-sm font-semibold text-slate-900">
+              {formTitle}
+            </div>
+          ) : null}
+          <div className="grid gap-[var(--erp-form-gap)]">
+            {formContent}
+          </div>
+        </section>
 
         {bottomContent ? <div>{bottomContent}</div> : null}
       </div>

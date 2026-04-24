@@ -10,6 +10,7 @@
 
 import { Fragment, useEffect, useMemo, useRef } from "react";
 import { pushToast } from "../../store/uiToast.js";
+import ErpCommandStrip from "../layout/ErpCommandStrip.jsx";
 
 const ACTION_TONE_CLASS = Object.freeze({
   primary:
@@ -366,13 +367,13 @@ export default function ErpScreenScaffold({
     <section className="min-h-full text-slate-900">
       <div className="mx-auto flex max-w-none flex-col gap-4">
         <div className="sticky top-0 z-20 overflow-hidden border border-slate-400 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.06)]">
-          <div className="border-b border-slate-300 bg-[linear-gradient(180deg,#f5f8fb_0%,#e8eef5_100%)] px-4 py-3">
+          <div className="border-b border-slate-300 bg-[linear-gradient(180deg,#f5f8fb_0%,#e8eef5_100%)] px-4 py-2">
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
               <div className="min-w-0">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-sky-700">
                   {eyebrow}
                 </p>
-                <h1 className="mt-2 text-[1.7rem] font-semibold tracking-tight text-slate-900">
+                <h1 className="mt-1 text-[1.35rem] font-semibold tracking-tight text-slate-900">
                   {title}
                 </h1>
               </div>
@@ -389,15 +390,7 @@ export default function ErpScreenScaffold({
 
         <div className="grid gap-4">{children}</div>
 
-        {footerHints.length > 0 ? (
-          <div className="border border-slate-300 bg-[#eef3f7] px-4 py-2 shadow-[0_4px_10px_rgba(15,23,42,0.04)]">
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-              {footerHints.map((hint) => (
-                <span key={hint}>{hint}</span>
-              ))}
-            </div>
-          </div>
-        ) : null}
+        <ErpCommandStrip hints={footerHints} />
       </div>
     </section>
   );

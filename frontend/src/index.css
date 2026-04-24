@@ -38,6 +38,9 @@ TEMP_UI_BOOT_LOG.md
   --erp-danger-soft: #fde7ea;
   --erp-grid-stripe: #f4f7fa;
   --erp-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+  --erp-row-height: 30px;
+  --erp-form-gap: 6px;
+  --erp-section-gap: 12px;
 }
 
 /* ============================================================

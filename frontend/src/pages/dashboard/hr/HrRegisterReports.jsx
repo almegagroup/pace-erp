@@ -5,16 +5,16 @@ import {
   getActiveScreenContext,
   updateActiveScreenContext,
 } from "../../../navigation/screenStackEngine.js";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
-import ErpStickyDataTable from "../../../components/data/ErpStickyDataTable.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpReportFilterTemplate from "../../../components/templates/ErpReportFilterTemplate.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpSelectionField from "../../../components/forms/ErpSelectionField.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
-import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { downloadCsvFile } from "../../../shared/downloadTabularFile.js";
 import { formatDateTime, formatIsoDate, listLeaveRegister, listOutWorkRegister, shiftIsoDate } from "./hrApi.js";
 
@@ -130,7 +130,6 @@ function buildDownloadRows(columns, rows) {
 
 function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCode }) {
   const { runtimeContext } = useMenu();
-  const actionRefs = useRef([]);
   const [criteria, setCriteria] = useState(() =>
     normalizeCriteria(getActiveScreenContext()?.criteria)
   );
@@ -190,71 +189,55 @@ function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCod
     <ErpScreenScaffold
       title={title}
       footerHints={[
-        "Alt+Shift+P Or F7 Primary Target",
-        "Ctrl+S Or F2 Run Report",
+        "F8 Execute",
+        "Ctrl+S Execute",
         "Esc Back",
-        "Ctrl+K Or F9 Command Bar",
+        "Ctrl+K Command Bar",
       ]}
       actions={[
         {
           key: "run",
           label: "Run Report",
+          hint: "F8 / Ctrl+S",
           tone: "primary",
-          buttonRef: (element) => {
-            actionRefs.current[0] = element;
-          },
           onClick: handleRunReport,
-          onKeyDown: (event) =>
-            handleLinearNavigation(event, { index: 0, refs: actionRefs.current }),
         },
       ]}
     >
-      <div className="grid gap-4">
-        <ErpSectionCard
-          title="Report Criteria"
-        >
-          <div className="grid gap-3 md:grid-cols-3">
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">From Date</span>
-              <input
-                type="date"
-                value={criteria.fromDate}
-                onChange={(event) => updateCriteria("fromDate", event.target.value)}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">To Date</span>
-              <input
-                type="date"
-                value={criteria.toDate}
-                onChange={(event) => updateCriteria("toDate", event.target.value)}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Company</span>
-              <select
-                value={criteria.companyId}
-                onChange={(event) => updateCriteria("companyId", event.target.value)}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-              >
-                <option value="">Choose company or *</option>
-                <option value="*">* | All Companies In Scope</option>
-                {availableCompanies.map((company) => (
-                  <option key={company.id} value={company.id}>
-                    {company.company_code} | {company.company_name}
-                  </option>
-                ))}
-              </select>
-            </label>
+      <div className="grid gap-[var(--erp-section-gap)]">
+        <div className="grid gap-2">
+          <ErpSelectionSection label="Selection Criteria" />
+          <ErpSelectionField
+            label="From Date"
+            type="date"
+            value={criteria.fromDate}
+            onChange={(value) => updateCriteria("fromDate", value)}
+          />
+          <ErpSelectionField
+            label="To Date"
+            type="date"
+            value={criteria.toDate}
+            onChange={(value) => updateCriteria("toDate", value)}
+          />
+          <ErpSelectionField
+            label="Company"
+            type="select"
+            value={criteria.companyId}
+            onChange={(value) => updateCriteria("companyId", value)}
+            options={[
+              { value: "*", label: "* | All Companies In Scope" },
+              ...availableCompanies.map((company) => ({
+                value: company.id,
+                label: `${company.company_code} | ${company.company_name}`,
+              })),
+            ]}
+          />
+        </div>
+        {error ? (
+          <div className="border border-rose-300 bg-rose-50 px-3 py-3 text-sm text-rose-700">
+            {error}
           </div>
-          {error ? (
-            <div className="mt-3 border border-rose-300 bg-rose-50 px-3 py-3 text-sm text-rose-700">
-              {error}
-            </div>
-          ) : null}
-        </ErpSectionCard>
+        ) : null}
       </div>
     </ErpScreenScaffold>
   );
@@ -262,7 +245,6 @@ function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCod
 
 function RegisterResultsPage({ kind, title, loader }) {
   const searchRef = useRef(null);
-  const actionRefs = useRef([]);
   const { runtimeContext } = useMenu();
   const [rows, setRows] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -318,6 +300,22 @@ function RegisterResultsPage({ kind, title, loader }) {
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const pagedRows = filteredRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const gridColumns = useMemo(
+    () =>
+      columns.map((column) => ({
+        ...column,
+        render: (row) => normalizeCellValue(column.key, row?.[column.key]),
+      })),
+    [columns],
+  );
+  const summaryRow = useMemo(() => ({
+    label: `Total Rows: ${filteredRows.length}`,
+    values: {
+      total_days:
+        filteredRows.reduce((sum, row) => sum + Number(row?.total_days ?? 0), 0) || "",
+    },
+  }), [filteredRows]);
+  const { getRowProps } = useErpListNavigation(pagedRows);
 
   useEffect(() => {
     setPage(1);
@@ -362,117 +360,104 @@ function RegisterResultsPage({ kind, title, loader }) {
   });
 
   return (
-    <ErpScreenScaffold
+    <ErpReportFilterTemplate
       title={title}
+      eyebrow="HR Management"
       footerHints={[
-        "Alt+Shift+F Or F3 Search Target",
-        "Ctrl+S Or F2 Download Report",
+        "↑↓ Navigate",
+        "Enter Open",
+        "Ctrl+S Export",
+        "F8 Refresh",
         "Esc Back",
-        "Ctrl+K Or F9 Command Bar",
+        "Ctrl+K Command Bar",
       ]}
       actions={[
         {
           key: "back",
           label: "Back To Criteria",
           tone: "neutral",
-          buttonRef: (element) => {
-            actionRefs.current[0] = element;
-          },
           onClick: () => popScreen(),
-          onKeyDown: (event) =>
-            handleLinearNavigation(event, { index: 0, refs: actionRefs.current }),
         },
         {
           key: "export",
           label: "Download Excel CSV",
           tone: "primary",
-          buttonRef: (element) => {
-            actionRefs.current[1] = element;
-          },
           onClick: () =>
             downloadCsvFile({
               fileName: `${kind}-register-report.csv`,
               columns,
               rows: buildDownloadRows(columns, filteredRows),
             }),
-          onKeyDown: (event) =>
-            handleLinearNavigation(event, { index: 1, refs: actionRefs.current }),
         },
       ]}
-    >
-      <div className="grid gap-4">
-        <div className="grid gap-3 md:grid-cols-5">
-          <ErpFieldPreview label="Date Range" value={`${formatIsoDate(criteria.fromDate)} -> ${formatIsoDate(criteria.toDate)}`} />
-          <ErpFieldPreview label="Company" value={resolveCompanyLabel(availableCompanies, criteria.companyId)} />
-          <ErpFieldPreview label="Company Address" value={resolveCompanyAddress(availableCompanies, criteria.companyId)} />
-          <ErpFieldPreview label="Visible Rows" value={String(filteredRows.length)} />
-          <ErpFieldPreview label="Current Page" value={`${safePage} / ${totalPages}`} />
-        </div>
-
-        <ErpSectionCard title="Search Report">
-          <QuickFilterInput
-            label="Quick Search"
-            value={searchQuery}
-            onChange={setSearchQuery}
-            inputRef={searchRef}
-            placeholder="Search requester, company, work area, reason, destination, or workflow id"
-          />
-          {error ? (
-            <div className="mt-3 border border-rose-300 bg-rose-50 px-3 py-3 text-sm text-rose-700">
-              {error}
+      notices={error ? [{ key: "error", tone: "error", message: error }] : []}
+      filterSection={{
+        eyebrow: "Report Scope",
+        title: "Search within the loaded register report",
+        children: (
+          <div className="grid gap-3">
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5 border border-slate-300 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+              <div><span className="font-semibold text-slate-900">Date Range:</span> {formatIsoDate(criteria.fromDate)} {"->"} {formatIsoDate(criteria.toDate)}</div>
+              <div><span className="font-semibold text-slate-900">Company:</span> {resolveCompanyLabel(availableCompanies, criteria.companyId)}</div>
+              <div><span className="font-semibold text-slate-900">Address:</span> {resolveCompanyAddress(availableCompanies, criteria.companyId)}</div>
+              <div><span className="font-semibold text-slate-900">Visible Rows:</span> {filteredRows.length}</div>
+              <div><span className="font-semibold text-slate-900">Current Page:</span> {safePage} / {totalPages}</div>
             </div>
-          ) : null}
-        </ErpSectionCard>
-
-        <ErpSectionCard
-          title={loading ? "Loading report" : `${filteredRows.length} matching row${filteredRows.length === 1 ? "" : "s"}`}
-        >
-          {loading ? (
-            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-              Loading report.
-            </div>
-          ) : filteredRows.length === 0 ? (
-            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-              No row matches the current report criteria.
-            </div>
-          ) : (
-            <div className="grid gap-3">
-              <ErpStickyDataTable
-                columns={columns}
-                rows={pagedRows}
-                rowKey={(row) => `${row.workflow_request_id}-${row.requester_auth_user_id}`}
-                renderCell={(row, column) => normalizeCellValue(column.key, row?.[column.key])}
-                maxBodyHeightClass="max-h-[60vh]"
-              />
-
-              <div className="flex flex-wrap items-center justify-between gap-3 border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-                <span>
-                  Showing {(safePage - 1) * PAGE_SIZE + 1} - {Math.min(safePage * PAGE_SIZE, filteredRows.length)} of {filteredRows.length}
-                </span>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    disabled={safePage <= 1}
-                    onClick={() => setPage((current) => Math.max(1, current - 1))}
-                    className="border border-slate-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Prev
-                  </button>
-                  <button
-                    type="button"
-                    disabled={safePage >= totalPages}
-                    onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
-                    className="border border-slate-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Next
-                  </button>
-                </div>
+            <QuickFilterInput
+              label="Quick Search"
+              value={searchQuery}
+              onChange={setSearchQuery}
+              inputRef={searchRef}
+              placeholder="Search requester, company, work area, reason, destination, or workflow id"
+            />
+          </div>
+        ),
+      }}
+      reportSection={{
+        eyebrow: "Register Report",
+        title: loading ? "Loading report" : `${filteredRows.length} matching row${filteredRows.length === 1 ? "" : "s"}`,
+        children: loading ? (
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            Loading report.
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            <ErpDenseGrid
+              columns={gridColumns}
+              rows={pagedRows}
+              rowKey={(row) => `${row.workflow_request_id}-${row.requester_auth_user_id}`}
+              getRowProps={(_row, index) => getRowProps(index)}
+              summaryRow={summaryRow}
+              maxHeight="60vh"
+              emptyMessage="No row matches the current report criteria."
+            />
+            <div className="flex flex-wrap items-center justify-between gap-3 border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+              <span>
+                Showing {(safePage - 1) * PAGE_SIZE + 1} - {Math.min(safePage * PAGE_SIZE, filteredRows.length)} of {filteredRows.length}
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={safePage <= 1}
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  className="border border-slate-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Prev
+                </button>
+                <button
+                  type="button"
+                  disabled={safePage >= totalPages}
+                  onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                  className="border border-slate-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
               </div>
             </div>
-          )}
-        </ErpSectionCard>
-      </div>
-    </ErpScreenScaffold>
+          </div>
+        ),
+      }}
+    />
   );
 }
 

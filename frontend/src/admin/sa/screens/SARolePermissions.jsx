@@ -8,7 +8,7 @@ import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
-import { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 
 async function readJsonSafe(response) {
@@ -311,7 +311,9 @@ export default function SARolePermissions() {
     [selectedResourceCode, visibleMatrixRows]
   );
 
-  const { getRowProps } = useErpListNavigation(visibleMatrixRows);
+  const { getRowProps } = useErpListNavigation(visibleMatrixRows, {
+    onActivate: (row) => setSelectedResourceCode(row?.resource?.resource_code ?? ""),
+  });
 
   function updateDraft(resourceCode, updater) {
     setMatrixDrafts((current) => {
@@ -583,6 +585,7 @@ export default function SARolePermissions() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
+      footerHints={["Arrow Keys Navigate", "Enter Select", "Ctrl+S Save Matrix", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={{
         eyebrow: "Role Filter",
         title: "Choose role, project, module, and search resources",
@@ -659,6 +662,7 @@ export default function SARolePermissions() {
         title: selectedModuleCode
           ? `${selectedModuleCode} resource permission matrix`
           : "Choose one module to open the permission matrix",
+        count: visibleMatrixRows.length,
         children:
           loading || catalogLoading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
@@ -673,86 +677,74 @@ export default function SARolePermissions() {
               No visible mapped business resources were found in this module.
             </div>
           ) : (
-            <div className="overflow-x-auto border border-slate-300 bg-white">
-              <table className="min-w-full border-collapse text-sm text-slate-700">
-                <thead className="bg-slate-50 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                  <tr>
-                    <th className="border-b border-slate-300 px-4 py-3 text-left">Resource</th>
-                    {ACTION_MATRIX.map(([, , label]) => (
-                      <th
-                        key={label}
-                        className="border-b border-l border-slate-300 px-3 py-3 text-center"
-                      >
-                        {label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleMatrixRows.map(({ resource, draft }, index) => {
-                    const selected = resource.resource_code === selectedResourceCode;
-
-                    return (
-                      <tr
-                        key={resource.resource_code}
-                        {...getRowProps(index)}
-                        className={selected ? "bg-sky-50" : "bg-white"}
-                      >
-                        <td
-                          className="border-b border-slate-200 px-4 py-3 align-top"
-                          onClick={() => setSelectedResourceCode(resource.resource_code)}
-                        >
-                          <button
-                            type="button"
-                            className="w-full cursor-pointer text-left"
-                          >
-                            <div className="font-semibold text-slate-900">{resource.title}</div>
-                            <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                              {resource.resource_code}
-                            </div>
-                            <div className="mt-1 text-xs text-slate-500">
-                              {resource.route_path || "No route"}
-                            </div>
-                            {draft.denied_actions.length > 0 ? (
-                              <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-rose-600">
-                                Explicit deny: {draft.denied_actions.join(", ")}
-                              </div>
-                            ) : null}
-                          </button>
-                        </td>
-                        {ACTION_MATRIX.map(([actionCode, key]) => (
-                          <td
-                            key={`${resource.resource_code}-${actionCode}`}
-                            className="border-b border-l border-slate-200 px-3 py-3 text-center"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={Boolean(draft[key])}
-                              onChange={(event) =>
-                                updateAllowFlag(
-                                  resource.resource_code,
-                                  key,
-                                  event.target.checked,
-                                  actionCode
-                                )
-                              }
-                              className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-emerald-600"
-                            />
-                          </td>
-                        ))}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <ErpDenseGrid
+              columns={[
+                {
+                  key: "resource",
+                  label: "Resource",
+                  render: ({ resource, draft }) => (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedResourceCode(resource.resource_code)}
+                      className="w-full cursor-pointer text-left"
+                    >
+                      <div className="font-semibold text-slate-900">{resource.title}</div>
+                      <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                        {resource.resource_code}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {resource.route_path || "No route"}
+                      </div>
+                      {draft.denied_actions.length > 0 ? (
+                        <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-rose-600">
+                          Explicit deny: {draft.denied_actions.join(", ")}
+                        </div>
+                      ) : null}
+                    </button>
+                  ),
+                },
+                ...ACTION_MATRIX.map(([actionCode, key, label]) => ({
+                  key: actionCode,
+                  label,
+                  align: "center",
+                  render: ({ resource, draft }) => (
+                    <input
+                      type="checkbox"
+                      checked={Boolean(draft[key])}
+                      onChange={(event) =>
+                        updateAllowFlag(
+                          resource.resource_code,
+                          key,
+                          event.target.checked,
+                          actionCode
+                        )
+                      }
+                      className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-emerald-600"
+                    />
+                  ),
+                })),
+              ]}
+              rows={visibleMatrixRows}
+              rowKey={(row) => row.resource.resource_code}
+              getRowProps={(row, index) => ({
+                ...getRowProps(index),
+                onClick: () => setSelectedResourceCode(row.resource.resource_code),
+                className:
+                  row.resource.resource_code === selectedResourceCode ? "bg-sky-50" : "",
+              })}
+              onRowActivate={(row) => setSelectedResourceCode(row.resource.resource_code)}
+              maxHeight="none"
+            />
           ),
       }}
       bottomSection={
-        <ErpSectionCard
-          eyebrow="Selected Resource"
-          title={selectedMatrixRow?.resource?.title ?? "Advanced deny editor"}
-        >
+        <section className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            Selected Resource
+          </div>
+          <div className="text-sm font-semibold text-slate-900">
+            {selectedMatrixRow?.resource?.title ?? "Advanced deny editor"}
+          </div>
           {selectedMatrixRow ? (
           <div className="space-y-4">
             <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600">
@@ -808,7 +800,7 @@ export default function SARolePermissions() {
             Select one resource row from the matrix to edit advanced deny overrides.
           </div>
         )}
-        </ErpSectionCard>
+        </section>
       }
     />
   );

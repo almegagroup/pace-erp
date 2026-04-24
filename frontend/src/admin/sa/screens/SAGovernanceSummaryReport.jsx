@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
-import ErpStickyDataTable from "../../../components/data/ErpStickyDataTable.jsx";
-import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { downloadCsvFile } from "../../../shared/downloadTabularFile.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpRegisterHeader from "../../../components/data/ErpRegisterHeader.jsx";
+import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 
 const REPORT_COLUMNS = Object.freeze([
   { key: "company_code", label: "Company Code" },
@@ -140,6 +139,19 @@ export default function SAGovernanceSummaryReport() {
     () => REPORT_COLUMNS.filter((column) => visibleColumnKeys.includes(column.key)),
     [visibleColumnKeys]
   );
+  const denseColumns = useMemo(
+    () =>
+      visibleColumns.map((column) => ({
+        key: column.key,
+        label: column.label,
+        render: (row) =>
+          column.key === "active_acl_version_created_at"
+            ? formatDateTime(row[column.key])
+            : row[column.key] || "-",
+      })),
+    [visibleColumns]
+  );
+  const { getRowProps } = useErpListNavigation(filteredRows);
 
   const selectedCompany = companies.find((row) => row.id === companyId) ?? null;
   const selectedCompanyLabel = selectedCompany
@@ -220,18 +232,27 @@ export default function SAGovernanceSummaryReport() {
             handleLinearNavigation(event, { index: 1, refs: actionRefs.current }),
         },
       ]}
+      footerHints={["ALT+R REFRESH", "CTRL+S DOWNLOAD", "ALT+SHIFT+F SEARCH", "CTRL+K COMMAND BAR"]}
     >
       <div className="grid gap-4">
         <div className="grid gap-3 md:grid-cols-4">
-          <ErpFieldPreview label="Selected Company" value={selectedCompanyLabel} />
-          <ErpFieldPreview label="Selected Company Address" value={formatCompanyAddress(selectedCompany)} />
-          <ErpFieldPreview label="Report Rows" value={String(filteredRows.length)} />
-          <ErpFieldPreview label="Visible Columns" value={String(visibleColumns.length)} />
+          {[
+            ["Selected Company", selectedCompanyLabel],
+            ["Selected Company Address", formatCompanyAddress(selectedCompany)],
+            ["Report Rows", String(filteredRows.length)],
+            ["Visible Columns", String(visibleColumns.length)],
+          ].map(([label, value]) => (
+            <div key={label} className="border border-slate-300 bg-white px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                {label}
+              </p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">{value}</p>
+            </div>
+          ))}
         </div>
 
-        <ErpSectionCard
-          title="Report Filters"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Report Filters" />
           <div className="grid gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
             <label className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -254,24 +275,19 @@ export default function SAGovernanceSummaryReport() {
                 ))}
               </select>
             </label>
-            <QuickFilterInput
-              label="Search Loaded Rows"
-              value={searchQuery}
-              onChange={setSearchQuery}
-              inputRef={searchRef}
-              placeholder="Search company, department, work context, capability, project, module, or ACL version"
-            />
+            <div className="border border-slate-300 bg-white px-3 py-3 text-sm text-slate-600">
+              Inline search now lives in the register header so the report stays in one working surface.
+            </div>
           </div>
           {error ? (
             <div className="mt-3 border border-rose-300 bg-rose-50 px-3 py-3 text-sm text-rose-700">
               {error}
             </div>
           ) : null}
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          title="Visible Columns"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Visible Columns" />
           <div className="grid gap-2 md:grid-cols-3">
             {REPORT_COLUMNS.map((column) => {
               const checked = visibleColumnKeys.includes(column.key);
@@ -302,15 +318,21 @@ export default function SAGovernanceSummaryReport() {
               );
             })}
           </div>
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          title={
-            loading
-              ? "Loading governance summary report"
-              : `${filteredRows.length} company row${filteredRows.length === 1 ? "" : "s"}`
-          }
-        >
+        <div className="grid gap-3">
+          <ErpRegisterHeader
+            title={
+              loading
+                ? "Loading governance summary report"
+                : "Governance summary register"
+            }
+            count={filteredRows.length}
+            filterValue={searchQuery}
+            onFilterChange={setSearchQuery}
+            filterRef={searchRef}
+            filterPlaceholder="Search company, department, work context, capability, project, module, or ACL version"
+          />
           {loading ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
               Loading report.
@@ -320,18 +342,21 @@ export default function SAGovernanceSummaryReport() {
               No report row matches the current filter.
             </div>
           ) : (
-            <ErpStickyDataTable
-              columns={visibleColumns}
+            <ErpDenseGrid
+              columns={denseColumns}
               rows={filteredRows}
               rowKey={(row, index) => `${row.company_code}-${index}`}
-              renderCell={(row, column) =>
-                column.key === "active_acl_version_created_at"
-                  ? formatDateTime(row[column.key])
-                  : row[column.key] || "-"
-              }
+              getRowProps={(_row, index) => getRowProps(index)}
+              summaryRow={{
+                label: "Summary",
+                values: {
+                  company_name: `${filteredRows.length} company rows`,
+                  enabled_module_names: `${visibleColumns.length} visible columns`,
+                },
+              }}
             />
           )}
-        </ErpSectionCard>
+        </div>
       </div>
     </ErpScreenScaffold>
   );

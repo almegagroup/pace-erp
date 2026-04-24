@@ -367,12 +367,7 @@ export default function SAModuleResourceMap() {
             }),
         },
       ]}
-      footerHints={[
-        "ALT+R REFRESH",
-        "ALT+SHIFT+F SEARCH",
-        "ENTER SELECT RESOURCE",
-        "CTRL+K COMMAND BAR",
-      ]}
+      footerHints={["↑↓ Navigate", "Enter Select", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)]">
         <ErpSectionCard

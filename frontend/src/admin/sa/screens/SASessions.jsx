@@ -16,6 +16,7 @@ import ErpCompactFilterSelect from "../../../components/inputs/ErpCompactFilterS
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -236,7 +237,11 @@ export default function SASessions() {
     [searchQuery, statusFilteredSessions]
   );
   const sessionPagination = useErpPagination(filteredSessions, 10);
-  const { getRowProps } = useErpListNavigation(sessionPagination.pageItems);
+  const { getRowProps } = useErpListNavigation(sessionPagination.pageItems, {
+    onActivate: (_row, index) => {
+      rowActionRefs.current[index]?.focus();
+    },
+  });
 
   useErpScreenCommands([
     {
@@ -354,7 +359,7 @@ export default function SASessions() {
             : "No sessions match the selected filter right now."}
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        <>
           <ErpPaginationStrip
             page={sessionPagination.page}
             setPage={sessionPagination.setPage}
@@ -363,113 +368,93 @@ export default function SASessions() {
             endIndex={sessionPagination.endIndex}
             totalItems={filteredSessions.length}
           />
-          <table className="min-w-full border-collapse">
-            <thead>
-              <tr>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Session
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  ERP User
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Status
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Created
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Last Seen
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Expires
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Revoked
-                </th>
-                <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Action
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {sessionPagination.pageItems.map((session, index) => (
-                <tr key={session.session_id} {...getRowProps(index)} className="border-b border-slate-200 bg-white">
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {shortId(session.session_id)}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {session.session_id}
-                      </p>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {formatSessionIdentity(session)}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {session.parent_company_name ?? "Company Not Captured"}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {session.designation_hint ?? `Auth ${shortId(session.auth_user_id)}`}
-                      </p>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    <span
-                      className={`inline-flex border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${getStatusTone(session.status)}`}
+          <ErpDenseGrid
+            columns={[
+              {
+                key: "session",
+                label: "Session",
+                render: (session) => (
+                  <div>
+                    <p className="font-medium leading-tight">{shortId(session.session_id)}</p>
+                    <p className="text-[10px] text-slate-500 truncate max-w-[120px]">{session.session_id}</p>
+                  </div>
+                ),
+              },
+              {
+                key: "user",
+                label: "ERP User",
+                render: (session) => (
+                  <div>
+                    <p className="font-medium leading-tight">{formatSessionIdentity(session)}</p>
+                    <p className="text-[10px] text-slate-500">{session.parent_company_name ?? "Company Not Captured"}</p>
+                  </div>
+                ),
+              },
+              {
+                key: "status",
+                label: "Status",
+                render: (session) => (
+                  <span className={`inline-flex border px-2 py-[1px] text-[10px] font-semibold uppercase tracking-[0.14em] ${getStatusTone(session.status)}`}>
+                    {session.status}
+                  </span>
+                ),
+              },
+              {
+                key: "created",
+                label: "Created",
+                render: (session) => formatDateTime(session.created_at),
+              },
+              {
+                key: "last_seen",
+                label: "Last Seen",
+                render: (session) => formatDateTime(session.last_seen_at),
+              },
+              {
+                key: "expires",
+                label: "Expires",
+                render: (session) => formatDateTime(session.expires_at),
+              },
+              {
+                key: "revoked",
+                label: "Revoked",
+                render: (session) => formatDateTime(session.revoked_at),
+              },
+              {
+                key: "action",
+                label: "Action",
+                render: (session, index) =>
+                  session.status === "ACTIVE" ? (
+                    <button
+                      ref={(element) => {
+                        rowActionRefs.current[index] = element;
+                      }}
+                      type="button"
+                      onClick={() => void handleRevoke(session)}
+                      disabled={revokingSessionId === session.session_id}
+                      onKeyDown={(event) =>
+                        handleLinearNavigation(event, {
+                          index,
+                          refs: rowActionRefs.current,
+                          orientation: "vertical",
+                        })
+                      }
+                      className="border border-rose-300 bg-rose-50 px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {session.status}
+                      {revokingSessionId === session.session_id ? "Revoking..." : "Revoke"}
+                    </button>
+                  ) : (
+                    <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">
+                      Read Only
                     </span>
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    {formatDateTime(session.created_at)}
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    {formatDateTime(session.last_seen_at)}
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    {formatDateTime(session.expires_at)}
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    {formatDateTime(session.revoked_at)}
-                  </td>
-                  <td className="px-3 py-2 text-sm text-slate-700">
-                    {session.status === "ACTIVE" ? (
-                      <button
-                        ref={(element) => {
-                          rowActionRefs.current[index] = element;
-                        }}
-                        type="button"
-                        onClick={() => void handleRevoke(session)}
-                        disabled={revokingSessionId === session.session_id}
-                        onKeyDown={(event) =>
-                          handleLinearNavigation(event, {
-                            index,
-                            refs: rowActionRefs.current,
-                            orientation: "vertical",
-                          })
-                        }
-                        className="border border-rose-300 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {revokingSessionId === session.session_id
-                          ? "Revoking..."
-                          : "Revoke"}
-                      </button>
-                    ) : (
-                      <span className="text-xs uppercase tracking-[0.16em] text-slate-400">
-                        Read Only
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  ),
+              },
+            ]}
+            rows={sessionPagination.pageItems}
+            rowKey={(session) => session.session_id}
+            getRowProps={(_session, index) => getRowProps(index)}
+            emptyMessage="No sessions match the selected filter right now."
+          />
+        </>
       ),
   };
 
@@ -489,8 +474,11 @@ export default function SASessions() {
             ]
           : []
       }
+      footerHints={["Arrow Keys Navigate", "Enter Focus Action", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={filterSection}
       listSection={listSection}
     />
   );
 }
+
+

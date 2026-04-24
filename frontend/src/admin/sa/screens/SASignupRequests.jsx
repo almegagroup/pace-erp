@@ -10,14 +10,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
-import { openActionConfirm } from "../../../store/actionConfirm.js";
 import {
   handleGridNavigation,
   handleLinearNavigation,
 } from "../../../navigation/erpRovingFocus.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
-import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
+import ErpInlineApprovalRow from "../../../components/data/ErpInlineApprovalRow.jsx";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
@@ -78,8 +78,10 @@ export default function SASignupRequests() {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [actingUserId, setActingUserId] = useState("");
+  const [focusedRowIndex, setFocusedRowIndex] = useState(-1);
   const actionBarRefs = useRef([]);
   const rowActionRefs = useRef([]);
   const searchInputRef = useRef(null);
@@ -133,26 +135,9 @@ export default function SASignupRequests() {
       return;
     }
 
-    const approved = await openActionConfirm({
-      eyebrow: "SA Onboarding Queue",
-      title:
-        decision === "APPROVE"
-          ? "Approve Signup Request"
-          : "Reject Signup Request",
-      message:
-        decision === "APPROVE"
-          ? "Approve this ERP signup request and move the user into the governed ERP lifecycle?"
-          : "Reject this ERP signup request and close the onboarding request?",
-      confirmLabel: decision === "APPROVE" ? "Approve" : "Reject",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
-      return;
-    }
-
     setActingUserId(authUserId);
     setError("");
+    setNotice("");
 
     const endpoint =
       decision === "APPROVE"
@@ -189,12 +174,16 @@ export default function SASignupRequests() {
       const pendingRow = refreshedRequests.find(
         (row) => row.auth_user_id === authUserId
       );
-      const stillPending = Boolean(pendingRow);
 
       setRequests(refreshedRequests);
+      setNotice(
+        decision === "APPROVE"
+          ? "Signup request approved."
+          : "Signup request rejected."
+      );
 
-      if (stillPending) {
-        const lifecycleState = pendingRow?.user_state ?? "UNKNOWN";
+      if (pendingRow) {
+        const lifecycleState = pendingRow.user_state ?? "UNKNOWN";
         throw new Error(`SIGNUP_DECISION_NOT_FINALIZED:${lifecycleState}`);
       }
     } catch (caughtError) {
@@ -235,12 +224,17 @@ export default function SASignupRequests() {
   );
   const signupPagination = useErpPagination(filteredRequests, 10);
 
-  const { getRowProps, getRowElement } = useErpListNavigation(signupPagination.pageItems, {
-    onActivate: (_row, index) => {
-      const firstBtn = getRowElement(index)?.querySelector("button:not(:disabled)");
-      firstBtn?.focus();
-    },
-  });
+  const { getRowProps, getRowElement } = useErpListNavigation(
+    signupPagination.pageItems,
+    {
+      onActivate: (_row, index) => {
+        const firstBtn = getRowElement(index)?.querySelector(
+          "button:not(:disabled)"
+        );
+        firstBtn?.focus();
+      },
+    }
+  );
 
   useErpScreenCommands([
     {
@@ -351,7 +345,6 @@ export default function SASignupRequests() {
     children: (
       <QuickFilterInput
         inputRef={searchInputRef}
-        className=""
         label="Quick Search"
         value={searchQuery}
         onChange={setSearchQuery}
@@ -362,11 +355,11 @@ export default function SASignupRequests() {
     ),
   };
 
-  const listSection = {
+  const reviewSection = {
     eyebrow: "Decision Rows",
     title: loading
       ? "Refreshing onboarding queue"
-      : `${filteredRequests.length} visible request${filteredRequests.length === 1 ? "" : "s"}`,
+      : `${filteredRequests.length} actionable request${filteredRequests.length === 1 ? "" : "s"}`,
     children: loading ? (
       <div className="border border-dashed border-slate-300 bg-slate-50 px-5 py-6 text-sm text-slate-500">
         Loading pending signup requests from the onboarding queue.
@@ -376,7 +369,7 @@ export default function SASignupRequests() {
         There are no pending signup requests matching the current filter right now.
       </div>
     ) : (
-      <div className="overflow-x-auto">
+      <>
         <ErpPaginationStrip
           page={signupPagination.page}
           setPage={signupPagination.setPage}
@@ -385,129 +378,143 @@ export default function SASignupRequests() {
           endIndex={signupPagination.endIndex}
           totalItems={filteredRequests.length}
         />
-        <table className="min-w-full border-collapse">
-          <thead>
-            <tr>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Requester
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Company
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Designation
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Contact
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Submitted
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Lifecycle
-              </th>
-              <th className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {signupPagination.pageItems.map((request, index) => {
-              const isActing = actingUserId === request.auth_user_id;
+        <div className="overflow-auto border border-slate-300 bg-white">
+          <table className="erp-grid-table min-w-full text-xs">
+            <thead className="bg-slate-800 text-white">
+              <tr>
+                {[
+                  "Requester",
+                  "Company",
+                  "Designation",
+                  "Contact",
+                  "Submitted",
+                  "Lifecycle",
+                  "Actions",
+                ].map((label) => (
+                  <th
+                    key={label}
+                    className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.14em] text-white"
+                  >
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {signupPagination.pageItems.map((request, index) => {
+                const isActing = actingUserId === request.auth_user_id;
+                const rowProps = getRowProps(index);
 
-              return (
-                <tr key={request.auth_user_id} {...getRowProps(index)} className="border-b border-slate-200 bg-white align-top">
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <div className="font-semibold text-slate-900">
-                      {request.name ?? "Unnamed Request"}
-                    </div>
-                    <div className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
-                      Auth {shortId(request.auth_user_id)}
-                    </div>
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    {request.parent_company_name ?? "Not Provided"}
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    {request.designation_hint ?? "Not Provided"}
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    {request.phone_number ?? "Not Provided"}
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    {formatDateTime(request.submitted_at)}
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <span className="inline-flex border border-slate-300 bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700">
-                      {formatLifecycleState(request.user_state)}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3 text-sm text-slate-700">
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        ref={(element) => {
-                          rowActionRefs.current[index] ??= [];
-                          rowActionRefs.current[index][0] = element;
-                        }}
-                        type="button"
-                        disabled={isActing}
-                        onClick={() =>
-                          void handleDecision(request.auth_user_id, "APPROVE")
-                        }
-                        onKeyDown={(event) =>
-                          handleGridNavigation(event, {
-                            rowIndex: index,
-                            columnIndex: 0,
-                            gridRefs: rowActionRefs.current,
-                          })
-                        }
-                        className={`border border-emerald-300 bg-emerald-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700 ${
-                          isActing ? "cursor-not-allowed opacity-60" : ""
-                        }`}
-                      >
-                        {isActing ? "Updating..." : "Approve"}
-                      </button>
-                      <button
-                        ref={(element) => {
-                          rowActionRefs.current[index] ??= [];
-                          rowActionRefs.current[index][1] = element;
-                        }}
-                        type="button"
-                        disabled={isActing}
-                        onClick={() =>
-                          void handleDecision(request.auth_user_id, "REJECT")
-                        }
-                        onKeyDown={(event) =>
-                          handleGridNavigation(event, {
-                            rowIndex: index,
-                            columnIndex: 1,
-                            gridRefs: rowActionRefs.current,
-                          })
-                        }
-                        className={`border border-rose-300 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700 ${
-                          isActing ? "cursor-not-allowed opacity-60" : ""
-                        }`}
-                      >
-                        {isActing ? "Updating..." : "Reject"}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                return (
+                  <ErpInlineApprovalRow
+                    key={request.auth_user_id}
+                    row={request}
+                    index={index}
+                    isFocused={focusedRowIndex === index}
+                    onApprove={() => void handleDecision(request.auth_user_id, "APPROVE")}
+                    onReject={() => void handleDecision(request.auth_user_id, "REJECT")}
+                    onActivate={() => rowActionRefs.current[index]?.[0]?.focus()}
+                    rowProps={{
+                      ...rowProps,
+                      onFocus: () => setFocusedRowIndex(index),
+                    }}
+                    columns={[
+                      {
+                        key: "requester",
+                        render: (row) => (
+                          <div>
+                            <p className="font-medium leading-tight">{row.name ?? "Unnamed Request"}</p>
+                            <p className="text-[10px] text-slate-500">Auth {shortId(row.auth_user_id)}</p>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: "company",
+                        render: (row) => row.parent_company_name ?? "Not Provided",
+                      },
+                      {
+                        key: "designation",
+                        render: (row) => row.designation_hint ?? "Not Provided",
+                      },
+                      {
+                        key: "contact",
+                        render: (row) => row.phone_number ?? "Not Provided",
+                      },
+                      {
+                        key: "submitted",
+                        render: (row) => formatDateTime(row.submitted_at),
+                      },
+                      {
+                        key: "lifecycle",
+                        render: (row) => (
+                          <span className="inline-flex border border-slate-300 bg-slate-100 px-2 py-[1px] text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700">
+                            {formatLifecycleState(row.user_state)}
+                          </span>
+                        ),
+                      },
+                      {
+                        key: "actions",
+                        render: () => (
+                          <div className="flex gap-1">
+                            <button
+                              ref={(element) => {
+                                rowActionRefs.current[index] ??= [];
+                                rowActionRefs.current[index][0] = element;
+                              }}
+                              type="button"
+                              disabled={isActing}
+                              onClick={() => void handleDecision(request.auth_user_id, "APPROVE")}
+                              onKeyDown={(event) =>
+                                handleGridNavigation(event, {
+                                  rowIndex: index,
+                                  columnIndex: 0,
+                                  gridRefs: rowActionRefs.current,
+                                })
+                              }
+                              className={`border border-emerald-300 bg-emerald-50 px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700 ${isActing ? "cursor-not-allowed opacity-60" : ""}`}
+                            >
+                              {isActing ? "..." : "Approve"}
+                            </button>
+                            <button
+                              ref={(element) => {
+                                rowActionRefs.current[index] ??= [];
+                                rowActionRefs.current[index][1] = element;
+                              }}
+                              type="button"
+                              disabled={isActing}
+                              onClick={() => void handleDecision(request.auth_user_id, "REJECT")}
+                              onKeyDown={(event) =>
+                                handleGridNavigation(event, {
+                                  rowIndex: index,
+                                  columnIndex: 1,
+                                  gridRefs: rowActionRefs.current,
+                                })
+                              }
+                              className={`border border-rose-300 bg-rose-50 px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700 ${isActing ? "cursor-not-allowed opacity-60" : ""}`}
+                            >
+                              {isActing ? "..." : "Reject"}
+                            </button>
+                          </div>
+                        ),
+                      },
+                    ]}
+                  />
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </>
     ),
   };
 
   return (
-    <ErpMasterListTemplate
+    <ErpApprovalReviewTemplate
       eyebrow="SA Onboarding Queue"
       title="Pending Signup Requests"
       actions={topActions}
-      notices={
-        error
+      notices={[
+        ...(error
           ? [
               {
                 key: "error",
@@ -515,10 +522,28 @@ export default function SASignupRequests() {
                 message: error,
               },
             ]
-          : []
-      }
+          : []),
+        ...(notice
+          ? [
+              {
+                key: "notice",
+                tone: "success",
+                message: notice,
+              },
+            ]
+          : []),
+      ]}
+      footerHints={[
+        "Arrow Keys Navigate",
+        "Enter Focus Action",
+        "A Approve",
+        "R Reject",
+        "F8 Refresh",
+        "Esc Back",
+        "Ctrl+K Command Bar",
+      ]}
       filterSection={filterSection}
-      listSection={listSection}
+      reviewSection={reviewSection}
     />
   );
 }

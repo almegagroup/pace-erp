@@ -8,7 +8,8 @@ import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
-import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import {
   formatCompanyAddress,
   formatCompanyLabel,
@@ -149,7 +150,9 @@ export default function SACapabilityGovernance(){
     });
   },[catalog,search,projectCode,moduleCode]);
   const rows=useMemo(()=>filteredCatalog.map((resource)=>({resource,savedRow:capMap.get(resource.resource_code)??null,draft:drafts[resource.resource_code]??(capMap.has(resource.resource_code)?rowDraft(capCode,capMap.get(resource.resource_code)):newDraft(capCode,resource.resource_code))})),[filteredCatalog,drafts,capMap,capCode]);
-  const { getRowProps } = useErpListNavigation(rows);
+  const { getRowProps } = useErpListNavigation(rows, {
+    onActivate: (row) => setSelectedResourceCode(row?.resource?.resource_code ?? ""),
+  });
   useEffect(()=>{
     if(!rows.length){setSelectedResourceCode(""); return;}
     if(!selectedResourceCode||!rows.some((r)=>r.resource.resource_code===selectedResourceCode)) setSelectedResourceCode(rows[0].resource.resource_code);
@@ -260,9 +263,12 @@ export default function SACapabilityGovernance(){
         {key:"acl-version-center",label:"ACL Version Center",tone:"neutral",buttonRef:(el)=>{topRefs.current[2]=el;},onClick:()=>{openScreen("SA_ACL_VERSION_CENTER",{mode:"replace"});navigate("/sa/acl/version-center");},onKeyDown:(e)=>handleLinearNavigation(e,{index:2,refs:topRefs.current,orientation:"horizontal"})},
       ]}
       notices={[...(error?[{key:"error",tone:"error",message:error}]:[]),...(notice?[{key:"notice",tone:"success",message:notice}]:[])]}
+      footerHints={["Arrow Keys Navigate", "Enter Select", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-6 xl:grid-cols-[1.1fr,0.9fr]">
-          <ErpSectionCard eyebrow="Screen Packs" title="Capability matrix">
+        <section className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Screen Packs</div>
+          <div className="text-sm font-semibold text-slate-900">Capability matrix</div>
           <div className="mb-6 grid gap-3 border border-slate-300 bg-slate-50 px-4 py-4">
             <div><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Create Capability Pack</p><p className="mt-1 text-xs text-slate-600">Start with CAP_HR_REQUESTER, CAP_HR_APPROVER, and CAP_HR_REPORT_VIEWER.</p></div>
             <div className="grid gap-3 md:grid-cols-2">
@@ -286,15 +292,94 @@ export default function SACapabilityGovernance(){
             <label className="block"><span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Module</span><select value={moduleCode} onChange={(e)=>setModuleCode(e.target.value)} className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"><option value="">Choose module</option>{moduleOptions.map((code)=><option key={code} value={code}>{code}</option>)}</select></label>
           </div>
           <button type="button" disabled={saving} onClick={()=>void saveMatrix()} className="mt-4 border border-sky-300 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-900">Save Capability Matrix</button>
-          <div className="mt-6 overflow-x-auto border border-slate-300 bg-white">
-            {!moduleCode?<div className="bg-slate-50 px-4 py-4 text-sm text-slate-500">Project select korar por exact module choose koro. Tarpor oi module-er sob pages row hisebe asbe.</div>:catalogLoading?<div className="bg-slate-50 px-4 py-4 text-sm text-slate-500">Loading mapped business resources.</div>:rows.length===0?<div className="bg-slate-50 px-4 py-4 text-sm text-slate-500">Selected project/module-er niche visible mapped business resource paoa jayni.</div>:<table className="min-w-full border-collapse text-sm text-slate-700"><thead className="bg-slate-50 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500"><tr><th className="border-b border-slate-300 px-4 py-3 text-left">Resource</th>{ACTIONS.map(([, , label])=><th key={label} className="border-b border-l border-slate-300 px-3 py-3 text-center">{label}</th>)}</tr></thead><tbody>{rows.map(({resource,draft},index)=>{const selected=resource.resource_code===selectedResourceCode;const available=new Set(resource.available_actions??[]);return(<tr key={resource.resource_code} {...getRowProps(index)} className={selected?"bg-sky-50":"bg-white"}><td className="border-b border-slate-200 px-4 py-3 align-top" onClick={()=>setSelectedResourceCode(resource.resource_code)}><button ref={(el)=>{matrixRowRefs.current[index]=el;}} type="button" className="w-full cursor-pointer text-left"><div className="font-semibold text-slate-900">{resource.title}</div><div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">{resource.resource_code}</div><div className="mt-1 text-xs text-slate-500">{[resource.project_code,resource.module_code,resource.route_path].filter(Boolean).join(" | ")}</div>{draft.denied_actions.length>0?<div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-rose-600">Explicit deny: {draft.denied_actions.join(", ")}</div>:null}</button></td>{ACTIONS.map(([actionCode,key])=><td key={`${resource.resource_code}-${actionCode}`} className="border-b border-l border-slate-200 px-3 py-3 text-center"><input type="checkbox" disabled={!available.has(actionCode)} checked={Boolean(draft[key])} onChange={(e)=>updateAllow(resource.resource_code,key,e.target.checked,actionCode)} className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-emerald-600 disabled:cursor-not-allowed" /></td>)}</tr>);})}</tbody></table>}
+          <div className="mt-6 border border-slate-300 bg-white">
+            {!moduleCode ? (
+              <div className="bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                Project select korar por exact module choose koro. Tarpor oi module-er sob pages row hisebe asbe.
+              </div>
+            ) : catalogLoading ? (
+              <div className="bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                Loading mapped business resources.
+              </div>
+            ) : rows.length === 0 ? (
+              <div className="bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                Selected project/module-er niche visible mapped business resource paoa jayni.
+              </div>
+            ) : (
+              <ErpDenseGrid
+                columns={[
+                  {
+                    key: "resource",
+                    label: "Resource",
+                    render: ({ resource, draft }, index) => (
+                      <button
+                        ref={(el) => {
+                          matrixRowRefs.current[index] = el;
+                        }}
+                        type="button"
+                        onClick={() => setSelectedResourceCode(resource.resource_code)}
+                        className="w-full cursor-pointer text-left"
+                      >
+                        <div className="font-semibold text-slate-900">{resource.title}</div>
+                        <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                          {resource.resource_code}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {[resource.project_code, resource.module_code, resource.route_path]
+                            .filter(Boolean)
+                            .join(" | ")}
+                        </div>
+                        {draft.denied_actions.length > 0 ? (
+                          <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-rose-600">
+                            Explicit deny: {draft.denied_actions.join(", ")}
+                          </div>
+                        ) : null}
+                      </button>
+                    ),
+                  },
+                  ...ACTIONS.map(([actionCode, key, label]) => ({
+                    key: actionCode,
+                    label,
+                    align: "center",
+                    render: ({ resource, draft }) => {
+                      const available = new Set(resource.available_actions ?? []);
+                      return (
+                        <input
+                          type="checkbox"
+                          disabled={!available.has(actionCode)}
+                          checked={Boolean(draft[key])}
+                          onChange={(e) =>
+                            updateAllow(resource.resource_code, key, e.target.checked, actionCode)
+                          }
+                          className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-emerald-600 disabled:cursor-not-allowed"
+                        />
+                      );
+                    },
+                  })),
+                ]}
+                rows={rows}
+                rowKey={(row) => row.resource.resource_code}
+                getRowProps={(row, index) => ({
+                  ...getRowProps(index),
+                  onClick: () => setSelectedResourceCode(row.resource.resource_code),
+                  className:
+                    row.resource.resource_code === selectedResourceCode ? "bg-sky-50" : "",
+                })}
+                onRowActivate={(row) => setSelectedResourceCode(row.resource.resource_code)}
+                maxHeight="none"
+              />
+            )}
           </div>
-        </ErpSectionCard>
+        </section>
         <div className="grid gap-6">
-          <ErpSectionCard eyebrow="Selected Resource" title={selectedRow?.resource?.title??"Advanced deny editor"}>
+          <section className="grid gap-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Selected Resource</div>
+            <div className="text-sm font-semibold text-slate-900">{selectedRow?.resource?.title??"Advanced deny editor"}</div>
             {selectedRow?<div className="space-y-4"><div className="border border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600"><div>{selectedRow.resource.resource_code}</div><div className="mt-1">{[selectedRow.resource.project_code,selectedRow.resource.module_code,selectedRow.resource.route_path].filter(Boolean).join(" | ")}</div></div><div className="border border-slate-300 bg-white"><div className="grid grid-cols-[minmax(0,1fr)_84px] border-b border-slate-300 bg-slate-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500"><span>Advanced Explicit Deny</span><span className="text-center">Deny</span></div>{ACTIONS.map(([actionCode,,label])=><div key={`deny-${actionCode}`} className="grid grid-cols-[minmax(0,1fr)_84px] items-center border-b border-slate-200 px-4 py-3 text-sm text-slate-700 last:border-b-0"><span>{label}</span><label className="flex justify-center"><input type="checkbox" checked={selectedRow.draft.denied_actions.includes(actionCode)} onChange={(e)=>updateDeny(selectedRow.resource.resource_code,actionCode,e.target.checked)} className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-rose-600" /></label></div>)}</div><button type="button" onClick={()=>void clearSelected()} className="border border-rose-300 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700">Clear Selected Resource Rule</button></div>:<div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">Matrix theke ekta resource row select koro. Tarpor chaile explicit deny advanced override set korte parbe.</div>}
-          </ErpSectionCard>
-          <ErpSectionCard eyebrow="Access Pack Coverage" title={capCode||"Selected access pack summary"}>
+          </section>
+          <section className="grid gap-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Access Pack Coverage</div>
+            <div className="text-sm font-semibold text-slate-900">{capCode||"Selected access pack summary"}</div>
             <div className="grid gap-3 md:grid-cols-3">
               <div className="border border-slate-300 bg-slate-50 px-4 py-3"><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Selected Pack</p><p className="mt-2 text-sm font-semibold text-slate-900">{capCode||"Choose capability"}</p></div>
               <div className="border border-slate-300 bg-slate-50 px-4 py-3"><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Saved Rows</p><p className="mt-2 text-sm font-semibold text-slate-900">{capRows.length}</p></div>
@@ -303,8 +388,10 @@ export default function SACapabilityGovernance(){
             <div className="mt-4 border border-slate-300 bg-white">
               {capRows.length===0?<div className="px-4 py-4 text-sm text-slate-500">এই capability pack-এ এখনো কোনো saved page/action row নেই। আগে left side matrix save করো.</div>:capRows.map((row)=><div key={row.resource_code} className="border-b border-slate-200 px-4 py-3 last:border-b-0"><div className="text-sm font-semibold text-slate-900">{row.resource_code}</div><div className="mt-1 text-xs text-slate-500">{ACTIONS.filter(([,key])=>row[key]).map(([, , label])=>label).join(", ")||"No allow flags"}{Array.isArray(row.denied_actions)&&row.denied_actions.length?` | Deny: ${row.denied_actions.join(", ")}`:""}</div></div>)}
             </div>
-          </ErpSectionCard>
-          <ErpSectionCard eyebrow="Business Areas" title="Open one business area, then choose access packs inside the drawer">
+          </section>
+          <section className="grid gap-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Business Areas</div>
+            <div className="text-sm font-semibold text-slate-900">Open one business area, then choose access packs inside the drawer</div>
             <label className="block"><span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Company</span><select value={companyId} onChange={(e)=>setCompanyId(e.target.value)} className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none">{companies.map((c)=><option key={c.id} value={c.id}>{formatCompanyOptionLabel(c)}</option>)}</select></label>
             <QuickFilterInput label="Search Contexts" value={contextSearch} onChange={setContextSearch} placeholder="Search by company, department, or context code" hint="GENERAL_OPS is company-wide. DEPT_* rows come from department setup." />
             <div className="mt-6 border border-slate-300">
@@ -333,8 +420,10 @@ export default function SACapabilityGovernance(){
             <div className="mt-4 border border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600">
               {ctxId&&ctxCaps.length>0?`Selected business area currently carries: ${ctxCaps.map((cap)=>cap.capability_code).join(", ")}`:"Open any business area row to inspect and manage its attached access packs."}
             </div>
-          </ErpSectionCard>
-          <ErpSectionCard eyebrow="ACL Publish Flow" title="Versioning moved into its own desk">
+          </section>
+          <section className="grid gap-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">ACL Publish Flow</div>
+            <div className="text-sm font-semibold text-slate-900">Versioning moved into its own desk</div>
             <div className="grid gap-4 border border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-700">
               <p>Use this workspace to change access packs and work-scope binding. Then open ACL Version Center to see which companies now require a fresh publish snapshot.</p>
               <div className="flex flex-wrap gap-3">
@@ -342,7 +431,7 @@ export default function SACapabilityGovernance(){
                 <button type="button" onClick={()=>{openScreen("SA_WORK_CONTEXT_MASTER",{mode:"replace"});navigate("/sa/work-contexts");}} className="border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700">Review Work Context Master</button>
               </div>
             </div>
-          </ErpSectionCard>
+          </section>
         </div>
       </div>
       <DrawerBase

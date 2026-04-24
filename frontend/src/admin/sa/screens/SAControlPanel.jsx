@@ -10,10 +10,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
-import ErpScreenScaffold, {
-  ErpFieldPreview,
-  ErpSectionCard,
-} from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
@@ -132,40 +131,13 @@ function DataTableCard({
           {emptyMessage}
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="erp-grid-table min-w-full">
-            <thead>
-              <tr>
-                {columns.map((column) => (
-                  <th
-                    key={column.key}
-                    className="border-b border-slate-300 bg-[#eef4fb] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-                  >
-                    {column.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => (
-                <tr
-                  key={row.id ?? `${title}-${index}`}
-                  {...getRowProps(index)}
-                  className="border-b border-slate-200 bg-white"
-                >
-                  {columns.map((column) => (
-                    <td
-                      key={column.key}
-                      className="px-3 py-2 text-sm text-slate-700"
-                    >
-                      {column.render(row)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ErpDenseGrid
+          columns={columns}
+          rows={rows}
+          rowKey={(row, index) => row.id ?? `${title}-${index}`}
+          getRowProps={(_row, index) => getRowProps(index)}
+          maxHeight="none"
+        />
       )}
 
       {footer || actions ? (
@@ -490,6 +462,7 @@ export default function SAControlPanel() {
       title="ERP Control Panel"
       actions={topActions}
       notices={notices}
+      footerHints={["CTRL+K COMMAND BAR", "ALT+R REFRESH"]}
     >
       <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
         <DataTableCard
@@ -596,45 +569,47 @@ export default function SAControlPanel() {
             )}
           />
 
-          <ErpSectionCard
-            eyebrow="Snapshot Readiness"
-            title="Access Projection Status"
-          >
+          <div className="grid gap-3">
+            <ErpSelectionSection label="Snapshot Readiness" />
             <div className="grid gap-3 sm:grid-cols-2">
-              <ErpFieldPreview
-                label="ACL Snapshot"
-                value={loading ? "..." : health?.acl_snapshot_status ?? "N/A"}
-                caption="Permission projection readiness from the backend snapshot service."
-                tone={
-                  health?.acl_snapshot_status === "READY" ? "success" : "amber"
-                }
-              />
-              <ErpFieldPreview
-                label="Menu Snapshot"
-                value={loading ? "..." : health?.menu_snapshot_status ?? "N/A"}
-                caption="Navigation snapshot integrity for the protected ERP shell."
-                tone={
-                  health?.menu_snapshot_status === "READY" ? "success" : "amber"
-                }
-              />
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  ACL Snapshot
+                </p>
+                <p className="mt-1 text-sm font-semibold text-slate-900">
+                  {loading ? "..." : health?.acl_snapshot_status ?? "N/A"}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Permission projection readiness from the backend snapshot service.
+                </p>
+              </div>
+              <div className="border border-slate-300 bg-white px-3 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Menu Snapshot
+                </p>
+                <p className="mt-1 text-sm font-semibold text-slate-900">
+                  {loading ? "..." : health?.menu_snapshot_status ?? "N/A"}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Navigation snapshot integrity for the protected ERP shell.
+                </p>
+              </div>
             </div>
-          </ErpSectionCard>
+          </div>
         </div>
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <ErpSectionCard
-          eyebrow="Quick Launch"
-          title="Open the next SA workspace"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="Quick Launch" />
           <div className="grid gap-6">
             {quickLaunchSections.map((section) => (
               <div key={section.key} className="grid gap-2">
-                <div className="border border-slate-300 bg-[#eef4fb] px-3 py-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+                <div className="border-b border-slate-300 px-1 py-2">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-700">
                     {section.title}
                   </p>
-                  <p className="mt-1 text-sm text-slate-600">
+                  <p className="mt-1 text-xs text-slate-500">
                     {section.description || "Open the next governance workspace in this section."}
                   </p>
                 </div>
@@ -665,28 +640,36 @@ export default function SAControlPanel() {
               </div>
             ))}
           </div>
-        </ErpSectionCard>
+        </div>
 
-        <ErpSectionCard
-          eyebrow="System Snapshot"
-          title="Diagnostic context"
-        >
+        <div className="grid gap-3">
+          <ErpSelectionSection label="System Snapshot" />
           <div className="grid gap-3">
-            <ErpFieldPreview
-              label="ERP Build"
-              value={loading ? "..." : systemVersion}
-              caption="Build signature shown in one place so operators do not need to scan raw payload data."
-              tone="sky"
-            />
-            <ErpFieldPreview
-              label="Launch Program"
-              value={launchSummary.join("\n")}
-              caption="Active governance workspaces available from the quick launch rail."
-              multiline
-              tone="default"
-            />
+            <div className="border border-slate-300 bg-white px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                ERP Build
+              </p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {loading ? "..." : systemVersion}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Build signature shown in one place so operators do not need to scan raw payload data.
+              </p>
+            </div>
+            <div className="border border-slate-300 bg-white px-3 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Launch Program
+              </p>
+              <div className="mt-2 grid gap-2">
+                {launchSummary.map((item) => (
+                  <div key={item} className="border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    {item}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-        </ErpSectionCard>
+        </div>
       </div>
 
       <DrawerBase

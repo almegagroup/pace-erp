@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
-import { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
@@ -79,13 +79,6 @@ const VISIBILITY_SCOPE_OPTIONS = [
     description: "Broad director-level business visibility for the company.",
   },
 ];
-
-function buildVisibilityScopeLabel(scopeType) {
-  return (
-    VISIBILITY_SCOPE_OPTIONS.find((option) => option.value === String(scopeType ?? "").trim().toUpperCase())
-      ?.label ?? "Company-wide"
-  );
-}
 
 function createEmptyDraft() {
   return {
@@ -297,7 +290,9 @@ export default function SAReportVisibility() {
     searchQuery,
   ]);
 
-  const { getRowProps } = useErpListNavigation(filteredRules);
+  const { getRowProps } = useErpListNavigation(filteredRules, {
+    onActivate: (row) => handleRulePick(row),
+  });
 
   async function handleSave() {
     if (!draft.company_id || !draft.module_code || !draft.resource_code) {
@@ -496,6 +491,7 @@ export default function SAReportVisibility() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
+      footerHints={["Arrow Keys Navigate", "Enter Select", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={{
         eyebrow: "Visibility Filters",
         title: "Choose report scope",
@@ -625,6 +621,7 @@ export default function SAReportVisibility() {
       reviewSection={{
         eyebrow: "Existing Viewer Rules",
         title: loading ? "Loading visibility rules" : `${filteredRules.length} visible viewer rule${filteredRules.length === 1 ? "" : "s"}`,
+        count: filteredRules.length,
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading report visibility rules.
@@ -634,69 +631,82 @@ export default function SAReportVisibility() {
             No report visibility rule matches the current filter.
           </div>
         ) : (
-          <div className="grid gap-3">
-            {filteredRules.map((row, index) => {
-              const user = workspace.users.find((item) => item.auth_user_id === row.viewer_user_id) ?? null;
-              const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id) ?? null;
-              const resource = workspace.resources.find((item) => item.resource_code === row.resource_code) ?? null;
-              const requesterUser = workspace.users.find((item) => item.auth_user_id === row.subject_user_id) ?? null;
-
-              return (
-                <button
-                  key={row.viewer_id}
-                  {...getRowProps(index)}
-                  type="button"
-                  onClick={() => handleRulePick(row)}
-                  className={`border px-4 py-4 text-left ${
-                    draft.viewer_id === row.viewer_id ? "border-sky-400 bg-sky-50" : "border-slate-300 bg-white"
-                  }`}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+          <ErpDenseGrid
+            columns={[
+              {
+                key: "resource",
+                label: "Resource",
+                render: (row) => {
+                  const resource = workspace.resources.find((item) => item.resource_code === row.resource_code) ?? null;
+                  return (
                     <div>
-                      <div className="text-sm font-semibold text-slate-900">
+                      <div className="font-semibold text-slate-900">
                         {resource?.title ?? row.resource_code}
                       </div>
-                      <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                      <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
                         {row.module_code} | {row.resource_code} | {row.action_code}
                       </div>
-                      <div className="mt-2 text-xs text-slate-600">
-                        {user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.viewer_role_code] ?? row.viewer_role_code}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        Scope: {buildVisibilityScopeLabel(row.scope_type)}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {row.scope_type === "USER_EXCEPTION"
-                          ? `Requester user: ${buildUserLabel(requesterUser)}`
-                          : scope
-                            ? `Viewer lane: ${buildWorkContextLabel(scope)}`
-                            : row.scope_type === "DIRECTOR"
-                              ? "Viewer lane: director broad visibility"
-                              : "Viewer lane: company-wide broad visibility"}
-                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void handleDelete(row);
-                      }}
-                      className="border border-rose-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-rose-700"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </button>
-              );
+                  );
+                },
+              },
+              {
+                key: "viewer",
+                label: "Viewer",
+                render: (row) => {
+                  const user = workspace.users.find((item) => item.auth_user_id === row.viewer_user_id) ?? null;
+                  return user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.viewer_role_code] ?? row.viewer_role_code;
+                },
+              },
+              {
+                key: "scope",
+                label: "Scope",
+                render: (row) => {
+                  const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id) ?? null;
+                  const requesterUser = workspace.users.find((item) => item.auth_user_id === row.subject_user_id) ?? null;
+                  if (row.scope_type === "USER_EXCEPTION") {
+                    return `User | ${buildUserLabel(requesterUser)}`;
+                  }
+                  if (scope) {
+                    return buildWorkContextLabel(scope);
+                  }
+                  return row.scope_type === "DIRECTOR" ? "Director broad visibility" : "Company-wide broad visibility";
+                },
+              },
+              {
+                key: "delete",
+                label: "Delete",
+                align: "center",
+                render: (row) => (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleDelete(row);
+                    }}
+                    className="border border-rose-300 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-rose-700"
+                  >
+                    Delete
+                  </button>
+                ),
+              },
+            ]}
+            rows={filteredRules}
+            rowKey={(row) => row.viewer_id}
+            getRowProps={(row, index) => ({
+              ...getRowProps(index),
+              onClick: () => handleRulePick(row),
+              className: draft.viewer_id === row.viewer_id ? "bg-sky-50" : "",
             })}
-          </div>
+            onRowActivate={(row) => handleRulePick(row)}
+            maxHeight="none"
+          />
         ),
       }}
       bottomSection={
-        <ErpSectionCard
-          eyebrow="Viewer Rule Editor"
-          title={draft.viewer_id ? "Edit visibility rule" : "Create visibility rule"}
-        >
+        <section className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Viewer Rule Editor</div>
+          <div className="text-sm font-semibold text-slate-900">{draft.viewer_id ? "Edit visibility rule" : "Create visibility rule"}</div>
           <div className="grid gap-4">
             <label className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -876,7 +886,7 @@ export default function SAReportVisibility() {
               Use company-wide or director viewer rows for broad business visibility. Use department, lane, or user-exception viewer rows when the report must stay tightly scoped.
             </div>
           </div>
-        </ErpSectionCard>
+        </section>
       }
     />
   );

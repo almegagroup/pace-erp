@@ -8,19 +8,17 @@
  * Authority: Frontend
  */
 
-import ErpScreenScaffold, {
-  ErpSectionCard,
-} from "./ErpScreenScaffold.jsx";
+import ErpScreenScaffold from "./ErpScreenScaffold.jsx";
+import ErpSelectionSection from "../forms/ErpSelectionSection.jsx";
+import ErpRegisterHeader from "../data/ErpRegisterHeader.jsx";
 
 const DEFAULT_FOOTER_HINTS = Object.freeze([
-  "Alt+Shift+F Or F3 Search Target",
-  "Arrow Keys Move Through Lists",
-  "Enter Open Row",
-  "Alt+A Action Rail",
-  "Alt+C Work Canvas",
-  "Alt+R Or F4 Refresh",
+  "↑↓ Navigate",
+  "Enter Open",
+  "Space Select",
+  "F8 Refresh",
   "Esc Back",
-  "Ctrl+K Or F9 Command Bar",
+  "Ctrl+K Command Bar",
 ]);
 
 export default function ErpMasterListTemplate({
@@ -33,6 +31,11 @@ export default function ErpMasterListTemplate({
   bottomSection = null,
   footerHints = DEFAULT_FOOTER_HINTS,
 }) {
+  const showFilterHeader = Boolean(filterSection?.eyebrow || filterSection?.title);
+  const showListHeader = Boolean(
+    listSection?.eyebrow || listSection?.title || listSection?.count != null,
+  );
+
   return (
     <ErpScreenScaffold
       eyebrow={eyebrow}
@@ -41,10 +44,47 @@ export default function ErpMasterListTemplate({
       notices={notices}
       footerHints={footerHints}
     >
-      <div className="grid gap-4">
-        {filterSection ? <ErpSectionCard {...filterSection} tone="accent" /> : null}
+      <div className="grid gap-[var(--erp-section-gap)]">
+        {filterSection ? (
+          <section className="grid gap-2 border-b border-slate-300 pb-3">
+            {showFilterHeader ? (
+              <div className="grid gap-2">
+                {filterSection.eyebrow ? (
+                  <ErpSelectionSection label={filterSection.eyebrow} />
+                ) : null}
+                {filterSection.title ? (
+                  <div className="text-sm font-semibold text-slate-900">
+                    {filterSection.title}
+                  </div>
+                ) : null}
+                {filterSection.aside ? (
+                  <div className="justify-self-start">{filterSection.aside}</div>
+                ) : null}
+              </div>
+            ) : null}
+            <div>{filterSection.children}</div>
+          </section>
+        ) : null}
         {listSection ? (
-          <ErpSectionCard {...listSection} className="min-h-[560px]" />
+          <section className="grid gap-2">
+            {showListHeader ? (
+              <ErpRegisterHeader
+                title={listSection.title ?? ""}
+                count={listSection.count}
+                filterValue={listSection.filterValue}
+                onFilterChange={listSection.onFilterChange}
+                filterRef={listSection.filterRef}
+                filterPlaceholder={listSection.filterPlaceholder}
+              />
+            ) : null}
+            {listSection.eyebrow && !showListHeader ? (
+              <ErpSelectionSection label={listSection.eyebrow} />
+            ) : null}
+            {listSection.aside ? (
+              <div className="justify-self-start">{listSection.aside}</div>
+            ) : null}
+            <div>{listSection.children}</div>
+          </section>
         ) : null}
         {bottomSection ? <div>{bottomSection}</div> : null}
       </div>

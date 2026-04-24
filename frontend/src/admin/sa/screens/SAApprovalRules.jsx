@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
-import { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
@@ -79,13 +79,6 @@ const APPROVAL_SCOPE_OPTIONS = [
     description: "Highest business-level broad participant for the company.",
   },
 ];
-
-function buildApprovalScopeLabel(scopeType) {
-  return (
-    APPROVAL_SCOPE_OPTIONS.find((option) => option.value === String(scopeType ?? "").trim().toUpperCase())
-      ?.label ?? "Company-wide"
-  );
-}
 
 function createEmptyDraft() {
   return {
@@ -329,7 +322,9 @@ export default function SAApprovalRules() {
     searchQuery,
   ]);
 
-  const { getRowProps } = useErpListNavigation(filteredRules);
+  const { getRowProps } = useErpListNavigation(filteredRules, {
+    onActivate: (row) => handleRulePick(row),
+  });
 
   async function handleSave() {
     if (!draft.company_id || !draft.module_code || !draft.resource_code) {
@@ -541,6 +536,7 @@ export default function SAApprovalRules() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
+      footerHints={["Arrow Keys Navigate", "Enter Select", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={{
         eyebrow: "Scope Filters",
         title: "Choose approval pool boundaries",
@@ -672,6 +668,7 @@ export default function SAApprovalRules() {
       reviewSection={{
         eyebrow: "Existing Rules",
         title: loading ? "Loading approver rules" : `${filteredRules.length} visible approver rule${filteredRules.length === 1 ? "" : "s"}`,
+        count: filteredRules.length,
         children: loading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
             Loading scoped approver rules.
@@ -681,69 +678,88 @@ export default function SAApprovalRules() {
             No approver rule matches the current filter.
           </div>
         ) : (
-          <div className="grid gap-3">
-            {filteredRules.map((row, index) => {
-              const user = workspace.users.find((item) => item.auth_user_id === row.approver_user_id) ?? null;
-              const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id) ?? null;
-              const resource = workspace.resources.find((item) => item.resource_code === row.resource_code) ?? null;
-              const requesterUser = workspace.users.find((item) => item.auth_user_id === row.subject_user_id) ?? null;
-
-              return (
-                <button
-                  key={row.approver_id}
-                  {...getRowProps(index)}
-                  type="button"
-                  onClick={() => handleRulePick(row)}
-                  className={`border px-4 py-4 text-left ${
-                    draft.approver_id === row.approver_id ? "border-sky-400 bg-sky-50" : "border-slate-300 bg-white"
-                  }`}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+          <ErpDenseGrid
+            columns={[
+              {
+                key: "resource",
+                label: "Resource",
+                render: (row) => {
+                  const resource = workspace.resources.find((item) => item.resource_code === row.resource_code) ?? null;
+                  return (
                     <div>
-                      <div className="text-sm font-semibold text-slate-900">
+                      <div className="font-semibold text-slate-900">
                         {resource?.title ?? row.resource_code ?? row.module_code}
                       </div>
-                      <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                      <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
                         {row.module_code} | {row.resource_code ?? "MODULE_SCOPE"} | {row.action_code ?? "ALL"}
                       </div>
-                      <div className="mt-2 text-xs text-slate-600">
-                        Stage {row.approval_stage} | {user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.approver_role_code] ?? row.approver_role_code}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        Scope: {buildApprovalScopeLabel(row.scope_type)}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {row.scope_type === "USER_EXCEPTION"
-                          ? `Requester user: ${buildUserLabel(requesterUser)}`
-                          : scope
-                            ? `Requester lane: ${buildWorkContextLabel(scope)}`
-                            : row.scope_type === "DIRECTOR"
-                              ? "Requester lane: director broad coverage"
-                              : "Requester lane: company-wide broad coverage"}
-                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void handleDelete(row);
-                      }}
-                      className="border border-rose-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-rose-700"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </button>
-              );
+                  );
+                },
+              },
+              {
+                key: "stage",
+                label: "Stage",
+                align: "center",
+                render: (row) => row.approval_stage,
+              },
+              {
+                key: "approver",
+                label: "Approver",
+                render: (row) => {
+                  const user = workspace.users.find((item) => item.auth_user_id === row.approver_user_id) ?? null;
+                  return user ? buildUserLabel(user) : ERP_ROLE_LABELS[row.approver_role_code] ?? row.approver_role_code;
+                },
+              },
+              {
+                key: "scope",
+                label: "Scope",
+                render: (row) => {
+                  const scope = workspace.work_contexts.find((item) => item.work_context_id === row.subject_work_context_id) ?? null;
+                  const requesterUser = workspace.users.find((item) => item.auth_user_id === row.subject_user_id) ?? null;
+                  if (row.scope_type === "USER_EXCEPTION") {
+                    return `User | ${buildUserLabel(requesterUser)}`;
+                  }
+                  if (scope) {
+                    return buildWorkContextLabel(scope);
+                  }
+                  return row.scope_type === "DIRECTOR" ? "Director broad coverage" : "Company-wide broad coverage";
+                },
+              },
+              {
+                key: "delete",
+                label: "Delete",
+                align: "center",
+                render: (row) => (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleDelete(row);
+                    }}
+                    className="border border-rose-300 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-rose-700"
+                  >
+                    Delete
+                  </button>
+                ),
+              },
+            ]}
+            rows={filteredRules}
+            rowKey={(row) => row.approver_id}
+            getRowProps={(row, index) => ({
+              ...getRowProps(index),
+              onClick: () => handleRulePick(row),
+              className: draft.approver_id === row.approver_id ? "bg-sky-50" : "",
             })}
-          </div>
+            onRowActivate={(row) => handleRulePick(row)}
+            maxHeight="none"
+          />
         ),
       }}
       bottomSection={
-        <ErpSectionCard
-          eyebrow="Rule Editor"
-          title={draft.approver_id ? "Edit approver rule" : "Create approver rule"}
-        >
+        <section className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Rule Editor</div>
+          <div className="text-sm font-semibold text-slate-900">{draft.approver_id ? "Edit approver rule" : "Create approver rule"}</div>
           <div className="grid gap-4">
             <label className="grid gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -944,7 +960,7 @@ export default function SAApprovalRules() {
               Company-wide and director rows are broad participants, not weak fallback rows. Department, lane, and user-exception rows can coexist in the same effective approver pool.
             </div>
           </div>
-        </ErpSectionCard>
+        </section>
       }
     />
   );
