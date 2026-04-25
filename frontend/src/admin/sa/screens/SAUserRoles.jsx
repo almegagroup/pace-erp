@@ -697,7 +697,7 @@ export default function SAUserRoles() {
               ]
             : []
         }
-        footerHints={["↑↓ Navigate", "Enter Edit", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+        footerHints={["↑↓ Navigate", "F8 Refresh", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
         filterSection={filterSection}
         listSection={listSection}
       />
@@ -714,5 +714,3 @@ export default function SAUserRoles() {
     </>
   );
 }
-
-

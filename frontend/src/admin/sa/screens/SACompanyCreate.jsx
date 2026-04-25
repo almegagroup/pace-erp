@@ -620,9 +620,7 @@ export default function SACompanyCreate() {
       actions={topActions}
       notices={notices}
       footerHints={[
-        "Tab Next Field",
         "Ctrl+S Save",
-        isEditMode ? "Enter Next Field" : "Enter Check GST",
         "Esc Back",
         "Ctrl+K Command Bar",
       ]}

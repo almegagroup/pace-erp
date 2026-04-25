@@ -351,7 +351,7 @@ export default function SACompanyManage() {
           ...(error ? [{ key: "error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
         ]}
-        footerHints={["↑↓ Navigate", "Enter Edit Address", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+        footerHints={["↑↓ Navigate", "Enter Open", "F8 Refresh", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
         filterSection={{
           eyebrow: "Registry Filter",
           title: "Search company inventory",
@@ -480,4 +480,3 @@ export default function SACompanyManage() {
     </>
   );
 }
-

@@ -474,11 +474,9 @@ export default function SASessions() {
             ]
           : []
       }
-      footerHints={["↑↓ Navigate", "Enter Inspect", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "F8 Refresh", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={filterSection}
       listSection={listSection}
     />
   );
 }
-
-

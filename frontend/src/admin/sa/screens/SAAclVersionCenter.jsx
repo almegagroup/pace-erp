@@ -535,7 +535,7 @@ export default function SAAclVersionCenter() {
             }),
         },
       ]}
-      footerHints={["↑↓ Navigate", "Enter Inspect", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),

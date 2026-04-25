@@ -10,7 +10,9 @@
 
 import { Fragment, useEffect, useMemo, useRef } from "react";
 import { pushToast } from "../../store/uiToast.js";
+import { isBlockingLayerActive } from "../layer/blockingLayerStack.js";
 import ErpCommandStrip from "../layout/ErpCommandStrip.jsx";
+
 
 const ACTION_TONE_CLASS = Object.freeze({
   primary:
@@ -308,8 +310,12 @@ export default function ErpScreenScaffold({
   );
   const resolvedActions = useMemo(() => withActionMnemonics(mergedActions), [mergedActions]);
 
-  useEffect(() => {
+     useEffect(() => {
     function handleMnemonic(event) {
+      if (isBlockingLayerActive()) {
+        return;
+      }
+
       if (
         !event.altKey ||
         event.ctrlKey ||

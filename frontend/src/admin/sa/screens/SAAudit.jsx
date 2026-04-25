@@ -461,7 +461,7 @@ export default function SAAudit() {
             ]
           : []
       }
-      footerHints={["↑↓ Navigate", "Enter Open", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "Enter Open", "F8 Refresh", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={filterSection}
       listSection={listSection}
       bottomSection={

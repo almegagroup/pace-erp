@@ -563,7 +563,7 @@ export default function SAGroupGovernance() {
             }),
         },
       ]}
-      footerHints={["↑↓ Navigate", "Enter Map/Unmap", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <div className="grid gap-3">

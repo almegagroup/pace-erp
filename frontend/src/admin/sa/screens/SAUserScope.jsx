@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   getActiveScreenContext,
@@ -339,7 +339,7 @@ export default function SAUserScope() {
     defaultColumnKeys: DEFAULT_USER_SCOPE_PREVIEW_COLUMNS,
   });
 
-  function handleReturnToUserDirectory() {
+   const handleReturnToUserDirectory = useCallback(() => {
     const previousScreen = getPreviousScreen();
 
     if (previousScreen?.screen_code === "SA_USERS") {
@@ -349,7 +349,7 @@ export default function SAUserScope() {
 
     openScreen("SA_USERS", { mode: "replace" });
     navigate("/sa/users");
-  }
+  }, [navigate]);
 
   useEffect(() => {
     let alive = true;
@@ -628,7 +628,7 @@ export default function SAUserScope() {
     );
   }
 
-  async function handleSave() {
+    const handleSave = useCallback(async () => {
     if (!authUserId || !parentCompanyId) {
       setError("Select a Parent Company before saving scope.");
       return;
@@ -724,7 +724,14 @@ export default function SAUserScope() {
     } finally {
       setSaving(false);
     }
-  }
+  }, [
+    authUserId,
+    departmentIds,
+    parentCompanyId,
+    projectIds,
+    workCompanyIds,
+    workContextIds,
+  ]);
 
   async function handleSetPrimaryCompany(companyId) {
     if (!authUserId || !companyId || settingPrimary) {
@@ -759,19 +766,19 @@ export default function SAUserScope() {
     }
   }
 
-  function closeCompanyPicker() {
+   const closeCompanyPicker = useCallback(() => {
     setCompanyPickerOpen(false);
     setCompanySearch("");
-  }
+  }, []);
 
-  function openParentCompanyPicker() {
+  const openParentCompanyPicker = useCallback(() => {
     setCompanyPickerOpen(true);
     globalThis.setTimeout(() => {
       companySearchRef.current?.focus();
     }, 0);
-  }
+  }, []);
 
-  async function closeScopeEditor() {
+    const closeScopeEditor = useCallback(async () => {
     if (activeScopeEditor && isScopeDirty) {
       const approved = await openActionConfirm({
         eyebrow: "SA User Scope Governance",
@@ -787,9 +794,9 @@ export default function SAUserScope() {
     }
 
     setActiveScopeEditor("");
-  }
+  }, [activeScopeEditor, isScopeDirty]);
 
-  function openScopeEditor(scopeKey) {
+    const openScopeEditor = useCallback((scopeKey) => {
     setActiveScopeEditor(scopeKey);
 
     globalThis.setTimeout(() => {
@@ -806,192 +813,222 @@ export default function SAUserScope() {
         departmentSearchRef.current?.focus();
       }
     }, 0);
-  }
+  }, []);
 
-  function selectParentCompany(companyId) {
+    const selectParentCompany = useCallback((companyId) => {
     setParentCompanyId(companyId);
     setNotice("");
     closeCompanyPicker();
-  }
+  }, [closeCompanyPicker]);
 
-  useErpScreenHotkeys({
-    save: {
-      disabled: loading || saving || !authUserId,
-      perform: () => void handleSave(),
-    },
-    focusSearch: {
-      perform: () => openScopeEditor("work-companies"),
-    },
-    focusPrimary: {
-      perform: () => parentCompanyButtonRef.current?.focus(),
-    },
-  });
+  const screenHotkeys = useMemo(
+    () => ({
+      save: {
+        disabled: loading || saving || !authUserId,
+        perform: () => void handleSave(),
+      },
+      focusSearch: {
+        perform: () => openScopeEditor("work-companies"),
+      },
+      focusPrimary: {
+        perform: () => parentCompanyButtonRef.current?.focus(),
+      },
+    }),
+    [authUserId, handleSave, loading, openScopeEditor, saving]
+  );
 
-  useErpScreenCommands([
-    {
-      id: "sa-user-scope-directory",
-      group: "Current Screen",
-      label: "Go to user directory",
-      keywords: ["users", "directory", "sa users"],
-      perform: () => handleReturnToUserDirectory(),
-      order: 10,
-    },
-    {
-      id: "sa-user-scope-roles",
-      group: "Current Screen",
-      label: "Go to role assignment",
-      keywords: ["role assignment", "user roles"],
-      perform: () => {
-        openScreen("SA_USER_ROLES");
-        navigate("/sa/users/roles");
-      },
-      order: 20,
-    },
-    {
-      id: "sa-user-scope-parent",
-      group: "Current Screen",
-      label: "Open parent company picker",
-      keywords: ["parent company", "company picker", "hr identity"],
-      perform: openParentCompanyPicker,
-      order: 30,
-    },
-    {
-      id: "sa-user-scope-work",
-      group: "Current Screen",
-      label: "Edit work companies",
-      keywords: ["work company", "operational scope"],
-      perform: () => openScopeEditor("work-companies"),
-      order: 40,
-    },
-    {
-      id: "sa-user-scope-work-contexts",
-      group: "Current Screen",
-      label: "Edit work contexts",
-      keywords: ["work context", "functional context"],
-      perform: () => openScopeEditor("work-contexts"),
-      order: 50,
-    },
-    {
-      id: "sa-user-scope-projects",
-      group: "Current Screen",
-      label: "Edit projects",
-      keywords: ["projects", "project scope"],
-      perform: () => openScopeEditor("projects"),
-      order: 60,
-    },
-    {
-      id: "sa-user-scope-departments",
-      group: "Current Screen",
-      label: "Edit departments",
-      keywords: ["departments", "department scope"],
-      perform: () => openScopeEditor("departments"),
-      order: 65,
-    },
-    {
-      id: "sa-user-scope-columns",
-      group: "Current Screen",
-      label: "Choose scope preview columns",
-      keywords: ["columns", "preview", "selection preview"],
-      perform: () => setShowColumnDrawer(true),
-      order: 67,
-    },
-    {
-      id: "sa-user-scope-save",
-      group: "Current Screen",
-      label: saving ? "Saving scope..." : "Save user scope",
-      hint: "Ctrl+S",
-      keywords: ["save scope", "user scope", "persist"],
-      disabled: saving || loading || !authUserId,
-      perform: () => void handleSave(),
-      order: 70,
-    },
-  ]);
+  useErpScreenHotkeys(screenHotkeys);
 
-  const topActions = [
-    {
-      key: "user-directory",
-      label: "User Directory",
-      tone: "neutral",
-      buttonRef: (element) => {
-        actionBarRefs.current[0] = element;
+    const screenCommands = useMemo(
+    () => [
+      {
+        id: "sa-user-scope-directory",
+        group: "Current Screen",
+        label: "Go to user directory",
+        keywords: ["users", "directory", "sa users"],
+        perform: () => handleReturnToUserDirectory(),
+        order: 10,
       },
-      onClick: () => handleReturnToUserDirectory(),
-      onKeyDown: (event) =>
-        handleLinearNavigation(event, {
-          index: 0,
-          refs: actionBarRefs.current,
-          orientation: "horizontal",
-        }),
-    },
-    {
-      key: "role-assignment",
-      label: "Role Assignment",
-      tone: "neutral",
-      buttonRef: (element) => {
-        actionBarRefs.current[1] = element;
+      {
+        id: "sa-user-scope-roles",
+        group: "Current Screen",
+        label: "Go to role assignment",
+        keywords: ["role assignment", "user roles"],
+        perform: () => {
+          openScreen("SA_USER_ROLES");
+          navigate("/sa/users/roles");
+        },
+        order: 20,
       },
-      onClick: () => {
-        openScreen("SA_USER_ROLES");
-        navigate("/sa/users/roles");
+      {
+        id: "sa-user-scope-parent",
+        group: "Current Screen",
+        label: "Open parent company picker",
+        keywords: ["parent company", "company picker", "hr identity"],
+        perform: openParentCompanyPicker,
+        order: 30,
       },
-      onKeyDown: (event) =>
-        handleLinearNavigation(event, {
-          index: 1,
-          refs: actionBarRefs.current,
-          orientation: "horizontal",
-        }),
-    },
-    {
-      key: "edit-work-scope",
-      label: "Edit Work Scope",
-      hint: "F3",
-      tone: "neutral",
-      disabled: loading || !authUserId,
-      buttonRef: (element) => {
-        actionBarRefs.current[2] = element;
+      {
+        id: "sa-user-scope-work",
+        group: "Current Screen",
+        label: "Edit work companies",
+        keywords: ["work company", "operational scope"],
+        perform: () => openScopeEditor("work-companies"),
+        order: 40,
       },
-      onClick: () => openScopeEditor("work-companies"),
-      onKeyDown: (event) =>
-        handleLinearNavigation(event, {
-          index: 2,
-          refs: actionBarRefs.current,
-          orientation: "horizontal",
-        }),
-    },
-    {
-      key: "columns",
-      label: "Columns",
-      tone: "neutral",
-      disabled: loading,
-      buttonRef: (element) => {
-        actionBarRefs.current[3] = element;
+      {
+        id: "sa-user-scope-work-contexts",
+        group: "Current Screen",
+        label: "Edit work contexts",
+        keywords: ["work context", "functional context"],
+        perform: () => openScopeEditor("work-contexts"),
+        order: 50,
       },
-      onClick: () => setShowColumnDrawer(true),
-      onKeyDown: (event) =>
-        handleLinearNavigation(event, {
-          index: 3,
-          refs: actionBarRefs.current,
-          orientation: "horizontal",
-        }),
-    },
-    {
-      key: "save-scope",
-      label: saving ? "Saving..." : "Save Scope",
-      hint: "Ctrl+S | F2",
-      tone: "primary",
-      disabled: saving || loading || !authUserId,
-      buttonRef: (element) => {
-        actionBarRefs.current[4] = element;
+      {
+        id: "sa-user-scope-projects",
+        group: "Current Screen",
+        label: "Edit projects",
+        keywords: ["projects", "project scope"],
+        perform: () => openScopeEditor("projects"),
+        order: 60,
       },
-      onClick: () => void handleSave(),
-      onKeyDown: (event) =>
-        handleLinearNavigation(event, {
-          index: 4,
-          refs: actionBarRefs.current,
-          orientation: "horizontal",
-        }),
-    },
-  ];
+      {
+        id: "sa-user-scope-departments",
+        group: "Current Screen",
+        label: "Edit departments",
+        keywords: ["departments", "department scope"],
+        perform: () => openScopeEditor("departments"),
+        order: 65,
+      },
+      {
+        id: "sa-user-scope-columns",
+        group: "Current Screen",
+        label: "Choose scope preview columns",
+        keywords: ["columns", "preview", "selection preview"],
+        perform: () => setShowColumnDrawer(true),
+        order: 67,
+      },
+      {
+        id: "sa-user-scope-save",
+        group: "Current Screen",
+        label: saving ? "Saving scope..." : "Save user scope",
+        hint: "Ctrl+S",
+        keywords: ["save scope", "user scope", "persist"],
+        disabled: saving || loading || !authUserId,
+        perform: () => void handleSave(),
+        order: 70,
+      },
+    ],
+    [
+      authUserId,
+      handleReturnToUserDirectory,
+      handleSave,
+      loading,
+      navigate,
+      openParentCompanyPicker,
+      openScopeEditor,
+      saving,
+    ]
+  );
+
+  useErpScreenCommands(screenCommands);
+
+    const topActions = useMemo(
+    () => [
+      {
+        key: "user-directory",
+        label: "User Directory",
+        tone: "neutral",
+        buttonRef: (element) => {
+          actionBarRefs.current[0] = element;
+        },
+        onClick: () => handleReturnToUserDirectory(),
+        onKeyDown: (event) =>
+          handleLinearNavigation(event, {
+            index: 0,
+            refs: actionBarRefs.current,
+            orientation: "horizontal",
+          }),
+      },
+      {
+        key: "role-assignment",
+        label: "Role Assignment",
+        tone: "neutral",
+        buttonRef: (element) => {
+          actionBarRefs.current[1] = element;
+        },
+        onClick: () => {
+          openScreen("SA_USER_ROLES");
+          navigate("/sa/users/roles");
+        },
+        onKeyDown: (event) =>
+          handleLinearNavigation(event, {
+            index: 1,
+            refs: actionBarRefs.current,
+            orientation: "horizontal",
+          }),
+      },
+      {
+        key: "edit-work-scope",
+        label: "Edit Work Scope",
+        hint: "F3",
+        tone: "neutral",
+        disabled: loading || !authUserId,
+        buttonRef: (element) => {
+          actionBarRefs.current[2] = element;
+        },
+        onClick: () => openScopeEditor("work-companies"),
+        onKeyDown: (event) =>
+          handleLinearNavigation(event, {
+            index: 2,
+            refs: actionBarRefs.current,
+            orientation: "horizontal",
+          }),
+      },
+      {
+        key: "columns",
+        label: "Columns",
+        tone: "neutral",
+        disabled: loading,
+        buttonRef: (element) => {
+          actionBarRefs.current[3] = element;
+        },
+        onClick: () => setShowColumnDrawer(true),
+        onKeyDown: (event) =>
+          handleLinearNavigation(event, {
+            index: 3,
+            refs: actionBarRefs.current,
+            orientation: "horizontal",
+          }),
+      },
+      {
+        key: "save-scope",
+        label: saving ? "Saving..." : "Save Scope",
+        hint: "Ctrl+S | F2",
+        tone: "primary",
+        disabled: saving || loading || !authUserId,
+        buttonRef: (element) => {
+          actionBarRefs.current[4] = element;
+        },
+        onClick: () => void handleSave(),
+        onKeyDown: (event) =>
+          handleLinearNavigation(event, {
+            index: 4,
+            refs: actionBarRefs.current,
+            orientation: "horizontal",
+          }),
+      },
+    ],
+    [
+      authUserId,
+      handleReturnToUserDirectory,
+      handleSave,
+      loading,
+      navigate,
+      openScopeEditor,
+      saving,
+    ]
+  );
 
   const notices = [
     ...(error
@@ -1243,7 +1280,7 @@ export default function SAUserScope() {
       title="ERP User Scope Mapping"
       actions={topActions}
       notices={notices}
-      footerHints={["↑↓ Navigate", "Ctrl+S Save Scope", "F3 Edit Scope", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["Ctrl+S Save", "Esc Back", "Ctrl+K Command Bar"]}
     >
       {mainContent}
 
@@ -1412,12 +1449,17 @@ export default function SAUserScope() {
                 Selecting a company adds it to work scope only. Primary changes only when you press Set Primary.
               </span>
             </div>
+            {isScopeDirty && (
+              <p className="text-[11px] text-amber-700">
+                Save scope changes first before setting primary company.
+              </p>
+            )}
             <div className="grid gap-[var(--erp-form-gap)] md:grid-cols-[minmax(0,1fr)_auto]">
               <select
                 value={primaryCompanyCandidateId}
                 onChange={(event) => setPrimaryCompanyCandidateId(event.target.value)}
-                disabled={selectedWorkCompanies.length === 0 || settingPrimary}
-                className="h-8 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none"
+                disabled={selectedWorkCompanies.length === 0 || settingPrimary || isScopeDirty}
+                className="h-8 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none disabled:opacity-50"
               >
                 {selectedWorkCompanies.length === 0 ? (
                   <option value="">Select work companies first</option>
@@ -1434,7 +1476,8 @@ export default function SAUserScope() {
                   settingPrimary ||
                   !authUserId ||
                   !primaryCompanyCandidateId ||
-                  primaryCompanyCandidateId === primaryWorkCompanyId
+                  primaryCompanyCandidateId === primaryWorkCompanyId ||
+                  isScopeDirty
                 }
                 onClick={() => void handleSetPrimaryCompany(primaryCompanyCandidateId)}
                 className="h-8 border border-slate-300 bg-white px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 hover:border-sky-300 hover:text-sky-800 disabled:opacity-50"
