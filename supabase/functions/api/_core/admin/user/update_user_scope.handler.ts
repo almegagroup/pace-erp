@@ -331,6 +331,16 @@ export async function updateUserScopeHandler(
       );
     }
 
+    // Read existing primary before wiping, so an explicit SA "Set Primary" survives a scope re-save.
+    const { data: existingPrimaryRow } = await db
+      .schema("erp_map").from("user_companies")
+      .select("company_id")
+      .eq("auth_user_id", targetAuthUserId)
+      .eq("is_primary", true)
+      .maybeSingle();
+
+    const existingPrimaryCompanyId = existingPrimaryRow?.company_id ?? null;
+
     const { error: workDeleteError } = await db
       .schema("erp_map").from("user_companies")
       .delete()
@@ -345,12 +355,15 @@ export async function updateUserScopeHandler(
     }
 
     if (workCompanyIds.length > 0) {
-      // is_primary = true for parent company if it exists in work companies.
-      // If parent company is not a work company (e.g. org parent only),
-      // fall back to first work company as primary.
-      const primaryWorkCompanyId = workCompanyIds.includes(parentCompanyId)
-        ? parentCompanyId
-        : workCompanyIds[0];
+      // Preserve an existing explicit "Set Primary" if that company is still in the new scope.
+      // Only fall back to parent-company / first-company logic when there is no existing primary
+      // or it was removed from the scope.
+      const primaryWorkCompanyId =
+        existingPrimaryCompanyId && workCompanyIds.includes(existingPrimaryCompanyId)
+          ? existingPrimaryCompanyId
+          : workCompanyIds.includes(parentCompanyId)
+          ? parentCompanyId
+          : workCompanyIds[0];
 
       const { error: workInsertError } = await db
         .schema("erp_map").from("user_companies")
