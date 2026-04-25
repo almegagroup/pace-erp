@@ -10,7 +10,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { openRoute, openScreen } from "../../../navigation/screenStackEngine.js";
+import {
+  openRoute,
+  openScreen,
+  openScreenWithContext,
+  registerScreenRefreshCallback,
+} from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
@@ -132,6 +137,14 @@ export default function SACompanyManage() {
     void loadCompanies();
   }, []);
 
+  useEffect(
+    () =>
+      registerScreenRefreshCallback(() => {
+        void loadCompanies();
+      }),
+    [],
+  );
+
   const filteredCompanies = useMemo(() => {
     const needle = normalize(search).toLowerCase();
 
@@ -142,9 +155,22 @@ export default function SACompanyManage() {
     return companies.filter((row) => companySearchValue(row).includes(needle));
   }, [companies, search]);
 
+  function handleOpenCompanyEdit(company) {
+    if (!company?.id) {
+      return;
+    }
+
+    openScreenWithContext("SA_COMPANY_CREATE", {
+      mode: "edit",
+      companyId: company.id,
+      refreshOnReturn: true,
+    });
+    navigate(`/sa/company/create?company_id=${encodeURIComponent(company.id)}`);
+  }
+
   const { getRowProps } = useErpListNavigation(filteredCompanies, {
-    onActivate: (_row, index) => {
-      rowActionRefs.current[index]?.focus();
+    onActivate: (row) => {
+      handleOpenCompanyEdit(row);
     },
   });
 
@@ -325,7 +351,7 @@ export default function SACompanyManage() {
           ...(error ? [{ key: "error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
         ]}
-        footerHints={["↑↓ Navigate", "Enter Inspect", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+        footerHints={["↑↓ Navigate", "Enter Edit Address", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
         filterSection={{
           eyebrow: "Registry Filter",
           title: "Search company inventory",
@@ -369,9 +395,9 @@ export default function SACompanyManage() {
                     const isActive = normalize(row.status).toUpperCase() === "ACTIVE";
                     if (column.key === "company") {
                       return (
-                        <div>
+                        <div className="min-w-0">
                           <p className="font-medium leading-tight">{row.company_code}</p>
-                          <p className="text-[10px] text-slate-500">{row.company_name}</p>
+                          <p className="truncate text-[10px] text-slate-500">{row.company_name}</p>
                         </div>
                       );
                     }
@@ -391,6 +417,19 @@ export default function SACompanyManage() {
                     return null;
                   },
                 })),
+                {
+                  key: "edit",
+                  label: "Edit",
+                  render: (row) => (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenCompanyEdit(row)}
+                      className="border border-sky-300 bg-sky-50 px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-700"
+                    >
+                      Address
+                    </button>
+                  ),
+                },
                 {
                   key: "action",
                   label: "Action",
@@ -441,5 +480,4 @@ export default function SACompanyManage() {
     </>
   );
 }
-
 

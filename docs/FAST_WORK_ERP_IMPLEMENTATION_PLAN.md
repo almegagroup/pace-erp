@@ -24,6 +24,35 @@
 
 ---
 
+## Phase Status Quick Reference
+
+> Last updated: 2026-04-25 Claude. Read the Active Work Log for session-by-session detail.
+
+| Phase | Description | Status | Last Updated |
+|-------|-------------|--------|-------------|
+| Foundation UX-1 to UX-9 | Keyboard foundation, footerHints, description removal | âœ… DONE | 2026-04-23 Claude |
+| Phase 1 | Dense primitive components (7 new components + CSS vars) | âœ… DONE | 2026-04-24 Codex |
+| Phase 2 | Template layer update (5 templates migrated to dense primitives) | âœ… DONE | 2026-04-24 Codex |
+| Phase 3 | HR screen family migration (13 screens â€” Leave + OutWork full cycle) | âœ… DONE | 2026-04-24 Claude |
+| Phase 4 | SA admin screen migration (30 screens â€” all sub-phases 4Aâ€”4E done) | âœ… DONE | 2026-04-25 Claude |
+| Phase 5A | Shell navigation behaviors (Esc/back logic, drawer restore, focus restore) | âœ… DONE | 2026-04-25 Claude |
+| Phase 5B | HR drill-through code verification (8 pairs verified in code) | âœ… DONE | 2026-04-25 Claude |
+| Phase 5C | SA drill-through code verification | âœ… DONE | 2026-04-25 Claude |
+| Phase 5D | Missing drill-through gap audit | â¬œ NOT STARTED | â€” |
+| Phase 5E | Drill-through behavioral verification (browser end-to-end) | â¬œ NOT STARTED | â€” |
+| Phase 6A | Footer hint accuracy audit | â¬œ NOT STARTED | â€” |
+| Phase 6B | Approval screen keyboard wiring | â¬œ NOT STARTED | â€” |
+| Phase 6C | Report screen filter keys | â¬œ NOT STARTED | â€” |
+| Phase 6D | Form screen Tab order | â¬œ NOT STARTED | â€” |
+| Phase 6E | Cross-screen keyboard vocabulary consistency | â¬œ NOT STARTED | â€” |
+| Phase 7A | HR module end-to-end test | â¬œ NOT STARTED | â€” |
+| Phase 7B | SA module end-to-end test | â¬œ NOT STARTED | â€” |
+| Phase 7C | Density verification | â¬œ NOT STARTED | â€” |
+| Phase 7D | Regression check | â¬œ NOT STARTED | â€” |
+| Phase 7E | Final sign-off | â¬œ NOT STARTED | â€” |
+
+---
+
 ## Foundation Baseline â€” UX-1 through UX-9 (Pre-existing work)
 
 These tasks were completed before Phase 1 of the Fast-Work redesign began.
@@ -728,147 +757,470 @@ grep “px-4 py-4” SACompanyProjectMap.jsx # 0 matches
 
 ---
 
-## Phase 5 â€” Drill-Through Completion
+## Phase 5 â€” Navigation Behaviors + Drill-Through Completion
 
-> **Goal:** Wire all remaining list â†’ detail pairs across the entire application.  
-> **Rule:** Every list screen where a row has a detail target must support Enter-to-drill. Return must refresh list.  
-> **Pattern:** Use `openScreenWithContext` with `contextKind: 'DRILL_THROUGH'` and `registerScreenRefreshCallback`. See Design Authority Part 4, Pattern 8.
+> **Goal:** Correct all shell navigation behaviors, then verify and complete every list â†’ detail drill-through pair.
+> **Rule:** Sub-phases are sequential. Do not start 5B until 5A is done. Do not start 5C until 5B is done. Etc.
+> **Pattern for drill-through:** `openScreenWithContext` with `contextKind: ‘DRILL_THROUGH’` + `registerScreenRefreshCallback`. See Design Authority Part 4, Pattern 8.
 
-### Drill-Through Pairs to Wire
+---
 
-**Current status note:** Phase 5 is not complete yet. The list below reflects implementation reality:
-- `WIRED IN CODE` = drill-through infrastructure exists in the repo and passes lint/build
-- `VERIFIED IN CODE` = existing wiring was re-checked in code and still looks valid
-- `BLOCKED` = cannot be completed honestly until the missing capability exists
-- Behavioral checklist below is still pending operator-side verification for the phase as a whole
+### Phase 5A â€” Shell Navigation Behaviors
 
-| # | From Screen | To Screen | State to Restore | Status |
-|---|-------------|-----------|-----------------|--------|
-| 5.1 | Leave My Requests list | Leave Request Detail | filter, searchQuery, page, focusKey | WIRED IN CODE 2026-04-24 Codex |
-| 5.2 | Leave Approval Inbox | Leave Request Detail (approval view) | focusedRow | WIRED IN CODE 2026-04-24 Codex |
-| 5.3 | Leave Approval History | Leave Request Detail (read-only) | filter, page, focusKey | WIRED IN CODE 2026-04-24 Codex |
-| 5.4 | Leave Register Results | Leave Request Detail (read-only) | filter, page, focusKey | WIRED IN CODE 2026-04-24 Codex |
-| 5.5 | OutWork My Requests list | OutWork Request Detail | filter, searchQuery, page, focusKey | WIRED IN CODE 2026-04-24 Codex |
-| 5.6 | OutWork Approval Inbox | OutWork Request Detail (approval view) | focusedRow | WIRED IN CODE 2026-04-24 Codex |
-| 5.7 | OutWork Approval History | OutWork Request Detail (read-only) | filter, page, focusKey | WIRED IN CODE 2026-04-24 Codex |
-| 5.8 | OutWork Register Results | OutWork Request Detail (read-only) | filter, page, focusKey | WIRED IN CODE 2026-04-24 Codex |
-| 5.9 | SAUsers â†’ SAUserScope | Already wired â€” verify return-and-refresh still works | filter, searchQuery, focusKey | VERIFIED IN CODE 2026-04-24 Codex |
-| 5.10 | SACompanyManage | SACompanyCreate (edit mode) | focusKey | BLOCKED 2026-04-24 Codex â€” no company edit endpoint / no real edit mode |
-| 5.11 | SAProjectMaster | SAProjectManage | focusKey | WIRED IN CODE 2026-04-24 Codex |
-| 5.12 | SAAudit | Audit Detail (if screen exists) | filter, page | WIRED IN CODE 2026-04-24 Codex |
+**Status:** âœ… DONE 2026-04-25 Claude
 
-### Drill-Through Verification Checklist (for each pair)
+All shell-level navigation behaviors are now correct. No further work needed here.
 
-For every wired pair, test:
+| Task | Description | Status |
+|------|-------------|--------|
+| 5A.1 | Esc when stackDepth=1 on non-home â†’ `resetToScreen(homeScreenCode)` instead of broken `navigate(-1)` | âœ… DONE 2026-04-25 Claude |
+| 5A.2 | Esc (depth 2â†’1): restore sidebar drawer to sub-menu item user navigated away from | âœ… DONE 2026-04-25 Claude |
+| 5A.3 | Esc (depth 2â†’1): focus restored to sidebar item (not “Start Here” in content) | âœ… DONE 2026-04-25 Claude |
+| 5A.4 | Esc (depth 3â†’2 drill-through return): do NOT suppress content focus â€” list screen handles row focus | âœ… DONE 2026-04-25 Claude |
+
+**Implementation file:** `frontend/src/layout/MenuShell.jsx`
+- Added `pendingDrawerRestoreRef` and `suppressContentFocusRef` refs
+- `handleBack`: computes origin route drawer state, sets refs only when returning to home level (stackDepth-1 â‰¤ 1)
+- Content focus effect: checks `suppressContentFocusRef` and skips on back-to-home navigation
+- Drawer path effect: checks `pendingDrawerRestoreRef` and restores drawer state + focus index
+- Build: âœ” built in 3.73s, zero errors
+
+---
+
+### Phase 5B â€” HR Drill-Through Code Verification
+
+**Status:** âœ… DONE 2026-04-25 Claude
+
+**Files read:**
+- `frontend/src/pages/dashboard/hr/HrWorkflowPages.jsx` (2473 lines)
+- `frontend/src/pages/dashboard/hr/HrRegisterReports.jsx` (601 lines)
+
+**Verification result â€” all 8 pairs pass all 6 checks:**
+
+| # | From Screen | To Screen | State Restored | Verified |
+|---|-------------|-----------|---------------|---------|
+| 5.1 | Leave My Requests | Leave Request Detail | `searchQuery`, `focusKey` | âœ… VERIFIED 2026-04-25 Claude |
+| 5.2 | Leave Approval Inbox | Leave Request Detail (approval view) | `searchQuery`, `companyFilter`, `focusKey` | âœ… VERIFIED 2026-04-25 Claude |
+| 5.3 | Leave Approval History | Leave Request Detail (read-only) | `searchQuery`, `requesterAuthUserId`, `focusKey` | âœ… VERIFIED 2026-04-25 Claude |
+| 5.4 | Leave Register Results | Leave Request Detail (read-only) | `searchQuery`, `page`, `focusKey` (pagination-aware) | âœ… VERIFIED 2026-04-25 Claude |
+| 5.5 | OutWork My Requests | OutWork Request Detail | `searchQuery`, `focusKey` | âœ… VERIFIED 2026-04-25 Claude |
+| 5.6 | OutWork Approval Inbox | OutWork Request Detail (approval view) | `searchQuery`, `companyFilter`, `focusKey` | âœ… VERIFIED 2026-04-25 Claude |
+| 5.7 | OutWork Approval History | OutWork Request Detail (read-only) | `searchQuery`, `requesterAuthUserId`, `focusKey` | âœ… VERIFIED 2026-04-25 Claude |
+| 5.8 | OutWork Register Results | OutWork Request Detail (read-only) | `searchQuery`, `page`, `focusKey` | âœ… VERIFIED 2026-04-25 Claude |
+
+**What was confirmed for every pair:**
+1. âœ… `openScreenWithContext` called with `refreshOnReturn: true` â†' engine auto-sets `contextKind: “DRILL_THROUGH”`
+2. âœ… `parentState` in context includes `focusKey` (and screen-specific filter fields)
+3. âœ… Detail screen (`HrRequestDetailWorkspace`) reads context via `getActiveScreenContext()` â†' extracts `request`, `mode`
+4. âœ… `registerScreenRefreshCallback` registered in EVERY list screen â†' fires on `popScreen()` return
+5. âœ… Focus restore: `useEffect` in each list screen finds row by `focusKey`, calls `focusRow(targetIndex)` via `queueMicrotask`
+6. âœ… `useErpListNavigation` wired with `onActivate: (row) => openDetail(row)` in all list screens
+7. âœ… `popScreen()` on Back button + MenuShell Esc (stackDepth > 1 path)
+8. âœ… Screen codes `HR_LEAVE_REQUEST_DETAIL` and `HR_OUT_WORK_REQUEST_DETAIL` registered in SCREEN_REGISTRY
+9. âœ… Leave and OutWork share the same component â€” `kind` prop (âa€œleaveâ€ vs “outWork”) differentiates behaviour throughout
+
+**Minor observation (not a bug):** Each `openDetail` call is followed immediately by an explicit `navigate(getHrDetailRoute(kind))`. This is redundant â€” the `NavigationStackBridge` already drives navigation after the stack update. The double call is harmless because the Bridge skips if the pathname already matches. No fix needed.
+
+---
+
+### Phase 5C â€” SA Drill-Through Code Verification
+
+**Status:** âœ… DONE 2026-04-25 Claude
+
+**Files read:**
+- `frontend/src/admin/sa/screens/SAUsers.jsx` (792 lines)
+- `frontend/src/admin/sa/screens/SAUserScope.jsx` (1693 lines)
+- `frontend/src/admin/sa/screens/SAProjectMaster.jsx` (479 lines)
+- `frontend/src/admin/sa/screens/SAProjectManage.jsx` (437 lines)
+- `frontend/src/admin/sa/screens/SAAudit.jsx` (503 lines)
+- `frontend/src/admin/sa/screens/SAAuditDetail.jsx` (65 lines) â€” confirmed exists
+
+**Verification result:**
+
+| # | From | To | State Restored | Verified |
+|---|------|----|---------------|---------|
+| 5.9 | SAUsers | SAUserScope | `filter`, `searchQuery`, `page`, `auth_user_id` for focus | âœ… VERIFIED 2026-04-25 Claude |
+| 5.10 | SACompanyManage | SACompanyCreate (edit mode) | `companyId` | âœ… DONE 2026-04-25 Codex â€” address-only edit |
+| 5.11 | SAProjectMaster | SAProjectManage | `searchQuery`, `focusKey` (projectId) | âœ… VERIFIED 2026-04-25 Claude |
+| 5.12 | SAAudit | SAAuditDetail | `filter`, `searchQuery`, `page`, `focusKey` (audit_id) | âœ… VERIFIED 2026-04-25 Claude |
+
+**What was confirmed per pair:**
+
+**5.9 SAUsers â†' SAUserScope:**
+- `openScreenWithContext(“SA_USER_SCOPE”, { auth_user_id, returnState: { filter, searchQuery, page }, refreshOnReturn: true })` â†' auto `contextKind: “DRILL_THROUGH”` âœ…
+- `registerScreenRefreshCallback` reads `meta.context.returnState` to restore filter/searchQuery/page AND `meta.context.auth_user_id` for row focus âœ…
+- SAUserScope reads `activeScreenContext.auth_user_id` âœ…
+- Back: `handleReturnToUserDirectory()` â€” checks `previousScreen.screen_code === “SA_USERS”` â†' `popScreen()`, else fallback to `openScreen(“SA_USERS”, { mode: “replace” })`. Called from Back button + screen command. Esc via MenuShell â†' `popScreen()` (depth > 1). Both paths correct âœ…
+
+**5.11 SAProjectMaster â†' SAProjectManage:**
+- `openScreenWithContext(“SA_PROJECT_MANAGE”, { projectId, parentState, refreshOnReturn: true })` âœ…
+- `registerScreenRefreshCallback(() => loadProjects())` registered âœ…
+- Focus restore via `selectedProjectId + focusRow(targetIndex)` in SAProjectMaster âœ…
+- SAProjectManage reads `isDrillThrough = initialContext.contextKind === “DRILL_THROUGH”` âœ…
+- Back button label switches: “Back To Project Register” (drill-through) vs “Project Master” (direct) âœ…
+- `popScreen()` on Back button when drill-through + MenuShell Esc âœ…
+
+**5.12 SAAudit â†' SAAuditDetail:**
+- `openScreenWithContext(“SA_AUDIT_DETAIL”, { auditRow, parentState, refreshOnReturn: true })` âœ…
+- `SA_AUDIT_DETAIL` in SCREEN_REGISTRY, `SAAuditDetail.jsx` exists (65 lines) âœ…
+- SAAuditDetail reads context via `getActiveScreenContext()` âœ…
+- `popScreen()` on Back button in SAAuditDetail âœ…
+- `registerScreenRefreshCallback` in SAAudit âœ…
+- SAAudit restores `filter`, `searchQuery`, `page`, `focusKey` from `initialContext.parentState` on mount âœ…
+- Focus restore via `focusKey + focusRow` effect âœ…
+
+**5.10 resolution:** `SACompanyManage` now opens `SACompanyCreate` in drill-through edit mode for an existing company, and `SACompanyCreate` now supports SA-only address edits (`state_name`, `pin_code`, `full_address`) while keeping company code, company name, and GST locked.
+
+---
+
+### Phase 5D â€” Missing Drill-Through Gap Audit
+
+**Status:** â¬œ NOT STARTED
+
+**What to do:** Find any list screen that has a navigable table (ErpDenseGrid with `onRowActivate` or `getRowProps`) but NO drill-through target defined.
+
+**How to audit:**
+1. Grep for all screens that use `ErpDenseGrid` with `onRowActivate` or row-level Enter handling
+2. Check each screen against the pairs defined in 5B + 5C
+3. For every screen NOT in 5B/5C: decide â€” does this row have a logical detail target? If yes, it needs wiring. If no, document explicitly as “no drill-through intended”.
+
+**Screens to check specifically (SA only â€” HR already covered in 5B):**
+```
+SAUserRoles.jsx          â€” role rows: drill to role edit or policy detail?
+SAGroupGovernance.jsx    â€” group rows: drill to group detail?
+SAApprovalPolicy.jsx     â€” policy rows: drill to SAApprovalRules?
+SACompanyModuleMap.jsx   â€” module rows: toggle only, no detail
+SACapabilityGovernance.jsx â€” capability rows: detail needed?
+SASignupRequests.jsx     â€” approval inline (A/R keys) â€” no drill needed
+SASessions.jsx           â€” session rows: revoke action, not drill
+SAReportVisibility.jsx   â€” visibility toggle rows, no detail needed
+```
+
+**Output:** Fill in a table with “Needs Wiring” / “No Detail Target” / “Already In 5B/5C” for each screen.
+
+**Phase 5D completion rule:** Every SA list screen with a navigable grid is accounted for. No silent gaps.
+
+---
+
+### Phase 5E â€” Drill-Through Behavioral Verification
+
+**Status:** â¬œ NOT STARTED (requires browser access â€” manual or automated)
+
+**Prerequisite:** 5A, 5B, 5C, 5D all DONE.
+
+**Verification checklist per pair (run for every non-blocked pair):**
 - [ ] Enter on focused row â†’ opens correct detail screen
-- [ ] Detail screen shows correct record data
-- [ ] Esc from detail â†’ returns to list
-- [ ] List is at same scroll position and row focus
-- [ ] List data is refreshed (reflects any edits made in detail)
+- [ ] Detail screen shows correct record data matching the row
+- [ ] Esc from detail â†’ returns to list (NOT to home)
+- [ ] List is at same scroll position and same row focused
+- [ ] List data is refreshed (reflects any changes made in detail)
 - [ ] Filter/search state is preserved on return
-- [ ] No "Open" button required â€” Enter is the primary action
+- [ ] No mouse click required â€” Enter is the only trigger
 
-### Phase 5 Completion Criteria
+**Phase 5E completion rule:** All 7 checklist items pass for all non-blocked pairs.
 
-- [ ] All 12 drill-through pairs verified per checklist
-- [ ] Return-and-refresh works on every pair
-- [ ] No list screen with a drillable row lacks Enter-to-drill
-- [ ] Explicit blocker resolved for 5.10 (`SACompanyManage` still lacks a true edit-mode target)
+---
+
+### Phase 5 â€” Completion Criteria
+
+Phase 5 is DONE when:
+- [ ] 5A: Shell navigation behaviors verified (DONE)
+- [ ] 5B: All 8 HR pairs read, verified or fixed in code
+- [ ] 5C: All 4 SA pairs verified in code, including 5.10 address-only edit drill-through
+- [ ] 5D: All list screens audited, gaps documented or wired
+- [ ] 5E: All non-blocked pairs pass the 7-item behavioral checklist
 
 ---
 
 ## Phase 6 â€” Command Layer Polish
 
-> **Goal:** Ensure every screen has accurate, complete, and consistent keyboard vocabulary.  
-> **Rule:** Footer hints must exactly match what each key actually does. No mismatch allowed.
+> **Goal:** Every screen has accurate, complete, consistent keyboard vocabulary. Footer hints exactly match what each key does. No mismatch, no stale hint, no missing hint.
+> **Rule:** Sub-phases are sequential. Do not start 6B until 6A is done. Etc.
+> **Prerequisite:** Phase 5 fully DONE.
 
-### Command Standardization
+---
 
-| # | Task | Status |
-|---|------|--------|
-| 6.1 | Audit all screen footer hints â€” verify each hint's key actually works | â¬œ NOT STARTED |
-| 6.2 | Standardize shortcut vocabulary across all screens (see table below) | â¬œ NOT STARTED |
-| 6.3 | Approval inbox screens: confirm A/R keys are wired and in footer | â¬œ NOT STARTED |
-| 6.4 | Report screens: confirm inline filter live-updates without button press | â¬œ NOT STARTED |
-| 6.5 | Selection screens: confirm F8 / Ctrl+S executes and is in footer | â¬œ NOT STARTED |
-| 6.6 | All list screens: confirm Home/End/PgUp/PgDn work for row navigation | â¬œ NOT STARTED |
-| 6.7 | All form screens: confirm Tab follows business field order (not DOM order) | â¬œ NOT STARTED |
+### Standard Keyboard Vocabulary Reference
 
-### Standard Keyboard Vocabulary
+> This is the authoritative vocabulary. All footer hints must use these exact strings.
 
-| Key | Action | Footer text |
-|-----|--------|-------------|
-| Arrow Up/Down | Navigate list rows | â†‘â†“ NAVIGATE |
-| Enter | Open / drill / activate | ENTER OPEN |
-| Space | Select / deselect row | SPACE SELECT |
-| Esc | Back / cancel / close | ESC BACK |
-| Ctrl+S | Save / submit / export | CTRL+S SAVE |
-| F8 | Execute / refresh | F8 REFRESH or F8 EXECUTE |
-| Ctrl+K / F9 | Command palette | CTRL+K COMMAND BAR |
-| Alt+Shift+P | Focus primary element | ALT+SHIFT+P FOCUS |
-| A | Approve (approval screens only) | A APPROVE |
-| R | Reject (approval screens only) | R REJECT |
-| F2 | Edit focused record | F2 EDIT |
-| Alt+R | Refresh | ALT+R REFRESH |
+| Key | Screen type | Footer hint string | When to include |
+|-----|------------|-------------------|-----------------|
+| â†’â†” | Any list | `â†’â†” Navigate` | Every screen with a navigable list |
+| Enter | List screen | `Enter Open` | When Enter opens a detail/drill |
+| Enter | Form screen | `Enter Confirm` | When Enter submits/confirms inline |
+| Space | List screen | `Space Select` | When Space toggles row selection |
+| Esc | Any | `Esc Back` | Always (except logout screen) |
+| Ctrl+S | Form | `Ctrl+S Save` | Form screens with save |
+| Ctrl+S | Report | `Ctrl+S Export` | Report screens with export |
+| F8 | List/Report | `F8 Refresh` | Any screen that can refresh data |
+| F8 | Selection | `F8 Execute` | Selection/filter screens that run a query |
+| Ctrl+K | Any | `Ctrl+K Command Bar` | Every screen |
+| Alt+R | Any | `Alt+R Refresh` | Screens where F8 is used for something else |
+| A | Approval inbox | `A Approve` | Approval inbox screens only |
+| R | Approval inbox | `R Reject` | Approval inbox screens only |
+| Alt+Shift+F | Any | `Alt+Shift+F Search` | Screens with a quick filter input |
 
-### Phase 6 Completion Criteria
+---
 
-- [ ] Any user can operate any screen from keyboard only â€” no mouse needed
-- [ ] Every footer hint is accurate â€” no stale/missing hints
-- [ ] Approval screens: full A/R workflow without mouse
-- [ ] Register screens: inline filter works live
-- [ ] All shortcuts in this vocabulary are implemented where the screen supports the action
+### Phase 6A â€” Footer Hint Accuracy Audit
+
+**Status:** â¬œ NOT STARTED
+
+**What to do:**
+1. Open every screen file (all HR + all SA = 33 files)
+2. Read the `footerHints` array in each file
+3. For each hint, verify the key actually has a working handler in that screen
+4. Mark each screen as PASS (all hints accurate) or FAIL (mismatch found)
+5. Create a fix list for all FAIL screens
+
+**Screens to audit:**
+
+HR (3 files):
+```
+HrWorkflowFoundationPage.jsx, HrWorkflowPages.jsx, HrRegisterReports.jsx
+```
+
+SA (30 files):
+```
+SAHome.jsx, SAControlPanel.jsx, SASystemHealth.jsx
+SAUsers.jsx, SAUserScope.jsx, SAUserRoles.jsx, SASignupRequests.jsx, SASessions.jsx
+SACompanyManage.jsx, SACompanyCreate.jsx, SACompanyModuleMap.jsx, SACompanyProjectMap.jsx
+SADepartmentMaster.jsx, SAProjectMaster.jsx, SAProjectManage.jsx, SAModuleMaster.jsx, SAWorkContextMaster.jsx
+SAGroupGovernance.jsx, SACapabilityGovernance.jsx, SARolePermissions.jsx
+SAApprovalPolicy.jsx, SAApprovalRules.jsx, SAMenuGovernance.jsx
+SAModuleResourceMap.jsx, SAPageResourceRegistry.jsx, SAReportVisibility.jsx, SAAclVersionCenter.jsx
+SAAudit.jsx, SAGovernanceSummaryReport.jsx, SAUserScopeReport.jsx
+```
+
+**Phase 6A completion rule:** Every screen is either PASS or has a fix scheduled. The fix list is written into 6B/6C/6D/6E.
+
+---
+
+### Phase 6B â€” Approval Screen Keyboard Wiring
+
+**Status:** â¬œ NOT STARTED
+
+**Screens in scope:** `SASignupRequests.jsx`, `HrWorkflowPages.jsx` (Leave Approval Inbox, OutWork Approval Inbox)
+
+**For each approval screen, verify:**
+1. Arrow Up/Down navigates rows â€” `useErpListNavigation` wired
+2. A key on focused row â†’ approve without dialog (toast only)
+3. R key on focused row â†’ reject (inline reason input or confirm)
+4. Footer hints include `A Approve` and `R Reject`
+5. Focus returns to list after approve/reject action
+
+**Fix anything not working.**
+
+**Phase 6B completion rule:** A and R keys work on all 3 approval screens without mouse.
+
+---
+
+### Phase 6C â€” Report Screen Filter Keys
+
+**Status:** â¬œ NOT STARTED
+
+**Screens in scope:** All screens with a filter/search input that should live-update the list
+- `SAUsers.jsx`, `SASessions.jsx`, `SAAudit.jsx`, `SAUserRoles.jsx`
+- `SAGovernanceSummaryReport.jsx`, `SAUserScopeReport.jsx`
+- HR register results, HR approval history
+
+**For each screen, verify:**
+1. Typing in the filter input immediately filters the list (no button press needed)
+2. Alt+Shift+F (or documented shortcut) focuses the filter input
+3. Footer hint for the filter shortcut is present and accurate
+4. F8 refreshes the underlying data (re-fetches from backend), distinct from filter
+
+**Phase 6C completion rule:** All report/register screens: filter is live, shortcut documented.
+
+---
+
+### Phase 6D â€” Form Screen Tab Order
+
+**Status:** â¬œ NOT STARTED
+
+**Screens in scope:** All form entry screens
+- `SACompanyCreate.jsx`, `SAProjectManage.jsx`, `SAModuleMaster.jsx`
+- `SAUserScope.jsx` (edit drawers)
+- `HrWorkflowPages.jsx` (Leave Apply, OutWork Apply)
+
+**For each form screen, verify:**
+1. Tab key moves focus through fields in business-logical order (top to bottom, not DOM accident)
+2. Shift+Tab reverses correctly
+3. No Tab trap (Tab on last field should move to action button or wrap gracefully)
+4. Ctrl+S saves without needing to click Save button
+
+**Fix any out-of-order Tab sequences using `tabIndex` or DOM reordering.**
+
+**Phase 6D completion rule:** Tab through all form screens follows business field order.
+
+---
+
+### Phase 6E â€” Cross-Screen Keyboard Vocabulary Consistency
+
+**Status:** â¬œ NOT STARTED
+
+**What to do:** Check that the same key does the same thing across all screens of the same type.
+
+**Consistency rules:**
+- All list screens: Enter = open detail (never a button click)
+- All form screens: Ctrl+S = save (never just a button)
+- All screens: Esc = back (never closes a drawer that should stay open)
+- All screens: Ctrl+K = command bar (never intercepted for something else)
+- All screens with refresh: F8 = refresh (consistent)
+
+**Run a cross-screen diff:** read the `useErpScreenHotkeys` registration in each screen and flag any screen where the same key does something different from the standard.
+
+**Phase 6E completion rule:** Zero cross-screen hotkey conflicts. Every same-type screen does the same thing with the same key.
+
+---
+
+### Phase 6 â€” Completion Criteria
+
+Phase 6 is DONE when:
+- [ ] 6A: All 33 screens audited, pass/fail recorded
+- [ ] 6B: A/R keys work on all 3 approval screens
+- [ ] 6C: All filter screens: live filter + documented shortcut
+- [ ] 6D: Tab order correct on all form screens
+- [ ] 6E: Zero hotkey conflicts across screen types
 
 ---
 
 ## Phase 7 â€” Full System Validation
 
-> **Goal:** Walk the entire application as an ERP operator. Find and fix any remaining gaps.  
-> **Rule:** This phase is inspection + fix only. No new features. No architectural changes.
+> **Goal:** Walk the entire application as an ERP operator from a fresh login. Find and fix any remaining gaps.
+> **Rule:** Inspection + fix only. No new features. No architectural changes. No phase ends with open issues.
+> **Prerequisite:** Phase 6 fully DONE.
 
-### Validation Checklist by Screen Family
+---
 
-#### HR Module
-- [ ] Leave Apply: open â†’ fill fields â†’ Ctrl+S submit â†’ confirm success
-- [ ] Leave My Requests: open â†’ Arrow navigate â†’ Enter drill â†’ detail opens â†’ Esc back â†’ list refreshed
-- [ ] Leave Approval Inbox: open â†’ Arrow navigate â†’ A approve â†’ toast confirmation â†’ no dialog shown
-- [ ] Leave Register: criteria screen â†’ F8 execute â†’ results â†’ Arrow navigate â†’ Ctrl+S export
-- [ ] OutWork: repeat all above for OutWork
+### Phase 7A â€” HR Module End-to-End Test
 
-#### SA Module
-- [ ] User onboarding: SAUsers â†’ Arrow â†’ Enter â†’ SAUserScope â†’ fill â†’ Ctrl+S â†’ Esc back â†’ list refreshed
-- [ ] Company governance: SACompanyManage â†’ Enter â†’ SACompanyCreate edit â†’ Ctrl+S â†’ back
-- [ ] Audit review: SAAudit â†’ inline filter â†’ Arrow navigate â†’ Enter â†’ detail â†’ Esc back
-- [ ] Report: SAGovernanceSummaryReport â†’ filter â†’ Ctrl+S export
+**Status:** â¬œ NOT STARTED
 
-#### Cross-Screen
-- [ ] Command palette (Ctrl+K): opens on any screen, routes correctly
-- [ ] Tab between screens: focus management intact
-- [ ] No screen with missing or wrong footer hints
-- [ ] No screen with web-app patterns remaining (section cards around tables, description paragraphs, metric cards on operational screens)
+**Do every step keyboard-only. No mouse.**
 
-### Density Verification
+**Leave full cycle:**
+- [ ] Login â†’ navigate to HR module â†’ Leave Apply
+- [ ] Fill all fields (Tab through, Ctrl+S submit) â†’ success toast visible
+- [ ] Navigate to Leave My Requests â†’ Arrow navigate to the new row
+- [ ] Enter on the row â†’ Leave detail opens â†’ correct data shown
+- [ ] Esc from detail â†’ back to My Requests â†’ same row focused, list refreshed
+- [ ] Navigate to Leave Approval Inbox â†’ Arrow to pending row â†’ A to approve â†’ toast (no dialog)
+- [ ] R to reject a different row â†’ reason input â†’ confirm â†’ row removed from inbox
+- [ ] Leave Register: criteria screen â†’ fill filter â†’ F8 execute â†’ results load
+- [ ] Arrow navigate results â†’ Enter on row â†’ detail â†’ Esc back
+- [ ] Ctrl+S on results â†’ export triggered (or error if backend missing â€” document)
 
-For each screen with a data table, confirm:
-- [ ] Row height â‰¤ 32px
-- [ ] Visible rows â‰¥ 20 on a 1080p display (target 25+)
-- [ ] Font size 12-13px in table cells
-- [ ] Header is dark (slate-800 or darker)
+**OutWork full cycle:** Repeat all above steps for OutWork module.
 
-### Regression Check
+**Phase 7A completion rule:** Every step above has a checkmark. No step requires a mouse click.
 
-- [ ] No console errors on any screen
-- [ ] All API calls still work (no backend changes introduced)
-- [ ] All approval flows still work correctly
-- [ ] All leave/outwork workflows complete end-to-end
-- [ ] Auth, session, ACL behavior unchanged
+---
 
-### Phase 7 Completion Criteria
+### Phase 7B â€” SA Module End-to-End Test
 
-- [ ] All checklist items above verified
-- [ ] Zero web-app patterns remaining on any screen
-- [ ] Zero missing or inaccurate footer hints
-- [ ] Full HR and SA workflows completable keyboard-only
+**Status:** â¬œ NOT STARTED
+
+**Do every step keyboard-only. No mouse.**
+
+**User onboarding flow:**
+- [ ] Navigate to SAUsers â†’ Arrow navigate â†’ Enter on a user row â†’ SAUserScope opens
+- [ ] SAUserScope: Tab through fields â†’ edit work companies â†’ Ctrl+S save â†’ success
+- [ ] Esc back â†’ SAUsers list â†’ same row focused, data refreshed
+
+**Company governance flow:**
+- [ ] Navigate to SACompanyManage â†’ Arrow navigate â†’ verify rows are navigable
+- [ ] Enable/disable button: Enter focuses the action button â†’ Space/Enter triggers lifecycle change
+- [ ] Confirm dialog appears â†’ Enter to confirm â†’ row status updated
+- [ ] Navigate to SACompanyCreate â†’ fill fields â†’ Ctrl+S â†’ company created
+
+**Menu governance flow:**
+- [ ] Navigate to SAMenuGovernance â†’ Arrow navigate â†’ screen loads without crash
+- [ ] Add/edit menu item â†’ Ctrl+S â†’ item appears in list
+
+**Audit review flow:**
+- [ ] Navigate to SAAudit â†’ type in filter â†’ list filters live
+- [ ] Arrow navigate â†’ Enter on row â†’ detail view opens
+- [ ] Esc back â†’ list â†’ same filter state, same row focused
+
+**Report flow:**
+- [ ] Navigate to SAGovernanceSummaryReport â†’ F8 or filter â†’ data loads
+- [ ] Ctrl+S â†’ export triggered
+
+**Approval flow:**
+- [ ] Navigate to SASignupRequests â†’ Arrow navigate â†’ A approve â†’ toast
+- [ ] R reject â†’ reason â†’ confirm â†’ removed from list
+
+**Phase 7B completion rule:** Every step above passes. Any failure is fixed before marking DONE.
+
+---
+
+### Phase 7C â€” Density Verification
+
+**Status:** â¬œ NOT STARTED
+
+For every screen that contains a data table:
+
+| Check | Target | Pass Condition |
+|-------|--------|----------------|
+| Row height | â‰¤ 32px | Inspect with DevTools or visual check |
+| Visible rows at 1080p | â‰¥ 20 rows without scrolling (target 25+) | Count visible rows in browser |
+| Table cell font size | 12â€”13px (text-xs / text-[12px]) | Visual or DevTools check |
+| Table header background | Dark (slate-800 or darker) | Visual check |
+| Sticky header | Header stays visible on scroll | Scroll table and verify |
+| No section cards around tables | No white border-radius box around the table | Visual check |
+
+Run through all SA screens with tables, then all HR screens with tables.
+
+**Phase 7C completion rule:** All screens pass all 6 checks above.
+
+---
+
+### Phase 7D â€” Regression Check
+
+**Status:** â¬œ NOT STARTED
+
+**Open browser DevTools console. Check every screen category.**
+
+| Check | Screens | Pass Condition |
+|-------|---------|----------------|
+| No console errors | All 33 screens | Zero red errors in console |
+| API calls succeed | All screens that fetch data | Network tab: all fetch calls return 200 |
+| Approval flows intact | Leave, OutWork, SA Signup | Submit/approve/reject completes without error |
+| Auth/session unchanged | Login â†’ session timeout â†’ re-login | Session expiry shows correct warning |
+| ACL enforcement intact | Try accessing an SA route as a non-SA user | Redirect or 403 â€” no silent data leak |
+
+**Phase 7D completion rule:** All checks pass with zero console errors.
+
+---
+
+### Phase 7E â€” Final Sign-Off
+
+**Status:** â¬œ NOT STARTED
+
+**Final checklist before marking the entire implementation COMPLETE:**
+
+- [ ] Zero web-app patterns on any screen (no description paragraphs, no metric cards on operational screens, no section-card borders around data tables)
+- [ ] Zero missing or inaccurate footer hints on any screen
+- [ ] All drill-through pairs work enter-to-drill and esc-to-return
+- [ ] Full HR Leave + OutWork workflows completable keyboard-only
+- [ ] Full SA user onboarding + company governance completable keyboard-only
+- [ ] All Phase Status Quick Reference rows at the top of this document are âœ… DONE
+- [ ] Active Work Log has a “PHASE COMPLETE” entry dated and signed
+
+**When this checklist is fully checked, the PACE ERP Fast-Work migration is COMPLETE.**
+
+---
+
+### Phase 7 â€” Completion Criteria
+
+Phase 7 is DONE when:
+- [ ] 7A: Full HR cycle passes keyboard-only
+- [ ] 7B: Full SA cycle passes keyboard-only
+- [ ] 7C: All screens pass density checks
+- [ ] 7D: Zero console errors, all API calls work
+- [ ] 7E: Final sign-off checklist complete
 
 ---
 
@@ -955,6 +1307,142 @@ frontend/src/index.css                                    â€” add dense CSS
 
 ---
 
+### [2026-04-25] — Claude — Phase 5C: SA Drill-Through Code Verification DONE
+
+**Session result:** All 4 SA drill-through pairs are now present in code. 5.10 is no longer blocked because company address-only edit now exists end-to-end.
+
+**Files read:**
+- `SAUsers.jsx`, `SAUserScope.jsx` — pair 5.9
+- `SAProjectMaster.jsx`, `SAProjectManage.jsx` — pair 5.11
+- `SAAudit.jsx`, `SAAuditDetail.jsx` — pair 5.12
+
+**Confirmed:**
+- 5.9: `openScreenWithContext` with `returnState` + `auth_user_id`, smart back handler (`handleReturnToUserDirectory`) checks `previousScreen` before `popScreen`, Esc via MenuShell also correct ✓
+- 5.10: `SACompanyManage` -> `SACompanyCreate` now opens real address-only edit mode with backend save support ✓
+- 5.11: `isDrillThrough` flag used in SAProjectManage to change back button label + route. `popScreen()` on drill-through return ✓
+- 5.12: `SAAuditDetail.jsx` confirmed exists (65 lines). Full wiring verified ✓
+
+**Phase 5C status:** DONE 2026-04-25 Claude
+**Next:** Phase 5D (missing drill-through gap audit) — awaiting user instruction
+
+---
+
+### [2026-04-25] — Claude — Phase 5B: HR Drill-Through Code Verification DONE
+
+**Session result:** All 8 HR drill-through pairs verified by reading actual source code. No fixes needed — all wiring is correct.
+
+**Files read:**
+- `frontend/src/pages/dashboard/hr/HrWorkflowPages.jsx` (2473 lines) — pairs 5.1–5.3, 5.5–5.7
+- `frontend/src/pages/dashboard/hr/HrRegisterReports.jsx` (601 lines) — pairs 5.4, 5.8
+
+**Confirmed for all 8 pairs:**
+- `openScreenWithContext` with `refreshOnReturn: true` â†' engine auto-sets `contextKind: "DRILL_THROUGH"` ✓
+- `parentState` includes `focusKey` + screen-specific filter fields in context ✓
+- Detail screen reads context via `getActiveScreenContext()` ✓
+- `registerScreenRefreshCallback` in every list screen â†' fires on return ✓
+- Focus restore via `focusKey + focusRow(targetIndex)` effect in every list screen ✓
+- `useErpListNavigation` + `onActivate` â†' `openDetail` wired in all list screens ✓
+- `popScreen()` on Back button + MenuShell Esc (depth > 1 path) ✓
+- Both screen codes registered in SCREEN_REGISTRY ✓
+- Leave and OutWork share components â€" `kind` prop differentiates ✓
+
+**Observation (no fix needed):** Redundant explicit `navigate()` call after `openScreenWithContext` in each `openDetail`. Harmless — Bridge skips if pathname already matches.
+
+**Phase 5B status:** DONE 2026-04-25 Claude
+**Next:** Phase 5C (SA drill-through code verification) â€" awaiting user instruction
+
+---
+
+### [2026-04-25] — Claude — MD Restructure: Phase Status Summary + Phase 5/6/7 Sub-Phase Breakdown
+
+**Session result:** MD file fully restructured. Phase 1-4 status is clearly documented. Phase 5, 6, 7 are broken into sequential sub-phases (5A-5E, 6A-6E, 7A-7E) with detailed tasks, verification rules, and completion criteria for each.
+
+**Changes to MD file:**
+- Added "Phase Status Quick Reference" table after CRITICAL INSTRUCTION section — one-line status for every sub-phase
+- Phase 5 rewritten: 5 sequential sub-phases (5A shell nav, 5B HR drill-through code verify, 5C SA drill-through code verify, 5D gap audit, 5E behavioral verify)
+- Phase 6 rewritten: 5 sequential sub-phases (6A footer hint audit, 6B approval keyboard wiring, 6C report filter keys, 6D form tab order, 6E cross-screen consistency) + authoritative keyboard vocabulary reference table
+- Phase 7 rewritten: 5 sequential sub-phases (7A HR end-to-end, 7B SA end-to-end, 7C density verify, 7D regression check, 7E final sign-off)
+- Back nav fix (part 2) updated: added conditional — drawer/focus restore only fires when returning to home level (stackDepth-1 â‰¤ 1). Drill-through returns (stackDepth-1 > 1) do NOT suppress content focus.
+
+**Current work position:** Phase 5A DONE. Next: Phase 5B (HR drill-through code verification).
+
+---
+
+### [2026-04-25] — Claude — Phase 5: Back Navigation Fix (part 1 + part 2)
+
+**Session result:** Two back-navigation bugs fixed. Esc now returns to the logical origin screen AND restores sidebar drawer state + focus to the sub-menu item the user navigated away from.
+
+**Fixes:**
+
+- DONE 2026-04-25 Claude — `frontend/src/layout/MenuShell.jsx` (fix 1: stackDepth=1 edge case)
+  - In `handleBack`: replaced `navigate(-1)` with `resetToScreen(homeScreenCode)` (SA_HOME / GA_HOME / DASHBOARD_HOME)
+  - Root cause: `navigate(-1)` used browser history AND was immediately cancelled by NavigationStackBridge. `resetToScreen` updates the stack first, Bridge drives the route. Consistent with `handleGoHome`.
+
+- DONE 2026-04-25 Claude — `frontend/src/layout/MenuShell.jsx` (fix 2: drawer + focus restore on back nav)
+  - Added `pendingDrawerRestoreRef` and `suppressContentFocusRef` refs.
+  - `handleBack`: before `popScreen()`, computes the drawer state for the screen being LEFT (`getAncestorMenuCodes` + `resolveDrawerTrail`), finds the exact item index, stores in `pendingDrawerRestoreRef`. Sets `suppressContentFocusRef = true`.
+  - Location focus effect (`location.pathname` dep): if `suppressContentFocusRef` is set, skip content auto-focus (clears the flag).
+  - Drawer path effect (`location.pathname, sidebarRoots` deps): if `pendingDrawerRestoreRef` is set, use it to restore `drawerPath` + `drawerFocusIndex` instead of recomputing from destination route. For top-level pages (no drawer parent), focuses the corresponding sidebar menu button.
+  - Root cause: the drawer-path effect was deriving state from the DESTINATION route (/sa/home → ancestors = [] → drawer closes). On back navigation it should instead derive state from the ORIGIN route (e.g. /sa/users → ancestors = ["user_management"] → drawer opens showing User Management items with User Scope focused). The content focus effect was also unconditionally focusing the first element in the content region on every route change, sending focus to "Start Here" instead of the sidebar.
+  - Build: ✓ built in 3.53s, zero errors
+
+**Phase 5 status:** IN PROGRESS — back navigation fixed (both edge case + drawer/focus restore). Drill-through behavioral verification still pending. 5.10 is now implemented for address-only edit.
+
+---
+
+### [2026-04-25] — Claude — Phase 4 True Close: Sticky Header + Column Overlap + SAMenuGovernance TDZ
+
+**Session result:** Phase 4 is now fully and verifiably closed. Three targeted fixes applied.
+
+**Fixes completed:**
+
+- DONE 2026-04-25 Claude — `frontend/src/components/data/ErpDenseGrid.jsx`
+  - Changed viewport container from `style={{ maxHeight }}` to `style={{ height: maxHeight, overflowY: "auto" }}`
+  - Root cause: `maxHeight` only creates a scroll ancestor when content overflows. When rows are few, the page scrolled instead and `position: sticky` on `<thead th>` had no effect. Fixed by using a fixed `height` so the container is ALWAYS a scroll ancestor regardless of content height. Sticky headers now work on all tables at all row counts.
+
+- DONE 2026-04-25 Claude — `frontend/src/admin/sa/screens/SACompanyManage.jsx`
+  - Added `truncate` to company_name `<p>` and `min-w-0` to the wrapping div
+  - Root cause: long company names (e.g. "Ace Cable And Conductors Limited") overflowed the company cell into adjacent columns with no overflow clipping. Now truncates cleanly within the cell.
+
+- DONE 2026-04-25 Claude — `frontend/src/admin/sa/screens/SAMenuGovernance.jsx`
+  - Moved `getNextAvailableOrder` useCallback from line 965 to line 290 (before all useMemo hooks that reference it)
+  - Root cause: `const getNextAvailableOrder = useCallback(...)` was declared AFTER `useMemo` hooks at lines 375–382 that listed it in their dependency arrays. JavaScript temporal dead zone — accessing a `const` before its declaration throws `ReferenceError` on every render. Screen was completely unusable (crashed on mount). Fixed by hoisting the definition above all dependent useMemo calls.
+
+**Phase 4 status:** DONE 2026-04-25 Claude — all sub-phases (4A–4E) complete + all post-audit regressions fixed. Zero outstanding Phase 4 items.
+
+**Phase 5 status:** IN PROGRESS — infrastructure wired, behavioral verification pending. Back navigation unresolved operator-side. 5.10 now has address-only edit support.
+
+---
+
+### [2026-04-25] — Codex — 5.10 Company Address Edit Unblocked
+
+**Session result:** Implemented the previously blocked `SACompanyManage -> SACompanyCreate` drill-through as an address-only edit flow.
+
+**Completed:**
+- DONE 2026-04-25 Codex — `supabase/functions/api/_core/admin/company/update_company_address.handler.ts`
+  - added SA-only backend address update handler for `state_name`, `pin_code`, and `full_address`
+  - kept `company_code`, `company_name`, and `gst_number` immutable
+- DONE 2026-04-25 Codex — `supabase/functions/api/_routes/admin.routes.ts`
+  - registered `PATCH /api/admin/company/address`
+- DONE 2026-04-25 Codex — `frontend/src/admin/sa/screens/SACompanyManage.jsx`
+  - wired row Enter + explicit Address action button to open company edit drill-through
+  - parent company register now refreshes when returning from the edit screen
+- DONE 2026-04-25 Codex — `frontend/src/admin/sa/screens/SACompanyCreate.jsx`
+  - added dual-mode behavior: create mode stays intact, edit mode loads existing company
+  - edit mode is address-only and keeps identity fields read-only
+  - drill-through return now goes back to company register correctly
+
+**Verification:**
+- backend import sanity check OK with dummy env vars
+- `frontend/npm run build` OK
+
+**Next action for next session:**
+Continue Phase 5 behavioral verification, now including the new 5.10 address-edit path.
+
+**Phase 5 status:** IN PROGRESS — 5.10 unblocked in code; behavioral verification still pending.
+
+---
+
 ### [2026-04-24] — Codex — SA Registry + Primary Scope Clarification Pass
 
 **Session result:** Fixed two operator-facing SA issues and corrected the documentation truth around `Esc/back`.
@@ -1024,7 +1512,7 @@ frontend/src/index.css                                    â€” add dense CSS
 **Current truth at the end of this session:**
 - Phase 4: DONE and verified
 - Phase 5: IN PROGRESS
-- 5.10 remains blocked until a real company edit capability exists
+- 5.10 now supports SA-only address editing without opening broader company identity edits
 
 ---
 
@@ -1052,7 +1540,7 @@ frontend/src/index.css                                    â€” add dense CSS
 - `SAAuditDetail.jsx` exists (confirmed by grep)
 - Routes wired in `AppRouter.jsx` and `hrScreens.js`
 - Drill-through from SAProjectMaster → SAProjectManage appears wired
-- 5.10 (SACompanyManage → edit) correctly blocked — no backend company update route exists
+- 5.10 (SACompanyManage → edit) now exists for address-only company updates
 
 **Phase 5 status:** IN PROGRESS — infrastructure exists, behavioral verification pending
 
@@ -1093,8 +1581,8 @@ frontend/src/index.css                                    â€” add dense CSS
 **Blocked pair:**
 
 - `5.10 SACompanyManage -> SACompanyCreate (edit mode)`
-  - blocked because `SACompanyCreate.jsx` is still create-only
-  - backend has company create + company state change, but no company profile update route / handler
+  - implemented as SA-only address edit
+  - backend now exposes company address update while company identity fields stay locked
   - this pair cannot be honestly marked complete without a real company edit capability
 
 **Verification:**

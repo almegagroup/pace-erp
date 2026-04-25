@@ -52,8 +52,8 @@ export default function ErpDenseGrid({
   const viewportClassName =
     maxHeight === "none"
       ? "overflow-x-auto overflow-y-visible border border-slate-300 bg-white"
-      : "overflow-auto border border-slate-300 bg-white";
-  const viewportStyle = maxHeight === "none" ? undefined : { maxHeight };
+      : "border border-slate-300 bg-white";
+  const viewportStyle = maxHeight === "none" ? undefined : { height: maxHeight, overflowY: "auto" };
 
   return (
     <div className="grid gap-0">
