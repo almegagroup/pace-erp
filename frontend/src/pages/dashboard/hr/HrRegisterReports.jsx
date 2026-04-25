@@ -191,14 +191,13 @@ function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCod
       group: "Current Screen",
       label: "Run register report",
       keywords: ["register", "report", "run", kind],
-      onSelect: handleRunReport,
+      perform: handleRunReport,
     },
   ]);
 
   useErpScreenHotkeys({
-    save: {
-      label: "Run register report",
-      handler: handleRunReport,
+    refresh: {
+      perform: handleRunReport,
     },
   });
 
@@ -207,7 +206,6 @@ function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCod
       title={title}
       footerHints={[
         "F8 Execute",
-        "Ctrl+S Execute",
         "Esc Back",
         "Ctrl+K Command Bar",
       ]}
@@ -215,7 +213,7 @@ function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCod
         {
           key: "run",
           label: "Run Report",
-          hint: "F8 / Ctrl+S",
+          hint: "F8",
           tone: "primary",
           onClick: handleRunReport,
         },
@@ -403,14 +401,14 @@ function RegisterResultsPage({ kind, title, loader }) {
       group: "Current Screen",
       label: "Back to report criteria",
       keywords: ["register", "criteria", "back", kind],
-      onSelect: () => popScreen(),
+      perform: () => popScreen(),
     },
     {
       id: `${kind}-register-results-export`,
       group: "Current Screen",
       label: "Download filtered report",
       keywords: ["register", "export", "excel", kind],
-      onSelect: () =>
+      perform: () =>
         downloadCsvFile({
           fileName: `${kind}-register-report.csv`,
           columns,
@@ -421,17 +419,30 @@ function RegisterResultsPage({ kind, title, loader }) {
 
   useErpScreenHotkeys({
     save: {
-      label: "Download filtered report",
-      handler: () =>
+      perform: () =>
         downloadCsvFile({
           fileName: `${kind}-register-report.csv`,
           columns,
           rows: buildDownloadRows(columns, filteredRows),
         }),
     },
+    refresh: {
+      disabled: loading,
+      perform: () =>
+        void (async () => {
+          setLoading(true);
+          try {
+            const reportRows = await loader(criteria);
+            setRows(reportRows);
+          } catch (loadError) {
+            setError(loadError instanceof Error ? loadError.message : "REGISTER_REPORT_FAILED");
+          } finally {
+            setLoading(false);
+          }
+        })(),
+    },
     focusSearch: {
-      label: "Focus report search",
-      handler: () => searchRef.current?.focus?.(),
+      perform: () => searchRef.current?.focus?.(),
     },
   });
 
@@ -444,6 +455,7 @@ function RegisterResultsPage({ kind, title, loader }) {
         "Enter Open",
         "Ctrl+S Export",
         "F8 Refresh",
+        "Alt+Shift+F Search",
         "Esc Back",
         "Ctrl+K Command Bar",
       ]}

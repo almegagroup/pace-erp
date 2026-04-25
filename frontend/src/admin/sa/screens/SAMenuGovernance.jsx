@@ -1202,7 +1202,7 @@ export default function SAMenuGovernance() {
       eyebrow="Menu Governance"
       title="Super Admin Menu Governance"
       actions={topActions}
-      footerHints={["↑↓ Navigate", "Enter Inspect", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
       notices={[
         ...(error
           ? [

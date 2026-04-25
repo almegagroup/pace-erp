@@ -542,7 +542,7 @@ export default function SAApprovalRules() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      footerHints={["↑↓ Navigate", "Enter Select", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "F8 Refresh", "Ctrl+S Save", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={{
         eyebrow: "Scope Filters",
         title: "Choose approval pool boundaries",

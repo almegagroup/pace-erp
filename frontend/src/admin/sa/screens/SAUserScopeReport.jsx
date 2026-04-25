@@ -205,14 +205,14 @@ export default function SAUserScopeReport() {
       group: "Current Screen",
       label: "Refresh user scope report",
       keywords: ["user", "scope", "report", "refresh"],
-      onSelect: () => void loadAll(),
+      perform: () => void loadAll(),
     },
     {
       id: "sa-user-scope-report-export",
       group: "Current Screen",
       label: "Download user scope report",
       keywords: ["user", "scope", "report", "export", "excel"],
-      onSelect: () =>
+      perform: () =>
         downloadCsvFile({
           fileName: "sa-user-scope-report.csv",
           columns: visibleColumns,
@@ -224,14 +224,13 @@ export default function SAUserScopeReport() {
       group: "Current Screen",
       label: "Choose visible report columns",
       keywords: ["columns", "visible columns", "report columns"],
-      onSelect: () => setShowColumnDrawer(true),
+      perform: () => setShowColumnDrawer(true),
     },
   ]);
 
   useErpScreenHotkeys({
     save: {
-      label: "Download user scope report",
-      handler: () =>
+      perform: () =>
         downloadCsvFile({
           fileName: "sa-user-scope-report.csv",
           columns: visibleColumns,
@@ -239,19 +238,18 @@ export default function SAUserScopeReport() {
         }),
     },
     refresh: {
-      label: "Refresh user scope report",
-      handler: () => void loadAll(),
+      disabled: loading,
+      perform: () => void loadAll(),
     },
     focusSearch: {
-      label: "Focus report search",
-      handler: () => searchRef.current?.focus?.(),
+      perform: () => searchRef.current?.focus?.(),
     },
   });
 
   return (
     <ErpScreenScaffold
       title="SA User Scope Report"
-      footerHints={["↑↓ Navigate", "Ctrl+S Export", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "Ctrl+S Export", "F8 Refresh", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
       actions={[
         {
           key: "refresh",

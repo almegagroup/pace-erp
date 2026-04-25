@@ -164,14 +164,14 @@ export default function SAGovernanceSummaryReport() {
       group: "Current Screen",
       label: "Refresh governance summary report",
       keywords: ["governance", "summary", "report", "refresh"],
-      onSelect: () => void loadAll(),
+      perform: () => void loadAll(),
     },
     {
       id: "sa-governance-summary-report-export",
       group: "Current Screen",
       label: "Download governance summary report",
       keywords: ["governance", "summary", "report", "export", "excel"],
-      onSelect: () =>
+      perform: () =>
         downloadCsvFile({
           fileName: "sa-governance-summary-report.csv",
           columns: visibleColumns,
@@ -182,8 +182,7 @@ export default function SAGovernanceSummaryReport() {
 
   useErpScreenHotkeys({
     save: {
-      label: "Download governance summary report",
-      handler: () =>
+      perform: () =>
         downloadCsvFile({
           fileName: "sa-governance-summary-report.csv",
           columns: visibleColumns,
@@ -191,12 +190,11 @@ export default function SAGovernanceSummaryReport() {
         }),
     },
     refresh: {
-      label: "Refresh governance summary report",
-      handler: () => void loadAll(),
+      disabled: loading,
+      perform: () => void loadAll(),
     },
     focusSearch: {
-      label: "Focus governance report search",
-      handler: () => searchRef.current?.focus?.(),
+      perform: () => searchRef.current?.focus?.(),
     },
   });
 
@@ -232,7 +230,7 @@ export default function SAGovernanceSummaryReport() {
             handleLinearNavigation(event, { index: 1, refs: actionRefs.current }),
         },
       ]}
-      footerHints={["↑↓ Navigate", "Ctrl+S Export", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "Ctrl+S Export", "F8 Refresh", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-4">
         <div className="grid gap-3 md:grid-cols-4">

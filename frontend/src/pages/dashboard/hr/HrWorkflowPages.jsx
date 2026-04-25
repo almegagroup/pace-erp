@@ -61,9 +61,9 @@ const STATUS_TONE_CLASS = Object.freeze({
 });
 
 const HR_ENTRY_FOOTER_HINTS = Object.freeze([
-  "Tab Next Field",
-  "Ctrl+S Submit",
-  "Esc Cancel",
+  "Ctrl+S Save",
+  "Esc Back",
+  "Ctrl+K Command Bar",
 ]);
 
 const HR_LIST_FOOTER_HINTS = Object.freeze([
@@ -71,17 +71,20 @@ const HR_LIST_FOOTER_HINTS = Object.freeze([
   "Enter Open",
   "Space Select",
   "F8 Refresh",
+  "Alt+Shift+F Search",
   "Esc Back",
   "Ctrl+K Command Bar",
 ]);
 
 const HR_APPROVAL_FOOTER_HINTS = Object.freeze([
   "↑↓ Navigate",
-  "Enter View",
+  "Enter Open",
   "A Approve",
   "R Reject",
   "F8 Refresh",
+  "Alt+Shift+F Search",
   "Esc Back",
+  "Ctrl+K Command Bar",
 ]);
 
 function todayDefault() {
@@ -129,6 +132,8 @@ function getHrRequestKey(request) {
     ""
   );
 }
+
+const HR_FOCUS_FIRST_ROW = "__FIRST_ROW__";
 
 export function RequestStatusBadge({ state }) {
   return (
@@ -1042,6 +1047,7 @@ function HrApprovalDenseTable({
 export function LeaveApplyWorkspace() {
   const navigate = useNavigate();
   const { menu, runtimeContext } = useMenu();
+  const transactionCompanyRef = useRef(null);
   const [fromDate, setFromDate] = useState(todayDefault());
   const [toDate, setToDate] = useState(todayDefault());
   const [reason, setReason] = useState("");
@@ -1075,12 +1081,7 @@ export function LeaveApplyWorkspace() {
       perform: () => void handleSubmit(),
     },
     focusPrimary: {
-      perform: () => {
-        const companyField = globalThis.document?.querySelector(
-          "[data-transaction-company='leave'] select, [data-transaction-company='leave']",
-        );
-        companyField?.focus?.();
-      },
+      perform: () => transactionCompanyRef.current?.focus?.(),
     },
   });
 
@@ -1165,13 +1166,12 @@ export function LeaveApplyWorkspace() {
       formContent={
         <div className="grid gap-[var(--erp-form-gap)]">
           <ErpDenseFormRow label="Company" required>
-            <div data-transaction-company="leave" tabIndex={0}>
-              <TransactionCompanySelector
-                runtimeContext={runtimeContext}
-                value={transactionCompanyId}
-                onChange={setTransactionCompanyId}
-              />
-            </div>
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={transactionCompanyId}
+              onChange={setTransactionCompanyId}
+              selectRef={transactionCompanyRef}
+            />
           </ErpDenseFormRow>
           <ErpDenseFormRow label="From Date" required>
             <input
@@ -1217,6 +1217,7 @@ export function LeaveApplyWorkspace() {
 export function OutWorkApplyWorkspace() {
   const navigate = useNavigate();
   const { menu, runtimeContext } = useMenu();
+  const transactionCompanyRef = useRef(null);
   const [fromDate, setFromDate] = useState(todayDefault());
   const [toDate, setToDate] = useState(todayDefault());
   const [reason, setReason] = useState("");
@@ -1257,12 +1258,7 @@ export function OutWorkApplyWorkspace() {
       perform: () => void handleSubmit(),
     },
     focusPrimary: {
-      perform: () => {
-        const companyField = globalThis.document?.querySelector(
-          "[data-transaction-company='outwork'] select, [data-transaction-company='outwork']",
-        );
-        companyField?.focus?.();
-      },
+      perform: () => transactionCompanyRef.current?.focus?.(),
     },
   });
 
@@ -1409,16 +1405,15 @@ export function OutWorkApplyWorkspace() {
         formEyebrow="Out Work Request"
         formTitle="Submit an out work request"
         formContent={
-          <div className="grid gap-[var(--erp-form-gap)]">
-            <ErpDenseFormRow label="Company" required>
-              <div data-transaction-company="outwork" tabIndex={0}>
-                <TransactionCompanySelector
-                  runtimeContext={runtimeContext}
-                  value={transactionCompanyId}
-                  onChange={setTransactionCompanyId}
-                />
-              </div>
-            </ErpDenseFormRow>
+        <div className="grid gap-[var(--erp-form-gap)]">
+          <ErpDenseFormRow label="Company" required>
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={transactionCompanyId}
+                onChange={setTransactionCompanyId}
+                selectRef={transactionCompanyRef}
+              />
+          </ErpDenseFormRow>
             <ErpDenseFormRow label="From Date" required>
               <input
                 type="date"
@@ -1847,7 +1842,10 @@ function HrApprovalInboxWorkspace({
     if (!focusKey || filteredRows.length === 0) {
       return;
     }
-    const targetIndex = filteredRows.findIndex((row) => getHrRequestKey(row) === focusKey);
+    const targetIndex =
+      focusKey === HR_FOCUS_FIRST_ROW
+        ? 0
+        : filteredRows.findIndex((row) => getHrRequestKey(row) === focusKey);
     if (targetIndex >= 0) {
       queueMicrotask(() => focusRow(targetIndex));
     }
@@ -1867,8 +1865,18 @@ function HrApprovalInboxWorkspace({
     // Design Authority Law 10: Approval and rejection are immediate — no confirmation dialog.
     // Feedback is delivered via toast only. Dialog is reserved for destructive actions (cancel/delete).
     const companyId = isMulti ? (request.parent_company_id ?? null) : null;
+    const currentIndex = filteredRows.findIndex(
+      (row) => getHrRequestKey(row) === getHrRequestKey(request)
+    );
+    const fallbackRow =
+      filteredRows[currentIndex + 1] ??
+      filteredRows[currentIndex - 1] ??
+      null;
+    const fallbackFocusKey =
+      fallbackRow ? getHrRequestKey(fallbackRow) : HR_FOCUS_FIRST_ROW;
 
     try {
+      setFocusKey(fallbackFocusKey);
       await submitWorkflowDecision(request.workflow_request_id, decision, companyId);
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       await refresh();

@@ -75,12 +75,14 @@ function formatLifecycleState(value) {
 }
 
 export default function SASignupRequests() {
+  const FOCUS_FIRST_ROW = "__FIRST_ROW__";
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [actingUserId, setActingUserId] = useState("");
+  const [pendingFocusTarget, setPendingFocusTarget] = useState(null);
   const [focusedRowIndex, setFocusedRowIndex] = useState(-1);
   const actionBarRefs = useRef([]);
   const rowActionRefs = useRef([]);
@@ -130,7 +132,7 @@ export default function SASignupRequests() {
     }
   }
 
-  async function handleDecision(authUserId, decision) {
+  async function handleDecision(authUserId, decision, fallbackUserId = "") {
     if (!authUserId) {
       return;
     }
@@ -176,6 +178,9 @@ export default function SASignupRequests() {
       );
 
       setRequests(refreshedRequests);
+      setPendingFocusTarget(
+        refreshedRequests.length > 0 ? fallbackUserId || FOCUS_FIRST_ROW : null
+      );
       setNotice(
         decision === "APPROVE"
           ? "Signup request approved."
@@ -224,7 +229,7 @@ export default function SASignupRequests() {
   );
   const signupPagination = useErpPagination(filteredRequests, 10);
 
-  const { getRowProps, getRowElement } = useErpListNavigation(
+  const { getRowProps, getRowElement, focusRow } = useErpListNavigation(
     signupPagination.pageItems,
     {
       onActivate: (_row, index) => {
@@ -235,6 +240,27 @@ export default function SASignupRequests() {
       },
     }
   );
+
+  useEffect(() => {
+    if (!pendingFocusTarget || signupPagination.pageItems.length === 0) {
+      return;
+    }
+
+    let targetIndex = 0;
+
+    if (pendingFocusTarget !== FOCUS_FIRST_ROW) {
+      const matchedIndex = signupPagination.pageItems.findIndex(
+        (row) => row.auth_user_id === pendingFocusTarget
+      );
+
+      if (matchedIndex >= 0) {
+        targetIndex = matchedIndex;
+      }
+    }
+
+    queueMicrotask(() => focusRow(targetIndex));
+    setPendingFocusTarget(null);
+  }, [focusRow, pendingFocusTarget, signupPagination.pageItems]);
 
   useErpScreenCommands([
     {
@@ -404,6 +430,11 @@ export default function SASignupRequests() {
               {signupPagination.pageItems.map((request, index) => {
                 const isActing = actingUserId === request.auth_user_id;
                 const rowProps = getRowProps(index);
+                const fallbackRequest =
+                  signupPagination.pageItems[index + 1] ??
+                  signupPagination.pageItems[index - 1] ??
+                  null;
+                const fallbackUserId = fallbackRequest?.auth_user_id ?? "";
 
                 return (
                   <ErpInlineApprovalRow
@@ -411,8 +442,20 @@ export default function SASignupRequests() {
                     row={request}
                     index={index}
                     isFocused={focusedRowIndex === index}
-                    onApprove={() => void handleDecision(request.auth_user_id, "APPROVE")}
-                    onReject={() => void handleDecision(request.auth_user_id, "REJECT")}
+                    onApprove={() =>
+                      void handleDecision(
+                        request.auth_user_id,
+                        "APPROVE",
+                        fallbackUserId
+                      )
+                    }
+                    onReject={() =>
+                      void handleDecision(
+                        request.auth_user_id,
+                        "REJECT",
+                        fallbackUserId
+                      )
+                    }
                     onActivate={() => rowActionRefs.current[index]?.[0]?.focus()}
                     rowProps={{
                       ...rowProps,
@@ -463,7 +506,13 @@ export default function SASignupRequests() {
                               }}
                               type="button"
                               disabled={isActing}
-                              onClick={() => void handleDecision(request.auth_user_id, "APPROVE")}
+                              onClick={() =>
+                                void handleDecision(
+                                  request.auth_user_id,
+                                  "APPROVE",
+                                  fallbackUserId
+                                )
+                              }
                               onKeyDown={(event) =>
                                 handleGridNavigation(event, {
                                   rowIndex: index,
@@ -482,7 +531,13 @@ export default function SASignupRequests() {
                               }}
                               type="button"
                               disabled={isActing}
-                              onClick={() => void handleDecision(request.auth_user_id, "REJECT")}
+                              onClick={() =>
+                                void handleDecision(
+                                  request.auth_user_id,
+                                  "REJECT",
+                                  fallbackUserId
+                                )
+                              }
                               onKeyDown={(event) =>
                                 handleGridNavigation(event, {
                                   rowIndex: index,
@@ -533,7 +588,7 @@ export default function SASignupRequests() {
             ]
           : []),
       ]}
-      footerHints={["↑↓ Navigate", "A Approve", "R Reject", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "A Approve", "R Reject", "F8 Refresh", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
       filterSection={filterSection}
       reviewSection={reviewSection}
     />

@@ -26,7 +26,7 @@
 
 ## Phase Status Quick Reference
 
-> Last updated: 2026-04-25 Claude. Read the Active Work Log for session-by-session detail.
+> Last updated: 2026-04-25 Codex. Read the Active Work Log for session-by-session detail.
 
 | Phase | Description | Status | Last Updated |
 |-------|-------------|--------|-------------|
@@ -38,13 +38,13 @@
 | Phase 5A | Shell navigation behaviors (Esc/back logic, drawer restore, focus restore) | âœ… DONE | 2026-04-25 Claude |
 | Phase 5B | HR drill-through code verification (8 pairs verified in code) | âœ… DONE | 2026-04-25 Claude |
 | Phase 5C | SA drill-through code verification | âœ… DONE | 2026-04-25 Claude |
-| Phase 5D | Missing drill-through gap audit | â¬œ NOT STARTED | â€” |
+| Phase 5D | Missing drill-through gap audit | âœ… DONE | 2026-04-25 Codex |
 | Phase 5E | Drill-through behavioral verification (browser end-to-end) | â¬œ NOT STARTED | â€” |
-| Phase 6A | Footer hint accuracy audit | â¬œ NOT STARTED | â€” |
-| Phase 6B | Approval screen keyboard wiring | â¬œ NOT STARTED | â€” |
-| Phase 6C | Report screen filter keys | â¬œ NOT STARTED | â€” |
-| Phase 6D | Form screen Tab order | â¬œ NOT STARTED | â€” |
-| Phase 6E | Cross-screen keyboard vocabulary consistency | â¬œ NOT STARTED | â€” |
+| Phase 6A | Footer hint accuracy audit | âœ… DONE | 2026-04-25 Codex |
+| Phase 6B | Approval screen keyboard wiring | âœ… DONE | 2026-04-25 Codex |
+| Phase 6C | Report screen filter keys | âœ… DONE | 2026-04-25 Codex |
+| Phase 6D | Form screen Tab order | âœ… DONE | 2026-04-25 Codex |
+| Phase 6E | Cross-screen keyboard vocabulary consistency | âœ… DONE | 2026-04-25 Codex |
 | Phase 7A | HR module end-to-end test | â¬œ NOT STARTED | â€” |
 | Phase 7B | SA module end-to-end test | â¬œ NOT STARTED | â€” |
 | Phase 7C | Density verification | â¬œ NOT STARTED | â€” |
@@ -875,7 +875,7 @@ All shell-level navigation behaviors are now correct. No further work needed her
 
 ### Phase 5D â€” Missing Drill-Through Gap Audit
 
-**Status:** â¬œ NOT STARTED
+**Status:** âœ… DONE 2026-04-25 Codex
 
 **What to do:** Find any list screen that has a navigable table (ErpDenseGrid with `onRowActivate` or `getRowProps`) but NO drill-through target defined.
 
@@ -897,6 +897,34 @@ SAReportVisibility.jsx   â€” visibility toggle rows, no detail needed
 ```
 
 **Output:** Fill in a table with “Needs Wiring” / “No Detail Target” / “Already In 5B/5C” for each screen.
+
+| Screen | Audit Result | Reason |
+|--------|--------------|--------|
+| `SAUsers.jsx` | Already In 5B/5C | Real drill-through already wired to `SAUserScope` |
+| `SACompanyManage.jsx` | Already In 5B/5C | Real drill-through now wired to `SACompanyCreate` edit mode |
+| `SAProjectMaster.jsx` | Already In 5B/5C | Real drill-through already wired to `SAProjectManage` |
+| `SAAudit.jsx` | Already In 5B/5C | Real drill-through already wired to `SAAuditDetail` |
+| `SAUserRoles.jsx` | No Detail Target | Enter moves focus into inline role-edit controls inside the same grid row |
+| `SAGroupGovernance.jsx` | No Detail Target | Group selection drives same-screen governance/editor workspace rather than a separate detail screen |
+| `SAApprovalPolicy.jsx` | No Detail Target | Row activation opens the policy editor drawer on the same screen |
+| `SACompanyModuleMap.jsx` | No Detail Target | Company/module rows are same-screen selectors for toggle operations only |
+| `SACapabilityGovernance.jsx` | No Detail Target | Resource rows feed the same-screen capability binding workspace and drawer |
+| `SASignupRequests.jsx` | No Detail Target | Approval queue uses inline approve/reject actions, not a detail screen |
+| `SASessions.jsx` | No Detail Target | Session rows only expose revoke/focus action; no deeper detail contract exists |
+| `SAReportVisibility.jsx` | No Detail Target | Rule pick loads the same-screen rule editor rather than navigating away |
+| `SADepartmentMaster.jsx` | No Detail Target | Department selection updates the same-screen master editor |
+| `SAModuleMaster.jsx` | No Detail Target | Module rows are edited in the same screen workspace |
+| `SAWorkContextMaster.jsx` | No Detail Target | Work-context rows drive same-screen details plus drawers |
+| `SAPageResourceRegistry.jsx` | No Detail Target | Row selection fills the same-screen registry inspector/work area |
+| `SAModuleResourceMap.jsx` | No Detail Target | Resource rows are same-screen selection for mapping actions |
+| `SAProjectManage.jsx` | No Detail Target | Project roster is the detail screen already; rows only switch in-screen selection |
+| `SASystemHealth.jsx` | No Detail Target | Diagnostic grid is read-only summary, with no separate row detail screen |
+| `SAAclVersionCenter.jsx` | No Detail Target | Company rows switch the same-screen version-center detail pane |
+| `SAGovernanceSummaryReport.jsx` | No Detail Target | Flat report grid has no row-level detail contract defined |
+| `SAUserScopeReport.jsx` | No Detail Target | Report grid is read-only summary output |
+| `SAControlPanel.jsx` | No Detail Target | Dense grids are dashboard summary tables, not drill-through registers |
+
+**Audit result:** No additional missing drill-through pair was found beyond the pairs already handled in 5B/5C. The remaining navigable SA grids are intentional same-screen selectors, inline-action queues, or read-only summaries.
 
 **Phase 5D completion rule:** Every SA list screen with a navigable grid is accounted for. No silent gaps.
 
@@ -927,7 +955,7 @@ Phase 5 is DONE when:
 - [ ] 5A: Shell navigation behaviors verified (DONE)
 - [ ] 5B: All 8 HR pairs read, verified or fixed in code
 - [ ] 5C: All 4 SA pairs verified in code, including 5.10 address-only edit drill-through
-- [ ] 5D: All list screens audited, gaps documented or wired
+- [x] 5D: All list screens audited, gaps documented or wired
 - [ ] 5E: All non-blocked pairs pass the 7-item behavioral checklist
 
 ---
@@ -965,7 +993,7 @@ Phase 5 is DONE when:
 
 ### Phase 6A â€” Footer Hint Accuracy Audit
 
-**Status:** â¬œ NOT STARTED
+**Status:** âœ… DONE 2026-04-25 Codex
 
 **What to do:**
 1. Open every screen file (all HR + all SA = 33 files)
@@ -993,13 +1021,59 @@ SAModuleResourceMap.jsx, SAPageResourceRegistry.jsx, SAReportVisibility.jsx, SAA
 SAAudit.jsx, SAGovernanceSummaryReport.jsx, SAUserScopeReport.jsx
 ```
 
+**Audit table (PASS/FAIL):**
+
+| Screen | Result | Notes | Scheduled follow-up |
+|--------|--------|-------|---------------------|
+| `HrWorkflowFoundationPage.jsx` | PASS | Wrapper forwards footer hints; no local keyboard vocabulary mismatch found | â€” |
+| `HrWorkflowPages.jsx` | FAIL | Nonstandard hints (`Ctrl+S Submit`, `Enter View`), missing `Ctrl+K`, entry/list vocabulary drift | 6B, 6D, 6E |
+| `HrRegisterReports.jsx` | FAIL | Selection footer uses nonstandard `Ctrl+S Execute`; results footer lacks documented search shortcut | 6C, 6E |
+| `SAHome.jsx` | PASS | Footer matches working launch-grid behavior and standard global keys | â€” |
+| `SAControlPanel.jsx` | FAIL | Footer says `Enter Open`, but dense summary tables do not wire a true row open action | 6E |
+| `SASystemHealth.jsx` | PASS | Minimal footer matches actual refresh/back/command behavior | â€” |
+| `SAUsers.jsx` | FAIL | Drill-through is correct, but quick filter shortcut is undocumented in footer | 6C |
+| `SAUserScope.jsx` | FAIL | Nonstandard `Ctrl+S Save Scope` / `F3 Edit Scope` footer vocabulary | 6D, 6E |
+| `SAUserRoles.jsx` | FAIL | Nonstandard `Enter Edit`; quick filter shortcut missing from footer | 6C, 6E |
+| `SASignupRequests.jsx` | FAIL | A/R hints present, but quick filter shortcut missing from footer | 6B, 6C |
+| `SASessions.jsx` | FAIL | Nonstandard/stale `Enter Inspect`; quick filter shortcut missing from footer | 6C, 6E |
+| `SACompanyManage.jsx` | FAIL | Nonstandard `Enter Edit Address`; quick filter shortcut missing from footer | 6C, 6E |
+| `SACompanyCreate.jsx` | FAIL | Entry footer uses nonstandard `Enter Check GST` / `Enter Next Field` instead of standard confirm/save vocabulary | 6D, 6E |
+| `SACompanyModuleMap.jsx` | FAIL | Nonstandard `Enter Select`; `Space Select` documented but not part of a clear standardized selection contract | 6E |
+| `SACompanyProjectMap.jsx` | FAIL | Nonstandard `Enter Select`; `Space Select` vocabulary needs consistency pass | 6E |
+| `SADepartmentMaster.jsx` | FAIL | Nonstandard `Enter Select` on same-screen selector/editor workspace | 6D, 6E |
+| `SAProjectMaster.jsx` | FAIL | Mixed form/list footer includes nonstandard `Tab Next Field` | 6D, 6E |
+| `SAProjectManage.jsx` | FAIL | Nonstandard `Enter Select`; quick filter shortcut missing from footer | 6C, 6E |
+| `SAModuleMaster.jsx` | FAIL | Mixed form/list footer uses nonstandard `Tab Next Field` and `Enter Select` | 6D, 6E |
+| `SAWorkContextMaster.jsx` | FAIL | Nonstandard `Enter Inspect`; screen acts as same-screen selector/editor workspace | 6D, 6E |
+| `SAGroupGovernance.jsx` | FAIL | Nonstandard/stale `Enter Map/Unmap` with no matching Enter handler | 6E |
+| `SACapabilityGovernance.jsx` | FAIL | Nonstandard `Enter Select Or Open`; quick filter shortcut missing from footer | 6C, 6E |
+| `SARolePermissions.jsx` | FAIL | Nonstandard `Enter Select` and `Ctrl+S Save Matrix` | 6D, 6E |
+| `SAApprovalPolicy.jsx` | FAIL | Nonstandard `Enter Open Editor`; footer vocabulary does not match standard list/drawer language | 6B, 6E |
+| `SAApprovalRules.jsx` | FAIL | Nonstandard `Enter Select`; same-screen editor vocabulary drift | 6B, 6E |
+| `SAMenuGovernance.jsx` | FAIL | Nonstandard `Enter Inspect` footer text | 6E |
+| `SAModuleResourceMap.jsx` | FAIL | Nonstandard `Enter Select`; quick filter shortcut missing from footer | 6C, 6E |
+| `SAPageResourceRegistry.jsx` | FAIL | Nonstandard `Enter Select`; quick filter shortcut missing from footer | 6C, 6E |
+| `SAReportVisibility.jsx` | FAIL | Nonstandard `Enter Select`; same-screen editor vocabulary drift | 6B, 6E |
+| `SAAclVersionCenter.jsx` | FAIL | Nonstandard/stale `Enter Inspect`; no true row open contract | 6E |
+| `SAAudit.jsx` | FAIL | `Enter Open` works, but quick filter shortcut is undocumented in footer | 6C |
+| `SAGovernanceSummaryReport.jsx` | FAIL | Export footer is mostly correct, but filter shortcut is undocumented | 6C |
+| `SAUserScopeReport.jsx` | FAIL | Export footer is mostly correct, but filter shortcut is undocumented | 6C |
+
+**6A summary:** 3 PASS, 30 FAIL.
+
+**Fix list routed into later sub-phases:**
+- **6B Approval keyboard/vocabulary fixes:** `SASignupRequests.jsx`, `SAApprovalPolicy.jsx`, `SAApprovalRules.jsx`, `SAReportVisibility.jsx`, `HrWorkflowPages.jsx`
+- **6C Filter shortcut/footer fixes:** `SAUsers.jsx`, `SAUserRoles.jsx`, `SASignupRequests.jsx`, `SASessions.jsx`, `SACompanyManage.jsx`, `SAProjectManage.jsx`, `SACapabilityGovernance.jsx`, `SAModuleResourceMap.jsx`, `SAPageResourceRegistry.jsx`, `SAAudit.jsx`, `SAGovernanceSummaryReport.jsx`, `SAUserScopeReport.jsx`, `HrRegisterReports.jsx`
+- **6D Form/tab-order/footer fixes:** `SAUserScope.jsx`, `SACompanyCreate.jsx`, `SADepartmentMaster.jsx`, `SAProjectMaster.jsx`, `SAModuleMaster.jsx`, `SAWorkContextMaster.jsx`, `SARolePermissions.jsx`, `HrWorkflowPages.jsx`
+- **6E Cross-screen vocabulary consistency fixes:** `HrWorkflowPages.jsx`, `HrRegisterReports.jsx`, `SAControlPanel.jsx`, `SAUserScope.jsx`, `SAUserRoles.jsx`, `SASessions.jsx`, `SACompanyManage.jsx`, `SACompanyModuleMap.jsx`, `SACompanyProjectMap.jsx`, `SADepartmentMaster.jsx`, `SAProjectMaster.jsx`, `SAProjectManage.jsx`, `SAModuleMaster.jsx`, `SAWorkContextMaster.jsx`, `SAGroupGovernance.jsx`, `SACapabilityGovernance.jsx`, `SARolePermissions.jsx`, `SAApprovalPolicy.jsx`, `SAApprovalRules.jsx`, `SAMenuGovernance.jsx`, `SAReportVisibility.jsx`, `SAAclVersionCenter.jsx`
+
 **Phase 6A completion rule:** Every screen is either PASS or has a fix scheduled. The fix list is written into 6B/6C/6D/6E.
 
 ---
 
 ### Phase 6B â€” Approval Screen Keyboard Wiring
 
-**Status:** â¬œ NOT STARTED
+**Status:** âœ… DONE 2026-04-25 Codex
 
 **Screens in scope:** `SASignupRequests.jsx`, `HrWorkflowPages.jsx` (Leave Approval Inbox, OutWork Approval Inbox)
 
@@ -1012,13 +1086,24 @@ SAAudit.jsx, SAGovernanceSummaryReport.jsx, SAUserScopeReport.jsx
 
 **Fix anything not working.**
 
+**What was verified and fixed:**
+1. `SASignupRequests.jsx` already had row navigation plus `A` / `R` hotkeys through `ErpInlineApprovalRow`
+2. Signup queue now restores keyboard focus to the next available row after approve/reject refresh
+3. `HrWorkflowPages.jsx` Leave Approval Inbox and Out Work Approval Inbox already had row navigation plus `A` / `R`
+4. HR approval inboxes now restore keyboard focus to the next available row after approve/reject refresh
+5. Footer hints on all 3 approval screens include `A Approve` and `R Reject`
+
+**Files updated in 6B:**
+- `frontend/src/admin/sa/screens/SASignupRequests.jsx`
+- `frontend/src/pages/dashboard/hr/HrWorkflowPages.jsx`
+
 **Phase 6B completion rule:** A and R keys work on all 3 approval screens without mouse.
 
 ---
 
 ### Phase 6C â€” Report Screen Filter Keys
 
-**Status:** â¬œ NOT STARTED
+**Status:** âœ… DONE 2026-04-25 Codex
 
 **Screens in scope:** All screens with a filter/search input that should live-update the list
 - `SAUsers.jsx`, `SASessions.jsx`, `SAAudit.jsx`, `SAUserRoles.jsx`
@@ -1031,13 +1116,35 @@ SAAudit.jsx, SAGovernanceSummaryReport.jsx, SAUserScopeReport.jsx
 3. Footer hint for the filter shortcut is present and accurate
 4. F8 refreshes the underlying data (re-fetches from backend), distinct from filter
 
+**What was verified and fixed:**
+1. All scoped SA filter/report screens already used live `searchQuery` filtering with no submit button
+2. Footer hints now document `Alt+Shift+F Search` on the scoped SA list/report screens and HR register results
+3. `SAGovernanceSummaryReport.jsx` and `SAUserScopeReport.jsx` had broken command/hotkey registrations (`onSelect` / `handler` instead of `perform`); those are now corrected
+4. `HrRegisterReports.jsx` results page now wires `F8 Refresh` as a true backend reload, distinct from client-side filtering
+5. Shared HR list/approval footers now include the search shortcut, so approval history/register-style views stay consistent with the actual focus hotkey
+
+**Files updated in 6C:**
+- `frontend/src/admin/sa/screens/SAUsers.jsx`
+- `frontend/src/admin/sa/screens/SAUserRoles.jsx`
+- `frontend/src/admin/sa/screens/SASessions.jsx`
+- `frontend/src/admin/sa/screens/SACompanyManage.jsx`
+- `frontend/src/admin/sa/screens/SAProjectManage.jsx`
+- `frontend/src/admin/sa/screens/SACapabilityGovernance.jsx`
+- `frontend/src/admin/sa/screens/SAModuleResourceMap.jsx`
+- `frontend/src/admin/sa/screens/SAPageResourceRegistry.jsx`
+- `frontend/src/admin/sa/screens/SAAudit.jsx`
+- `frontend/src/admin/sa/screens/SAGovernanceSummaryReport.jsx`
+- `frontend/src/admin/sa/screens/SAUserScopeReport.jsx`
+- `frontend/src/pages/dashboard/hr/HrRegisterReports.jsx`
+- `frontend/src/pages/dashboard/hr/HrWorkflowPages.jsx`
+
 **Phase 6C completion rule:** All report/register screens: filter is live, shortcut documented.
 
 ---
 
 ### Phase 6D â€” Form Screen Tab Order
 
-**Status:** â¬œ NOT STARTED
+**Status:** âœ… DONE 2026-04-25 Codex
 
 **Screens in scope:** All form entry screens
 - `SACompanyCreate.jsx`, `SAProjectManage.jsx`, `SAModuleMaster.jsx`
@@ -1050,15 +1157,29 @@ SAAudit.jsx, SAGovernanceSummaryReport.jsx, SAUserScopeReport.jsx
 3. No Tab trap (Tab on last field should move to action button or wrap gracefully)
 4. Ctrl+S saves without needing to click Save button
 
-**Fix any out-of-order Tab sequences using `tabIndex` or DOM reordering.**
+**What was verified and fixed:**
+- `SADepartmentMaster.jsx`: `Ctrl+S Save` now creates the department directly from keyboard, and primary/search focus lands on the real company/name inputs instead of action chrome.
+- `SAWorkContextMaster.jsx`: create/edit drawers now land on the first editable business field (`code` on create, `name` on edit), and `Ctrl+S Save` works without moving to the save button.
+- `HrWorkflowPages.jsx`: Leave Apply and Out Work Apply now focus the actual company selector control; the extra wrapper tab stop was removed so Tab order stays business-logical.
+- `SACompanyCreate.jsx`, `SAUserScope.jsx`, `SAProjectMaster.jsx`, `SAModuleMaster.jsx`, `SARolePermissions.jsx`: footer/save vocabulary was normalized to the standard form contract so form screens consistently advertise `Ctrl+S Save`.
 
 **Phase 6D completion rule:** Tab through all form screens follows business field order.
+
+**Files updated in 6D:**
+- `frontend/src/admin/sa/screens/SACompanyCreate.jsx`
+- `frontend/src/admin/sa/screens/SADepartmentMaster.jsx`
+- `frontend/src/admin/sa/screens/SAModuleMaster.jsx`
+- `frontend/src/admin/sa/screens/SAProjectMaster.jsx`
+- `frontend/src/admin/sa/screens/SARolePermissions.jsx`
+- `frontend/src/admin/sa/screens/SAUserScope.jsx`
+- `frontend/src/admin/sa/screens/SAWorkContextMaster.jsx`
+- `frontend/src/pages/dashboard/hr/HrWorkflowPages.jsx`
 
 ---
 
 ### Phase 6E â€” Cross-Screen Keyboard Vocabulary Consistency
 
-**Status:** â¬œ NOT STARTED
+**Status:** âœ… DONE 2026-04-25 Codex
 
 **What to do:** Check that the same key does the same thing across all screens of the same type.
 
@@ -1071,18 +1192,47 @@ SAAudit.jsx, SAGovernanceSummaryReport.jsx, SAUserScopeReport.jsx
 
 **Run a cross-screen diff:** read the `useErpScreenHotkeys` registration in each screen and flag any screen where the same key does something different from the standard.
 
+**What was verified and fixed:**
+- Approval, list, report, and form footers were normalized so each screen type now advertises the same action words for the same key: `Enter Open`, `Ctrl+S Save`, `Ctrl+S Export`, `F8 Refresh`, `Alt+Shift+F Search`, `Esc Back`, `Ctrl+K Command Bar`.
+- Selection-only same-screen workspaces now omit misleading `Enter` hints instead of pretending that Enter opens a detail screen. This was corrected in module/page ownership and registry surfaces.
+- Approval queues and HR registers now document search and execution/export keys consistently; stale `Ctrl+S Execute`, `Enter View`, `Enter Inspect`, `Enter Select`, `Enter Edit`, `Save Scope`, and `Save Matrix` footer variants were removed or standardized.
+- Hotkey/command registration drift was reconciled where screens still used legacy command-bar handlers instead of the standard `perform` contract.
+
 **Phase 6E completion rule:** Zero cross-screen hotkey conflicts. Every same-type screen does the same thing with the same key.
+
+**Files updated in 6E:**
+- `frontend/src/admin/sa/screens/SAApprovalPolicy.jsx`
+- `frontend/src/admin/sa/screens/SAApprovalRules.jsx`
+- `frontend/src/admin/sa/screens/SAAclVersionCenter.jsx`
+- `frontend/src/admin/sa/screens/SAAudit.jsx`
+- `frontend/src/admin/sa/screens/SACapabilityGovernance.jsx`
+- `frontend/src/admin/sa/screens/SACompanyManage.jsx`
+- `frontend/src/admin/sa/screens/SACompanyModuleMap.jsx`
+- `frontend/src/admin/sa/screens/SACompanyProjectMap.jsx`
+- `frontend/src/admin/sa/screens/SAGroupGovernance.jsx`
+- `frontend/src/admin/sa/screens/SAMenuGovernance.jsx`
+- `frontend/src/admin/sa/screens/SAModuleResourceMap.jsx`
+- `frontend/src/admin/sa/screens/SAPageResourceRegistry.jsx`
+- `frontend/src/admin/sa/screens/SAProjectManage.jsx`
+- `frontend/src/admin/sa/screens/SAReportVisibility.jsx`
+- `frontend/src/admin/sa/screens/SARolePermissions.jsx`
+- `frontend/src/admin/sa/screens/SASessions.jsx`
+- `frontend/src/admin/sa/screens/SASignupRequests.jsx`
+- `frontend/src/admin/sa/screens/SAUserRoles.jsx`
+- `frontend/src/admin/sa/screens/SAUserScope.jsx`
+- `frontend/src/pages/dashboard/hr/HrRegisterReports.jsx`
+- `frontend/src/pages/dashboard/hr/HrWorkflowPages.jsx`
 
 ---
 
 ### Phase 6 â€” Completion Criteria
 
 Phase 6 is DONE when:
-- [ ] 6A: All 33 screens audited, pass/fail recorded
-- [ ] 6B: A/R keys work on all 3 approval screens
-- [ ] 6C: All filter screens: live filter + documented shortcut
-- [ ] 6D: Tab order correct on all form screens
-- [ ] 6E: Zero hotkey conflicts across screen types
+- [x] 6A: All 33 screens audited, pass/fail recorded
+- [x] 6B: A/R keys work on all 3 approval screens
+- [x] 6C: All filter screens: live filter + documented shortcut
+- [x] 6D: Tab order correct on all form screens
+- [x] 6E: Zero hotkey conflicts across screen types
 
 ---
 
@@ -1411,6 +1561,31 @@ frontend/src/index.css                                    â€” add dense CSS
 **Phase 4 status:** DONE 2026-04-25 Claude — all sub-phases (4A–4E) complete + all post-audit regressions fixed. Zero outstanding Phase 4 items.
 
 **Phase 5 status:** IN PROGRESS — infrastructure wired, behavioral verification pending. Back navigation unresolved operator-side. 5.10 now has address-only edit support.
+
+---
+
+### [2026-04-25] — Codex — Phase 5D Drill-Through Gap Audit Complete
+
+**Session result:** Completed the repo-wide SA drill-through gap audit for Phase 5D. No silent missing drill-through pair remains.
+
+**Completed:**
+- audited all remaining SA screens using `ErpDenseGrid`, `getRowProps`, and/or `onRowActivate` outside the already-verified 5B/5C pairs
+- classified each screen as either:
+  - already covered by 5B/5C, or
+  - intentional same-screen selector / inline action / read-only summary with no drill-through target
+- updated the implementation plan table so Phase 5D is now marked DONE
+
+**Findings:**
+- no additional screen was found that clearly needs a new drill-through target
+- the remaining navigable grids are mostly:
+  - inline action queues (`SASignupRequests`, `SASessions`)
+  - same-screen master/editor workspaces (`SAUserRoles`, `SAGroupGovernance`, `SACompanyModuleMap`, `SAModuleMaster`, `SAWorkContextMaster`, etc.)
+  - read-only summaries/reports (`SASystemHealth`, `SAUserScopeReport`, `SAGovernanceSummaryReport`, `SAControlPanel`)
+
+**Next action for next session:**
+Start Phase 5E behavioral verification in browser, since 5A through 5D are now complete in code/documentation.
+
+**Phase 5 status:** IN PROGRESS — 5A/5B/5C/5D done; 5E behavioral verification still pending.
 
 ---
 

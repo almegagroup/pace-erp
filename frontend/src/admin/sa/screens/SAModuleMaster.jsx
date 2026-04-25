@@ -551,7 +551,7 @@ export default function SAModuleMaster() {
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
-      footerHints={["Tab Next Field", "↑↓ Navigate", "Enter Select", "Ctrl+S Save", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "F8 Refresh", "Ctrl+S Save", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
       formEyebrow={editorMode === "edit" ? "Edit" : "Create"}
       formTitle={editorMode === "edit" ? "Edit selected module" : "Create a new project module"}
       formContent={

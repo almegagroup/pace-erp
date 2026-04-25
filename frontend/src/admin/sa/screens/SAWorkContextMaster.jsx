@@ -173,6 +173,8 @@ export default function SAWorkContextMaster() {
   const companySelectRef = useRef(null);
   const searchRef = useRef(null);
   const drawerPrimaryRef = useRef(null);
+  const drawerCodeRef = useRef(null);
+  const drawerNameRef = useRef(null);
   const lastLoadedCompanyIdRef = useRef("");
   const selectedCompanyIdRef = useRef("");
   const selectedContextIdRef = useRef("");
@@ -626,6 +628,10 @@ export default function SAWorkContextMaster() {
   ]);
 
   useErpScreenHotkeys({
+    save: {
+      disabled: saving || !editorOpen,
+      perform: () => void handleSaveContext(),
+    },
     refresh: {
       disabled: loading,
       perform: () => void loadCompanyWorkspace(selectedCompanyId, selectedContextId),
@@ -712,7 +718,7 @@ export default function SAWorkContextMaster() {
               }),
           },
         ]}
-        footerHints={["↑↓ Navigate", "Enter Inspect", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+        footerHints={["↑↓ Navigate", "F8 Refresh", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
       >
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.65fr)]">
           <div className="grid gap-3">
@@ -1012,7 +1018,7 @@ export default function SAWorkContextMaster() {
             : "Edit Manual Work Scope"
         }
         onEscape={closeEditor}
-        initialFocusRef={drawerPrimaryRef}
+        initialFocusRef={editorMode === "create" ? drawerCodeRef : drawerNameRef}
         width="min(520px, calc(100vw - 24px))"
         actions={
           <>
@@ -1053,6 +1059,7 @@ export default function SAWorkContextMaster() {
               Work Scope Code
             </span>
             <input
+              ref={drawerCodeRef}
               value={formDraft.work_context_code}
               onChange={(event) =>
                 setFormDraft((current) => ({
@@ -1071,6 +1078,7 @@ export default function SAWorkContextMaster() {
               Work Scope Name
             </span>
             <input
+              ref={drawerNameRef}
               value={formDraft.work_context_name}
               onChange={(event) =>
                 setFormDraft((current) => ({

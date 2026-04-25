@@ -1243,7 +1243,7 @@ export default function SAUserScope() {
       title="ERP User Scope Mapping"
       actions={topActions}
       notices={notices}
-      footerHints={["↑↓ Navigate", "Ctrl+S Save Scope", "F3 Edit Scope", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["Ctrl+S Save", "Esc Back", "Ctrl+K Command Bar"]}
     >
       {mainContent}
 

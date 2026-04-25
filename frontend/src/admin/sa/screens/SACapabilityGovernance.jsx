@@ -267,7 +267,7 @@ export default function SACapabilityGovernance(){
         {key:"acl-version-center",label:"ACL Version Center",tone:"neutral",buttonRef:(el)=>{topRefs.current[2]=el;},onClick:()=>{openScreen("SA_ACL_VERSION_CENTER",{mode:"replace"});navigate("/sa/acl/version-center");},onKeyDown:(e)=>handleLinearNavigation(e,{index:2,refs:topRefs.current,orientation:"horizontal"})},
       ]}
       notices={[...(error?[{key:"error",tone:"error",message:error}]:[]),...(notice?[{key:"notice",tone:"success",message:notice}]:[])]}
-      footerHints={["↑↓ Navigate", "Enter Select Or Open", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "F8 Refresh", "Ctrl+S Save", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-[var(--erp-section-gap)] xl:grid-cols-[1.15fr,0.85fr]">
         <section className="grid gap-[var(--erp-section-gap)]">

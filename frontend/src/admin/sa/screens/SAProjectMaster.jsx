@@ -381,7 +381,7 @@ export default function SAProjectMaster() {
             ]
           : []),
       ]}
-      footerHints={["Tab Next Field", "↑↓ Navigate", "Enter Open", "Ctrl+S Save", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "Enter Open", "Ctrl+S Save", "F8 Refresh", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
       formEyebrow="Create"
       formTitle="Create a new project"
       formContent={
