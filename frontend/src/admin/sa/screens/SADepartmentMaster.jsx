@@ -8,10 +8,10 @@ import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import {
   formatCompanyAddress,
   formatCompanyLabel,
-  formatCompanyOptionLabel,
 } from "../../../shared/companyDisplay.js";
 
 async function readJsonSafe(response) {
@@ -252,18 +252,6 @@ export default function SADepartmentMaster() {
       return;
     }
 
-    const approved = await openActionConfirm({
-      eyebrow: "Department Master",
-      title: "Create Department",
-      message: `Create ${normalizedName} for ${formatCompanyLabel(selectedCompany, { separator: " - " })}?`,
-      confirmLabel: "Create Department",
-      cancelLabel: "Cancel",
-    });
-
-    if (!approved) {
-      return;
-    }
-
     setSaving(true);
     setError("");
     setNotice("");
@@ -493,22 +481,22 @@ export default function SADepartmentMaster() {
       footerHints={["↑↓ Navigate", "Ctrl+S Save", "F8 Refresh", "Esc Back", "Ctrl+K Command Bar"]}
     >
       <div className="grid gap-3 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-        <div className="grid gap-3">
+        <div className="grid min-w-0 gap-3">
           <div className="grid gap-1">
             <ErpSelectionSection label="Selected Company" />
             <div className="grid gap-3">
-              <label className="grid grid-cols-[100px_1fr] items-center gap-x-2">
+              <label className="grid grid-cols-[100px_1fr] items-center gap-x-2 min-w-0">
                 <span className="text-[11px] text-slate-600">Company</span>
                 <select
                   ref={companySelectRef}
                   value={selectedCompanyId}
                   onChange={(event) => setSelectedCompanyId(event.target.value)}
-                  className="h-7 border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-400 focus:bg-white"
+                  className="h-7 w-full min-w-0 border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-400 focus:bg-white"
                 >
                   <option value="">Select company</option>
                   {companies.map((company) => (
                     <option key={company.id} value={company.id}>
-                      {formatCompanyOptionLabel(company)}
+                      {formatCompanyLabel(company)}
                     </option>
                   ))}
                 </select>
@@ -537,14 +525,14 @@ export default function SADepartmentMaster() {
 
           <div className="grid gap-1">
             <ErpSelectionSection label="Create Department" />
-            <div className="grid grid-cols-[1fr_auto] items-center gap-2">
-              <label className="grid grid-cols-[100px_1fr] items-center gap-x-2">
+            <div className="grid min-w-0 grid-cols-[1fr_auto] items-center gap-2">
+              <label className="grid min-w-0 grid-cols-[100px_1fr] items-center gap-x-2">
                 <span className="text-[11px] text-slate-600">Department Name</span>
                 <input
                   ref={createInputRef}
                   value={departmentName}
                   onChange={(event) => setDepartmentName(event.target.value)}
-                  className="h-7 border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-400 focus:bg-white"
+                  className="h-7 w-full min-w-0 border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-400 focus:bg-white"
                   placeholder="QA, HR, Accounts, Purchase"
                 />
               </label>
@@ -562,47 +550,45 @@ export default function SADepartmentMaster() {
 
           <div className="grid gap-1">
             <ErpSelectionSection label="Department Inventory" />
-            <div className="grid gap-2">
-              {loading ? (
-                <p className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                  Loading department inventory...
-                </p>
-              ) : departments.length === 0 ? (
-                <p className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                  No departments created for the selected company yet.
-                </p>
-              ) : (
-                departments.map((department, index) => {
-                  const isSelected = department.id === selectedDepartmentId;
-
-                  return (
-                    <button
-                      key={department.id}
-                      {...getDepartmentRowProps(index)}
-                      type="button"
-                      onClick={() => setSelectedDepartmentId(department.id)}
-                      className={`border px-4 py-3 text-left ${
-                        isSelected
-                          ? "border-sky-300 bg-sky-50 text-sky-900"
-                          : "border-slate-300 bg-white text-slate-700"
-                      }`}
-                    >
-                      <div className="font-semibold">
-                        {department.department_code} | {department.department_name}
-                      </div>
-                      <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-slate-500">
-                        {department.status} |{" "}
-                        {department.derived_work_context?.work_context_code ?? "No derived context"}
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
+            <ErpDenseGrid
+              columns={[
+                { key: "department_code", label: "Code", width: "90px" },
+                { key: "department_name", label: "Department Name" },
+                {
+                  key: "status",
+                  label: "Status",
+                  width: "76px",
+                  align: "center",
+                  render: (row) => (
+                    <span className={row.status === "ACTIVE" ? "font-semibold text-emerald-700" : "font-semibold text-rose-600"}>
+                      {row.status}
+                    </span>
+                  ),
+                },
+                {
+                  key: "work_context",
+                  label: "Work Context",
+                  width: "130px",
+                  render: (row) => row.derived_work_context?.work_context_code ?? "—",
+                },
+              ]}
+              rows={departments}
+              rowKey={(row) => row.id}
+              getRowProps={(row, index) => ({
+                ...getDepartmentRowProps(index),
+                onClick: () => setSelectedDepartmentId(row.id),
+                className: row.id === selectedDepartmentId
+                  ? "!bg-sky-50 !border-l-[3px] !border-l-sky-600"
+                  : undefined,
+              })}
+              onRowActivate={(row) => setSelectedDepartmentId(row.id)}
+              emptyMessage={loading ? "Loading departments..." : "No departments for this company yet."}
+              maxHeight="calc(100vh - 380px)"
+            />
           </div>
         </div>
 
-        <div className="grid gap-3">
+        <div className="grid min-w-0 auto-rows-min gap-3">
           <div className="grid gap-1">
             <ErpSelectionSection
               label={
@@ -612,28 +598,31 @@ export default function SADepartmentMaster() {
               }
             />
             {selectedDepartment ? (
-              <>
-                <div className="border border-slate-300 bg-white">
-                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
-                    <span className="text-[11px] text-slate-500">Department Status</span>
-                    <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.status}</span>
-                  </div>
-                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
-                    <span className="text-[11px] text-slate-500">Created</span>
-                    <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.created_at ? new Date(selectedDepartment.created_at).toLocaleDateString() : "Unknown"}</span>
-                  </div>
-                  <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
-                    <span className="text-[11px] text-slate-500">Assigned Users</span>
-                    <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context?.assigned_user_count ?? 0}</span>
-                  </div>
+              <div className="border border-slate-300 bg-white">
+                <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Department Status</span>
+                  <span className={`text-[11px] font-semibold ${selectedDepartment.status === "ACTIVE" ? "text-emerald-700" : "text-rose-600"}`}>
+                    {selectedDepartment.status}
+                  </span>
                 </div>
-
-                <div className="mt-2 flex flex-wrap gap-1">
+                <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Created</span>
+                  <span className="text-[11px] font-semibold text-slate-900">
+                    {selectedDepartment.created_at ? new Date(selectedDepartment.created_at).toLocaleDateString() : "Unknown"}
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
+                  <span className="text-[11px] text-slate-500">Assigned Users</span>
+                  <span className="text-[11px] font-semibold text-slate-900">
+                    {selectedDepartment.derived_work_context?.assigned_user_count ?? 0}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 px-2 py-[3px]">
                   <button
                     type="button"
                     disabled={saving || selectedDepartment.status === "ACTIVE"}
                     onClick={() => void handleDepartmentStateChange("ACTIVE")}
-                    className="border border-emerald-300 bg-emerald-50 px-2 py-[3px] text-[11px] font-semibold text-emerald-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-emerald-300 bg-emerald-50 px-2 py-[1px] text-[11px] font-semibold text-emerald-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Activate
                   </button>
@@ -641,15 +630,15 @@ export default function SADepartmentMaster() {
                     type="button"
                     disabled={saving || selectedDepartment.status === "INACTIVE"}
                     onClick={() => void handleDepartmentStateChange("INACTIVE")}
-                    className="border border-rose-300 bg-rose-50 px-2 py-[3px] text-[11px] font-semibold text-rose-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    className="border border-rose-300 bg-rose-50 px-2 py-[1px] text-[11px] font-semibold text-rose-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     Inactivate
                   </button>
                 </div>
-              </>
+              </div>
             ) : (
-              <p className="text-sm text-slate-500">
-                Select a department from the roster to inspect its runtime foundation.
+              <p className="text-[12px] text-slate-500">
+                Select a department from the list to inspect its foundation.
               </p>
             )}
           </div>
@@ -660,46 +649,34 @@ export default function SADepartmentMaster() {
               <div className="border border-slate-300 bg-white">
                 <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
                   <span className="text-[11px] text-slate-500">Work Context Code</span>
-                  <span className="text-[11px] font-semibold text-emerald-800">{selectedDepartment.derived_work_context.work_context_code}</span>
+                  <span className="text-[11px] font-semibold text-emerald-800">
+                    {selectedDepartment.derived_work_context.work_context_code}
+                  </span>
                 </div>
                 <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
                   <span className="text-[11px] text-slate-500">Work Context State</span>
-                  <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context.is_active ? "ACTIVE" : "INACTIVE"}</span>
+                  <span className={`text-[11px] font-semibold ${selectedDepartment.derived_work_context.is_active ? "text-emerald-700" : "text-rose-600"}`}>
+                    {selectedDepartment.derived_work_context.is_active ? "ACTIVE" : "INACTIVE"}
+                  </span>
                 </div>
                 <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]">
                   <span className="text-[11px] text-slate-500">Capability Count</span>
-                  <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context.capability_count}</span>
+                  <span className="text-[11px] font-semibold text-slate-900">
+                    {selectedDepartment.derived_work_context.capability_count}
+                  </span>
                 </div>
                 <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]">
                   <span className="text-[11px] text-slate-500">Assigned Users</span>
-                  <span className="text-[11px] font-semibold text-slate-900">{selectedDepartment.derived_work_context.assigned_user_count}</span>
+                  <span className="text-[11px] font-semibold text-slate-900">
+                    {selectedDepartment.derived_work_context.assigned_user_count}
+                  </span>
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-slate-500">
-                No derived work context found yet for this department.
+              <p className="text-[12px] text-slate-500">
+                {selectedDepartment ? "No derived work context found for this department." : "—"}
               </p>
             )}
-          </div>
-
-          <div className="grid gap-1">
-            <ErpSelectionSection label="How To Use This Foundation" />
-            <div className="grid gap-2">
-              {[ 
-                "Create the department now so the company team structure is real.",
-                "Let the backend auto-create the matching DEPT_* work scope.",
-                "Open Work Context Master for manual scopes like PROD_POWDER, QA_ADMIX, SCM_OPERATIONS, or MGMT_ALL.",
-                "Later, when business pages exist, assign screen packs and ACL to each exact work scope.",
-                "Use User Scope to bind users into the right department-derived work scope.",
-              ].map((line) => (
-                <div
-                  key={line}
-                  className="border border-amber-200 bg-white px-3 py-2 text-sm text-slate-700"
-                >
-                  {line}
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       </div>
