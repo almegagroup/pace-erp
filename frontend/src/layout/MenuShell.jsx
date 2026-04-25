@@ -268,6 +268,11 @@ export default function MenuShell() {
     completedAt: 0,
     errorAt: 0,
   });
+  // Back-navigation drawer restore: holds the sidebar state to reinstate after popScreen.
+  // Set in handleBack before calling popScreen(), consumed once by the drawer-path effect.
+  const pendingDrawerRestoreRef = useRef(null);
+  // Suppresses the auto-focus-content effect for one navigation cycle (back nav only).
+  const suppressContentFocusRef = useRef(false);
   const stackDepth = getStackDepth();
 
   const navigationTree = useMemo(() => buildMenuTree(menu), [menu]);
@@ -786,6 +791,13 @@ export default function MenuShell() {
   }, [networkActivity.blockingInFlightCount, networkActivity.blockingStartedAt]);
 
   useEffect(() => {
+    // Back navigation: suppress content focus — the drawer restore logic will
+    // place focus on the sidebar item the user navigated away from instead.
+    if (suppressContentFocusRef.current) {
+      suppressContentFocusRef.current = false;
+      return;
+    }
+
     const timer = window.setTimeout(() => {
       const target =
         findFirstFocusableWithin(contentRegionRef.current) ?? contentRegionRef.current;
@@ -800,6 +812,23 @@ export default function MenuShell() {
   }, [workspaceMode]);
 
   useEffect(() => {
+    if (pendingDrawerRestoreRef.current) {
+      const restore = pendingDrawerRestoreRef.current;
+      pendingDrawerRestoreRef.current = null;
+      setDrawerPath(restore.drawerPath);
+      setDrawerFocusIndex(restore.focusIndex);
+      // Top-level pages (no drawer parent): focus the corresponding sidebar button.
+      if (restore.menuFocusIndex >= 0) {
+        window.requestAnimationFrame(() => {
+          setMenuFocusIndex(restore.menuFocusIndex);
+          focusElement(
+            menuButtonRefs.current[restore.menuFocusIndex] ?? menuButtonRefs.current[0]
+          );
+          setActiveZone("menu");
+        });
+      }
+      return;
+    }
     setDrawerPath(getAncestorMenuCodes(sidebarRoots, location.pathname));
     setDrawerFocusIndex(0);
   }, [location.pathname, sidebarRoots]);
@@ -1008,13 +1037,18 @@ export default function MenuShell() {
     }
 
     if (stackDepth <= 1) {
+      const homeScreenCode = location.pathname.startsWith("/sa")
+        ? "SA_HOME"
+        : location.pathname.startsWith("/ga")
+          ? "GA_HOME"
+          : "DASHBOARD_HOME";
       const homePath = location.pathname.startsWith("/sa")
         ? "/sa/home"
         : location.pathname.startsWith("/ga")
           ? "/ga/home"
           : "/dashboard";
       if (location.pathname !== homePath) {
-        navigate(-1);
+        resetToScreen(homeScreenCode);
         return;
       }
 
@@ -1027,8 +1061,44 @@ export default function MenuShell() {
       return;
     }
 
+    // Sidebar restore only applies when returning to home level (depth 2 → 1).
+    // For drill-through returns (depth 3 → 2) the sidebar is in workspace/rail mode
+    // (collapsed, drawer hidden) so restoring drawer state has no effect — and we must
+    // NOT suppress content focus because the destination list screen needs to re-focus
+    // its previously-selected row.
+    const returningToHomeLevel = stackDepth - 1 <= 1;
+
+    if (returningToHomeLevel) {
+      suppressContentFocusRef.current = true;
+      const originRoute = location.pathname;
+      const ancestorCodes = getAncestorMenuCodes(sidebarRoots, originRoute);
+
+      if (ancestorCodes.length > 0) {
+        // Page lives under a drawer sub-menu — reopen that drawer and focus the item.
+        const trail = resolveDrawerTrail(sidebarRoots, ancestorCodes);
+        const parentNode = trail[trail.length - 1] ?? null;
+        const parentEntries = parentNode?.children ?? [];
+        const itemIndex = parentEntries.findIndex(
+          (entry) => entry.item?.route_path === originRoute
+        );
+        pendingDrawerRestoreRef.current = {
+          drawerPath: ancestorCodes,
+          focusIndex: itemIndex >= 0 ? itemIndex : 0,
+          menuFocusIndex: -1,
+        };
+      } else {
+        // Top-level page — focus the matching sidebar menu button.
+        const topIndex = resolveTopLevelIndex(sidebarRoots, originRoute);
+        pendingDrawerRestoreRef.current = {
+          drawerPath: [],
+          focusIndex: 0,
+          menuFocusIndex: topIndex >= 0 ? topIndex : resolvedMenuFocusIndex,
+        };
+      }
+    }
+
     popScreen();
-  }, [drawerTrail, drawerVisible, location.pathname, navigate, resolvedMenuFocusIndex, sidebarRoots, stackDepth]);
+  }, [drawerTrail, drawerVisible, location.pathname, resolvedMenuFocusIndex, sidebarRoots, stackDepth]);
 
   const handleGoHome = useCallback(async () => {
     const target = location.pathname.startsWith("/sa")

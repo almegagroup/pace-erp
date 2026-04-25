@@ -15,6 +15,7 @@ import { rejectSignupHandler } from "../_core/admin/signup/reject.handler.ts";
 import { createCompanyHandler } from "../_core/admin/company/create_company.handler.ts";
 import { getCompanyGstProfileHandler } from "../_core/admin/company/get_company_gst_profile.handler.ts";
 import { listCompaniesHandler } from "../_core/admin/company/list_companies.handler.ts";
+import { updateCompanyAddressHandler } from "../_core/admin/company/update_company_address.handler.ts";
 import { updateCompanyStateHandler } from "../_core/admin/company/update_company_state.handler.ts";
 
 import { createGroupHandler } from "../_core/admin/group/create_group.handler.ts";
@@ -188,6 +189,13 @@ export async function dispatchAdminRoutes(
 
     case "POST:/api/admin/company/state":
       response = await updateCompanyStateHandler(req, {
+        context,
+        request_id: requestId,
+      });
+      break;
+
+    case "PATCH:/api/admin/company/address":
+      response = await updateCompanyAddressHandler(req, {
         context,
         request_id: requestId,
       });
