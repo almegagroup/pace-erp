@@ -27,6 +27,7 @@ import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpInlineApprovalRow from "../../../components/data/ErpInlineApprovalRow.jsx";
 import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
+import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { applyQuickFilter } from "../../../shared/erpCollections.js";
 import {
@@ -980,6 +981,206 @@ function HrRequestDetailWorkspace({ kind }) {
   );
 }
 
+function HrRequesterActionDrawer({
+  visible,
+  request,
+  kind,
+  cancelling,
+  onEdit,
+  onCancel,
+  onClose,
+}) {
+  if (!request) return null;
+
+  const requesterParts = splitDisplay(
+    request.requester_display,
+    request.requester_auth_user_id,
+    request.requester_display,
+  );
+
+  return (
+    <DrawerBase
+      visible={visible}
+      title={kind === "leave" ? "Leave Request" : "Out Work Request"}
+      onEscape={cancelling ? undefined : onClose}
+      width="min(520px, calc(100vw - 24px))"
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={cancelling}
+            className="border border-slate-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 disabled:opacity-50"
+          >
+            Close
+          </button>
+          {request.can_cancel ? (
+            <>
+              <button
+                type="button"
+                onClick={() => onEdit?.(request)}
+                disabled={cancelling}
+                className="border border-sky-400 bg-sky-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 disabled:opacity-50"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => onCancel?.(request)}
+                disabled={cancelling}
+                className="border border-rose-400 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700 disabled:opacity-50"
+              >
+                {cancelling ? "Cancelling…" : "Cancel Request"}
+              </button>
+            </>
+          ) : null}
+        </div>
+      }
+    >
+      <div className="grid gap-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Requester</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900">{requesterParts.name}</div>
+            <div className="text-xs text-slate-600">{requesterParts.code}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Status</div>
+            <div className="mt-1"><RequestStatusBadge state={request.current_state} /></div>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">From</div>
+            <div className="mt-1 text-sm text-slate-800">{formatIsoDate(request.from_date)}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">To</div>
+            <div className="mt-1 text-sm text-slate-800">{formatIsoDate(request.to_date)}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Days</div>
+            <div className="mt-1 text-sm text-slate-800">{request.total_days ?? "-"}</div>
+          </div>
+        </div>
+        {kind === "outWork" ? (
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Destination</div>
+            <div className="mt-1 text-sm text-slate-900">{request.destination_name ?? "-"}</div>
+            <div className="text-xs text-slate-600">{request.destination_address ?? "-"}</div>
+          </div>
+        ) : null}
+        <div className="border border-slate-300 bg-white px-3 py-3">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Reason</div>
+          <div className="mt-2 whitespace-pre-wrap text-sm text-slate-800">{request.reason || "-"}</div>
+        </div>
+        <div className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Decision History</div>
+          <RequestDecisionHistory history={request.decision_history} />
+        </div>
+      </div>
+    </DrawerBase>
+  );
+}
+
+function HrApprovalDecisionDrawer({
+  visible,
+  request,
+  kind,
+  deciding,
+  onApprove,
+  onReject,
+  onClose,
+}) {
+  if (!request) return null;
+
+  const requesterParts = splitDisplay(
+    request.requester_display,
+    request.requester_auth_user_id,
+    request.requester_display,
+  );
+
+  return (
+    <DrawerBase
+      visible={visible}
+      title={kind === "leave" ? "Leave Request" : "Out Work Request"}
+      onEscape={deciding ? undefined : onClose}
+      width="min(520px, calc(100vw - 24px))"
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={deciding}
+            className="border border-slate-300 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-700 disabled:opacity-50"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={() => onReject?.(request)}
+            disabled={deciding}
+            className="border border-rose-400 bg-rose-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-700 disabled:opacity-50"
+          >
+            {deciding ? "Processing…" : "Reject"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onApprove?.(request)}
+            disabled={deciding}
+            className="border border-emerald-400 bg-emerald-50 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700 disabled:opacity-50"
+          >
+            {deciding ? "Processing…" : "Approve"}
+          </button>
+        </div>
+      }
+    >
+      <div className="grid gap-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Requester</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900">{requesterParts.name}</div>
+            <div className="text-xs text-slate-600">{requesterParts.code}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Status</div>
+            <div className="mt-1"><RequestStatusBadge state={request.current_state} /></div>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">From</div>
+            <div className="mt-1 text-sm text-slate-800">{formatIsoDate(request.from_date)}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">To</div>
+            <div className="mt-1 text-sm text-slate-800">{formatIsoDate(request.to_date)}</div>
+          </div>
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Days</div>
+            <div className="mt-1 text-sm text-slate-800">{request.total_days ?? "-"}</div>
+          </div>
+        </div>
+        {kind === "outWork" ? (
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Destination</div>
+            <div className="mt-1 text-sm text-slate-900">{request.destination_name ?? "-"}</div>
+            <div className="text-xs text-slate-600">{request.destination_address ?? "-"}</div>
+          </div>
+        ) : null}
+        <div className="border border-slate-300 bg-white px-3 py-3">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Reason</div>
+          <div className="mt-2 whitespace-pre-wrap text-sm text-slate-800">{request.reason || "-"}</div>
+        </div>
+        <div className="grid gap-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Decision History</div>
+          <RequestDecisionHistory history={request.decision_history} />
+        </div>
+      </div>
+    </DrawerBase>
+  );
+}
+
 function HrApprovalDenseTable({
   rows,
   columns,
@@ -1589,9 +1790,11 @@ function HrRequestListWorkspace({
   const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
   const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
   const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const [actionDrawerRequest, setActionDrawerRequest] = useState(null);
+  const [cancelling, setCancelling] = useState(false);
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.myRequests`);
-  const { rows, loading, error, refresh } = useHrQueryLoader(loader);
+  const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
   const approvalInboxRoute =
     kind === "leave"
       ? "/dashboard/hr/leave/approval-inbox"
@@ -1636,8 +1839,41 @@ function HrRequestListWorkspace({
   }
 
   const { getRowProps, focusRow } = useErpListNavigation(filteredRows, {
-    onActivate: (row) => openDetail(row),
+    onActivate: (row) => setActionDrawerRequest(row),
   });
+
+  async function handleCancelFromDrawer(row) {
+    const approved = await openActionConfirm({
+      eyebrow: kind === "leave" ? "Leave Request" : "Out Work Request",
+      title: "Cancel Pending Request",
+      message: `Cancel request ${row.workflow_request_id}?`,
+      confirmLabel: "Cancel Request",
+      cancelLabel: "Keep",
+    });
+
+    if (!approved) return;
+
+    setCancelling(true);
+    try {
+      if (kind === "leave") {
+        await cancelLeaveRequest(row.leave_request_id);
+      } else {
+        await cancelOutWorkRequest(row.out_work_request_id);
+      }
+      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
+      setActionDrawerRequest(null);
+      await refresh();
+    } catch (err) {
+      setError(formatError(err, "Request could not be cancelled."));
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  function handleEditFromDrawer(row) {
+    setActionDrawerRequest(null);
+    openDetail(row);
+  }
 
   useEffect(() => registerScreenRefreshCallback(() => {
     void refresh();
@@ -1744,7 +1980,7 @@ function HrRequestListWorkspace({
             rows={filteredRows}
             rowKey={(row) => row.workflow_request_id ?? row.leave_request_id ?? row.out_work_request_id}
             getRowProps={(_row, index) => getRowProps(index)}
-            onRowActivate={(row) => openDetail(row)}
+            onRowActivate={(row) => setActionDrawerRequest(row)}
             summaryRow={summaryRow}
             emptyMessage="No request matches the current filter."
           />
@@ -1758,6 +1994,15 @@ function HrRequestListWorkspace({
             onClose={() => setShowColumnPicker(false)}
             onToggleColumn={toggleColumn}
             onResetColumns={resetColumns}
+          />
+          <HrRequesterActionDrawer
+            visible={Boolean(actionDrawerRequest)}
+            request={actionDrawerRequest}
+            kind={kind}
+            cancelling={cancelling}
+            onEdit={handleEditFromDrawer}
+            onCancel={(row) => void handleCancelFromDrawer(row)}
+            onClose={() => setActionDrawerRequest(null)}
           />
         </>
       }
@@ -1784,6 +2029,8 @@ function HrApprovalInboxWorkspace({
   const [companyFilter, setCompanyFilter] = useState(initialContext.parentState?.companyFilter ?? "*");
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
+  const [decisionDrawerRequest, setDecisionDrawerRequest] = useState(null);
+  const [deciding, setDeciding] = useState(false);
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.approvalInbox`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
@@ -1827,8 +2074,18 @@ function HrApprovalInboxWorkspace({
   }
 
   const { getRowProps, focusRow } = useErpListNavigation(filteredRows, {
-    onActivate: (row) => openDetail(row),
+    onActivate: (row) => setDecisionDrawerRequest(row),
   });
+
+  async function handleDecisionFromDrawer(request, decision) {
+    setDeciding(true);
+    try {
+      await handleDecision(request, decision);
+      setDecisionDrawerRequest(null);
+    } finally {
+      setDeciding(false);
+    }
+  }
 
   useEffect(() => registerScreenRefreshCallback(() => {
     void refresh();
@@ -2000,7 +2257,7 @@ function HrApprovalInboxWorkspace({
             getRowProps={(_row, index) => getRowProps(index)}
             onApprove={(row) => void handleDecision(row, "APPROVED")}
             onReject={(row) => void handleDecision(row, "REJECTED")}
-            onActivate={(row) => openDetail(row)}
+            onActivate={(row) => setDecisionDrawerRequest(row)}
             emptyMessage="No pending request is currently actionable for this approver."
           />
         ),
@@ -2013,6 +2270,15 @@ function HrApprovalInboxWorkspace({
             onClose={() => setShowColumnPicker(false)}
             onToggleColumn={toggleColumn}
             onResetColumns={resetColumns}
+          />
+          <HrApprovalDecisionDrawer
+            visible={Boolean(decisionDrawerRequest)}
+            request={decisionDrawerRequest}
+            kind={kind}
+            deciding={deciding}
+            onApprove={(request) => void handleDecisionFromDrawer(request, "APPROVED")}
+            onReject={(request) => void handleDecisionFromDrawer(request, "REJECTED")}
+            onClose={() => setDecisionDrawerRequest(null)}
           />
         </>
       }
