@@ -1,7 +1,7 @@
 # PACE ERP — Task-First UX Redesign
 **Classification:** Design Authority + Implementation Plan  
 **Status:** ✅ COMPLETE  
-**Last Updated:** 2026-04-23  
+**Last Updated:** 2026-04-27  
 **Principle:** Inspired by SAP and Tally — task-first, register-style, zero decoration
 
 ---
@@ -700,6 +700,50 @@ A screen is **done** when all of the following are true:
 
 ---
 
+### Phase UX-12 — Searchable Combobox (All Dropdowns)
+**Status:** ✅ Complete
+**Scope:** All `<select>` elements across SA + HR + shared components
+**Effort:** Medium
+
+Every bare `<select>` replaced with `ErpComboboxField` — a keyboard-native, type-to-filter dropdown.
+
+#### Rules going forward
+> **Never write a raw `<select>` — always use `ErpComboboxField` or `ErpSelectionField` (type="select").**
+
+`ErpSelectionField` with `type="select"` already uses `ErpComboboxField` internally, so any screen that uses that component is automatically covered.
+
+#### What was built
+- `frontend/src/components/forms/ErpComboboxField.jsx` — new primitive
+- Props: `value`, `onChange`, `options`, `blankLabel`, `hideBlank`, `inputClassName`, `inputProps`, `disabled`, `className`
+- Keyboard: ↑↓ navigate, Enter select, Esc close, Tab close, Space/ArrowDown open
+- Outside click closes dropdown
+- Highlighted item auto-scrolls into view
+- `hideBlank` for always-valid selections (e.g. `ErpCompactFilterSelect`)
+- `inputProps` for arbitrary attribute forwarding (e.g. `data-workspace-primary-focus`)
+
+#### Screens covered
+- All 14 SA screens with selects
+- `HrWorkflowPages.jsx` (Destination + Company filter)
+- `ErpSelectionField`, `ErpCompanySelector`, `ErpCompactFilterSelect` wrapper components
+- **Exception:** `MenuShell.jsx` sidebar company/work-context switchers — intentionally kept as native select (dark-theme navigation shell, not a form input)
+
+---
+
+### Phase HR-FIX — HR Register + Workflow Bug Fixes
+**Status:** ✅ Complete
+**Scope:** Leave/OutWork register backend + frontend; edit navigation bug
+**Effort:** Medium
+
+#### Fixes delivered
+1. **Department column blank** — `buildLeaveCases` / `buildOutWorkCases` now look up department from `companyWorkContextMap`
+2. **Register visibility bug** — approver-fallback added to `listLeaveRegisterHandler` / `listOutWorkRegisterHandler`; approvers now see all requests in their scope
+3. **Company column** — shows name + code (two lines) in register grid and detail view
+4. **Requester display** — detail page now shows P-code (P0004) via `splitDisplay()` instead of raw UUID
+5. **Column picker** — `HrRegisterReports.jsx` completely rewritten with `ErpColumnVisibilityDrawer`, per-kind localStorage persistence, computed columns
+6. **Edit navigation bug** — Edit button in drawer navigated to HOME; fixed by extracting `HrEditRequestModal` shared component; edit opens directly via state, no navigation required
+
+---
+
 ## IMPLEMENTATION LOG
 
 | Date | Phase | File | Change | Result |
@@ -769,4 +813,15 @@ A screen is **done** when all of the following are true:
 | 2026-04-23 | UX-11 | `HrRegisterReports.jsx` | Removed documentation-style `ErpFieldPreview` cards from report criteria and kept only real result-state previews | ✅ |
 | 2026-04-23 | UX-5 | `ErpStickyDataTable.jsx`, `HrRegisterReports.jsx` | Added `getRowProps` prop to ErpStickyDataTable; wired `useErpListNavigation(pagedRows)` in RegisterResultsPage — Arrow/Space/Enter now works on HR register report rows | ✅ |
 | 2026-04-23 | UX-9 | All 24 SA screens + SACompanyCreate, UserDashboardHome, GAHome, EnterpriseDashboard | Added `footerHints` to every remaining screen; `EnterpriseDashboard` updated to accept and pass through `footerHints` prop | ✅ |
+| 2026-04-27 | HR-FIX | `leave.handlers.ts`, `out_work.handlers.ts` | Department column was blank in register — added `department_name` / `department_code` to `LeaveCaseRow` / `OutWorkCaseRow` types; `buildLeaveCases` / `buildOutWorkCases` now look up department from `companyWorkContextMap` | ✅ |
+| 2026-04-27 | HR-FIX | `leave.handlers.ts`, `out_work.handlers.ts` | Register visibility bug — approver could not see all assigned requests; added `approverRulesByCompany` fallback alongside `viewerRulesByCompany` in `listLeaveRegisterHandler` / `listOutWorkRegisterHandler` | ✅ |
+| 2026-04-27 | HR-FIX | `HrWorkflowPages.jsx` | Company column in register grid now shows name + code on two lines; Requester card in detail view now shows P-code (e.g. P0004) from `splitDisplay()` instead of raw UUID | ✅ |
+| 2026-04-27 | HR-REG | `HrRegisterReports.jsx` | Complete rewrite — added column picker (`ErpColumnVisibilityDrawer`) with per-kind localStorage persistence; separate `requester_name`, `requester_code`, `department_name`, `department_code`, `parent_company_name`, `parent_company_code` columns; `resolveColumnValue` handles computed columns + date formatting; CSV export uses column labels as headers | ✅ |
+| 2026-04-27 | HR-FIX | `HrWorkflowPages.jsx` | Edit navigation bug — clicking Edit in request drawer navigated to HOME instead of edit form; root cause: `handleEditFromDrawer` called `openDetail()` → `navigate()` while `BlockingLayer` cleanup ran → screen stack inconsistency; fix: extracted shared `HrEditRequestModal` component, edit form now opens directly via state — no navigation required | ✅ |
+| 2026-04-27 | UX-12 | `ErpComboboxField.jsx` (new) | Created searchable combobox primitive replacing all bare `<select>` elements; type-to-filter, ↑↓ keyboard nav, Enter select, Esc close, outside-click close, scroll-to-highlight, `hideBlank` / `inputClassName` / `inputProps` props | ✅ |
+| 2026-04-27 | UX-12 | `ErpSelectionField.jsx` | `type="select"` branch now renders `ErpComboboxField` instead of native `<select>` | ✅ |
+| 2026-04-27 | UX-12 | `ErpCompanySelector.jsx`, `ErpCompactFilterSelect.jsx` | Both wrapper components updated to use `ErpComboboxField` internally; `data-workspace-primary-focus` forwarded via `inputProps`; `mode="all"` value mapping preserved | ✅ |
+| 2026-04-27 | UX-12 | 14 SA screens (SAApprovalRules, SAUserScope, SAReportVisibility, SACapabilityGovernance, SAModuleMaster, SARolePermissions, SAMenuGovernance, SAAclVersionCenter, SADepartmentMaster, SAUserRoles, SAModuleResourceMap, SAUserScopeReport, SAGovernanceSummaryReport, SAWorkContextMaster) | All raw `<select>` elements replaced with `ErpComboboxField` — 0 bare selects remain in SA universe | ✅ |
+| 2026-04-27 | UX-12 | `HrWorkflowPages.jsx` | All 3 remaining `<select>` elements replaced (edit-form Destination, new-request Destination, approval-inbox Company filter) | ✅ |
+| 2026-04-27 | NOTE | — | Issue 2 (search/filter bar audit across all screens) deferred — to be done in a future session | ⏳ |
 
