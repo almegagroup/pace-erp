@@ -9,6 +9,7 @@ import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { ERP_ROLE_OPTIONS, ERP_ROLE_LABELS } from "../../../shared/erpRoles.js";
 
 async function readJsonSafe(response) {
@@ -595,17 +596,16 @@ export default function SARolePermissions() {
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Role Code
               </span>
-              <select
+              <ErpComboboxField
                 value={selectedRoleCode}
-                onChange={(event) => setSelectedRoleCode(event.target.value)}
-                className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
-              >
-                {ERP_ROLE_OPTIONS.map((role) => (
-                  <option key={role.code} value={role.code}>
-                    {role.code} - {role.label}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => { if (val) setSelectedRoleCode(val); }}
+                options={ERP_ROLE_OPTIONS.map((role) => ({
+                  value: role.code,
+                  label: `${role.code} - ${role.label}`,
+                }))}
+                blankLabel="-- Role --"
+                inputClassName="mt-2 px-3 py-2 text-sm"
+              />
             </label>
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -613,36 +613,32 @@ export default function SARolePermissions() {
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Project
                 </span>
-                <select
+                <ErpComboboxField
                   value={selectedProjectCode}
-                  onChange={(event) => setSelectedProjectCode(event.target.value)}
-                  className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
-                >
-                  <option value="">All mapped projects</option>
-                  {catalogProjectOptions.map((projectCode) => (
-                    <option key={projectCode} value={projectCode}>
-                      {projectCode}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setSelectedProjectCode(val)}
+                  options={catalogProjectOptions.map((projectCode) => ({
+                    value: projectCode,
+                    label: projectCode,
+                  }))}
+                  blankLabel="All mapped projects"
+                  inputClassName="mt-2 px-3 py-2 text-sm"
+                />
               </label>
 
               <label className="block">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Module
                 </span>
-                <select
+                <ErpComboboxField
                   value={selectedModuleCode}
-                  onChange={(event) => setSelectedModuleCode(event.target.value)}
-                  className="mt-2 w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white"
-                >
-                  <option value="">Choose module</option>
-                  {catalogModuleOptions.map((moduleCode) => (
-                    <option key={moduleCode} value={moduleCode}>
-                      {moduleCode}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setSelectedModuleCode(val)}
+                  options={catalogModuleOptions.map((moduleCode) => ({
+                    value: moduleCode,
+                    label: moduleCode,
+                  }))}
+                  blankLabel="Choose module"
+                  inputClassName="mt-2 px-3 py-2 text-sm"
+                />
               </label>
             </div>
 

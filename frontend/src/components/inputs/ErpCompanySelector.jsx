@@ -7,12 +7,13 @@
  *
  * Rules:
  *   - mode="required"  → blank placeholder shown, empty string value = no selection (caller must block action)
- *   - mode="all"       → first option is "* All Companies" (value = "*"); used for inbox / report filters
- *   - Keyboard-first: standard <select> with full browser keyboard support
+ *   - mode="all"       → first slot shows "* All Companies" (value = "*"); used for inbox / report filters
  *   - Type 1 users: pre-filled + read-only (pass readOnly prop)
- *   - Type 2 users: selectable dropdown
+ *   - Type 2 users: searchable combobox via ErpComboboxField
  *   - Never used for ACL decisions — display and UX only
  */
+
+import ErpComboboxField from "../forms/ErpComboboxField.jsx";
 
 /**
  * @param {object} props
@@ -82,24 +83,18 @@ export default function ErpCompanySelector({
           </span>
         ) : null}
       </div>
-      <select
-        ref={selectRef}
-        value={value ?? ""}
-        onChange={(event) => onChange?.(event.target.value)}
+      <ErpComboboxField
+        inputRef={selectRef}
+        value={mode === "all" && value === "*" ? "" : (value ?? "")}
+        onChange={(val) => onChange?.(mode === "all" && val === "" ? "*" : val)}
         disabled={disabled}
-        className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
-      >
-        {mode === "required" ? (
-          <option value="">— Select company —</option>
-        ) : (
-          <option value="*">* All Companies</option>
-        )}
-        {safeCompanies.map((company) => (
-          <option key={company.id} value={company.id}>
-            {company.company_code} | {company.company_name}
-          </option>
-        ))}
-      </select>
+        options={safeCompanies.map((company) => ({
+          value: company.id,
+          label: `${company.company_code} | ${company.company_name}`,
+        }))}
+        blankLabel={mode === "required" ? "— Select company —" : "* All Companies"}
+        inputClassName="px-3 py-2 text-sm"
+      />
     </div>
   );
 }

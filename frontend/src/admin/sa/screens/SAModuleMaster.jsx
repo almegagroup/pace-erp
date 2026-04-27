@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
@@ -557,22 +558,14 @@ export default function SAModuleMaster() {
       formContent={
         <div ref={formContainerRef} className="grid gap-[var(--erp-form-gap)]">
           <ErpDenseFormRow label="Project" required>
-            <select
-              ref={projectRef}
-              data-workspace-primary-focus="true"
-              data-erp-form-field="true"
+            <ErpComboboxField
               value={selectedProjectId}
-              onChange={(event) => setSelectedProjectId(event.target.value)}
+              onChange={(val) => setSelectedProjectId(val)}
+              options={projects.map((project) => ({ value: project.id, label: `${project.project_code} | ${project.project_name}` }))}
+              blankLabel="Choose active project"
               disabled={editorMode === "edit"}
-              className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white disabled:bg-slate-100"
-            >
-              <option value="">Choose active project</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.project_code} | {project.project_name}
-                </option>
-              ))}
-            </select>
+              inputClassName="h-7 px-2 py-0.5 text-[12px]"
+            />
           </ErpDenseFormRow>
 
           <ErpDenseFormRow label="Module Name" required>
@@ -626,46 +619,46 @@ export default function SAModuleMaster() {
           </ErpDenseFormRow>
 
           <ErpDenseFormRow label="Approval Type">
-            <select
-              data-erp-form-field="true"
+            <ErpComboboxField
               value={approvalType}
-              onChange={(event) => setApprovalType(event.target.value)}
+              onChange={(val) => setApprovalType(val)}
+              options={[
+                { value: "ANYONE", label: "ANYONE" },
+                { value: "SEQUENTIAL", label: "SEQUENTIAL" },
+                { value: "MUST_ALL", label: "MUST_ALL" },
+              ]}
               disabled={!approvalRequired}
-              className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
-            >
-              <option value="ANYONE">ANYONE</option>
-              <option value="SEQUENTIAL">SEQUENTIAL</option>
-              <option value="MUST_ALL">MUST_ALL</option>
-            </select>
+              inputClassName="h-7 px-2 py-0.5 text-[12px]"
+            />
           </ErpDenseFormRow>
 
           <div className="grid grid-cols-2 gap-[var(--erp-form-gap)]">
             <ErpDenseFormRow label="Min Approvers">
-              <select
-                data-erp-form-field="true"
+              <ErpComboboxField
                 value={minApprovers}
-                onChange={(event) => setMinApprovers(event.target.value)}
+                onChange={(val) => setMinApprovers(val)}
+                options={[
+                  { value: "1", label: "1" },
+                  { value: "2", label: "2" },
+                  { value: "3", label: "3" },
+                ]}
                 disabled={!approvalRequired}
-                className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
-              >
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-              </select>
+                inputClassName="h-7 px-2 py-0.5 text-[12px]"
+              />
             </ErpDenseFormRow>
 
             <ErpDenseFormRow label="Max Approvers">
-              <select
-                data-erp-form-field="true"
+              <ErpComboboxField
                 value={maxApprovers}
-                onChange={(event) => setMaxApprovers(event.target.value)}
+                onChange={(val) => setMaxApprovers(val)}
+                options={[
+                  { value: "1", label: "1" },
+                  { value: "2", label: "2" },
+                  { value: "3", label: "3" },
+                ]}
                 disabled={!approvalRequired}
-                className="h-7 w-full border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition disabled:bg-slate-100 focus:border-sky-500 focus:bg-white"
-              >
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-              </select>
+                inputClassName="h-7 px-2 py-0.5 text-[12px]"
+              />
             </ErpDenseFormRow>
           </div>
         </div>

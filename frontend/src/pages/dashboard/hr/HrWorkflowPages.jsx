@@ -14,6 +14,7 @@ import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { pushToast } from "../../../store/uiToast.js";
 import { getErrorMessage } from "../../../config/errorMessages.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import {
   resolveDefaultTransactionCompanyId,
@@ -444,7 +445,16 @@ function renderHrRequestColumnValue(request, kind, columnKey) {
   const contentByColumn = {
     name: <div className="text-sm font-semibold text-slate-900">{requesterParts.name}</div>,
     code: <div className="text-sm text-slate-700">{requesterParts.code}</div>,
-    company: <div className="text-sm text-slate-700">{companyDisplay}</div>,
+    company: (
+      <div>
+        <div className="text-sm text-slate-700">
+          {request.parent_company_name ?? request.parent_company_id ?? "-"}
+        </div>
+        {request.parent_company_code ? (
+          <div className="text-xs text-slate-500">{request.parent_company_code}</div>
+        ) : null}
+      </div>
+    ),
     department: <div className="text-sm text-slate-700">{departmentDisplay}</div>,
     fromDate: <div className="text-sm text-slate-700">{formatIsoDate(request.from_date)}</div>,
     toDate: <div className="text-sm text-slate-700">{formatIsoDate(request.to_date)}</div>,
@@ -591,7 +601,12 @@ function HrRequestDetailModal({
           </div>
           <div className="border border-slate-300 bg-white px-3 py-2">
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Company</div>
-            <div className="mt-1 text-sm text-slate-900">{companyLabel}</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900">
+              {request.parent_company_name ?? request.parent_company_id ?? "-"}
+            </div>
+            {request.parent_company_code ? (
+              <div className="text-xs text-slate-600">{request.parent_company_code}</div>
+            ) : null}
           </div>
           <div className="border border-slate-300 bg-white px-3 py-2">
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Department</div>
@@ -642,6 +657,191 @@ function HrRequestDetailModal({
   );
 }
 
+// ─── Shared edit modal (used by both list workspace and detail workspace) ─────
+
+function HrEditRequestModal({ visible, kind, request, onClose, onSaved }) {
+  const earliestBackdate = getHrEarliestBackdate();
+  const [editFromDate, setEditFromDate] = useState(todayDefault());
+  const [editToDate, setEditToDate] = useState(todayDefault());
+  const [editReason, setEditReason] = useState("");
+  const [editDestinationId, setEditDestinationId] = useState("");
+  const [editDestinations, setEditDestinations] = useState([]);
+  const [editDestinationsLoading, setEditDestinationsLoading] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+  const editTotalDays = calculateInclusiveDays(editFromDate, editToDate);
+
+  // Initialise form state whenever the request being edited changes
+  useEffect(() => {
+    if (!request) return;
+    setEditFromDate(request.from_date ?? todayDefault());
+    setEditToDate(request.to_date ?? todayDefault());
+    setEditReason(request.reason ?? "");
+    setEditError("");
+
+    if (kind === "outWork") {
+      setEditDestinationsLoading(true);
+      listOutWorkDestinations()
+        .then((data) => {
+          const rows = data?.destinations ?? [];
+          setEditDestinations(rows);
+          setEditDestinationId(
+            rows.find((r) => r.destination_id === request.destination_id)
+              ?.destination_id ??
+              rows[0]?.destination_id ??
+              "",
+          );
+        })
+        .catch((err) => {
+          setEditDestinations([]);
+          setEditDestinationId("");
+          setEditError(formatError(err, "Destination list could not be loaded."));
+        })
+        .finally(() => setEditDestinationsLoading(false));
+    }
+  }, [request, kind]);
+
+  async function handleSave() {
+    if (!request) return;
+
+    if (!editFromDate || !editToDate || !editReason.trim()) {
+      setEditError("From date, to date, and reason are required.");
+      return;
+    }
+
+    if (kind === "outWork" && !editDestinationId) {
+      setEditError("Destination is required.");
+      return;
+    }
+
+    setEditSaving(true);
+    setEditError("");
+
+    try {
+      if (kind === "leave") {
+        await updateLeaveRequest({
+          leave_request_id: request.leave_request_id,
+          from_date: editFromDate,
+          to_date: editToDate,
+          reason: editReason.trim(),
+        });
+      } else {
+        await updateOutWorkRequest({
+          out_work_request_id: request.out_work_request_id,
+          from_date: editFromDate,
+          to_date: editToDate,
+          destination_id: editDestinationId,
+          reason: editReason.trim(),
+        });
+      }
+
+      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
+      onSaved?.();
+    } catch (err) {
+      setEditError(formatError(err, "Request could not be updated."));
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  return (
+    <ModalBase
+      visible={visible}
+      eyebrow={kind === "leave" ? "Leave Request" : "Out Work Request"}
+      title={kind === "leave" ? "Edit Pending Leave" : "Edit Pending Out Work"}
+      message="Edit is allowed only until the first approver decision arrives."
+      onEscape={editSaving ? undefined : onClose}
+      width="min(720px, calc(100vw - 32px))"
+      actions={
+        <>
+          <button
+            type="button"
+            disabled={editSaving}
+            onClick={onClose}
+            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={editSaving}
+            onClick={() => void handleSave()}
+            className="border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900 disabled:opacity-50"
+          >
+            {editSaving ? "Saving..." : "Save Changes"}
+          </button>
+        </>
+      }
+    >
+      <div className="grid gap-3">
+        {editError ? (
+          <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            {editError}
+          </div>
+        ) : null}
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="grid gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">From Date</span>
+            <input
+              type="date"
+              value={editFromDate}
+              min={earliestBackdate}
+              onChange={(event) => setEditFromDate(event.target.value)}
+              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+          </label>
+          <label className="grid gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">To Date</span>
+            <input
+              type="date"
+              value={editToDate}
+              min={editFromDate || earliestBackdate}
+              onChange={(event) => setEditToDate(event.target.value)}
+              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+          </label>
+          <label className="grid gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Number Of Days</span>
+            <input
+              type="text"
+              readOnly
+              value={editTotalDays > 0 ? `${editTotalDays}` : "-"}
+              className="w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
+            />
+          </label>
+        </div>
+        {kind === "outWork" ? (
+          <label className="grid gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Destination</span>
+            <ErpComboboxField
+              value={editDestinationId}
+              disabled={editDestinationsLoading}
+              onChange={(val) => setEditDestinationId(val)}
+              options={editDestinations.map((row) => ({
+                value: row.destination_id,
+                label: row.destination_name,
+              }))}
+              blankLabel={editDestinationsLoading ? "Loading..." : "Choose destination"}
+              inputClassName="px-3 py-2 text-sm"
+            />
+          </label>
+        ) : null}
+        <label className="grid gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Reason</span>
+          <textarea
+            rows={4}
+            value={editReason}
+            onChange={(event) => setEditReason(event.target.value)}
+            className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+          />
+        </label>
+      </div>
+    </ModalBase>
+  );
+}
+
+// ─── Detail workspace ─────────────────────────────────────────────────────────
+
 function HrRequestDetailWorkspace({ kind }) {
   const context = getActiveScreenContext() ?? {};
   const request = context.request ?? null;
@@ -649,50 +849,15 @@ function HrRequestDetailWorkspace({ kind }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editingRequest, setEditingRequest] = useState(null);
-  const [editSaving, setEditSaving] = useState(false);
-  const [editFromDate, setEditFromDate] = useState(todayDefault());
-  const [editToDate, setEditToDate] = useState(todayDefault());
-  const [editReason, setEditReason] = useState("");
-  const [editDestinationId, setEditDestinationId] = useState("");
-  const [editDestinations, setEditDestinations] = useState([]);
-  const [editDestinationsLoading, setEditDestinationsLoading] = useState(false);
-  const earliestBackdate = getHrEarliestBackdate();
-  const editTotalDays = calculateInclusiveDays(editFromDate, editToDate);
+  const requesterParts = splitDisplay(
+    request?.requester_display ?? "",
+    request?.requester_auth_user_id ?? "",
+    request?.requester_display ?? "",
+  );
 
-  async function loadEditDestinations(preferredDestinationId = "") {
-    if (kind !== "outWork") {
-      return;
-    }
-
-    setEditDestinationsLoading(true);
-    try {
-      const data = await listOutWorkDestinations();
-      const destinationRows = data.destinations ?? [];
-      setEditDestinations(destinationRows);
-      setEditDestinationId(
-        destinationRows.find((row) => row.destination_id === preferredDestinationId)?.destination_id ??
-          destinationRows[0]?.destination_id ??
-          "",
-      );
-    } catch (err) {
-      setEditDestinations([]);
-      setEditDestinationId("");
-      setError(formatError(err, "Destination list could not be loaded."));
-    } finally {
-      setEditDestinationsLoading(false);
-    }
-  }
-
-  async function handleEdit(row) {
+  function handleEdit(row) {
     setNotice("");
-    setEditFromDate(row.from_date ?? todayDefault());
-    setEditToDate(row.to_date ?? todayDefault());
-    setEditReason(row.reason ?? "");
     setEditingRequest(row);
-
-    if (kind === "outWork") {
-      await loadEditDestinations(row.destination_id ?? "");
-    }
   }
 
   async function handleCancel(row) {
@@ -716,52 +881,6 @@ function HrRequestDetailWorkspace({ kind }) {
       popScreen();
     } catch (err) {
       setError(formatError(err, "Request could not be cancelled."));
-    }
-  }
-
-  async function handleEditSave() {
-    if (!editingRequest) {
-      return;
-    }
-
-    if (!editFromDate || !editToDate || !editReason.trim()) {
-      setError("From date, to date, and reason are required.");
-      return;
-    }
-
-    if (kind === "outWork" && !editDestinationId) {
-      setError("Destination is required.");
-      return;
-    }
-
-    setEditSaving(true);
-    setError("");
-    setNotice("");
-
-    try {
-      if (kind === "leave") {
-        await updateLeaveRequest({
-          leave_request_id: editingRequest.leave_request_id,
-          from_date: editFromDate,
-          to_date: editToDate,
-          reason: editReason.trim(),
-        });
-      } else {
-        await updateOutWorkRequest({
-          out_work_request_id: editingRequest.out_work_request_id,
-          from_date: editFromDate,
-          to_date: editToDate,
-          destination_id: editDestinationId,
-          reason: editReason.trim(),
-        });
-      }
-
-      window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
-      popScreen();
-    } catch (err) {
-      setError(formatError(err, "Request could not be updated."));
-    } finally {
-      setEditSaving(false);
     }
   }
 
@@ -813,20 +932,17 @@ function HrRequestDetailWorkspace({ kind }) {
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <div className="border border-slate-300 bg-white px-3 py-2">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Requester</div>
-                <div className="mt-1 text-sm font-semibold text-slate-900">
-                  {splitDisplay(
-                    request.requester_display,
-                    request.requester_auth_user_id,
-                    request.requester_display,
-                  ).name}
-                </div>
-                <div className="text-xs text-slate-600">{request.requester_auth_user_id ?? "-"}</div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">{requesterParts.name}</div>
+                <div className="text-xs text-slate-600">{requesterParts.code}</div>
               </div>
               <div className="border border-slate-300 bg-white px-3 py-2">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Company</div>
-                <div className="mt-1 text-sm text-slate-900">
-                  {request.parent_company_name ?? request.parent_company_code ?? request.parent_company_id ?? "-"}
+                <div className="mt-1 text-sm font-semibold text-slate-900">
+                  {request.parent_company_name ?? request.parent_company_id ?? "-"}
                 </div>
+                {request.parent_company_code ? (
+                  <div className="text-xs text-slate-600">{request.parent_company_code}</div>
+                ) : null}
               </div>
               <div className="border border-slate-300 bg-white px-3 py-2">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Department</div>
@@ -877,106 +993,16 @@ function HrRequestDetailWorkspace({ kind }) {
           </div>
         )}
       </ErpScreenScaffold>
-      <ModalBase
+      <HrEditRequestModal
         visible={Boolean(editingRequest)}
-        eyebrow={kind === "leave" ? "Leave Request" : "Out Work Request"}
-        title={kind === "leave" ? "Edit Pending Leave" : "Edit Pending Out Work"}
-        message="Edit is allowed only until the first approver decision arrives."
-        onEscape={() => setEditingRequest(null)}
-        width="min(720px, calc(100vw - 32px))"
-        actions={
-          <>
-            <button
-              type="button"
-              onClick={() => setEditingRequest(null)}
-              className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={editSaving}
-              onClick={() => void handleEditSave()}
-              className="border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900"
-            >
-              {editSaving ? "Saving..." : "Save Changes"}
-            </button>
-          </>
-        }
-      >
-        <div className="grid gap-3">
-          <div className="grid gap-3 md:grid-cols-3">
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                From Date
-              </span>
-              <input
-                type="date"
-                value={editFromDate}
-                min={earliestBackdate}
-                onChange={(event) => setEditFromDate(event.target.value)}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                To Date
-              </span>
-              <input
-                type="date"
-                value={editToDate}
-                min={editFromDate || earliestBackdate}
-                onChange={(event) => setEditToDate(event.target.value)}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Number Of Days
-              </span>
-              <input
-                type="text"
-                readOnly
-                value={editTotalDays > 0 ? `${editTotalDays}` : "-"}
-                className="w-full border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
-              />
-            </label>
-          </div>
-
-          {kind === "outWork" ? (
-            <label className="grid gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Destination
-              </span>
-              <select
-                value={editDestinationId}
-                disabled={editDestinationsLoading}
-                onChange={(event) => setEditDestinationId(event.target.value)}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-              >
-                <option value="">{editDestinationsLoading ? "Loading..." : "Choose destination"}</option>
-                {editDestinations.map((row) => (
-                  <option key={row.destination_id} value={row.destination_id}>
-                    {row.destination_name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-
-          <label className="grid gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Reason
-            </span>
-            <textarea
-              rows={4}
-              value={editReason}
-              onChange={(event) => setEditReason(event.target.value)}
-              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-            />
-          </label>
-        </div>
-      </ModalBase>
+        kind={kind}
+        request={editingRequest}
+        onClose={() => setEditingRequest(null)}
+        onSaved={() => {
+          setEditingRequest(null);
+          popScreen();
+        }}
+      />
     </>
   );
 }
@@ -1643,21 +1669,18 @@ export function OutWorkApplyWorkspace() {
             </ErpDenseFormRow>
             <ErpDenseFormRow label="Destination" required>
               <div className="flex flex-wrap items-center gap-2">
-                <select
+                <ErpComboboxField
                   value={destinationId}
                   disabled={loadingDestinations || !transactionCompanyId}
-                  onChange={(event) => setDestinationId(event.target.value)}
-                  className="min-w-[280px] flex-1 border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-                >
-                  <option value="">
-                    {loadingDestinations ? "Loading destination..." : "Choose destination"}
-                  </option>
-                  {destinations.map((row) => (
-                    <option key={row.destination_id} value={row.destination_id}>
-                      {row.destination_name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setDestinationId(val)}
+                  options={destinations.map((row) => ({
+                    value: row.destination_id,
+                    label: row.destination_name,
+                  }))}
+                  blankLabel={loadingDestinations ? "Loading destination..." : "Choose destination"}
+                  inputClassName="px-3 py-2 text-sm"
+                  className="min-w-[280px] flex-1"
+                />
                 <button
                   type="button"
                   disabled={!transactionCompanyId}
@@ -1792,6 +1815,7 @@ function HrRequestListWorkspace({
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [actionDrawerRequest, setActionDrawerRequest] = useState(null);
   const [cancelling, setCancelling] = useState(false);
+  const [editingRequest, setEditingRequest] = useState(null);
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.myRequests`);
   const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
@@ -1872,7 +1896,7 @@ function HrRequestListWorkspace({
 
   function handleEditFromDrawer(row) {
     setActionDrawerRequest(null);
-    openDetail(row);
+    setEditingRequest(row);
   }
 
   useEffect(() => registerScreenRefreshCallback(() => {
@@ -2003,6 +2027,16 @@ function HrRequestListWorkspace({
             onEdit={handleEditFromDrawer}
             onCancel={(row) => void handleCancelFromDrawer(row)}
             onClose={() => setActionDrawerRequest(null)}
+          />
+          <HrEditRequestModal
+            visible={Boolean(editingRequest)}
+            kind={kind}
+            request={editingRequest}
+            onClose={() => setEditingRequest(null)}
+            onSaved={async () => {
+              setEditingRequest(null);
+              await refresh();
+            }}
           />
         </>
       }
@@ -2213,18 +2247,19 @@ function HrApprovalInboxWorkspace({
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Company
                 </span>
-                <select
+                <ErpComboboxField
                   value={companyFilter}
-                  onChange={(event) => setCompanyFilter(event.target.value)}
-                  className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
-                >
-                  <option value="*">* All Companies</option>
-                  {availableCompanies.map((company) => (
-                    <option key={company.id} value={company.id}>
-                      {company.company_code} | {company.company_name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setCompanyFilter(val || "*")}
+                  options={[
+                    { value: "*", label: "* All Companies" },
+                    ...availableCompanies.map((company) => ({
+                      value: company.id,
+                      label: `${company.company_code} | ${company.company_name}`,
+                    })),
+                  ]}
+                  blankLabel="-- Company --"
+                  inputClassName="px-3 py-2 text-sm"
+                />
               </div>
             ) : null}
             <QuickFilterInput

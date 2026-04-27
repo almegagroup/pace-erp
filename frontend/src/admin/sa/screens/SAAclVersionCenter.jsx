@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import {
@@ -582,16 +583,18 @@ export default function SAAclVersionCenter() {
               ))}
             </datalist>
             <ErpDenseFormRow label="Status Filter">
-              <select
+              <ErpComboboxField
                 value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-              >
-                <option value="ALL">All Companies</option>
-                <option value="NO_ACTIVE_VERSION">No Active Version</option>
-                <option value="PUBLISH_REQUIRED">Publish Required</option>
-                <option value="CLEAN">Clean</option>
-              </select>
+                onChange={(val) => { if (val) setStatusFilter(val); }}
+                options={[
+                  { value: "ALL", label: "All Companies" },
+                  { value: "NO_ACTIVE_VERSION", label: "No Active Version" },
+                  { value: "PUBLISH_REQUIRED", label: "Publish Required" },
+                  { value: "CLEAN", label: "Clean" },
+                ]}
+                blankLabel="-- Filter --"
+                inputClassName="px-3 py-2 text-sm"
+              />
             </ErpDenseFormRow>
             <p className="text-xs text-slate-500">
               Showing {filteredCompanies.length} of {companies.length} companies.

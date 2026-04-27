@@ -13,6 +13,7 @@ import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
 import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { PROJECT_SCREENS } from "../../../navigation/screens/projects/projectScreens.js";
 import { HR_SCREENS } from "../../../navigation/screens/projects/hrModule/hrScreens.js";
 import { OPERATION_SCREENS } from "../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -1369,26 +1370,24 @@ export default function SAMenuGovernance() {
                     </label>
                     <label className="grid gap-1 text-sm text-slate-700">
                       <span className="font-semibold">Parent Group</span>
-                      <select
+                      <ErpComboboxField
                         value={editForm.parent_menu_code}
-                        onChange={(event) =>
+                        onChange={(val) =>
                           setEditForm((current) => ({
                             ...current,
-                            parent_menu_code: event.target.value,
+                            parent_menu_code: val,
                             display_order: String(
-                              getNextAvailableOrder(event.target.value, selectedMenu?.menu_code ?? "")
+                              getNextAvailableOrder(val, selectedMenu?.menu_code ?? "")
                             ),
                           }))
                         }
-                        className={inputClassName()}
-                      >
-                        <option value="">No parent</option>
-                        {parentOptions.map((option) => (
-                          <option key={option.menu_code} value={option.menu_code}>
-                            {option.title} ({option.menu_code})
-                          </option>
-                        ))}
-                      </select>
+                        options={parentOptions.map((option) => ({
+                          value: option.menu_code,
+                          label: `${option.title} (${option.menu_code})`,
+                        }))}
+                        blankLabel="No parent"
+                        inputClassName="px-3 py-2 text-sm"
+                      />
                     </label>
                   </div>
 
@@ -1967,28 +1966,26 @@ export default function SAMenuGovernance() {
             </label>
             <label className="grid gap-1 text-sm text-slate-700">
               <span className="font-semibold">Parent Group</span>
-              <select
+              <ErpComboboxField
                 value={createForm.parent_menu_code}
-                onChange={(event) =>
+                onChange={(val) =>
                   setCreateForm((current) => ({
                     ...current,
-                    parent_menu_code: event.target.value,
-                    display_order: String(getNextAvailableOrder(event.target.value)),
+                    parent_menu_code: val,
+                    display_order: String(getNextAvailableOrder(val)),
                   }))
                 }
-                className={inputClassName()}
-              >
-                <option value="">No parent</option>
-                {menus
+                options={menus
                   .filter(
                     (item) => item.universe === universe && item.menu_type === "GROUP"
                   )
-                  .map((option) => (
-                    <option key={option.menu_code} value={option.menu_code}>
-                      {option.title} ({option.menu_code})
-                    </option>
-                  ))}
-              </select>
+                  .map((option) => ({
+                    value: option.menu_code,
+                    label: `${option.title} (${option.menu_code})`,
+                  }))}
+                blankLabel="No parent"
+                inputClassName="px-3 py-2 text-sm"
+              />
             </label>
             <label className="grid gap-1 text-sm text-slate-700">
               <span className="font-semibold">Display Order</span>

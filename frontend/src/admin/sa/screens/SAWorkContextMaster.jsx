@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
@@ -732,34 +733,29 @@ export default function SAWorkContextMaster() {
                   <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                     Company
                   </span>
-                  <select
-                    ref={companySelectRef}
+                  <ErpComboboxField
                     value={selectedCompanyId}
-                    onChange={(event) => setSelectedCompanyId(event.target.value)}
-                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
-                  >
-                    <option value="">Select company</option>
-                    {companies.map((company) => (
-                      <option key={company.id} value={company.id}>
-                        {formatCompanyLabel(company)}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(val) => setSelectedCompanyId(val)}
+                    options={companies.map((company) => ({ value: company.id, label: formatCompanyLabel(company) }))}
+                    blankLabel="Select company"
+                    inputClassName="px-3 py-2 text-sm"
+                  />
                 </label>
 
                 <label className="grid gap-2">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                     Type
                   </span>
-                  <select
+                  <ErpComboboxField
                     value={typeFilter}
-                    onChange={(event) => setTypeFilter(event.target.value)}
-                    className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
-                  >
-                    <option value="ALL">All</option>
-                    <option value="SYSTEM">System only</option>
-                    <option value="MANUAL">Manual only</option>
-                  </select>
+                    onChange={(val) => setTypeFilter(val)}
+                    options={[
+                      { value: "ALL", label: "All" },
+                      { value: "SYSTEM", label: "System only" },
+                      { value: "MANUAL", label: "Manual only" },
+                    ]}
+                    inputClassName="px-3 py-2 text-sm"
+                  />
                 </label>
 
                 <QuickFilterInput
@@ -1095,23 +1091,21 @@ export default function SAWorkContextMaster() {
             <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
               Department Link
             </span>
-            <select
+            <ErpComboboxField
               value={formDraft.department_id}
-              onChange={(event) =>
+              onChange={(val) =>
                 setFormDraft((current) => ({
                   ...current,
-                  department_id: event.target.value,
+                  department_id: val,
                 }))
               }
-              className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
-            >
-              <option value="">No department link</option>
-              {departments.map((department) => (
-                <option key={department.id} value={department.id}>
-                  {department.department_code} | {department.department_name}
-                </option>
-              ))}
-            </select>
+              options={departments.map((department) => ({
+                value: department.id,
+                label: `${department.department_code} | ${department.department_name}`,
+              }))}
+              blankLabel="No department link"
+              inputClassName="px-3 py-2 text-sm"
+            />
           </label>
 
           <label className="grid gap-2">
