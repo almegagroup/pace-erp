@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
@@ -452,18 +453,16 @@ export default function SAModuleResourceMap() {
 
                 <label className="grid grid-cols-[100px_1fr] items-center gap-x-2">
                   <span className="text-[11px] text-slate-600">Target Module</span>
-                  <select
+                  <ErpComboboxField
                     value={targetModuleCode}
-                    onChange={(event) => setTargetModuleCode(event.target.value)}
-                    className="h-7 border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-400 focus:bg-white"
-                  >
-                    <option value="">Choose module</option>
-                    {modules.map((moduleRow) => (
-                      <option key={moduleRow.module_code} value={moduleRow.module_code}>
-                        {moduleRow.project_code} | {moduleRow.module_code} | {moduleRow.module_name} | {moduleRow.module_active ? "ACTIVE" : "INACTIVE"}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(val) => setTargetModuleCode(val)}
+                    options={modules.map((moduleRow) => ({
+                      value: moduleRow.module_code,
+                      label: `${moduleRow.project_code} | ${moduleRow.module_code} | ${moduleRow.module_name} | ${moduleRow.module_active ? "ACTIVE" : "INACTIVE"}`,
+                    }))}
+                    blankLabel="Choose module"
+                    inputClassName="px-2 py-0.5 text-[12px]"
+                  />
                 </label>
 
                 <div className="flex flex-wrap gap-1">

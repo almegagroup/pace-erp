@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
@@ -508,94 +509,74 @@ export default function SAReportVisibility() {
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Company
                 </span>
-                <select
+                <ErpComboboxField
                   value={draft.company_id}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraft((current) => ({
                       ...current,
-                      company_id: event.target.value,
+                      company_id: val,
                       subject_work_context_id: "",
                       subject_user_id: "",
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-                >
-                  <option value="">Choose company</option>
-                  {companyOptions.map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {formatCompanyLabel(row)}
-                    </option>
-                  ))}
-                </select>
+                  options={companyOptions.map((row) => ({ value: row.id, label: formatCompanyLabel(row) }))}
+                  blankLabel="Choose company"
+                  inputClassName="px-3 py-2 text-sm"
+                />
               </label>
               <label className="grid gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Project
                 </span>
-                <select
+                <ErpComboboxField
                   value={draft.project_code}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraft((current) => ({
                       ...current,
-                      project_code: event.target.value,
+                      project_code: val,
                       module_code: "",
                       resource_code: "",
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-                >
-                  <option value="">Choose project</option>
-                  {projectOptions.map((row) => (
-                    <option key={row.id} value={row.project_code}>
-                      {row.project_code} | {row.project_name}
-                    </option>
-                  ))}
-                </select>
+                  options={projectOptions.map((row) => ({ value: row.project_code, label: `${row.project_code} | ${row.project_name}` }))}
+                  blankLabel="Choose project"
+                  inputClassName="px-3 py-2 text-sm"
+                />
               </label>
               <label className="grid gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Module
                 </span>
-                <select
+                <ErpComboboxField
                   value={draft.module_code}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraft((current) => ({
                       ...current,
-                      module_code: event.target.value,
+                      module_code: val,
                       resource_code: "",
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-                >
-                  <option value="">Choose module</option>
-                  {moduleOptions.map((row) => (
-                    <option key={row.module_code} value={row.module_code}>
-                      {row.project_code} | {row.module_code} | {row.module_name}
-                    </option>
-                  ))}
-                </select>
+                  options={moduleOptions.map((row) => ({ value: row.module_code, label: `${row.project_code} | ${row.module_code} | ${row.module_name}` }))}
+                  blankLabel="Choose module"
+                  inputClassName="px-3 py-2 text-sm"
+                />
               </label>
               <label className="grid gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Report Resource
                 </span>
-                <select
+                <ErpComboboxField
                   value={draft.resource_code}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraft((current) => ({
                       ...current,
-                      resource_code: event.target.value,
+                      resource_code: val,
                     }))
                   }
-                  className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-                >
-                  <option value="">Choose resource</option>
-                  {resourceOptions.map((row) => (
-                    <option key={row.resource_code} value={row.resource_code}>
-                      {row.title} | {row.resource_code}
-                    </option>
-                  ))}
-                </select>
+                  options={resourceOptions.map((row) => ({ value: row.resource_code, label: `${row.title} | ${row.resource_code}` }))}
+                  blankLabel="Choose resource"
+                  inputClassName="px-3 py-2 text-sm"
+                />
               </label>
             </div>
             <QuickFilterInput
@@ -719,93 +700,71 @@ export default function SAReportVisibility() {
           <div className="text-sm font-semibold text-slate-900">{draft.viewer_id ? "Edit visibility rule" : "Create visibility rule"}</div>
           <div className="grid gap-[var(--erp-form-gap)] md:grid-cols-2 md:gap-x-6">
             <ErpDenseFormRow label="Action">
-              <select
+              <ErpComboboxField
                 value={draft.action_code}
-                onChange={(event) =>
+                onChange={(val) =>
                   setDraft((current) => ({
                     ...current,
-                    action_code: event.target.value,
+                    action_code: val,
                   }))
                 }
-                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
-              >
-                {actionOptions.map((action) => (
-                  <option key={action} value={action}>
-                    {action}
-                  </option>
-                ))}
-              </select>
+                options={actionOptions.map((action) => ({ value: action, label: action }))}
+                inputClassName="px-2 py-[3px] text-[12px]"
+              />
             </ErpDenseFormRow>
 
             <ErpDenseFormRow label="Scope Type">
-              <select
+              <ErpComboboxField
                 value={draft.scope_type}
-                onChange={(event) =>
+                onChange={(val) =>
                   setDraft((current) => ({
                     ...current,
-                    scope_type: event.target.value,
+                    scope_type: val,
                     subject_work_context_id:
-                      event.target.value === "DEPARTMENT" || event.target.value === "WORK_CONTEXT"
+                      val === "DEPARTMENT" || val === "WORK_CONTEXT"
                         ? current.subject_work_context_id
                         : "",
-                    subject_user_id: event.target.value === "USER_EXCEPTION" ? current.subject_user_id : "",
+                    subject_user_id: val === "USER_EXCEPTION" ? current.subject_user_id : "",
                   }))
                 }
-                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
-              >
-                {VISIBILITY_SCOPE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                options={VISIBILITY_SCOPE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                inputClassName="px-2 py-[3px] text-[12px]"
+              />
             </ErpDenseFormRow>
 
             {(draft.scope_type === "DEPARTMENT" || draft.scope_type === "WORK_CONTEXT") ? (
               <ErpDenseFormRow
                 label={draft.scope_type === "DEPARTMENT" ? "Requester Department Lane" : "Requester Work Context"}
               >
-              <select
+              <ErpComboboxField
                 value={draft.subject_work_context_id}
-                onChange={(event) =>
+                onChange={(val) =>
                   setDraft((current) => ({
                     ...current,
-                    subject_work_context_id: event.target.value,
+                    subject_work_context_id: val,
                   }))
                 }
-                className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
-              >
-                <option value="">
-                  {draft.scope_type === "DEPARTMENT" ? "Choose requester department lane" : "Choose requester work context"}
-                </option>
-                {subjectScopeOptions.map((row) => (
-                  <option key={row.work_context_id} value={row.work_context_id}>
-                    {buildWorkContextLabel(row)}
-                  </option>
-                  ))}
-              </select>
+                options={subjectScopeOptions.map((row) => ({ value: row.work_context_id, label: buildWorkContextLabel(row) }))}
+                blankLabel={draft.scope_type === "DEPARTMENT" ? "Choose requester department lane" : "Choose requester work context"}
+                inputClassName="px-2 py-[3px] text-[12px]"
+              />
             </ErpDenseFormRow>
             ) : null}
 
             {draft.scope_type === "USER_EXCEPTION" ? (
               <ErpDenseFormRow label="Requester User Exception">
-                <select
+                <ErpComboboxField
                   value={draft.subject_user_id}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraft((current) => ({
                       ...current,
-                      subject_user_id: event.target.value,
+                      subject_user_id: val,
                     }))
                   }
-                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
-                >
-                  <option value="">Choose requester user</option>
-                  {userOptions.map((row) => (
-                    <option key={row.auth_user_id} value={row.auth_user_id}>
-                      {buildUserLabel(row)}
-                    </option>
-                    ))}
-                </select>
+                  options={userOptions.map((row) => ({ value: row.auth_user_id, label: buildUserLabel(row) }))}
+                  blankLabel="Choose requester user"
+                  inputClassName="px-2 py-[3px] text-[12px]"
+                />
               </ErpDenseFormRow>
             ) : null}
 
@@ -834,42 +793,32 @@ export default function SAReportVisibility() {
 
             {draft.target_mode === "user" ? (
               <ErpDenseFormRow label="Viewer User">
-                <select
+                <ErpComboboxField
                   value={draft.viewer_user_id}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraft((current) => ({
                       ...current,
-                      viewer_user_id: event.target.value,
+                      viewer_user_id: val,
                     }))
                   }
-                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
-                >
-                  <option value="">Choose user</option>
-                  {userOptions.map((row) => (
-                    <option key={row.auth_user_id} value={row.auth_user_id}>
-                      {buildUserLabel(row)}
-                    </option>
-                    ))}
-                </select>
+                  options={userOptions.map((row) => ({ value: row.auth_user_id, label: buildUserLabel(row) }))}
+                  blankLabel="Choose user"
+                  inputClassName="px-2 py-[3px] text-[12px]"
+                />
               </ErpDenseFormRow>
             ) : (
               <ErpDenseFormRow label="Viewer Role">
-                <select
+                <ErpComboboxField
                   value={draft.viewer_role_code}
-                  onChange={(event) =>
+                  onChange={(val) =>
                     setDraft((current) => ({
                       ...current,
-                      viewer_role_code: event.target.value,
+                      viewer_role_code: val,
                     }))
                   }
-                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-[3px] text-[12px] text-slate-900 outline-none"
-                >
-                  {ERP_ROLE_OPTIONS.map((row) => (
-                    <option key={row.code} value={row.code}>
-                      {row.code} | {row.label}
-                    </option>
-                    ))}
-                </select>
+                  options={ERP_ROLE_OPTIONS.map((row) => ({ value: row.code, label: `${row.code} | ${row.label}` }))}
+                  inputClassName="px-2 py-[3px] text-[12px]"
+                />
               </ErpDenseFormRow>
             )}
 

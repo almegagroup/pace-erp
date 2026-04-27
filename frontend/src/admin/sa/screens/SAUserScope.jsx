@@ -32,6 +32,7 @@ import {
   sortProjects,
 } from "../../../shared/erpCollections.js";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
 
 const USER_SCOPE_PREVIEW_COLUMN_DEFS = Object.freeze([
@@ -1455,21 +1456,22 @@ export default function SAUserScope() {
               </p>
             )}
             <div className="grid gap-[var(--erp-form-gap)] md:grid-cols-[minmax(0,1fr)_auto]">
-              <select
+              <ErpComboboxField
                 value={primaryCompanyCandidateId}
-                onChange={(event) => setPrimaryCompanyCandidateId(event.target.value)}
+                onChange={(val) => setPrimaryCompanyCandidateId(val)}
                 disabled={selectedWorkCompanies.length === 0 || settingPrimary || isScopeDirty}
-                className="h-8 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none disabled:opacity-50"
-              >
-                {selectedWorkCompanies.length === 0 ? (
-                  <option value="">Select work companies first</option>
-                ) : null}
-                {selectedWorkCompanies.map((company) => (
-                  <option key={company.id} value={company.id}>
-                    {company.company_code} — {company.company_name}
-                  </option>
-                ))}
-              </select>
+                options={selectedWorkCompanies.map((company) => ({
+                  value: company.id,
+                  label: `${company.company_code} — ${company.company_name}`,
+                }))}
+                blankLabel={
+                  selectedWorkCompanies.length === 0
+                    ? "Select work companies first"
+                    : "-- Select --"
+                }
+                inputClassName="px-2 text-sm"
+                className="h-8"
+              />
               <button
                 type="button"
                 disabled={

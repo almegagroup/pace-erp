@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { openScreen } from "../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
@@ -296,13 +297,31 @@ export default function SACapabilityGovernance(){
             <ErpSelectionSection label="Capability Matrix" />
             <div className="grid gap-[var(--erp-form-gap)]">
               <ErpDenseFormRow label="Capability">
-                <select value={capCode} onChange={(e)=>setCapCode(e.target.value)} className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none">{caps.length===0?<option value="">No capability pack yet</option>:null}{caps.map((cap)=><option key={cap.capability_code} value={cap.capability_code}>{cap.capability_code} | {cap.capability_name}</option>)}</select>
+                <ErpComboboxField
+                  value={capCode}
+                  onChange={(val) => setCapCode(val)}
+                  options={caps.map((cap) => ({ value: cap.capability_code, label: `${cap.capability_code} | ${cap.capability_name}` }))}
+                  blankLabel={caps.length === 0 ? "No capability pack yet" : "Choose capability"}
+                  inputClassName="px-3 py-2 text-sm"
+                />
               </ErpDenseFormRow>
               <ErpDenseFormRow label="Project">
-                <select value={projectCode} onChange={(e)=>setProjectCode(e.target.value)} className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"><option value="">All mapped projects</option>{projectOptions.map((code)=><option key={code} value={code}>{code}</option>)}</select>
+                <ErpComboboxField
+                  value={projectCode}
+                  onChange={(val) => setProjectCode(val)}
+                  options={projectOptions.map((code) => ({ value: code, label: code }))}
+                  blankLabel="All mapped projects"
+                  inputClassName="px-3 py-2 text-sm"
+                />
               </ErpDenseFormRow>
               <ErpDenseFormRow label="Module">
-                <select value={moduleCode} onChange={(e)=>setModuleCode(e.target.value)} className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"><option value="">Choose module</option>{moduleOptions.map((code)=><option key={code} value={code}>{code}</option>)}</select>
+                <ErpComboboxField
+                  value={moduleCode}
+                  onChange={(val) => setModuleCode(val)}
+                  options={moduleOptions.map((code) => ({ value: code, label: code }))}
+                  blankLabel="Choose module"
+                  inputClassName="px-3 py-2 text-sm"
+                />
               </ErpDenseFormRow>
             </div>
             <QuickFilterInput label="Search Resources" value={search} onChange={setSearch} inputRef={searchRef} placeholder="Search inside the selected project/module" hint="First choose one module, then search inside that module." />
@@ -427,7 +446,13 @@ export default function SACapabilityGovernance(){
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Business Areas</div>
             <div className="text-sm font-semibold text-slate-900">Open one business area, then choose access packs inside the drawer</div>
             <ErpDenseFormRow label="Company">
-              <select value={companyId} onChange={(e)=>setCompanyId(e.target.value)} className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none">{companies.map((c)=><option key={c.id} value={c.id}>{formatCompanyLabel(c)}</option>)}</select>
+              <ErpComboboxField
+                value={companyId}
+                onChange={(val) => setCompanyId(val)}
+                options={companies.map((c) => ({ value: c.id, label: formatCompanyLabel(c) }))}
+                blankLabel="Choose company"
+                inputClassName="px-3 py-2 text-sm"
+              />
             </ErpDenseFormRow>
             <QuickFilterInput label="Search Contexts" value={contextSearch} onChange={setContextSearch} placeholder="Search by company, department, or context code" hint="GENERAL_OPS is company-wide. DEPT_* rows come from department setup." />
             <div className="border border-slate-300">

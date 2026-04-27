@@ -8,29 +8,29 @@
  * Authority: Frontend
  */
 
-function renderField({ type, value, onChange, options, inputRef }) {
-  const commonProps = {
-    ref: inputRef,
-    value: value ?? "",
-    onChange: (event) => onChange?.(event.target.value),
-    className:
-      "h-7 border border-slate-400 bg-white px-2 py-0.5 text-sm text-slate-900 outline-none focus:border-sky-500",
-  };
+import ErpComboboxField from "./ErpComboboxField.jsx";
 
+function renderField({ type, value, onChange, options, inputRef }) {
   if (type === "select") {
     return (
-      <select {...commonProps}>
-        <option value="">-- Select --</option>
-        {(options ?? []).map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      <ErpComboboxField
+        inputRef={inputRef}
+        value={value ?? ""}
+        onChange={(val) => onChange?.(val)}
+        options={options ?? []}
+      />
     );
   }
 
-  return <input {...commonProps} type={type} />;
+  return (
+    <input
+      ref={inputRef}
+      type={type}
+      value={value ?? ""}
+      onChange={(event) => onChange?.(event.target.value)}
+      className="h-7 border border-slate-400 bg-white px-2 py-0.5 text-sm text-slate-900 outline-none focus:border-sky-500"
+    />
+  );
 }
 
 export default function ErpSelectionField({

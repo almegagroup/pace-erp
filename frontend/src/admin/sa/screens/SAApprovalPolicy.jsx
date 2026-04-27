@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpApprovalReviewTemplate from "../../../components/templates/ErpApprovalReviewTemplate.jsx";
@@ -426,17 +427,16 @@ export default function SAApprovalPolicy() {
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Action
                 </span>
-                <select
+                <ErpComboboxField
                   value={actionCode}
-                  onChange={(event) => setActionCode(event.target.value)}
-                  className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
-                >
-                  {(selectedResource.available_actions ?? []).map((code) => (
-                    <option key={code} value={code}>
-                      {code}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => { if (val) setActionCode(val); }}
+                  options={(selectedResource.available_actions ?? []).map((code) => ({
+                    value: code,
+                    label: code,
+                  }))}
+                  blankLabel="-- Action --"
+                  inputClassName="px-3 py-2 text-sm"
+                />
               </label>
 
               <label className="grid gap-2">
@@ -460,18 +460,14 @@ export default function SAApprovalPolicy() {
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                   Approval Type
                 </span>
-                <select
+                <ErpComboboxField
                   value={approvalType}
                   disabled={!approvalRequired}
-                  onChange={(event) => setApprovalType(event.target.value)}
-                  className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none disabled:bg-slate-100"
-                >
-                  {APPROVAL_TYPE_OPTIONS.map((code) => (
-                    <option key={code} value={code}>
-                      {code}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => { if (val) setApprovalType(val); }}
+                  options={APPROVAL_TYPE_OPTIONS.map((code) => ({ value: code, label: code }))}
+                  blankLabel="-- Type --"
+                  inputClassName="px-3 py-2 text-sm"
+                />
               </label>
 
               <label className="grid gap-2">

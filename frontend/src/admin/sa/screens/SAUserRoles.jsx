@@ -21,6 +21,7 @@ import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpMasterListTemplate from "../../../components/templates/ErpMasterListTemplate.jsx";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { applyQuickFilter, sortUsers } from "../../../shared/erpCollections.js";
 import {
@@ -616,30 +617,26 @@ export default function SAUserRoles() {
               }
               if (column.key === "next_role") {
                 return (
-                  <select
-                    ref={(element) => {
+                  <ErpComboboxField
+                    inputRef={(element) => {
                       rowControlRefs.current[index] ??= [];
                       rowControlRefs.current[index][0] = element;
                     }}
                     value={selectedRole}
-                    onChange={(event) =>
+                    onChange={(val) =>
                       setDraftRoles((current) => ({
                         ...current,
-                        [user.auth_user_id]: event.target.value,
+                        [user.auth_user_id]: val,
                       }))
                     }
-                    onKeyDown={(event) => {
-                      if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End") {
-                        handleGridNavigation(event, { rowIndex: index, columnIndex: 0, gridRefs: rowControlRefs.current });
-                      }
-                    }}
-                    className="min-w-[160px] border border-slate-300 bg-[#fffef7] px-2 py-[2px] text-xs text-slate-700 outline-none"
-                  >
-                    <option value="">Select role</option>
-                    {ERP_ROLE_OPTIONS.map((role) => (
-                      <option key={role.code} value={role.code}>{role.label}</option>
-                    ))}
-                  </select>
+                    options={ERP_ROLE_OPTIONS.map((role) => ({
+                      value: role.code,
+                      label: role.label,
+                    }))}
+                    blankLabel="Select role"
+                    inputClassName="px-2 py-[2px] text-xs"
+                    className="min-w-[160px]"
+                  />
                 );
               }
               if (column.key === "state") {

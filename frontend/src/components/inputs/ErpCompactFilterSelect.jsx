@@ -8,6 +8,8 @@
  * Authority: Frontend
  */
 
+import ErpComboboxField from "../forms/ErpComboboxField.jsx";
+
 export default function ErpCompactFilterSelect({
   label = "Filter",
   value,
@@ -34,19 +36,16 @@ export default function ErpCompactFilterSelect({
             </span>
           ) : null}
         </div>
-        <select
-          ref={selectRef}
-          data-workspace-primary-focus={primaryFocus ? "true" : undefined}
+        <ErpComboboxField
+          inputRef={selectRef}
           value={value}
-          onChange={(event) => onChange(event.target.value)}
-          className="min-h-[44px] w-full min-w-[240px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-700 outline-none focus:border-sky-400 focus:bg-white"
-        >
-          {options.map((option) => (
-            <option key={option.key} value={option.key}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+          onChange={(val) => { if (val) onChange(val); }}
+          options={options.map((option) => ({ value: option.key, label: option.label }))}
+          hideBlank
+          inputClassName="min-h-[44px] px-3 py-2 text-sm text-slate-700 focus:bg-white"
+          className="min-w-[240px]"
+          inputProps={primaryFocus ? { "data-workspace-primary-focus": "true" } : {}}
+        />
         {helperText ? (
           <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
             {helperText}

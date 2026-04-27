@@ -84,6 +84,8 @@ type OutWorkCaseRow = {
   requester_department_work_context_id: string | null;
   requester_work_context_code: string | null;
   requester_work_context_name: string | null;
+  department_name: string | null;
+  department_code: string | null;
   parent_company_id: string;
   parent_company_code: string | null;
   parent_company_name: string | null;
@@ -253,6 +255,9 @@ async function buildOutWorkCases(rows: OutWorkRequestRow[]) {
     const requesterWorkContext = workflow.requester_work_context_id
       ? companyWorkContextMap.get(workflow.requester_work_context_id) ?? null
       : null;
+    const departmentWorkContext = requesterDepartmentWorkContextId
+      ? companyWorkContextMap.get(requesterDepartmentWorkContextId) ?? null
+      : null;
 
     requests.push({
       out_work_request_id: row.out_work_request_id,
@@ -265,6 +270,8 @@ async function buildOutWorkCases(rows: OutWorkRequestRow[]) {
       requester_department_work_context_id: requesterDepartmentWorkContextId,
       requester_work_context_code: requesterWorkContext?.work_context_code ?? null,
       requester_work_context_name: requesterWorkContext?.work_context_name ?? null,
+      department_name: departmentWorkContext?.work_context_name ?? null,
+      department_code: departmentWorkContext?.work_context_code ?? null,
       parent_company_id: row.parent_company_id,
       parent_company_code: companyIdentity?.company_code ?? null,
       parent_company_name: companyIdentity?.company_name ?? null,
@@ -1136,17 +1143,24 @@ export async function listOutWorkRegisterHandler(
       string,
       Awaited<ReturnType<typeof loadViewerRulesForCompanyModule>>
     >();
+    const approverRulesByCompany = new Map<
+      string,
+      Awaited<ReturnType<typeof loadApproverRulesForCompanyModule>>
+    >();
     for (const companyId of resolvedCompanyIds) {
       viewerRulesByCompany.set(
         companyId,
         await loadViewerRulesForCompanyModule(companyId, moduleBinding.module_code),
       );
+      approverRulesByCompany.set(
+        companyId,
+        await loadApproverRulesForCompanyModule(companyId, moduleBinding.module_code),
+      );
     }
 
     const visibleRequests = requests.filter((row) => {
       const viewerRows = viewerRulesByCompany.get(row.parent_company_id) ?? [];
-      return (
-      pickScopedViewerRules(
+      const hasViewerAccess = pickScopedViewerRules(
         {
           resource_code: OUT_WORK_RESOURCE_CODES.register,
           action_code: "VIEW",
@@ -1156,7 +1170,24 @@ export async function listOutWorkRegisterHandler(
         },
         viewerRows,
         "VIEW",
-      ).some((viewer) => isViewerMatch(viewer, ctx.auth_user_id, ctx.roleCode))
+      ).some((viewer) => isViewerMatch(viewer, ctx.auth_user_id, ctx.roleCode));
+
+      if (hasViewerAccess) return true;
+
+      // Fallback: approvers can always see requests within their approval scope
+      const approverRows = approverRulesByCompany.get(row.parent_company_id) ?? [];
+      const scopedApprovers = pickScopedApprovers(
+        {
+          resource_code: row.resource_code,
+          action_code: row.action_code,
+          requester_auth_user_id: row.requester_auth_user_id,
+          requester_work_context_id: row.requester_work_context_id,
+          requester_department_work_context_id: row.requester_department_work_context_id,
+        },
+        approverRows,
+      );
+      return scopedApprovers.some((approver) =>
+        isApproverMatch(approver, ctx.auth_user_id, ctx.roleCode)
       );
     });
 

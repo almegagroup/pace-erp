@@ -8,6 +8,7 @@ import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import {
   formatCompanyAddress,
@@ -487,19 +488,17 @@ export default function SADepartmentMaster() {
             <div className="grid gap-3">
               <label className="grid grid-cols-[100px_1fr] items-center gap-x-2 min-w-0">
                 <span className="text-[11px] text-slate-600">Company</span>
-                <select
-                  ref={companySelectRef}
+                <ErpComboboxField
+                  inputRef={companySelectRef}
                   value={selectedCompanyId}
-                  onChange={(event) => setSelectedCompanyId(event.target.value)}
-                  className="h-7 w-full min-w-0 border border-slate-300 bg-[#fffef7] px-2 py-0.5 text-[12px] text-slate-900 outline-none transition focus:border-sky-400 focus:bg-white"
-                >
-                  <option value="">Select company</option>
-                  {companies.map((company) => (
-                    <option key={company.id} value={company.id}>
-                      {formatCompanyLabel(company)}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setSelectedCompanyId(val)}
+                  options={companies.map((company) => ({
+                    value: company.id,
+                    label: formatCompanyLabel(company),
+                  }))}
+                  blankLabel="Select company"
+                  inputClassName="px-2 py-0.5 text-[12px]"
+                />
               </label>
 
               <div className="border border-slate-300 bg-white">

@@ -6,6 +6,7 @@ import { downloadCsvFile } from "../../../shared/downloadTabularFile.js";
 import { handleLinearNavigation } from "../../../navigation/erpRovingFocus.js";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import ErpRegisterHeader from "../../../components/data/ErpRegisterHeader.jsx";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
@@ -313,22 +314,19 @@ export default function SAUserScopeReport() {
               <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Company
               </span>
-              <select
+              <ErpComboboxField
                 value={companyId}
-                onChange={(event) => {
-                  const nextCompanyId = event.target.value;
-                  setCompanyId(nextCompanyId);
-                  void loadAll(nextCompanyId);
+                onChange={(val) => {
+                  setCompanyId(val);
+                  void loadAll(val);
                 }}
-                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-              >
-                <option value="">All companies</option>
-                {companies.map((company) => (
-                  <option key={company.id} value={company.id}>
-                    {company.company_code} | {company.company_name}
-                  </option>
-                ))}
-              </select>
+                options={companies.map((company) => ({
+                  value: company.id,
+                  label: `${company.company_code} | ${company.company_name}`,
+                }))}
+                blankLabel="All companies"
+                inputClassName="px-3 py-2 text-sm"
+              />
             </label>
             <div className="border border-slate-300 bg-white px-3 py-3 text-sm text-slate-600">
               Inline search now lives in the register header so the report stays in one working surface.
