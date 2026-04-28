@@ -289,6 +289,42 @@ export default function SAModuleResourceMap() {
   }
 
   // ---------------------------------------------------------------------------
+  // Unassign handler (single row only)
+  // ---------------------------------------------------------------------------
+
+  async function handleUnassign(resourceCode) {
+    const res = resources.find((r) => r.resource_code === resourceCode);
+    if (!res?.owner_module_code) return;
+
+    const confirmed = await openActionConfirm({
+      eyebrow: "Module Page Ownership",
+      title: "Unassign Page from Module",
+      message: `Remove "${res.title ?? resourceCode}" from ${res.owner_module_code}? The page will have no module owner.`,
+      confirmLabel: "Unassign",
+      cancelLabel: "Cancel",
+    });
+
+    if (!confirmed) return;
+
+    setError("");
+    setNotice("");
+
+    try {
+      await postJson("/api/admin/module-resource-map/remove", {
+        resource_code: resourceCode,
+      });
+      await loadWorkspace();
+      setNotice(`${resourceCode} is now unassigned from module ownership.`);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Unassign failed. ${err.message}`
+          : "Unassign failed right now.",
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Assign handler (single or bulk)
   // ---------------------------------------------------------------------------
 
@@ -603,18 +639,29 @@ export default function SAModuleResourceMap() {
                     </div>
                   </div>
 
-                  {/* Assign / Reassign button */}
-                  <button
-                    type="button"
-                    onClick={() => openDrawerSingle(row.resource_code)}
-                    className={`flex-shrink-0 border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-colors ${
-                      isAssigned
-                        ? "border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:bg-slate-50"
-                        : "border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100"
-                    }`}
-                  >
-                    {isAssigned ? "Reassign" : "Assign"}
-                  </button>
+                  {/* Assign / Reassign + Unassign buttons */}
+                  <div className="flex flex-shrink-0 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => openDrawerSingle(row.resource_code)}
+                      className={`border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] transition-colors ${
+                        isAssigned
+                          ? "border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:bg-slate-50"
+                          : "border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100"
+                      }`}
+                    >
+                      {isAssigned ? "Reassign" : "Assign"}
+                    </button>
+                    {isAssigned && (
+                      <button
+                        type="button"
+                        onClick={() => void handleUnassign(row.resource_code)}
+                        className="border border-rose-200 bg-rose-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-rose-600 transition-colors hover:bg-rose-100"
+                      >
+                        Unassign
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
