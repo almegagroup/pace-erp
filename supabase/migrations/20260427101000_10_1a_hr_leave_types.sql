@@ -15,7 +15,7 @@
 
 CREATE TABLE erp_hr.leave_types (
   leave_type_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id             UUID NOT NULL REFERENCES erp_master.companies(company_id),
+  company_id             UUID NOT NULL REFERENCES erp_master.companies(id),
   type_code              TEXT NOT NULL,
   type_name              TEXT NOT NULL,
   is_paid                BOOLEAN NOT NULL DEFAULT TRUE,

@@ -18,7 +18,7 @@
 
 CREATE TABLE erp_hr.employee_day_records (
   day_record_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id                 UUID NOT NULL REFERENCES erp_master.companies(company_id),
+  company_id                 UUID NOT NULL REFERENCES erp_master.companies(id),
   employee_auth_user_id      UUID NOT NULL REFERENCES auth.users(id),
   record_date                DATE NOT NULL,
 
@@ -92,7 +92,7 @@ CREATE POLICY day_records_read_authenticated
 
 CREATE TABLE erp_hr.company_holiday_calendar (
   holiday_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id     UUID NOT NULL REFERENCES erp_master.companies(company_id),
+  company_id     UUID NOT NULL REFERENCES erp_master.companies(id),
   holiday_date   DATE NOT NULL,
   holiday_name   TEXT NOT NULL,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -121,7 +121,7 @@ CREATE POLICY holiday_calendar_read_authenticated
 
 CREATE TABLE erp_hr.company_week_off_config (
   week_off_config_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id          UUID NOT NULL REFERENCES erp_master.companies(company_id),
+  company_id          UUID NOT NULL REFERENCES erp_master.companies(id),
 
   -- ISO weekday numbers: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun
   -- Default [6, 7] = Saturday + Sunday
