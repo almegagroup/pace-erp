@@ -246,6 +246,9 @@ export async function listLeaveRegister(filters = {}) {
   if (filters?.toDate) {
     params.set("to_date", filters.toDate);
   }
+  if (filters?.leaveTypeCode) {
+    params.set("leave_type_code", filters.leaveTypeCode);
+  }
   const query = params.toString() ? `?${params.toString()}` : "";
 
   return apiJson(
@@ -253,6 +256,135 @@ export async function listLeaveRegister(filters = {}) {
     {},
     "LEAVE_REGISTER_FAILED",
     "Leave register could not be loaded.",
+  );
+}
+
+export async function listLeaveTypes(companyId = null) {
+  return apiJson(
+    "/api/hr/leave/types",
+    { companyId },
+    "LEAVE_TYPES_LIST_FAILED",
+    "Leave type list could not be loaded.",
+  );
+}
+
+export async function listAllLeaveTypes() {
+  return apiJson(
+    "/api/hr/leave/types/all",
+    {},
+    "LEAVE_TYPES_LIST_ALL_FAILED",
+    "Leave type list could not be loaded.",
+  );
+}
+
+export async function createLeaveType(payload) {
+  return apiJson(
+    "/api/hr/leave/types",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "LEAVE_TYPE_CREATE_FAILED",
+    "Leave type could not be created.",
+  );
+}
+
+export async function updateLeaveType(payload) {
+  return apiJson(
+    "/api/hr/leave/types",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "LEAVE_TYPE_UPDATE_FAILED",
+    "Leave type could not be updated.",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Holiday Calendar
+// ---------------------------------------------------------------------------
+
+export async function listHolidays(year = null) {
+  const query = year ? `?year=${encodeURIComponent(year)}` : "";
+  return apiJson(
+    `/api/hr/calendar/holidays${query}`,
+    {},
+    "HOLIDAY_LIST_FAILED",
+    "Holiday calendar could not be loaded.",
+  );
+}
+
+export async function createHoliday(payload) {
+  return apiJson(
+    "/api/hr/calendar/holidays",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "HOLIDAY_CREATE_FAILED",
+    "Holiday could not be created.",
+  );
+}
+
+export async function updateHoliday(payload) {
+  return apiJson(
+    "/api/hr/calendar/holidays",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "HOLIDAY_UPDATE_FAILED",
+    "Holiday could not be updated.",
+  );
+}
+
+export async function deleteHoliday(holidayId) {
+  return apiJson(
+    `/api/hr/calendar/holidays?holiday_id=${encodeURIComponent(holidayId)}`,
+    { method: "DELETE" },
+    "HOLIDAY_DELETE_FAILED",
+    "Holiday could not be deleted.",
+  );
+}
+
+export async function getWeekOffConfig() {
+  return apiJson(
+    "/api/hr/calendar/week-off",
+    {},
+    "WEEK_OFF_CONFIG_GET_FAILED",
+    "Week-off configuration could not be loaded.",
+  );
+}
+
+export async function upsertWeekOffConfig(weekOffDays) {
+  return apiJson(
+    "/api/hr/calendar/week-off",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ week_off_days: weekOffDays }),
+    },
+    "WEEK_OFF_CONFIG_UPSERT_FAILED",
+    "Week-off configuration could not be saved.",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sandwich Leave Preview
+// ---------------------------------------------------------------------------
+
+export async function getLeaveSandwichPreview(fromDate, toDate) {
+  const params = new URLSearchParams({ from_date: fromDate, to_date: toDate });
+  return apiJson(
+    `/api/hr/leave/sandwich-preview?${params.toString()}`,
+    {},
+    "SANDWICH_PREVIEW_FAILED",
+    "Leave preview could not be computed.",
   );
 }
 
@@ -394,5 +526,154 @@ export async function submitWorkflowDecision(requestId, decision, companyId = nu
   return apiWorkflowDecision(
     { request_id: requestId, decision },
     companyId,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Attendance Correction (HR backdated apply + day records)
+// ---------------------------------------------------------------------------
+
+/**
+ * HR applies leave on behalf of an employee (no backdate limit).
+ * Requires HR_LEAVE_BACKDATED_APPLY permission.
+ */
+export async function backdatedLeaveApply(payload) {
+  return apiJson(
+    "/api/hr/leave/backdated-apply",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "BACKDATED_LEAVE_APPLY_FAILED",
+    "Backdated leave could not be applied.",
+  );
+}
+
+/**
+ * HR applies out-work on behalf of an employee (no backdate limit).
+ * Requires HR_OUT_WORK_BACKDATED_APPLY permission.
+ */
+export async function backdatedOutWorkApply(payload) {
+  return apiJson(
+    "/api/hr/out-work/backdated-apply",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "BACKDATED_OUT_WORK_APPLY_FAILED",
+    "Backdated out-work could not be applied.",
+  );
+}
+
+/**
+ * List day records for a specific employee + date range.
+ * Requires HR_LEAVE_BACKDATED_APPLY permission.
+ * @param {{ employeeId: string, fromDate: string, toDate: string }} filters
+ */
+export async function listDayRecords({ employeeId, fromDate, toDate }) {
+  const params = new URLSearchParams({
+    employee_id: employeeId,
+    from_date: fromDate,
+    to_date: toDate,
+  });
+  return apiJson(
+    `/api/hr/attendance/day-records?${params.toString()}`,
+    {},
+    "DAY_RECORDS_LIST_FAILED",
+    "Day records could not be loaded.",
+  );
+}
+
+/**
+ * HR manually corrects a day record status (PRESENT / ABSENT / MISS_PUNCH).
+ * Requires HR_ATTENDANCE_MANUAL_CORRECTION permission.
+ */
+export async function manualCorrectDayRecord(payload) {
+  return apiJson(
+    "/api/hr/attendance/correct",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "MANUAL_CORRECTION_FAILED",
+    "Attendance correction could not be saved.",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Attendance Reports (Phase 6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Monthly attendance summary — per-employee status counts.
+ * @param {{ year: number, month: number }} params
+ */
+export async function getMonthlyAttendanceSummary({ year, month }) {
+  const params = new URLSearchParams({ year: String(year), month: String(month) });
+  return apiJson(
+    `/api/hr/attendance/monthly-summary?${params.toString()}`,
+    {},
+    "MONTHLY_SUMMARY_FAILED",
+    "Monthly attendance summary could not be loaded.",
+  );
+}
+
+/**
+ * Daily attendance register — flat list of all day records in range (max 31 days).
+ * @param {{ fromDate: string, toDate: string }} params
+ */
+export async function getDailyAttendanceRegister({ fromDate, toDate }) {
+  const params = new URLSearchParams({ from_date: fromDate, to_date: toDate });
+  return apiJson(
+    `/api/hr/attendance/daily-register?${params.toString()}`,
+    {},
+    "DAILY_REGISTER_FAILED",
+    "Daily attendance register could not be loaded.",
+  );
+}
+
+/**
+ * Yearly leave summary — month-by-month leave counts for one employee.
+ * @param {{ year: number, employeeId: string }} params
+ */
+export async function getYearlyLeaveSummary({ year, employeeId }) {
+  const params = new URLSearchParams({ year: String(year), employee_id: employeeId });
+  return apiJson(
+    `/api/hr/attendance/yearly-leave-summary?${params.toString()}`,
+    {},
+    "YEARLY_LEAVE_SUMMARY_FAILED",
+    "Yearly leave summary could not be loaded.",
+  );
+}
+
+/**
+ * Department attendance report — per-work-context totals (max 31 days).
+ * @param {{ fromDate: string, toDate: string }} params
+ */
+export async function getDepartmentAttendanceReport({ fromDate, toDate }) {
+  const params = new URLSearchParams({ from_date: fromDate, to_date: toDate });
+  return apiJson(
+    `/api/hr/attendance/department-report?${params.toString()}`,
+    {},
+    "DEPARTMENT_REPORT_FAILED",
+    "Department attendance report could not be loaded.",
+  );
+}
+
+/**
+ * Leave usage report — per-employee per-type days taken for the year.
+ * Balance is always null until Phase 8.
+ * @param {{ year: number }} params
+ */
+export async function getLeaveUsageReport({ year }) {
+  const params = new URLSearchParams({ year: String(year) });
+  return apiJson(
+    `/api/hr/attendance/leave-usage?${params.toString()}`,
+    {},
+    "LEAVE_USAGE_REPORT_FAILED",
+    "Leave usage report could not be loaded.",
   );
 }

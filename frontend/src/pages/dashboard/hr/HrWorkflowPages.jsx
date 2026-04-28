@@ -35,15 +35,23 @@ import {
   calculateInclusiveDays,
   cancelLeaveRequest,
   cancelOutWorkRequest,
+  createHoliday,
   createLeaveRequest,
+  createLeaveType,
   createOutWorkDestination,
   createOutWorkRequest,
+  deleteHoliday,
   formatDateTime,
   formatIsoDate,
   getHrEarliestBackdate,
+  getLeaveSandwichPreview,
+  getWeekOffConfig,
+  listHolidays,
   listLeaveApprovalHistory,
   listLeaveApprovalInbox,
+  listAllLeaveTypes,
   listLeaveRegister,
+  listLeaveTypes,
   listMyLeaveRequests,
   listMyOutWorkRequests,
   listOutWorkApprovalHistory,
@@ -51,8 +59,11 @@ import {
   listOutWorkDestinations,
   listOutWorkRegister,
   submitWorkflowDecision,
+  updateHoliday,
   updateLeaveRequest,
+  updateLeaveType,
   updateOutWorkRequest,
+  upsertWeekOffConfig,
 } from "./hrApi.js";
 
 const STATUS_TONE_CLASS = Object.freeze({
@@ -255,6 +266,16 @@ const HR_REQUEST_COLUMN_DEFS = Object.freeze([
     key: "reason",
     label: "Reason",
     width: "minmax(220px, 1.4fr)",
+  },
+  {
+    key: "leaveType",
+    label: "Leave Type",
+    width: "minmax(140px, 0.8fr)",
+  },
+  {
+    key: "scope",
+    label: "Scope",
+    width: "minmax(130px, 0.75fr)",
   },
   {
     key: "status",
@@ -469,6 +490,32 @@ function renderHrRequestColumnValue(request, kind, columnKey) {
         ) : null}
       </div>
     ),
+    leaveType: kind === "leave"
+      ? (
+        <div>
+          <div className="text-sm text-slate-700">{request.leave_type_name ?? request.leave_type_code ?? "-"}</div>
+          {request.leave_type_code ? (
+            <div className="text-xs text-slate-500">{request.leave_type_code}</div>
+          ) : null}
+        </div>
+      )
+      : <div className="text-sm text-slate-500">—</div>,
+    scope: kind === "outWork"
+      ? (
+        <div>
+          <span className={`border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${
+            request.day_scope === "PARTIAL_DAY"
+              ? "border-sky-200 bg-sky-50 text-sky-800"
+              : "border-slate-200 bg-slate-50 text-slate-700"
+          }`}>
+            {request.day_scope === "PARTIAL_DAY" ? "Partial Day" : "Full Day"}
+          </span>
+          {request.day_scope === "PARTIAL_DAY" && request.office_departure_time ? (
+            <div className="mt-1 text-xs text-slate-500">Depart: {request.office_departure_time}</div>
+          ) : null}
+        </div>
+      )
+      : <div className="text-sm text-slate-500">—</div>,
     status: (
       <div className="pt-1">
         <RequestStatusBadge state={request.current_state} />
@@ -635,11 +682,37 @@ function HrRequestDetailModal({
             <div className="mt-1">{request.workflow_request_id ?? "-"}</div>
           </div>
         </div>
+        {kind === "leave" ? (
+          <div className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Leave Type</div>
+            <div className="mt-1 font-medium text-slate-900">{request.leave_type_name ?? "-"}</div>
+            {request.leave_type_code ? (
+              <div className="text-xs text-slate-500">{request.leave_type_code}</div>
+            ) : null}
+          </div>
+        ) : null}
         {kind === "outWork" ? (
-          <div className="border border-slate-300 bg-white px-3 py-2">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Destination</div>
-            <div className="mt-1 text-sm text-slate-900">{request.destination_name ?? "-"}</div>
-            <div className="text-xs text-slate-600">{request.destination_address ?? "-"}</div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="border border-slate-300 bg-white px-3 py-2">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Destination</div>
+              <div className="mt-1 text-sm text-slate-900">{request.destination_name ?? "-"}</div>
+              <div className="text-xs text-slate-600">{request.destination_address ?? "-"}</div>
+            </div>
+            <div className="border border-slate-300 bg-white px-3 py-2">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Scope</div>
+              <div className="mt-1">
+                <span className={`border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${
+                  request.day_scope === "PARTIAL_DAY"
+                    ? "border-sky-200 bg-sky-50 text-sky-800"
+                    : "border-slate-200 bg-slate-50 text-slate-700"
+                }`}>
+                  {request.day_scope === "PARTIAL_DAY" ? "Partial Day" : "Full Day"}
+                </span>
+                {request.day_scope === "PARTIAL_DAY" && request.office_departure_time ? (
+                  <div className="mt-1 text-xs text-slate-600">Office → Field at {request.office_departure_time}</div>
+                ) : null}
+              </div>
+            </div>
           </div>
         ) : null}
         <div className="border border-slate-300 bg-white px-3 py-3">
@@ -664,9 +737,14 @@ function HrEditRequestModal({ visible, kind, request, onClose, onSaved }) {
   const [editFromDate, setEditFromDate] = useState(todayDefault());
   const [editToDate, setEditToDate] = useState(todayDefault());
   const [editReason, setEditReason] = useState("");
+  const [editLeaveTypeId, setEditLeaveTypeId] = useState("");
+  const [editLeaveTypes, setEditLeaveTypes] = useState([]);
+  const [editLeaveTypesLoading, setEditLeaveTypesLoading] = useState(false);
   const [editDestinationId, setEditDestinationId] = useState("");
   const [editDestinations, setEditDestinations] = useState([]);
   const [editDestinationsLoading, setEditDestinationsLoading] = useState(false);
+  const [editDayScope, setEditDayScope] = useState("FULL_DAY");
+  const [editOfficeDepartureTime, setEditOfficeDepartureTime] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState("");
   const editTotalDays = calculateInclusiveDays(editFromDate, editToDate);
@@ -679,7 +757,25 @@ function HrEditRequestModal({ visible, kind, request, onClose, onSaved }) {
     setEditReason(request.reason ?? "");
     setEditError("");
 
+    if (kind === "leave") {
+      setEditLeaveTypeId(request.leave_type_id ?? "");
+      setEditLeaveTypesLoading(true);
+      listLeaveTypes(request.parent_company_id ?? null)
+        .then((data) => {
+          const rows = data?.leave_types ?? [];
+          setEditLeaveTypes(rows);
+          setEditLeaveTypeId((current) => {
+            if (current && rows.some((r) => r.leave_type_id === current)) return current;
+            return request.leave_type_id ?? rows[0]?.leave_type_id ?? "";
+          });
+        })
+        .catch(() => { setEditLeaveTypes([]); })
+        .finally(() => setEditLeaveTypesLoading(false));
+    }
+
     if (kind === "outWork") {
+      setEditDayScope(request.day_scope ?? "FULL_DAY");
+      setEditOfficeDepartureTime(request.office_departure_time ?? "");
       setEditDestinationsLoading(true);
       listOutWorkDestinations()
         .then((data) => {
@@ -709,8 +805,18 @@ function HrEditRequestModal({ visible, kind, request, onClose, onSaved }) {
       return;
     }
 
+    if (kind === "leave" && !editLeaveTypeId) {
+      setEditError("Leave type is required.");
+      return;
+    }
+
     if (kind === "outWork" && !editDestinationId) {
       setEditError("Destination is required.");
+      return;
+    }
+
+    if (kind === "outWork" && editDayScope === "PARTIAL_DAY" && !editOfficeDepartureTime) {
+      setEditError("Departure time is required for partial day out-work.");
       return;
     }
 
@@ -719,19 +825,26 @@ function HrEditRequestModal({ visible, kind, request, onClose, onSaved }) {
 
     try {
       if (kind === "leave") {
-        await updateLeaveRequest({
+        const leavePayload = {
           leave_request_id: request.leave_request_id,
           from_date: editFromDate,
           to_date: editToDate,
           reason: editReason.trim(),
-        });
+        };
+        // Only send leave_type_id if changed
+        if (editLeaveTypeId && editLeaveTypeId !== request.leave_type_id) {
+          leavePayload.leave_type_id = editLeaveTypeId;
+        }
+        await updateLeaveRequest(leavePayload);
       } else {
         await updateOutWorkRequest({
           out_work_request_id: request.out_work_request_id,
           from_date: editFromDate,
-          to_date: editToDate,
+          to_date: editDayScope === "PARTIAL_DAY" ? editFromDate : editToDate,
           destination_id: editDestinationId,
           reason: editReason.trim(),
+          day_scope: editDayScope,
+          office_departure_time: editDayScope === "PARTIAL_DAY" ? editOfficeDepartureTime : null,
         });
       }
 
@@ -810,6 +923,22 @@ function HrEditRequestModal({ visible, kind, request, onClose, onSaved }) {
             />
           </label>
         </div>
+        {kind === "leave" ? (
+          <label className="grid gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Leave Type</span>
+            <ErpComboboxField
+              value={editLeaveTypeId}
+              disabled={editLeaveTypesLoading}
+              onChange={(val) => setEditLeaveTypeId(val)}
+              options={editLeaveTypes.map((lt) => ({
+                value: lt.leave_type_id,
+                label: `${lt.type_name} (${lt.type_code})`,
+              }))}
+              blankLabel={editLeaveTypesLoading ? "Loading types…" : "Choose leave type"}
+              inputClassName="px-3 py-2 text-sm"
+            />
+          </label>
+        ) : null}
         {kind === "outWork" ? (
           <label className="grid gap-2">
             <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Destination</span>
@@ -973,11 +1102,37 @@ function HrRequestDetailWorkspace({ kind }) {
                 <div className="mt-1">{request.workflow_request_id ?? "-"}</div>
               </div>
             </div>
+            {kind === "leave" ? (
+              <div className="border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Leave Type</div>
+                <div className="mt-1 font-medium text-slate-900">{request.leave_type_name ?? "-"}</div>
+                {request.leave_type_code ? (
+                  <div className="text-xs text-slate-500">{request.leave_type_code}</div>
+                ) : null}
+              </div>
+            ) : null}
             {kind === "outWork" ? (
-              <div className="border border-slate-300 bg-white px-3 py-2">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Destination</div>
-                <div className="mt-1 text-sm text-slate-900">{request.destination_name ?? "-"}</div>
-                <div className="text-xs text-slate-600">{request.destination_address ?? "-"}</div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="border border-slate-300 bg-white px-3 py-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Destination</div>
+                  <div className="mt-1 text-sm text-slate-900">{request.destination_name ?? "-"}</div>
+                  <div className="text-xs text-slate-600">{request.destination_address ?? "-"}</div>
+                </div>
+                <div className="border border-slate-300 bg-white px-3 py-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Scope</div>
+                  <div className="mt-1">
+                    <span className={`border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${
+                      request.day_scope === "PARTIAL_DAY"
+                        ? "border-sky-200 bg-sky-50 text-sky-800"
+                        : "border-slate-200 bg-slate-50 text-slate-700"
+                    }`}>
+                      {request.day_scope === "PARTIAL_DAY" ? "Partial Day" : "Full Day"}
+                    </span>
+                    {request.day_scope === "PARTIAL_DAY" && request.office_departure_time ? (
+                      <div className="mt-1 text-xs text-slate-600">Office → Field at {request.office_departure_time}</div>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             ) : null}
             <div className="border border-slate-300 bg-white px-3 py-3">
@@ -1089,6 +1244,15 @@ function HrRequesterActionDrawer({
             <div className="mt-1 text-sm text-slate-800">{request.total_days ?? "-"}</div>
           </div>
         </div>
+        {kind === "leave" ? (
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Leave Type</div>
+            <div className="mt-1 text-sm font-medium text-slate-900">{request.leave_type_name ?? "-"}</div>
+            {request.leave_type_code ? (
+              <div className="text-xs text-slate-500">{request.leave_type_code}</div>
+            ) : null}
+          </div>
+        ) : null}
         {kind === "outWork" ? (
           <div className="border border-slate-300 bg-white px-3 py-2">
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Destination</div>
@@ -1117,7 +1281,51 @@ function HrApprovalDecisionDrawer({
   onApprove,
   onReject,
   onClose,
+  onRequestUpdated,
 }) {
+  const [overrideLeaveTypes, setOverrideLeaveTypes] = useState([]);
+  const [overrideLeaveTypeId, setOverrideLeaveTypeId] = useState("");
+  const [overrideTypesLoading, setOverrideTypesLoading] = useState(false);
+  const [overrideSaving, setOverrideSaving] = useState(false);
+  const [overrideError, setOverrideError] = useState("");
+  const canOverrideType = kind === "leave" && request?.current_state === "PENDING";
+
+  useEffect(() => {
+    if (!visible || !canOverrideType || !request) {
+      setOverrideLeaveTypes([]);
+      setOverrideLeaveTypeId("");
+      setOverrideError("");
+      return;
+    }
+    setOverrideLeaveTypeId(request.leave_type_id ?? "");
+    setOverrideError("");
+    setOverrideTypesLoading(true);
+    listLeaveTypes(request.parent_company_id ?? null)
+      .then((data) => {
+        setOverrideLeaveTypes(data?.leave_types ?? []);
+      })
+      .catch(() => setOverrideLeaveTypes([]))
+      .finally(() => setOverrideTypesLoading(false));
+  }, [visible, canOverrideType, request?.leave_request_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleSaveTypeOverride() {
+    if (!request || !overrideLeaveTypeId || overrideLeaveTypeId === request.leave_type_id) return;
+    setOverrideSaving(true);
+    setOverrideError("");
+    try {
+      await updateLeaveRequest({
+        leave_request_id: request.leave_request_id,
+        leave_type_id: overrideLeaveTypeId,
+        approver_type_override: true,
+      });
+      onRequestUpdated?.();
+    } catch (err) {
+      setOverrideError(formatError(err, "Leave type could not be changed."));
+    } finally {
+      setOverrideSaving(false);
+    }
+  }
+
   if (!request) return null;
 
   const requesterParts = splitDisplay(
@@ -1187,6 +1395,54 @@ function HrApprovalDecisionDrawer({
             <div className="mt-1 text-sm text-slate-800">{request.total_days ?? "-"}</div>
           </div>
         </div>
+        {canOverrideType ? (
+          <div className="border border-amber-200 bg-amber-50 px-3 py-3">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+              Leave Type Override
+            </div>
+            <div className="mt-2 text-xs text-amber-800">
+              Correct the leave type before approving or rejecting. Once a decision is made, the type is locked.
+            </div>
+            <div className="mt-2 grid gap-2">
+              <ErpComboboxField
+                value={overrideLeaveTypeId}
+                disabled={overrideTypesLoading || overrideSaving || deciding}
+                onChange={(val) => setOverrideLeaveTypeId(val)}
+                options={overrideLeaveTypes.map((lt) => ({
+                  value: lt.leave_type_id,
+                  label: `${lt.type_name} (${lt.type_code})`,
+                }))}
+                blankLabel={overrideTypesLoading ? "Loading types…" : "Choose leave type"}
+                inputClassName="px-3 py-2 text-sm"
+              />
+              {overrideError ? (
+                <div className="text-xs text-rose-700">{overrideError}</div>
+              ) : null}
+              <button
+                type="button"
+                disabled={
+                  overrideSaving ||
+                  deciding ||
+                  overrideTypesLoading ||
+                  !overrideLeaveTypeId ||
+                  overrideLeaveTypeId === request.leave_type_id
+                }
+                onClick={() => void handleSaveTypeOverride()}
+                className="self-start border border-amber-400 bg-white px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-800 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {overrideSaving ? "Saving…" : "Save Type"}
+              </button>
+            </div>
+          </div>
+        ) : kind === "leave" ? (
+          <div className="border border-slate-300 bg-white px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Leave Type</div>
+            <div className="mt-1 text-sm font-medium text-slate-900">{request.leave_type_name ?? "-"}</div>
+            {request.leave_type_code ? (
+              <div className="text-xs text-slate-500">{request.leave_type_code}</div>
+            ) : null}
+          </div>
+        ) : null}
         {kind === "outWork" ? (
           <div className="border border-slate-300 bg-white px-3 py-2">
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Destination</div>
@@ -1278,12 +1534,18 @@ export function LeaveApplyWorkspace() {
   const [fromDate, setFromDate] = useState(todayDefault());
   const [toDate, setToDate] = useState(todayDefault());
   const [reason, setReason] = useState("");
+  const [leaveTypeId, setLeaveTypeId] = useState("");
+  const [leaveTypes, setLeaveTypes] = useState([]);
+  const [leaveTypesLoading, setLeaveTypesLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [transactionCompanyId, setTransactionCompanyId] = useState(() =>
     resolveDefaultTransactionCompanyId(runtimeContext),
   );
+  const [sandwichPreview, setSandwichPreview] = useState(null); // null | SandwichResult
+  const [sandwichLoading, setSandwichLoading] = useState(false);
+  const sandwichTimerRef = useRef(null);
 
   const totalDays = calculateInclusiveDays(fromDate, toDate);
   const earliestBackdate = getHrEarliestBackdate();
@@ -1301,6 +1563,43 @@ export function LeaveApplyWorkspace() {
     const nextCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
     setTransactionCompanyId((current) => current || nextCompanyId);
   }, [runtimeContext]);
+
+  useEffect(() => {
+    if (!transactionCompanyId) {
+      setLeaveTypes([]);
+      setLeaveTypeId("");
+      return;
+    }
+    setLeaveTypesLoading(true);
+    listLeaveTypes(transactionCompanyId)
+      .then((data) => {
+        const rows = data?.leave_types ?? [];
+        setLeaveTypes(rows);
+        setLeaveTypeId((current) => {
+          if (current && rows.some((r) => r.leave_type_id === current)) return current;
+          return rows[0]?.leave_type_id ?? "";
+        });
+      })
+      .catch(() => { setLeaveTypes([]); setLeaveTypeId(""); })
+      .finally(() => setLeaveTypesLoading(false));
+  }, [transactionCompanyId]);
+
+  // Debounced sandwich preview: fires 400 ms after fromDate/toDate settle
+  useEffect(() => {
+    clearTimeout(sandwichTimerRef.current);
+    if (!fromDate || !toDate || fromDate > toDate) {
+      setSandwichPreview(null);
+      return;
+    }
+    setSandwichLoading(true);
+    sandwichTimerRef.current = setTimeout(() => {
+      getLeaveSandwichPreview(fromDate, toDate)
+        .then((data) => setSandwichPreview(data ?? null))
+        .catch(() => setSandwichPreview(null))
+        .finally(() => setSandwichLoading(false));
+    }, 400);
+    return () => clearTimeout(sandwichTimerRef.current);
+  }, [fromDate, toDate]);
 
   useErpScreenHotkeys({
     save: {
@@ -1356,6 +1655,16 @@ export function LeaveApplyWorkspace() {
       return;
     }
 
+    if (!leaveTypeId) {
+      setError("Leave type is required.");
+      return;
+    }
+
+    if (sandwichPreview?.isBlocked) {
+      setError("No working days in the selected date range. Please choose a different date range.");
+      return;
+    }
+
     setSaving(true);
     setError("");
     setNotice("");
@@ -1365,6 +1674,7 @@ export function LeaveApplyWorkspace() {
         from_date: fromDate,
         to_date: toDate,
         reason: reason.trim(),
+        leave_type_id: leaveTypeId,
       }, transactionCompanyId);
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       setNotice("Leave request submitted.");
@@ -1400,6 +1710,20 @@ export function LeaveApplyWorkspace() {
               selectRef={transactionCompanyRef}
             />
           </ErpDenseFormRow>
+          <ErpDenseFormRow label="Leave Type" required>
+            <ErpComboboxField
+              value={leaveTypeId}
+              disabled={leaveTypesLoading || !transactionCompanyId}
+              onChange={(val) => setLeaveTypeId(val)}
+              options={leaveTypes.map((lt) => ({
+                value: lt.leave_type_id,
+                label: `${lt.type_name} (${lt.type_code})`,
+              }))}
+              blankLabel={leaveTypesLoading ? "Loading types…" : "Choose leave type"}
+              inputClassName="px-3 py-2 text-sm"
+              className="min-w-[280px] max-w-[400px]"
+            />
+          </ErpDenseFormRow>
           <ErpDenseFormRow label="From Date" required>
             <input
               type="date"
@@ -1419,12 +1743,32 @@ export function LeaveApplyWorkspace() {
             />
           </ErpDenseFormRow>
           <ErpDenseFormRow label="Number Of Days">
-            <input
-              type="text"
-              readOnly
-              value={totalDays > 0 ? `${totalDays}` : "-"}
-              className="w-full max-w-[220px] border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
-            />
+            <div className="flex flex-col gap-2">
+              <input
+                type="text"
+                readOnly
+                value={
+                  sandwichLoading
+                    ? "Calculating…"
+                    : sandwichPreview
+                      ? `${sandwichPreview.effectiveLeaveDays} day${sandwichPreview.effectiveLeaveDays === 1 ? "" : "s"}`
+                      : totalDays > 0
+                        ? `${totalDays}`
+                        : "-"
+                }
+                className="w-full max-w-[220px] border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
+              />
+              {sandwichPreview?.isBlocked && (
+                <div className="max-w-[400px] border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                  <strong>No working days in this range.</strong> The selected dates fall entirely on weekends or holidays. Please choose a different date range.
+                </div>
+              )}
+              {!sandwichPreview?.isBlocked && sandwichPreview?.sandwichDays > 0 && (
+                <div className="max-w-[400px] border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  <strong>Sandwich leave policy applies.</strong> {sandwichPreview.sandwichDays} weekend/holiday day{sandwichPreview.sandwichDays === 1 ? "" : "s"} between your first and last working day will be counted as leave. Total charged: <strong>{sandwichPreview.effectiveLeaveDays} day{sandwichPreview.effectiveLeaveDays === 1 ? "" : "s"}</strong>.
+                </div>
+              )}
+            </div>
           </ErpDenseFormRow>
           <ErpDenseFormRow label="Reason" required>
             <textarea
@@ -1453,6 +1797,8 @@ export function OutWorkApplyWorkspace() {
   const [showDestinationModal, setShowDestinationModal] = useState(false);
   const [destinationName, setDestinationName] = useState("");
   const [destinationAddress, setDestinationAddress] = useState("");
+  const [dayScope, setDayScope] = useState("FULL_DAY");
+  const [officeDepartureTime, setOfficeDepartureTime] = useState("");
   const [saving, setSaving] = useState(false);
   const [loadingDestinations, setLoadingDestinations] = useState(true);
   const [error, setError] = useState("");
@@ -1464,6 +1810,13 @@ export function OutWorkApplyWorkspace() {
 
   const totalDays = calculateInclusiveDays(fromDate, toDate);
   const earliestBackdate = getHrEarliestBackdate();
+
+  // Partial day: lock toDate to fromDate automatically
+  useEffect(() => {
+    if (dayScope === "PARTIAL_DAY") {
+      setToDate(fromDate);
+    }
+  }, [dayScope, fromDate]);
   const canViewApprovalInbox = useMemo(
     () =>
       canOpenHrResource(
@@ -1595,6 +1948,11 @@ export function OutWorkApplyWorkspace() {
       return;
     }
 
+    if (dayScope === "PARTIAL_DAY" && !officeDepartureTime) {
+      setError("Departure time is required for partial day out-work.");
+      return;
+    }
+
     setSaving(true);
     setError("");
     setNotice("");
@@ -1602,13 +1960,17 @@ export function OutWorkApplyWorkspace() {
     try {
       await createOutWorkRequest({
         from_date: fromDate,
-        to_date: toDate,
+        to_date: dayScope === "PARTIAL_DAY" ? fromDate : toDate,
         destination_id: destinationId,
         reason: reason.trim(),
+        day_scope: dayScope,
+        office_departure_time: dayScope === "PARTIAL_DAY" ? officeDepartureTime : null,
       }, transactionCompanyId);
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
       setNotice("Out work request submitted.");
       setReason("");
+      setDayScope("FULL_DAY");
+      setOfficeDepartureTime("");
       setFromDate(todayDefault());
       setToDate(todayDefault());
     } catch (err) {
@@ -1641,7 +2003,28 @@ export function OutWorkApplyWorkspace() {
                 selectRef={transactionCompanyRef}
               />
           </ErpDenseFormRow>
-            <ErpDenseFormRow label="From Date" required>
+            <ErpDenseFormRow label="Scope" required>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { value: "FULL_DAY", label: "Full Day" },
+                  { value: "PARTIAL_DAY", label: "Office → Field (Partial Day)" },
+                ].map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setDayScope(value)}
+                    className={`border px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] ${
+                      dayScope === value
+                        ? "border-sky-400 bg-sky-50 text-sky-900"
+                        : "border-slate-300 bg-white text-slate-700"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </ErpDenseFormRow>
+            <ErpDenseFormRow label="Date" required>
               <input
                 type="date"
                 value={fromDate}
@@ -1650,20 +2033,32 @@ export function OutWorkApplyWorkspace() {
                 className="w-full max-w-[220px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
               />
             </ErpDenseFormRow>
-            <ErpDenseFormRow label="To Date" required>
-              <input
-                type="date"
-                value={toDate}
-                min={fromDate || earliestBackdate}
-                onChange={(event) => setToDate(event.target.value)}
-                className="w-full max-w-[220px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
-              />
-            </ErpDenseFormRow>
+            {dayScope === "FULL_DAY" && (
+              <ErpDenseFormRow label="To Date" required>
+                <input
+                  type="date"
+                  value={toDate}
+                  min={fromDate || earliestBackdate}
+                  onChange={(event) => setToDate(event.target.value)}
+                  className="w-full max-w-[220px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                />
+              </ErpDenseFormRow>
+            )}
+            {dayScope === "PARTIAL_DAY" && (
+              <ErpDenseFormRow label="Departed Office At" required>
+                <input
+                  type="time"
+                  value={officeDepartureTime}
+                  onChange={(e) => setOfficeDepartureTime(e.target.value)}
+                  className="w-full max-w-[220px] border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+                />
+              </ErpDenseFormRow>
+            )}
             <ErpDenseFormRow label="Number Of Days">
               <input
                 type="text"
                 readOnly
-                value={totalDays > 0 ? `${totalDays}` : "-"}
+                value={dayScope === "PARTIAL_DAY" ? "1 day (partial)" : totalDays > 0 ? `${totalDays}` : "-"}
                 className="w-full max-w-[220px] border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-700 outline-none"
               />
             </ErpDenseFormRow>
@@ -2314,6 +2709,7 @@ function HrApprovalInboxWorkspace({
             onApprove={(request) => void handleDecisionFromDrawer(request, "APPROVED")}
             onReject={(request) => void handleDecisionFromDrawer(request, "REJECTED")}
             onClose={() => setDecisionDrawerRequest(null)}
+            onRequestUpdated={() => void refresh()}
           />
         </>
       }
@@ -2515,6 +2911,8 @@ function HrRegisterWorkspace({
   const requesterRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
   const [requesterAuthUserId, setRequesterAuthUserId] = useState(initialContext.parentState?.requesterAuthUserId ?? "");
+  const [leaveTypeCode, setLeaveTypeCode] = useState(initialContext.parentState?.leaveTypeCode ?? "*");
+  const [registerLeaveTypes, setRegisterLeaveTypes] = useState([]);
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
@@ -2523,20 +2921,29 @@ function HrRegisterWorkspace({
     requesterAuthUserId,
   ]);
 
-  const filteredRows = useMemo(
-    () =>
-      applyQuickFilter(rows, searchQuery, [
-        "requester_display",
-        "reason",
-        "current_state",
-        "parent_company_name",
-        "parent_company_code",
-        "destination_name",
-        "destination_address",
-        "workflow_request_id",
-      ]),
-    [rows, searchQuery],
-  );
+  useEffect(() => {
+    if (kind !== "leave") return;
+    listLeaveTypes()
+      .then((data) => setRegisterLeaveTypes(data?.leave_types ?? []))
+      .catch(() => setRegisterLeaveTypes([]));
+  }, [kind]);
+
+  const filteredRows = useMemo(() => {
+    let result = applyQuickFilter(rows, searchQuery, [
+      "requester_display",
+      "reason",
+      "current_state",
+      "parent_company_name",
+      "parent_company_code",
+      "destination_name",
+      "destination_address",
+      "workflow_request_id",
+    ]);
+    if (kind === "leave" && leaveTypeCode && leaveTypeCode !== "*") {
+      result = result.filter((row) => row.leave_type_code === leaveTypeCode);
+    }
+    return result;
+  }, [rows, searchQuery, kind, leaveTypeCode]);
   const denseColumns = useMemo(
     () => buildHrDenseColumns(visibleColumns, kind),
     [visibleColumns, kind],
@@ -2578,8 +2985,8 @@ function HrRegisterWorkspace({
   );
 
   useEffect(() => {
-    updateActiveScreenContext({ parentState: { searchQuery, requesterAuthUserId, focusKey } });
-  }, [searchQuery, requesterAuthUserId, focusKey]);
+    updateActiveScreenContext({ parentState: { searchQuery, requesterAuthUserId, leaveTypeCode, focusKey } });
+  }, [searchQuery, requesterAuthUserId, leaveTypeCode, focusKey]);
 
   useEffect(() => {
     if (!focusKey || filteredRows.length === 0) {
@@ -2644,6 +3051,26 @@ function HrRegisterWorkspace({
               inputRef={requesterRef}
               placeholder="Optional requester auth user id"
             />
+            {kind === "leave" && registerLeaveTypes.length > 0 ? (
+              <div className="grid gap-1">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Leave Type
+                </span>
+                <ErpComboboxField
+                  value={leaveTypeCode}
+                  onChange={(val) => setLeaveTypeCode(val || "*")}
+                  options={[
+                    { value: "*", label: "* All Types" },
+                    ...registerLeaveTypes.map((lt) => ({
+                      value: lt.type_code,
+                      label: `${lt.type_name} (${lt.type_code})`,
+                    })),
+                  ]}
+                  blankLabel="-- Leave Type --"
+                  inputClassName="px-3 py-2 text-sm"
+                />
+              </div>
+            ) : null}
           </div>
         ),
       }}
@@ -2779,4 +3206,768 @@ export function LeaveRequestDetailWorkspace() {
 
 export function OutWorkRequestDetailWorkspace() {
   return <HrRequestDetailWorkspace kind="outWork" />;
+}
+
+// ─── Leave Type Management ────────────────────────────────────────────────────
+
+function LeaveTypeFormModal({ visible, editTarget, onClose, onSaved }) {
+  const isCreate = !editTarget;
+  const [typeCode, setTypeCode] = useState("");
+  const [typeName, setTypeName] = useState("");
+  const [isPaid, setIsPaid] = useState(true);
+  const [requiresDocument, setRequiresDocument] = useState(false);
+  const [carryForwardAllowed, setCarryForwardAllowed] = useState(false);
+  const [maxDaysPerYear, setMaxDaysPerYear] = useState("");
+  const [sortOrder, setSortOrder] = useState("0");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!visible) return;
+    if (editTarget) {
+      setTypeCode(editTarget.type_code ?? "");
+      setTypeName(editTarget.type_name ?? "");
+      setIsPaid(editTarget.is_paid !== false);
+      setRequiresDocument(editTarget.requires_document === true);
+      setCarryForwardAllowed(editTarget.carry_forward_allowed === true);
+      setMaxDaysPerYear(editTarget.max_days_per_year != null ? String(editTarget.max_days_per_year) : "");
+      setSortOrder(editTarget.sort_order != null ? String(editTarget.sort_order) : "0");
+    } else {
+      setTypeCode("");
+      setTypeName("");
+      setIsPaid(true);
+      setRequiresDocument(false);
+      setCarryForwardAllowed(false);
+      setMaxDaysPerYear("");
+      setSortOrder("0");
+    }
+    setError("");
+  }, [visible, editTarget]);
+
+  async function handleSave() {
+    if (!typeName.trim()) { setError("Type name is required."); return; }
+    if (isCreate && !typeCode.trim()) { setError("Type code is required."); return; }
+
+    setSaving(true);
+    setError("");
+    try {
+      const maxDays = maxDaysPerYear.trim() ? Number(maxDaysPerYear.trim()) : null;
+      if (isCreate) {
+        await createLeaveType({
+          type_code: typeCode.trim().toUpperCase(),
+          type_name: typeName.trim(),
+          is_paid: isPaid,
+          requires_document: requiresDocument,
+          carry_forward_allowed: carryForwardAllowed,
+          max_days_per_year: maxDays,
+          sort_order: Number(sortOrder) || 0,
+        });
+      } else {
+        await updateLeaveType({
+          leave_type_id: editTarget.leave_type_id,
+          type_name: typeName.trim(),
+          is_paid: isPaid,
+          requires_document: requiresDocument,
+          carry_forward_allowed: carryForwardAllowed,
+          max_days_per_year: maxDays,
+          sort_order: Number(sortOrder) || 0,
+        });
+      }
+      onSaved?.();
+    } catch (err) {
+      setError(formatError(err, "Could not save leave type."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ModalBase
+      visible={visible}
+      eyebrow="Leave Type Catalogue"
+      title={isCreate ? "Add Leave Type" : `Edit: ${editTarget?.type_name ?? ""}`}
+      message={isCreate
+        ? "Create a new leave type for this company. The type code is permanent after creation."
+        : "Update leave type details. The type code cannot be changed."}
+      onEscape={saving ? undefined : onClose}
+      width="min(600px, calc(100vw - 32px))"
+      actions={
+        <>
+          <button type="button" disabled={saving} onClick={onClose}
+            className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">
+            Cancel
+          </button>
+          <button type="button" disabled={saving} onClick={() => void handleSave()}
+            className="border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900 disabled:opacity-50">
+            {saving ? "Saving…" : isCreate ? "Create Type" : "Save Changes"}
+          </button>
+        </>
+      }
+    >
+      <div className="grid gap-3">
+        {error ? (
+          <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
+        ) : null}
+        {isCreate ? (
+          <label className="grid gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Type Code <span className="text-rose-500">*</span>
+            </span>
+            <input
+              type="text"
+              value={typeCode}
+              onChange={(e) => setTypeCode(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
+              maxLength={20}
+              placeholder="e.g. MATERNITY"
+              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+            <span className="text-xs text-slate-500">1–20 uppercase letters, digits, or underscores. Permanent after creation.</span>
+          </label>
+        ) : (
+          <div className="grid gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Type Code</span>
+            <div className="border border-slate-200 bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+              {editTarget?.type_code ?? "-"}
+            </div>
+            <span className="text-xs text-slate-500">Type code is immutable after creation.</span>
+          </div>
+        )}
+        <label className="grid gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+            Type Name <span className="text-rose-500">*</span>
+          </span>
+          <input
+            type="text"
+            value={typeName}
+            onChange={(e) => setTypeName(e.target.value)}
+            placeholder="e.g. Maternity Leave"
+            className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+          />
+        </label>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="flex items-center gap-2 text-sm text-slate-800">
+            <input type="checkbox" checked={isPaid} onChange={(e) => setIsPaid(e.target.checked)} className="h-4 w-4" />
+            Is Paid Leave
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-800">
+            <input type="checkbox" checked={requiresDocument} onChange={(e) => setRequiresDocument(e.target.checked)} className="h-4 w-4" />
+            Requires Document
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-800">
+            <input type="checkbox" checked={carryForwardAllowed} onChange={(e) => setCarryForwardAllowed(e.target.checked)} className="h-4 w-4" />
+            Carry Forward Allowed
+          </label>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="grid gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Max Days / Year</span>
+            <input
+              type="number"
+              min="1"
+              value={maxDaysPerYear}
+              onChange={(e) => setMaxDaysPerYear(e.target.value)}
+              placeholder="Leave blank for unlimited"
+              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+          </label>
+          <label className="grid gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Sort Order</span>
+            <input
+              type="number"
+              min="0"
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value)}
+              className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+          </label>
+        </div>
+      </div>
+    </ModalBase>
+  );
+}
+
+export function LeaveTypeManagementWorkspace() {
+  const [leaveTypes, setLeaveTypes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [editTarget, setEditTarget] = useState(null);  // null = create, object = edit
+  const [showForm, setShowForm] = useState(false);
+  const [togglingId, setTogglingId] = useState(null);
+  const searchRef = useRef(null);
+
+  const filteredTypes = useMemo(
+    () => applyQuickFilter(leaveTypes, searchQuery, ["type_code", "type_name"]),
+    [leaveTypes, searchQuery],
+  );
+
+  async function loadTypes() {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await listAllLeaveTypes();
+      setLeaveTypes(data?.leave_types ?? []);
+    } catch (err) {
+      setError(formatError(err, "Leave types could not be loaded."));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { void loadTypes(); }, []);
+
+  useErpScreenHotkeys({
+    refresh: { disabled: loading, perform: () => void loadTypes() },
+    focusSearch: { perform: () => searchRef.current?.focus?.() },
+  });
+
+  async function handleToggleActive(lt) {
+    setTogglingId(lt.leave_type_id);
+    try {
+      await updateLeaveType({ leave_type_id: lt.leave_type_id, is_active: !lt.is_active });
+      await loadTypes();
+    } catch (err) {
+      setError(formatError(err, "Could not toggle leave type status."));
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
+  return (
+    <ErpMasterListTemplate
+      eyebrow="HR Management"
+      title="Leave Type Catalogue"
+      actions={[
+        {
+          key: "add",
+          label: "Add Leave Type",
+          tone: "neutral",
+          onClick: () => { setEditTarget(null); setShowForm(true); },
+        },
+        {
+          key: "refresh",
+          label: loading ? "Refreshing..." : "Refresh",
+          hint: "Alt+R / F4",
+          tone: "primary",
+          onClick: () => void loadTypes(),
+        },
+      ]}
+      notices={error ? [{ key: "error", tone: "error", message: error }] : []}
+      footerHints={["Alt+R Refresh", "Alt+Shift+F Search", "Ctrl+K Command Bar"]}
+      filterSection={{
+        eyebrow: "Type Search",
+        title: "Search leave type catalogue",
+        children: (
+          <QuickFilterInput
+            label="Quick Search"
+            value={searchQuery}
+            onChange={setSearchQuery}
+            inputRef={searchRef}
+            placeholder="Search by type code or type name"
+          />
+        ),
+      }}
+      listSection={{
+        eyebrow: "Leave Types",
+        title: loading
+          ? "Loading leave types"
+          : `${filteredTypes.length} leave type${filteredTypes.length === 1 ? "" : "s"}`,
+        children: loading ? (
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            Loading leave type catalogue.
+          </div>
+        ) : filteredTypes.length === 0 ? (
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            No leave types found. Use "Add Leave Type" to create the first one.
+          </div>
+        ) : (
+          <div className="overflow-auto border border-slate-300 bg-white">
+            <table className="erp-grid-table min-w-full text-xs">
+              <thead className="bg-slate-800 text-white">
+                <tr>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Code</th>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Name</th>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Paid</th>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Doc Req.</th>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Carry Fwd.</th>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-[0.14em]">Max Days</th>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-[0.14em]">Sort</th>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Status</th>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTypes.map((lt) => (
+                  <tr key={lt.leave_type_id}
+                    className={`border-b border-slate-100 ${lt.is_active ? "bg-white hover:bg-slate-50" : "bg-slate-50 opacity-60 hover:opacity-80"}`}
+                  >
+                    <td className="px-3 py-2 font-semibold text-slate-900">{lt.type_code}</td>
+                    <td className="px-3 py-2 text-slate-800">{lt.type_name}</td>
+                    <td className="px-3 py-2 text-slate-700">{lt.is_paid ? "Yes" : "No"}</td>
+                    <td className="px-3 py-2 text-slate-700">{lt.requires_document ? "Yes" : "No"}</td>
+                    <td className="px-3 py-2 text-slate-700">{lt.carry_forward_allowed ? "Yes" : "No"}</td>
+                    <td className="px-3 py-2 text-right text-slate-700">{lt.max_days_per_year ?? "—"}</td>
+                    <td className="px-3 py-2 text-right text-slate-700">{lt.sort_order ?? 0}</td>
+                    <td className="px-3 py-2">
+                      <span className={`border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                        lt.is_active
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                          : "border-slate-200 bg-slate-100 text-slate-500"
+                      }`}>
+                        {lt.is_active ? "Active" : "Inactive"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          onClick={() => { setEditTarget(lt); setShowForm(true); }}
+                          className="border border-sky-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-700"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          disabled={togglingId === lt.leave_type_id}
+                          onClick={() => void handleToggleActive(lt)}
+                          className={`border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] disabled:opacity-50 ${
+                            lt.is_active
+                              ? "border-rose-300 bg-white text-rose-700"
+                              : "border-emerald-300 bg-white text-emerald-700"
+                          }`}
+                        >
+                          {togglingId === lt.leave_type_id ? "…" : lt.is_active ? "Deactivate" : "Activate"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ),
+      }}
+      bottomSection={
+        <LeaveTypeFormModal
+          visible={showForm}
+          editTarget={editTarget}
+          onClose={() => setShowForm(false)}
+          onSaved={async () => {
+            setShowForm(false);
+            await loadTypes();
+          }}
+        />
+      }
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// HolidayCalendarWorkspace
+// HR_CALENDAR_MANAGE scope: list/create/update/delete holidays + week-off config
+// ---------------------------------------------------------------------------
+
+const WEEKDAY_LABELS = Object.freeze([
+  { iso: 1, label: "Monday" },
+  { iso: 2, label: "Tuesday" },
+  { iso: 3, label: "Wednesday" },
+  { iso: 4, label: "Thursday" },
+  { iso: 5, label: "Friday" },
+  { iso: 6, label: "Saturday" },
+  { iso: 7, label: "Sunday" },
+]);
+
+function HolidayFormModal({ visible, editTarget, onClose, onSaved }) {
+  const [date, setDate] = useState("");
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (visible) {
+      setDate(editTarget?.holiday_date ?? "");
+      setName(editTarget?.holiday_name ?? "");
+      setError("");
+    }
+  }, [visible, editTarget]);
+
+  async function handleSave() {
+    if (!date || !name.trim()) {
+      setError("Date and name are required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      if (editTarget) {
+        await updateHoliday({
+          holiday_id: editTarget.holiday_id,
+          holiday_date: date,
+          holiday_name: name.trim(),
+        });
+      } else {
+        await createHoliday({ holiday_date: date, holiday_name: name.trim() });
+      }
+      await onSaved();
+    } catch (err) {
+      setError(formatError(err, "Holiday could not be saved."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!visible) return null;
+
+  return (
+    <ModalBase onClose={onClose}>
+      <div className="flex w-full max-w-sm flex-col gap-4 bg-white p-6">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-800">
+          {editTarget ? "Edit Holiday" : "Add Holiday"}
+        </h2>
+        {error && (
+          <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+            {error}
+          </div>
+        )}
+        <div className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Date
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Name
+            <input
+              type="text"
+              value={name}
+              maxLength={100}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Independence Day"
+              className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+          </label>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void handleSave()}
+            className="border border-emerald-400 bg-emerald-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-800 disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="border border-slate-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </ModalBase>
+  );
+}
+
+export function HolidayCalendarWorkspace() {
+  const { runtimeContext } = useMenu();
+  const [transactionCompanyId, setTransactionCompanyId] = useState(() =>
+    resolveDefaultTransactionCompanyId(runtimeContext),
+  );
+  const transactionCompanyRef = useRef(null);
+
+  // Holidays state
+  const [holidays, setHolidays] = useState([]);
+  const [holidaysLoading, setHolidaysLoading] = useState(false);
+  const [holidayError, setHolidayError] = useState("");
+  const [filterYear, setFilterYear] = useState(() => String(new Date().getFullYear()));
+  const [showHolidayForm, setShowHolidayForm] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+
+  // Week-off state
+  const [weekOffDays, setWeekOffDays] = useState([6, 7]);
+  const [weekOffLoading, setWeekOffLoading] = useState(false);
+  const [weekOffSaving, setWeekOffSaving] = useState(false);
+  const [weekOffError, setWeekOffError] = useState("");
+  const [weekOffNotice, setWeekOffNotice] = useState("");
+
+  useEffect(() => {
+    const nextId = resolveDefaultTransactionCompanyId(runtimeContext);
+    setTransactionCompanyId((curr) => curr || nextId);
+  }, [runtimeContext]);
+
+  // Load holidays when company or year changes
+  useEffect(() => {
+    if (!transactionCompanyId) { setHolidays([]); return; }
+    setHolidaysLoading(true);
+    setHolidayError("");
+    listHolidays(filterYear || null)
+      .then((data) => setHolidays(data?.holidays ?? []))
+      .catch((err) => setHolidayError(formatError(err, "Holidays could not be loaded.")))
+      .finally(() => setHolidaysLoading(false));
+  }, [transactionCompanyId, filterYear]);
+
+  // Load week-off config when company changes
+  useEffect(() => {
+    if (!transactionCompanyId) return;
+    setWeekOffLoading(true);
+    setWeekOffError("");
+    getWeekOffConfig()
+      .then((data) => setWeekOffDays(data?.week_off_days ?? [6, 7]))
+      .catch((err) => setWeekOffError(formatError(err, "Week-off configuration could not be loaded.")))
+      .finally(() => setWeekOffLoading(false));
+  }, [transactionCompanyId]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: holidaysLoading,
+      perform: () => {
+        if (transactionCompanyId) {
+          setHolidaysLoading(true);
+          listHolidays(filterYear || null)
+            .then((data) => setHolidays(data?.holidays ?? []))
+            .catch((err) => setHolidayError(formatError(err, "Holidays could not be loaded.")))
+            .finally(() => setHolidaysLoading(false));
+        }
+      },
+    },
+    focusPrimary: { perform: () => transactionCompanyRef.current?.focus?.() },
+  });
+
+  async function handleDeleteHoliday(holiday) {
+    openActionConfirm({
+      title: "Delete Holiday",
+      message: `Delete "${holiday.holiday_name}" on ${formatIsoDate(holiday.holiday_date)}? This cannot be undone.`,
+      confirmLabel: "Delete",
+      onConfirm: async () => {
+        setDeletingId(holiday.holiday_id);
+        try {
+          await deleteHoliday(holiday.holiday_id);
+          setHolidays((prev) => prev.filter((h) => h.holiday_id !== holiday.holiday_id));
+        } catch (err) {
+          setHolidayError(formatError(err, "Holiday could not be deleted."));
+        } finally {
+          setDeletingId(null);
+        }
+      },
+    });
+  }
+
+  function toggleWeekOffDay(isoDay) {
+    setWeekOffDays((prev) =>
+      prev.includes(isoDay) ? prev.filter((d) => d !== isoDay) : [...prev, isoDay].sort((a, b) => a - b),
+    );
+  }
+
+  async function handleSaveWeekOff() {
+    if (weekOffDays.length === 0) {
+      setWeekOffError("At least one day must be selected.");
+      return;
+    }
+    setWeekOffSaving(true);
+    setWeekOffError("");
+    setWeekOffNotice("");
+    try {
+      await upsertWeekOffConfig(weekOffDays);
+      setWeekOffNotice("Week-off configuration saved.");
+    } catch (err) {
+      setWeekOffError(formatError(err, "Week-off configuration could not be saved."));
+    } finally {
+      setWeekOffSaving(false);
+    }
+  }
+
+  const currentYear = new Date().getFullYear();
+  const yearOptions = Array.from({ length: 5 }, (_, i) => String(currentYear - 1 + i));
+
+  return (
+    <ErpMasterListTemplate
+      eyebrow="HR Management"
+      title="Holiday Calendar"
+      actions={[
+        {
+          key: "add",
+          label: "Add Holiday",
+          tone: "neutral",
+          disabled: !transactionCompanyId,
+          onClick: () => { setEditTarget(null); setShowHolidayForm(true); },
+        },
+        {
+          key: "refresh",
+          label: holidaysLoading ? "Refreshing…" : "Refresh",
+          hint: "Alt+R / F4",
+          tone: "primary",
+          disabled: !transactionCompanyId || holidaysLoading,
+          onClick: () => {
+            if (!transactionCompanyId) return;
+            setHolidaysLoading(true);
+            listHolidays(filterYear || null)
+              .then((data) => setHolidays(data?.holidays ?? []))
+              .catch((err) => setHolidayError(formatError(err, "Holidays could not be loaded.")))
+              .finally(() => setHolidaysLoading(false));
+          },
+        },
+      ]}
+      notices={holidayError ? [{ key: "holiday-error", tone: "error", message: holidayError }] : []}
+      footerHints={["Alt+R Refresh", "Ctrl+K Command Bar"]}
+      filterSection={{
+        eyebrow: "Calendar Settings",
+        title: "Company & year",
+        children: (
+          <div className="flex flex-col gap-3">
+            <ErpDenseFormRow label="Company" required>
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={transactionCompanyId}
+                onChange={setTransactionCompanyId}
+                selectRef={transactionCompanyRef}
+              />
+            </ErpDenseFormRow>
+            <ErpDenseFormRow label="Year">
+              <select
+                value={filterYear}
+                onChange={(e) => setFilterYear(e.target.value)}
+                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+              >
+                <option value="">All years</option>
+                {yearOptions.map((y) => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </ErpDenseFormRow>
+          </div>
+        ),
+      }}
+      listSection={{
+        eyebrow: "Holidays",
+        title: holidaysLoading
+          ? "Loading holidays…"
+          : `${holidays.length} holiday${holidays.length === 1 ? "" : "s"}${filterYear ? ` in ${filterYear}` : ""}`,
+        children: holidaysLoading ? (
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            Loading holiday calendar…
+          </div>
+        ) : holidays.length === 0 ? (
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            No holidays found. Use "Add Holiday" to create the first one.
+          </div>
+        ) : (
+          <div className="overflow-auto border border-slate-300 bg-white">
+            <table className="erp-grid-table min-w-full text-xs">
+              <thead className="bg-slate-800 text-white">
+                <tr>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Date</th>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Holiday Name</th>
+                  <th className="sticky top-0 z-10 border-b border-slate-700 bg-slate-800 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {holidays.map((h) => (
+                  <tr key={h.holiday_id} className="border-b border-slate-100 bg-white hover:bg-slate-50">
+                    <td className="px-3 py-2 font-semibold text-slate-900">{formatIsoDate(h.holiday_date)}</td>
+                    <td className="px-3 py-2 text-slate-800">{h.holiday_name}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          onClick={() => { setEditTarget(h); setShowHolidayForm(true); }}
+                          className="border border-sky-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-700"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          disabled={deletingId === h.holiday_id}
+                          onClick={() => void handleDeleteHoliday(h)}
+                          className="border border-rose-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-rose-700 disabled:opacity-50"
+                        >
+                          {deletingId === h.holiday_id ? "…" : "Delete"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ),
+      }}
+      bottomSection={
+        <div className="flex flex-col gap-4">
+          {/* Week-off config panel */}
+          <div className="border border-slate-200 bg-white p-4">
+            <div className="mb-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+              Week-Off Days
+            </div>
+            {weekOffLoading ? (
+              <div className="text-sm text-slate-500">Loading week-off configuration…</div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {weekOffError && (
+                  <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                    {weekOffError}
+                  </div>
+                )}
+                {weekOffNotice && (
+                  <div className="border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                    {weekOffNotice}
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  {WEEKDAY_LABELS.map(({ iso, label }) => (
+                    <label
+                      key={iso}
+                      className={`flex cursor-pointer items-center gap-2 border px-3 py-2 text-xs font-medium select-none ${
+                        weekOffDays.includes(iso)
+                          ? "border-sky-400 bg-sky-50 text-sky-900"
+                          : "border-slate-300 bg-white text-slate-700"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={weekOffDays.includes(iso)}
+                        onChange={() => toggleWeekOffDay(iso)}
+                        className="h-3.5 w-3.5"
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    disabled={weekOffSaving || !transactionCompanyId}
+                    onClick={() => void handleSaveWeekOff()}
+                    className="border border-emerald-400 bg-emerald-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-800 disabled:opacity-50"
+                  >
+                    {weekOffSaving ? "Saving…" : "Save Week-Off Config"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Holiday form modal */}
+          <HolidayFormModal
+            visible={showHolidayForm}
+            editTarget={editTarget}
+            onClose={() => setShowHolidayForm(false)}
+            onSaved={async () => {
+              setShowHolidayForm(false);
+              setHolidaysLoading(true);
+              await listHolidays(filterYear || null)
+                .then((data) => setHolidays(data?.holidays ?? []))
+                .catch((err) => setHolidayError(formatError(err, "Holidays could not be reloaded.")))
+                .finally(() => setHolidaysLoading(false));
+            }}
+          />
+        </div>
+      }
+    />
+  );
 }

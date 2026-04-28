@@ -19,6 +19,8 @@ import {
   resolveDepartmentWorkflowScopeId,
 } from "../../_shared/workflow_scope.ts";
 import { readAclSnapshotDecision } from "../../_shared/acl_snapshot.ts";
+import { expandLeaveToDateRecords } from "../hr/leave.handlers.ts";
+import { expandOutWorkToDateRecords } from "../hr/out_work.handlers.ts";
 
 interface HandlerContext {
   auth_user_id: string;
@@ -486,6 +488,23 @@ if (routingResult.newState) {
       new_state: routingResult.newState,
       actor_auth_user_id: ctx.auth_user_id,
     });
+}
+
+// =========================================================
+// STEP 10.5: Post-Approval Hooks
+// =========================================================
+
+// Expand day records when a leave or out-work request is approved.
+// Both functions silently no-op if the workflow_request_id does not match
+// their respective request type. Non-fatal: approval must never fail due
+// to day record expansion — records can be backfilled via Phase 7.
+if (routingResult.newState === "APPROVED") {
+  await expandLeaveToDateRecords(workflow.request_id).catch(() => {
+    // Intentionally swallowed — approval must not fail due to day record expansion
+  });
+  await expandOutWorkToDateRecords(workflow.request_id).catch(() => {
+    // Intentionally swallowed — approval must not fail due to day record expansion
+  });
 }
 
     // Further strict logic will be added step-by-step

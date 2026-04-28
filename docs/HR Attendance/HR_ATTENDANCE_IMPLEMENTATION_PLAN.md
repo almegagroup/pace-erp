@@ -135,6 +135,44 @@ ALTER TABLE erp_hr.leave_requests
   - SELECT from leave_types WHERE company_id = X AND is_active = TRUE ORDER BY sort_order
   - Return array of: `{ leave_type_id, type_code, type_name, is_paid, requires_document, max_days_per_year, carry_forward_allowed }`
 
+**Handler 2: `listAllLeaveTypesHandler`** (for management screen — includes inactive)
+- Route: `GET /api/hr/leave/types/all`
+- Auth: requires `HR_LEAVE_TYPE_MANAGE`
+- Logic:
+  - Resolve company from session
+  - SELECT from leave_types WHERE company_id = X ORDER BY sort_order (no is_active filter)
+  - Return full rows including: `{ leave_type_id, type_code, type_name, is_paid, requires_document, max_days_per_year, carry_forward_allowed, is_active, sort_order }`
+
+**Handler 3: `createLeaveTypeHandler`**
+- Route: `POST /api/hr/leave/types`
+- Auth: requires `HR_LEAVE_TYPE_MANAGE`
+- Payload: `{ type_code, type_name, is_paid, requires_document, max_days_per_year, carry_forward_allowed, sort_order }`
+- Logic:
+  - Resolve `company_id` from session — HR can only create for their own company
+  - Validate: `type_code` is non-empty, no special characters
+  - Validate: `UNIQUE (company_id, type_code)` — reject duplicate
+  - INSERT with `created_by = current user`
+  - Return the created row
+
+**Handler 4: `updateLeaveTypeHandler`**
+- Route: `PATCH /api/hr/leave/types/:leave_type_id`
+- Auth: requires `HR_LEAVE_TYPE_MANAGE`
+- Payload (all optional): `{ type_name, is_paid, requires_document, max_days_per_year, carry_forward_allowed, is_active, sort_order }`
+- Logic:
+  - Load leave type, verify `company_id` matches session company — server-side isolation
+  - `type_code` is NOT updatable after creation (changing the code would break Phase 8 balance logic)
+  - Apply updates
+  - Return updated row
+
+**Modify:** `supabase/functions/api/_core/hr/shared.ts`
+- Add: `LEAVE_RESOURCE_CODES.types = "HR_LEAVE_TYPES"`
+- Add: `LEAVE_RESOURCE_CODES.typeManage = "HR_LEAVE_TYPE_MANAGE"`
+
+**Modify:** `supabase/functions/api/_core/sa/company.handlers.ts` (or wherever company creation lives)
+- After a new company is successfully created, seed the 5 default leave types (GEN, CL, SL, EL, LOP)
+  for that company — same values as the Phase 1-A migration INSERT
+- This ensures every new company always starts with the defaults without manual SA action
+
 **Modify:** `supabase/functions/api/_core/hr/leave.handlers.ts`
 
 **`createLeaveRequestHandler` changes:**
@@ -147,6 +185,13 @@ ALTER TABLE erp_hr.leave_requests
 **`updateLeaveRequestHandler` changes:**
 - Accept optional `leave_type_id` update
 - Apply same company validation if provided
+- **Approver leave type correction (pre-decision):**
+  - Accept `leave_type_id` override from the approver when the request is still PENDING
+  - Validate: new `leave_type_id` belongs to the same `parent_company_id` as the request
+  - Validate: request state is PENDING — reject update if state is already APPROVED or REJECTED
+  - Write the change to the audit log (`erp_audit.workflow_events` or equivalent), recording who changed it, when, and what the previous type was
+  - Once the decision is committed (APPROVED / REJECTED), any further `leave_type_id` update must be rejected with an error
+  - Balance deduction logic based on the final committed type is deferred to Phase 8
 
 **`listMyLeaveRequestsHandler` changes:**
 - JOIN `erp_hr.leave_types` on `leave_type_id`
@@ -161,9 +206,9 @@ ALTER TABLE erp_hr.leave_requests
 
 **Modify:** `supabase/functions/api/_routes/hr.routes.ts`
 - Add: `GET /api/hr/leave/types → listLeaveTypesHandler`
-
-**Modify:** `supabase/functions/api/_core/hr/shared.ts`
-- Add `LEAVE_RESOURCE_CODES.types = "HR_LEAVE_TYPES"`
+- Add: `GET /api/hr/leave/types/all → listAllLeaveTypesHandler`
+- Add: `POST /api/hr/leave/types → createLeaveTypeHandler`
+- Add: `PATCH /api/hr/leave/types/:leave_type_id → updateLeaveTypeHandler`
 
 ---
 
@@ -171,6 +216,9 @@ ALTER TABLE erp_hr.leave_requests
 
 **Modify:** `frontend/src/pages/dashboard/hr/hrApi.js`
 - Add: `listLeaveTypes()` → `GET /api/hr/leave/types`
+- Add: `listAllLeaveTypes()` → `GET /api/hr/leave/types/all`
+- Add: `createLeaveType(payload)` → `POST /api/hr/leave/types`
+- Add: `updateLeaveType(leaveTypeId, payload)` → `PATCH /api/hr/leave/types/:id`
 
 **Modify:** `frontend/src/pages/dashboard/hr/HrWorkflowPages.jsx`
 
@@ -189,25 +237,52 @@ ALTER TABLE erp_hr.leave_requests
 
 **`LeaveApprovalInboxPage` changes:**
 - Add `type_name` column
+- **Approver leave type correction:**
+  - In the request detail view (opened from inbox), show a "Leave Type" field
+  - When the request is PENDING: render as an editable dropdown (ErpComboboxField) populated from `listLeaveTypes()`
+  - When the request is APPROVED or REJECTED: render as read-only text — no dropdown, no edit
+  - "Save Type Change" button — calls `updateLeaveRequestHandler` with the new `leave_type_id` before the approve/reject action
+  - After saving the type change, the updated type is shown and the approver can then proceed to approve or reject
+  - Do NOT allow type change and decision submission in a single action — two explicit steps: (1) save type, (2) decide
 
 **`LeaveRegisterResultsPage` changes:**
 - Add `type_name` column
 - Add leave type filter to `LeaveRegisterPage` filter form
 
+**New page: `LeaveTypeManagementPage`**
+- Visible only to users with `HR_LEAVE_TYPE_MANAGE` permission (checked via session ACL)
+- Shows all leave types for the session company (both active and inactive)
+- Table columns: Type Code | Type Name | Paid | Requires Doc | Max Days/Year | Carry Forward | Status | Actions
+- Actions per row:
+  - Edit — inline form: type_name, is_paid, requires_document, max_days_per_year, carry_forward_allowed, sort_order
+  - Toggle Active/Inactive — one-click with confirmation dialog:
+    "Deactivating this type will hide it from new leave applications. Existing approved leaves are unaffected."
+- "Add New Type" button → inline form: type_code (required, unique), type_name, and all other fields
+  - `type_code` is set at creation only — shown as read-only in edit form with note: "Type code cannot be changed after creation"
+- Add to HR navigation menu (conditionally shown only to users with `HR_LEAVE_TYPE_MANAGE`)
+
 **Definition of Done — Phase 1:**
-- Leave apply form shows type dropdown
-- New leave requests have leave_type_id stored
+- Leave apply form shows type dropdown (active types only)
+- New leave requests store leave_type_id
 - All existing leave requests show "General Leave"
 - Register can filter by leave type
+- HR with `HR_LEAVE_TYPE_MANAGE` can add, edit, deactivate leave types for their company
+- SA can assign/revoke `HR_LEAVE_TYPE_MANAGE` via existing ACL admin panel
+- New company creation seeds 5 default types automatically
 - No existing functionality broken
 
 ---
 
-## PHASE 2 — DAY RECORDS + LEAVE EXPANSION [20%]
+## PHASE 2 — DAY RECORDS + LEAVE EXPANSION + HOLIDAY CALENDAR [25%]
 
-**Goal:** When a leave is approved, system automatically creates date-wise day records.
-**Breaks existing flows:** No — day records table is new. Existing approve flow gets an additive step.
-**User-visible:** Backend only at this stage.
+**Goal:**
+1. When a leave is approved, system creates date-wise day records (one per calendar day).
+2. Leave application enforces Sandwich Leave Policy — holiday/week-off days between
+   working-day leaves count as charged leave. Applications with zero working days are blocked.
+3. HR can manage company holiday calendar and week-off config.
+
+**Breaks existing flows:** No — day records table is new, sandwich calc is additive to apply flow.
+**User-visible:** Phase 2-D/2-E add new HR management pages; Phase 2-B changes apply-time UX (info/block).
 
 ---
 
@@ -216,7 +291,16 @@ ALTER TABLE erp_hr.leave_requests
 **File to create:**
 `supabase/migrations/20260427_20_2a_hr_employee_day_records.sql`
 
+This single migration file contains four logical sections:
+1. `employee_day_records` table + indexes + RLS
+2. `company_holiday_calendar` table + indexes + RLS
+3. `company_week_off_config` table + RLS
+4. `effective_leave_days` column on `leave_requests`
+
 ```sql
+-- ============================================================
+-- SECTION 1 — employee_day_records
+-- ============================================================
 CREATE TABLE erp_hr.employee_day_records (
   day_record_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id                 UUID NOT NULL REFERENCES erp_master.companies(company_id),
@@ -268,11 +352,285 @@ CREATE INDEX idx_day_records_employee_date
 ALTER TABLE erp_hr.employee_day_records ENABLE ROW LEVEL SECURITY;
 CREATE POLICY day_records_read_authenticated ON erp_hr.employee_day_records
   FOR SELECT TO authenticated USING (TRUE);
+
+-- ============================================================
+-- SECTION 2 — company_holiday_calendar
+-- ============================================================
+CREATE TABLE erp_hr.company_holiday_calendar (
+  holiday_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id     UUID NOT NULL REFERENCES erp_master.companies(company_id),
+  holiday_date   DATE NOT NULL,
+  holiday_name   TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_by     UUID REFERENCES auth.users(id),
+
+  UNIQUE (company_id, holiday_date)
+);
+
+CREATE INDEX idx_holiday_calendar_company_date
+  ON erp_hr.company_holiday_calendar (company_id, holiday_date);
+
+ALTER TABLE erp_hr.company_holiday_calendar ENABLE ROW LEVEL SECURITY;
+CREATE POLICY holiday_calendar_read_authenticated ON erp_hr.company_holiday_calendar
+  FOR SELECT TO authenticated USING (TRUE);
+
+-- ============================================================
+-- SECTION 3 — company_week_off_config
+-- ============================================================
+CREATE TABLE erp_hr.company_week_off_config (
+  week_off_config_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id          UUID NOT NULL REFERENCES erp_master.companies(company_id) UNIQUE,
+  week_off_days       INTEGER[] NOT NULL DEFAULT ARRAY[6, 7],
+                        -- ISO weekday: 1=Mon...5=Fri, 6=Sat, 7=Sun
+                        -- Default: Saturday + Sunday
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by          UUID REFERENCES auth.users(id)
+);
+
+ALTER TABLE erp_hr.company_week_off_config ENABLE ROW LEVEL SECURITY;
+CREATE POLICY week_off_config_read_authenticated ON erp_hr.company_week_off_config
+  FOR SELECT TO authenticated USING (TRUE);
+
+-- ============================================================
+-- SECTION 4 — effective_leave_days on leave_requests
+-- ============================================================
+ALTER TABLE erp_hr.leave_requests
+  ADD COLUMN effective_leave_days INTEGER;
+-- NULL = pre-Phase 2 row (treated as total_days for Phase 8 balance purposes)
+-- Value is computed at apply-time and locked. Never recalculated after submission.
 ```
 
 ---
 
-### Phase 2-B — Backend: Leave Expansion on Approve [10%]
+### Phase 2-B — Backend: Sandwich Calc at Apply-Time + Leave Expansion on Approve [12%]
+
+This phase has two distinct parts:
+
+**Part B1 — Sandwich Calculation at Apply-Time**
+
+Add a new shared helper `computeSandwichLeave` in `shared.ts` (or a new `sandwich.ts` helper file):
+
+```typescript
+interface SandwichResult {
+  totalDays: number;           // raw inclusive calendar days
+  workingDays: number;         // working days in the range
+  effectiveLeaveDays: number;  // working days + sandwiched non-working days
+  sandwichDays: number;        // non-working days that are charged (in between)
+  isBlocked: boolean;          // true if zero working days
+  blockedReason?: string;
+}
+
+async function computeSandwichLeave(
+  companyId: string,
+  fromDate: string,  // YYYY-MM-DD
+  toDate: string,    // YYYY-MM-DD
+  supabase: SupabaseClient
+): Promise<SandwichResult> {
+  // 1. Load holidays for company in range
+  const { data: holidays } = await supabase
+    .from('erp_hr.company_holiday_calendar')
+    .select('holiday_date')
+    .eq('company_id', companyId)
+    .gte('holiday_date', fromDate)
+    .lte('holiday_date', toDate);
+  const holidaySet = new Set((holidays ?? []).map((h) => h.holiday_date));
+
+  // 2. Load week-off config (or use default Sat+Sun = [6, 7])
+  const { data: woCfg } = await supabase
+    .from('erp_hr.company_week_off_config')
+    .select('week_off_days')
+    .eq('company_id', companyId)
+    .maybeSingle();
+  const weekOffDays: number[] = woCfg?.week_off_days ?? [6, 7]; // ISO weekday numbers
+
+  // 3. Enumerate all dates in [fromDate, toDate]
+  const allDates = generateDateRange(fromDate, toDate);
+  const totalDays = allDates.length;
+
+  // 4. Classify each date
+  // ISO weekday: 1=Mon...7=Sun
+  function isWeekOff(dateStr: string): boolean {
+    const d = new Date(dateStr);
+    // getDay() returns 0=Sun...6=Sat; convert to ISO: Sun=7, Mon=1...Sat=6
+    const jsDay = d.getDay();
+    const isoDay = jsDay === 0 ? 7 : jsDay;
+    return weekOffDays.includes(isoDay);
+  }
+
+  function isNonWorking(dateStr: string): boolean {
+    return holidaySet.has(dateStr) || isWeekOff(dateStr);
+  }
+
+  const workingDates = allDates.filter((d) => !isNonWorking(d));
+  const workingDays = workingDates.length;
+
+  if (workingDays === 0) {
+    return {
+      totalDays, workingDays: 0, effectiveLeaveDays: 0,
+      sandwichDays: 0, isBlocked: true,
+      blockedReason: "Your selected date range contains no working days."
+    };
+  }
+
+  // 5. Sandwich: all days from first working day to last working day are charged
+  const firstWorking = workingDates[0];
+  const lastWorking = workingDates[workingDates.length - 1];
+  const chargedDates = allDates.filter((d) => d >= firstWorking && d <= lastWorking);
+  const effectiveLeaveDays = chargedDates.length;
+  const sandwichDays = effectiveLeaveDays - workingDays;
+
+  return { totalDays, workingDays, effectiveLeaveDays, sandwichDays, isBlocked: false };
+}
+```
+
+**Modify `createLeaveRequestHandler`:**
+
+After validating from_date, to_date, and before inserting:
+
+```typescript
+// Sandwich check
+const sandwich = await computeSandwichLeave(
+  parentCompany.company_id, fromDate, toDate, supabase
+);
+
+if (sandwich.isBlocked) {
+  return res.status(400).json({ error: sandwich.blockedReason });
+}
+
+// Insert with effective_leave_days
+const { data: newLeave } = await supabase
+  .from('erp_hr.leave_requests')
+  .insert({
+    ...existingFields,
+    total_days: sandwich.totalDays,
+    effective_leave_days: sandwich.effectiveLeaveDays,
+  })
+  .select()
+  .single();
+```
+
+**Add a lightweight preview endpoint:**
+
+Route: `GET /api/hr/leave/sandwich-preview`
+
+Query params: `from_date`, `to_date` (company_id resolved from session).
+
+Returns: `{ total_days, working_days, effective_leave_days, sandwich_days, is_blocked, blocked_reason }`
+
+This endpoint is called by the frontend as the user selects their date range to show the
+informational preview before submit.
+
+```typescript
+async function getLeaveSandwichPreviewHandler(req, res) {
+  // Auth + company resolution (standard pattern)
+  const { from_date, to_date } = req.query;
+  // Validate dates...
+  const result = await computeSandwichLeave(
+    parentCompany.company_id, from_date, to_date, supabase
+  );
+  return res.json(result);
+}
+```
+
+Route registration in `hr.routes.ts`:
+```
+GET /api/hr/leave/sandwich-preview  → getLeaveSandwichPreviewHandler  (authenticated, no special ACL)
+```
+
+---
+
+**Part B2 — Leave Expansion on Approve** (unchanged from original design)
+
+**After a leave request is APPROVED, call:**
+
+```typescript
+async function expandLeaveToDateRecords(
+  leaveRequestId: string,
+  supabase: SupabaseClient
+): Promise<void> {
+  // 1. Load the leave request
+  const { data: lr } = await supabase
+    .from('erp_hr.leave_requests')
+    .select('requester_auth_user_id, parent_company_id, from_date, to_date, leave_type_id')
+    .eq('leave_request_id', leaveRequestId)
+    .single();
+
+  // 2. Generate all dates in range (inclusive)
+  const dates = generateDateRange(lr.from_date, lr.to_date); // YYYY-MM-DD strings
+
+  // 3. UPSERT one row per date
+  for (const date of dates) {
+    await supabase.rpc('upsert_day_record_leave', {
+      p_company_id: lr.parent_company_id,
+      p_employee_id: lr.requester_auth_user_id,
+      p_record_date: date,
+      p_leave_request_id: leaveRequestId,
+      p_leave_type_id: lr.leave_type_id
+    });
+  }
+}
+```
+
+**Create DB function** `upsert_day_record_leave` in migration:
+
+```sql
+CREATE OR REPLACE FUNCTION erp_hr.upsert_day_record_leave(
+  p_company_id UUID,
+  p_employee_id UUID,
+  p_record_date DATE,
+  p_leave_request_id UUID,
+  p_leave_type_id UUID
+) RETURNS VOID AS $$
+BEGIN
+  INSERT INTO erp_hr.employee_day_records (
+    company_id, employee_auth_user_id, record_date,
+    declared_status, leave_request_id, leave_type_id, source
+  )
+  VALUES (
+    p_company_id, p_employee_id, p_record_date,
+    'LEAVE', p_leave_request_id, p_leave_type_id, 'LEAVE_APPROVED'
+  )
+  ON CONFLICT (company_id, employee_auth_user_id, record_date) DO UPDATE
+    SET
+      declared_status  = CASE
+        WHEN employee_day_records.source IN ('HOLIDAY_CALENDAR','WEEK_OFF_CALENDAR')
+          THEN employee_day_records.declared_status  -- do not overwrite holiday/week-off
+        ELSE 'LEAVE'
+      END,
+      leave_request_id = CASE
+        WHEN employee_day_records.source IN ('HOLIDAY_CALENDAR','WEEK_OFF_CALENDAR')
+          THEN employee_day_records.leave_request_id
+        ELSE p_leave_request_id
+      END,
+      leave_type_id    = CASE
+        WHEN employee_day_records.source IN ('HOLIDAY_CALENDAR','WEEK_OFF_CALENDAR')
+          THEN employee_day_records.leave_type_id
+        ELSE p_leave_type_id
+      END,
+      source           = CASE
+        WHEN employee_day_records.source IN ('HOLIDAY_CALENDAR','WEEK_OFF_CALENDAR')
+          THEN employee_day_records.source
+        ELSE 'LEAVE_APPROVED'
+      END,
+      updated_at       = now();
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+**Helper function** `generateDateRange` in TypeScript shared.ts:
+
+```typescript
+function generateDateRange(fromDate: string, toDate: string): string[] {
+  const dates: string[] = [];
+  let current = new Date(fromDate);
+  const end = new Date(toDate);
+  while (current <= end) {
+    dates.push(current.toISOString().substring(0, 10));
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+}
+```
 
 **Modify:** The workflow decision handler (wherever approve/reject is processed).
 Locate the handler for `POST /api/hr/workflow/decide` or equivalent in the codebase.
@@ -370,7 +728,7 @@ function generateDateRange(fromDate: string, toDate: string): string[] {
 
 ---
 
-### Phase 2-C — Backend: Cleanup on Cancel [5%]
+### Phase 2-C — Backend: Cleanup on Cancel [2%]
 
 **When a leave request is CANCELLED (after having been APPROVED):**
 
@@ -390,12 +748,138 @@ async function removeLeaveFromDateRecords(
 Call this in `cancelLeaveRequestHandler` only when the previous state was APPROVED.
 If the request was still PENDING when cancelled, no day records exist — skip silently.
 
+---
+
+### Phase 2-D — Backend: Holiday Calendar CRUD + Week-Off Config + Resource Code [5%]
+
+**New file to create:** `supabase/functions/api/_core/hr/calendar.handlers.ts`
+
+**New resource code** to add in `shared.ts`:
+```typescript
+export const HR_CALENDAR_MANAGE = "HR_CALENDAR_MANAGE";
+```
+Register this code in the SA ACL admin panel (same process as `HR_LEAVE_TYPE_MANAGE`).
+
+**Handlers to implement:**
+
+```
+listHolidaysHandler         GET  /api/hr/calendar/holidays
+  — query param: company_id (optional; resolved from session if omitted)
+  — returns: { holidays: [{ holiday_id, holiday_date, holiday_name }] }
+  — auth: authenticated; no special ACL (any user can see company holidays for preview purposes)
+
+createHolidayHandler        POST /api/hr/calendar/holidays
+  — body: { holiday_date: "YYYY-MM-DD", holiday_name: string }
+  — auth: HR_CALENDAR_MANAGE required
+  — validates: holiday_date is valid, not past (warn but allow), company isolation
+
+updateHolidayHandler        PATCH /api/hr/calendar/holidays
+  — body: { holiday_id, holiday_date?, holiday_name? }
+  — auth: HR_CALENDAR_MANAGE required
+  — validates: holiday belongs to user's company
+
+deleteHolidayHandler        DELETE /api/hr/calendar/holidays/:holiday_id
+  — auth: HR_CALENDAR_MANAGE required
+  — validates: holiday belongs to user's company
+
+getWeekOffConfigHandler     GET  /api/hr/calendar/week-off
+  — returns: { week_off_days: [6, 7] }  (default if no config row exists)
+  — auth: authenticated
+
+upsertWeekOffConfigHandler  PUT  /api/hr/calendar/week-off
+  — body: { week_off_days: number[] }  (array of ISO weekday numbers 1-7)
+  — validates: array has 1-6 elements (at least one work day must remain)
+  — validates: all values are integers in range [1, 7]
+  — auth: HR_CALENDAR_MANAGE required
+  — does an UPSERT on company_week_off_config
+```
+
+**Route registration** in `hr.routes.ts`:
+```
+GET    /api/hr/calendar/holidays         → listHolidaysHandler
+POST   /api/hr/calendar/holidays         → createHolidayHandler
+PATCH  /api/hr/calendar/holidays         → updateHolidayHandler
+DELETE /api/hr/calendar/holidays/:id     → deleteHolidayHandler
+GET    /api/hr/calendar/week-off         → getWeekOffConfigHandler
+PUT    /api/hr/calendar/week-off         → upsertWeekOffConfigHandler
+```
+
+**Also add to `hrApi.js` (frontend API layer) — to be consumed by Phase 2-E:**
+```
+listHolidays(companyId?)         → GET /api/hr/calendar/holidays
+createHoliday(payload)           → POST
+updateHoliday(payload)           → PATCH
+deleteHoliday(holidayId)         → DELETE
+getWeekOffConfig()               → GET /api/hr/calendar/week-off
+upsertWeekOffConfig(weekOffDays) → PUT
+```
+
+---
+
+### Phase 2-E — Frontend: Holiday Calendar Management UI [3%]
+
+**New files to create:**
+
+`frontend/src/pages/dashboard/hr/calendar/HolidayCalendarPage.jsx`
+- Wrapper page (same pattern as `LeaveTypeManagementPage.jsx`)
+- Renders `HolidayCalendarWorkspace` from `HrWorkflowPages.jsx`
+
+**New workspace** `HolidayCalendarWorkspace` in `HrWorkflowPages.jsx`:
+- Two sections: Holidays list + Week-off config
+- **Holidays section:**
+  - Table: Date | Name | Actions (Edit / Delete)
+  - Add button → inline form or modal: date picker + name
+  - Edit → prefilled modal
+  - Delete → confirm dialog
+  - Sorted by date ascending
+  - Shows current year by default; year selector to navigate
+- **Week-off section:**
+  - Checkbox grid: Mon Tue Wed Thu Fri Sat Sun
+  - Sat + Sun checked by default
+  - "Save" button → calls `upsertWeekOffConfig`
+  - At least one working day must remain (validation)
+
+**Requires `HR_CALENDAR_MANAGE` ACL resource** — page must guard via existing resource-check pattern.
+If user lacks permission, show "You do not have permission to manage the HR calendar."
+
+**New route** in `AppRouter.jsx`:
+```
+<Route path="hr/calendar/holidays" element={<HolidayCalendarPage />} />
+```
+
+**New page file:** `frontend/src/pages/dashboard/hr/calendar/HolidayCalendarPage.jsx`
+
+**Sandwich preview integration** (also Phase 2-E, touches `LeaveApplyWorkspace`):
+
+After the user selects both `from_date` and `to_date` in the leave apply form:
+- Debounce 400ms, then call `GET /api/hr/leave/sandwich-preview?from_date=...&to_date=...`
+- If `is_blocked = true` → show error banner, disable submit button
+- If `sandwich_days > 0` → show amber info box:
+  "X working day(s) in your selected range. Y holiday/week-off day(s) between your leave days
+   will also be counted (sandwich rule). You will be charged Z effective leave days."
+- If no sandwich → no special UI (normal submit)
+
+Add state to `LeaveApplyWorkspace`:
+```
+sandwichPreview: null | SandwichResult
+sandwichLoading: boolean
+```
+
+---
+
 **Definition of Done — Phase 2:**
 - Approve a leave → employee_day_records rows created for every date in range
 - Cancel an approved leave → those rows deleted
 - Reject a leave → no rows created
 - Holiday rows not overwritten by leave approval
 - `generateDateRange` tested with single-day, multi-day, and month-boundary ranges
+- Apply leave with range containing only holidays → blocked with clear error
+- Apply leave Mon–Wed where Tue is a holiday → `effective_leave_days = 3` (sandwich)
+- Apply leave Mon only → `effective_leave_days = 1` (no sandwich)
+- HR can add/edit/delete holidays for their company
+- HR can configure week-off days
+- `sandwich-preview` endpoint returns correct values for all scenarios
+- `HR_CALENDAR_MANAGE` resource code registered and assignable via SA ACL panel
 
 ---
 

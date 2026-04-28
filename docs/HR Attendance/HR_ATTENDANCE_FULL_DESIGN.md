@@ -165,12 +165,34 @@ UNIQUE (company_id, type_code)
 INDEX on (company_id, is_active, sort_order)
 ```
 
-Seeded per company on setup: CL, SL, EL, LOP, GEN (General — for migration of old rows).
-HR can add more via admin. Nothing in the leave flow is hardcoded to type codes.
+Seeded per company on setup: GEN, CL, SL, EL, LOP (General — for migration of old rows).
+Nothing in the leave flow is hardcoded to type codes.
 
 `max_days_per_year` and `carry_forward_allowed` are present now but not enforced yet.
 They will be the foundation for the future Leave Policy & Balance module.
 Do not remove or repurpose these columns.
+
+**Management Authority:**
+
+| Actor | Can Do | Restriction |
+|---|---|---|
+| HR user with `HR_LEAVE_TYPE_MANAGE` permission | Add, edit, deactivate leave types for their own company | Cannot touch other companies' types |
+| SA | Add, edit, deactivate for any company | Full access — used for initial setup or extension beyond HR scope |
+| Employee / Approver | None | Read-only (sees active types in dropdown only) |
+
+SA does not manage leave types day-to-day. SA uses the existing ACL admin panel to assign the `HR_LEAVE_TYPE_MANAGE` resource code to the appropriate HR users per company. Those HR users then manage their own company's leave catalogue.
+
+**Deactivation behaviour:**
+- `is_active = FALSE` → type no longer appears in the leave apply dropdown
+- Existing approved requests and day records using this type are unaffected
+- A deactivated type can be reactivated at any time
+- A type cannot be hard-deleted if any leave_request references it (FK constraint prevents this)
+
+**New company seeding:**
+The 5 default types (GEN, CL, SL, EL, LOP) are seeded:
+1. By the Phase 1-A migration (for all existing companies at migration time)
+2. By the `createCompanyHandler` in future (when a new company is created — hook must seed defaults)
+   This hook is part of Phase 1-B scope.
 
 ---
 
@@ -190,6 +212,10 @@ applied_by_auth_user_id UUID          FK → auth.users            ← NEW (null
 from_date               DATE               (existing)
 to_date                 DATE               (existing)
 total_days              INTEGER            (existing)
+effective_leave_days    INTEGER       nullable   ← NEW
+                                       calendar days minus sandwiched holidays/week-offs
+                                       NULL means not yet computed (pre-Phase 2 rows)
+                                       used for leave balance deduction (Phase 8)
 reason                  TEXT               (existing)
 cancelled_at            TIMESTAMPTZ        (existing)
 cancelled_by            UUID               (existing)
@@ -199,6 +225,13 @@ created_by              UUID               (existing)
 
 `applied_by_auth_user_id` distinguishes self-application from HR backdated application.
 Existing rows: `applied_by_auth_user_id = NULL` (self-applied, backward compatible).
+
+`effective_leave_days` captures the sandwich-adjusted leave count calculated at apply-time.
+- `total_days` = raw inclusive calendar days (e.g. Mon–Fri = 5, always includes holidays/week-offs)
+- `effective_leave_days` = days actually charged after sandwich rule (excludes leading/trailing holidays/week-offs)
+- Example: Mon (leave) → Tue (holiday) → Wed (leave) → `total_days = 3`, `effective_leave_days = 3` (sandwich applies)
+- Example: Mon (leave) → Tue (holiday) → no more leave → `total_days = 2`, `effective_leave_days = 1`
+- Existing rows: NULL (will not be backfilled — Phase 8 balance will treat NULL as total_days)
 
 ---
 
@@ -311,6 +344,66 @@ Future biometric: punch arrives for Rohan on 15 Apr
 
 ---
 
+### Entity 5 — `erp_hr.company_holiday_calendar`
+
+Per-company holiday dates. Lazy approach — only rows that exist count as holidays.
+No pre-population of day records for all employees. The calendar is consulted at apply-time
+for sandwich calculation, and at approval-time to guard `upsert_day_record_leave`.
+
+```
+holiday_id     UUID          PK
+company_id     UUID          FK → erp_master.companies
+holiday_date   DATE          the calendar date
+holiday_name   TEXT          descriptive label, e.g. "Diwali", "Republic Day"
+created_at     TIMESTAMPTZ
+created_by     UUID          FK → auth.users
+
+UNIQUE (company_id, holiday_date)
+INDEX on (company_id, holiday_date)
+```
+
+**Management Authority:**
+
+| Actor | Can Do | Restriction |
+|---|---|---|
+| HR user with `HR_CALENDAR_MANAGE` permission | Add, edit, delete holidays for their own company | Cannot touch other companies' calendars |
+| SA | Full access | Used for initial setup |
+| Employee / Approver | None | Not visible to non-HR |
+
+`HR_CALENDAR_MANAGE` is a new resource code. SA assigns it to HR users via the ACL admin panel
+(same pattern as `HR_LEAVE_TYPE_MANAGE`).
+
+Holidays are always company-scoped. National holidays must be entered per-company by HR.
+There is no shared global holiday list — each company maintains its own.
+
+---
+
+### Entity 6 — `erp_hr.company_week_off_config`
+
+Per-company weekly off day configuration. Defaults: Saturday and Sunday (days 6 and 0 in JS DOW).
+
+```
+week_off_config_id   UUID          PK
+company_id           UUID          FK → erp_master.companies  UNIQUE
+week_off_days        INTEGER[]     array of ISO weekday numbers
+                                    1=Monday, 2=Tuesday, ..., 6=Saturday, 7=Sunday
+                                    Default: [6, 7]  (Saturday, Sunday)
+updated_at           TIMESTAMPTZ
+updated_by           UUID          FK → auth.users
+```
+
+`UNIQUE (company_id)` — exactly one config row per company.
+
+If no row exists for a company → default week-off days are Saturday and Sunday.
+This means the table starts empty and only needs a row when a company deviates from the default.
+
+**Management Authority:** Same as holiday calendar — `HR_CALENDAR_MANAGE` required.
+
+**Day numbering:** ISO weekday convention: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun.
+Backend must normalize DOW comparisons to ISO weekday numbers consistently.
+
+---
+
 ### Entity Relationships
 
 ```
@@ -323,6 +416,13 @@ leave_types ──────────────────────�
                         │
                         ▼
               (future) biometric_punches
+
+company_holiday_calendar ─────────────────────────────┐
+company_week_off_config  ─────────────────────────────┤
+                                                       ▼
+                                          (consulted at apply-time for
+                                           sandwich calc + block rule;
+                                           guard in upsert functions)
 ```
 
 ---
@@ -386,6 +486,33 @@ Backend:
 - A different authorized person must approve
 ```
 
+### Approver Leave Type Override (Before Decision)
+
+An employee may submit a leave request under the wrong leave type.
+Example: applied as "Casual Leave" but it should have been "Sick Leave".
+
+The approver can correct the leave type **before committing their approval decision**.
+Once the decision (APPROVED or REJECTED) is committed, the leave type is locked and cannot be changed.
+
+```
+Rules:
+- Approver sees current leave_type on the request detail page
+- A "Change Leave Type" dropdown is shown only when request is still PENDING
+- Approver selects the correct type and saves → leave_request.leave_type_id updated
+- This change is recorded in the workflow audit log (erp_audit.workflow_events)
+- After the correction, approver proceeds to approve/reject as normal
+- Once APPROVED or REJECTED, the leave type field becomes read-only — no further changes
+
+Balance implications:
+- Leave balance deduction (Phase 8) will use the final leave_type_id at the time
+  the day records are created (i.e., after approval).
+- If the approver corrected the type before approving, the corrected type is what
+  gets stored in employee_day_records and what Phase 8 will count against.
+- The design and enforcement of balance deduction is deferred to Phase 8.
+```
+
+---
+
 ### Approver Flow — Leave Approved
 
 ```
@@ -397,7 +524,7 @@ Backend on APPROVED:
    UPSERT employee_day_records:
      declared_status     = "LEAVE"
      leave_request_id    = this request
-     leave_type_id       = this leave type
+     leave_type_id       = this leave type  ← uses the final type (post any approver correction)
      source              = "LEAVE_APPROVED"
      updated_at          = now()
 
@@ -565,6 +692,22 @@ Register view:
 
 Rule: The person who applies cannot also approve. This is enforced by the existing workflow engine.
 
+### Leave Type Management Permission
+
+```
+Resource code: HR_LEAVE_TYPE_MANAGE
+```
+
+Assigned by SA via the existing ACL admin panel on a per-company basis.
+Only the assigned HR user(s) for a company can add, edit, or deactivate leave types for that company.
+HR cannot manage leave types of any other company — `parent_company_id` isolation enforced server-side.
+
+SA retains the ability to manage leave types for any company directly.
+SA uses this when: setting up a new company, extending types beyond what the HR user has configured,
+or correcting a misconfiguration.
+
+---
+
 ### Manual Correction Permission
 
 ```
@@ -622,7 +765,7 @@ The biometric columns are already present — they hold NULL until biometric is 
 
 ## PART 9 — PHASE MAP WITH WEIGHTAGES
 
-Total implementation = 100%
+Total implementation = 100% (weightages are relative — exact % are effort guidance, not strict)
 
 ```
 Phase 1 — Leave Types                                     10%
@@ -630,10 +773,15 @@ Phase 1 — Leave Types                                     10%
   Phase 1-B: Backend (list types handler, create/update handlers updated)   4%
   Phase 1-C: Frontend (dropdown in apply form, type shown in lists)         3%
 
-Phase 2 — Day Records + Leave Expansion                   20%
-  Phase 2-A: DB Migration (employee_day_records table)                      5%
-  Phase 2-B: Backend expansion on leave approve                            10%
-  Phase 2-C: Backend cleanup on leave cancel                                5%
+Phase 2 — Day Records + Leave Expansion + Holiday Calendar  25%
+  Phase 2-A: DB Migration (employee_day_records + holiday/week-off tables
+             + effective_leave_days on leave_requests)                      5%
+  Phase 2-B: Backend: sandwich calc at apply-time + block rule +
+             effective_leave_days stored; expansion on approve              10%
+  Phase 2-C: Backend cleanup on leave cancel                                2%
+  Phase 2-D: Backend CRUD for holiday calendar + week-off config +
+             sandwich preview endpoint + HR_CALENDAR_MANAGE resource code   5%
+  Phase 2-E: Frontend: holiday calendar management UI + week-off config UI  3%
 
 Phase 3 — Out Work Partial Day + Expansion                15%
   Phase 3-A: DB Migration (out_work_requests extension)                     3%
@@ -765,6 +913,129 @@ HR applying on behalf of an employee must use destinations from that employee's 
 
 ---
 
+## PART 11 — HOLIDAY & WEEK-OFF CALENDAR MANAGEMENT
+
+### Business Rules
+
+1. **Company-wise holidays.** Every company manages its own holiday list independently.
+   There is no global holiday list. If two companies share the same national holiday,
+   each company must add it separately.
+
+2. **Default week-off days.** Saturday and Sunday are the default weekly off days for every company.
+   A company can override this by configuring `company_week_off_config` (e.g. Friday+Saturday).
+
+3. **HR manages the calendar.** Any user with `HR_CALENDAR_MANAGE` resource permission
+   can add, edit, and delete their company's holidays and configure week-off days.
+   SA assigns this permission via the ACL admin panel — same pattern as leave type management.
+
+4. **Holidays do not pre-populate day records.** The "lazy" approach is used.
+   Day records for all employees are NOT created in advance when a holiday is added.
+   Instead, the holiday calendar is consulted at two critical points:
+   - At **leave apply-time** — to calculate sandwich leave adjustment
+   - At **leave approval-time** — the `upsert_day_record_leave` DB function guards
+     against overwriting HOLIDAY_CALENDAR and WEEK_OFF_CALENDAR day records
+
+5. **Week-offs are not stored as day records.** Week-off determination is always
+   computed from `company_week_off_config` (or the default Sat/Sun) on the fly.
+   There are no pre-created WEEK_OFF rows for all employees.
+
+### Scope
+
+Phase 2-D: Backend CRUD handlers for holiday and week-off config.
+Phase 2-E: Frontend management UI for HR.
+
+---
+
+## PART 12 — SANDWICH LEAVE POLICY
+
+### What is Sandwich Leave?
+
+When an employee applies for leave that brackets a holiday or week-off, the system must
+decide whether those bracketed days count as leave deduction.
+
+**PACE ERP Policy: Sandwich Rule is enforced. All bracketed days count.**
+
+Definition: If a holiday or week-off falls between two working days that are both leave days
+(or falls between the first and last working-day leave in a multi-day range), those
+holidays/week-offs are counted as charged leave days.
+
+### Algorithm
+
+Given leave range [from_date, to_date]:
+
+```
+1. Build the set of "working days" in the range:
+   working_days = dates in [from_date, to_date]
+     where date is NOT in company_holiday_calendar
+       AND DOW(date) is NOT in company_week_off_config.week_off_days
+
+2. If working_days is empty → BLOCK the application.
+   Return error: "Your selected date range contains no working days."
+
+3. first_working = min(working_days)
+   last_working  = max(working_days)
+
+4. effective_leave_days = count of dates in [first_working, last_working]
+   (inclusive, regardless of whether each date is a holiday, week-off, or working day)
+
+   This means: all days between the first and last working-day leave are charged.
+   Only leading holidays/week-offs before the first working day and trailing
+   holidays/week-offs after the last working day are excluded.
+
+5. total_days = count of dates in [from_date, to_date]  (unchanged — always inclusive range)
+```
+
+### Examples
+
+| Scenario | from_date | to_date | total_days | effective_leave_days | Notes |
+|---|---|---|---|---|---|
+| All working days | Mon | Fri | 5 | 5 | No sandwich — no holidays |
+| Weekend at end | Mon | Sun | 7 | 5 | Sat+Sun trailing → not counted |
+| Weekend in middle | Thu | Tue (next wk) | 6 | 6 | Sat+Sun sandwiched → counted |
+| Holiday at start | Holiday Mon, leave Tue | Wed | 3 | 2 | Mon leading → not counted |
+| Holiday in middle | Mon leave, Tue holiday, Wed leave | Wed | 3 | 3 | Tue sandwiched → counted |
+| Only holidays | Hol Mon | Hol Tue | 2 | 0 → BLOCKED | No working days → blocked |
+| Single day (working) | Mon | Mon | 1 | 1 | Normal |
+| Single day (holiday) | Holiday Mon | Mon | 1 | 0 → BLOCKED | Blocked |
+
+### Display at Apply-Time
+
+When the user selects a date range, the frontend computes a preview:
+- If range is blocked → show error inline, disable submit button
+- If effective < total → show amber info box:
+  "X working day(s) in this range. Y holiday/week-off day(s) between your leave days
+   will also be charged (sandwich rule). You will be charged Y effective leave days."
+- If effective == total → no special notice needed
+
+The frontend calls the backend to get the calculation (not pure client-side) so that
+the holiday calendar is authoritative. A dedicated lightweight endpoint returns:
+`{ working_days, effective_leave_days, is_blocked, sandwich_days }` given a date range.
+
+### Storage
+
+`effective_leave_days` is stored on `erp_hr.leave_requests` at submission time.
+It is never recalculated after submission — the value is locked at apply-time.
+
+Day records still reflect the actual day status:
+- Holidays between leave days → HOLIDAY rows (from HOLIDAY_CALENDAR source) — not overwritten
+- Week-offs between leave days → WEEK_OFF rows (from WEEK_OFF_CALENDAR source) — not overwritten
+- Working days within range → LEAVE rows (from LEAVE_APPROVED source)
+
+`effective_leave_days` is the counter used for Phase 8 balance deduction.
+`total_days` is preserved as the raw range count for display/reporting.
+
+### Invariants Specific to Sandwich Policy
+
+- The sandwich calculation always uses the authoritative server-side holiday calendar.
+  Frontend preview is informational. Server recalculates at submit and stores the value.
+- If the holiday calendar changes after a request is submitted, `effective_leave_days`
+  is NOT recalculated. The value is locked at submission. This is by design — retroactive
+  changes to the calendar do not affect submitted requests.
+- `effective_leave_days` must always be ≤ `total_days`.
+- `effective_leave_days` = 0 is invalid — blocked before reaching storage.
+
+---
+
 ## INVARIANTS — MUST NEVER BE VIOLATED
 
 1. Day records are always derived from approved requests. Never create for PENDING.
@@ -779,3 +1050,11 @@ HR applying on behalf of an employee must use destinations from that employee's 
 10. Biometric columns are reserved. Do not repurpose them for other use before biometric integration.
 11. Out work destinations are always company-scoped. A user never sees or selects another company's destination.
 12. Destination validation must happen server-side — frontend dropdown is not sufficient guard.
+13. Approver may correct leave_type_id only while the request is PENDING. Once APPROVED or REJECTED, the leave type is immutable. Any type change after decision is prohibited — the day records already reflect the committed type.
+14. Holidays are company-scoped. One company's holiday calendar must never affect another company's leave calculations or day records.
+15. Week-off determination is always computed from `company_week_off_config` (default: Sat+Sun). Day records are NOT pre-created for week-offs. Week-off rows in employee_day_records are created by the leave expansion guard only — they are never bulk-created for all employees.
+16. Leave applications with zero working days in the selected range must be blocked at both the API layer and the frontend. The block is not advisory — it is an error that prevents submission.
+17. `effective_leave_days` is calculated and locked at submission time using the current holiday calendar. A subsequent holiday calendar change does NOT trigger recalculation of any existing request's `effective_leave_days`.
+18. `effective_leave_days` must be ≥ 1 on every stored leave request. Zero is invalid — the block rule (Invariant 16) prevents it.
+19. The sandwich calculation is always performed server-side. The frontend preview is informational only. The stored `effective_leave_days` is always the server-computed value.
+20. `HR_CALENDAR_MANAGE` authorises holiday and week-off management only. It does not grant leave type management (`HR_LEAVE_TYPE_MANAGE`), leave approval, or any other HR permission. These are separate resource codes.

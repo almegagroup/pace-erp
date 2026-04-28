@@ -73,6 +73,31 @@ function shapeCompanyPayload(data: Record<string, unknown>) {
 }
 
 // ------------------------------------------------------------------
+// Leave type seed helper — 5 defaults for every new company
+// Matches the Phase 1-A migration seed exactly.
+// ------------------------------------------------------------------
+async function seedDefaultLeaveTypes(
+  db: ReturnType<typeof getServiceRoleClientWithContext>,
+  companyId: string,
+): Promise<void> {
+  const defaults = [
+    { type_code: "GEN", type_name: "General Leave",  is_paid: true,  requires_document: false, carry_forward_allowed: false, sort_order: 0 },
+    { type_code: "CL",  type_name: "Casual Leave",   is_paid: true,  requires_document: false, carry_forward_allowed: false, sort_order: 1 },
+    { type_code: "SL",  type_name: "Sick Leave",      is_paid: true,  requires_document: true,  carry_forward_allowed: false, sort_order: 2 },
+    { type_code: "EL",  type_name: "Earned Leave",    is_paid: true,  requires_document: false, carry_forward_allowed: true,  sort_order: 3 },
+    { type_code: "LOP", type_name: "Loss of Pay",     is_paid: false, requires_document: false, carry_forward_allowed: false, sort_order: 4 },
+  ];
+
+  await db
+    .schema("erp_hr")
+    .from("leave_types")
+    .upsert(
+      defaults.map((t) => ({ ...t, company_id: companyId })),
+      { onConflict: "company_id,type_code", ignoreDuplicates: true },
+    );
+}
+
+// ------------------------------------------------------------------
 // Handler
 // ------------------------------------------------------------------
 export async function createCompanyHandler(
@@ -177,8 +202,11 @@ export async function createCompanyHandler(
       );
     }
 
-    // 6️⃣ Success
+    // 6️⃣ Ensure operational work contexts
     await ensureCompanyOperationalWorkContexts(db, data.id);
+
+    // 7️⃣ Seed default leave types for the new company
+    await seedDefaultLeaveTypes(db, data.id);
 
     return okResponse(
       {

@@ -20,6 +20,13 @@ export const LEAVE_RESOURCE_CODES = Object.freeze({
   approvalInbox: "HR_LEAVE_APPROVAL_INBOX",
   approvalHistory: "HR_LEAVE_APPROVAL_SCOPE_HISTORY",
   register: "HR_LEAVE_REGISTER",
+  types: "HR_LEAVE_TYPES",
+  typeManage: "HR_LEAVE_TYPE_MANAGE",
+  backdatedApply: "HR_LEAVE_BACKDATED_APPLY",
+});
+
+export const CALENDAR_RESOURCE_CODES = Object.freeze({
+  calendarManage: "HR_CALENDAR_MANAGE",
 });
 
 export const OUT_WORK_RESOURCE_CODES = Object.freeze({
@@ -28,6 +35,12 @@ export const OUT_WORK_RESOURCE_CODES = Object.freeze({
   approvalInbox: "HR_OUT_WORK_APPROVAL_INBOX",
   approvalHistory: "HR_OUT_WORK_APPROVAL_SCOPE_HISTORY",
   register: "HR_OUT_WORK_REGISTER",
+  backdatedApply: "HR_OUT_WORK_BACKDATED_APPLY",
+});
+
+export const ATTENDANCE_RESOURCE_CODES = Object.freeze({
+  manualCorrection: "HR_ATTENDANCE_MANUAL_CORRECTION",
+  report: "HR_ATTENDANCE_REPORT",
 });
 
 export type HrHandlerContext = {
@@ -191,6 +204,98 @@ export function calculateInclusiveDays(fromDate: string, toDate: string): number
   const diffMs = toUtc.getTime() - fromUtc.getTime();
   const diffDays = Math.floor(diffMs / 86400000);
   return diffDays + 1;
+}
+
+export function generateDateRange(fromDate: string, toDate: string): string[] {
+  const dates: string[] = [];
+  const end = isoToUtcDate(toDate);
+  let current = isoToUtcDate(fromDate);
+  while (current <= end) {
+    dates.push(current.toISOString().slice(0, 10));
+    current = new Date(current.getTime() + 86400000);
+  }
+  return dates;
+}
+
+export type SandwichResult = {
+  totalDays: number;
+  workingDays: number;
+  effectiveLeaveDays: number;
+  sandwichDays: number;
+  isBlocked: boolean;
+  blockedReason?: string;
+};
+
+export async function computeSandwichLeave(
+  companyId: string,
+  fromDate: string,
+  toDate: string,
+): Promise<SandwichResult> {
+  // Load holidays for this company in the range
+  const { data: holidays } = await serviceRoleClient
+    .schema("erp_hr")
+    .from("company_holiday_calendar")
+    .select("holiday_date")
+    .eq("company_id", companyId)
+    .gte("holiday_date", fromDate)
+    .lte("holiday_date", toDate);
+
+  const holidaySet = new Set<string>(
+    (holidays ?? []).map((h: { holiday_date: string }) => h.holiday_date),
+  );
+
+  // Load week-off config (default Sat+Sun = ISO [6, 7] if no row exists)
+  const { data: woCfg } = await serviceRoleClient
+    .schema("erp_hr")
+    .from("company_week_off_config")
+    .select("week_off_days")
+    .eq("company_id", companyId)
+    .maybeSingle();
+
+  const weekOffDays: number[] =
+    (woCfg as { week_off_days: number[] } | null)?.week_off_days ?? [6, 7];
+
+  const allDates = generateDateRange(fromDate, toDate);
+  const totalDays = allDates.length;
+
+  // ISO weekday: 1=Mon...5=Fri, 6=Sat, 7=Sun
+  // JS getUTCDay(): 0=Sun, 1=Mon...6=Sat  →  isoDay = jsDay === 0 ? 7 : jsDay
+  function isNonWorking(dateStr: string): boolean {
+    if (holidaySet.has(dateStr)) return true;
+    const jsDay = new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
+    const isoDay = jsDay === 0 ? 7 : jsDay;
+    return weekOffDays.includes(isoDay);
+  }
+
+  const workingDates = allDates.filter((d) => !isNonWorking(d));
+  const workingDays = workingDates.length;
+
+  if (workingDays === 0) {
+    return {
+      totalDays,
+      workingDays: 0,
+      effectiveLeaveDays: 0,
+      sandwichDays: 0,
+      isBlocked: true,
+      blockedReason: "Your selected date range contains no working days.",
+    };
+  }
+
+  // Sandwich rule: charge all days from first working day to last working day (inclusive)
+  const firstWorking = workingDates[0];
+  const lastWorking = workingDates[workingDates.length - 1];
+  const effectiveLeaveDays = allDates.filter(
+    (d) => d >= firstWorking && d <= lastWorking,
+  ).length;
+  const sandwichDays = effectiveLeaveDays - workingDays;
+
+  return {
+    totalDays,
+    workingDays,
+    effectiveLeaveDays,
+    sandwichDays,
+    isBlocked: false,
+  };
 }
 
 export async function getParentCompanyScope(
