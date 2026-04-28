@@ -185,6 +185,22 @@ export default function SAApprovalPolicy() {
     setPolicyEditorOpen(true);
   }
 
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (
+        policyEditorOpen &&
+        event.altKey &&
+        event.key.toLowerCase() === "s" &&
+        !saving
+      ) {
+        event.preventDefault();
+        void handleSave();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [policyEditorOpen, saving]);
+
   async function handleSave() {
     if (!selectedResource || !actionCode) {
       setError("Choose a business resource and action first.");
@@ -420,6 +436,26 @@ export default function SAApprovalPolicy() {
           visible={policyEditorOpen}
           title={`Policy Editor | ${selectedResource.title}`}
           onClose={() => setPolicyEditorOpen(false)}
+          actions={
+            <>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => setPolicyEditorOpen(false)}
+                className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void handleSave()}
+                className="border border-sky-500 bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+              >
+                {saving ? "Saving..." : "Save Policy"}
+              </button>
+            </>
+          }
         >
           <div className="grid gap-4">
             <div className="grid gap-3 md:grid-cols-2">
