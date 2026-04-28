@@ -55,7 +55,7 @@ ALTER TABLE erp_hr.leave_requests
 INSERT INTO erp_hr.leave_types
   (company_id, type_code, type_name, is_paid, requires_document, carry_forward_allowed, sort_order)
 SELECT
-  company_id,
+  id,
   unnest(ARRAY['GEN', 'CL',            'SL',          'EL',            'LOP'         ]) AS type_code,
   unnest(ARRAY['General Leave',
                'Casual Leave',
