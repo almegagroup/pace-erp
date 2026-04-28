@@ -16,6 +16,7 @@ import {
   createWorkflowRequest,
   deleteWorkflowRequest,
   ensureNoDuplicateOutWorkRequest,
+  generateDateRange,
   getModuleBindingForResource,
   getParentCompanyScope,
   isActionableForApprover,
@@ -57,6 +58,9 @@ type OutWorkRequestRow = {
   to_date: string;
   total_days: number;
   reason: string;
+  day_scope: "FULL_DAY" | "PARTIAL_DAY";
+  office_departure_time: string | null;
+  applied_by_auth_user_id: string | null;
   cancelled_at: string | null;
   cancelled_by: string | null;
   created_at: string;
@@ -96,6 +100,8 @@ type OutWorkCaseRow = {
   to_date: string;
   total_days: number;
   reason: string;
+  day_scope: "FULL_DAY" | "PARTIAL_DAY";
+  office_departure_time: string | null;
   created_at: string;
   current_state: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
   approval_type: "ANYONE" | "SEQUENTIAL" | "MUST_ALL";
@@ -149,7 +155,7 @@ async function loadOutWorkRows(filters: {
   let query = serviceRoleClient
     .schema("erp_hr")
     .from("out_work_requests")
-    .select("out_work_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, destination_id, destination_name, destination_address, from_date, to_date, total_days, reason, cancelled_at, cancelled_by, created_at")
+    .select("out_work_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, destination_id, destination_name, destination_address, from_date, to_date, total_days, reason, day_scope, office_departure_time, applied_by_auth_user_id, cancelled_at, cancelled_by, created_at")
     .order("created_at", { ascending: false });
 
   if (filters.requesterAuthUserId) {
@@ -282,6 +288,8 @@ async function buildOutWorkCases(rows: OutWorkRequestRow[]) {
       to_date: row.to_date,
       total_days: row.total_days,
       reason: row.reason,
+      day_scope: row.day_scope,
+      office_departure_time: row.office_departure_time ?? null,
       created_at: workflow.created_at ?? row.created_at,
       current_state: workflow.current_state,
       approval_type: workflow.approval_type,
@@ -446,6 +454,20 @@ export async function createOutWorkRequestHandler(
     const requestedCompanyId =
       String(body?.parent_company_id ?? ctx.context.companyId ?? "").trim() || null;
 
+    // Partial day scope
+    const rawDayScope = String(body?.day_scope ?? "").trim().toUpperCase() || "FULL_DAY";
+    if (!["FULL_DAY", "PARTIAL_DAY"].includes(rawDayScope)) {
+      return errorResponse(
+        "OUT_WORK_DAY_SCOPE_INVALID",
+        "day_scope must be FULL_DAY or PARTIAL_DAY",
+        ctx.request_id,
+        "NONE",
+        400,
+      );
+    }
+    const dayScope = rawDayScope as "FULL_DAY" | "PARTIAL_DAY";
+    const rawDepartureTime = String(body?.office_departure_time ?? "").trim() || null;
+
     if (!reason) {
       return errorResponse(
         "OUT_WORK_REASON_REQUIRED",
@@ -460,6 +482,30 @@ export async function createOutWorkRequestHandler(
         "to date must be after from date",
         ctx.request_id,
       );
+    }
+
+    // Partial day: single date only + departure time required
+    let officeDepartureTime: string | null = null;
+    if (dayScope === "PARTIAL_DAY") {
+      if (fromDate !== toDate) {
+        return errorResponse(
+          "OUT_WORK_PARTIAL_DAY_SINGLE_DATE_ONLY",
+          "partial day out-work must be for a single date (from_date must equal to_date)",
+          ctx.request_id,
+          "NONE",
+          400,
+        );
+      }
+      if (!rawDepartureTime || !/^\d{2}:\d{2}$/.test(rawDepartureTime)) {
+        return errorResponse(
+          "OUT_WORK_DEPARTURE_TIME_REQUIRED",
+          "office_departure_time (HH:MM) is required for partial day out-work",
+          ctx.request_id,
+          "NONE",
+          400,
+        );
+      }
+      officeDepartureTime = rawDepartureTime;
     }
 
     const todayIso = todayIsoInKolkata();
@@ -561,9 +607,11 @@ export async function createOutWorkRequestHandler(
         to_date: toDate,
         total_days: totalDays,
         reason,
+        day_scope: dayScope,
+        office_departure_time: officeDepartureTime,
         created_by: ctx.auth_user_id,
       })
-      .select("out_work_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, destination_id, destination_name, destination_address, from_date, to_date, total_days, reason, cancelled_at, cancelled_by, created_at")
+      .select("out_work_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, destination_id, destination_name, destination_address, from_date, to_date, total_days, reason, day_scope, office_departure_time, cancelled_at, cancelled_by, created_at")
       .single();
 
     if (outWorkError || !outWorkRow) {
@@ -644,6 +692,20 @@ export async function updateOutWorkRequestHandler(
     const reason = String(body?.reason ?? "").trim();
     const destinationId = String(body?.destination_id ?? "").trim();
 
+    // Partial day scope
+    const rawDayScope = String(body?.day_scope ?? "").trim().toUpperCase() || "FULL_DAY";
+    if (!["FULL_DAY", "PARTIAL_DAY"].includes(rawDayScope)) {
+      return errorResponse(
+        "OUT_WORK_DAY_SCOPE_INVALID",
+        "day_scope must be FULL_DAY or PARTIAL_DAY",
+        ctx.request_id,
+        "NONE",
+        400,
+      );
+    }
+    const dayScope = rawDayScope as "FULL_DAY" | "PARTIAL_DAY";
+    const rawDepartureTime = String(body?.office_departure_time ?? "").trim() || null;
+
     if (!outWorkRequestId) {
       return errorResponse(
         "OUT_WORK_UPDATE_ID_REQUIRED",
@@ -674,6 +736,30 @@ export async function updateOutWorkRequestHandler(
         "to_date cannot be before from_date",
         ctx.request_id,
       );
+    }
+
+    // Partial day: single date only + departure time required
+    let officeDepartureTime: string | null = null;
+    if (dayScope === "PARTIAL_DAY") {
+      if (fromDate !== toDate) {
+        return errorResponse(
+          "OUT_WORK_PARTIAL_DAY_SINGLE_DATE_ONLY",
+          "partial day out-work must be for a single date (from_date must equal to_date)",
+          ctx.request_id,
+          "NONE",
+          400,
+        );
+      }
+      if (!rawDepartureTime || !/^\d{2}:\d{2}$/.test(rawDepartureTime)) {
+        return errorResponse(
+          "OUT_WORK_DEPARTURE_TIME_REQUIRED",
+          "office_departure_time (HH:MM) is required for partial day out-work",
+          ctx.request_id,
+          "NONE",
+          400,
+        );
+      }
+      officeDepartureTime = rawDepartureTime;
     }
 
     const todayIso = todayIsoInKolkata();
@@ -777,9 +863,11 @@ export async function updateOutWorkRequestHandler(
         to_date: toDate,
         total_days: totalDays,
         reason,
+        day_scope: dayScope,
+        office_departure_time: officeDepartureTime,
       })
       .eq("out_work_request_id", outWorkRequestId)
-      .select("out_work_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, destination_id, destination_name, destination_address, from_date, to_date, total_days, reason, cancelled_at, cancelled_by, created_at")
+      .select("out_work_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, destination_id, destination_name, destination_address, from_date, to_date, total_days, reason, day_scope, office_departure_time, cancelled_at, cancelled_by, created_at")
       .single();
 
     if (updateError || !updatedRow) {
@@ -913,6 +1001,9 @@ export async function cancelOutWorkRequestHandler(
       );
     }
 
+    // Capture state before mutation — needed for cleanup hook below
+    const previousState = workflow.current_state;
+
     const { error: workflowUpdateError } = await serviceRoleClient
       .schema("acl")
       .from("workflow_requests")
@@ -944,9 +1035,15 @@ export async function cancelOutWorkRequestHandler(
       module_code: workflow.module_code,
       event_type: "CANCEL",
       actor_auth_user_id: ctx.auth_user_id,
-      previous_state: workflow.current_state,
+      previous_state: previousState,
       new_state: "CANCELLED",
     });
+
+    // Day record cleanup — only fires when cancelling an already-approved request.
+    // Non-fatal: cancel must never fail due to day record side effects.
+    if (previousState === "APPROVED") {
+      await removeOutWorkFromDateRecords(outWorkRequestId).catch(() => {});
+    }
 
     return okResponse(
       {
@@ -1199,4 +1296,56 @@ export async function listOutWorkRegisterHandler(
       ctx.request_id,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// expandOutWorkToDateRecords
+// Called by process_decision.handler.ts after an out-work workflow reaches
+// APPROVED. Looks up out_work_request by workflow_request_id and upserts one
+// day record per calendar date in the approved range.
+// HOLIDAY/WEEK_OFF rows are not overwritten (guard inside DB function).
+// Silently no-ops if workflow_request_id does not match any out-work request.
+// ---------------------------------------------------------------------------
+export async function expandOutWorkToDateRecords(
+  workflowRequestId: string,
+): Promise<void> {
+  const { data: owr } = await serviceRoleClient
+    .schema("erp_hr")
+    .from("out_work_requests")
+    .select("out_work_request_id, requester_auth_user_id, parent_company_id, from_date, to_date, day_scope, office_departure_time")
+    .eq("workflow_request_id", workflowRequestId)
+    .maybeSingle();
+
+  if (!owr) return; // Not an out-work workflow — silently no-op
+
+  const dates = generateDateRange(owr.from_date, owr.to_date);
+
+  for (const date of dates) {
+    await serviceRoleClient
+      .schema("erp_hr")
+      .rpc("upsert_day_record_out_work", {
+        p_company_id: owr.parent_company_id,
+        p_employee_id: owr.requester_auth_user_id,
+        p_record_date: date,
+        p_out_work_request_id: owr.out_work_request_id,
+        p_day_scope: owr.day_scope,
+        p_departure_time: owr.office_departure_time ?? null,
+      });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// removeOutWorkFromDateRecords
+// Called by cancelOutWorkRequestHandler when previousState === "APPROVED".
+// Deletes day records created by out-work approval for this request.
+// Only removes rows with source = 'OUT_WORK_APPROVED' — HOLIDAY/WEEK_OFF rows
+// that fall in the same range are never touched.
+// ---------------------------------------------------------------------------
+async function removeOutWorkFromDateRecords(outWorkRequestId: string): Promise<void> {
+  await serviceRoleClient
+    .schema("erp_hr")
+    .from("employee_day_records")
+    .delete()
+    .eq("out_work_request_id", outWorkRequestId)
+    .eq("source", "OUT_WORK_APPROVED");
 }

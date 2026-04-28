@@ -114,4 +114,52 @@ export const HR_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  HR_ATTENDANCE_CORRECTION: {
+    screen_code: "HR_ATTENDANCE_CORRECTION",
+    route: "/dashboard/hr/attendance/correction",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  HR_ATTENDANCE_MONTHLY_SUMMARY: {
+    screen_code: "HR_ATTENDANCE_MONTHLY_SUMMARY",
+    route: "/dashboard/hr/attendance/monthly-summary",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  HR_ATTENDANCE_DAILY_REGISTER: {
+    screen_code: "HR_ATTENDANCE_DAILY_REGISTER",
+    route: "/dashboard/hr/attendance/daily-register",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  HR_ATTENDANCE_YEARLY_LEAVE_SUMMARY: {
+    screen_code: "HR_ATTENDANCE_YEARLY_LEAVE_SUMMARY",
+    route: "/dashboard/hr/attendance/yearly-leave-summary",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  HR_ATTENDANCE_DEPARTMENT_REPORT: {
+    screen_code: "HR_ATTENDANCE_DEPARTMENT_REPORT",
+    route: "/dashboard/hr/attendance/department-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  HR_ATTENDANCE_LEAVE_USAGE: {
+    screen_code: "HR_ATTENDANCE_LEAVE_USAGE",
+    route: "/dashboard/hr/attendance/leave-usage",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
 });

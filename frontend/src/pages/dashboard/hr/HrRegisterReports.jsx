@@ -20,7 +20,7 @@ import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
 import { downloadCsvFile } from "../../../shared/downloadTabularFile.js";
-import { formatDateTime, formatIsoDate, listLeaveRegister, listOutWorkRegister, shiftIsoDate } from "./hrApi.js";
+import { formatDateTime, formatIsoDate, listLeaveRegister, listLeaveTypes, listOutWorkRegister, shiftIsoDate } from "./hrApi.js";
 
 const PAGE_SIZE = 25;
 
@@ -37,6 +37,7 @@ const LEAVE_COLUMN_DEFS = Object.freeze([
   { key: "department_code",            label: "Dept Code",         width: "minmax(120px,0.7fr)" },
   { key: "requester_work_context_name",label: "Work Area",         width: "minmax(160px,0.9fr)" },
   { key: "requester_work_context_code",label: "Work Area Code",    width: "minmax(120px,0.7fr)" },
+  { key: "leave_type_name",            label: "Leave Type",        width: "minmax(140px,0.8fr)" },
   { key: "from_date",                  label: "From Date",         width: "minmax(120px,0.7fr)" },
   { key: "to_date",                    label: "To Date",           width: "minmax(120px,0.7fr)" },
   { key: "total_days",                 label: "Days",              width: "minmax(80px,0.45fr)" },
@@ -58,6 +59,8 @@ const OUT_WORK_COLUMN_DEFS = Object.freeze([
   { key: "requester_work_context_code",label: "Work Area Code",    width: "minmax(120px,0.7fr)" },
   { key: "destination_name",           label: "Destination",       width: "minmax(180px,1fr)"   },
   { key: "destination_address",        label: "Dest. Address",     width: "minmax(220px,1.2fr)" },
+  { key: "day_scope",                  label: "Scope",             width: "minmax(110px,0.65fr)"},
+  { key: "office_departure_time",      label: "Departed",          width: "minmax(110px,0.65fr)"},
   { key: "from_date",                  label: "From Date",         width: "minmax(120px,0.7fr)" },
   { key: "to_date",                    label: "To Date",           width: "minmax(120px,0.7fr)" },
   { key: "total_days",                 label: "Days",              width: "minmax(80px,0.45fr)"  },
@@ -74,6 +77,7 @@ const LEAVE_DEFAULT_VISIBLE = Object.freeze([
   "requester_name", "requester_code",
   "parent_company_name", "parent_company_code",
   "department_name",
+  "leave_type_name",
   "from_date", "to_date", "total_days",
   "reason", "current_state", "created_at",
 ]);
@@ -83,6 +87,7 @@ const OUT_WORK_DEFAULT_VISIBLE = Object.freeze([
   "parent_company_name", "parent_company_code",
   "department_name",
   "destination_name",
+  "day_scope", "office_departure_time",
   "from_date", "to_date", "total_days",
   "reason", "current_state", "created_at",
 ]);
@@ -105,6 +110,7 @@ function defaultCriteria() {
     fromDate: shiftIsoDate(todayIso(), -30),
     toDate: todayIso(),
     companyId: "",
+    leaveTypeCode: "",
   };
 }
 
@@ -116,6 +122,7 @@ function normalizeCriteria(criteria) {
     fromDate: criteria.fromDate || shiftIsoDate(todayIso(), -30),
     toDate: criteria.toDate || todayIso(),
     companyId: criteria.companyId || "",
+    leaveTypeCode: criteria.leaveTypeCode || "",
   };
 }
 
@@ -162,6 +169,8 @@ function resolveColumnValue(columnKey, row) {
   if (columnKey === "requester_code")  return splitDisplay(row?.requester_display).code;
   if (columnKey === "created_at")      return formatDateTime(row?.[columnKey]);
   if (columnKey === "from_date" || columnKey === "to_date") return formatIsoDate(row?.[columnKey]);
+  if (columnKey === "day_scope")       return row?.day_scope === "PARTIAL_DAY" ? "Partial Day" : "Full Day";
+  if (columnKey === "office_departure_time") return row?.office_departure_time ?? "—";
   return row?.[columnKey] ?? "-";
 }
 
@@ -247,9 +256,17 @@ function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCod
     normalizeCriteria(getActiveScreenContext()?.criteria)
   );
   const [error, setError] = useState("");
+  const [criteriaLeaveTypes, setCriteriaLeaveTypes] = useState([]);
   const availableCompanies = Array.isArray(runtimeContext?.availableCompanies)
     ? runtimeContext.availableCompanies
     : [];
+
+  useEffect(() => {
+    if (kind !== "leave") return;
+    listLeaveTypes()
+      .then((data) => setCriteriaLeaveTypes(data?.leave_types ?? []))
+      .catch(() => setCriteriaLeaveTypes([]));
+  }, [kind]);
 
   function updateCriteria(key, value) {
     setCriteria((current) => ({ ...current, [key]: value }));
@@ -337,6 +354,21 @@ function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCod
               })),
             ]}
           />
+          {kind === "leave" && criteriaLeaveTypes.length > 0 ? (
+            <ErpSelectionField
+              label="Leave Type"
+              type="select"
+              value={criteria.leaveTypeCode}
+              onChange={(value) => updateCriteria("leaveTypeCode", value)}
+              options={[
+                { value: "", label: "— All Leave Types —" },
+                ...criteriaLeaveTypes.map((lt) => ({
+                  value: lt.type_code,
+                  label: `${lt.type_name} (${lt.type_code})`,
+                })),
+              ]}
+            />
+          ) : null}
         </div>
         {error ? (
           <div className="border border-rose-300 bg-rose-50 px-3 py-3 text-sm text-rose-700">
@@ -707,6 +739,7 @@ async function loadLeaveRegisterRows(criteria) {
     companyId: criteria.companyId,
     fromDate: criteria.fromDate,
     toDate: criteria.toDate,
+    leaveTypeCode: criteria.leaveTypeCode || undefined,
   });
   return Array.isArray(data?.requests) ? data.requests : [];
 }

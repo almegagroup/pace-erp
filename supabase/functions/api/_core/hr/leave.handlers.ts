@@ -13,9 +13,11 @@ import {
   buildUserDisplay,
   calculateInclusiveDays,
   canRequesterCancel,
+  computeSandwichLeave,
   createWorkflowRequest,
   deleteWorkflowRequest,
   ensureNoDuplicateLeaveRequest,
+  generateDateRange,
   getModuleBindingForResource,
   getParentCompanyScope,
   isActionableForApprover,
@@ -42,9 +44,12 @@ type LeaveRequestRow = {
   workflow_request_id: string;
   requester_auth_user_id: string;
   parent_company_id: string;
+  leave_type_id: string;
+  applied_by_auth_user_id: string | null;
   from_date: string;
   to_date: string;
   total_days: number;
+  effective_leave_days: number | null;
   reason: string;
   cancelled_at: string | null;
   cancelled_by: string | null;
@@ -81,6 +86,7 @@ type LeaveCaseRow = {
   from_date: string;
   to_date: string;
   total_days: number;
+  effective_leave_days: number | null;
   reason: string;
   created_at: string;
   current_state: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
@@ -91,6 +97,11 @@ type LeaveCaseRow = {
   resource_code: string | null;
   action_code: string | null;
   module_code: string;
+  leave_type_id: string;
+  leave_type_code: string | null;
+  leave_type_name: string | null;
+  applied_by_auth_user_id: string | null;
+  applied_by_display: string | null;
 };
 
 function buildDecisionHistory(
@@ -119,7 +130,7 @@ async function loadLeaveRows(filters: {
   let query = serviceRoleClient
     .schema("erp_hr")
     .from("leave_requests")
-    .select("leave_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, from_date, to_date, total_days, reason, cancelled_at, cancelled_by, created_at")
+    .select("leave_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, leave_type_id, applied_by_auth_user_id, from_date, to_date, total_days, effective_leave_days, reason, cancelled_at, cancelled_by, created_at")
     .order("created_at", { ascending: false });
 
   if (filters.requesterAuthUserId) {
@@ -173,6 +184,49 @@ async function loadWorkflowMap(
   return workflowMap;
 }
 
+async function loadLeaveTypeMap(
+  leaveTypeIds: string[],
+): Promise<Map<string, { type_code: string; type_name: string }>> {
+  const map = new Map<string, { type_code: string; type_name: string }>();
+  const ids = [...new Set(leaveTypeIds.filter(Boolean))];
+  if (ids.length === 0) return map;
+
+  const { data } = await serviceRoleClient
+    .schema("erp_hr")
+    .from("leave_types")
+    .select("leave_type_id, type_code, type_name")
+    .in("leave_type_id", ids);
+
+  for (const row of (data ?? []) as Array<{
+    leave_type_id: string;
+    type_code: string;
+    type_name: string;
+  }>) {
+    map.set(row.leave_type_id, {
+      type_code: row.type_code,
+      type_name: row.type_name,
+    });
+  }
+  return map;
+}
+
+async function validateLeaveTypeForCompany(
+  leaveTypeId: string,
+  companyId: string,
+): Promise<{ type_code: string; type_name: string } | null> {
+  const { data } = await serviceRoleClient
+    .schema("erp_hr")
+    .from("leave_types")
+    .select("leave_type_id, type_code, type_name")
+    .eq("leave_type_id", leaveTypeId)
+    .eq("company_id", companyId)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (!data) return null;
+  return { type_code: data.type_code, type_name: data.type_name };
+}
+
 async function buildLeaveCases(rows: LeaveRequestRow[]) {
   const workflowRequestIds = rows.map((row) => row.workflow_request_id);
   const workflowMap = await loadWorkflowMap(workflowRequestIds);
@@ -181,6 +235,7 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
   const actorIds = new Set<string>();
   for (const row of rows) {
     actorIds.add(row.requester_auth_user_id);
+    if (row.applied_by_auth_user_id) actorIds.add(row.applied_by_auth_user_id);
   }
   for (const decisions of decisionMap.values()) {
     for (const decision of decisions) {
@@ -189,6 +244,9 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
   }
 
   const userIdentityMap = await loadUserIdentityMap([...actorIds]);
+  const leaveTypeMap = await loadLeaveTypeMap(
+    rows.map((row) => row.leave_type_id).filter(Boolean),
+  );
   const companyIdentityMap = await loadCompanyIdentityMap(
     rows.map((row) => row.parent_company_id),
   );
@@ -248,6 +306,7 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
       from_date: row.from_date,
       to_date: row.to_date,
       total_days: row.total_days,
+      effective_leave_days: row.effective_leave_days ?? null,
       reason: row.reason,
       created_at: workflow.created_at ?? row.created_at,
       current_state: workflow.current_state,
@@ -262,6 +321,13 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
       resource_code: workflow.resource_code,
       action_code: workflow.action_code,
       module_code: workflow.module_code,
+      leave_type_id: row.leave_type_id,
+      leave_type_code: leaveTypeMap.get(row.leave_type_id)?.type_code ?? null,
+      leave_type_name: leaveTypeMap.get(row.leave_type_id)?.type_name ?? null,
+      applied_by_auth_user_id: row.applied_by_auth_user_id ?? null,
+      applied_by_display: row.applied_by_auth_user_id
+        ? buildUserDisplay(userIdentityMap.get(row.applied_by_auth_user_id) ?? null)
+        : null,
     });
   }
 
@@ -297,6 +363,18 @@ export async function createLeaveRequestHandler(
     const reason = String(body?.reason ?? "").trim();
     const requestedCompanyId =
       String(body?.parent_company_id ?? ctx.context.companyId ?? "").trim() || null;
+    const leaveTypeIdRaw = String(body?.leave_type_id ?? "").trim();
+
+    if (!leaveTypeIdRaw) {
+      return errorResponse(
+        "LEAVE_TYPE_REQUIRED",
+        "leave_type_id required",
+        ctx.request_id,
+        "NONE",
+        400,
+        { gateId: "HR.LEAVE", routeKey, decisionTrace: "LEAVE_TYPE_REQUIRED" },
+      );
+    }
 
     if (!reason) {
       return errorResponse(
@@ -346,8 +424,40 @@ export async function createLeaveRequestHandler(
       );
     }
 
-    const totalDays = calculateInclusiveDays(fromDate, toDate);
     const parentCompany = await getParentCompanyScope(ctx.auth_user_id, requestedCompanyId);
+
+    // Sandwich leave policy — block if no working days; compute effective_leave_days
+    const sandwichResult = await computeSandwichLeave(
+      parentCompany.company_id,
+      fromDate,
+      toDate,
+    );
+    if (sandwichResult.isBlocked) {
+      return errorResponse(
+        "LEAVE_NO_WORKING_DAYS",
+        sandwichResult.blockedReason ?? "Your selected date range contains no working days.",
+        ctx.request_id,
+        "NONE",
+        400,
+        { gateId: "HR.LEAVE", routeKey, decisionTrace: "LEAVE_NO_WORKING_DAYS" },
+      );
+    }
+    const totalDays = sandwichResult.totalDays;
+    const effectiveLeaveDays = sandwichResult.effectiveLeaveDays;
+
+    // Validate leave_type_id belongs to this company and is active
+    const leaveType = await validateLeaveTypeForCompany(leaveTypeIdRaw, parentCompany.company_id);
+    if (!leaveType) {
+      return errorResponse(
+        "LEAVE_TYPE_INVALID",
+        "leave type not found or not active for this company",
+        ctx.request_id,
+        "NONE",
+        400,
+        { gateId: "HR.LEAVE", routeKey, decisionTrace: "LEAVE_TYPE_INVALID" },
+      );
+    }
+
     const explicitRequesterWorkContextId =
       String(body?.requester_work_context_id ?? "").trim() || null;
     const requesterWorkContext = await resolveRequesterSubjectWorkContext({
@@ -385,14 +495,17 @@ export async function createLeaveRequestHandler(
         workflow_request_id: workflow.request_id,
         requester_auth_user_id: ctx.auth_user_id,
         parent_company_id: parentCompany.company_id,
+        leave_type_id: leaveTypeIdRaw,
+        applied_by_auth_user_id: null,
         requester_work_context_id: requesterWorkContext.work_context_id,
         from_date: fromDate,
         to_date: toDate,
         total_days: totalDays,
+        effective_leave_days: effectiveLeaveDays,
         reason,
         created_by: ctx.auth_user_id,
       })
-      .select("leave_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, from_date, to_date, total_days, reason, cancelled_at, cancelled_by, created_at")
+      .select("leave_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, leave_type_id, applied_by_auth_user_id, from_date, to_date, total_days, effective_leave_days, reason, cancelled_at, cancelled_by, created_at")
       .single();
 
     if (leaveError || !leaveRow) {
@@ -439,6 +552,9 @@ export async function createLeaveRequestHandler(
           requester_work_context_id: requesterWorkContext.work_context_id,
           requester_work_context_code: requesterWorkContext.work_context_code ?? null,
           requester_work_context_name: requesterWorkContext.work_context_name ?? null,
+          leave_type_code: leaveType.type_code,
+          leave_type_name: leaveType.type_name,
+          sandwich_days: sandwichResult.sandwichDays,
         },
       },
       ctx.request_id,
@@ -486,9 +602,6 @@ export async function updateLeaveRequestHandler(
 
     const body = await req.json().catch(() => ({}));
     const leaveRequestId = String(body?.leave_request_id ?? "").trim();
-    const fromDate = normalizeIsoDate(body?.from_date);
-    const toDate = normalizeIsoDate(body?.to_date);
-    const reason = String(body?.reason ?? "").trim();
 
     if (!leaveRequestId) {
       return errorResponse(
@@ -497,6 +610,165 @@ export async function updateLeaveRequestHandler(
         ctx.request_id,
       );
     }
+
+    // -----------------------------------------------------------------------
+    // Branch A — Approver leave type override (body.approver_type_override = true)
+    // Approver corrects the leave_type before committing their decision.
+    // Only allowed while request is PENDING. Once decided, type is immutable.
+    // -----------------------------------------------------------------------
+    if (body?.approver_type_override === true) {
+      const newLeaveTypeId = String(body?.leave_type_id ?? "").trim();
+      if (!newLeaveTypeId) {
+        return errorResponse(
+          "LEAVE_TYPE_REQUIRED",
+          "leave_type_id required for approver type override",
+          ctx.request_id,
+          "NONE",
+          400,
+        );
+      }
+
+      const { data: leaveRowA, error: leaveErrorA } = await serviceRoleClient
+        .schema("erp_hr")
+        .from("leave_requests")
+        .select("leave_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, leave_type_id")
+        .eq("leave_request_id", leaveRequestId)
+        .maybeSingle();
+
+      if (leaveErrorA || !leaveRowA) {
+        return errorResponse("LEAVE_REQUEST_NOT_FOUND", "leave request not found", ctx.request_id);
+      }
+
+      // Requester cannot use the approver override path on their own request
+      if (leaveRowA.requester_auth_user_id === ctx.auth_user_id) {
+        return errorResponse(
+          "LEAVE_TYPE_OVERRIDE_SELF_FORBIDDEN",
+          "use the regular edit endpoint to change your own request's leave type",
+          ctx.request_id,
+          "NONE",
+          403,
+        );
+      }
+
+      const { data: workflowA, error: workflowErrorA } = await serviceRoleClient
+        .schema("acl")
+        .from("workflow_requests")
+        .select("request_id, module_code, current_state, approval_type, resource_code, action_code, requester_work_context_id")
+        .eq("request_id", leaveRowA.workflow_request_id)
+        .maybeSingle();
+
+      if (workflowErrorA || !workflowA) {
+        return errorResponse("LEAVE_WORKFLOW_NOT_FOUND", "workflow request not found", ctx.request_id);
+      }
+
+      if (workflowA.current_state !== "PENDING") {
+        return errorResponse(
+          "LEAVE_TYPE_OVERRIDE_NOT_ALLOWED",
+          "leave type can only be changed while the request is PENDING",
+          ctx.request_id,
+          "NONE",
+          403,
+        );
+      }
+
+      // Verify caller is an actionable approver for this request
+      const moduleBindingA = await getModuleBindingForResource(LEAVE_RESOURCE_CODES.apply);
+      const approverRowsA = await loadApproverRulesForCompanyModule(
+        leaveRowA.parent_company_id,
+        moduleBindingA.module_code,
+      );
+      const decisionMapA = await loadWorkflowDecisionMap([leaveRowA.workflow_request_id]);
+      const decisionsA = decisionMapA.get(leaveRowA.workflow_request_id) ?? [];
+
+      const companyWorkContextMapA = createWorkflowScopeContextMap(
+        await loadActiveCompanyWorkContexts(serviceRoleClient, leaveRowA.parent_company_id),
+      );
+      const requesterDeptContextIdA = resolveDepartmentWorkflowScopeId(
+        { requester_work_context_id: workflowA.requester_work_context_id ?? null },
+        companyWorkContextMapA,
+      );
+      const scopedApproversA = pickScopedApprovers(
+        {
+          resource_code: workflowA.resource_code,
+          action_code: workflowA.action_code,
+          requester_auth_user_id: leaveRowA.requester_auth_user_id,
+          requester_work_context_id: workflowA.requester_work_context_id ?? null,
+          requester_department_work_context_id: requesterDeptContextIdA,
+        },
+        approverRowsA,
+      );
+      const isApproverA = isActionableForApprover({
+        workflow: { approval_type: workflowA.approval_type },
+        requesterAuthUserId: leaveRowA.requester_auth_user_id,
+        scopedApprovers: scopedApproversA,
+        decisions: decisionsA,
+        authUserId: ctx.auth_user_id,
+        roleCode: ctx.roleCode,
+      });
+
+      if (!isApproverA) {
+        return errorResponse(
+          "LEAVE_TYPE_OVERRIDE_FORBIDDEN",
+          "only the actionable approver can change the leave type",
+          ctx.request_id,
+          "NONE",
+          403,
+        );
+      }
+
+      // Validate new leave_type_id belongs to this company and is active
+      const leaveTypeA = await validateLeaveTypeForCompany(newLeaveTypeId, leaveRowA.parent_company_id);
+      if (!leaveTypeA) {
+        return errorResponse(
+          "LEAVE_TYPE_INVALID",
+          "leave type not found or not active for this company",
+          ctx.request_id,
+          "NONE",
+          400,
+        );
+      }
+
+      const previousLeaveTypeId = leaveRowA.leave_type_id;
+
+      const { error: overrideUpdateError } = await serviceRoleClient
+        .schema("erp_hr")
+        .from("leave_requests")
+        .update({ leave_type_id: newLeaveTypeId })
+        .eq("leave_request_id", leaveRequestId);
+
+      if (overrideUpdateError) {
+        throw new Error("LEAVE_TYPE_OVERRIDE_UPDATE_FAILED");
+      }
+
+      await appendWorkflowEvent({
+        request_id: leaveRowA.workflow_request_id,
+        company_id: leaveRowA.parent_company_id,
+        module_code: workflowA.module_code,
+        event_type: "LEAVE_TYPE_CHANGED",
+        actor_auth_user_id: ctx.auth_user_id,
+        previous_state: previousLeaveTypeId,
+        new_state: newLeaveTypeId,
+      });
+
+      return okResponse(
+        {
+          leave_request_id: leaveRequestId,
+          leave_type_id: newLeaveTypeId,
+          leave_type_code: leaveTypeA.type_code,
+          leave_type_name: leaveTypeA.type_name,
+        },
+        ctx.request_id,
+      );
+    }
+
+    // -----------------------------------------------------------------------
+    // Branch B — Requester edits their own request (dates, reason, leave_type)
+    // Only allowed while PENDING with 0 decisions.
+    // -----------------------------------------------------------------------
+    const fromDate = normalizeIsoDate(body?.from_date);
+    const toDate = normalizeIsoDate(body?.to_date);
+    const reason = String(body?.reason ?? "").trim();
+    const newLeaveTypeIdB = String(body?.leave_type_id ?? "").trim() || null;
 
     if (!reason) {
       return errorResponse(
@@ -528,7 +800,7 @@ export async function updateLeaveRequestHandler(
     const { data: leaveRow, error: leaveError } = await serviceRoleClient
       .schema("erp_hr")
       .from("leave_requests")
-      .select("leave_request_id, workflow_request_id, requester_auth_user_id, parent_company_id")
+      .select("leave_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, leave_type_id")
       .eq("leave_request_id", leaveRequestId)
       .maybeSingle();
 
@@ -574,6 +846,22 @@ export async function updateLeaveRequestHandler(
       );
     }
 
+    // Validate new leave_type_id if the requester is changing it
+    let resolvedLeaveTypeId = leaveRow.leave_type_id;
+    if (newLeaveTypeIdB && newLeaveTypeIdB !== leaveRow.leave_type_id) {
+      const leaveTypeB = await validateLeaveTypeForCompany(newLeaveTypeIdB, leaveRow.parent_company_id);
+      if (!leaveTypeB) {
+        return errorResponse(
+          "LEAVE_TYPE_INVALID",
+          "leave type not found or not active for this company",
+          ctx.request_id,
+          "NONE",
+          400,
+        );
+      }
+      resolvedLeaveTypeId = newLeaveTypeIdB;
+    }
+
     await ensureNoDuplicateLeaveRequest({
       requesterAuthUserId: ctx.auth_user_id,
       parentCompanyId: leaveRow.parent_company_id,
@@ -582,7 +870,22 @@ export async function updateLeaveRequestHandler(
       excludeLeaveRequestId: leaveRequestId,
     });
 
-    const totalDays = calculateInclusiveDays(fromDate, toDate);
+    // Recompute sandwich (dates may have changed)
+    const sandwichResultB = await computeSandwichLeave(
+      leaveRow.parent_company_id,
+      fromDate,
+      toDate,
+    );
+    if (sandwichResultB.isBlocked) {
+      return errorResponse(
+        "LEAVE_NO_WORKING_DAYS",
+        sandwichResultB.blockedReason ?? "Your selected date range contains no working days.",
+        ctx.request_id,
+        "NONE",
+        400,
+      );
+    }
+    const totalDays = sandwichResultB.totalDays;
 
     const { data: updatedLeaveRow, error: updateError } = await serviceRoleClient
       .schema("erp_hr")
@@ -591,10 +894,12 @@ export async function updateLeaveRequestHandler(
         from_date: fromDate,
         to_date: toDate,
         total_days: totalDays,
+        effective_leave_days: sandwichResultB.effectiveLeaveDays,
         reason,
+        leave_type_id: resolvedLeaveTypeId,
       })
       .eq("leave_request_id", leaveRequestId)
-      .select("leave_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, from_date, to_date, total_days, reason, cancelled_at, cancelled_by, created_at")
+      .select("leave_request_id, workflow_request_id, requester_auth_user_id, parent_company_id, leave_type_id, applied_by_auth_user_id, from_date, to_date, total_days, effective_leave_days, reason, cancelled_at, cancelled_by, created_at")
       .single();
 
     if (updateError || !updatedLeaveRow) {
@@ -737,6 +1042,9 @@ export async function cancelLeaveRequestHandler(
       );
     }
 
+    // Capture previous state before mutation — needed for day record cleanup
+    const previousState = workflow.current_state;
+
     const { error: workflowUpdateError } = await serviceRoleClient
       .schema("acl")
       .from("workflow_requests")
@@ -762,13 +1070,22 @@ export async function cancelLeaveRequestHandler(
       throw new Error("LEAVE_CANCEL_REQUEST_UPDATE_FAILED");
     }
 
+    // If request was previously APPROVED, remove the day records that were
+    // created on approval. Non-fatal — day records can be cleaned up manually
+    // if this fails, but we don't want to fail the cancel itself.
+    if (previousState === "APPROVED") {
+      await removeLeaveFromDateRecords(leaveRequestId).catch(() => {
+        // Intentionally swallowed — cancel must not fail due to day record cleanup
+      });
+    }
+
     await appendWorkflowEvent({
       request_id: leaveRow.workflow_request_id,
       company_id: leaveRow.parent_company_id,
       module_code: workflow.module_code,
       event_type: "CANCEL",
       actor_auth_user_id: ctx.auth_user_id,
-      previous_state: workflow.current_state,
+      previous_state: previousState,
       new_state: "CANCELLED",
     });
 
@@ -927,6 +1244,7 @@ export async function listLeaveRegisterHandler(
     const requestedCompanyId = url.searchParams.get("company_id")?.trim() || "";
     const fromDate = url.searchParams.get("from_date")?.trim() || "";
     const toDate = url.searchParams.get("to_date")?.trim() || "";
+    const leaveTypeCodeFilter = url.searchParams.get("leave_type_code")?.trim().toUpperCase() || "";
     const normalizedFromDate = fromDate ? normalizeIsoDate(fromDate) : "";
     const normalizedToDate = toDate ? normalizeIsoDate(toDate) : "";
 
@@ -1025,9 +1343,13 @@ export async function listLeaveRegisterHandler(
       );
     });
 
+    const filteredCases = leaveTypeCodeFilter
+      ? visibleCases.filter((c) => c.leave_type_code === leaveTypeCodeFilter)
+      : visibleCases;
+
     return okResponse(
       {
-        requests: visibleCases,
+        requests: filteredCases,
       },
       ctx.request_id,
     );
@@ -1035,6 +1357,113 @@ export async function listLeaveRegisterHandler(
     return errorResponse(
       (err as Error).message || "LEAVE_REGISTER_EXCEPTION",
       "leave register exception",
+      ctx.request_id,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// expandLeaveToDateRecords
+// Called by process_decision.handler.ts after a leave workflow reaches APPROVED.
+// Looks up leave_request by workflow_request_id and upserts one day record per
+// calendar date in the approved range. HOLIDAY/WEEK_OFF rows are not overwritten
+// (guard is inside the DB function erp_hr.upsert_day_record_leave).
+// ---------------------------------------------------------------------------
+export async function expandLeaveToDateRecords(
+  workflowRequestId: string,
+): Promise<void> {
+  const { data: lr } = await serviceRoleClient
+    .schema("erp_hr")
+    .from("leave_requests")
+    .select("leave_request_id, requester_auth_user_id, parent_company_id, from_date, to_date, leave_type_id")
+    .eq("workflow_request_id", workflowRequestId)
+    .maybeSingle();
+
+  if (!lr) return; // Not a leave request — silently no-op
+
+  const dates = generateDateRange(lr.from_date, lr.to_date);
+
+  for (const date of dates) {
+    await serviceRoleClient
+      .schema("erp_hr")
+      .rpc("upsert_day_record_leave", {
+        p_company_id: lr.parent_company_id,
+        p_employee_id: lr.requester_auth_user_id,
+        p_record_date: date,
+        p_leave_request_id: lr.leave_request_id,
+        p_leave_type_id: lr.leave_type_id,
+      });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// removeLeaveFromDateRecords
+// Called by cancelLeaveRequestHandler when previousState === "APPROVED".
+// Deletes all day records that were created by leave approval for this request.
+// Only removes rows with source = 'LEAVE_APPROVED' — HOLIDAY/WEEK_OFF rows
+// that happened to fall in the same range are never touched.
+// ---------------------------------------------------------------------------
+async function removeLeaveFromDateRecords(leaveRequestId: string): Promise<void> {
+  await serviceRoleClient
+    .schema("erp_hr")
+    .from("employee_day_records")
+    .delete()
+    .eq("leave_request_id", leaveRequestId)
+    .eq("source", "LEAVE_APPROVED");
+}
+
+// ---------------------------------------------------------------------------
+// getLeaveSandwichPreviewHandler
+// GET /api/hr/leave/sandwich-preview?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD
+// Called by the frontend as the user selects dates in the apply form to show
+// the sandwich info panel / block error before they submit.
+// No special ACL required — any authenticated user with HR business context.
+// ---------------------------------------------------------------------------
+export async function getLeaveSandwichPreviewHandler(
+  req: Request,
+  ctx: HrHandlerContext,
+): Promise<Response> {
+  try {
+    assertHrBusinessContext(ctx);
+
+    const url = new URL(req.url);
+    const fromDateRaw = url.searchParams.get("from_date")?.trim() ?? "";
+    const toDateRaw = url.searchParams.get("to_date")?.trim() ?? "";
+
+    if (!fromDateRaw || !toDateRaw) {
+      return errorResponse(
+        "SANDWICH_PREVIEW_DATES_REQUIRED",
+        "from_date and to_date are required",
+        ctx.request_id,
+        "NONE",
+        400,
+      );
+    }
+
+    const fromDate = normalizeIsoDate(fromDateRaw);
+    const toDate = normalizeIsoDate(toDateRaw);
+
+    if (toDate < fromDate) {
+      return errorResponse(
+        "LEAVE_DATE_RANGE_INVALID",
+        "to_date cannot be before from_date",
+        ctx.request_id,
+        "NONE",
+        400,
+      );
+    }
+
+    const requestedCompanyId =
+      String(url.searchParams.get("company_id") ?? ctx.context.companyId ?? "").trim() || null;
+    const parentCompany = await getParentCompanyScope(ctx.auth_user_id, requestedCompanyId);
+
+    const result = await computeSandwichLeave(parentCompany.company_id, fromDate, toDate);
+
+    return okResponse(result, ctx.request_id);
+  } catch (err) {
+    return errorResponse(
+      (err as Error).message || "SANDWICH_PREVIEW_EXCEPTION",
+      "sandwich preview exception",
       ctx.request_id,
     );
   }

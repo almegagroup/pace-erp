@@ -69,6 +69,7 @@ import LeaveRequestDetailPage from "../pages/dashboard/hr/leave/LeaveRequestDeta
 import LeaveApprovalScopeHistoryPage from "../pages/dashboard/hr/leave/LeaveApprovalScopeHistoryPage.jsx";
 import LeaveRegisterPage from "../pages/dashboard/hr/leave/LeaveRegisterPage.jsx";
 import LeaveRegisterResultsPage from "../pages/dashboard/hr/leave/LeaveRegisterResultsPage.jsx";
+import LeaveTypeManagementPage from "../pages/dashboard/hr/leave/LeaveTypeManagementPage.jsx";
 import OutWorkApplyPage from "../pages/dashboard/hr/outWork/OutWorkApplyPage.jsx";
 import OutWorkMyRequestsPage from "../pages/dashboard/hr/outWork/OutWorkMyRequestsPage.jsx";
 import OutWorkApprovalInboxPage from "../pages/dashboard/hr/outWork/OutWorkApprovalInboxPage.jsx";
@@ -76,6 +77,13 @@ import OutWorkRequestDetailPage from "../pages/dashboard/hr/outWork/OutWorkReque
 import OutWorkApprovalScopeHistoryPage from "../pages/dashboard/hr/outWork/OutWorkApprovalScopeHistoryPage.jsx";
 import OutWorkRegisterPage from "../pages/dashboard/hr/outWork/OutWorkRegisterPage.jsx";
 import OutWorkRegisterResultsPage from "../pages/dashboard/hr/outWork/OutWorkRegisterResultsPage.jsx";
+import HolidayCalendarPage from "../pages/dashboard/hr/calendar/HolidayCalendarPage.jsx";
+import HrAttendanceCorrectionPage from "../pages/dashboard/hr/attendance/HrAttendanceCorrectionPage.jsx";
+import HrMonthlyAttendanceSummaryPage from "../pages/dashboard/hr/attendance/HrMonthlyAttendanceSummaryPage.jsx";
+import HrDailyAttendanceRegisterPage from "../pages/dashboard/hr/attendance/HrDailyAttendanceRegisterPage.jsx";
+import HrYearlyLeaveSummaryPage from "../pages/dashboard/hr/attendance/HrYearlyLeaveSummaryPage.jsx";
+import HrDepartmentAttendanceReportPage from "../pages/dashboard/hr/attendance/HrDepartmentAttendanceReportPage.jsx";
+import HrLeaveUsageReportPage from "../pages/dashboard/hr/attendance/HrLeaveUsageReportPage.jsx";
 
 export default function AppRouter() {
   return (
@@ -247,6 +255,10 @@ export default function AppRouter() {
                     element={<LeaveRegisterResultsPage />}
                   />
                   <Route
+                    path="hr/leave/types"
+                    element={<LeaveTypeManagementPage />}
+                  />
+                  <Route
                     path="hr/out-work/apply"
                     element={<OutWorkApplyPage />}
                   />
@@ -273,6 +285,34 @@ export default function AppRouter() {
                   <Route
                     path="hr/out-work/register/results"
                     element={<OutWorkRegisterResultsPage />}
+                  />
+                  <Route
+                    path="hr/calendar/holidays"
+                    element={<HolidayCalendarPage />}
+                  />
+                  <Route
+                    path="hr/attendance/correction"
+                    element={<HrAttendanceCorrectionPage />}
+                  />
+                  <Route
+                    path="hr/attendance/monthly-summary"
+                    element={<HrMonthlyAttendanceSummaryPage />}
+                  />
+                  <Route
+                    path="hr/attendance/daily-register"
+                    element={<HrDailyAttendanceRegisterPage />}
+                  />
+                  <Route
+                    path="hr/attendance/yearly-leave-summary"
+                    element={<HrYearlyLeaveSummaryPage />}
+                  />
+                  <Route
+                    path="hr/attendance/department-report"
+                    element={<HrDepartmentAttendanceReportPage />}
+                  />
+                  <Route
+                    path="hr/attendance/leave-usage"
+                    element={<HrLeaveUsageReportPage />}
                   />
                 </Route>
               </Route>
