@@ -209,6 +209,9 @@ export default function SACapabilityGovernance(){
   const { getRowProps: getContextRowProps } = useErpListNavigation(filteredContexts, {
     onActivate: (row) => openBindingDrawer(row),
   });
+  const { getRowProps: getPackRowProps } = useErpListNavigation(caps, {
+    onActivate: (cap) => { setCapCode(cap.capability_code); setActiveTab("matrix"); },
+  });
   const filteredBindingCaps=useMemo(()=>{
     const needle=normalize(bindingSearch);
     return caps.filter((cap)=>{
@@ -737,11 +740,11 @@ export default function SACapabilityGovernance(){
           <div className="border border-slate-300 bg-white">
             {caps.length===0?(
               <div className="px-4 py-6 text-center text-sm text-slate-400">No capability packs created yet. Use the form above to create the first one.</div>
-            ):caps.map((cap)=>{
+            ):caps.map((cap,i)=>{
               const ctxCount=Object.values(contextCapabilityMap).filter((codes)=>Array.isArray(codes)&&codes.includes(cap.capability_code)).length;
               const isCurrent=capCode===cap.capability_code;
               return (
-                <div key={cap.capability_code} className={`grid grid-cols-[minmax(0,1fr)_80px_80px_120px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0 ${isCurrent?"bg-sky-50":"bg-white"}`}>
+                <div key={cap.capability_code} {...getPackRowProps(i)} className={`grid grid-cols-[minmax(0,1fr)_80px_80px_120px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0 outline-none focus:ring-1 focus:ring-inset focus:ring-sky-400 ${isCurrent?"bg-sky-50":"bg-white hover:bg-slate-50"}`}>
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-slate-900">{cap.capability_code}</div>
                     <div className="mt-0.5 text-xs text-slate-500">{cap.capability_name}</div>
