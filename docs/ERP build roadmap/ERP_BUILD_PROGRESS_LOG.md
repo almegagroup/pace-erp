@@ -2488,3 +2488,123 @@ then validate that SA and ACL paths work cleanly after the legacy bridge table i
     - explicitly declared automatic menu recompute on company or work-context switch
     - explicitly declared user overrides as exception layer, not default permission stitching
     - docs/ACL_SSOT.md
+
+## Entry 043
+
+Date:
+2026-04-29
+
+Roadmap step:
+SA ACL Governance — HR Module Capability Pack Setup
+
+Status:
+IN PROGRESS
+
+What was done:
+- Registered 4 new screen codes in Page Resource Registry for Phase 5-D correction approval workflow:
+  HR_ATTENDANCE_CORRECTION_PENDING_LIST, HR_ATTENDANCE_CORRECTION_REQUEST_DETAIL,
+  HR_ATTENDANCE_CORRECTION_APPROVAL_INBOX, HR_ATTENDANCE_CORRECTION_APPROVAL_SCOPE_HISTORY
+- Registered new resource code HR_ATTENDANCE_CORRECTION_INBOX in Module Resource Map (HR module)
+- Reviewed and documented full HR capability pack breakdown across 5 packs:
+  CAP_HR_SELF_SERVICE (6 screens), CAP_HR_APPROVER (9 screens),
+  CAP_HR_AUDIT_VIEW (9 screens), CAP_HR_ACCESS (5 screens), CAP_HR_DIRECTOR (all + EXPORT)
+- Defined complete resource code + action matrix for all screens across all 5 packs
+  (resource codes from shared.ts: LEAVE_RESOURCE_CODES, OUT_WORK_RESOURCE_CODES,
+  ATTENDANCE_RESOURCE_CODES, CALENDAR_RESOURCE_CODES)
+- Began configuring CAP_HR_ACCESS and CAP_HR_APPROVER pack matrices for new correction screens
+
+What changed in repo:
+- SA Panel: Page Resource Registry (4 new entries)
+- SA Panel: Module Resource Map (1 new resource code)
+- SA Panel: Capability Pack matrices (in progress — CAP_HR_ACCESS, CAP_HR_APPROVER)
+
+What was verified:
+- All 4 new screen codes registered with correct routes and ACL universe
+- HR_ATTENDANCE_CORRECTION_INBOX resource code bound to HR module
+- Matrix for correction screens: HR uses MANUAL_CORRECTION WRITE; Approver uses CORRECTION_INBOX APPROVE/VIEW
+
+Problems or blockers:
+- SA Capability Governance page had UX issues (excessive scrolling, no bulk operations)
+  causing high error risk during matrix configuration — addressed in Entry 044
+
+Decision or note:
+Identified that VIEW action does not exist in this system — available actions are VIEW, WRITE,
+EDIT, DELETE, APPROVE, EXPORT. Corrected matrix accordingly.
+Approval history pages use VIEW (not APPROVE) since they are read-only screens.
+
+Next step:
+Complete matrix configuration for all 5 HR packs, then configure Role Permissions,
+Approval Policy, and publish ACL version.
+
+---
+
+## Entry 044
+
+Date:
+2026-04-29
+
+Roadmap step:
+SA Capability Governance — UX Redesign
+
+Status:
+COMPLETED
+
+What was done:
+- Redesigned SACapabilityGovernance.jsx from a single long-scroll layout into a 3-tab structure:
+  Tab 1 "Capability Matrix" — pack/project/module/search filter bar in one compact row;
+    resource list with checkbox selection; Edit drawer for allow/deny per resource
+  Tab 2 "Work Area Bindings" — company selector + context list; binding drawer unchanged
+  Tab 3 "Pack Definitions" — compact single-row create form with presets; pack list with context/resource counts
+- Resource allow/deny editing moved from a fixed right-panel (required scrolling) into a right-side drawer
+  (accessible from any scroll position via row click or Enter key)
+- Added checkbox per resource row in Matrix tab for selective pack inclusion:
+  checked = include in pack; unchecked = exclude (clears existing rule on save)
+  Select All / Deselect All controls with indeterminate state support
+  "No flags set" amber warning badge on checked rows with no actions configured
+- Added Pack Contents drawer (accessible from Packs tab → View Contents):
+  shows all currently saved resource rules for a pack with Allow/Deny badges
+  checkbox per row + Select All header for bulk selection
+  individual Remove button per row
+  Remove Selected (N) bulk action button with confirm dialog
+- Added keyboard shortcuts for drawer action buttons:
+  Alt+C → Clear Rule (Edit drawer)
+  Alt+R → Remove Selected (Pack Contents drawer, only active when rows are selected)
+  Esc  → Done / Close (all drawers — was already wired via onEscape, now labelled on buttons)
+  Shortcut hints displayed inline on buttons as small faded text (e.g. "Clear Rule Alt+C")
+- Save Matrix logic updated to respect checkbox state:
+  included + has flags → save rule
+  included + no flags → clear if had rule (skip otherwise)
+  excluded + had rule → delete rule
+  excluded + no rule → skip
+- Pack list in Packs tab shows "Edit Matrix →" button that switches to Matrix tab with that pack pre-selected
+- Planned feature noted: per-page shortcut help panel (tooltip or button showing all shortcuts for the
+  current page) — deferred, will be implemented as a global ERP feature across all screens
+
+What changed in repo:
+- frontend/src/admin/sa/screens/SACapabilityGovernance.jsx
+
+What was verified:
+- 3-tab layout renders correctly; tab switching preserves all state
+- Checkbox Select All shows indeterminate state when partially selected
+- Save Matrix correctly uses includedResources to decide save vs skip vs clear
+- Alt+C and Alt+R shortcuts fire only when the respective drawer is open
+- Pack Contents drawer Remove Selected uses confirm dialog before bulk delete
+- All existing functionality (binding drawer, edit drawer, matrix save, pack create) intact
+
+Problems or blockers:
+- None
+
+Decision or note:
+The core UX principle applied: progressive disclosure — show only what is needed for the
+current task. All sections are still accessible but not simultaneously visible.
+Keyboard shortcut labelling on buttons follows the same pattern as footer hint bars.
+
+Planned future work — Global Shortcut Help System:
+- Each page will have a "Shortcuts" button or tooltip showing all keyboard shortcuts for that page
+- Hovering over action buttons will show their keyboard shortcut (tooltip pattern)
+- This will be a global ERP feature applied to all screens, not page-by-page
+
+Next step:
+Resume HR capability pack matrix configuration (Entry 043).
+Complete CAP_HR_SELF_SERVICE, CAP_HR_APPROVER, CAP_HR_AUDIT_VIEW, CAP_HR_ACCESS,
+CAP_HR_DIRECTOR matrices, then Role Permissions → Approval Policy → ACL Version publish.
