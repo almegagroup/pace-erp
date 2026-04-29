@@ -115,9 +115,16 @@ export default function SACapabilityGovernance(){
     finally{setCatalogLoading(false);}
   }
   async function loadCapRows(code=capCode){
-    if(!code){setCapRows([]);return;}
-    try{const data=await fetchApi(`/api/admin/acl/capability-actions?capability_code=${encodeURIComponent(code)}`); setCapRows(data.permissions??[]);}
-    catch(err){console.error("CAPABILITY_ROWS_LOAD_FAILED",{capability_code:code||null,message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setCapRows([]); setError(`Capability action rows could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
+    if(!code){setCapRows([]); setIncludedResources(new Set()); return;}
+    try{
+      const data=await fetchApi(`/api/admin/acl/capability-actions?capability_code=${encodeURIComponent(code)}`);
+      const permissions=data.permissions??[];
+      setCapRows(permissions);
+      // Initialize includedResources HERE (after fetch) — not in a separate effect.
+      // This avoids the race where stale capRows from the previous pack bleeds into the new pack's includedResources.
+      setIncludedResources(new Set(permissions.map((r)=>r.resource_code)));
+    }
+    catch(err){console.error("CAPABILITY_ROWS_LOAD_FAILED",{capability_code:code||null,message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setCapRows([]); setIncludedResources(new Set()); setError(`Capability action rows could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
   }
   async function loadCompanyState(id=companyId){
     setBindingDrawerOpen(false);
@@ -161,8 +168,10 @@ export default function SACapabilityGovernance(){
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{void loadBootstrap(); void loadCatalog();},[]);
+  // Clear drafts when pack changes — prevents stale drafts from one pack contaminating another pack's save.
+  // Also re-initializes includedResources inside loadCapRows (after fetch) to avoid async race.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(()=>{void loadCapRows(capCode);},[capCode]);
+  useEffect(()=>{ setDrafts({}); void loadCapRows(capCode); },[capCode]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>{void loadCompanyState(companyId);},[companyId]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -174,6 +183,8 @@ export default function SACapabilityGovernance(){
   const projectOptions=useMemo(()=>[...new Set(catalog.map((r)=>r.project_code).filter(Boolean))].sort(),[catalog]);
   const moduleOptions=useMemo(()=>[...new Set(catalog.filter((r)=>!projectCode||r.project_code===projectCode).map((r)=>r.module_code).filter(Boolean))].sort(),[catalog,projectCode]);
   useEffect(()=>{if(moduleCode&&!moduleOptions.includes(moduleCode)) setModuleCode("");},[moduleOptions,moduleCode]);
+  // NOTE: includedResources is initialized inside loadCapRows after the fetch, not here.
+  // A separate effect on [capCode,moduleCode] was removed because it ran with stale capRows during async load.
   const filteredCatalog=useMemo(()=>{
     const needle=String(search??"").trim().toLowerCase();
     return catalog.filter((r)=>{
@@ -184,9 +195,6 @@ export default function SACapabilityGovernance(){
     });
   },[catalog,search,projectCode,moduleCode]);
   const rows=useMemo(()=>filteredCatalog.map((resource)=>({resource,savedRow:capMap.get(resource.resource_code)??null,draft:drafts[resource.resource_code]??(capMap.has(resource.resource_code)?rowDraft(capCode,capMap.get(resource.resource_code)):newDraft(capCode,resource.resource_code))})),[filteredCatalog,drafts,capMap,capCode]);
-  // Auto-initialize includedResources when pack or module changes — pre-check rows that already have saved rules
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(()=>{ setIncludedResources(new Set(capRows.map((r)=>r.resource_code))); },[capCode,moduleCode]);
   const { getRowProps } = useErpListNavigation(rows, {
     onActivate: (row) => { setSelectedResourceCode(row?.resource?.resource_code ?? ""); setEditDrawerOpen(true); },
   });
@@ -264,7 +272,9 @@ export default function SACapabilityGovernance(){
         await fetchApi("/api/admin/acl/capability-actions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capCode,resource_code:row.resource.resource_code,can_view:payload.can_view,can_write:payload.can_write,can_edit:payload.can_edit,can_delete:payload.can_delete,can_approve:payload.can_approve,can_export:payload.can_export,denied_actions:payload.denied_actions})});
       }
       console.info("CAPABILITY_MATRIX_SAVE_RESULT",{capability_code:capCode,module_code:moduleCode,project_code:projectCode||null});
-      await loadCapRows(capCode); setNotice(`${capCode} capability-er jonno ${moduleCode} matrix save hoyeche.`);
+      // loadCapRows re-initializes capRows + includedResources from DB truth.
+      // Clear drafts so UI reflects persisted state cleanly — no stale local edits remain.
+      await loadCapRows(capCode); setDrafts({}); setNotice(`${capCode} capability-er jonno ${moduleCode} matrix save hoyeche.`);
     }catch(err){console.error("CAPABILITY_MATRIX_SAVE_FAILED",{capability_code:capCode,module_code:moduleCode,project_code:projectCode||null,selected_resource_code:selectedResourceCode||null,message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setError(`Capability matrix could not be saved. ${err.message??"REQUEST_FAILED"}`);}finally{setSaving(false);}
   }
   async function clearSelected(){
