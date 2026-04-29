@@ -42,6 +42,13 @@ import {
   manualCorrectDayRecordHandler,
 } from "../_core/hr/attendance_correction.handlers.ts";
 import {
+  getCorrectionRequestDetailHandler,
+  listCorrectionApprovalHistoryHandler,
+  listCorrectionApprovalInboxHandler,
+  listPendingCorrectionsHandler,
+  submitCorrectionRequestHandler,
+} from "../_core/hr/attendance_correction_approval.handlers.ts";
+import {
   getMonthlyAttendanceSummaryHandler,
   getDailyAttendanceRegisterHandler,
   getYearlyLeaveSummaryHandler,
@@ -171,6 +178,21 @@ export async function dispatchHrRoutes(
 
     case "GET:/api/hr/attendance/leave-usage":
       return await getLeaveUsageReportHandler(req, ctx);
+
+    case "POST:/api/hr/attendance/correction/submit":
+      return await submitCorrectionRequestHandler(req, ctx);
+
+    case "GET:/api/hr/attendance/correction/my-requests":
+      return await listPendingCorrectionsHandler(req, ctx);
+
+    case "GET:/api/hr/attendance/correction/detail":
+      return await getCorrectionRequestDetailHandler(req, ctx);
+
+    case "GET:/api/hr/attendance/correction/approval-inbox":
+      return await listCorrectionApprovalInboxHandler(req, ctx);
+
+    case "GET:/api/hr/attendance/correction/approval-history":
+      return await listCorrectionApprovalHistoryHandler(req, ctx);
 
     default:
       return null;

@@ -24,7 +24,7 @@ import {
   listDayRecords,
   listLeaveTypes,
   listOutWorkDestinations,
-  manualCorrectDayRecord,
+  submitCorrectionRequest,
   shiftIsoDate,
 } from "../hrApi.js";
 
@@ -492,21 +492,21 @@ function ManualCorrectionPanel({ record, employeeId, onSuccess, onClose }) {
     setSaving(true);
     setError("");
     try {
-      await manualCorrectDayRecord({
-        employee_id:     employeeId,
-        record_date:     record.record_date,
-        new_status:      newStatus,
-        correction_note: note.trim(),
+      await submitCorrectionRequest({
+        target_employee_id: employeeId,
+        target_date:        record.record_date,
+        requested_status:   newStatus,
+        correction_note:    note.trim(),
       });
       pushToast({
-        id: `corrected-${record.record_date}`,
+        id: `correction-submitted-${record.record_date}`,
         tone: "success",
-        title: "Saved",
-        message: `Attendance corrected to ${newStatus.replace(/_/g, " ")} for ${formatIsoDate(record.record_date)}.`,
+        title: "Correction Request Submitted",
+        message: `Correction to ${newStatus.replace(/_/g, " ")} for ${formatIsoDate(record.record_date)} is pending approval.`,
       });
       onSuccess();
     } catch (err) {
-      setError(formatError(err, "Correction could not be saved."));
+      setError(formatError(err, "Correction request could not be submitted."));
     } finally {
       setSaving(false);
     }
@@ -524,6 +524,10 @@ function ManualCorrectionPanel({ record, employeeId, onSuccess, onClose }) {
           ) : null}
         </p>
         <button type="button" onClick={onClose} className="text-xs text-slate-500 hover:text-slate-800">✕ Close</button>
+      </div>
+
+      <div className="border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        Correction requires approval. After submission, the Plant Manager will review and approve or reject this request. The day record will only be updated after approval.
       </div>
 
       {error ? (
@@ -558,7 +562,7 @@ function ManualCorrectionPanel({ record, employeeId, onSuccess, onClose }) {
             onChange={(e) => setNote(e.target.value)}
             rows={2}
             className="w-full border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 outline-none focus:border-amber-500 resize-none"
-            placeholder="Reason for manual correction (required for audit trail)…"
+            placeholder="Reason for correction (required for audit trail)…"
           />
         </ErpDenseFormRow>
       </div>
@@ -570,7 +574,7 @@ function ManualCorrectionPanel({ record, employeeId, onSuccess, onClose }) {
           onClick={handleSubmit}
           className="border border-amber-700 bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.08em] text-amber-950 hover:bg-amber-200 disabled:opacity-50"
         >
-          {saving ? "Saving…" : "Save Correction"}
+          {saving ? "Submitting…" : "Submit for Approval"}
         </button>
         <button
           type="button"

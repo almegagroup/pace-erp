@@ -79,6 +79,10 @@ import OutWorkRegisterPage from "../pages/dashboard/hr/outWork/OutWorkRegisterPa
 import OutWorkRegisterResultsPage from "../pages/dashboard/hr/outWork/OutWorkRegisterResultsPage.jsx";
 import HolidayCalendarPage from "../pages/dashboard/hr/calendar/HolidayCalendarPage.jsx";
 import HrAttendanceCorrectionPage from "../pages/dashboard/hr/attendance/HrAttendanceCorrectionPage.jsx";
+import HrCorrectionPendingListPage from "../pages/dashboard/hr/attendance/HrCorrectionPendingListPage.jsx";
+import HrCorrectionRequestDetailPage from "../pages/dashboard/hr/attendance/HrCorrectionRequestDetailPage.jsx";
+import HrCorrectionApprovalInboxPage from "../pages/dashboard/hr/attendance/HrCorrectionApprovalInboxPage.jsx";
+import HrCorrectionApprovalHistoryPage from "../pages/dashboard/hr/attendance/HrCorrectionApprovalHistoryPage.jsx";
 import HrMonthlyAttendanceSummaryPage from "../pages/dashboard/hr/attendance/HrMonthlyAttendanceSummaryPage.jsx";
 import HrDailyAttendanceRegisterPage from "../pages/dashboard/hr/attendance/HrDailyAttendanceRegisterPage.jsx";
 import HrYearlyLeaveSummaryPage from "../pages/dashboard/hr/attendance/HrYearlyLeaveSummaryPage.jsx";
@@ -293,6 +297,22 @@ export default function AppRouter() {
                   <Route
                     path="hr/attendance/correction"
                     element={<HrAttendanceCorrectionPage />}
+                  />
+                  <Route
+                    path="hr/attendance/correction/my-requests"
+                    element={<HrCorrectionPendingListPage />}
+                  />
+                  <Route
+                    path="hr/attendance/correction/detail"
+                    element={<HrCorrectionRequestDetailPage />}
+                  />
+                  <Route
+                    path="hr/attendance/correction/approval-inbox"
+                    element={<HrCorrectionApprovalInboxPage />}
+                  />
+                  <Route
+                    path="hr/attendance/correction/approval-history"
+                    element={<HrCorrectionApprovalHistoryPage />}
                   />
                   <Route
                     path="hr/attendance/monthly-summary"

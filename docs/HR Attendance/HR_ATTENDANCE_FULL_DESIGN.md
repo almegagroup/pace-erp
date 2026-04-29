@@ -404,6 +404,48 @@ Backend must normalize DOW comparisons to ISO weekday numbers consistently.
 
 ---
 
+### Entity 7 — `erp_hr.attendance_correction_requests` ← NEW (Phase 5-D)
+
+One row per correction request submitted by HR. The approval workflow engine manages state.
+
+```
+correction_request_id       UUID          PK
+workflow_request_id         UUID          FK → acl.workflow_requests
+requester_auth_user_id      UUID          FK → auth.users  (the HR person who submitted)
+parent_company_id           UUID          FK → erp_master.companies
+target_employee_id          UUID          FK → auth.users  (the employee whose record is corrected)
+target_date                 DATE          the calendar day to correct
+requested_status            TEXT          "PRESENT" | "ABSENT" | "MISS_PUNCH"
+previous_status             TEXT          nullable — snapshot of declared_status at submission time
+correction_note             TEXT          HR's mandatory reason
+cancelled_at                TIMESTAMPTZ   nullable
+cancelled_by                UUID          nullable FK → auth.users
+created_at                  TIMESTAMPTZ
+created_by                  UUID          FK → auth.users
+
+UNIQUE (workflow_request_id)
+INDEX on (parent_company_id, target_employee_id, target_date)
+INDEX on (parent_company_id, requester_auth_user_id)
+```
+
+**On APPROVED:**
+- `employee_day_records` is updated for `(parent_company_id, target_employee_id, target_date)`
+- `declared_status = requested_status`
+- `manually_corrected = TRUE`
+- `corrected_by = approver's auth_user_id`
+- `corrected_at = now()`
+- `correction_note = correction_request.correction_note`
+- `previous_status = correction_request.previous_status`
+- `source = MANUAL_HR`
+
+**New Resource Codes:**
+```
+ATTENDANCE_RESOURCE_CODES.correctionRequest  = "HR_ATTENDANCE_MANUAL_CORRECTION"  (existing, reused for WRITE)
+ATTENDANCE_RESOURCE_CODES.correctionInbox    = "HR_ATTENDANCE_CORRECTION_INBOX"   (new — for approver)
+```
+
+---
+
 ### Entity Relationships
 
 ```
@@ -564,25 +606,57 @@ User or HR cancels an APPROVED leave or out-work:
 Day records are safely removable because they trace back to this request via FK.
 ```
 
-### HR Manual Correction Flow
+### HR Manual Correction Flow (Approval-Gated)
 
 ```
 HR finds a day marked ABSENT that should be PRESENT (employee forgot to punch):
 
-1. HR opens day record for that employee and date
-2. Sees: declared_status = "ABSENT", source = "BIOMETRIC_AUTO" or no record
-3. HR changes declared_status to "PRESENT"
-4. System records:
-   manually_corrected  = TRUE
-   corrected_by        = HR's user ID
-   corrected_at        = now()
-   correction_note     = HR's note
-   previous_status     = "ABSENT"
+1. HR opens Attendance Correction screen
+2. Selects employee and date
+3. Sees current declared_status for that date
+4. Selects "Correct Status" → chooses PRESENT / ABSENT / MISS_PUNCH
+5. Enters correction_note (mandatory)
+6. Submits correction REQUEST — does NOT directly update day record
 
-Requires permission: HR_ATTENDANCE_MANUAL_CORRECTION
-Cannot be done by employee. Cannot be done by someone without that permission.
-Full audit trail — cannot be hidden.
+Backend:
+- Creates erp_hr.attendance_correction_requests row
+- Creates workflow_request (same engine as Leave / Out Work)
+- Returns PENDING state
+
+Approver (Plant Manager or designated approver):
+- Sees correction request in their Approval Inbox
+- Reviews: employee, date, current status, requested status, HR's note
+- Approves or Rejects
+
+On APPROVED:
+- Backend updates employee_day_records with new status
+- Sets: manually_corrected = TRUE, corrected_by = approver's user ID,
+  corrected_at = now(), correction_note = HR's original note,
+  previous_status = what it was before
+
+On REJECTED:
+- day record unchanged
+- correction_request marked REJECTED
+- No audit columns written to day records
+
+Requires submission: HR_ATTENDANCE_MANUAL_CORRECTION WRITE
+Requires approval: HR_ATTENDANCE_CORRECTION_INBOX APPROVE
+Cannot be submitted by employee.
+Cannot be approved by the same HR person who submitted.
+Full audit trail — correction_request row is permanent record.
 ```
+
+**Why approval is required:**
+Without approval, an HR person could fraudulently change ABSENT → PRESENT
+for any employee (salary fraud, attendance fraud). The Plant Manager acts as
+an independent check. No correction can take effect without a second person's
+explicit approval.
+
+**What CANNOT be corrected via this flow:**
+- LEAVE — must go through Leave workflow
+- OUT_WORK — must go through Out Work workflow
+- HOLIDAY — managed via Holiday Calendar, not correction
+- WEEK_OFF — determined by company_week_off_config, not editable here
 
 ### Day Record Generation Timing
 
@@ -592,7 +666,9 @@ Full audit trail — cannot be hidden.
 | Request approved | Expand range → UPSERT day records |
 | Request rejected | None |
 | Request cancelled (after approval) | DELETE day records for this request |
-| HR manually corrects | UPDATE with audit columns |
+| HR submits correction request (PENDING) | None |
+| Correction request approved | UPDATE day record with audit columns |
+| Correction request rejected | None |
 | Holiday calendar loaded | INSERT with source = HOLIDAY_CALENDAR |
 | Future: biometric punch | UPDATE biometric_* columns |
 
@@ -793,10 +869,20 @@ Phase 4 — HR Backdated Application                        20%
   Phase 4-B: Backend handlers (HR apply on behalf, no backdate limit)       9%
   Phase 4-C: Frontend (HR correction screen, on-behalf form)                7%
 
-Phase 5 — Manual Attendance Correction                    15%
+Phase 5 — Manual Attendance Correction (Direct)           15%  ✅ DONE
   Phase 5-A: ACL resource code + permission setup                           3%
-  Phase 5-B: Backend correction handler with audit                          7%
-  Phase 5-C: Frontend correction UI with audit trail display                5%
+  Phase 5-B: Backend direct correction handler with audit                   7%
+  Phase 5-C: Frontend correction UI (direct save — legacy path)             5%
+
+Phase 5-D — Correction Approval Workflow                  20%  ← NEW
+  Phase 5-D-1: DB Migration (attendance_correction_requests table)          4%
+  Phase 5-D-2: Backend handlers (submit request, pending list,              9%
+               request detail, approval inbox, approve/reject,
+               approval history, correction inbox resource code)
+  Phase 5-D-3: Frontend (redesign correction page to submit request,        7%
+               pending list page, request detail page,
+               approval inbox page, approval history page,
+               new hrScreens.js entries + AppRouter routes)
 
 Phase 6 — HR Summary Reports                              20%
   Phase 6-A: Backend report handlers                                        10%
@@ -1058,3 +1144,6 @@ Day records still reflect the actual day status:
 18. `effective_leave_days` must be ≥ 1 on every stored leave request. Zero is invalid — the block rule (Invariant 16) prevents it.
 19. The sandwich calculation is always performed server-side. The frontend preview is informational only. The stored `effective_leave_days` is always the server-computed value.
 20. `HR_CALENDAR_MANAGE` authorises holiday and week-off management only. It does not grant leave type management (`HR_LEAVE_TYPE_MANAGE`), leave approval, or any other HR permission. These are separate resource codes.
+21. Manual attendance corrections (PRESENT/ABSENT/MISS_PUNCH) must go through the approval workflow. HR cannot directly update a day record's declared_status — a correction_request must be submitted and approved by an independent approver (e.g., Plant Manager) before the day record is updated. This prevents salary fraud via silent attendance manipulation.
+22. The HR person who submits a correction_request cannot also approve it. The workflow engine enforces this — same rule as Leave and Out Work (the person who applies cannot approve).
+23. LEAVE, OUT_WORK, HOLIDAY, and WEEK_OFF statuses cannot be set via the correction workflow. LEAVE must use Leave workflow; OUT_WORK must use Out Work workflow; HOLIDAY is managed via Holiday Calendar; WEEK_OFF is determined by company_week_off_config.

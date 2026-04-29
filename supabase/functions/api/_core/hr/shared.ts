@@ -39,8 +39,9 @@ export const OUT_WORK_RESOURCE_CODES = Object.freeze({
 });
 
 export const ATTENDANCE_RESOURCE_CODES = Object.freeze({
-  manualCorrection: "HR_ATTENDANCE_MANUAL_CORRECTION",
-  report: "HR_ATTENDANCE_REPORT",
+  manualCorrection:  "HR_ATTENDANCE_MANUAL_CORRECTION",
+  correctionInbox:   "HR_ATTENDANCE_CORRECTION_INBOX",
+  report:            "HR_ATTENDANCE_REPORT",
 });
 
 export type HrHandlerContext = {

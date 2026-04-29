@@ -178,4 +178,38 @@ export const HR_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // ── Correction Approval Workflow (Phase 5-D) ────────────────────────────
+
+  HR_ATTENDANCE_CORRECTION_PENDING_LIST: {
+    screen_code: "HR_ATTENDANCE_CORRECTION_PENDING_LIST",
+    route: "/dashboard/hr/attendance/correction/my-requests",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  HR_ATTENDANCE_CORRECTION_REQUEST_DETAIL: {
+    screen_code: "HR_ATTENDANCE_CORRECTION_REQUEST_DETAIL",
+    route: "/dashboard/hr/attendance/correction/detail",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  HR_ATTENDANCE_CORRECTION_APPROVAL_INBOX: {
+    screen_code: "HR_ATTENDANCE_CORRECTION_APPROVAL_INBOX",
+    route: "/dashboard/hr/attendance/correction/approval-inbox",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  HR_ATTENDANCE_CORRECTION_APPROVAL_SCOPE_HISTORY: {
+    screen_code: "HR_ATTENDANCE_CORRECTION_APPROVAL_SCOPE_HISTORY",
+    route: "/dashboard/hr/attendance/correction/approval-history",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
 });
