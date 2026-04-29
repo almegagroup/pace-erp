@@ -589,6 +589,8 @@ export async function listDayRecords({ employeeId, fromDate, toDate }) {
 /**
  * HR manually corrects a day record status (PRESENT / ABSENT / MISS_PUNCH).
  * Requires HR_ATTENDANCE_MANUAL_CORRECTION permission.
+ * @deprecated Phase 5-D: use submitCorrectionRequest() — direct correction is
+ *             no longer safe; all corrections now go through approval workflow.
  */
 export async function manualCorrectDayRecord(payload) {
   return apiJson(
@@ -600,6 +602,80 @@ export async function manualCorrectDayRecord(payload) {
     },
     "MANUAL_CORRECTION_FAILED",
     "Attendance correction could not be saved.",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Attendance Correction Approval Workflow (Phase 5-D)
+// ---------------------------------------------------------------------------
+
+/**
+ * HR submits a correction request for an employee's day record.
+ * Request goes through approval workflow — day record is NOT changed immediately.
+ * Requires: HR_ATTENDANCE_MANUAL_CORRECTION WRITE
+ */
+export async function submitCorrectionRequest(payload) {
+  return apiJson(
+    "/api/hr/attendance/correction/submit",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "CORRECTION_SUBMIT_FAILED",
+    "Correction request could not be submitted.",
+  );
+}
+
+/**
+ * List all correction requests submitted by the current HR user.
+ * Requires: HR_ATTENDANCE_MANUAL_CORRECTION WRITE
+ */
+export async function listCorrectionRequests() {
+  return apiJson(
+    "/api/hr/attendance/correction/my-requests",
+    {},
+    "CORRECTION_LIST_FAILED",
+    "Correction request list could not be loaded.",
+  );
+}
+
+/**
+ * Get full detail for a single correction request.
+ * @param {string} correctionRequestId
+ */
+export async function getCorrectionRequestDetail(correctionRequestId) {
+  return apiJson(
+    `/api/hr/attendance/correction/detail?correction_request_id=${encodeURIComponent(correctionRequestId)}`,
+    {},
+    "CORRECTION_DETAIL_FAILED",
+    "Correction request detail could not be loaded.",
+  );
+}
+
+/**
+ * Load actionable PENDING correction requests in the current approver's scope.
+ * Requires: HR_ATTENDANCE_CORRECTION_INBOX APPROVE
+ */
+export async function listCorrectionApprovalInbox() {
+  return apiJson(
+    "/api/hr/attendance/correction/approval-inbox",
+    {},
+    "CORRECTION_INBOX_FAILED",
+    "Correction approval inbox could not be loaded.",
+  );
+}
+
+/**
+ * Load all correction requests (any state) in the current approver's approval scope.
+ * Requires: HR_ATTENDANCE_CORRECTION_INBOX APPROVE
+ */
+export async function listCorrectionApprovalHistory() {
+  return apiJson(
+    "/api/hr/attendance/correction/approval-history",
+    {},
+    "CORRECTION_HISTORY_FAILED",
+    "Correction approval history could not be loaded.",
   );
 }
 

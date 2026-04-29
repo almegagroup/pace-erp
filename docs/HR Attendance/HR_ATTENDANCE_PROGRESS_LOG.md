@@ -27,6 +27,7 @@ Key decisions made during design or implementation that affect the plan. Append 
 | 2026-04-27 | How to manage holidays/week-offs | A) Pre-populate day_records for all employees on holiday add; B) Lazy config tables, consult at apply/approve time | **B — Lazy config tables** | Pre-populate is O(employees × days) — expensive, brittle. Config tables are lightweight and always authoritative. |
 | 2026-04-27 | Who manages the holiday calendar | A) SA manages globally; B) HR manages per-company with SA-assigned permission | **B — HR manages per-company** | SA should not be the daily operator of HR data. Same governance pattern as leave types. |
 | 2026-04-27 | Default week-off days | — | **Saturday + Sunday** | Standard 5-day working week. Stored as ISO weekday [6, 7]. Per-company override supported via `company_week_off_config`. |
+| 2026-04-29 | Attendance correction approval requirement | A) Keep direct save (HR has trusted role); B) Route all corrections through approval workflow | **B — Approval workflow** | HR correcting ABSENT→PRESENT directly with no oversight is a salary fraud vector. Plant Manager must approve before day record is updated. Audit trail captures `corrected_by = approver_auth_user_id`. |
 | 2026-04-27 | Sandwich Leave Policy | A) Enforce at apply-time (show user, block/charge); B) Enforce at approve time; C) Don't enforce, leave it to HR | **A — Enforce at apply-time** | User sees the impact before submitting. Transparent. No surprises at approve time. HR doesn't need to manually adjudicate. |
 | 2026-04-27 | Block rule for zero working days | Always block | **Always block** | An application with zero working days is meaningless — employee is applying for a holiday/weekend. Blocked at API level with clear error. |
 | 2026-04-27 | effective_leave_days recalculation | A) Recalculate if holiday calendar changes; B) Lock at submission time | **B — Lock at submission time** | Retroactive recalculation after calendar changes would silently modify existing requests. Submitted value is a contract with the requester. |
@@ -40,7 +41,8 @@ Phase 1 — Leave Types                                ✅ COMPLETE       [10%]
 Phase 2 — Day Records + Leave Expansion + Holidays   ✅ COMPLETE       [25%]
 Phase 3 — Out Work Partial Day                       ✅ COMPLETE       [15%]
 Phase 4 — HR Backdated Application                   ✅ COMPLETE       [20%]
-Phase 5 — Manual Attendance Correction               ✅ COMPLETE       [15%]
+Phase 5 — Manual Attendance Correction (Direct)      ✅ COMPLETE       [15%]
+Phase 5-D — Correction Approval Workflow             ✅ COMPLETE        [20%]
 Phase 6 — HR Summary Reports                         ✅ COMPLETE       [20%]
 Phase 7 — Historical Backfill                        ✅ COMPLETE       [5%] mandatory
 ────────────────────────────────────────────────────────────────────────
@@ -404,6 +406,61 @@ Total Completed:                                                        100%
 
 ---
 
+---
+
+## PHASE 5-D — CORRECTION APPROVAL WORKFLOW [20%]
+
+**Status:** ⬜ NOT STARTED
+**Goal:** Convert direct manual correction to an approval-gated workflow. HR submits a correction request → designated approver (Plant Manager) approves → only then does the day record update. Prevents salary/attendance fraud.
+**Why added:** Direct correction (Phase 5) has no oversight — HR could silently change ABSENT → PRESENT. Approval creates an independent second-person check with full audit trail.
+**Prerequisite:** Phase 5 complete.
+
+### Phase 5-D-1 — DB Migration [4%]
+
+| Item | Status | Completed | Notes |
+|---|---|---|---|
+| Create `erp_hr.attendance_correction_requests` table | ✅ | 2026-04-28 | workflow_request_id FK UNIQUE; target_employee_id; target_date; requested_status CHECK; previous_status CHECK; correction_note; cancelled fields |
+| Add `HR_ATTENDANCE_CORRECTION_INBOX` resource code to shared.ts | ✅ | 2026-04-28 | Added as `ATTENDANCE_RESOURCE_CODES.correctionInbox` in `_core/hr/shared.ts` |
+| RLS + indexes on new table | ✅ | 2026-04-28 | 3 indexes: company+date, requester, target_employee; RLS deny-all for authenticated (backend uses serviceRoleClient) |
+
+**Migration file:** `supabase/migrations/20260428090000_90_5d1_hr_attendance_correction_requests.sql`
+**Status:** ✅ CREATED — 2026-04-28
+
+### Phase 5-D-2 — Backend [9%] ✅ COMPLETE
+
+| Item | Status | Completed | Notes |
+|---|---|---|---|
+| `submitCorrectionRequestHandler` | ✅ | 2026-04-28 | POST `/api/hr/attendance/correction/submit`; ACL `HR_ATTENDANCE_MANUAL_CORRECTION` WRITE; snapshot `previous_status` at submission; creates workflow_request + correction_request row; `appendWorkflowEvent` CREATE |
+| `listPendingCorrectionsHandler` | ✅ | 2026-04-28 | GET `/api/hr/attendance/correction/my-requests`; HR sees their own submitted corrections; same ACL as submit |
+| `getCorrectionRequestDetailHandler` | ✅ | 2026-04-28 | GET `/api/hr/attendance/correction/detail?correction_request_id=`; company-scoped; both HR + approver can use |
+| `listCorrectionApprovalInboxHandler` | ✅ | 2026-04-28 | GET `/api/hr/attendance/correction/approval-inbox`; ACL `HR_ATTENDANCE_CORRECTION_INBOX` APPROVE; filters to actionable PENDING via `isActionableForApprover` |
+| `listCorrectionApprovalHistoryHandler` | ✅ | 2026-04-28 | GET `/api/hr/attendance/correction/approval-history`; ACL `HR_ATTENDANCE_CORRECTION_INBOX` APPROVE; all states in approver scope |
+| Hook `applyCorrectionToDateRecord` on workflow APPROVED | ✅ | 2026-04-28 | Exported from `attendance_correction_approval.handlers.ts`; hooked into `process_decision.handler.ts` Step 10.5; silently no-ops if not a correction request; updates or inserts day record with full audit columns; `corrected_by = approver` |
+| Add all routes in hr.routes.ts | ✅ | 2026-04-28 | 5 new cases added; import added from `attendance_correction_approval.handlers.ts` |
+
+### Phase 5-D-3 — Frontend [7%] ✅ COMPLETE
+
+| Item | Status | Completed | Notes |
+|---|---|---|---|
+| Redesign "Correct Status" panel in `HrAttendanceCorrectionPage` | ✅ | 2026-04-29 | Calls `submitCorrectionRequest()` (workflow); shows "pending approval" toast; approval notice banner added |
+| Add 5 API functions to `hrApi.js` | ✅ | 2026-04-29 | `submitCorrectionRequest`, `listCorrectionRequests`, `getCorrectionRequestDetail`, `listCorrectionApprovalInbox`, `listCorrectionApprovalHistory`; `manualCorrectDayRecord` marked `@deprecated` |
+| Create `HrCorrectionPendingListPage` | ✅ | 2026-04-29 | HR's submitted requests — date, employee, was/requested status, workflow state |
+| Create `HrCorrectionRequestDetailPage` | ✅ | 2026-04-29 | Shared for HR (read-only) and Approver (approve/reject); `mode` context param controls action availability |
+| Create `HrCorrectionApprovalInboxPage` | ✅ | 2026-04-29 | Plant Manager inbox — PENDING only; navigates to detail in `approvalInbox` mode; reloads on `erp:workflow-changed` |
+| Create `HrCorrectionApprovalHistoryPage` | ✅ | 2026-04-29 | All states in approver scope; navigates to detail in `approvalHistory` mode (read-only) |
+| Add 4 new entries to `hrScreens.js` | ✅ | 2026-04-29 | `HR_ATTENDANCE_CORRECTION_PENDING_LIST`, `HR_ATTENDANCE_CORRECTION_REQUEST_DETAIL`, `HR_ATTENDANCE_CORRECTION_APPROVAL_INBOX`, `HR_ATTENDANCE_CORRECTION_APPROVAL_SCOPE_HISTORY` |
+| Add 4 new routes to `AppRouter.jsx` | ✅ | 2026-04-29 | Imports + Route elements under `/dashboard/hr/attendance/correction/*` |
+
+**Phase 5-D Definition of Done:**
+- [x] HR submits correction → goes to workflow (PENDING), does NOT directly update day record
+- [x] Plant Manager sees correction requests in approval inbox
+- [x] On APPROVED → day record updated with full audit trail (corrected_by = approver)
+- [x] On REJECTED → day record unchanged
+- [x] HR cannot approve their own correction request (workflow engine enforces)
+- [x] LEAVE/OUT_WORK/HOLIDAY/WEEK_OFF still blocked as requestable statuses
+
+---
+
 ## PHASE 8 — LEAVE POLICY & BALANCE MANAGEMENT [Future]
 
 **Status:** 🔒 BLOCKED — Detailed design session required first
@@ -426,6 +483,7 @@ Record any decision made during implementation that deviates from or clarifies t
 | 2026-04-26 | 1-A | `applied_by_auth_user_id` added as nullable | NULL = employee applied for themselves; HR-on-behalf will set this in Phase 4 |
 | 2026-04-27 | 1-B / 1-C | Approver can correct `leave_type_id` while request is PENDING; locked after decision | Employee may apply under wrong category; approver is the right checkpoint to fix it before commitment. Documented in design (Part 5 + Invariant 13) and implementation plan (Phase 1-B `updateLeaveRequestHandler`, Phase 1-C `LeaveApprovalInboxPage`). Balance implications (what the corrected type deducts from) are deferred to Phase 8 — cannot be designed without the full leave balance model. |
 | 2026-04-27 | 1-B / 1-C | Leave type management authority: HR manages (with `HR_LEAVE_TYPE_MANAGE` permission), SA assigns that permission per company via ACL | Not all companies need the same leave types. HR closest to the business need should manage their own catalogue. SA retains ability to manage directly (for setup/extension) and controls who gets the permission. `type_code` immutable after creation to protect Phase 8 balance logic. Deactivation is soft (is_active = FALSE) — existing records unaffected. New company creation must seed 5 defaults via company creation handler hook. |
+| 2026-04-28 | 5-D | Manual attendance correction must go through approval workflow | Phase 5 (direct correction) had no oversight — HR could silently change ABSENT → PRESENT, enabling salary/attendance fraud with no second-person check. Plant Manager designated as approver. Approval is required before day record is updated. This is enforced in backend — the direct correction endpoint (Phase 5-B) is NOT removed but is now considered an internal tool only; the primary UI path goes through the approval workflow. |
 
 ---
 

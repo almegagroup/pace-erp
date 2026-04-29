@@ -21,6 +21,7 @@ import {
 import { readAclSnapshotDecision } from "../../_shared/acl_snapshot.ts";
 import { expandLeaveToDateRecords } from "../hr/leave.handlers.ts";
 import { expandOutWorkToDateRecords } from "../hr/out_work.handlers.ts";
+import { applyCorrectionToDateRecord } from "../hr/attendance_correction_approval.handlers.ts";
 
 interface HandlerContext {
   auth_user_id: string;
@@ -504,6 +505,9 @@ if (routingResult.newState === "APPROVED") {
   });
   await expandOutWorkToDateRecords(workflow.request_id).catch(() => {
     // Intentionally swallowed — approval must not fail due to day record expansion
+  });
+  await applyCorrectionToDateRecord(workflow.request_id, ctx.auth_user_id).catch(() => {
+    // Intentionally swallowed — approval must not fail due to day record update
   });
 }
 
