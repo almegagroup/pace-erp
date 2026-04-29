@@ -79,6 +79,25 @@ export default function SACapabilityGovernance(){
   const [includedResources,setIncludedResources]=useState(()=>new Set());
   const [contentsSelected,setContentsSelected]=useState(()=>new Set());
 
+  // Drawer keyboard shortcuts
+  useEffect(()=>{
+    function onKey(e){
+      // Edit drawer: Alt+C → Clear Rule
+      if(editDrawerOpen&&e.altKey&&!e.shiftKey&&!e.ctrlKey&&e.key.toLowerCase()==="c"){
+        e.preventDefault();
+        void clearSelected();
+      }
+      // Contents drawer: Alt+R → Remove Selected
+      if(packContentsOpen&&e.altKey&&!e.shiftKey&&!e.ctrlKey&&e.key.toLowerCase()==="r"&&contentsSelected.size>0){
+        e.preventDefault();
+        document.getElementById("btn-remove-selected")?.click();
+      }
+    }
+    window.addEventListener("keydown",onKey);
+    return ()=>window.removeEventListener("keydown",onKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[editDrawerOpen,packContentsOpen,contentsSelected.size]);
+
   async function loadBootstrap(){
     setLoading(true); setError("");
     try{
@@ -783,14 +802,14 @@ export default function SACapabilityGovernance(){
               onClick={()=>void clearSelected()}
               className="border border-rose-300 bg-rose-50 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-rose-700"
             >
-              Clear Rule
+              Clear Rule <span className="ml-1 text-[9px] font-normal normal-case tracking-normal opacity-60">Alt+C</span>
             </button>
             <button
               type="button"
               onClick={()=>setEditDrawerOpen(false)}
               className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-950"
             >
-              Done
+              Done <span className="ml-1 text-[9px] font-normal normal-case tracking-normal opacity-60">Esc</span>
             </button>
           </div>
         }
@@ -865,7 +884,7 @@ export default function SACapabilityGovernance(){
             onClick={()=>setBindingDrawerOpen(false)}
             className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-950"
           >
-            Done
+            Done <span className="ml-1 text-[9px] font-normal normal-case tracking-normal opacity-60">Esc</span>
           </button>
         }
       >
@@ -956,6 +975,7 @@ export default function SACapabilityGovernance(){
           <div className="flex gap-2">
             {contentsSelected.size>0&&(
               <button
+                id="btn-remove-selected"
                 type="button"
                 disabled={saving}
                 onClick={async()=>{
@@ -976,7 +996,7 @@ export default function SACapabilityGovernance(){
                 }}
                 className="border border-rose-300 bg-rose-50 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-rose-700 disabled:opacity-40"
               >
-                Remove Selected ({contentsSelected.size})
+                Remove Selected ({contentsSelected.size}) <span className="ml-1 text-[9px] font-normal normal-case tracking-normal opacity-60">Alt+R</span>
               </button>
             )}
             <button
@@ -991,7 +1011,7 @@ export default function SACapabilityGovernance(){
               onClick={()=>setPackContentsOpen(false)}
               className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-950"
             >
-              Done
+              Done <span className="ml-1 text-[9px] font-normal normal-case tracking-normal opacity-60">Esc</span>
             </button>
           </div>
         }
