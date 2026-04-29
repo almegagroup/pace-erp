@@ -76,6 +76,8 @@ export default function SACapabilityGovernance(){
   const [loading,setLoading]=useState(true),[catalogLoading,setCatalogLoading]=useState(true),[saving,setSaving]=useState(false),[bindingLoading,setBindingLoading]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
   const [activeTab,setActiveTab]=useState("matrix"),[editDrawerOpen,setEditDrawerOpen]=useState(false);
   const [packContentsOpen,setPackContentsOpen]=useState(false),[packContentsCode,setPackContentsCode]=useState(""),[packContentsRows,setPackContentsRows]=useState([]),[packContentsLoading,setPackContentsLoading]=useState(false);
+  const [includedResources,setIncludedResources]=useState(()=>new Set());
+  const [contentsSelected,setContentsSelected]=useState(()=>new Set());
 
   async function loadBootstrap(){
     setLoading(true); setError("");
@@ -163,6 +165,9 @@ export default function SACapabilityGovernance(){
     });
   },[catalog,search,projectCode,moduleCode]);
   const rows=useMemo(()=>filteredCatalog.map((resource)=>({resource,savedRow:capMap.get(resource.resource_code)??null,draft:drafts[resource.resource_code]??(capMap.has(resource.resource_code)?rowDraft(capCode,capMap.get(resource.resource_code)):newDraft(capCode,resource.resource_code))})),[filteredCatalog,drafts,capMap,capCode]);
+  // Auto-initialize includedResources when pack or module changes — pre-check rows that already have saved rules
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(()=>{ setIncludedResources(new Set(capRows.map((r)=>r.resource_code))); },[capCode,moduleCode]);
   const { getRowProps } = useErpListNavigation(rows, {
     onActivate: (row) => { setSelectedResourceCode(row?.resource?.resource_code ?? ""); setEditDrawerOpen(true); },
   });
@@ -227,8 +232,13 @@ export default function SACapabilityGovernance(){
     setSaving(true); setError(""); setNotice("");
     try{
       for(const row of rows){
+        const included=includedResources.has(row.resource.resource_code);
         const payload=row.draft, hadExisting=Boolean(row.savedRow), explicit=hasRule(payload);
+        // Not included → clear existing rule if any, skip otherwise
+        if(!included){ if(hadExisting){ await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capCode,resource_code:row.resource.resource_code})}); } continue; }
+        // Included but no flags → clear if had rule, skip otherwise
         if(!explicit){ if(hadExisting){ await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capCode,resource_code:row.resource.resource_code})}); } continue; }
+        // Included with flags → save
         await fetchApi("/api/admin/acl/capability-actions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capCode,resource_code:row.resource.resource_code,can_view:payload.can_view,can_write:payload.can_write,can_edit:payload.can_edit,can_delete:payload.can_delete,can_approve:payload.can_approve,can_export:payload.can_export,denied_actions:payload.denied_actions})});
       }
       console.info("CAPABILITY_MATRIX_SAVE_RESULT",{capability_code:capCode,module_code:moduleCode,project_code:projectCode||null});
@@ -411,68 +421,134 @@ export default function SACapabilityGovernance(){
             ):rows.length===0?(
               <div className="px-4 py-6 text-center text-sm text-slate-400">Selected project / module-er niche kono mapped resource paoa jayni.</div>
             ):(
-              <ErpDenseGrid
-                columns={[
-                  {
-                    key:"resource",
-                    label:"Resource",
-                    render:({resource})=>(
-                      <div>
-                        <div className="font-semibold text-slate-900">{resource.title}</div>
-                        <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-slate-400">{resource.resource_code}</div>
-                      </div>
-                    ),
-                  },
-                  {
-                    key:"allow",
-                    label:"Allow",
-                    render:({resource,draft})=>{
-                      const available=new Set(resource.available_actions??[]);
-                      const enabled=ACTIONS.filter(([ac,key])=>available.has(ac)&&Boolean(draft[key])).map(([,,label])=>label);
-                      return enabled.length?(
-                        <div className="flex flex-wrap gap-1">
-                          {enabled.map((l)=>(
-                            <span key={l} className="border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">{l}</span>
-                          ))}
-                        </div>
-                      ):<span className="text-xs text-slate-300">—</span>;
+              <>
+                {/* Select All controls */}
+                {(()=>{
+                  const allCodes=rows.map((r)=>r.resource.resource_code);
+                  const checkedCount=allCodes.filter((c)=>includedResources.has(c)).length;
+                  const allChecked=checkedCount===allCodes.length;
+                  const noneChecked=checkedCount===0;
+                  return (
+                    <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2">
+                      <label className="flex cursor-pointer items-center gap-2 text-[11px] font-semibold text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={allChecked}
+                          ref={(el)=>{ if(el) el.indeterminate=!allChecked&&!noneChecked; }}
+                          onChange={(e)=>{
+                            if(e.target.checked) setIncludedResources(new Set(allCodes));
+                            else setIncludedResources(new Set());
+                          }}
+                          className="h-4 w-4 cursor-pointer border-slate-300"
+                        />
+                        {allChecked?"Deselect All":"Select All"}
+                      </label>
+                      <span className="text-[11px] text-slate-400">{checkedCount} / {allCodes.length} selected</span>
+                      {checkedCount>0&&!allChecked&&(
+                        <button
+                          type="button"
+                          onClick={()=>setIncludedResources(new Set())}
+                          className="ml-auto border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-rose-700"
+                        >
+                          Clear Selection
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+                <ErpDenseGrid
+                  columns={[
+                    {
+                      key:"check",
+                      label:"",
+                      render:({resource})=>(
+                        <label className="flex cursor-pointer items-center justify-center" onClick={(e)=>e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={includedResources.has(resource.resource_code)}
+                            onChange={(e)=>{
+                              setIncludedResources((cur)=>{
+                                const next=new Set(cur);
+                                if(e.target.checked) next.add(resource.resource_code);
+                                else next.delete(resource.resource_code);
+                                return next;
+                              });
+                            }}
+                            className="h-4 w-4 cursor-pointer border-slate-300"
+                          />
+                        </label>
+                      ),
                     },
-                  },
-                  {
-                    key:"deny",
-                    label:"Deny",
-                    render:({draft})=>draft.denied_actions.length>0?(
-                      <div className="flex flex-wrap gap-1">
-                        {draft.denied_actions.map((a)=>(
-                          <span key={a} className="border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-800">{a}</span>
-                        ))}
-                      </div>
-                    ):null,
-                  },
-                  {
-                    key:"edit",
-                    label:"",
-                    render:({resource})=>(
-                      <button
-                        type="button"
-                        onClick={(e)=>{e.stopPropagation(); openEditDrawer(resource.resource_code);}}
-                        className="border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500 hover:bg-slate-50"
-                      >
-                        Edit →
-                      </button>
-                    ),
-                  },
-                ]}
-                rows={rows}
-                rowKey={(row)=>row.resource.resource_code}
-                getRowProps={(row,index)=>({
-                  ...getRowProps(index),
-                  onClick:()=>openEditDrawer(row.resource.resource_code),
-                  className:row.resource.resource_code===selectedResourceCode?"bg-sky-50":"",
-                })}
-                onRowActivate={(row)=>openEditDrawer(row.resource.resource_code)}
-                maxHeight="none"
-              />
+                    {
+                      key:"resource",
+                      label:"Resource",
+                      render:({resource})=>{
+                        const included=includedResources.has(resource.resource_code);
+                        return (
+                          <div className={included?"":"opacity-40"}>
+                            <div className="font-semibold text-slate-900">{resource.title}</div>
+                            <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-slate-400">{resource.resource_code}</div>
+                          </div>
+                        );
+                      },
+                    },
+                    {
+                      key:"allow",
+                      label:"Allow",
+                      render:({resource,draft})=>{
+                        const included=includedResources.has(resource.resource_code);
+                        const available=new Set(resource.available_actions??[]);
+                        const enabled=ACTIONS.filter(([ac,key])=>available.has(ac)&&Boolean(draft[key])).map(([,,label])=>label);
+                        if(!included) return <span className="text-xs text-slate-300">—</span>;
+                        return enabled.length?(
+                          <div className="flex flex-wrap gap-1">
+                            {enabled.map((l)=>(
+                              <span key={l} className="border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">{l}</span>
+                            ))}
+                          </div>
+                        ):<span className="border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">No flags set</span>;
+                      },
+                    },
+                    {
+                      key:"deny",
+                      label:"Deny",
+                      render:({resource,draft})=>{
+                        const included=includedResources.has(resource.resource_code);
+                        if(!included||draft.denied_actions.length===0) return null;
+                        return (
+                          <div className="flex flex-wrap gap-1">
+                            {draft.denied_actions.map((a)=>(
+                              <span key={a} className="border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-800">{a}</span>
+                            ))}
+                          </div>
+                        );
+                      },
+                    },
+                    {
+                      key:"edit",
+                      label:"",
+                      render:({resource})=>(
+                        <button
+                          type="button"
+                          onClick={(e)=>{e.stopPropagation(); openEditDrawer(resource.resource_code);}}
+                          className="border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500 hover:bg-slate-50"
+                        >
+                          Edit →
+                        </button>
+                      ),
+                    },
+                  ]}
+                  rows={rows}
+                  rowKey={(row)=>row.resource.resource_code}
+                  getRowProps={(row,index)=>({
+                    ...getRowProps(index),
+                    onClick:()=>openEditDrawer(row.resource.resource_code),
+                    className:row.resource.resource_code===selectedResourceCode?"bg-sky-50":"",
+                  })}
+                  onRowActivate={(row)=>openEditDrawer(row.resource.resource_code)}
+                  maxHeight="none"
+                />
+              </>
             )}
           </div>
         </div>
@@ -878,6 +954,31 @@ export default function SACapabilityGovernance(){
         width="min(560px, calc(100vw - 24px))"
         actions={
           <div className="flex gap-2">
+            {contentsSelected.size>0&&(
+              <button
+                type="button"
+                disabled={saving}
+                onClick={async()=>{
+                  const ok=await openActionConfirm({eyebrow:"Pack Contents",title:"Remove Selected Rules",message:`${contentsSelected.size}টা rule ${packContentsCode} pack theke remove korte chao?`,confirmLabel:"Remove All Selected",cancelLabel:"Cancel"});
+                  if(!ok) return;
+                  setSaving(true); setError(""); setNotice("");
+                  try{
+                    for(const rc of contentsSelected){
+                      await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:packContentsCode,resource_code:rc})});
+                    }
+                    const data=await fetchApi(`/api/admin/acl/capability-actions?capability_code=${encodeURIComponent(packContentsCode)}`);
+                    setPackContentsRows(data.permissions??[]);
+                    setContentsSelected(new Set());
+                    if(packContentsCode===capCode) await loadCapRows(packContentsCode);
+                    setNotice(`${contentsSelected.size} rules removed from ${packContentsCode}.`);
+                  }catch(err){setError(`Bulk remove failed. ${err.message??"REQUEST_FAILED"}`);}
+                  finally{setSaving(false);}
+                }}
+                className="border border-rose-300 bg-rose-50 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-rose-700 disabled:opacity-40"
+              >
+                Remove Selected ({contentsSelected.size})
+              </button>
+            )}
             <button
               type="button"
               onClick={()=>{setCapCode(packContentsCode); setActiveTab("matrix"); setPackContentsOpen(false);}}
@@ -909,19 +1010,54 @@ export default function SACapabilityGovernance(){
             </div>
           ):(
             <div className="border border-slate-300 bg-white">
-              {/* Header */}
-              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_80px] border-b border-slate-200 bg-slate-50 px-3 py-[5px] text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                <span>Resource</span>
-                <span>Allow / Deny</span>
-                <span></span>
-              </div>
+              {/* Select All header */}
+              {(()=>{
+                const allCodes=packContentsRows.map((r)=>r.resource_code);
+                const allChecked=allCodes.length>0&&allCodes.every((c)=>contentsSelected.has(c));
+                const noneChecked=allCodes.every((c)=>!contentsSelected.has(c));
+                return (
+                  <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-3 py-[5px]">
+                    <label className="flex cursor-pointer items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                      <input
+                        type="checkbox"
+                        checked={allChecked}
+                        ref={(el)=>{ if(el) el.indeterminate=!allChecked&&!noneChecked; }}
+                        onChange={(e)=>{
+                          if(e.target.checked) setContentsSelected(new Set(allCodes));
+                          else setContentsSelected(new Set());
+                        }}
+                        className="h-4 w-4 cursor-pointer border-slate-300"
+                      />
+                      Resource
+                    </label>
+                    <span className="ml-auto text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Allow / Deny</span>
+                    <span className="w-[70px]"></span>
+                  </div>
+                );
+              })()}
               {packContentsRows.map((row)=>{
                 const allowLabels=ACTIONS.filter(([,key])=>Boolean(row[key])).map(([,,label])=>label);
                 const denyLabels=Array.isArray(row.denied_actions)?row.denied_actions:[];
+                const isSelected=contentsSelected.has(row.resource_code);
                 return (
-                  <div key={row.resource_code} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_80px] items-center gap-2 border-b border-slate-100 px-3 py-2.5 last:border-b-0">
+                  <div key={row.resource_code} className={`grid grid-cols-[28px_minmax(0,1fr)_minmax(0,1fr)_70px] items-center gap-2 border-b border-slate-100 px-3 py-2.5 last:border-b-0 ${isSelected?"bg-rose-50":""}`}>
+                    <label className="flex cursor-pointer items-center justify-center" onClick={(e)=>e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(e)=>{
+                          setContentsSelected((cur)=>{
+                            const next=new Set(cur);
+                            if(e.target.checked) next.add(row.resource_code);
+                            else next.delete(row.resource_code);
+                            return next;
+                          });
+                        }}
+                        className="h-4 w-4 cursor-pointer border-slate-300"
+                      />
+                    </label>
                     <div className="min-w-0">
-                      <div className="text-[12px] font-semibold text-slate-800 truncate">{row.resource_code}</div>
+                      <div className="truncate text-[12px] font-semibold text-slate-800">{row.resource_code}</div>
                     </div>
                     <div className="flex flex-wrap gap-1">
                       {allowLabels.map((l)=>(
