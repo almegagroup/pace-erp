@@ -78,6 +78,8 @@ export default function SACapabilityGovernance(){
   const [packContentsOpen,setPackContentsOpen]=useState(false),[packContentsCode,setPackContentsCode]=useState(""),[packContentsRows,setPackContentsRows]=useState([]),[packContentsLoading,setPackContentsLoading]=useState(false);
   const [includedResources,setIncludedResources]=useState(()=>new Set());
   const [contentsSelected,setContentsSelected]=useState(()=>new Set());
+  // Resource count per pack — loaded for all packs on bootstrap so the Packs tab shows real numbers, not "—"
+  const [capRowCountMap,setCapRowCountMap]=useState({});
 
   // Drawer keyboard shortcuts
   useEffect(()=>{
@@ -106,7 +108,23 @@ export default function SACapabilityGovernance(){
       setCompanies(nextCompanies); setCaps(nextCaps);
       if(!companyId) setCompanyId(nextCompanies[0]?.id??"");
       if(!capCode) setCapCode(nextCaps[0]?.capability_code??"");
+      // Load resource counts for all packs in parallel so Packs tab shows real numbers immediately
+      void loadAllPackCounts(nextCaps);
     }catch(err){console.error("CAPABILITY_BOOTSTRAP_LOAD_FAILED",{message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setError(`Capability governance bootstrap could not be loaded. ${err.message??"REQUEST_FAILED"}`);}finally{setLoading(false);}
+  }
+  async function loadAllPackCounts(capsToCount){
+    if(!capsToCount?.length) return;
+    try{
+      const settled=await Promise.allSettled(
+        capsToCount.map(async(cap)=>{
+          const data=await fetchApi(`/api/admin/acl/capability-actions?capability_code=${encodeURIComponent(cap.capability_code)}`);
+          return [cap.capability_code,(data.permissions??[]).length];
+        }),
+      );
+      const countMap={};
+      for(const r of settled){ if(r.status==="fulfilled"){ const [code,count]=r.value; countMap[code]=count; } }
+      setCapRowCountMap(countMap);
+    }catch(err){ console.error("PACK_COUNT_LOAD_FAILED",{message:err?.message??"REQUEST_FAILED"}); }
   }
   async function loadCatalog(){
     setCatalogLoading(true);
@@ -123,6 +141,8 @@ export default function SACapabilityGovernance(){
       // Initialize includedResources HERE (after fetch) — not in a separate effect.
       // This avoids the race where stale capRows from the previous pack bleeds into the new pack's includedResources.
       setIncludedResources(new Set(permissions.map((r)=>r.resource_code)));
+      // Keep count map updated so pack list always shows real count for current pack
+      setCapRowCountMap((prev)=>({...prev,[code]:permissions.length}));
     }
     catch(err){console.error("CAPABILITY_ROWS_LOAD_FAILED",{capability_code:code||null,message:err?.message??"REQUEST_FAILED",code:err?.code??null,requestId:err?.requestId??null,decisionTrace:err?.decisionTrace??null});setCapRows([]); setIncludedResources(new Set()); setError(`Capability action rows could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
   }
@@ -310,7 +330,9 @@ export default function SACapabilityGovernance(){
     try{
       await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capabilityCode,resource_code:resourceCode})});
       const data=await fetchApi(`/api/admin/acl/capability-actions?capability_code=${encodeURIComponent(capabilityCode)}`);
-      setPackContentsRows(data.permissions??[]);
+      const updatedRows=data.permissions??[];
+      setPackContentsRows(updatedRows);
+      setCapRowCountMap((prev)=>({...prev,[capabilityCode]:updatedRows.length}));
       if(capabilityCode===capCode) await loadCapRows(capabilityCode);
       setNotice(`${resourceCode} rule removed from ${capabilityCode}.`);
     }catch(err){console.error("PACK_RULE_REMOVE_FAILED",{capability_code:capabilityCode,resource_code:resourceCode,message:err?.message??"REQUEST_FAILED"});setError(`Rule could not be removed. ${err.message??"REQUEST_FAILED"}`);}
@@ -766,7 +788,9 @@ export default function SACapabilityGovernance(){
                   </div>
                   <div className="text-center">
                     <div className="text-[10px] uppercase tracking-[0.1em] text-slate-400">Resources</div>
-                    <div className="mt-0.5 text-sm font-semibold text-slate-700">{isCurrent?capRows.length:"—"}</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-700">
+                      {isCurrent ? capRows.length : capRowCountMap[cap.capability_code] !== undefined ? capRowCountMap[cap.capability_code] : "…"}
+                    </div>
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <button
@@ -1000,7 +1024,9 @@ export default function SACapabilityGovernance(){
                       await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:packContentsCode,resource_code:rc})});
                     }
                     const data=await fetchApi(`/api/admin/acl/capability-actions?capability_code=${encodeURIComponent(packContentsCode)}`);
-                    setPackContentsRows(data.permissions??[]);
+                    const updatedRows=data.permissions??[];
+                    setPackContentsRows(updatedRows);
+                    setCapRowCountMap((prev)=>({...prev,[packContentsCode]:updatedRows.length}));
                     setContentsSelected(new Set());
                     if(packContentsCode===capCode) await loadCapRows(packContentsCode);
                     setNotice(`${contentsSelected.size} rules removed from ${packContentsCode}.`);
