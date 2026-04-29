@@ -12,7 +12,6 @@ import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
-import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
 import {
   formatCompanyAddress,
   formatCompanyLabel,
@@ -58,6 +57,16 @@ function recommendedCapabilityCodes(row){
   return [];
 }
 
+const PRESET_CAPS = [
+  {capability_code:"CAP_HR_SELF_SERVICE",capability_name:"HR Self Service",description:"Self-service access for leave and out work apply / my-request pages."},
+  {capability_code:"CAP_HR_APPROVER",capability_name:"HR Approver",description:"Approver inbox and approval-history access for HR workflows."},
+  {capability_code:"CAP_HR_AUDIT_VIEW",capability_name:"HR Audit",description:"Register and reporting visibility without approval authority."},
+  {capability_code:"CAP_HR_ACCESS",capability_name:"HR Admin Access",description:"Full HR management: leave types, calendar, attendance correction."},
+  {capability_code:"CAP_HR_DIRECTOR",capability_name:"HR Director",description:"Director-level access including export permissions across all HR reports."},
+];
+
+const TAB_LABELS = {matrix:"Capability Matrix", bindings:"Work Area Bindings", packs:"Pack Definitions"};
+
 export default function SACapabilityGovernance(){
   const navigate=useNavigate();
   const topRefs=useRef([]), searchRef=useRef(null), bindingSearchRef=useRef(null);
@@ -65,6 +74,8 @@ export default function SACapabilityGovernance(){
   const [companyId,setCompanyId]=useState(""),[capCode,setCapCode]=useState(""),[ctxId,setCtxId]=useState(""),[projectCode,setProjectCode]=useState(""),[moduleCode,setModuleCode]=useState(""),[selectedResourceCode,setSelectedResourceCode]=useState("");
   const [search,setSearch]=useState(""),[drafts,setDrafts]=useState({}),[capDraft,setCapDraft]=useState(newCap()),[contextSearch,setContextSearch]=useState(""),[bindingSearch,setBindingSearch]=useState(""),[bindingDrawerOpen,setBindingDrawerOpen]=useState(false);
   const [loading,setLoading]=useState(true),[catalogLoading,setCatalogLoading]=useState(true),[saving,setSaving]=useState(false),[bindingLoading,setBindingLoading]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
+  const [activeTab,setActiveTab]=useState("matrix"),[editDrawerOpen,setEditDrawerOpen]=useState(false);
+  const [packContentsOpen,setPackContentsOpen]=useState(false),[packContentsCode,setPackContentsCode]=useState(""),[packContentsRows,setPackContentsRows]=useState([]),[packContentsLoading,setPackContentsLoading]=useState(false);
 
   async function loadBootstrap(){
     setLoading(true); setError("");
@@ -153,7 +164,7 @@ export default function SACapabilityGovernance(){
   },[catalog,search,projectCode,moduleCode]);
   const rows=useMemo(()=>filteredCatalog.map((resource)=>({resource,savedRow:capMap.get(resource.resource_code)??null,draft:drafts[resource.resource_code]??(capMap.has(resource.resource_code)?rowDraft(capCode,capMap.get(resource.resource_code)):newDraft(capCode,resource.resource_code))})),[filteredCatalog,drafts,capMap,capCode]);
   const { getRowProps } = useErpListNavigation(rows, {
-    onActivate: (row) => setSelectedResourceCode(row?.resource?.resource_code ?? ""),
+    onActivate: (row) => { setSelectedResourceCode(row?.resource?.resource_code ?? ""); setEditDrawerOpen(true); },
   });
   useEffect(()=>{
     if(!rows.length){setSelectedResourceCode(""); return;}
@@ -237,6 +248,32 @@ export default function SACapabilityGovernance(){
     setBindingDrawerOpen(true);
     void loadCtxCaps(row.work_context_id);
   }
+  function openEditDrawer(resourceCode){
+    setSelectedResourceCode(resourceCode);
+    setEditDrawerOpen(true);
+  }
+  async function openPackContents(code){
+    setPackContentsCode(code);
+    setPackContentsRows([]);
+    setPackContentsOpen(true);
+    setPackContentsLoading(true);
+    try{const data=await fetchApi(`/api/admin/acl/capability-actions?capability_code=${encodeURIComponent(code)}`); setPackContentsRows(data.permissions??[]);}
+    catch(err){console.error("PACK_CONTENTS_LOAD_FAILED",{capability_code:code,message:err?.message??"REQUEST_FAILED"});setError(`Pack contents could not be loaded. ${err.message??"REQUEST_FAILED"}`);}
+    finally{setPackContentsLoading(false);}
+  }
+  async function removePackRule(capabilityCode,resourceCode){
+    const ok=await openActionConfirm({eyebrow:"Pack Contents",title:"Remove Resource Rule",message:`${resourceCode} er rule ta ${capabilityCode} pack theke remove korte chao?`,confirmLabel:"Remove",cancelLabel:"Cancel"});
+    if(!ok) return;
+    setSaving(true); setError(""); setNotice("");
+    try{
+      await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capabilityCode,resource_code:resourceCode})});
+      const data=await fetchApi(`/api/admin/acl/capability-actions?capability_code=${encodeURIComponent(capabilityCode)}`);
+      setPackContentsRows(data.permissions??[]);
+      if(capabilityCode===capCode) await loadCapRows(capabilityCode);
+      setNotice(`${resourceCode} rule removed from ${capabilityCode}.`);
+    }catch(err){console.error("PACK_RULE_REMOVE_FAILED",{capability_code:capabilityCode,resource_code:resourceCode,message:err?.message??"REQUEST_FAILED"});setError(`Rule could not be removed. ${err.message??"REQUEST_FAILED"}`);}
+    finally{setSaving(false);}
+  }
   async function toggleCapabilityForContext(workContextId, capabilityCode, attached, workContextCode){
     await postAndRefresh(
       attached?"/api/admin/acl/work-context-capabilities/unassign":"/api/admin/acl/work-context-capabilities/assign",
@@ -264,235 +301,482 @@ export default function SACapabilityGovernance(){
       title="Screen Packs and Business-Area Binding"
       actions={[
         {key:"control-panel",label:"Control Panel",tone:"neutral",buttonRef:(el)=>{topRefs.current[0]=el;},onClick:()=>{openScreen("SA_CONTROL_PANEL",{mode:"replace"});navigate("/sa/control-panel");},onKeyDown:(e)=>handleLinearNavigation(e,{index:0,refs:topRefs.current,orientation:"horizontal"})},
-        {key:"work-context-master",label:"Work Context Master",tone:"neutral",buttonRef:(el)=>{topRefs.current[1]=el;},onClick:()=>{openScreen("SA_WORK_CONTEXT_MASTER",{mode:"replace"});navigate("/sa/work-contexts");},onKeyDown:(e)=>handleLinearNavigation(e,{index:1,refs:topRefs.current,orientation:"horizontal"})},
+        {key:"work-context-master",label:"Work Contexts",tone:"neutral",buttonRef:(el)=>{topRefs.current[1]=el;},onClick:()=>{openScreen("SA_WORK_CONTEXT_MASTER",{mode:"replace"});navigate("/sa/work-contexts");},onKeyDown:(e)=>handleLinearNavigation(e,{index:1,refs:topRefs.current,orientation:"horizontal"})},
         {key:"acl-version-center",label:"ACL Version Center",tone:"neutral",buttonRef:(el)=>{topRefs.current[2]=el;},onClick:()=>{openScreen("SA_ACL_VERSION_CENTER",{mode:"replace"});navigate("/sa/acl/version-center");},onKeyDown:(e)=>handleLinearNavigation(e,{index:2,refs:topRefs.current,orientation:"horizontal"})},
       ]}
       notices={[...(error?[{key:"error",tone:"error",message:error}]:[]),...(notice?[{key:"notice",tone:"success",message:notice}]:[])]}
-      footerHints={["↑↓ Navigate", "F8 Refresh", "Ctrl+S Save", "Alt+Shift+F Search", "Esc Back", "Ctrl+K Command Bar"]}
+      footerHints={["↑↓ Navigate", "Enter Edit", "F8 Refresh", "Ctrl+S Save Matrix", "Alt+Shift+F Search", "Esc Back"]}
     >
-      <div className="grid gap-[var(--erp-section-gap)] xl:grid-cols-[1.15fr,0.85fr]">
-        <section className="grid gap-[var(--erp-section-gap)]">
-          <div className="grid gap-[var(--erp-section-gap)] border border-slate-300 bg-white p-3">
-            <ErpSelectionSection label="Create Capability Pack" />
-            <p className="text-xs text-slate-600">Start with CAP_HR_REQUESTER, CAP_HR_APPROVER, and CAP_HR_REPORT_VIEWER.</p>
-            <div className="grid gap-[var(--erp-form-gap)]">
-              <ErpDenseFormRow label="Capability Code" required>
-                <input type="text" value={capDraft.capability_code} onChange={(e)=>setCapDraft((c)=>({...c,capability_code:e.target.value.toUpperCase()}))} placeholder="CAPABILITY_CODE" className="w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none" />
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Capability Name" required>
-                <input type="text" value={capDraft.capability_name} onChange={(e)=>setCapDraft((c)=>({...c,capability_name:e.target.value}))} placeholder="Capability Name" className="w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none" />
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Description">
-                <textarea value={capDraft.description} onChange={(e)=>setCapDraft((c)=>({...c,description:e.target.value}))} rows={2} placeholder="Description" className="w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none" />
-              </ErpDenseFormRow>
+      {/* ── Tab Bar ─────────────────────────────────────────────── */}
+      <div className="mb-[var(--erp-section-gap)] flex border-b border-slate-300">
+        {Object.entries(TAB_LABELS).map(([key,label])=>(
+          <button
+            key={key}
+            type="button"
+            onClick={()=>setActiveTab(key)}
+            className={`-mb-px border-b-2 px-5 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] transition-colors ${activeTab===key?"border-sky-600 text-sky-700":"border-transparent text-slate-400 hover:text-slate-600"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════
+          TAB 1 — CAPABILITY MATRIX
+      ═══════════════════════════════════════════════════════════ */}
+      {activeTab==="matrix"&&(
+        <div className="grid gap-[var(--erp-section-gap)]">
+
+          {/* Compact filter bar */}
+          <div className="grid grid-cols-[1fr_140px_160px_1fr_auto_auto] items-end gap-2 border border-slate-300 bg-white p-3">
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Pack</div>
+              <ErpComboboxField
+                value={capCode}
+                onChange={(val)=>setCapCode(val)}
+                options={caps.map((cap)=>({value:cap.capability_code,label:`${cap.capability_code} | ${cap.capability_name}`}))}
+                blankLabel={caps.length===0?"No packs yet":"Choose pack"}
+                inputClassName="px-2 py-[7px] text-sm"
+              />
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" disabled={saving} onClick={()=>void saveCap()} className="border border-sky-300 bg-sky-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-900">Save Pack</button>
-              <button type="button" disabled={saving} onClick={()=>setCapDraft({capability_code:"CAP_HR_REQUESTER",capability_name:"HR Requester",description:"Requester access for leave and out work apply/my-request pages."})} className="border border-slate-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-700">Requester</button>
-              <button type="button" disabled={saving} onClick={()=>setCapDraft({capability_code:"CAP_HR_APPROVER",capability_name:"HR Approver",description:"Approver inbox and approval-history access for HR workflows."})} className="border border-slate-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-700">Approver</button>
-              <button type="button" disabled={saving} onClick={()=>setCapDraft({capability_code:"CAP_HR_REPORT_VIEWER",capability_name:"HR Report Viewer",description:"Register and reporting visibility without approval authority."})} className="border border-slate-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-700">Report</button>
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Project</div>
+              <ErpComboboxField
+                value={projectCode}
+                onChange={(val)=>setProjectCode(val)}
+                options={projectOptions.map((code)=>({value:code,label:code}))}
+                blankLabel="All"
+                inputClassName="px-2 py-[7px] text-sm"
+              />
             </div>
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Module</div>
+              <ErpComboboxField
+                value={moduleCode}
+                onChange={(val)=>setModuleCode(val)}
+                options={moduleOptions.map((code)=>({value:code,label:code}))}
+                blankLabel="Choose module"
+                inputClassName="px-2 py-[7px] text-sm"
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Search</div>
+              <input
+                ref={searchRef}
+                type="text"
+                value={search}
+                onChange={(e)=>setSearch(e.target.value)}
+                placeholder="Filter resources..."
+                className="w-full border border-slate-300 bg-white px-2 py-[7px] text-sm text-slate-900 outline-none"
+              />
+            </div>
+            <button
+              type="button"
+              disabled={saving||!moduleCode||!capCode}
+              onClick={()=>void saveMatrix()}
+              className="self-end border border-sky-300 bg-sky-50 px-4 py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-900 disabled:opacity-40"
+            >
+              Save Matrix
+            </button>
+            <button
+              type="button"
+              disabled={loading||catalogLoading}
+              onClick={()=>{void loadBootstrap(); void loadCatalog();}}
+              className="self-end border border-slate-300 bg-white px-3 py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 disabled:opacity-40"
+            >
+              Refresh
+            </button>
           </div>
-          <div className="grid gap-[var(--erp-section-gap)] border border-slate-300 bg-white p-3">
-            <ErpSelectionSection label="Capability Matrix" />
-            <div className="grid gap-[var(--erp-form-gap)]">
-              <ErpDenseFormRow label="Capability">
-                <ErpComboboxField
-                  value={capCode}
-                  onChange={(val) => setCapCode(val)}
-                  options={caps.map((cap) => ({ value: cap.capability_code, label: `${cap.capability_code} | ${cap.capability_name}` }))}
-                  blankLabel={caps.length === 0 ? "No capability pack yet" : "Choose capability"}
-                  inputClassName="px-3 py-2 text-sm"
-                />
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Project">
-                <ErpComboboxField
-                  value={projectCode}
-                  onChange={(val) => setProjectCode(val)}
-                  options={projectOptions.map((code) => ({ value: code, label: code }))}
-                  blankLabel="All mapped projects"
-                  inputClassName="px-3 py-2 text-sm"
-                />
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Module">
-                <ErpComboboxField
-                  value={moduleCode}
-                  onChange={(val) => setModuleCode(val)}
-                  options={moduleOptions.map((code) => ({ value: code, label: code }))}
-                  blankLabel="Choose module"
-                  inputClassName="px-3 py-2 text-sm"
-                />
-              </ErpDenseFormRow>
+
+          {/* Pack summary strip */}
+          {capCode&&(
+            <div className="flex flex-wrap items-center gap-4 border border-slate-200 bg-slate-50 px-3 py-2">
+              <span className="text-[11px] font-semibold text-slate-700">{capCode}</span>
+              <span className="text-[11px] text-slate-500">{caps.find(c=>c.capability_code===capCode)?.capability_name??""}</span>
+              <span className="ml-auto flex gap-4 text-[11px] text-slate-500">
+                <span><span className="font-semibold text-slate-800">{capRows.length}</span> saved rows</span>
+                <span><span className="font-semibold text-slate-800">{bindingLoading?"…":attachedContextCount}</span> attached contexts</span>
+              </span>
             </div>
-            <QuickFilterInput label="Search Resources" value={search} onChange={setSearch} inputRef={searchRef} placeholder="Search inside the selected project/module" hint="First choose one module, then search inside that module." />
-            <div className="flex items-center justify-between gap-3 border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-              <span>{moduleCode ? "Arrow through rows, then edit the selected resource on the right." : "Choose one project and one exact module first."}</span>
-              <button type="button" disabled={saving} onClick={()=>void saveMatrix()} className="border border-sky-300 bg-sky-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-900">Save Matrix</button>
-            </div>
-          </div>
+          )}
+
+          {/* Resource grid */}
           <div className="border border-slate-300 bg-white">
-            {!moduleCode ? (
-              <div className="bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                Project select korar por exact module choose koro. Tarpor oi module-er sob pages row hisebe asbe.
+            {!moduleCode?(
+              <div className="px-4 py-6 text-center text-sm text-slate-400">
+                Project select korar por exact module choose koro — tarpor oi module-er sob resources dekhabe.
               </div>
-            ) : catalogLoading ? (
-              <div className="bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                Loading mapped business resources.
-              </div>
-            ) : rows.length === 0 ? (
-              <div className="bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                Selected project/module-er niche visible mapped business resource paoa jayni.
-              </div>
-            ) : (
+            ):catalogLoading?(
+              <div className="px-4 py-6 text-center text-sm text-slate-400">Loading resources…</div>
+            ):rows.length===0?(
+              <div className="px-4 py-6 text-center text-sm text-slate-400">Selected project / module-er niche kono mapped resource paoa jayni.</div>
+            ):(
               <ErpDenseGrid
                 columns={[
                   {
-                    key: "resource",
-                    label: "Resource",
-                    render: ({ resource }) => (
+                    key:"resource",
+                    label:"Resource",
+                    render:({resource})=>(
                       <div>
                         <div className="font-semibold text-slate-900">{resource.title}</div>
-                        <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                          {resource.resource_code}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          {[resource.project_code, resource.module_code, resource.route_path]
-                            .filter(Boolean)
-                            .join(" | ")}
-                        </div>
+                        <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-slate-400">{resource.resource_code}</div>
                       </div>
                     ),
                   },
                   {
-                    key: "allow",
-                    label: "Allow Flags",
-                    render: ({ resource, draft }) => {
-                      const available = new Set(resource.available_actions ?? []);
-                      const enabled = ACTIONS.filter(([actionCode, key]) => available.has(actionCode) && Boolean(draft[key])).map(([, , label]) => label);
-                      return enabled.length ? enabled.join(", ") : "No explicit allow";
+                    key:"allow",
+                    label:"Allow",
+                    render:({resource,draft})=>{
+                      const available=new Set(resource.available_actions??[]);
+                      const enabled=ACTIONS.filter(([ac,key])=>available.has(ac)&&Boolean(draft[key])).map(([,,label])=>label);
+                      return enabled.length?(
+                        <div className="flex flex-wrap gap-1">
+                          {enabled.map((l)=>(
+                            <span key={l} className="border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">{l}</span>
+                          ))}
+                        </div>
+                      ):<span className="text-xs text-slate-300">—</span>;
                     },
                   },
                   {
-                    key: "deny",
-                    label: "Explicit Deny",
-                    render: ({ draft }) => draft.denied_actions.length > 0 ? draft.denied_actions.join(", ") : "None",
+                    key:"deny",
+                    label:"Deny",
+                    render:({draft})=>draft.denied_actions.length>0?(
+                      <div className="flex flex-wrap gap-1">
+                        {draft.denied_actions.map((a)=>(
+                          <span key={a} className="border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-800">{a}</span>
+                        ))}
+                      </div>
+                    ):null,
+                  },
+                  {
+                    key:"edit",
+                    label:"",
+                    render:({resource})=>(
+                      <button
+                        type="button"
+                        onClick={(e)=>{e.stopPropagation(); openEditDrawer(resource.resource_code);}}
+                        className="border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500 hover:bg-slate-50"
+                      >
+                        Edit →
+                      </button>
+                    ),
                   },
                 ]}
                 rows={rows}
-                rowKey={(row) => row.resource.resource_code}
-                getRowProps={(row, index) => ({
+                rowKey={(row)=>row.resource.resource_code}
+                getRowProps={(row,index)=>({
                   ...getRowProps(index),
-                  onClick: () => setSelectedResourceCode(row.resource.resource_code),
-                  className:
-                    row.resource.resource_code === selectedResourceCode ? "bg-sky-50" : "",
+                  onClick:()=>openEditDrawer(row.resource.resource_code),
+                  className:row.resource.resource_code===selectedResourceCode?"bg-sky-50":"",
                 })}
-                onRowActivate={(row) => setSelectedResourceCode(row.resource.resource_code)}
+                onRowActivate={(row)=>openEditDrawer(row.resource.resource_code)}
                 maxHeight="none"
               />
             )}
           </div>
-        </section>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════
+          TAB 2 — WORK AREA BINDINGS
+      ═══════════════════════════════════════════════════════════ */}
+      {activeTab==="bindings"&&(
         <div className="grid gap-[var(--erp-section-gap)]">
-          <section className="grid gap-[var(--erp-section-gap)] border border-slate-300 bg-white p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Selected Resource</div>
-            <div className="text-sm font-semibold text-slate-900">{selectedRow?.resource?.title??"Advanced deny editor"}</div>
-            {selectedRow?(
-              <div className="grid gap-[var(--erp-section-gap)]">
-                <div className="grid gap-1 text-xs text-slate-600">
-                  <div>{selectedRow.resource.resource_code}</div>
-                  <div>{[selectedRow.resource.project_code,selectedRow.resource.module_code,selectedRow.resource.route_path].filter(Boolean).join(" | ")}</div>
-                </div>
-                <div className="border border-slate-300">
-                  <div className="grid grid-cols-[minmax(0,1fr)_72px_72px] border-b border-slate-300 bg-slate-50 px-2 py-[3px] text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    <span>Action</span>
-                    <span className="text-center">Allow</span>
-                    <span className="text-center">Deny</span>
-                  </div>
-                  {ACTIONS.map(([actionCode,key,label])=>{
-                    const available = new Set(selectedRow.resource.available_actions ?? []);
-                    return (
-                      <div key={`policy-${actionCode}`} className="grid grid-cols-[minmax(0,1fr)_72px_72px] items-center border-b border-slate-200 px-2 py-[3px] text-[12px] text-slate-700 last:border-b-0">
-                        <span>{label}</span>
-                        <label className="flex justify-center">
-                          <input type="checkbox" disabled={!available.has(actionCode)} checked={Boolean(selectedRow.draft[key])} onChange={(e)=>updateAllow(selectedRow.resource.resource_code,key,e.target.checked,actionCode)} className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-emerald-600 disabled:cursor-not-allowed" />
-                        </label>
-                        <label className="flex justify-center">
-                          <input type="checkbox" disabled={!available.has(actionCode)} checked={selectedRow.draft.denied_actions.includes(actionCode)} onChange={(e)=>updateDeny(selectedRow.resource.resource_code,actionCode,e.target.checked)} className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-rose-600 disabled:cursor-not-allowed" />
-                        </label>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-[11px] text-slate-500">Choose allow or deny per action. Deny clears allow for the same action.</div>
-                  <button type="button" onClick={()=>void clearSelected()} className="border border-rose-300 bg-rose-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-rose-700">Clear Rule</button>
-                </div>
-              </div>
-            ):<div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500">Matrix theke ekta resource row select koro. Tarpor allow/deny editor ekhanei khulbe.</div>}
-          </section>
-          <section className="grid gap-[var(--erp-section-gap)] border border-slate-300 bg-white p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Access Pack Coverage</div>
-            <div className="text-sm font-semibold text-slate-900">{capCode||"Selected access pack summary"}</div>
-            <div className="border border-slate-300 bg-white">
-              <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]"><span className="text-[11px] text-slate-500">Selected Pack</span><span className="text-[11px] font-semibold text-slate-900">{capCode||"Choose capability"}</span></div>
-              <div className="flex items-baseline justify-between gap-2 border-b border-slate-200 px-2 py-[3px]"><span className="text-[11px] text-slate-500">Saved Rows</span><span className="text-[11px] font-semibold text-slate-900">{capRows.length}</span></div>
-              <div className="flex items-baseline justify-between gap-2 px-2 py-[3px]"><span className="text-[11px] text-slate-500">Attached Contexts</span><span className="text-[11px] font-semibold text-slate-900">{bindingLoading?"...":attachedContextCount}</span></div>
-            </div>
-            <div className="mt-4 border border-slate-300 bg-white">
-              {capRows.length===0?<div className="px-4 py-3 text-sm text-slate-500">এই capability pack-এ এখনো কোনো saved page/action row নেই। আগে left side matrix save করো.</div>:capRows.map((row)=><div key={row.resource_code} className="border-b border-slate-200 px-4 py-3 last:border-b-0"><div className="text-sm font-semibold text-slate-900">{row.resource_code}</div><div className="mt-1 text-xs text-slate-500">{ACTIONS.filter(([,key])=>row[key]).map(([, , label])=>label).join(", ")||"No allow flags"}{Array.isArray(row.denied_actions)&&row.denied_actions.length?` | Deny: ${row.denied_actions.join(", ")}`:""}</div></div>)}
-            </div>
-          </section>
-          <section className="grid gap-[var(--erp-section-gap)] border border-slate-300 bg-white p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Business Areas</div>
-            <div className="text-sm font-semibold text-slate-900">Open one business area, then choose access packs inside the drawer</div>
-            <ErpDenseFormRow label="Company">
+
+          {/* Compact header */}
+          <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-2 border border-slate-300 bg-white p-3">
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Company</div>
               <ErpComboboxField
                 value={companyId}
-                onChange={(val) => setCompanyId(val)}
-                options={companies.map((c) => ({ value: c.id, label: formatCompanyLabel(c) }))}
+                onChange={(val)=>setCompanyId(val)}
+                options={companies.map((c)=>({value:c.id,label:formatCompanyLabel(c)}))}
                 blankLabel="Choose company"
-                inputClassName="px-3 py-2 text-sm"
+                inputClassName="px-2 py-[7px] text-sm"
               />
-            </ErpDenseFormRow>
-            <QuickFilterInput label="Search Contexts" value={contextSearch} onChange={setContextSearch} placeholder="Search by company, department, or context code" hint="GENERAL_OPS is company-wide. DEPT_* rows come from department setup." />
+            </div>
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Search Contexts</div>
+              <input
+                type="text"
+                value={contextSearch}
+                onChange={(e)=>setContextSearch(e.target.value)}
+                placeholder="Search by code, department, company…"
+                className="w-full border border-slate-300 bg-white px-2 py-[7px] text-sm text-slate-900 outline-none"
+              />
+            </div>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={()=>void loadBootstrap()}
+              className="self-end border border-slate-300 bg-white px-3 py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 disabled:opacity-40"
+            >
+              Refresh
+            </button>
+          </div>
+
+          {/* Hint */}
+          <div className="border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+            Click any row to open its pack binding drawer. Attach or remove capability packs for that work context.
+          </div>
+
+          {/* Context list */}
+          <div className="border border-slate-300 bg-white">
+            {loading?(
+              <div className="px-4 py-6 text-center text-sm text-slate-400">Loading…</div>
+            ):contexts.length===0?(
+              <div className="px-4 py-6 text-center text-sm text-slate-400">No work contexts found for this company. Company and department setup first complete koro.</div>
+            ):filteredContexts.length===0?(
+              <div className="px-4 py-6 text-center text-sm text-slate-400">Current search-e kono context match koreni.</div>
+            ):filteredContexts.map((row,i)=>{
+              const attachedCodes=contextCapabilityMap[row.work_context_id]??[];
+              const contextType=classifyContext(row);
+              const recommendedCodes=recommendedCapabilityCodes(row);
+              return (
+                <button
+                  key={row.work_context_id}
+                  type="button"
+                  onClick={()=>openBindingDrawer(row)}
+                  {...getContextRowProps(i)}
+                  className={`grid w-full grid-cols-[minmax(0,1.8fr)_100px_minmax(0,1fr)_60px] items-center gap-3 border-b px-3 py-2.5 text-left last:border-b-0 ${ctxId===row.work_context_id?"border-sky-200 bg-sky-50":"border-slate-200 bg-white hover:bg-slate-50"}`}
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-900">{row.work_context_code}</div>
+                    <div className="mt-0.5 text-xs text-slate-500">{row.work_context_name}</div>
+                    {row.department_code&&<div className="mt-0.5 text-[10px] text-slate-400">{row.department_code} | {row.department_name}</div>}
+                  </div>
+                  <div className="text-[11px]">
+                    <span className={`border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] ${contextType==="GENERAL"?"border-violet-200 bg-violet-50 text-violet-800":contextType==="DEPARTMENT"?"border-sky-200 bg-sky-50 text-sky-800":"border-slate-200 bg-slate-50 text-slate-600"}`}>
+                      {contextType==="GENERAL"?"General":contextType==="DEPARTMENT"?"Dept":"Manual"}
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    {attachedCodes.length===0?(
+                      <span className="text-[11px] text-slate-400">No packs attached</span>
+                    ):(
+                      <div className="flex flex-wrap gap-1">
+                        {attachedCodes.map((code)=>(
+                          <span key={code} className="border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800">{code}</span>
+                        ))}
+                      </div>
+                    )}
+                    {recommendedCodes.length>0&&!recommendedCodes.every(c=>attachedCodes.includes(c))&&(
+                      <div className="mt-1 text-[10px] text-amber-600">Suggested: {recommendedCodes.filter(c=>!attachedCodes.includes(c)).join(", ")}</div>
+                    )}
+                  </div>
+                  <div className="text-right text-[10px] font-semibold uppercase tracking-[0.1em] text-sky-600">Manage →</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════
+          TAB 3 — PACK DEFINITIONS
+      ═══════════════════════════════════════════════════════════ */}
+      {activeTab==="packs"&&(
+        <div className="grid gap-[var(--erp-section-gap)]">
+
+          {/* Create form — single compact row */}
+          <div className="border border-slate-300 bg-white p-3">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Create New Pack</div>
+            <div className="grid grid-cols-[180px_1fr_2fr_auto] items-end gap-2">
+              <div>
+                <div className="mb-1 text-[10px] text-slate-400">Code <span className="text-rose-500">*</span></div>
+                <input
+                  type="text"
+                  value={capDraft.capability_code}
+                  onChange={(e)=>setCapDraft((c)=>({...c,capability_code:e.target.value.toUpperCase()}))}
+                  placeholder="CAP_HR_..."
+                  className="w-full border border-slate-300 bg-white px-2 py-[7px] text-sm text-slate-900 outline-none"
+                />
+              </div>
+              <div>
+                <div className="mb-1 text-[10px] text-slate-400">Name <span className="text-rose-500">*</span></div>
+                <input
+                  type="text"
+                  value={capDraft.capability_name}
+                  onChange={(e)=>setCapDraft((c)=>({...c,capability_name:e.target.value}))}
+                  placeholder="Pack display name"
+                  className="w-full border border-slate-300 bg-white px-2 py-[7px] text-sm text-slate-900 outline-none"
+                />
+              </div>
+              <div>
+                <div className="mb-1 text-[10px] text-slate-400">Description</div>
+                <input
+                  type="text"
+                  value={capDraft.description}
+                  onChange={(e)=>setCapDraft((c)=>({...c,description:e.target.value}))}
+                  placeholder="Optional description"
+                  className="w-full border border-slate-300 bg-white px-2 py-[7px] text-sm text-slate-900 outline-none"
+                />
+              </div>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={()=>void saveCap()}
+                className="border border-sky-300 bg-sky-50 px-4 py-[7px] text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-900 disabled:opacity-40"
+              >
+                Save Pack
+              </button>
+            </div>
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <span className="text-[10px] uppercase tracking-[0.12em] text-slate-400">Presets:</span>
+              {PRESET_CAPS.map((p)=>(
+                <button
+                  key={p.capability_code}
+                  type="button"
+                  disabled={saving}
+                  onClick={()=>setCapDraft(p)}
+                  className="border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600 hover:bg-white"
+                >
+                  {p.capability_code.replace("CAP_HR_","")}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Pack list */}
+          <div className="border border-slate-300 bg-white">
+            {caps.length===0?(
+              <div className="px-4 py-6 text-center text-sm text-slate-400">No capability packs created yet. Use the form above to create the first one.</div>
+            ):caps.map((cap)=>{
+              const ctxCount=Object.values(contextCapabilityMap).filter((codes)=>Array.isArray(codes)&&codes.includes(cap.capability_code)).length;
+              const isCurrent=capCode===cap.capability_code;
+              return (
+                <div key={cap.capability_code} className={`grid grid-cols-[minmax(0,1fr)_80px_80px_120px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0 ${isCurrent?"bg-sky-50":"bg-white"}`}>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-900">{cap.capability_code}</div>
+                    <div className="mt-0.5 text-xs text-slate-500">{cap.capability_name}</div>
+                    {cap.description&&<div className="mt-0.5 text-[11px] text-slate-400">{cap.description}</div>}
+                  </div>
+                  <div className="text-center">
+                    <div className="text-[10px] uppercase tracking-[0.1em] text-slate-400">Contexts</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-700">{bindingLoading?"…":ctxCount}</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-[10px] uppercase tracking-[0.1em] text-slate-400">Resources</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-700">{isCurrent?capRows.length:"—"}</div>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <button
+                      type="button"
+                      onClick={()=>void openPackContents(cap.capability_code)}
+                      className="border border-slate-300 bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600 hover:bg-slate-50"
+                    >
+                      View Contents
+                    </button>
+                    <button
+                      type="button"
+                      onClick={()=>{setCapCode(cap.capability_code); setActiveTab("matrix");}}
+                      className="border border-sky-200 bg-sky-50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-sky-700 hover:bg-sky-100"
+                    >
+                      Edit Matrix →
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ACL Publish shortcut */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border border-slate-200 bg-slate-50 px-3 py-2.5">
+            <span className="text-[11px] text-slate-500">Packs configure kora hole ACL Version Center theke publish koro — sob companies-er jonno fresh snapshot lagbe.</span>
+            <div className="flex gap-2">
+              <button type="button" onClick={()=>{openScreen("SA_ACL_VERSION_CENTER",{mode:"replace"});navigate("/sa/acl/version-center");}} className="border border-sky-300 bg-sky-50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-sky-900">ACL Version Center</button>
+              <button type="button" onClick={()=>{openScreen("SA_WORK_CONTEXT_MASTER",{mode:"replace"});navigate("/sa/work-contexts");}} className="border border-slate-300 bg-white px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-600">Work Context Master</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════
+          DRAWER — Resource Allow / Deny Editor
+      ═══════════════════════════════════════════════════════════ */}
+      <DrawerBase
+        visible={editDrawerOpen}
+        title={selectedRow?.resource?.title??"Edit Resource Rule"}
+        onEscape={()=>setEditDrawerOpen(false)}
+        width="min(400px, calc(100vw - 24px))"
+        actions={
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={()=>void clearSelected()}
+              className="border border-rose-300 bg-rose-50 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-rose-700"
+            >
+              Clear Rule
+            </button>
+            <button
+              type="button"
+              onClick={()=>setEditDrawerOpen(false)}
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-950"
+            >
+              Done
+            </button>
+          </div>
+        }
+      >
+        {selectedRow?(
+          <div className="grid gap-[var(--erp-section-gap)]">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">{selectedRow.resource.resource_code}</div>
+              <div className="mt-1 text-xs text-slate-500">{[selectedRow.resource.project_code,selectedRow.resource.module_code,selectedRow.resource.route_path].filter(Boolean).join(" | ")}</div>
+            </div>
             <div className="border border-slate-300">
-              {contexts.length===0?<div className="bg-slate-50 px-4 py-3 text-sm text-slate-500">No work context is currently defined for this company. Company and department setup first complete koro.</div>:filteredContexts.length===0?<div className="bg-slate-50 px-4 py-3 text-sm text-slate-500">Current search-e kono context match koreni.</div>:filteredContexts.map((row)=>{
-                const attachedCodes=contextCapabilityMap[row.work_context_id]??[];
-                const contextType=classifyContext(row);
-                const recommendedCodes=recommendedCapabilityCodes(row);
-                return <div key={row.work_context_id} className={`border-b last:border-b-0 ${ctxId===row.work_context_id?"border-sky-200 bg-sky-50":"border-slate-300 bg-white"}`}>
-                  <button type="button" onClick={()=>openBindingDrawer(row)} {...getContextRowProps(filteredContexts.indexOf(row))} className="grid w-full grid-cols-[minmax(0,1.6fr)_120px_120px] items-start gap-3 px-2 py-[6px] text-left text-[12px] text-slate-800">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-slate-900">{row.work_context_code} | {row.work_context_name}</div>
-                      <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">{formatCompanyLabel(row)}</div>
-                      <div className="mt-1 text-xs text-slate-500">{row.department_code?`${row.department_code} | ${row.department_name}`:"Company-wide context (GENERAL_OPS type)"}</div>
-                    </div>
-                    <div className="text-[11px] text-slate-600">
-                      <div className="font-semibold text-slate-900">{contextType==="GENERAL"?"General":contextType==="DEPARTMENT"?"Department":"Manual"}</div>
-                      <div className="mt-1">{attachedCodes.length} pack{attachedCodes.length===1?"":"s"}</div>
-                    </div>
-                    <div className="text-[11px] text-slate-600">{recommendedCodes.length ? recommendedCodes.join(", ") : "No recommended default"}</div>
-                  </button>
-                </div>;
+              <div className="grid grid-cols-[minmax(0,1fr)_72px_72px] border-b border-slate-300 bg-slate-50 px-2 py-[3px] text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                <span>Action</span>
+                <span className="text-center">Allow</span>
+                <span className="text-center">Deny</span>
+              </div>
+              {ACTIONS.map(([actionCode,key,label])=>{
+                const available=new Set(selectedRow.resource.available_actions??[]);
+                const isAvailable=available.has(actionCode);
+                return (
+                  <div key={`policy-${actionCode}`} className={`grid grid-cols-[minmax(0,1fr)_72px_72px] items-center border-b border-slate-200 px-2 py-[5px] text-[12px] last:border-b-0 ${isAvailable?"text-slate-700":"text-slate-300"}`}>
+                    <span>{label}</span>
+                    <label className="flex justify-center">
+                      <input
+                        type="checkbox"
+                        disabled={!isAvailable}
+                        checked={Boolean(selectedRow.draft[key])}
+                        onChange={(e)=>updateAllow(selectedRow.resource.resource_code,key,e.target.checked,actionCode)}
+                        className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-emerald-600 disabled:cursor-not-allowed"
+                      />
+                    </label>
+                    <label className="flex justify-center">
+                      <input
+                        type="checkbox"
+                        disabled={!isAvailable}
+                        checked={selectedRow.draft.denied_actions.includes(actionCode)}
+                        onChange={(e)=>updateDeny(selectedRow.resource.resource_code,actionCode,e.target.checked)}
+                        className="h-4 w-4 cursor-pointer border-slate-300 bg-white text-rose-600 disabled:cursor-not-allowed"
+                      />
+                    </label>
+                  </div>
+                );
               })}
             </div>
-            <div className="border border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600">
-              {ctxId&&ctxCaps.length>0?`Selected business area currently carries: ${ctxCaps.map((cap)=>cap.capability_code).join(", ")}`:"Open any business area row to inspect and manage its attached access packs."}
+            <div className="text-[11px] text-slate-400">
+              Greyed-out actions are not available for this resource. Deny overrides allow for the same action.
             </div>
-          </section>
-          <section className="grid gap-[var(--erp-section-gap)] border border-slate-300 bg-white p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">ACL Publish Flow</div>
-            <div className="text-sm font-semibold text-slate-900">Versioning moved into its own desk</div>
-            <div className="grid gap-[var(--erp-form-gap)] text-sm text-slate-700">
-              <p>Use this workspace to change access packs and work-scope binding. Then open ACL Version Center to see which companies now require a fresh publish snapshot.</p>
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={()=>{openScreen("SA_ACL_VERSION_CENTER",{mode:"replace"});navigate("/sa/acl/version-center");}} className="border border-sky-300 bg-sky-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-900">Open ACL Version Center</button>
-                <button type="button" onClick={()=>{openScreen("SA_WORK_CONTEXT_MASTER",{mode:"replace"});navigate("/sa/work-contexts");}} className="border border-slate-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-700">Review Work Context Master</button>
+            <div className="border border-slate-200 bg-slate-50 px-3 py-2">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Pack: {capCode||"—"}</div>
+              <div className="text-[11px] text-slate-600">
+                Changes are staged locally. Click <strong>Save Matrix</strong> in the Matrix tab to persist all changes for the selected module at once.
               </div>
             </div>
-          </section>
-        </div>
-      </div>
+          </div>
+        ):(
+          <div className="text-sm text-slate-400">Select a resource row to edit its allow / deny rules.</div>
+        )}
+      </DrawerBase>
+
+      {/* ═══════════════════════════════════════════════════════════
+          DRAWER — Work Context Pack Binding
+      ═══════════════════════════════════════════════════════════ */}
       <DrawerBase
         visible={bindingDrawerOpen}
         title={selectedContext?`${selectedContext.work_context_code} | ${selectedContext.work_context_name}`:"Manage Work Scope Packs"}
@@ -511,77 +795,161 @@ export default function SACapabilityGovernance(){
       >
         {selectedContext?(
           <div className="grid gap-[var(--erp-section-gap)]">
-            <div className="grid gap-[var(--erp-form-gap)] text-sm text-slate-700">
+
+            {/* Context metadata */}
+            <div className="grid grid-cols-2 gap-3 border border-slate-200 bg-slate-50 px-3 py-2 text-[12px]">
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Scope Type</p>
-                <p className="mt-1 font-semibold text-slate-900">
-                  {classifyContext(selectedContext)==="GENERAL"?"General scope":classifyContext(selectedContext)==="DEPARTMENT"?"Department-derived scope":"Manual work scope"}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Company</p>
-                <p className="mt-1">{formatCompanyLabel(selectedContext)}</p>
-                <p className="mt-1 text-xs text-slate-500">{formatCompanyAddress(selectedContext)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Department Link</p>
-                <p className="mt-1">{selectedContext.department_code?`${selectedContext.department_code} | ${selectedContext.department_name}`:"No department link. This is a company-wide or manual scope."}</p>
-              </div>
-              {recommendedCapabilityCodes(selectedContext).length>0?(
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Recommended First Pack</p>
-                  <p className="mt-1 font-semibold text-emerald-800">{recommendedCapabilityCodes(selectedContext).join(", ")}</p>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Type</div>
+                <div className="mt-0.5 font-semibold text-slate-800">
+                  {classifyContext(selectedContext)==="GENERAL"?"General scope":classifyContext(selectedContext)==="DEPARTMENT"?"Department scope":"Manual scope"}
                 </div>
-              ):null}
-            </div>
-            <div className="grid gap-[var(--erp-form-gap)]">
-              <label className="block">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Search Packs</span>
-                <input
-                  ref={bindingSearchRef}
-                  type="text"
-                  value={bindingSearch}
-                  onChange={(e)=>setBindingSearch(e.target.value)}
-                  placeholder="Search by pack code, name, or description"
-                  className="mt-2 w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
-                />
-              </label>
-              <div className="border border-slate-300 bg-white">
-                {filteredBindingCaps.length===0?(
-                  <div className="px-4 py-3 text-sm text-slate-500">Current search-e kono capability pack match koreni.</div>
-                ):filteredBindingCaps.map((cap)=>{
-                  const attached=ctxCaps.some((item)=>item.capability_code===cap.capability_code);
-                  const recommended=recommendedCapabilityCodes(selectedContext).includes(cap.capability_code);
-                  return (
-                    <div key={`${selectedContext.work_context_id}-${cap.capability_code}`} className={`grid gap-2 border-b px-3 py-2 last:border-b-0 ${recommended?"bg-emerald-50":"bg-white"}`}>
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap gap-2">
-                            <span className="text-sm font-semibold text-slate-900">{cap.capability_code}</span>
-                            <span className="text-sm text-slate-600">{cap.capability_name}</span>
-                            {recommended?<span className="border border-emerald-300 bg-emerald-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-900">Recommended</span>:null}
-                            {attached?<span className="border border-violet-300 bg-violet-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-violet-800">Attached</span>:null}
-                          </div>
-                          {cap.description?<p className="mt-2 text-xs leading-5 text-slate-500">{cap.description}</p>:null}
-                        </div>
-                        <button
-                          type="button"
-                          disabled={saving||bindingLoading}
-                          onClick={()=>void toggleCapabilityForContext(selectedContext.work_context_id,cap.capability_code,attached,selectedContext.work_context_code)}
-                          className={`border px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] ${attached?"border-rose-300 bg-rose-50 text-rose-700":"border-emerald-300 bg-emerald-50 text-emerald-800"}`}
-                        >
-                          {attached?"Remove":"Attach"}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
               </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Company</div>
+                <div className="mt-0.5 text-slate-700">{formatCompanyLabel(selectedContext)}</div>
+              </div>
+              {selectedContext.department_code&&(
+                <div className="col-span-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Department</div>
+                  <div className="mt-0.5 text-slate-700">{selectedContext.department_code} | {selectedContext.department_name}</div>
+                </div>
+              )}
+              {recommendedCapabilityCodes(selectedContext).length>0&&(
+                <div className="col-span-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Suggested Pack</div>
+                  <div className="mt-0.5 font-semibold text-emerald-800">{recommendedCapabilityCodes(selectedContext).join(", ")}</div>
+                </div>
+              )}
+            </div>
+
+            {/* Search */}
+            <input
+              ref={bindingSearchRef}
+              type="text"
+              value={bindingSearch}
+              onChange={(e)=>setBindingSearch(e.target.value)}
+              placeholder="Search capability packs…"
+              className="w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+            />
+
+            {/* Pack list */}
+            <div className="border border-slate-300 bg-white">
+              {filteredBindingCaps.length===0?(
+                <div className="px-4 py-3 text-sm text-slate-400">No capability packs match the current search.</div>
+              ):filteredBindingCaps.map((cap)=>{
+                const attached=ctxCaps.some((item)=>item.capability_code===cap.capability_code);
+                const recommended=recommendedCapabilityCodes(selectedContext).includes(cap.capability_code);
+                return (
+                  <div key={`${selectedContext.work_context_id}-${cap.capability_code}`} className={`flex items-start justify-between gap-3 border-b px-3 py-2.5 last:border-b-0 ${recommended?"bg-emerald-50":"bg-white"}`}>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-sm font-semibold text-slate-900">{cap.capability_code}</span>
+                        {recommended&&<span className="border border-emerald-300 bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-900">Suggested</span>}
+                        {attached&&<span className="border border-violet-300 bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-violet-800">Attached</span>}
+                      </div>
+                      <div className="mt-0.5 text-xs text-slate-500">{cap.capability_name}</div>
+                      {cap.description&&<div className="mt-0.5 text-[11px] text-slate-400">{cap.description}</div>}
+                    </div>
+                    <button
+                      type="button"
+                      disabled={saving||bindingLoading}
+                      onClick={()=>void toggleCapabilityForContext(selectedContext.work_context_id,cap.capability_code,attached,selectedContext.work_context_code)}
+                      className={`shrink-0 border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] disabled:opacity-40 ${attached?"border-rose-300 bg-rose-50 text-rose-700":"border-emerald-300 bg-emerald-50 text-emerald-800"}`}
+                    >
+                      {attached?"Remove":"Attach"}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         ):(
-          <div className="text-sm text-slate-500">Choose one work scope row first.</div>
+          <div className="text-sm text-slate-400">Choose a work context row from the list first.</div>
         )}
+      </DrawerBase>
+
+      {/* ═══════════════════════════════════════════════════════════
+          DRAWER — Pack Contents (View + Remove rules)
+      ═══════════════════════════════════════════════════════════ */}
+      <DrawerBase
+        visible={packContentsOpen}
+        title={packContentsCode?`${packContentsCode} — Contents`:"Pack Contents"}
+        onEscape={()=>setPackContentsOpen(false)}
+        width="min(560px, calc(100vw - 24px))"
+        actions={
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={()=>{setCapCode(packContentsCode); setActiveTab("matrix"); setPackContentsOpen(false);}}
+              className="border border-sky-300 bg-sky-50 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-900"
+            >
+              Edit Matrix →
+            </button>
+            <button
+              type="button"
+              onClick={()=>setPackContentsOpen(false)}
+              className="border border-sky-700 bg-sky-100 px-2 py-[3px] text-[11px] font-semibold uppercase tracking-[0.06em] text-sky-950"
+            >
+              Done
+            </button>
+          </div>
+        }
+      >
+        <div className="grid gap-[var(--erp-section-gap)]">
+          <div className="flex items-center justify-between gap-3 border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+            <span>এই pack এ currently যা যা resource rule save আছে। Remove করলে সাথে সাথে delete হবে।</span>
+            <span className="font-semibold text-slate-700">{packContentsLoading?"…":`${packContentsRows.length} rules`}</span>
+          </div>
+
+          {packContentsLoading?(
+            <div className="px-4 py-6 text-center text-sm text-slate-400">Loading pack contents…</div>
+          ):packContentsRows.length===0?(
+            <div className="border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-400">
+              এই pack এ এখনো কোনো resource rule নেই।
+            </div>
+          ):(
+            <div className="border border-slate-300 bg-white">
+              {/* Header */}
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_80px] border-b border-slate-200 bg-slate-50 px-3 py-[5px] text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                <span>Resource</span>
+                <span>Allow / Deny</span>
+                <span></span>
+              </div>
+              {packContentsRows.map((row)=>{
+                const allowLabels=ACTIONS.filter(([,key])=>Boolean(row[key])).map(([,,label])=>label);
+                const denyLabels=Array.isArray(row.denied_actions)?row.denied_actions:[];
+                return (
+                  <div key={row.resource_code} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_80px] items-center gap-2 border-b border-slate-100 px-3 py-2.5 last:border-b-0">
+                    <div className="min-w-0">
+                      <div className="text-[12px] font-semibold text-slate-800 truncate">{row.resource_code}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {allowLabels.map((l)=>(
+                        <span key={`allow-${l}`} className="border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">{l}</span>
+                      ))}
+                      {denyLabels.map((a)=>(
+                        <span key={`deny-${a}`} className="border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">✕ {a}</span>
+                      ))}
+                      {allowLabels.length===0&&denyLabels.length===0&&(
+                        <span className="text-[11px] text-slate-400">No flags</span>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={()=>void removePackRule(packContentsCode,row.resource_code)}
+                        className="border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-rose-700 hover:bg-rose-100 disabled:opacity-40"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </DrawerBase>
     </ErpScreenScaffold>
   );
