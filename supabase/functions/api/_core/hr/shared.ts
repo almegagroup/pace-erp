@@ -236,13 +236,16 @@ export async function computeSandwichLeave(
   const { data: holidays } = await serviceRoleClient
     .schema("erp_hr")
     .from("company_holiday_calendar")
-    .select("holiday_date")
+    .select("holiday_date, day_kind")
     .eq("company_id", companyId)
     .gte("holiday_date", fromDate)
     .lte("holiday_date", toDate);
 
-  const holidaySet = new Set<string>(
-    (holidays ?? []).map((h: { holiday_date: string }) => h.holiday_date),
+  const holidayMap = new Map<string, string>(
+    (holidays ?? []).map((h: { holiday_date: string; day_kind?: string | null }) => [
+      h.holiday_date,
+      String(h.day_kind ?? "HOLIDAY").toUpperCase(),
+    ]),
   );
 
   // Load week-off config (default Sat+Sun = ISO [6, 7] if no row exists)
@@ -262,7 +265,9 @@ export async function computeSandwichLeave(
   // ISO weekday: 1=Mon...5=Fri, 6=Sat, 7=Sun
   // JS getUTCDay(): 0=Sun, 1=Mon...6=Sat  →  isoDay = jsDay === 0 ? 7 : jsDay
   function isNonWorking(dateStr: string): boolean {
-    if (holidaySet.has(dateStr)) return true;
+    const explicitDayKind = holidayMap.get(dateStr);
+    if (explicitDayKind === "WORKING_DAY") return false;
+    if (explicitDayKind === "HOLIDAY" || explicitDayKind === "WEEK_OFF") return true;
     const jsDay = new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
     const isoDay = jsDay === 0 ? 7 : jsDay;
     return weekOffDays.includes(isoDay);
