@@ -92,19 +92,32 @@ export async function listLeaveTypesHandler(
 }
 
 // ---------------------------------------------------------------------------
+// Internal helper — resolve target company from x-company-id header or session
+// ---------------------------------------------------------------------------
+
+function resolveTargetCompanyId(req: Request, ctx: HrHandlerContext): string {
+  const headerCompanyId = req.headers.get("x-company-id")?.trim();
+  return (headerCompanyId && headerCompanyId.length > 0)
+    ? headerCompanyId
+    : ctx.context.companyId;
+}
+
+// ---------------------------------------------------------------------------
 // Handler 2 — List ALL leave types inc. inactive (HR_LEAVE_TYPE_MANAGE)
 // ---------------------------------------------------------------------------
 
 export async function listAllLeaveTypesHandler(
-  _req: Request,
+  req: Request,
   ctx: HrHandlerContext,
 ): Promise<Response> {
   try {
     assertHrBusinessContext(ctx);
 
+    const targetCompanyId = resolveTargetCompanyId(req, ctx);
+
     const denied = await assertLeaveTypeManagePermission(
       ctx,
-      ctx.context.companyId,
+      targetCompanyId,
       ctx.context.workContextId,
     );
     if (denied) return denied;
@@ -115,7 +128,7 @@ export async function listAllLeaveTypesHandler(
       .select(
         "leave_type_id, type_code, type_name, is_paid, requires_document, max_days_per_year, carry_forward_allowed, is_active, sort_order, created_at",
       )
-      .eq("company_id", ctx.context.companyId)
+      .eq("company_id", targetCompanyId)
       .order("sort_order", { ascending: true });
 
     if (error) {
@@ -145,9 +158,11 @@ export async function createLeaveTypeHandler(
   try {
     assertHrBusinessContext(ctx);
 
+    const targetCompanyId = resolveTargetCompanyId(req, ctx);
+
     const denied = await assertLeaveTypeManagePermission(
       ctx,
-      ctx.context.companyId,
+      targetCompanyId,
       ctx.context.workContextId,
     );
     if (denied) return denied;
@@ -203,7 +218,7 @@ export async function createLeaveTypeHandler(
       .schema("erp_hr")
       .from("leave_types")
       .insert({
-        company_id: ctx.context.companyId,
+        company_id: targetCompanyId,
         type_code: typeCode,
         type_name: typeName,
         is_paid: isPaid,
@@ -270,9 +285,11 @@ export async function updateLeaveTypeHandler(
   try {
     assertHrBusinessContext(ctx);
 
+    const targetCompanyId = resolveTargetCompanyId(req, ctx);
+
     const denied = await assertLeaveTypeManagePermission(
       ctx,
-      ctx.context.companyId,
+      targetCompanyId,
       ctx.context.workContextId,
     );
     if (denied) return denied;
@@ -308,7 +325,7 @@ export async function updateLeaveTypeHandler(
       );
     }
 
-    if (existing.company_id !== ctx.context.companyId) {
+    if (existing.company_id !== targetCompanyId) {
       return errorResponse(
         "LEAVE_TYPE_FORBIDDEN",
         "cannot modify another company's leave type",

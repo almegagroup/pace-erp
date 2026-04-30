@@ -267,11 +267,13 @@ async function resolveProtectedRouteAclMeta(
       action: "VIEW",
     },
 
-    // ── Leave Type Management ────────────────────────────────────────────────
+    // ── Leave Types (employee-facing — called from Leave Apply dropdown) ────
     "GET:/api/hr/leave/types": {
-      resourceCode: "HR_LEAVE_TYPE_MANAGE",
+      resourceCode: "HR_LEAVE_APPLY",
       action: "VIEW",
     },
+
+    // ── Leave Type Management ────────────────────────────────────────────────
     "GET:/api/hr/leave/types/all": {
       resourceCode: "HR_LEAVE_TYPE_MANAGE",
       action: "VIEW",
