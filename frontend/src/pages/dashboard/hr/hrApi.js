@@ -268,21 +268,22 @@ export async function listLeaveTypes(companyId = null) {
   );
 }
 
-export async function listAllLeaveTypes() {
+export async function listAllLeaveTypes(companyId = null) {
   return apiJson(
     "/api/hr/leave/types/all",
-    {},
+    { companyId },
     "LEAVE_TYPES_LIST_ALL_FAILED",
     "Leave type list could not be loaded.",
   );
 }
 
-export async function createLeaveType(payload) {
+export async function createLeaveType(payload, companyId = null) {
   return apiJson(
     "/api/hr/leave/types",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      companyId,
       body: JSON.stringify(payload),
     },
     "LEAVE_TYPE_CREATE_FAILED",
@@ -290,12 +291,13 @@ export async function createLeaveType(payload) {
   );
 }
 
-export async function updateLeaveType(payload) {
+export async function updateLeaveType(payload, companyId = null) {
   return apiJson(
     "/api/hr/leave/types",
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
+      companyId,
       body: JSON.stringify(payload),
     },
     "LEAVE_TYPE_UPDATE_FAILED",

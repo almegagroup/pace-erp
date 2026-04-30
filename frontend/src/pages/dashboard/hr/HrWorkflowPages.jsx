@@ -3210,7 +3210,7 @@ export function OutWorkRequestDetailWorkspace() {
 
 // ─── Leave Type Management ────────────────────────────────────────────────────
 
-function LeaveTypeFormModal({ visible, editTarget, onClose, onSaved }) {
+function LeaveTypeFormModal({ visible, editTarget, onClose, onSaved, companyId = null }) {
   const isCreate = !editTarget;
   const [typeCode, setTypeCode] = useState("");
   const [typeName, setTypeName] = useState("");
@@ -3261,7 +3261,7 @@ function LeaveTypeFormModal({ visible, editTarget, onClose, onSaved }) {
           carry_forward_allowed: carryForwardAllowed,
           max_days_per_year: maxDays,
           sort_order: Number(sortOrder) || 0,
-        });
+        }, companyId);
       } else {
         await updateLeaveType({
           leave_type_id: editTarget.leave_type_id,
@@ -3271,7 +3271,7 @@ function LeaveTypeFormModal({ visible, editTarget, onClose, onSaved }) {
           carry_forward_allowed: carryForwardAllowed,
           max_days_per_year: maxDays,
           sort_order: Number(sortOrder) || 0,
-        });
+        }, companyId);
       }
       onSaved?.();
     } catch (err) {
@@ -3387,25 +3387,37 @@ function LeaveTypeFormModal({ visible, editTarget, onClose, onSaved }) {
 }
 
 export function LeaveTypeManagementWorkspace() {
+  const { runtimeContext } = useMenu();
+  const [transactionCompanyId, setTransactionCompanyId] = useState(() =>
+    resolveDefaultTransactionCompanyId(runtimeContext),
+  );
+  const transactionCompanyRef = useRef(null);
+
   const [leaveTypes, setLeaveTypes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [editTarget, setEditTarget] = useState(null);  // null = create, object = edit
+  const [editTarget, setEditTarget] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [togglingId, setTogglingId] = useState(null);
   const searchRef = useRef(null);
+
+  // Sync default company when runtime context loads
+  useEffect(() => {
+    const nextId = resolveDefaultTransactionCompanyId(runtimeContext);
+    setTransactionCompanyId((curr) => curr || nextId);
+  }, [runtimeContext]);
 
   const filteredTypes = useMemo(
     () => applyQuickFilter(leaveTypes, searchQuery, ["type_code", "type_name"]),
     [leaveTypes, searchQuery],
   );
 
-  async function loadTypes() {
+  async function loadTypes(cId = transactionCompanyId) {
     setLoading(true);
     setError("");
     try {
-      const data = await listAllLeaveTypes();
+      const data = await listAllLeaveTypes(cId);
       setLeaveTypes(data?.leave_types ?? []);
     } catch (err) {
       setError(formatError(err, "Leave types could not be loaded."));
@@ -3414,17 +3426,18 @@ export function LeaveTypeManagementWorkspace() {
     }
   }
 
-  useEffect(() => { void loadTypes(); }, []);
+  useEffect(() => { if (transactionCompanyId) void loadTypes(transactionCompanyId); }, [transactionCompanyId]);
 
   useErpScreenHotkeys({
     refresh: { disabled: loading, perform: () => void loadTypes() },
     focusSearch: { perform: () => searchRef.current?.focus?.() },
+    focusPrimary: { perform: () => transactionCompanyRef.current?.focus?.() },
   });
 
   async function handleToggleActive(lt) {
     setTogglingId(lt.leave_type_id);
     try {
-      await updateLeaveType({ leave_type_id: lt.leave_type_id, is_active: !lt.is_active });
+      await updateLeaveType({ leave_type_id: lt.leave_type_id, is_active: !lt.is_active }, transactionCompanyId);
       await loadTypes();
     } catch (err) {
       setError(formatError(err, "Could not toggle leave type status."));
@@ -3458,13 +3471,23 @@ export function LeaveTypeManagementWorkspace() {
         eyebrow: "Type Search",
         title: "Search leave type catalogue",
         children: (
-          <QuickFilterInput
-            label="Quick Search"
-            value={searchQuery}
-            onChange={setSearchQuery}
-            inputRef={searchRef}
-            placeholder="Search by type code or type name"
-          />
+          <div className="flex flex-col gap-3">
+            <ErpDenseFormRow label="Company" required>
+              <TransactionCompanySelector
+                runtimeContext={runtimeContext}
+                value={transactionCompanyId}
+                onChange={setTransactionCompanyId}
+                selectRef={transactionCompanyRef}
+              />
+            </ErpDenseFormRow>
+            <QuickFilterInput
+              label="Quick Search"
+              value={searchQuery}
+              onChange={setSearchQuery}
+              inputRef={searchRef}
+              placeholder="Search by type code or type name"
+            />
+          </div>
         ),
       }}
       listSection={{
@@ -3552,6 +3575,7 @@ export function LeaveTypeManagementWorkspace() {
           visible={showForm}
           editTarget={editTarget}
           onClose={() => setShowForm(false)}
+          companyId={transactionCompanyId}
           onSaved={async () => {
             setShowForm(false);
             await loadTypes();
