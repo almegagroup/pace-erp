@@ -3607,6 +3607,26 @@ const CALENDAR_DAY_KIND_OPTIONS = Object.freeze([
   { value: "WORKING_DAY", label: "Working Day Override" },
 ]);
 
+const CALENDAR_REPORT_TABS = Object.freeze([
+  { key: "HOLIDAY", label: "Holiday" },
+  { key: "WEEK_OFF", label: "One-Off Week Off" },
+  { key: "WORKING_DAY", label: "Working Override" },
+  { key: "RECURRING_WEEK_OFF", label: "Weekly Off" },
+]);
+
+function generateFrontendDateRange(fromDate, toDate) {
+  const dates = [];
+  const cursor = new Date(`${fromDate}T00:00:00.000Z`);
+  const end = new Date(`${toDate}T00:00:00.000Z`);
+
+  while (cursor <= end) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  return dates;
+}
+
 // ── Calendar Grid ─────────────────────────────────────────────────────────────
 
 const MONTH_NAMES = Object.freeze([
@@ -3937,6 +3957,7 @@ export function HolidayCalendarWorkspace() {
   });
   const [showHolidayForm, setShowHolidayForm] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
+  const [activeReportTab, setActiveReportTab] = useState("HOLIDAY");
 
   // Week-off state
   const [weekOffDays, setWeekOffDays] = useState([6, 7]);
@@ -3944,6 +3965,7 @@ export function HolidayCalendarWorkspace() {
   const [weekOffSaving, setWeekOffSaving] = useState(false);
   const [weekOffError, setWeekOffError] = useState("");
   const [weekOffNotice, setWeekOffNotice] = useState("");
+  const reportSectionRef = useRef(null);
 
   useEffect(() => {
     const nextId = resolveDefaultTransactionCompanyId(runtimeContext);
@@ -4003,26 +4025,26 @@ export function HolidayCalendarWorkspace() {
     setShowHolidayForm(true);
   }
 
-  function handleDeleteHoliday(holiday) {
+  async function handleDeleteHoliday(holiday) {
     const entryLabel = holiday?.holiday_name
       || (holiday?.day_kind === "WEEK_OFF"
         ? "one-off week off"
         : holiday?.day_kind === "WORKING_DAY"
           ? "working day override"
           : "holiday");
-    openActionConfirm({
+    const approved = await openActionConfirm({
       title: "Delete Calendar Entry",
       message: `Delete "${entryLabel}" on ${formatIsoDate(holiday.holiday_date)}? This cannot be undone.`,
       confirmLabel: "Delete",
-      onConfirm: async () => {
-        try {
-          await deleteHoliday(holiday.holiday_id, transactionCompanyId);
-          setHolidays((prev) => prev.filter((h) => h.holiday_id !== holiday.holiday_id));
-        } catch (err) {
-          setHolidayError(formatError(err, "Holiday could not be deleted."));
-        }
-      },
     });
+    if (!approved) return;
+
+    try {
+      await deleteHoliday(holiday.holiday_id, transactionCompanyId);
+      setHolidays((prev) => prev.filter((h) => h.holiday_id !== holiday.holiday_id));
+    } catch (err) {
+      setHolidayError(formatError(err, "Holiday could not be deleted."));
+    }
   }
 
   function toggleWeekOffDay(isoDay) {
@@ -4053,6 +4075,42 @@ export function HolidayCalendarWorkspace() {
     ? new Date().getFullYear()
     : new Date().getFullYear() - 1;
   const fyOptions = Array.from({ length: 5 }, (_, i) => currentFyYear - 1 + i);
+  const fyStart = `${fyYear}-04-01`;
+  const fyEnd = `${fyYear + 1}-03-31`;
+  const explicitEntryMap = useMemo(() => {
+    const map = {};
+    (holidays ?? []).forEach((entry) => {
+      map[entry.holiday_date] = entry;
+    });
+    return map;
+  }, [holidays]);
+  const explicitHolidays = useMemo(
+    () => (holidays ?? []).filter((entry) => entry.day_kind === "HOLIDAY"),
+    [holidays],
+  );
+  const explicitWeekOffs = useMemo(
+    () => (holidays ?? []).filter((entry) => entry.day_kind === "WEEK_OFF"),
+    [holidays],
+  );
+  const workingOverrides = useMemo(
+    () => (holidays ?? []).filter((entry) => entry.day_kind === "WORKING_DAY"),
+    [holidays],
+  );
+  const recurringWeekOffDates = useMemo(() => {
+    const allDates = generateFrontendDateRange(fyStart, fyEnd);
+    return allDates.filter((dateStr) => {
+      const explicitEntry = explicitEntryMap[dateStr] ?? null;
+      if (explicitEntry?.day_kind === "WORKING_DAY") return false;
+      if (explicitEntry?.day_kind === "WEEK_OFF") return false;
+      const jsDay = new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
+      const isoDay = jsDay === 0 ? 7 : jsDay;
+      return weekOffDays.includes(isoDay);
+    });
+  }, [explicitEntryMap, fyEnd, fyStart, weekOffDays]);
+
+  function openReportSection() {
+    reportSectionRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }
 
   return (
     <>
@@ -4074,6 +4132,13 @@ export function HolidayCalendarWorkspace() {
           tone: "primary",
           disabled: !transactionCompanyId || holidaysLoading,
           onClick: () => reloadHolidays(),
+        },
+        {
+          key: "report",
+          label: "View Report",
+          tone: "neutral",
+          disabled: !transactionCompanyId,
+          onClick: () => openReportSection(),
         },
       ]}
       notices={holidayError ? [{ key: "holiday-error", tone: "error", message: holidayError }] : []}
@@ -4199,7 +4264,146 @@ export function HolidayCalendarWorkspace() {
               </div>
             )}
           </div>
-
+          <div ref={reportSectionRef} className="border border-slate-200 bg-white p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  Calendar Report
+                </div>
+                <div className="text-sm font-semibold text-slate-900">
+                  FY {fyYear}-{String(fyYear + 1).slice(2)} calendar entries
+                </div>
+              </div>
+              <div className="text-xs text-slate-500">
+                Review configured dates by head without leaving this page.
+              </div>
+            </div>
+            <div className="mb-4 flex flex-wrap gap-2">
+              {CALENDAR_REPORT_TABS.map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setActiveReportTab(tab.key)}
+                  className={`border px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] ${
+                    activeReportTab === tab.key
+                      ? "border-sky-400 bg-sky-50 text-sky-900"
+                      : "border-slate-300 bg-white text-slate-700"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            {activeReportTab === "HOLIDAY" && (
+              explicitHolidays.length === 0 ? (
+                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                  No holiday dates are configured in this FY.
+                </div>
+              ) : (
+                <div className="overflow-auto border border-slate-300 bg-white">
+                  <table className="erp-grid-table min-w-full text-xs">
+                    <thead className="bg-slate-800 text-white">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Date</th>
+                        <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Name</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {explicitHolidays.map((entry) => (
+                        <tr key={entry.holiday_id} className="border-b border-slate-100">
+                          <td className="px-3 py-2 text-slate-700">{formatIsoDate(entry.holiday_date)}</td>
+                          <td className="px-3 py-2 text-slate-900">{entry.holiday_name || "Holiday"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
+            {activeReportTab === "WEEK_OFF" && (
+              explicitWeekOffs.length === 0 ? (
+                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                  No one-off week-off dates are configured in this FY.
+                </div>
+              ) : (
+                <div className="overflow-auto border border-slate-300 bg-white">
+                  <table className="erp-grid-table min-w-full text-xs">
+                    <thead className="bg-slate-800 text-white">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Date</th>
+                        <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Note</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {explicitWeekOffs.map((entry) => (
+                        <tr key={entry.holiday_id} className="border-b border-slate-100">
+                          <td className="px-3 py-2 text-slate-700">{formatIsoDate(entry.holiday_date)}</td>
+                          <td className="px-3 py-2 text-slate-900">{entry.holiday_name || "One-off week off"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
+            {activeReportTab === "WORKING_DAY" && (
+              workingOverrides.length === 0 ? (
+                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                  No working day overrides are configured in this FY.
+                </div>
+              ) : (
+                <div className="overflow-auto border border-slate-300 bg-white">
+                  <table className="erp-grid-table min-w-full text-xs">
+                    <thead className="bg-slate-800 text-white">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Date</th>
+                        <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Note</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {workingOverrides.map((entry) => (
+                        <tr key={entry.holiday_id} className="border-b border-slate-100">
+                          <td className="px-3 py-2 text-slate-700">{formatIsoDate(entry.holiday_date)}</td>
+                          <td className="px-3 py-2 text-slate-900">{entry.holiday_name || "Working day override"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
+            {activeReportTab === "RECURRING_WEEK_OFF" && (
+              recurringWeekOffDates.length === 0 ? (
+                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                  No recurring weekly off dates remain in this FY after overrides.
+                </div>
+              ) : (
+                <div className="grid gap-3">
+                  <div className="text-xs text-slate-500">
+                    Current recurring weekly off pattern: {WEEKDAY_LABELS.filter((day) => weekOffDays.includes(day.iso)).map((day) => day.label).join(", ") || "None"}
+                  </div>
+                  <div className="overflow-auto border border-slate-300 bg-white">
+                    <table className="erp-grid-table min-w-full text-xs">
+                      <thead className="bg-slate-800 text-white">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Date</th>
+                          <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.14em]">Head</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {recurringWeekOffDates.map((dateStr) => (
+                          <tr key={dateStr} className="border-b border-slate-100">
+                            <td className="px-3 py-2 text-slate-700">{formatIsoDate(dateStr)}</td>
+                            <td className="px-3 py-2 text-slate-900">Recurring weekly off</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )
+            )}
+          </div>
         </div>
       }
       />
