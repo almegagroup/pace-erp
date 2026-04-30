@@ -80,14 +80,14 @@ function CriteriaPanel({ employeeId, setEmployeeId, fromDate, setFromDate, toDat
   return (
     <ErpSectionCard eyebrow="HR Attendance Correction" title="Select Employee & Date Range">
       <div className="grid gap-2">
-        <ErpDenseFormRow label="Employee ID" required>
+        <ErpDenseFormRow label="Employee Code" required>
           <input
             ref={employeeRef}
             type="text"
             value={employeeId}
-            onChange={(e) => setEmployeeId(e.target.value)}
-            placeholder="Paste employee auth user ID (UUID)"
-            className="h-7 w-full max-w-sm border border-slate-300 bg-white px-2 py-0.5 text-sm text-slate-900 outline-none focus:border-sky-500 font-mono"
+            onChange={(e) => setEmployeeId(e.target.value.toUpperCase())}
+            placeholder="Enter employee code (e.g. P0003)"
+            className="h-7 w-full max-w-sm border border-slate-300 bg-white px-2 py-0.5 text-sm text-slate-900 outline-none focus:border-sky-500 font-mono uppercase"
           />
         </ErpDenseFormRow>
         <ErpDenseFormRow label="Date Range" required>
@@ -635,7 +635,7 @@ export default function HrAttendanceCorrectionPage() {
 
   async function handleLoad() {
     if (!employeeId.trim()) {
-      setError("Employee ID is required.");
+      setError("Employee code is required.");
       employeeRef.current?.focus?.();
       return;
     }

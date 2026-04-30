@@ -630,11 +630,11 @@ export async function listDayRecordsByEmployeeHandler(
     if (aclDenied) return aclDenied;
 
     const url = new URL(req.url);
-    const targetEmployeeId = url.searchParams.get("employee_id")?.trim() ?? "";
+    const employeeIdRaw = url.searchParams.get("employee_id")?.trim() ?? "";
     const fromDateRaw = url.searchParams.get("from_date")?.trim() ?? "";
     const toDateRaw = url.searchParams.get("to_date")?.trim() ?? "";
 
-    if (!targetEmployeeId) {
+    if (!employeeIdRaw) {
       return errorResponse(
         "EMPLOYEE_ID_REQUIRED",
         "employee_id query param is required",
@@ -642,6 +642,30 @@ export async function listDayRecordsByEmployeeHandler(
         "NONE",
         400,
       );
+    }
+
+    // Resolve employee: accept UUID or user_code (e.g. "P0003")
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let targetEmployeeId: string;
+    if (UUID_RE.test(employeeIdRaw)) {
+      targetEmployeeId = employeeIdRaw;
+    } else {
+      const { data: userRow } = await serviceRoleClient
+        .schema("erp_core")
+        .from("users")
+        .select("auth_user_id")
+        .ilike("user_code", employeeIdRaw)
+        .maybeSingle();
+      if (!userRow?.auth_user_id) {
+        return errorResponse(
+          "EMPLOYEE_NOT_FOUND",
+          `No employee found with code "${employeeIdRaw}"`,
+          ctx.request_id,
+          "NONE",
+          404,
+        );
+      }
+      targetEmployeeId = userRow.auth_user_id;
     }
 
     const fromDate = normalizeIsoDate(fromDateRaw);
