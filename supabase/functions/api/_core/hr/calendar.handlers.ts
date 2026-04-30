@@ -58,6 +58,17 @@ async function assertCalendarManagePermission(
 }
 
 // ---------------------------------------------------------------------------
+// Internal helper — resolve target company from x-company-id header or session
+// ---------------------------------------------------------------------------
+
+function resolveTargetCompanyId(req: Request, ctx: HrHandlerContext): string {
+  const headerCompanyId = req.headers.get("x-company-id")?.trim();
+  return (headerCompanyId && headerCompanyId.length > 0)
+    ? headerCompanyId
+    : ctx.context.companyId;
+}
+
+// ---------------------------------------------------------------------------
 // Handler 1 — List holidays for the session company (any authenticated user)
 // GET /api/hr/calendar/holidays
 // Returns holidays sorted by date ascending.
@@ -73,7 +84,7 @@ export async function listHolidaysHandler(
 
     const url = new URL(req.url);
     const yearRaw = url.searchParams.get("year")?.trim() ?? "";
-    const companyId = ctx.context.companyId;
+    const companyId = resolveTargetCompanyId(req, ctx);
 
     let query = serviceRoleClient
       .schema("erp_hr")
@@ -119,9 +130,11 @@ export async function createHolidayHandler(
   try {
     assertHrBusinessContext(ctx);
 
+    const targetCompanyId = resolveTargetCompanyId(req, ctx);
+
     const denied = await assertCalendarManagePermission(
       ctx,
-      ctx.context.companyId,
+      targetCompanyId,
       ctx.context.workContextId,
     );
     if (denied) return denied;
@@ -166,7 +179,7 @@ export async function createHolidayHandler(
       .schema("erp_hr")
       .from("company_holiday_calendar")
       .insert({
-        company_id: ctx.context.companyId,
+        company_id: targetCompanyId,
         holiday_date: holidayDate,
         holiday_name: holidayName,
         created_by: ctx.auth_user_id,
@@ -194,7 +207,7 @@ export async function createHolidayHandler(
       route_key: routeKey,
       event: "HOLIDAY_CREATED",
       actor: ctx.auth_user_id,
-      meta: { holiday_id: data.holiday_id, company_id: ctx.context.companyId, holiday_date: holidayDate },
+      meta: { holiday_id: data.holiday_id, company_id: targetCompanyId, holiday_date: holidayDate },
     });
 
     return okResponse({ holiday: data }, ctx.request_id);
@@ -222,9 +235,11 @@ export async function updateHolidayHandler(
   try {
     assertHrBusinessContext(ctx);
 
+    const targetCompanyId = resolveTargetCompanyId(req, ctx);
+
     const denied = await assertCalendarManagePermission(
       ctx,
-      ctx.context.companyId,
+      targetCompanyId,
       ctx.context.workContextId,
     );
     if (denied) return denied;
@@ -254,7 +269,7 @@ export async function updateHolidayHandler(
       return errorResponse("HOLIDAY_NOT_FOUND", "holiday not found", ctx.request_id, "NONE", 404);
     }
 
-    if (existing.company_id !== ctx.context.companyId) {
+    if (existing.company_id !== targetCompanyId) {
       return errorResponse(
         "HOLIDAY_FORBIDDEN",
         "cannot modify another company's holiday",
@@ -331,7 +346,7 @@ export async function updateHolidayHandler(
       route_key: routeKey,
       event: "HOLIDAY_UPDATED",
       actor: ctx.auth_user_id,
-      meta: { holiday_id: holidayId, company_id: ctx.context.companyId, changes: Object.keys(updates) },
+      meta: { holiday_id: holidayId, company_id: targetCompanyId, changes: Object.keys(updates) },
     });
 
     return okResponse({ holiday: updated }, ctx.request_id);
@@ -359,9 +374,11 @@ export async function deleteHolidayHandler(
   try {
     assertHrBusinessContext(ctx);
 
+    const targetCompanyId = resolveTargetCompanyId(req, ctx);
+
     const denied = await assertCalendarManagePermission(
       ctx,
-      ctx.context.companyId,
+      targetCompanyId,
       ctx.context.workContextId,
     );
     if (denied) return denied;
@@ -391,7 +408,7 @@ export async function deleteHolidayHandler(
       return errorResponse("HOLIDAY_NOT_FOUND", "holiday not found", ctx.request_id, "NONE", 404);
     }
 
-    if (existing.company_id !== ctx.context.companyId) {
+    if (existing.company_id !== targetCompanyId) {
       return errorResponse(
         "HOLIDAY_FORBIDDEN",
         "cannot delete another company's holiday",
@@ -418,7 +435,7 @@ export async function deleteHolidayHandler(
       route_key: routeKey,
       event: "HOLIDAY_DELETED",
       actor: ctx.auth_user_id,
-      meta: { holiday_id: holidayId, company_id: ctx.context.companyId, holiday_date: existing.holiday_date },
+      meta: { holiday_id: holidayId, company_id: targetCompanyId, holiday_date: existing.holiday_date },
     });
 
     return okResponse({ holiday_id: holidayId, deleted: true }, ctx.request_id);
@@ -438,17 +455,19 @@ export async function deleteHolidayHandler(
 // ---------------------------------------------------------------------------
 
 export async function getWeekOffConfigHandler(
-  _req: Request,
+  req: Request,
   ctx: HrHandlerContext,
 ): Promise<Response> {
   try {
     assertHrBusinessContext(ctx);
 
+    const companyId = resolveTargetCompanyId(req, ctx);
+
     const { data } = await serviceRoleClient
       .schema("erp_hr")
       .from("company_week_off_config")
       .select("week_off_days, updated_at")
-      .eq("company_id", ctx.context.companyId)
+      .eq("company_id", companyId)
       .maybeSingle();
 
     const weekOffDays: number[] = (data as { week_off_days: number[] } | null)?.week_off_days ?? [6, 7];
@@ -486,9 +505,11 @@ export async function upsertWeekOffConfigHandler(
   try {
     assertHrBusinessContext(ctx);
 
+    const targetCompanyId = resolveTargetCompanyId(req, ctx);
+
     const denied = await assertCalendarManagePermission(
       ctx,
-      ctx.context.companyId,
+      targetCompanyId,
       ctx.context.workContextId,
     );
     if (denied) return denied;
@@ -536,7 +557,7 @@ export async function upsertWeekOffConfigHandler(
       .from("company_week_off_config")
       .upsert(
         {
-          company_id: ctx.context.companyId,
+          company_id: targetCompanyId,
           week_off_days: uniqueDays,
           updated_at: new Date().toISOString(),
           updated_by: ctx.auth_user_id,
@@ -557,7 +578,7 @@ export async function upsertWeekOffConfigHandler(
       route_key: routeKey,
       event: "WEEK_OFF_CONFIG_UPDATED",
       actor: ctx.auth_user_id,
-      meta: { company_id: ctx.context.companyId, week_off_days: uniqueDays },
+      meta: { company_id: targetCompanyId, week_off_days: uniqueDays },
     });
 
     return okResponse({ week_off_days: data.week_off_days, updated_at: data.updated_at }, ctx.request_id);
