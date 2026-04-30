@@ -3769,7 +3769,10 @@ function HolidayFormModal({ visible, editTarget, onClose, onSaved, onDelete = nu
   if (!visible) return null;
 
   return (
-    <ModalBase onClose={onClose}>
+    <ModalBase
+      visible={visible}
+      onEscape={saving ? undefined : onClose}
+    >
       <div className="flex w-full max-w-sm flex-col gap-4 bg-white p-6">
         <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-800">
           {isCreate ? "Add Holiday" : "Edit Holiday"}
