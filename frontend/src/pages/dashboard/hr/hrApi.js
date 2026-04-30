@@ -309,22 +309,23 @@ export async function updateLeaveType(payload, companyId = null) {
 // Holiday Calendar
 // ---------------------------------------------------------------------------
 
-export async function listHolidays(year = null) {
+export async function listHolidays(year = null, companyId = null) {
   const query = year ? `?year=${encodeURIComponent(year)}` : "";
   return apiJson(
     `/api/hr/calendar/holidays${query}`,
-    {},
+    { companyId },
     "HOLIDAY_LIST_FAILED",
     "Holiday calendar could not be loaded.",
   );
 }
 
-export async function createHoliday(payload) {
+export async function createHoliday(payload, companyId = null) {
   return apiJson(
     "/api/hr/calendar/holidays",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      companyId,
       body: JSON.stringify(payload),
     },
     "HOLIDAY_CREATE_FAILED",
@@ -332,12 +333,13 @@ export async function createHoliday(payload) {
   );
 }
 
-export async function updateHoliday(payload) {
+export async function updateHoliday(payload, companyId = null) {
   return apiJson(
     "/api/hr/calendar/holidays",
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
+      companyId,
       body: JSON.stringify(payload),
     },
     "HOLIDAY_UPDATE_FAILED",
@@ -345,30 +347,31 @@ export async function updateHoliday(payload) {
   );
 }
 
-export async function deleteHoliday(holidayId) {
+export async function deleteHoliday(holidayId, companyId = null) {
   return apiJson(
     `/api/hr/calendar/holidays?holiday_id=${encodeURIComponent(holidayId)}`,
-    { method: "DELETE" },
+    { method: "DELETE", companyId },
     "HOLIDAY_DELETE_FAILED",
     "Holiday could not be deleted.",
   );
 }
 
-export async function getWeekOffConfig() {
+export async function getWeekOffConfig(companyId = null) {
   return apiJson(
     "/api/hr/calendar/week-off",
-    {},
+    { companyId },
     "WEEK_OFF_CONFIG_GET_FAILED",
     "Week-off configuration could not be loaded.",
   );
 }
 
-export async function upsertWeekOffConfig(weekOffDays) {
+export async function upsertWeekOffConfig(weekOffDays, companyId = null) {
   return apiJson(
     "/api/hr/calendar/week-off",
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
+      companyId,
       body: JSON.stringify({ week_off_days: weekOffDays }),
     },
     "WEEK_OFF_CONFIG_UPSERT_FAILED",
