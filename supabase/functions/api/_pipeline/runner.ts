@@ -266,6 +266,118 @@ async function resolveProtectedRouteAclMeta(
       resourceCode: "HR_OUT_WORK_REGISTER",
       action: "VIEW",
     },
+
+    // ── Leave Type Management ────────────────────────────────────────────────
+    "GET:/api/hr/leave/types": {
+      resourceCode: "HR_LEAVE_TYPE_MANAGE",
+      action: "VIEW",
+    },
+    "GET:/api/hr/leave/types/all": {
+      resourceCode: "HR_LEAVE_TYPE_MANAGE",
+      action: "VIEW",
+    },
+    "POST:/api/hr/leave/types": {
+      resourceCode: "HR_LEAVE_TYPE_MANAGE",
+      action: "WRITE",
+    },
+    "PATCH:/api/hr/leave/types": {
+      resourceCode: "HR_LEAVE_TYPE_MANAGE",
+      action: "EDIT",
+    },
+
+    // ── Calendar Management ──────────────────────────────────────────────────
+    "GET:/api/hr/calendar/holidays": {
+      resourceCode: "HR_CALENDAR_MANAGE",
+      action: "VIEW",
+    },
+    "POST:/api/hr/calendar/holidays": {
+      resourceCode: "HR_CALENDAR_MANAGE",
+      action: "WRITE",
+    },
+    "PATCH:/api/hr/calendar/holidays": {
+      resourceCode: "HR_CALENDAR_MANAGE",
+      action: "EDIT",
+    },
+    "DELETE:/api/hr/calendar/holidays": {
+      resourceCode: "HR_CALENDAR_MANAGE",
+      action: "DELETE",
+    },
+    "GET:/api/hr/calendar/week-off": {
+      resourceCode: "HR_CALENDAR_MANAGE",
+      action: "VIEW",
+    },
+    "PUT:/api/hr/calendar/week-off": {
+      resourceCode: "HR_CALENDAR_MANAGE",
+      action: "EDIT",
+    },
+
+    // ── Leave Apply (sandwich preview) ───────────────────────────────────────
+    "GET:/api/hr/leave/sandwich-preview": {
+      resourceCode: "HR_LEAVE_APPLY",
+      action: "VIEW",
+    },
+
+    // ── Attendance Correction (HR-initiated) ─────────────────────────────────
+    "GET:/api/hr/attendance/day-records": {
+      resourceCode: "HR_ATTENDANCE_CORRECTION",
+      action: "VIEW",
+    },
+    "POST:/api/hr/leave/backdated-apply": {
+      resourceCode: "HR_ATTENDANCE_CORRECTION",
+      action: "WRITE",
+    },
+    "POST:/api/hr/out-work/backdated-apply": {
+      resourceCode: "HR_ATTENDANCE_CORRECTION",
+      action: "WRITE",
+    },
+    "POST:/api/hr/attendance/correct": {
+      resourceCode: "HR_ATTENDANCE_CORRECTION",
+      action: "WRITE",
+    },
+    "POST:/api/hr/attendance/correction/submit": {
+      resourceCode: "HR_ATTENDANCE_CORRECTION",
+      action: "WRITE",
+    },
+
+    // ── Correction Approval Workflow ─────────────────────────────────────────
+    "GET:/api/hr/attendance/correction/my-requests": {
+      resourceCode: "HR_ATTENDANCE_CORRECTION_PENDING_LIST",
+      action: "VIEW",
+    },
+    "GET:/api/hr/attendance/correction/detail": {
+      resourceCode: "HR_ATTENDANCE_CORRECTION_REQUEST_DETAIL",
+      action: "VIEW",
+    },
+    "GET:/api/hr/attendance/correction/approval-inbox": {
+      resourceCode: "HR_ATTENDANCE_CORRECTION_APPROVAL_INBOX",
+      action: "VIEW",
+    },
+    "GET:/api/hr/attendance/correction/approval-history": {
+      resourceCode: "HR_ATTENDANCE_CORRECTION_APPROVAL_SCOPE_HISTORY",
+      action: "VIEW",
+    },
+
+    // ── Attendance Reports ───────────────────────────────────────────────────
+    "GET:/api/hr/attendance/monthly-summary": {
+      resourceCode: "HR_ATTENDANCE_MONTHLY_SUMMARY",
+      action: "VIEW",
+    },
+    "GET:/api/hr/attendance/daily-register": {
+      resourceCode: "HR_ATTENDANCE_DAILY_REGISTER",
+      action: "VIEW",
+    },
+    "GET:/api/hr/attendance/yearly-leave-summary": {
+      resourceCode: "HR_ATTENDANCE_YEARLY_LEAVE_SUMMARY",
+      action: "VIEW",
+    },
+    "GET:/api/hr/attendance/department-report": {
+      resourceCode: "HR_ATTENDANCE_DEPARTMENT_REPORT",
+      action: "VIEW",
+    },
+    "GET:/api/hr/attendance/leave-usage": {
+      resourceCode: "HR_ATTENDANCE_LEAVE_USAGE",
+      action: "VIEW",
+    },
   };
 
   if (hrRouteMeta[routeKey]) {
