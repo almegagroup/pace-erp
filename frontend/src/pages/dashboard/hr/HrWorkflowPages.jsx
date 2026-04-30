@@ -3685,7 +3685,7 @@ function MonthBlock({ year, month, holidayMap, weekOffSet, todayStr, onDateClick
   );
 }
 
-function YearCalendarGrid({ year, holidays, weekOffDays, onDateClick }) {
+function YearCalendarGrid({ fyYear, holidays, weekOffDays, onDateClick }) {
   const holidayMap = useMemo(() => {
     const map = {};
     (holidays ?? []).forEach((h) => { map[h.holiday_date] = h; });
@@ -3695,11 +3695,19 @@ function YearCalendarGrid({ year, holidays, weekOffDays, onDateClick }) {
   const weekOffSet = useMemo(() => new Set(weekOffDays ?? [6, 7]), [weekOffDays]);
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
+  const fyMonths = useMemo(
+    () => [
+      ...Array.from({ length: 9 }, (_, i) => ({ year: fyYear, month: i + 4 })),
+      ...Array.from({ length: 3 }, (_, i) => ({ year: fyYear + 1, month: i + 1 })),
+    ],
+    [fyYear],
+  );
+
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-      {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
+      {fyMonths.map(({ year, month }) => (
         <MonthBlock
-          key={month}
+          key={`${year}-${month}`}
           year={year}
           month={month}
           holidayMap={holidayMap}
@@ -3836,7 +3844,10 @@ export function HolidayCalendarWorkspace() {
   const [holidays, setHolidays] = useState([]);
   const [holidaysLoading, setHolidaysLoading] = useState(false);
   const [holidayError, setHolidayError] = useState("");
-  const [filterYear, setFilterYear] = useState(() => String(new Date().getFullYear()));
+  const [fyYear, setFyYear] = useState(() => {
+    const now = new Date();
+    return now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  });
   const [showHolidayForm, setShowHolidayForm] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
 
@@ -3853,20 +3864,30 @@ export function HolidayCalendarWorkspace() {
   }, [runtimeContext]);
 
   // Reload helper — reusable across effects + hotkey
-  function reloadHolidays(cId = transactionCompanyId, yr = filterYear) {
+  function reloadHolidays(cId = transactionCompanyId, fy = fyYear) {
     if (!cId) { setHolidays([]); return; }
     setHolidaysLoading(true);
     setHolidayError("");
-    listHolidays(yr || null, cId)
-      .then((data) => setHolidays(data?.holidays ?? []))
+    Promise.all([
+      listHolidays(String(fy), cId),
+      listHolidays(String(fy + 1), cId),
+    ])
+      .then(([d1, d2]) => {
+        const all = [...(d1?.holidays ?? []), ...(d2?.holidays ?? [])];
+        const fyStart = `${fy}-04-01`;
+        const fyEnd = `${fy + 1}-03-31`;
+        setHolidays(
+          all.filter((h) => h.holiday_date >= fyStart && h.holiday_date <= fyEnd),
+        );
+      })
       .catch((err) => setHolidayError(formatError(err, "Holidays could not be loaded.")))
       .finally(() => setHolidaysLoading(false));
   }
 
   // Load holidays when company or year changes
-  useEffect(() => { reloadHolidays(transactionCompanyId, filterYear); },
+  useEffect(() => { reloadHolidays(transactionCompanyId, fyYear); },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [transactionCompanyId, filterYear]);
+    [transactionCompanyId, fyYear]);
 
   // Load week-off config when company changes
   useEffect(() => {
@@ -3935,11 +3956,14 @@ export function HolidayCalendarWorkspace() {
     }
   }
 
-  const currentYear = new Date().getFullYear();
-  const yearOptions = Array.from({ length: 5 }, (_, i) => String(currentYear - 1 + i));
+  const currentFyYear = new Date().getMonth() >= 3
+    ? new Date().getFullYear()
+    : new Date().getFullYear() - 1;
+  const fyOptions = Array.from({ length: 5 }, (_, i) => currentFyYear - 1 + i);
 
   return (
-    <ErpMasterListTemplate
+    <>
+      <ErpMasterListTemplate
       eyebrow="HR Management"
       title="Holiday Calendar"
       actions={[
@@ -3976,12 +4000,12 @@ export function HolidayCalendarWorkspace() {
             </ErpDenseFormRow>
             <ErpDenseFormRow label="Year" required>
               <select
-                value={filterYear}
-                onChange={(e) => setFilterYear(e.target.value)}
+                value={fyYear}
+                onChange={(e) => setFyYear(Number(e.target.value))}
                 className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
               >
-                {yearOptions.map((y) => (
-                  <option key={y} value={y}>{y}</option>
+                {fyOptions.map((y) => (
+                  <option key={y} value={y}>{`FY ${y}-${String(y + 1).slice(2)}`}</option>
                 ))}
               </select>
             </ErpDenseFormRow>
@@ -4010,14 +4034,14 @@ export function HolidayCalendarWorkspace() {
         eyebrow: "Holidays",
         title: holidaysLoading
           ? "Loading calendar…"
-          : `${holidays.length} holiday${holidays.length === 1 ? "" : "s"} in ${filterYear} — click any date to add or edit`,
+          : `${holidays.length} holiday${holidays.length === 1 ? "" : "s"} | FY ${fyYear}-${String(fyYear + 1).slice(2)} | Click any date to add or edit`,
         children: holidaysLoading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
             Loading holiday calendar…
           </div>
         ) : (
           <YearCalendarGrid
-            year={Number(filterYear)}
+            fyYear={fyYear}
             holidays={holidays}
             weekOffDays={weekOffDays}
             onDateClick={handleDateClick}
@@ -4079,28 +4103,28 @@ export function HolidayCalendarWorkspace() {
             )}
           </div>
 
-          {/* Holiday form modal */}
-          <HolidayFormModal
-            visible={showHolidayForm}
-            editTarget={editTarget}
-            companyId={transactionCompanyId}
-            onClose={() => { setShowHolidayForm(false); setEditTarget(null); }}
-            onSaved={() => {
-              setShowHolidayForm(false);
-              setEditTarget(null);
-              reloadHolidays();
-            }}
-            onDelete={editTarget?.holiday_id
-              ? () => {
-                  setShowHolidayForm(false);
-                  handleDeleteHoliday(editTarget);
-                  setEditTarget(null);
-                }
-              : null
-            }
-          />
         </div>
       }
-    />
+      />
+      <HolidayFormModal
+        visible={showHolidayForm}
+        editTarget={editTarget}
+        companyId={transactionCompanyId}
+        onClose={() => { setShowHolidayForm(false); setEditTarget(null); }}
+        onSaved={() => {
+          setShowHolidayForm(false);
+          setEditTarget(null);
+          reloadHolidays();
+        }}
+        onDelete={editTarget?.holiday_id
+          ? () => {
+              setShowHolidayForm(false);
+              handleDeleteHoliday(editTarget);
+              setEditTarget(null);
+            }
+          : null
+        }
+      />
+    </>
   );
 }
