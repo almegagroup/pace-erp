@@ -3601,6 +3601,12 @@ const WEEKDAY_LABELS = Object.freeze([
   { iso: 7, label: "Sunday" },
 ]);
 
+const CALENDAR_DAY_KIND_OPTIONS = Object.freeze([
+  { value: "HOLIDAY", label: "Holiday" },
+  { value: "WEEK_OFF", label: "One-Off Week Off" },
+  { value: "WORKING_DAY", label: "Working Day Override" },
+]);
+
 // ── Calendar Grid ─────────────────────────────────────────────────────────────
 
 const MONTH_NAMES = Object.freeze([
@@ -3609,7 +3615,7 @@ const MONTH_NAMES = Object.freeze([
 ]);
 const GRID_DAY_HEADERS = Object.freeze(["M", "T", "W", "T", "F", "S", "S"]);
 
-function MonthBlock({ year, month, holidayMap, weekOffSet, todayStr, onDateClick }) {
+function MonthBlock({ year, month, entryMap, weekOffSet, todayStr, onDateClick }) {
   const daysInMonth = new Date(year, month, 0).getDate();
   const firstJsDay = new Date(year, month - 1, 1).getDay(); // 0=Sun
   const firstOffset = (firstJsDay + 6) % 7; // slots before day 1 (Mon=0)
@@ -3647,14 +3653,22 @@ function MonthBlock({ year, month, holidayMap, weekOffSet, todayStr, onDateClick
             const mm = String(month).padStart(2, "0");
             const dd = String(day).padStart(2, "0");
             const dateStr = `${year}-${mm}-${dd}`;
-            const holiday = holidayMap[dateStr];
-            const isWeekOff = weekOffSet.has(isoDay);
+            const entry = entryMap[dateStr] ?? null;
+            const dayKind = entry?.day_kind ?? null;
+            const isHoliday = dayKind === "HOLIDAY";
+            const isExplicitWeekOff = dayKind === "WEEK_OFF";
+            const isWorkingOverride = dayKind === "WORKING_DAY";
+            const isWeekOff = !isWorkingOverride && (isExplicitWeekOff || weekOffSet.has(isoDay));
             const isToday = dateStr === todayStr;
 
             let cls =
               "relative h-6 flex items-center justify-center text-[11px] cursor-pointer select-none";
-            if (holiday) {
+            if (isHoliday) {
               cls += " bg-amber-100 text-amber-900 font-semibold hover:bg-amber-200";
+            } else if (isExplicitWeekOff) {
+              cls += " bg-rose-50 text-rose-700 font-semibold hover:bg-rose-100";
+            } else if (isWorkingOverride) {
+              cls += " bg-emerald-50 text-emerald-800 font-semibold hover:bg-emerald-100";
             } else if (isWeekOff) {
               cls += " text-rose-300 hover:bg-rose-50";
             } else {
@@ -3666,10 +3680,14 @@ function MonthBlock({ year, month, holidayMap, weekOffSet, todayStr, onDateClick
               <div
                 key={dateStr}
                 className={cls}
-                onClick={() => onDateClick(dateStr, holiday ?? null)}
+                onClick={() => onDateClick(dateStr, entry)}
                 title={
-                  holiday
-                    ? holiday.holiday_name
+                  isHoliday
+                    ? entry?.holiday_name || "Holiday"
+                    : isExplicitWeekOff
+                    ? entry?.holiday_name || "One-off week off"
+                    : isWorkingOverride
+                    ? entry?.holiday_name || "Working day override"
                     : isWeekOff
                     ? "Week off"
                     : "Click to add holiday"
@@ -3686,7 +3704,7 @@ function MonthBlock({ year, month, holidayMap, weekOffSet, todayStr, onDateClick
 }
 
 function YearCalendarGrid({ fyYear, holidays, weekOffDays, onDateClick }) {
-  const holidayMap = useMemo(() => {
+  const entryMap = useMemo(() => {
     const map = {};
     (holidays ?? []).forEach((h) => { map[h.holiday_date] = h; });
     return map;
@@ -3710,7 +3728,7 @@ function YearCalendarGrid({ fyYear, holidays, weekOffDays, onDateClick }) {
           key={`${year}-${month}`}
           year={year}
           month={month}
-          holidayMap={holidayMap}
+          entryMap={entryMap}
           weekOffSet={weekOffSet}
           todayStr={todayStr}
           onDateClick={onDateClick}
@@ -3726,37 +3744,75 @@ function HolidayFormModal({ visible, editTarget, onClose, onSaved, onDelete = nu
   // editTarget can be:
   //   null                            — "Add Holiday" button (no pre-fill)
   //   { holiday_date }                — clicked an empty calendar date (pre-fill date)
-  //   { holiday_id, holiday_date, holiday_name, … } — clicked an existing holiday (edit)
+  //   { holiday_id, holiday_date, holiday_name, day_kind, … } — clicked an existing entry (edit)
   const isCreate = !editTarget?.holiday_id;
 
-  const [date, setDate] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [dayKind, setDayKind] = useState("HOLIDAY");
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const isHolidayKind = dayKind === "HOLIDAY";
+  const nameLabel = isHolidayKind ? "Holiday Name" : "Label / Note";
+  const namePlaceholder = isHolidayKind
+    ? "e.g. Independence Day"
+    : dayKind === "WEEK_OFF"
+      ? "Optional note for this one-off week off"
+      : "Optional note for this working day override";
 
   useEffect(() => {
     if (visible) {
-      setDate(editTarget?.holiday_date ?? "");
+      const seedDate = editTarget?.holiday_date ?? "";
+      setFromDate(seedDate);
+      setToDate(seedDate);
+      setDayKind(editTarget?.day_kind ?? "HOLIDAY");
       setName(editTarget?.holiday_name ?? "");
       setError("");
     }
   }, [visible, editTarget]);
 
   async function handleSave() {
-    if (!date || !name.trim()) {
-      setError("Date and name are required.");
+    if (!fromDate || (!isCreate && !editTarget?.holiday_id)) {
+      setError("Date is required.");
       return;
     }
+    if (isCreate && !toDate) {
+      setError("End date is required for range creation.");
+      return;
+    }
+    if (isCreate && fromDate > toDate) {
+      setError("End date must be on or after the start date.");
+      return;
+    }
+    if (isHolidayKind && !name.trim()) {
+      setError("Holiday name is required.");
+      return;
+    }
+
     setSaving(true);
     setError("");
     try {
       if (!isCreate) {
         await updateHoliday(
-          { holiday_id: editTarget.holiday_id, holiday_date: date, holiday_name: name.trim() },
+          {
+            holiday_id: editTarget.holiday_id,
+            holiday_date: fromDate,
+            holiday_name: name.trim() || null,
+            day_kind: dayKind,
+          },
           companyId,
         );
       } else {
-        await createHoliday({ holiday_date: date, holiday_name: name.trim() }, companyId);
+        await createHoliday(
+          {
+            from_date: fromDate,
+            to_date: toDate,
+            holiday_name: name.trim() || null,
+            day_kind: dayKind,
+          },
+          companyId,
+        );
       }
       await onSaved();
     } catch (err) {
@@ -3784,25 +3840,53 @@ function HolidayFormModal({ visible, editTarget, onClose, onSaved, onDelete = nu
         )}
         <div className="flex flex-col gap-3">
           <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
-            Date
+            {isCreate ? "From Date" : "Date"}
             <input
               type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
               className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
             />
           </label>
+          {isCreate && (
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+              To Date
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+              />
+            </label>
+          )}
           <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
-            Name
+            Entry Type
+            <select
+              value={dayKind}
+              onChange={(e) => setDayKind(e.target.value)}
+              className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
+            >
+              {CALENDAR_DAY_KIND_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            {nameLabel}
             <input
               type="text"
               value={name}
               maxLength={100}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Independence Day"
+              placeholder={namePlaceholder}
               className="border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none"
             />
           </label>
+          {isCreate && (
+            <div className="text-[11px] text-slate-500">
+              Create mode applies the selected entry type to every consecutive date in the chosen range.
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -3920,9 +4004,15 @@ export function HolidayCalendarWorkspace() {
   }
 
   function handleDeleteHoliday(holiday) {
+    const entryLabel = holiday?.holiday_name
+      || (holiday?.day_kind === "WEEK_OFF"
+        ? "one-off week off"
+        : holiday?.day_kind === "WORKING_DAY"
+          ? "working day override"
+          : "holiday");
     openActionConfirm({
-      title: "Delete Holiday",
-      message: `Delete "${holiday.holiday_name}" on ${formatIsoDate(holiday.holiday_date)}? This cannot be undone.`,
+      title: "Delete Calendar Entry",
+      message: `Delete "${entryLabel}" on ${formatIsoDate(holiday.holiday_date)}? This cannot be undone.`,
       confirmLabel: "Delete",
       onConfirm: async () => {
         try {
@@ -4025,6 +4115,10 @@ export function HolidayCalendarWorkspace() {
                 <span className="inline-block h-3 w-3 rounded-sm border border-rose-200 bg-rose-50" />
                 Week off
               </div>
+              <div className="flex items-center gap-2 text-[10px] text-emerald-700">
+                <span className="inline-block h-3 w-3 rounded-sm border border-emerald-300 bg-emerald-50" />
+                Working override
+              </div>
               <div className="flex items-center gap-2 text-[10px] text-slate-600">
                 <span className="inline-block h-3 w-3 border border-sky-400 ring-1 ring-sky-500" />
                 Today
@@ -4037,7 +4131,7 @@ export function HolidayCalendarWorkspace() {
         eyebrow: "Holidays",
         title: holidaysLoading
           ? "Loading calendar…"
-          : `${holidays.length} holiday${holidays.length === 1 ? "" : "s"} | FY ${fyYear}-${String(fyYear + 1).slice(2)} | Click any date to add or edit`,
+          : `${holidays.length} calendar entr${holidays.length === 1 ? "y" : "ies"} | FY ${fyYear}-${String(fyYear + 1).slice(2)} | Click any date to add or edit`,
         children: holidaysLoading ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
             Loading holiday calendar…

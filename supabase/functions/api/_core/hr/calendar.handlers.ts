@@ -16,9 +16,27 @@ import { readAclSnapshotDecision } from "../../_shared/acl_snapshot.ts";
 import {
   CALENDAR_RESOURCE_CODES,
   assertHrBusinessContext,
+  generateDateRange,
   normalizeIsoDate,
   type HrHandlerContext,
 } from "./shared.ts";
+
+const CALENDAR_DAY_KINDS = ["HOLIDAY", "WEEK_OFF", "WORKING_DAY"] as const;
+type CalendarDayKind = (typeof CALENDAR_DAY_KINDS)[number];
+
+function normalizeDayKind(value: unknown): CalendarDayKind {
+  const normalized = String(value ?? "HOLIDAY").trim().toUpperCase();
+  if (CALENDAR_DAY_KINDS.includes(normalized as CalendarDayKind)) {
+    return normalized as CalendarDayKind;
+  }
+
+  throw new Error("DAY_KIND_INVALID");
+}
+
+function normalizeOptionalName(value: unknown): string | null {
+  const trimmed = String(value ?? "").trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
 
 // ---------------------------------------------------------------------------
 // Permission guard — HR_CALENDAR_MANAGE
@@ -89,7 +107,7 @@ export async function listHolidaysHandler(
     let query = serviceRoleClient
       .schema("erp_hr")
       .from("company_holiday_calendar")
-      .select("holiday_id, holiday_date, holiday_name, created_at")
+      .select("holiday_id, holiday_date, holiday_name, day_kind, created_at")
       .eq("company_id", companyId)
       .order("holiday_date", { ascending: true });
 
@@ -118,7 +136,9 @@ export async function listHolidaysHandler(
 // ---------------------------------------------------------------------------
 // Handler 2 — Create holiday (HR_CALENDAR_MANAGE)
 // POST /api/hr/calendar/holidays
-// Body: { holiday_date: "YYYY-MM-DD", holiday_name: string }
+// Body:
+//   Single: { holiday_date: "YYYY-MM-DD", holiday_name?: string, day_kind?: "HOLIDAY"|"WEEK_OFF"|"WORKING_DAY" }
+//   Range:  { from_date: "YYYY-MM-DD", to_date: "YYYY-MM-DD", holiday_name?: string, day_kind?: ... }
 // ---------------------------------------------------------------------------
 
 export async function createHolidayHandler(
@@ -140,32 +160,45 @@ export async function createHolidayHandler(
     if (denied) return denied;
 
     const body = await req.json().catch(() => ({}));
-    const holidayDateRaw = String(body?.holiday_date ?? "").trim();
-    const holidayName = String(body?.holiday_name ?? "").trim();
+    const dayKind = normalizeDayKind(body?.day_kind);
+    const holidayName = normalizeOptionalName(body?.holiday_name);
+    const fromDateRaw = String(body?.from_date ?? body?.holiday_date ?? "").trim();
+    const toDateRaw = String(body?.to_date ?? body?.holiday_date ?? body?.from_date ?? "").trim();
 
-    if (!holidayDateRaw) {
+    if (!fromDateRaw || !toDateRaw) {
       return errorResponse(
         "HOLIDAY_DATE_REQUIRED",
-        "holiday_date required",
+        "holiday_date or from_date/to_date required",
         ctx.request_id,
         "NONE",
         400,
       );
     }
 
-    const holidayDate = normalizeIsoDate(holidayDateRaw);
+    const fromDate = normalizeIsoDate(fromDateRaw);
+    const toDate = normalizeIsoDate(toDateRaw);
 
-    if (!holidayName) {
+    if (fromDate > toDate) {
+      return errorResponse(
+        "HOLIDAY_DATE_RANGE_INVALID",
+        "from_date must be on or before to_date",
+        ctx.request_id,
+        "NONE",
+        400,
+      );
+    }
+
+    if (dayKind === "HOLIDAY" && !holidayName) {
       return errorResponse(
         "HOLIDAY_NAME_REQUIRED",
-        "holiday_name required",
+        "holiday_name required for holiday entries",
         ctx.request_id,
         "NONE",
         400,
       );
     }
 
-    if (holidayName.length > 100) {
+    if (holidayName && holidayName.length > 100) {
       return errorResponse(
         "HOLIDAY_NAME_TOO_LONG",
         "holiday_name must be 100 characters or fewer",
@@ -175,23 +208,26 @@ export async function createHolidayHandler(
       );
     }
 
+    const targetDates = generateDateRange(fromDate, toDate);
+    const insertRows = targetDates.map((dateStr) => ({
+      company_id: targetCompanyId,
+      holiday_date: dateStr,
+      holiday_name: holidayName,
+      day_kind: dayKind,
+      created_by: ctx.auth_user_id,
+    }));
+
     const { data, error } = await serviceRoleClient
       .schema("erp_hr")
       .from("company_holiday_calendar")
-      .insert({
-        company_id: targetCompanyId,
-        holiday_date: holidayDate,
-        holiday_name: holidayName,
-        created_by: ctx.auth_user_id,
-      })
-      .select("holiday_id, holiday_date, holiday_name, created_at")
-      .single();
+      .insert(insertRows)
+      .select("holiday_id, holiday_date, holiday_name, day_kind, created_at");
 
     if (error) {
       if (error.code === "23505" || error.message?.includes("unique")) {
         return errorResponse(
           "HOLIDAY_DATE_DUPLICATE",
-          "a holiday already exists for this date",
+          "a calendar entry already exists for one or more selected dates",
           ctx.request_id,
           "NONE",
           409,
@@ -207,11 +243,32 @@ export async function createHolidayHandler(
       route_key: routeKey,
       event: "HOLIDAY_CREATED",
       actor: ctx.auth_user_id,
-      meta: { holiday_id: data.holiday_id, company_id: targetCompanyId, holiday_date: holidayDate },
+      meta: {
+        company_id: targetCompanyId,
+        day_kind: dayKind,
+        entry_count: data?.length ?? 0,
+        from_date: fromDate,
+        to_date: toDate,
+      },
     });
 
-    return okResponse({ holiday: data }, ctx.request_id);
+    return okResponse(
+      {
+        entries: data ?? [],
+        holiday: data?.[0] ?? null,
+      },
+      ctx.request_id,
+    );
   } catch (err) {
+    if ((err as Error).message === "DAY_KIND_INVALID") {
+      return errorResponse(
+        "DAY_KIND_INVALID",
+        "day_kind must be HOLIDAY, WEEK_OFF, or WORKING_DAY",
+        ctx.request_id,
+        "NONE",
+        400,
+      );
+    }
     return errorResponse(
       (err as Error).message || "HOLIDAY_CREATE_EXCEPTION",
       "holiday create exception",
@@ -223,7 +280,7 @@ export async function createHolidayHandler(
 // ---------------------------------------------------------------------------
 // Handler 3 — Update holiday (HR_CALENDAR_MANAGE)
 // PATCH /api/hr/calendar/holidays
-// Body: { holiday_id, holiday_date?, holiday_name? }
+// Body: { holiday_id, holiday_date?, holiday_name?, day_kind? }
 // ---------------------------------------------------------------------------
 
 export async function updateHolidayHandler(
@@ -261,7 +318,7 @@ export async function updateHolidayHandler(
     const { data: existing, error: loadError } = await serviceRoleClient
       .schema("erp_hr")
       .from("company_holiday_calendar")
-      .select("holiday_id, company_id")
+      .select("holiday_id, company_id, holiday_name, day_kind")
       .eq("holiday_id", holidayId)
       .maybeSingle();
 
@@ -280,32 +337,43 @@ export async function updateHolidayHandler(
     }
 
     const updates: Record<string, unknown> = {};
+    const nextDayKind = body?.day_kind !== undefined
+      ? normalizeDayKind(body.day_kind)
+      : (existing.day_kind as CalendarDayKind);
+    const nextHolidayName = body?.holiday_name !== undefined
+      ? normalizeOptionalName(body.holiday_name)
+      : (existing.holiday_name as string | null);
 
     if (body?.holiday_date !== undefined) {
       updates.holiday_date = normalizeIsoDate(String(body.holiday_date).trim());
     }
 
+    if (body?.day_kind !== undefined) {
+      updates.day_kind = nextDayKind;
+    }
+
     if (body?.holiday_name !== undefined) {
-      const name = String(body.holiday_name).trim();
-      if (!name) {
-        return errorResponse(
-          "HOLIDAY_NAME_REQUIRED",
-          "holiday_name cannot be empty",
-          ctx.request_id,
-          "NONE",
-          400,
-        );
-      }
-      if (name.length > 100) {
-        return errorResponse(
-          "HOLIDAY_NAME_TOO_LONG",
-          "holiday_name must be 100 characters or fewer",
-          ctx.request_id,
-          "NONE",
-          400,
-        );
-      }
-      updates.holiday_name = name;
+      updates.holiday_name = nextHolidayName;
+    }
+
+    if (nextHolidayName && nextHolidayName.length > 100) {
+      return errorResponse(
+        "HOLIDAY_NAME_TOO_LONG",
+        "holiday_name must be 100 characters or fewer",
+        ctx.request_id,
+        "NONE",
+        400,
+      );
+    }
+
+    if (nextDayKind === "HOLIDAY" && !nextHolidayName) {
+      return errorResponse(
+        "HOLIDAY_NAME_REQUIRED",
+        "holiday_name required for holiday entries",
+        ctx.request_id,
+        "NONE",
+        400,
+      );
     }
 
     if (Object.keys(updates).length === 0) {
@@ -323,14 +391,14 @@ export async function updateHolidayHandler(
       .from("company_holiday_calendar")
       .update(updates)
       .eq("holiday_id", holidayId)
-      .select("holiday_id, holiday_date, holiday_name, created_at")
+      .select("holiday_id, holiday_date, holiday_name, day_kind, created_at")
       .single();
 
     if (updateError) {
       if (updateError.code === "23505" || updateError.message?.includes("unique")) {
         return errorResponse(
           "HOLIDAY_DATE_DUPLICATE",
-          "a holiday already exists for this date",
+          "a calendar entry already exists for this date",
           ctx.request_id,
           "NONE",
           409,
@@ -351,6 +419,15 @@ export async function updateHolidayHandler(
 
     return okResponse({ holiday: updated }, ctx.request_id);
   } catch (err) {
+    if ((err as Error).message === "DAY_KIND_INVALID") {
+      return errorResponse(
+        "DAY_KIND_INVALID",
+        "day_kind must be HOLIDAY, WEEK_OFF, or WORKING_DAY",
+        ctx.request_id,
+        "NONE",
+        400,
+      );
+    }
     return errorResponse(
       (err as Error).message || "HOLIDAY_UPDATE_EXCEPTION",
       "holiday update exception",
