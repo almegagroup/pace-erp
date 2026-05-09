@@ -250,6 +250,57 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_OM_UOM_MASTER: {
+    screen_code: "SA_OM_UOM_MASTER",
+    route: "/sa/om/uom-master",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_OM_STORAGE_LOCATIONS: {
+    screen_code: "SA_OM_STORAGE_LOCATIONS",
+    route: "/sa/om/storage-locations",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_OM_NUMBER_SERIES: {
+    screen_code: "SA_OM_NUMBER_SERIES",
+    route: "/sa/om/number-series",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_OM_MCG: {
+    screen_code: "SA_OM_MCG",
+    label: "Material Category Groups",
+    route: "/sa/om/material-category-groups",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_OM_COST_CENTER: {
+    screen_code: "SA_OM_COST_CENTER",
+    label: "Cost Centers",
+    route: "/sa/om/cost-centers",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_OM_MACHINES: {
+    screen_code: "SA_OM_MACHINES",
+    label: "Machine Master",
+    route: "/sa/om/machines",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   GA_HOME: {
     screen_code: "GA_HOME",
     route: "/ga/home",

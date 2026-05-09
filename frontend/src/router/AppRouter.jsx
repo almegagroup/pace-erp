@@ -59,6 +59,12 @@ import SAApprovalPolicy from "../admin/sa/screens/SAApprovalPolicy.jsx";
 import SAReportVisibility from "../admin/sa/screens/SAReportVisibility.jsx";
 import SACompanyModuleMap from "../admin/sa/screens/SACompanyModuleMap.jsx";
 import SAMenuGovernance from "../admin/sa/screens/SAMenuGovernance.jsx";
+import SAOmUomMaster from "../admin/sa/screens/SAOmUomMaster.jsx";
+import SAOmStorageLocations from "../admin/sa/screens/SAOmStorageLocations.jsx";
+import SAOmNumberSeries from "../admin/sa/screens/SAOmNumberSeries.jsx";
+import SAOmMaterialCategoryGroups from "../admin/sa/screens/SAOmMaterialCategoryGroups.jsx";
+import SACostCenterMaster from "../admin/sa/screens/SACostCenterMaster.jsx";
+import SAMachineMaster from "../admin/sa/screens/SAMachineMaster.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
 import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
@@ -88,6 +94,18 @@ import HrDailyAttendanceRegisterPage from "../pages/dashboard/hr/attendance/HrDa
 import HrYearlyLeaveSummaryPage from "../pages/dashboard/hr/attendance/HrYearlyLeaveSummaryPage.jsx";
 import HrDepartmentAttendanceReportPage from "../pages/dashboard/hr/attendance/HrDepartmentAttendanceReportPage.jsx";
 import HrLeaveUsageReportPage from "../pages/dashboard/hr/attendance/HrLeaveUsageReportPage.jsx";
+import MaterialListPage from "../pages/dashboard/om/material/MaterialListPage.jsx";
+import MaterialCreatePage from "../pages/dashboard/om/material/MaterialCreatePage.jsx";
+import MaterialDetailPage from "../pages/dashboard/om/material/MaterialDetailPage.jsx";
+import VendorListPage from "../pages/dashboard/om/vendor/VendorListPage.jsx";
+import VendorCreatePage from "../pages/dashboard/om/vendor/VendorCreatePage.jsx";
+import VendorDetailPage from "../pages/dashboard/om/vendor/VendorDetailPage.jsx";
+import AslListPage from "../pages/dashboard/om/asl/AslListPage.jsx";
+import AslCreatePage from "../pages/dashboard/om/asl/AslCreatePage.jsx";
+import AslDetailPage from "../pages/dashboard/om/asl/AslDetailPage.jsx";
+import CustomerListPage from "../pages/dashboard/om/customer/CustomerListPage.jsx";
+import CustomerCreatePage from "../pages/dashboard/om/customer/CustomerCreatePage.jsx";
+import CustomerDetailPage from "../pages/dashboard/om/customer/CustomerDetailPage.jsx";
 
 export default function AppRouter() {
   return (
@@ -204,6 +222,27 @@ export default function AppRouter() {
                     <Route
                       path="signup-requests"
                       element={<SASignupRequests />}
+                    />
+                    <Route path="om/uom-master" element={<SAOmUomMaster />} />
+                    <Route
+                      path="om/storage-locations"
+                      element={<SAOmStorageLocations />}
+                    />
+                    <Route
+                      path="om/number-series"
+                      element={<SAOmNumberSeries />}
+                    />
+                    <Route
+                      path="om/material-category-groups"
+                      element={<SAOmMaterialCategoryGroups />}
+                    />
+                    <Route
+                      path="om/cost-centers"
+                      element={<SACostCenterMaster />}
+                    />
+                    <Route
+                      path="om/machines"
+                      element={<SAMachineMaster />}
                     />
                   </Route>
                 </Route>
@@ -333,6 +372,45 @@ export default function AppRouter() {
                   <Route
                     path="hr/attendance/leave-usage"
                     element={<HrLeaveUsageReportPage />}
+                  />
+                  <Route path="om/materials" element={<MaterialListPage />} />
+                  <Route
+                    path="om/material/create"
+                    element={<MaterialCreatePage />}
+                  />
+                  <Route
+                    path="om/material/detail"
+                    element={<MaterialDetailPage />}
+                  />
+                  <Route path="om/vendors" element={<VendorListPage />} />
+                  <Route
+                    path="om/vendor/create"
+                    element={<VendorCreatePage />}
+                  />
+                  <Route
+                    path="om/vendor/detail"
+                    element={<VendorDetailPage />}
+                  />
+                  <Route
+                    path="om/vendor-material-infos"
+                    element={<AslListPage />}
+                  />
+                  <Route
+                    path="om/vendor-material-info/create"
+                    element={<AslCreatePage />}
+                  />
+                  <Route
+                    path="om/vendor-material-info/detail"
+                    element={<AslDetailPage />}
+                  />
+                  <Route path="om/customers" element={<CustomerListPage />} />
+                  <Route
+                    path="om/customer/create"
+                    element={<CustomerCreatePage />}
+                  />
+                  <Route
+                    path="om/customer/detail"
+                    element={<CustomerDetailPage />}
                   />
                 </Route>
               </Route>
