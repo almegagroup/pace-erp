@@ -301,6 +301,70 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_PAYMENT_TERMS: {
+    screen_code: "SA_PAYMENT_TERMS",
+    route: "/sa/payment-terms",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_PORT_MASTER: {
+    screen_code: "SA_PORT_MASTER",
+    route: "/sa/ports",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_PORT_TRANSIT: {
+    screen_code: "SA_PORT_TRANSIT",
+    route: "/sa/port-transit",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_LEAD_TIMES: {
+    screen_code: "SA_LEAD_TIMES",
+    route: "/sa/lead-times",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_TRANSPORTERS: {
+    screen_code: "SA_TRANSPORTERS",
+    route: "/sa/transporters",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_CHA_MASTER: {
+    screen_code: "SA_CHA_MASTER",
+    route: "/sa/chas",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_OPENING_STOCK_LIST: {
+    screen_code: "SA_OPENING_STOCK_LIST",
+    route: "/sa/opening-stock",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_OPENING_STOCK_DETAIL: {
+    screen_code: "SA_OPENING_STOCK_DETAIL",
+    route: "/sa/opening-stock/:id",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   GA_HOME: {
     screen_code: "GA_HOME",
     route: "/ga/home",

@@ -5805,14 +5805,13 @@ Gate-10: Operation Management Foundation
   ├── Current stock snapshot table
   └── Audit integration for all new tables
 
-Gate-11: Master Data
+Gate-11: Master Data (L1)
   ├── Material master + company extension + plant extension
   ├── UOM master + conversion table
   ├── Supplier master + company extension
-  ├── Supplier-material source / info record
-  ├── Approved source list
-  ├── Customer master
   └── Cost center master
+  [NOTE: Vendor-Material Info Record, Approved Source List → Gate-13.2 (PO validation dependency)
+         Customer Master → Gate-13.9 (Sales/Dispatch dependency)]
 
 Gate-12: Opening Stock & Legacy Migration
   ├── Opening stock upload and validation
@@ -5822,16 +5821,17 @@ Gate-12: Opening Stock & Legacy Migration
   ├── Number series counter setup
   └── Migration reconciliation reports
 
-Gate-13: Procurement Cycle
-  ├── Procurement planning view
-  ├── Purchase Requirement (PR)
-  ├── Purchase Order full lifecycle
-  ├── PO amendment and cancellation
-  ├── Consignment tracking (LE)
-  ├── Gate entry
-  ├── GRN (101/102)
-  ├── Inward QA (321/350/553/122)
-  └── Vendor return (122/123)
+Gate-13: Procurement Cycle — Full L2 (expanded — see Section 103 for complete detail)
+  ├── Gate-13.1: L2 Masters (Port, Transit, Lead Time, Material Category, Transporter, CHA)
+  ├── Gate-13.2: Purchase Order + Vendor-Material Info Record + Approved Source List
+  ├── Gate-13.3: Consignment Tracking (CSN + ETA Cascade + Alerts + Tracker)
+  ├── Gate-13.4: Gate Entry + Inbound Gate Exit
+  ├── Gate-13.5: GRN
+  ├── Gate-13.6: Inward QA
+  ├── Gate-13.7: STO + Inter-Company Distribution
+  ├── Gate-13.8: RTV + Debit Note + Exchange + Invoice Verification
+  └── Gate-13.9: Sales/Dispatch RM/PM + Customer Master
+  [NOTE: PR removed — no PR in PACE-ERP. Section 87.1 authoritative.]
 
 Gate-14: Production & BOM
   ├── BOM master — version, active flag, snapshot
@@ -5895,9 +5895,9 @@ Gate-18: Advanced (Post Go-Live)
 | 7 | Audit integration for all new tables | Gate-10 |
 | 8 | Material master + extensions | Gate-11 |
 | 9 | UOM master + conversion | Gate-11 |
-| 10 | Supplier master + extensions + source mapping | Gate-11 |
-| 11 | Approved source list | Gate-11 |
-| 12 | Customer master | Gate-11 |
+| 10 | Supplier master + extensions | Gate-11 |
+| 11 | Vendor-Material Info Record + Approved Source List | Gate-13.2 |
+| 12 | Customer master | Gate-13.9 |
 | 13 | Opening stock upload and posting (561/563/565) | Gate-12 |
 | 14 | Legacy open PO migration | Gate-12 |
 | 15 | In-transit migration | Gate-12 |
@@ -7792,10 +7792,25 @@ The following conflicts between early-draft sections and Layer 1/2 discovery dec
 Implementation must proceed in Gate order:
 ```
 Gate-10: DB Foundation → Stock Posting Engine → Ledger → Snapshot
-Gate-11: Material Master → UOM → Vendor Master → Info Record
+Gate-11: Material Master → UOM → Vendor Master → Cost Center Master
 Gate-12: Opening Stock Migration → Legacy PO → Number Series
-Gate-13: Purchase Order → Gate Entry → GRN → Basic QA (P321)
+Gate-13: Full L2 Procurement Cycle (9 sub-gates — see Section 103 for complete detail)
+  Gate-13.1: L2 Masters
+  Gate-13.2: PO + Vendor-Material Info Record + Approved Source List
+  Gate-13.3: CSN + ETA Cascade + Alerts
+  Gate-13.4: Gate Entry + Inbound Gate Exit
+  Gate-13.5: GRN
+  Gate-13.6: Inward QA
+  Gate-13.7: STO + Distribution
+  Gate-13.8: RTV + Debit Note + Invoice Verification
+  Gate-13.9: Sales/Dispatch RM/PM + Customer Master
 ```
+
+**Notes:**
+- PR (Purchase Requirement) removed from scope — Section 87.1 authoritative. No PR in PACE-ERP.
+- Vendor-Material Info Record + Approved Source List moved from Gate-11 → Gate-13.2
+- Customer Master moved from Gate-11 → Gate-13.9
+- Gate-13 is now fully expanded per Section 103 design
 
 **No implementation beyond Gate-13 until Layer 3 design is frozen.**
 
@@ -7803,7 +7818,3083 @@ Gate-13: Purchase Order → Gate Entry → GRN → Basic QA (P321)
 
 **Phase-0 Status: COMPLETE**
 **Implementation: AUTHORIZED for L1 + L2**
+**L2 Design Reference: Sections 85–103**
 **Next Design Session: Layer 3 — Production Discovery**
+
+---
+
+---
+
+---
+
+---
+
+## Section 87 — Layer 2 SAP Audit Gap Resolution (10 May 2026)
+
+**Session Date:** 10 May 2026
+**Status:** ✅ PARTIALLY FROZEN
+**Scope:** SAP MM cross-check gaps resolved. 12 decisions locked. Consignment Tracking (Gap #13) design in progress — not yet frozen.
+
+---
+
+### 87.1 — Gap #1: PR vs No-PR Contradiction
+
+**Decision: No PR entity. Plan → PO directly. CONFIRMED.**
+
+- Section 36 (Purchase Requirement design) is hereby **SUPERSEDED and ARCHIVED**.
+- Procurement team does all planning and raises POs directly against the plan.
+- No Purchase Requisition document exists in PACE-ERP.
+- PO header references Plan period for traceability.
+- Section 35.5 authority table rows referencing PR are void.
+
+---
+
+### 87.2 — Gap #2: Incoterms on Import PO
+
+**Decision: Dynamic last-used Incoterm — same pattern as Payment Terms.**
+
+| Rule | Detail |
+|---|---|
+| Field location | Import PO header — mandatory for IMPORT type POs |
+| Domestic PO | Incoterm field not shown — not applicable |
+| Default on new PO | Auto-loaded from last confirmed PO for this vendor |
+| First PO (no history) | Blank — Procurement team enters manually |
+| Override | Always allowed — Procurement team changes per deal |
+| After PO confirmed | That Incoterm becomes new last-used for this vendor |
+| Applicable terms | FOB / CIF / CFR / EXW / CIP / DAP / DDP and any new terms added by Procurement Manager |
+
+---
+
+### 87.3 — Gap #3: Account Assignment / Cost Center on PO Line
+
+**Decision: Mandatory Cost Center on every PO line. Manual selection. No auto-populate.**
+
+| Rule | Detail |
+|---|---|
+| Field location | PO line — mandatory |
+| Mandatory | Yes — PO line cannot be saved without Cost Center |
+| Auto-populate | ❌ None — no default from Material Master or elsewhere |
+| Reason | Same material (e.g., Caustic Soda) goes to different sections — cost center is context-dependent, not material-dependent |
+| Selection source | SA-managed Cost Center Master (company-scoped dropdown) |
+| One PO line | One Cost Center |
+
+---
+
+### 87.4 — Gap #4: Payment Terms — Structured Master + Governance
+
+**Decision: Structured Payment Terms Master managed by Procurement Manager.**
+
+#### Payment Terms Master Fields
+
+| Field | Type | Description |
+|---|---|---|
+| Code | Auto | PT-001, PT-002 etc. |
+| Name | Text | Display name (e.g., "Net 30 from Invoice Date") |
+| Payment Method | Enum | CREDIT / ADVANCE / LC / TT / DA / DP / MIXED |
+| Reference Date | Enum | INVOICE_DATE / GRN_DATE / BL_DATE / SHIPMENT_DATE / N_A |
+| Credit Days | Number | Nullable — for credit-based terms |
+| Advance % | Number | Nullable — for advance/mixed terms |
+| LC Type | Enum | AT_SIGHT / USANCE / N_A |
+| Usance Days | Number | Nullable — for LC usance |
+| Description | Free text | Full human-readable condition |
+| Active | Boolean | Inactive terms hidden from selection |
+
+#### Governance
+
+| Rule | Detail |
+|---|---|
+| Who manages | Procurement Manager (ACL-controlled authority) |
+| SA involvement | Not required — Procurement Manager adds new terms independently |
+| New term | Procurement Manager adds when new vendor/deal requires it |
+| Extensible | Yes — new Payment Methods / Reference Date types added as needed |
+
+#### Usage on Vendor Master and PO
+
+| Location | Rule |
+|---|---|
+| Vendor Master | Optional default payment term (PT Master reference) |
+| PO creation | Dynamic last-used from last confirmed PO for this vendor |
+| First PO (no history) | Vendor's default term loads; if none → blank → manual entry |
+| Override | Always allowed — Procurement selects any active term from PT Master |
+| After PO confirmed | That term becomes new last-used for this vendor |
+
+---
+
+### 87.5 — Gap #5: Intercompany PO
+
+**Decision: Option A — Separate PO per company. No cross-company PO.**
+
+| Rule | Detail |
+|---|---|
+| PO Company | Mandatory header field — one PO belongs to one company |
+| Procurement team | Centralized — same team raises POs on behalf of all companies |
+| CMP003 material | CMP003 PO → stock comes into CMP003 |
+| CMP010 material | CMP010 PO → stock comes into CMP010 |
+| Cross-company PO | Does not exist in PACE-ERP |
+| Intercompany movement | Handled via Plant Transfer (separate document), not PO |
+| ACL scope | Procurement team users have multi-company scope |
+
+---
+
+### 87.6 — Gap #6: PO Knock-off (replaces "Final Delivery Flag")
+
+**Decision: No "Final Delivery" flag on GRN. Separate PO Knock-off action by Procurement team.**
+
+| Rule | Detail |
+|---|---|
+| GRN | Simple receipt posting — no final delivery toggle |
+| PO Knock-off | Separate explicit action by Procurement team |
+| Purpose | Close POs that are over-serviced or under-serviced |
+| Scope | Individual PO line OR entire PO |
+| After knock-off | PO line status → CLOSED. Remaining open qty → cancelled |
+| Reason | Mandatory — Procurement team enters reason |
+| Authority | Authorized Procurement users |
+| Trigger | Vendor cannot deliver remainder / over-tolerance delivery accepted |
+
+---
+
+### 87.7 — Gap #7: Weigh Bridge — Tare / Net Weight
+
+**Decision: Weigh bridge fields on Gate Entry + Gate Exit. Tank/bulk items only.**
+
+| Rule | Detail |
+|---|---|
+| Applicable materials | Tank/bulk liquid items only |
+| Flag | Material Master → "Weigh Bridge Required" boolean |
+| Gate Entry (In-weight) | Gross weight — full truck on arrival |
+| Gate Exit (Out-weight) | Tare weight — empty truck after unloading |
+| Net weight | Auto-calculated = In-weight − Out-weight |
+| GRN | Net weight from weigh bridge used to verify actual received qty |
+| Non-weigh materials | Bag / drum / piece / carton — weigh bridge fields hidden |
+
+---
+
+### 87.8 — Gap #8: Backdated Gate Entry
+
+**Decision: Backdating allowed. No approval required.**
+
+| Rule | Detail |
+|---|---|
+| Backdating | Allowed — normal business operation |
+| Approval | Not required |
+| System timestamp | Always recorded automatically (cannot be altered) |
+| User-entered date | Backdated date entered by gate staff |
+| Audit trail | Both system timestamp and user-entered date stored — full traceability |
+
+---
+
+### 87.9 — Gap #9: Freight Terms on PO + Landed Cost
+
+**Decision: Freight Terms mandatory on every PO. Landed Cost entry by Accounts — any time after GRN.**
+
+#### Freight Terms on PO
+
+| Scenario | Description |
+|---|---|
+| FOR (Free on Road) | Vendor arranges transport, delivers to plant. No freight entry in PACE. |
+| Vendor Arranges — Buyer Pays | Vendor books transport, but company pays freight. Freight amount entered as separate line. |
+| Buyer Arranges — Buyer Pays | Company arranges own transport. Freight cost entered separately. |
+
+| Rule | Detail |
+|---|---|
+| Field location | PO header — mandatory for all PO types (import and domestic) |
+| Domestic | FOR / Freight Separate distinction fully applicable |
+| Import | Freight/Insurance already part of Incoterms (CIF/CFR) — but local freight from port to plant entered separately |
+| Freight amount | Entered on PO if known; can be updated later |
+
+#### Landed Cost
+
+| Component | Description |
+|---|---|
+| Material Cost | PO rate × GRN quantity |
+| Freight | Port to plant / vendor to plant transport |
+| Insurance | If not included in Incoterm |
+| Customs Duty | Import only |
+| CHA Charges | Clearing and Handling Agent fees — import |
+| Loading / Unloading | Labour charges at port or plant |
+
+| Rule | Detail |
+|---|---|
+| Who enters | Accounts section — not Procurement |
+| When | Any time after GRN is posted — no deadline |
+| Granularity | Per shipment / consignment |
+| Debit Note link | When material is rejected, landed cost is captured in the Debit Note value |
+| Retroactive | Allowed — landed cost can be entered or corrected after GRN |
+
+---
+
+### 87.10 — Gap #10: PO Approval Authority
+
+**Decision: Procurement Head approves POs. Delegation via PACE role designation system.**
+
+| Rule | Detail |
+|---|---|
+| Approver | Procurement Head (designated role in PACE ACL) |
+| Unavailable | Next level up — designated in PACE role hierarchy |
+| Delegation | Configurable in PACE — SA designates which role/user covers approval |
+| System | PACE already has role-based approval designation infrastructure |
+| Scope | PO creation approval + Amendment approval (for rate/qty changes — see 87.11) |
+
+---
+
+### 87.11 — Gap #11: PO Amendment Approval Scope
+
+**Decision: Rate and Qty changes require approval. All other amendments do not.**
+
+| Amendment Type | Approval Required |
+|---|---|
+| Rate change | ✅ Yes — Procurement Head |
+| Quantity change | ✅ Yes — Procurement Head |
+| Delivery date change | ❌ No |
+| Remarks / notes | ❌ No |
+| Cost Center change | ❌ No |
+| Incoterm change | ❌ No |
+| Payment Terms change | ❌ No |
+
+---
+
+### 87.12 — Gap #12: PO Cancellation
+
+**Decision: PO Cancellation does not require approval.**
+
+| Rule | Detail |
+|---|---|
+| Approval | ❌ Not required |
+| Authority | Authorized Procurement user |
+| Condition | PO must have zero GRN quantity (no receipts posted) |
+| Partial receipt | Only undelivered lines can be knocked off — not cancellation |
+| Audit | Cancellation reason mandatory. System timestamp recorded. |
+
+---
+
+### 87.15 — Global Document Number Series (11 May 2026)
+
+**Decision: Movement documents share a global number series across all same-group companies.**
+
+| Document Type | Number Series | Rule |
+|---|---|---|
+| PO Number | Company-specific | Prefix/suffix per company — already frozen |
+| GRN / Movement Document | **Global** | One shared counter across all same-group companies |
+| Invoice Number | **Global** | One shared counter across all same-group companies |
+| Process/Transaction Documents | **Global** | One shared counter across all same-group companies |
+
+| Rule | Detail |
+|---|---|
+| Condition | Applies only when companies are under the same group |
+| Same group | Two companies doing GRN simultaneously → MVT-00001, MVT-00002 — no overlap |
+| Different group | Separate number series — not shared |
+| Rationale | SAP standard — operational documents are globally unique within a client/group |
+
+---
+
+### 87.16 — PACE → Tally Cross-Reference Strategy (11 May 2026)
+
+**Decision: PACE replaces GSheets. PACE document numbers flow to Tally as cross-reference until Tally is replaced.**
+
+#### Current State
+```
+GSheets (operations + document numbers) → Tally (cross-reference)
+```
+
+#### After PACE Go-Live (July 2026)
+```
+PACE (operations + document numbers) → Tally (cross-reference)
+GSheets deprecated. PACE is the operational system.
+Tally continues as financial system with PACE document numbers as reference.
+```
+
+#### Future State (Tally Replacement Phase)
+```
+PACE handles everything.
+Tally cross-reference fields phased out.
+```
+
+| Rule | Detail |
+|---|---|
+| PACE document numbers | Globally generated (per 87.15) |
+| Tally cross-reference | PACE document numbers entered in Tally — same pattern as GSheets today |
+| Invoice | PACE generates its own invoice number. Tally invoice number also stored in PACE as reference during transition. |
+| GST Invoicing | Future phase — when PACE handles GST invoicing, Tally invoice number field removed from PACE |
+| Timeline | Cross-reference continues until PACE formally replaces Tally (separate project decision) |
+
+---
+
+### 87.17 — Sales/Dispatch Module — RM/PM Outward Sale (11 May 2026)
+
+**Decision: Sales/Dispatch module in scope for July 1. Basic flow only. Handled by Stores + Accounts.**
+
+#### Two Triggers — Same Sale Process
+
+| Trigger | Who Creates | Who Tracks |
+|---|---|---|
+| STO (internal group) | Procurement team creates STO | Procurement tracks |
+| External Customer PO | Customer sends PO — no Procurement involvement | Stores + Accounts |
+
+Regardless of trigger — the sale/dispatch process is **identical**.
+
+#### Sale Process (Both STO and External)
+
+```
+STO reference / Customer PO reference
+    ↓
+Stores → Stock issue (RM/PM leaves stock)
+    ↓
+Delivery Challan generated
+    ↓
+Accounts → Sales Invoice generated (global number series)
+    ↓
+Dispatch / Delivery to customer
+```
+
+#### July 1 Scope — Basic Only
+
+| Feature | July 1 |
+|---|---|
+| Sale against Customer PO | ✅ |
+| Sale against STO | ✅ |
+| Stock issue | ✅ |
+| Delivery Challan | ✅ |
+| Sales Invoice (global number) | ✅ |
+| Returns / Debit Note | ❌ Later phase |
+| Credit Note | ❌ Later phase |
+| QC on outward | ❌ Later phase |
+
+#### Authority
+
+| Action | Who |
+|---|---|
+| STO creation | Procurement team |
+| Delivery Challan + Invoice | Stores + Accounts |
+| External customer PO handling | Stores + Accounts |
+
+---
+
+### 87.13 — Conflicts Resolved in This Session
+
+| Section | Old State | Resolution |
+|---|---|---|
+| Section 36 — Purchase Requirement | Full PR design present | **SUPERSEDED** — No PR in PACE-ERP. Plan → PO directly. |
+| Section 85.1.5 — No PR confirmation | Stated but Section 36 contradicted | **CONFIRMED** — Section 36 archived. 87.1 is authoritative. |
+| Section 85.6.3 — Dynamic payment terms | Only days-based terms | **EXTENDED** — Full structured Payment Terms Master (87.4) |
+| Section 85.2 — PO header | Incoterms missing | **ADDED** — Dynamic last-used Incoterm on Import PO (87.2) |
+| Section 85.2 — PO line | Cost Center missing | **ADDED** — Mandatory Cost Center on PO line (87.3) |
+
+---
+
+### 87.14 — Updated L2 Freeze Status
+
+| Area | Section | Status |
+|---|---|---|
+| Plan Management | 85.1 | ✅ FROZEN |
+| No PR — Plan → PO directly | 87.1 | ✅ FROZEN (Section 36 archived) |
+| Purchase Order (Header + Lines) | 85.2, 87.2, 87.3 | ✅ FROZEN (Incoterms + Cost Center added) |
+| Payment Terms Master | 87.4 | ✅ FROZEN |
+| PO Amendment Rules | 85.2.6 | ✅ FROZEN |
+| Delivery Tolerance | 85.2.5 | ✅ FROZEN |
+| PO Knock-off | 87.6 | ✅ FROZEN |
+| Intercompany PO | 87.5 | ✅ FROZEN |
+| Gate Entry | 85.3, 87.7, 87.8 | ✅ FROZEN (Weigh bridge + backdating added) |
+| GRN | 85.4 | ✅ FROZEN |
+| Receiving Location (3-level) | 85.4.5 | ✅ FROZEN |
+| Vendor Master | 14, 85.6, 87.4 | ✅ FROZEN |
+| Vendor-Material Info Record / ASL | 15, 85.7 | ✅ FROZEN |
+| Approved Source Hard Block at PO | 15.3, 85.7.3 | ✅ FROZEN |
+| Freight Terms on PO | 87.9 | ✅ FROZEN |
+| Landed Cost (Accounts entry, post-GRN) | 87.9 | ✅ FROZEN |
+| PO Approval Authority | 87.10 | ✅ FROZEN |
+| PO Amendment Approval Scope | 87.11 | ✅ FROZEN (Rate + Qty only) |
+| PO Cancellation | 87.12 | ✅ FROZEN (No approval required) |
+| Global Document Number Series | 87.15 | ✅ FROZEN |
+| PACE → Tally Cross-Reference Strategy | 87.16 | ✅ FROZEN |
+| Sales/Dispatch Module (RM/PM outward) | 87.17 | ✅ FROZEN (Basic scope — July 1) |
+| Invoice Verification | 85.5 | 🔶 Framework only — scope TBD |
+| Consignment Tracking | 39 | 🔶 Design in progress — not frozen |
+| Procurement Planning UI | 35 | 🔶 Scope TBD |
+| Inward QA (post-GRN) | 42 | 🔶 Layer assignment TBD |
+
+---
+
+*— End of Section 87 —*
+
+---
+
+## Section 88 — Consignment Tracking System Design (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** Full consignment tracker design — GE redesign, CSN structure, distribution, STO flow, planning view.
+
+---
+
+### 88.1 — Gate Entry Redesign (Header + Lines)
+
+**Decision: GE is a multi-line document. One GE = one truck arrival.**
+
+Prior design (Section 85.3) assumed single PO + single line. This is superseded.
+
+```
+GE Header:
+  Vehicle Number, Date/Time, Driver, Gate Staff
+
+GE Lines (multiple):
+  Line 1: PO-001 → Line Item 3 → Invoice INV-001 → 5,000 KG
+  Line 2: PO-045 → Line Item 1 → Invoice INV-007 → 200 KG
+  Line 3: PO-001 → Line Item 5 → Invoice INV-001 → 100 KG
+```
+
+| Rule | Detail |
+|---|---|
+| One GE | One truck arrival |
+| Multiple PO lines | Allowed — different POs, different line items |
+| Multiple vendors | Allowed — vendor auto-identified from PO, not entered separately |
+| GE Number | Auto-generated, global number series |
+
+---
+
+### 88.2 — CSN Auto-creation from PO
+
+**Decision: PO confirm → one CSN auto-created per line item. Global number series.**
+
+| Rule | Detail |
+|---|---|
+| Trigger | PO confirmation |
+| Granularity | One CSN per PO line item |
+| Example | PO with 3 line items → 3 CSNs |
+| Number series | Global (same-group companies share counter) |
+| Initial status | ORDERED |
+| Initial details | Empty — Procurement fills tracking info later |
+
+---
+
+### 88.3 — Mother CSN + Sub CSN (Distribution Planning)
+
+**Decision: Procurement can create Sub CSNs under a Mother CSN for cross-company distribution planning.**
+
+```
+CSN-055 [MOTHER] — CMP003, 25MT
+    ├── Sub CSN-067 — CMP004, 5MT
+    └── Sub CSN-085 — CMP005, 10MT
+```
+
+| Rule | Detail |
+|---|---|
+| Sub CSN creation | Procurement team — anytime |
+| Sub CSN edit/delete | Anytime — full control |
+| Port-to-destination details | Sub CSNs have own LR/Truck/ETA (different after port) |
+| Vessel/BL/ETA (pre-port) | Mother CSN details — automatically same in all Sub CSNs |
+| Planning view | Sub CSNs used when they exist — Mother CSN not shown |
+| GE screen (importing company) | Mother CSN shown with full qty |
+| Any company | Any company's PO can be the importing company — scenario applies universally |
+
+#### Mother CSN Status with Sub CSNs
+
+| Sub CSN State | Mother CSN Shows |
+|---|---|
+| Some GE done, some not | PARTLY ARRIVED |
+| All Sub CSNs GE + GRN done | FULLY DISTRIBUTED |
+| No Sub CSNs | Standard status flow (88.5) |
+
+Mother CSN tracks physical arrival at importing company independently. Sub CSN statuses do not drive Mother CSN status.
+
+---
+
+### 88.4 — Sub CSN → STO Transformation
+
+**Decision: Sub CSN transforms in-place when mapped to STO. No delete. No new CSN.**
+
+```
+Sub CSN-067 [IMPORT, CMP004, 5MT]
+    ↓ STO-001 mapped
+CSN-067 [LOCAL, CMP004, 5MT, STO-001]
+    - Import fields: cleared
+    - LOCAL fields active: LR, Truck, ETA plant
+    - Detached from Mother CSN (independent)
+    - Origin reference preserved: Mother CSN-055
+```
+
+| Rule | Detail |
+|---|---|
+| Transform | In-place — same record updated |
+| Delete | ❌ Not deleted |
+| New CSN | ❌ Not created |
+| Detachment | Sub CSN becomes independent after STO mapping |
+| Origin reference | Preserved — Mother CSN reference kept for traceability |
+| Document Flow | PO → CSN-055 (Mother) → [Sub: CSN-067] → STO-001 → GE → GRN |
+
+---
+
+### 88.5 — Distribution Scenarios
+
+**Decision: Three distribution scenarios — all handled via Mother/Sub CSN structure.**
+
+**Scenario A — Full qty to PO company:**
+```
+CSN-055 (CMP003, 25MT) → GE → GRN → Close
+No Sub CSNs needed.
+```
+
+**Scenario B — PO company + other companies:**
+```
+Mother CSN-055 (CMP003, 25MT)
+Sub CSN-067 (CMP004, 5MT) → STO-001 → LOCAL
+Sub CSN-085 (CMP005, 10MT) → STO-002 → LOCAL
+CMP003 → full 25MT GRN → then STO distributes
+```
+
+**Scenario C — Nothing stays at PO company:**
+```
+Mother CSN-055 (CMP003, 25MT)
+Sub CSN-067 (CMP004, 10MT) → STO-001 → LOCAL
+Sub CSN-085 (CMP005, 15MT) → STO-002 → LOCAL
+CMP003 GRN mandatory (PO in CMP003 name) → all STOed out → CMP003 net = 0
+```
+
+All three scenarios possible for any company in the group.
+
+---
+
+### 88.6 — GE to CSN Linking + BOE/Invoice Rules
+
+**Decision: Security selects CSN at GE time. BOE/Invoice display depends on scenario.**
+
+**GE Screen Flow:**
+```
+Security sees company-specific open CSNs
+→ Enters physical BOE/Invoice number (verification)
+→ Selects CSN (system mapping)
+→ Enters actual qty
+→ GE created → CSN status: ARRIVED
+```
+
+**Display Rules:**
+
+| Scenario | GE Shows | Invoice Entry |
+|---|---|---|
+| Import — Mother CSN, same company | BOE number + Invoice number | At GE |
+| Import — Sub CSN → STO → LOCAL (destination) | BOE number only | Stores enters at GRN |
+| Domestic | Invoice number | At GE |
+
+| Rule | Detail |
+|---|---|
+| Company scope | Security sees only their company's CSNs |
+| BOE timing | Import: Procurement fills before arrival (BOE received at port before delivery) |
+| Two actions | Enter physical number (verify) + select CSN (map) — separate |
+
+---
+
+### 88.7 — CSN Status Flow
+
+**Standard flow:**
+```
+ORDERED → IN_TRANSIT → ARRIVED → GRN_DONE / CLOSED
+```
+
+| Transition | Trigger |
+|---|---|
+| ORDERED → IN_TRANSIT | Procurement enters dispatch details (vessel/BL/LR) |
+| IN_TRANSIT → ARRIVED | Security creates GE against CSN |
+| ARRIVED → GRN_DONE | Stores posts GRN |
+
+---
+
+### 88.8 — Partial Dispatch — Balance CSN Auto-create
+
+**Decision: System auto-creates balance CSN on partial dispatch or partial GRN.**
+
+**At dispatch:**
+```
+CSN-055: PO qty = 25MT
+Procurement enters dispatch qty: 15MT
+→ CSN-055: 15MT (IN_TRANSIT)
+→ CSN-056: 10MT (ORDERED — auto-created, balance)
+```
+
+**At GRN:**
+```
+GRN qty = CSN qty → CSN auto-close
+GRN qty < CSN qty → balance qty → new CSN auto-created
+PO total qty fully received → PO auto-close
+```
+
+**Unplanned arrival (no advance details):**
+```
+CSN exists (ORDERED, details empty — auto-created from PO)
+Security → GE (enters qty from physical delivery)
+Stores → GRN
+System → balance CSN auto-create or close
+Procurement → fills tracking details retroactively
+```
+
+---
+
+### 88.9 — Auto-fill from GE/GRN to Tracker
+
+**Decision: Fields entered at GE or GRN auto-populate in CSN tracker. Single entry, multiple places.**
+
+| Entry Point | Auto-fills in Tracker |
+|---|---|
+| GE | Invoice/BOE number, Gate Entry date, Arrived qty |
+| GRN | GRN date, Actual received qty, Transporter, LR number |
+| STO | LR number (delayed ok), Dispatch date |
+
+**LR number delayed entry:**
+- Plant dispatches → transporter godown → LR number comes later
+- Procurement enters LR in STO → tracker auto-updates
+- Tracker entry → STO auto-updates
+- Single source — enter anywhere, syncs everywhere
+
+---
+
+### 88.10 — Single Window Tracker View
+
+**Decision: Procurement team has one flat list view of all active CSNs. UI to be designed in separate session before build.**
+
+Concept: All CSNs visible in one screen. Filter by company, status, material, type, date. Color coding by status. Inline edit for key fields. Mother-Sub relationship visually indicated. Click-through to full detail.
+
+---
+
+### 88.11 — Document Flow — Bi-directional Navigation
+
+**Decision: Full document chain navigable in any direction. SAP Document Flow equivalent.**
+
+```
+PO → CSN (Mother) → Sub CSN → STO → CSN (LOCAL) → GE → GRN → Invoice
+
+Any direction:
+PO → GRN ✓
+GRN → PO ✓
+STO → Mother CSN → PO ✓
+```
+
+Every document linked with full lineage preserved even after Sub CSN detachment.
+
+---
+
+### 88.12 — STO Visibility and Workflow
+
+**Decision: Dispatching and receiving company Stores + Accounts see open STOs automatically.**
+
+```
+Procurement → STO create
+    ↓
+Dispatching company Stores + Accounts → open STO visible automatically
+    → Dispatch (stock issue, LR, truck) without Procurement involvement
+    ↓
+Receiving company Stores + Accounts → open STO visible automatically
+    → Security GE → Stores GRN → stock posted
+```
+
+| Rule | Detail |
+|---|---|
+| STO close condition | PO balance = 0 |
+| STO types | Consignment distribution + Independent inter-plant transfer |
+| Both types | Same workflow |
+| LR delayed | Procurement enters later in STO → flows to tracker |
+
+---
+
+### 88.13 — Planning View — Per Company
+
+**Decision: Each company sees only their own incoming consignments. UI to be designed before build.**
+
+| Source | Shown in Planning |
+|---|---|
+| Direct PO (vendor → company) | ✅ |
+| STO incoming (another company → this company) | ✅ |
+| Sub CSNs exist | Sub CSN qtys shown (not Mother) |
+| No Sub CSNs | Mother CSN qty shown |
+
+Plant team uses planning view for space planning, worker/vehicle arrangement, readiness.
+
+---
+
+*— End of Section 88 —*
+
+---
+
+## Section 89 — Supply Chain Tracking: Masters, ETA Cascade, and CSN Field Design (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** Port Master, Port-to-Plant Transit Master, Material Category Master, Lead Time Masters (Import + Domestic), ETA Cascade rules (Import + Domestic), Date field definitions, CSN full field list.
+
+---
+
+### 89.1 — Date Field Definitions
+
+These fields originate from the GSheet supply chain tracker. All are now formally defined for PACE implementation.
+
+| PACE Field Name | GSheet Ref | Meaning | Entry Method |
+|---|---|---|---|
+| Scheduled ETA to Port | O | Expected arrival date at discharge port — entered at PO creation | Manual by Procurement at PO |
+| ETD (Estimated Time of Departure) | Y | Estimated vessel departure from loading port | Auto = Scheduled ETA to Port − Sail Time; Manually overridable |
+| BL Date / LR Date | Z | For Import: Bill of Lading date = Actual Time of Departure (ATD). For Domestic: LR Date = ATD | Manual by Procurement when received |
+| ETA at Port | AH | Estimated arrival date at discharge port | Auto = ETD + Sail Time; Updates when BL Date entered (AH = BL Date + Sail Time); Manually overridable |
+| ATA at Port | AI | Actual arrival at port (vessel berthed) — Import only | Manual by Procurement |
+| Post-Clearance LR Date | AP | Import: Date truck departs port after customs clearance. Domestic: Same as LR Date (= ATD) | Manual by Procurement |
+| Gate Entry Date | AR | Actual arrival at plant — entered by Security at GE | Auto-filled from GE creation |
+| Sail Time | BV | Days from loading port to discharge port — from Lead Time Master | From Lead Time Master (Vendor + Mat. Category + Port) |
+| Clearance Days | BQ | Expected customs clearance time at port — from Lead Time Master | From Lead Time Master |
+| Port-to-Plant Transit | BR | Days from discharge port to destination plant — from Transit Master | From Port-to-Plant Transit Master |
+
+**Key Rules:**
+- Y (ETD) is Estimated Time of **Departure** — not arrival. Auto-calculated. When Z (BL Date) is entered, Z becomes the effective ETD.
+- AH (ETA at Port) always recalculates from the most current available date.
+- O is ETA to Port (destination). O already includes sail time from vendor side — do NOT add Sail Time again when using O.
+- BV (Sail Time) is only used with Z: AH = Z + BV.
+
+---
+
+### 89.2 — ETA Cascade — Import Shipments
+
+**Principle: ETA to Plant is always calculated from the most accurate date available. As each checkpoint date is entered, ETA automatically recalculates.**
+
+#### Step-by-step from PO creation to GRN:
+
+```
+Step 1 — PO Created:
+  Procurement enters: O (Scheduled ETA to Port)
+  System auto-calculates:
+    → ETD (Y) = O − Sail Time
+    → ETA at Port (AH) = ETD + Sail Time = O
+    → ETA to Plant = O + Clearance Days + Port-to-Plant Transit Days
+
+Step 2 — Vessel Departs (BL Date received):
+  Procurement enters: Z (BL Date = ATD)
+  System recalculates:
+    → ETA at Port (AH) = Z + Sail Time
+    → ETA to Plant = AH + Clearance Days + Port-to-Plant Transit Days
+
+Step 3 — Vessel Arrives at Port (ATA):
+  Procurement enters: AI (ATA at Port)
+  System recalculates:
+    → ETA to Plant = AI + Clearance Days + Port-to-Plant Transit Days
+
+Step 4 — Customs Cleared, Truck Dispatched (LR Date):
+  Procurement enters: AP (Post-Clearance LR Date)
+  System recalculates:
+    → ETA to Plant = AP + Port-to-Plant Transit Days
+
+Step 5 — Gate Entry:
+  Security creates GE → AR (Gate Entry Date) filled automatically
+  ETA to Plant: ACTUAL ARRIVAL — no further calculation needed
+```
+
+#### ETA to Plant Priority Logic:
+
+| Checkpoint Available | ETA to Plant Formula |
+|---|---|
+| AR entered (GE done) | Actual — no estimate |
+| AP entered | AP + Port-to-Plant Transit Days |
+| AI entered | AI + Clearance Days + Port-to-Plant Transit Days |
+| AH available | AH + Clearance Days + Port-to-Plant Transit Days |
+| O only (at PO) | O + Clearance Days + Port-to-Plant Transit Days |
+
+AH is driven by (in priority): BL Date + Sail Time > ETD + Sail Time > Scheduled ETA to Port (O).
+
+**Procurement can manually override AH at any time.** Override flag preserved. Manual entry is highest priority.
+
+---
+
+### 89.3 — ETA Cascade — Domestic Shipments
+
+```
+Step 1 — PO Created:
+  System fetches Lead Time from Domestic Lead Time Master (Vendor + Destination Company)
+  → ETA to Plant (estimated) = PO Date + Transit Days
+
+Step 2 — Truck Dispatched (LR Date received):
+  Procurement / Stores enters: Z / AP (LR Date = ATD)
+  System recalculates:
+    → ETA to Plant = LR Date + Transit Days
+
+Step 3 — Gate Entry:
+  Security creates GE → AR (Gate Entry Date) filled automatically
+  ETA to Plant: ACTUAL ARRIVAL
+```
+
+| Checkpoint Available | ETA to Plant Formula |
+|---|---|
+| AR entered | Actual — no estimate |
+| AP / Z entered (LR Date) | LR Date + Transit Days (from Domestic Lead Time Master) |
+| PO only | PO Date + Transit Days |
+
+For domestic, there is no Port, no AH, no AI, no Sail Time. AP = Z = LR Date.
+
+---
+
+### 89.4 — Port Master
+
+**SA-managed. Referenced by CSN, Lead Time Master, Port-to-Plant Transit Master.**
+
+| Field | Type | Rules |
+|---|---|---|
+| Port Code | Code | Unique, system-generated |
+| Port Name | Text | Full name (e.g., Kolkata Port, JNPT, Chennai) |
+| Port Type | Dropdown | SEA / AIR / LAND |
+| State | Text | Indian state where port is located |
+| Country | Text | Default India; other for future |
+| CHA (Default) | Reference | Optional — preferred Clearing Agent for this port |
+| Active | Flag | Inactive ports hidden from dropdowns |
+
+---
+
+### 89.5 — Port-to-Plant Transit Master
+
+**SA-managed. Drives "Port-to-Plant Transit Days" in ETA cascade.**
+
+| Field | Type | Rules |
+|---|---|---|
+| Port | Reference → Port Master | Discharge port |
+| Destination Company | Reference → Company | Receiving plant/company |
+| Transit Days | Number | Days from port gate out to plant gate |
+| Mode | Dropdown | ROAD / RAIL / MULTI-MODAL |
+| Remarks | Text | Optional |
+| Active | Flag | |
+
+**Key Design Rule:** Transit time is per Port + Destination Company combination — NOT per material. Same port, same company always has the same transit days regardless of material.
+
+**Example:**
+| Port | Company | Transit Days |
+|---|---|---|
+| Kolkata Port | CMP003 | 1 |
+| Kolkata Port | CMP004 | 4 |
+| JNPT | CMP003 | 7 |
+| JNPT | CMP004 | 8 |
+
+---
+
+### 89.6 — Material Category Master
+
+**SA-managed. Used for procurement planning grouping. Separate from Material Category Group (functional equivalents).**
+
+| Field | Type | Rules |
+|---|---|---|
+| Category Code | Code | Unique, system-generated |
+| Category Name | Text | e.g., Raw Material - Fibre, Packaging - Carton |
+| Description | Text | Optional |
+| Active | Flag | |
+
+**Design Rule:** Material Category in this master is a planning grouping dimension. It tells "what type of material this is" for planning dashboards, ETA grouping, and lead time lookup. It is NOT the same as Material Category Group which groups functionally equivalent materials for substitution/planning.
+
+Each Material is mapped to one Material Category.
+
+---
+
+### 89.7 — Lead Time Master — Import
+
+**SA-managed. Drives Sail Time and Clearance Days for import ETA cascade.**
+
+| Field | Type | Rules |
+|---|---|---|
+| Vendor | Reference → Vendor Master | Supplying vendor |
+| Material Category | Reference → Material Category Master | Category of material |
+| Port of Loading | Text / Reference | Vendor's dispatch port |
+| Port of Discharge | Reference → Port Master | Destination port in India |
+| Sail Time (Days) | Number | BV — vessel transit days |
+| Clearance Days | Number | BQ — expected customs clearance at discharge port |
+| Effective From | Date | Version control start |
+| Effective To | Date | Version control end; blank = current |
+| Active | Flag | |
+
+**Usage in ETA cascade:**
+- Sail Time → used to auto-calculate ETD from Scheduled ETA to Port, and ETA at Port from BL Date
+- Clearance Days → used to calculate ETA to Plant from AH or AI
+
+---
+
+### 89.8 — Lead Time Master — Domestic
+
+**SA-managed. Drives Transit Days for domestic ETA cascade.**
+
+| Field | Type | Rules |
+|---|---|---|
+| Vendor | Reference → Vendor Master | Supplying vendor |
+| Destination Company | Reference → Company | Receiving plant |
+| Transit Days | Number | Days from LR Date to plant arrival |
+| Effective From | Date | Version control start |
+| Effective To | Date | Version control end; blank = current |
+| Active | Flag | |
+
+**Usage:** When LR Date entered → ETA to Plant = LR Date + Transit Days. When only PO exists → ETA to Plant = PO Date + Transit Days.
+
+---
+
+### 89.9 — CSN Full Field List
+
+**Auto-created on PO confirmation (one per PO line item). Global number series.**
+
+#### Header Fields (All CSNs)
+
+| Field | Type | Rules |
+|---|---|---|
+| CSN Number | Code | Auto, global number series |
+| CSN Type | Dropdown | IMPORT / DOMESTIC |
+| Status | Dropdown | ORDERED / IN_TRANSIT / ARRIVED / GRN_DONE / CLOSED |
+| Company | Reference | Destination / PO company |
+| PO Number | Reference → PO | Source PO |
+| PO Line Item | Number | Line item reference |
+| Vendor | Auto from PO | |
+| Material | Auto from PO | |
+| Material Category | Auto from Material | |
+| PO Qty | Decimal | From PO line |
+| UOM | From PO | |
+| Dispatch Qty | Decimal | Entered by Procurement at dispatch |
+| Is Mother CSN | Flag | Set if Sub CSNs exist under this CSN |
+| Mother CSN Reference | Reference | Populated if this is a Sub CSN |
+| STO Number | Reference → STO | Populated when Sub CSN transforms via STO mapping |
+| Invoice Number | Text | From vendor — entered at GE (domestic) or GRN (import STO) |
+
+#### Import-Specific Fields
+
+| Field | Type | Notes |
+|---|---|---|
+| Port of Loading | Text | Vendor's dispatch port |
+| Port of Discharge | Reference → Port Master | India destination port |
+| Vessel Name | Text | |
+| Voyage Number | Text | |
+| BL Number | Text | Bill of Lading number |
+| BOE Number | Text | Bill of Entry — entered by Procurement before arrival |
+| CHA | Text / Reference | Clearing Agent |
+| Scheduled ETA to Port | Date | O — entered at PO creation |
+| ETD | Date | Y — auto from O − Sail Time; manually overridable |
+| BL Date | Date | Z — Actual Time of Departure |
+| ETA at Port | Date | AH — auto; updates from BL Date; manually overridable |
+| ETA at Port Override Flag | Flag | Set when AH entered manually |
+| ATA at Port | Date | AI — actual vessel arrival at port |
+| Post-Clearance LR Date | Date | AP — truck leaves port after customs |
+| Transporter (Port-to-Plant) | Text / Reference | |
+| LR Number (Port-to-Plant) | Text | |
+| Vehicle Number (Port-to-Plant) | Text | |
+
+#### Domestic-Specific Fields
+
+| Field | Type | Notes |
+|---|---|---|
+| LR Date | Date | Z / AP — ATD; truck departure from vendor |
+| Transporter | Text / Reference | |
+| LR Number | Text | |
+| Vehicle Number | Text | |
+
+#### Arrival + GRN Fields (All CSNs)
+
+| Field | Type | Notes |
+|---|---|---|
+| Gate Entry Date | Date | AR — auto-filled from GE |
+| GE Number | Reference → GE | Auto-filled when GE created |
+| GRN Date | Date | Auto-filled from GRN |
+| GRN Number | Reference → GRN | Auto-filled when GRN posted |
+| Received Qty | Decimal | Auto-filled from GRN |
+| ETA to Plant (Calculated) | Date | Auto — always latest calculation per cascade rules |
+| Remarks | Text | Procurement free text |
+| Created By | User | |
+| Created At | Timestamp | |
+| Last Updated By | User | |
+| Last Updated At | Timestamp | |
+
+---
+
+### 89.10 — ETA Cascade Summary — Single View
+
+```
+IMPORT FLOW:
+  PO Created
+    ↓ O entered (Scheduled ETA to Port)
+    ↓ Y auto = O − Sail Time (ETD)
+    ↓ AH auto = Y + Sail Time = O (ETA at Port)
+    → ETA to Plant = O + Clearance + Port-to-Plant
+
+  BL Date (Z) received
+    ↓ AH = Z + Sail Time (updated)
+    → ETA to Plant = AH + Clearance + Port-to-Plant
+
+  ATA at Port (AI) entered
+    → ETA to Plant = AI + Clearance + Port-to-Plant
+
+  Post-Clearance LR Date (AP) entered
+    → ETA to Plant = AP + Port-to-Plant
+
+  Gate Entry (AR) created
+    → ETA ACTUAL — calculation complete
+
+DOMESTIC FLOW:
+  PO Created
+    → ETA to Plant = PO Date + Transit Days (from master)
+
+  LR Date entered (Z / AP)
+    → ETA to Plant = LR Date + Transit Days
+
+  Gate Entry (AR) created
+    → ETA ACTUAL — calculation complete
+```
+
+**Key Principle:** The system always uses the most downstream (most accurate) date available. Procurement does not need to "trigger recalculation" — it happens automatically on every date entry.
+
+---
+
+*— End of Section 89 —*
+
+---
+
+## Section 90 — PO & CSN Extended Tracking: LC, Vessel Booking, Rebate, Vendor Indent (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** LC tracking, vessel booking follow-up alerts, rebate flag, vendor indent number — PO-level flags carrying into CSN.
+
+---
+
+### 90.1 — LC (Letter of Credit) Tracking
+
+**Decision: LC fields live entirely in the CSN Tracker — not at PO level. Payment Term is at PO level only. All LC tracking and alerts operate from the tracker.**
+
+#### PO-Level Fields
+
+| Field | Type | Rules |
+|---|---|---|
+| Payment Term | Dropdown | LC / TT / DP / OPEN / etc. |
+| LC Required | Flag | Auto-set Y when Payment Term = LC. Carries to CSN |
+
+#### CSN Tracker Fields (LC section — visible only when LC Required = Y)
+
+| Field | Type | Rules |
+|---|---|---|
+| LC Required | Auto from PO | Controls visibility of LC section in tracker |
+| LC Due Date | Date | Auto = ETD − 10 days. Recalculates when ETD changes in CSN |
+| LC Opened Date | Date | Manual entry by Procurement. Entering = LC opened |
+| LC Number | Text | LC reference number from bank. Entering = LC done |
+
+**LC is considered complete when both LC Opened Date AND LC Number are entered. Either missing = LC not complete.**
+
+#### Alert Logic
+
+| Condition | Alert |
+|---|---|
+| LC Required = Y AND (LC Opened Date or LC Number empty) AND today ≥ LC Due Date | 🔴 LC Overdue |
+| LC Required = Y AND (LC Opened Date or LC Number empty) AND today = LC Due Date − 3 days | 🟡 LC due in 3 days |
+| Both LC Opened Date AND LC Number entered | Alert auto-dismissed |
+
+---
+
+### 90.2 — Vessel Booking Follow-up
+
+**Decision: Vessel Booking Confirmed Date is a field in the CSN Tracker. Entering this date = booking is done. If not entered after PO Date + 3 days → alert triggers automatically. No separate "expected by" date needed.**
+
+#### How it works
+
+- PO confirmed → CSN created (ORDERED)
+- Procurement confirms vessel booking with vendor → enters Vessel Booking Confirmed Date in CSN Tracker
+- If this date is still empty 3 days after PO Date → alert triggers
+- Date entered → alert auto-dismissed
+
+#### CSN Tracker Field
+
+| Field | Type | Rules |
+|---|---|---|
+| Vessel Booking Confirmed Date | Date | Manual entry by Procurement. Import only. Entering this = vessel booking done |
+
+#### Alert Logic
+
+| Condition | Alert |
+|---|---|
+| CSN Type = IMPORT AND Vessel Booking Confirmed Date is empty AND today > PO Date + 3 days | 🟡 Vessel booking not confirmed — follow up with vendor |
+| Vessel Booking Confirmed Date is entered | Alert auto-dismissed |
+
+Alert visible in Procurement Dashboard and CSN Tracker for relevant CSN.
+
+---
+
+### 90.3 — Rebate Flag
+
+**Decision: Rebate flag at PO level. Carries to CSN. Full rebate tracker to be designed in a later session.**
+
+#### PO-Level Fields
+
+| Field | Type | Rules |
+|---|---|---|
+| Has Rebate | Flag | Y / N — set by Procurement at PO creation |
+| Rebate Remarks | Text | Brief note on rebate terms (free text for now) |
+
+#### CSN-Level Fields (carried from PO)
+
+| Field | Type | Rules |
+|---|---|---|
+| Has Rebate | Auto from PO | Visible on CSN for awareness |
+| Rebate Remarks | Auto from PO | Read-only on CSN |
+
+**Rebate Tracker:** Full design deferred. Flag + remarks capture ensures no consignment with rebate is missed. Tracker to be designed as a separate sub-module once basic procurement flow is live.
+
+---
+
+### 90.4 — Vendor Indent Number
+
+**Decision: Vendor gives their own reference/indent number against our PO. Captured per CSN. Controlled by a sticky vendor-level flag.**
+
+#### Vendor Master Flag
+
+| Field | Type | Rules |
+|---|---|---|
+| Indent Number Required | Flag | Default: OFF. Set at Vendor Master level by SA |
+
+**Sticky behavior:** Once turned ON for a vendor, all new POs with that vendor automatically have indent tracking active. Remains ON until explicitly turned OFF in Vendor Master. Procurement does not need to toggle per PO.
+
+#### PO-Level
+
+| Field | Type | Rules |
+|---|---|---|
+| Indent Required | Flag | Auto-inherited from Vendor Master. Procurement can override per PO |
+
+#### CSN-Level
+
+| Field | Type | Rules |
+|---|---|---|
+| Vendor Indent Number | Text | Manual entry by Procurement. Shown only if Indent Required = Y on PO |
+| Indent Required | Auto from PO | Controls field visibility |
+
+**UI Rule:** If Indent Required = N on the PO, Vendor Indent Number field is hidden on CSN. If Y, field is visible and editable.
+
+---
+
+### 90.5 — PO Extended Fields Summary
+
+All new PO-level fields introduced in this section:
+
+| Field | Source | Carries to CSN |
+|---|---|---|
+| Payment Term | Procurement | ✅ (LC Required auto-derived) |
+| LC Required | Auto from Payment Term | ✅ (controls LC section visibility in tracker) |
+| Has Rebate | Manual | ✅ |
+| Rebate Remarks | Manual | ✅ |
+| Indent Required | Auto from Vendor Master / override | ✅ (controls field visibility) |
+
+LC tracking fields (LC Due Date, LC Opened Date, LC Number) are in CSN Tracker only — not at PO level.
+
+---
+
+### 90.6 — CSN Extended Fields Summary
+
+All new CSN-level fields from this section (additions to 89.9):
+
+| Field | Type | Applies To |
+|---|---|---|
+| Payment Term | Auto from PO | All |
+| LC Required | Auto from PO | Import |
+| LC Due Date | Auto = ETD − 10 days, recalculates | Import, when LC Required = Y |
+| LC Opened Date | Manual | Import, when LC Required = Y |
+| LC Number | Manual | Import, when LC Required = Y |
+| Vessel Booking Confirmed Date | Manual | Import |
+| Has Rebate | Auto from PO | All |
+| Rebate Remarks | Auto from PO | All |
+| Indent Required | Auto from PO | All |
+| Vendor Indent Number | Manual | All (if Indent Required = Y) |
+
+---
+
+### 90.7 — Alert System — Tab Structure
+
+**Decision: Alert system in Procurement Dashboard / CSN Tracker is tab-based. Each alert type has its own tab. Alerts appear only on the relevant tab — not mixed.**
+
+| Tab | Shows | Relevant To |
+|---|---|---|
+| LC Alerts | CSNs where LC Required = Y and LC not completed (LC Opened Date or LC Number missing) past or near due date | Procurement / Finance |
+| Vessel Booking | Import CSNs where Vessel Booking Confirmed Date is empty and PO Date + 3 days passed | Procurement |
+| (Future tabs) | Other follow-up types as designed | TBD |
+
+**Design Rules:**
+- Each tab shows only its own alert type — no mixing
+- Count badge on each tab showing number of pending alerts
+- Clicking a row opens the relevant CSN directly
+- Alert auto-clears from tab when the required action is completed (date/number entered)
+- Tabs with zero alerts are empty but still visible (not hidden)
+
+---
+
+*— End of Section 90 —*
+
+---
+
+## Section 91 — Bulk CSN Type + GE Weighment Design (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** Bulk PO indicator, Bulk CSN type design, RST/Weighment fields on Gate Entry.
+
+---
+
+### 91.1 — Bulk / Tanker PO Indicator
+
+**Decision: PO-level indicator distinguishes Standard, Bulk, and Tanker POs. CSN type derives from this indicator.**
+
+| Field | Level | Type | Rules |
+|---|---|---|---|
+| Delivery Type | PO | Dropdown | STANDARD / BULK / TANKER. Default STANDARD |
+| CSN Type | CSN | Auto | STANDARD → IMPORT or DOMESTIC. BULK or TANKER → BULK |
+
+- STANDARD: regular CSN flow — full tracking, alerts, ETA cascade
+- BULK: loose solid materials (coal, sand, chemicals in bags, etc.) — weighment-based qty
+- TANKER: liquid materials (oils, chemicals, etc.) — weighment-based qty (gross/tare/net)
+
+Both BULK and TANKER follow the same Bulk CSN flow (Section 91.2). No separate CSN type for Tanker — both map to CSN Type = BULK.
+
+---
+
+### 91.2 — Bulk CSN Design
+
+**Bulk CSN is a simplified type. No tracking fields, no alerts, no ETA cascade. Quantity is weighment-based.**
+
+#### Key Differences from Regular CSN
+
+| Feature | Regular CSN (IMPORT/DOMESTIC) | Bulk CSN |
+|---|---|---|
+| Type | IMPORT / DOMESTIC | BULK |
+| Tracking fields | Vessel, BL, LC, ETA cascade, follow-up dates | ❌ None |
+| Alerts | LC overdue, Vessel Booking, etc. | ❌ None |
+| Mother / Sub CSN | ✅ | ❌ |
+| GEs per CSN | One shipment = one GE | Multiple trucks → multiple GEs, same CSN open |
+| Quantity basis | Invoice qty / counted qty | Net Weight (Gross − Tare from weighment) |
+| Status flow | ORDERED → IN_TRANSIT → ARRIVED → GRN_DONE | OPEN → CLOSED |
+| CSN closes when | GRN posted for full qty | PO balance reaches zero |
+| Planning view | ✅ | ✅ (shows open balance) |
+
+#### Bulk CSN Fields
+
+| Field | Type | Rules |
+|---|---|---|
+| CSN Number | Auto | Global number series |
+| CSN Type | Auto | BULK |
+| Status | Dropdown | OPEN / CLOSED |
+| Company | Auto from PO | |
+| PO Number | Auto from PO | |
+| PO Line Item | Auto from PO | |
+| Vendor | Auto from PO | |
+| Material | Auto from PO | |
+| Material Category | Auto from Material | |
+| PO Qty | Decimal | Total ordered qty (weight-based UOM) |
+| Total Received Qty | Decimal | Cumulative net weight from all GRNs against this CSN |
+| Balance Qty | Auto | PO Qty − Total Received Qty |
+| Payment Term | Auto from PO | |
+| Has Rebate | Auto from PO | |
+| Rebate Remarks | Auto from PO | |
+| Indent Required | Auto from PO | |
+| Vendor Indent Number | Manual | If Indent Required = Y |
+| Remarks | Text | Free text |
+
+No vessel, BL, LC, ETD, ETA, Sail Time, Clearance or Port fields on Bulk CSN.
+
+#### Multiple GE / GRN Against One Bulk CSN
+
+```
+CSN-BULK-001 (CMP003, Coal, 500MT, OPEN)
+    ├── GE-101 → GRN-201 → 80MT (Net Weight)
+    ├── GE-102 → GRN-202 → 75MT (Net Weight)
+    ├── GE-103 → GRN-203 → 90MT (Net Weight)
+    └── ... continues until 500MT received → CSN CLOSED
+```
+
+CSN remains OPEN and accepts new GEs until PO balance = 0.
+
+---
+
+### 91.3 — GE Weighment Fields (All GE Types)
+
+**Decision: RST Number, Gross Weight, Tare Weight, Net Weight added to Gate Entry for all GE types. Mandatory for Bulk/Tanker GEs. Optional for Standard GEs.**
+
+#### Fields Added to GE (Gate Entry)
+
+These fields are at **GE Line level** — each GE line (each PO line item on the truck) can have its own weighment record.
+
+| Field | Type | Mandatory | Rules |
+|---|---|---|---|
+| RST Number | Text | BULK/TANKER: ✅ Yes. STANDARD: ❌ No | Weighbridge Slip / Road Side Ticket number |
+| Gross Weight | Decimal | BULK/TANKER: ✅ Yes. STANDARD: ❌ No | Total weight of truck + material (KG / MT) |
+| Tare Weight | Decimal | BULK/TANKER: ✅ Yes. STANDARD: ❌ No | Empty truck weight (KG / MT) |
+| Net Weight | Decimal | Auto | Auto = Gross − Tare. Read-only when both entered. Manually overridable |
+
+**Rules:**
+- BULK / TANKER GE → RST, Gross, Tare all mandatory. System cannot save GE without these
+- STANDARD GE → all four fields optional (supplementary info only)
+- Net Weight auto-calculates when Gross and Tare both entered
+- Net Weight can be entered manually if weighbridge gives net directly (Gross/Tare not required in that case)
+- Every truck = one GE record — per-truck weighment preserved permanently
+- Security enters these fields at time of GE creation
+
+#### Bulk CSN GE → GRN Qty Flow
+
+```
+GE Line: Bulk CSN-001
+  RST: W-4521
+  Gross Weight: 28,500 KG
+  Tare Weight:   6,200 KG
+  Net Weight:   22,300 KG  ← auto
+
+GRN: Received Qty = 22,300 KG (auto-filled from Net Weight)
+```
+
+For Bulk CSN, GRN received qty defaults to Net Weight from GE. Stores can override if needed.
+
+---
+
+*— End of Section 91 —*
+
+---
+
+## Section 92 — Stock Transfer Order (STO) Full Design (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** STO types, header, lines, transfer pricing, dispatch flow (Gate Exit + Delivery Challan), receipt flow (GE + GRN), status flow, close conditions.
+
+---
+
+### 92.1 — STO Types
+
+| Type | Description | Trigger |
+|---|---|---|
+| CONSIGNMENT_DISTRIBUTION | Sub CSN → STO transform. Distributing imported material from PO company to other companies | Sub CSN mapped to STO by Procurement |
+| INTER_PLANT | Independent inter-company stock transfer — not related to any import consignment | Procurement creates directly |
+
+Both types follow the **same document structure and workflow.** No behavioural difference after creation.
+
+---
+
+### 92.2 — STO Header Fields
+
+| Field | Type | Rules |
+|---|---|---|
+| STO Number | Auto | Global number series |
+| STO Date | Date | System date. Backdating allowed (same rule as GE) |
+| STO Type | Dropdown | CONSIGNMENT_DISTRIBUTION / INTER_PLANT |
+| Sending Company | Reference → Company | Material moves out of this company |
+| Receiving Company | Reference → Company | Material moves into this company |
+| Status | Auto | CREATED → DISPATCHED → RECEIVED → CLOSED |
+| Related CSN | Reference → CSN | For CONSIGNMENT_DISTRIBUTION only. Auto-linked from Sub CSN transform |
+| Created By | User | Procurement team |
+| Remarks | Text | Optional |
+
+---
+
+### 92.3 — STO Line Fields
+
+| Field | Type | Rules |
+|---|---|---|
+| Line Number | Auto | Sequential |
+| Material | Reference → Material Master | |
+| Quantity | Decimal | |
+| UOM | From Material Master | |
+| Sending Storage Location | Reference | From sending company |
+| Receiving Storage Location | Reference | Default from Material Master (receiving company). Overridable at GRN |
+| Transfer Price | Decimal | Default = last used transfer price for this Material + Sending Company + Receiving Company. Editable by Procurement before dispatch |
+| Transfer Price Currency | Auto from Company | |
+| Dispatched Qty | Decimal | Auto-filled from Gate Exit |
+| Received Qty | Decimal | Auto-filled from GRN |
+| Balance Qty | Auto | Quantity − Received Qty |
+
+**Transfer Price rule:** Same dynamic last-used pattern as Payment Terms and Incoterms — loads last confirmed transfer price for this material/company pair. First time → blank → Procurement enters manually. After STO confirmed → becomes new last-used.
+
+Transfer Price editable by Procurement any time before Delivery Challan is generated (i.e., before dispatch).
+
+---
+
+### 92.4 — STO Status Flow
+
+```
+CREATED
+    ↓ Stores issues stock + Gate Exit done
+DISPATCHED
+    ↓ Gate Entry at receiving company
+IN_TRANSIT  (optional intermediate — if GE not immediate)
+    ↓ GRN posted at receiving company
+RECEIVED
+    ↓ All lines fully received OR Procurement knocks off balance
+CLOSED
+```
+
+| Status | Meaning |
+|---|---|
+| CREATED | STO made. Visible to both companies. No stock movement yet |
+| DISPATCHED | Stock issued from sending company. Gate Exit done. Delivery Challan generated |
+| RECEIVED | GRN posted at receiving company for all lines |
+| CLOSED | STO fully closed — all qty received or balance knocked off |
+
+Partial receipt: STO remains RECEIVED (partially) until all lines closed. Each line has its own received qty and balance.
+
+---
+
+### 92.5 — Dispatch Flow (Sending Company)
+
+```
+Procurement creates STO → status: CREATED
+    ↓
+Sending company Stores: sees open STO automatically
+    ↓
+Stores picks stock from Sending Storage Location
+    ↓
+Stores posts stock issue (movement type: STO_ISSUE)
+    → Stock deducted from sending company
+    → Delivery Challan auto-generated
+    ↓
+Gate staff: Gate Exit
+    → Vehicle Number, Driver, Transporter, LR Number, Dispatch Qty, Date/Time
+    → Gate Exit Number auto-generated
+    ↓
+STO status → DISPATCHED
+    ↓
+LR Number flows to CSN tracker (if CONSIGNMENT_DISTRIBUTION type)
+```
+
+#### Delivery Challan — Auto-generated on Stock Issue
+
+| Field | Source |
+|---|---|
+| Delivery Challan Number | Auto, global number series |
+| Date | System date |
+| STO Reference | Auto |
+| Sending Company | From STO |
+| Receiving Company | From STO |
+| Material, Qty, UOM | From STO line |
+| Transfer Price | From STO line |
+| Total Value | Auto = Qty × Transfer Price |
+| Transporter / LR / Vehicle | From Gate Exit |
+
+Delivery Challan is auto-generated and cannot be manually created. Trigger = stock issue posting.
+
+---
+
+### 92.6 — Gate Exit (Sending Company)
+
+**Decision: Gate Exit is a document at the sending company. Mirrors Gate Entry structure. Recorded when loaded truck leaves the plant.**
+
+#### Gate Exit Header
+
+| Field | Type | Rules |
+|---|---|---|
+| Gate Exit Number | Auto | Global number series |
+| Gate Exit Date/Time | Auto + user-entry | System timestamp always recorded. User enters date (backdating allowed) |
+| Vehicle Number | Text | Mandatory |
+| Driver Name | Text | Optional |
+| Gate Staff | Auto | Logged-in user |
+
+#### Gate Exit Lines
+
+| Field | Type | Rules |
+|---|---|---|
+| STO Reference | Reference → STO | Mandatory |
+| STO Line | Reference | |
+| Material | Auto from STO | |
+| Dispatch Qty | Decimal | Mandatory |
+| Transporter | Text / Reference | Optional |
+| LR Number | Text | Optional — can be entered later in STO/CSN |
+| RST Number | Text | BULK/TANKER: Mandatory. STANDARD: Optional |
+| Gross Weight | Decimal | BULK/TANKER: Mandatory. STANDARD: Optional |
+| Tare Weight | Decimal | BULK/TANKER: Mandatory. STANDARD: Optional |
+| Net Weight | Decimal | Auto = Gross − Tare. Manually overridable |
+
+Same weighment rules as Gate Entry (Section 91.3) apply at Gate Exit.
+
+---
+
+### 92.7 — Receipt Flow (Receiving Company)
+
+```
+Receiving company Security: sees incoming STO automatically
+    ↓
+Truck arrives → Gate Entry (same GE flow as vendor delivery)
+    → GE references STO (instead of PO)
+    → RST / weighment fields filled (if Bulk/Tanker)
+    ↓
+Receiving company Stores: sees open STO + GE automatically
+    ↓
+Stores posts GRN (movement type: STO_RECEIPT)
+    → Stock added to receiving company
+    → STO received qty updated
+    ↓
+If all STO lines fully received → STO status: CLOSED
+```
+
+#### GE for STO Receipt
+
+GE for incoming STO is the same Gate Entry document (Section 88.1 / 91.3) with one difference:
+
+| Regular GE | STO GE |
+|---|---|
+| References PO + Line Item | References STO + STO Line |
+| Vendor Invoice Number mandatory | Delivery Challan Number (from sending side) |
+
+All other GE rules (weighment, multi-line, auto-link) apply identically.
+
+---
+
+### 92.8 — STO Visibility Rules
+
+| Company | What They See |
+|---|---|
+| Sending Company (Stores + Accounts) | Open STOs where they are the sender. Can dispatch |
+| Receiving Company (Stores + Accounts) | Open STOs where they are the receiver. Can GRN |
+| Procurement Team | All STOs — all companies (multi-company scope) |
+| Other companies | ❌ Not visible |
+
+---
+
+### 92.9 — STO Close / Knock-off
+
+| Scenario | Action |
+|---|---|
+| All qty received | STO auto-closes |
+| Partial receipt, remainder not coming | Procurement knocks off balance (reason mandatory) |
+| Amendment before dispatch | Qty / Price changeable — no approval required (unlike PO) |
+| Cancellation (no dispatch done) | Procurement can cancel. No approval. Reason mandatory |
+
+---
+
+### 92.10 — Document Flow
+
+```
+PO → CSN (Mother) → Sub CSN → STO → Delivery Challan → Gate Exit (sending)
+                                   ↓
+                              Gate Entry (receiving) → GRN
+```
+
+Full bi-directional navigation from any point in the chain (same rule as 88.11).
+
+---
+
+*— End of Section 92 —*
+
+---
+
+## Section 93 — GRN Complete Field List (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** GRN header, GRN lines, batch/lot rules, stock posting, weighment tally, post-GRN auto-updates.
+
+---
+
+### 93.1 — GRN Structure
+
+**One GRN = One GE. GRN cannot span multiple GEs.**
+
+GRN is a header + line document. Lines are loaded from the referenced GE — Stores does not manually add lines.
+
+---
+
+### 93.2 — GRN Header Fields
+
+| Field | Type | Rules |
+|---|---|---|
+| GRN Number | Auto | Global number series |
+| GRN Date | Date | System date. Backdating allowed |
+| Posting Date | Date | Defaults to GRN Date. Overridable (financial posting date) |
+| Company | Auto | From GE |
+| Gate Entry Reference | Reference → GE | Mandatory. One per GRN. Loaded on selection |
+| PO Reference | Auto from GE | |
+| STO Reference | Auto from GE | If GRN is for STO receipt |
+| Vendor | Auto from PO | |
+| Movement Type | Auto | P101 (standard GRN) / STO_RECEIPT (STO GRN) |
+| Posted By | Auto | Logged-in Stores user |
+| Remarks | Text | Optional |
+
+---
+
+### 93.3 — GRN Line Fields
+
+Lines auto-loaded from GE. Stores cannot add or delete lines — only edit qty and receiving fields.
+
+| Field | Type | Rules |
+|---|---|---|
+| Line Number | Auto | From GE line |
+| Material | Auto from GE | |
+| PO / STO Line Reference | Auto from GE | |
+| GE Qty | Decimal | Read-only. Reference — what Security recorded at gate |
+| Net Weight (Weighbridge) | Decimal | Read-only. Auto from GE Gross − Gate Exit Tare (for BULK/TANKER). Blank for STANDARD |
+| Received Qty | Decimal | **Stores enters actual received qty**. For BULK/TANKER defaults to Net Weight — overridable |
+| UOM | Auto from PO | |
+| Discrepancy | Auto | GE Qty − Received Qty. Shown for reference. Positive = shortage, Negative = excess |
+| Storage Location | Reference | Default from 3-level hierarchy (Material Master → PO line → GRN override). Stores can change |
+| Stock Type | Auto | UNRESTRICTED (no QA) / QA_STOCK (QA required — from Material Master) |
+| Batch / Lot Number | Text | Manual entry by Stores. **Required only if material has Batch Tracking = ON in Material Master**. Skip if not applicable |
+| Expiry Date | Date | Required only if material has FIFO + Expiry = ON in Material Master. Skip otherwise |
+| Invoice Number | Text | For import STO GRN — Stores enters vendor invoice. For direct PO GRN — auto from GE |
+
+---
+
+### 93.4 — Batch / Lot Number Rules
+
+| Material Setting | GRN Behaviour |
+|---|---|
+| Batch Tracking = OFF | Batch field hidden. No entry required |
+| Batch Tracking = ON | Batch / Lot Number mandatory. Stores enters manually |
+| PM (Packaging Material) | Typically Batch Tracking = OFF. Field not shown |
+| RM with lot variation | Batch Tracking = ON. Each GRN lot gets its own batch |
+
+System does **not** auto-generate batch numbers. Stores enters the vendor's lot/batch reference or an internal identifier as decided operationally. If no batch applicable → field is skipped entirely.
+
+---
+
+### 93.5 — Weighbridge Tally (Bulk / Tanker)
+
+For BULK / TANKER deliveries, received qty is derived from weighbridge:
+
+```
+Gate Entry:   Truck arrives loaded → Gross Weight recorded
+              Unloading happens
+Gate Exit:    Empty truck leaves → Tare Weight recorded
+              Net Weight = Gross − Tare (auto-calculated by system)
+
+GRN:          Received Qty defaults to Net Weight
+              Stores can override if physical count differs
+              System shows: GE Gross / Gate Exit Tare / Net Weight / Stores Entered Qty
+              Discrepancy = Net Weight − Stores Entered Qty flagged in report
+```
+
+**System tally report:** After GRN, system generates a weighment tally showing GE Gross, Gate Exit Tare, Net Weight, GRN Received Qty, and any discrepancy. Available to Stores and Accounts.
+
+---
+
+### 93.6 — Post-GRN Auto-Updates
+
+On GRN posting, system automatically:
+
+| Update | Details |
+|---|---|
+| Stock Ledger | +Received Qty at Storage Location, Stock Type per line |
+| Snapshot | Updated for company + material + location + batch |
+| PO Open Qty | Reduced by Received Qty on each line |
+| CSN Status | → GRN_DONE (regular CSN) / Cumulative total updated (Bulk CSN) |
+| Vendor-Material Info Record | Last Price updated with GRN rate |
+| Bulk CSN Balance | Total Received Qty updated. CSN CLOSED if PO balance = 0 |
+
+---
+
+### 93.7 — GRN Amendment / Reversal
+
+| Action | Rule |
+|---|---|
+| Edit after posting | ❌ Not allowed |
+| Reversal (P102) | Allowed with approval. Reverses stock movement. Resets PO open qty. CSN status reverts |
+| Re-GRN after reversal | Fresh GRN required |
+
+---
+
+*— End of Section 93 —*
+
+---
+
+## Section 94 — Transporter Master (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** Transporter Master fields, usage direction, context-filtered dropdowns, governance.
+
+---
+
+### 94.1 — Transporter Master Fields
+
+| Field | Type | Rules |
+|---|---|---|
+| Transporter Code | Auto | System-generated. Global |
+| Transporter Name | Text | Mandatory |
+| Usage Direction | Dropdown | INBOUND / OUTBOUND / BOTH. Mandatory |
+| Mode | Dropdown | ROAD / RAIL / COURIER / MULTI-MODAL |
+| Contact Person | Text | Optional |
+| Phone | Text | Optional |
+| Email | Text | Optional |
+| PAN Number | Text | Optional — for TDS applicability |
+| GST Number | Text | Optional |
+| Address | Text | Optional |
+| Active | Flag | Inactive transporters hidden from all dropdowns |
+
+---
+
+### 94.2 — Usage Direction Rules
+
+| Usage Direction | Meaning |
+|---|---|
+| INBOUND | Handles incoming deliveries (vendor → plant). Procurement side |
+| OUTBOUND | Handles outgoing dispatches (plant → customer / plant). Dispatch/Sales side |
+| BOTH | Works both ways — appears in both inbound and outbound dropdowns |
+
+**Context-filtered dropdown:** Dropdown list shown to user depends on the document context:
+
+| Document Context | Dropdown Shows |
+|---|---|
+| CSN, GE (inbound), GRN | INBOUND + BOTH only |
+| Gate Exit, STO dispatch, Sales/Dispatch | OUTBOUND + BOTH only |
+
+This keeps each team's list short and relevant. No duplicate records needed for shared transporters.
+
+---
+
+### 94.3 — Governance
+
+| Action | Authority |
+|---|---|
+| Create INBOUND transporter | Procurement team |
+| Create OUTBOUND transporter | Dispatch / Sales team |
+| Create BOTH transporter | Either team |
+| Edit | Creating team (or SA) |
+| Deactivate | Creating team (or SA) |
+| SA involvement | Not required for routine operations |
+
+---
+
+### 94.4 — Usage Points in PACE
+
+| Document | Direction | Field | Rule |
+|---|---|---|---|
+| CSN (Import) | Inbound | Transporter (Port-to-Plant) | INBOUND + BOTH dropdown. Optional |
+| CSN (Domestic) | Inbound | Transporter | INBOUND + BOTH dropdown. Optional |
+| Gate Entry (inbound) | Inbound | Transporter | INBOUND + BOTH dropdown. Optional |
+| Gate Exit (STO dispatch) | Outbound | Transporter | OUTBOUND + BOTH dropdown. Optional |
+| Sales / Dispatch | Outbound | Transporter | OUTBOUND + BOTH dropdown. Optional |
+
+Free text entry allowed at all usage points — if transporter is not in master, user can type name directly. Handles one-time or unregistered transporters without blocking operations.
+
+---
+
+*— End of Section 94 —*
+
+---
+
+## Section 95 — CHA Master (Clearing and Handling Agent) (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** CHA Master fields, governance, usage points.
+
+---
+
+### 95.1 — CHA Master Fields
+
+| Field | Type | Rules |
+|---|---|---|
+| CHA Code | Auto | System-generated. Global |
+| CHA Name | Text | Mandatory |
+| CHA License Number | Text | Mandatory — customs broker license number |
+| GST Number | Text | Optional |
+| PAN Number | Text | Optional — for TDS |
+| Contact Person | Text | Optional |
+| Phone | Text | Optional |
+| Email | Text | Optional |
+| Address | Text | Optional |
+| Ports | Multi-select → Port Master | Ports where this CHA operates. Optional — for reference/filter |
+| Active | Flag | Inactive CHA hidden from dropdowns |
+
+---
+
+### 95.2 — Governance
+
+| Action | Authority |
+|---|---|
+| Create | Procurement team |
+| Edit | Procurement team |
+| Deactivate | Procurement team |
+| SA involvement | Not required |
+
+---
+
+### 95.3 — Usage Points in PACE
+
+| Document | Field | Rule |
+|---|---|---|
+| CSN (Import) | CHA | Reference → CHA Master. Optional. Procurement enters when known |
+| Port Master | Default CHA | Reference → CHA Master. Optional default per port |
+| Landed Cost | CHA Charges | CHA reference for cost allocation |
+
+Free text allowed at CSN level — if CHA is not in master, Procurement can type directly. Master reference preferred for tracking and reporting.
+
+---
+
+*— End of Section 95 —*
+
+---
+
+## Section 96 — Customer Master (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** Customer Master fields, governance, usage in Sales/Dispatch module.
+
+---
+
+### 96.1 — Customer Master Fields
+
+| Field Group | Field | Type | Rules |
+|---|---|---|---|
+| Basic | Customer Code | Auto | System-generated. Global |
+| Basic | Customer Name | Text | Mandatory |
+| Basic | Customer Type | Dropdown | DOMESTIC / EXPORT |
+| Identity | GST Number | Text | Domestic — API auto-fill triggers: Name, Address auto-populated |
+| Identity | PAN Number | Text | Optional |
+| Identity | Trade License | Text | Optional |
+| Address | Registered Address | Text | Auto from GST API for Domestic. Manual for Export |
+| Address | Correspondence Address | Text | Optional — if different from registered |
+| Contact | Contact Person | Text | Optional |
+| Contact | Phone | Text | Optional |
+| Contact | Email | Text | Optional |
+| Financial | Payment Terms | Reference → Payment Terms Master | Dynamic last-used — same pattern as Vendor Master |
+| Financial | Credit Limit | Decimal | Optional. For credit sales tracking |
+| Company | Company Mapping | Multi-select | Which companies this customer can buy from |
+| Status | Active | Flag | Inactive customers hidden from dropdowns |
+| Status | Status | Dropdown | ACTIVE / BLOCKED / PENDING_APPROVAL |
+
+---
+
+### 96.2 — Governance
+
+| Action | Rule |
+|---|---|
+| Create | Stores / Accounts team |
+| Edit | Stores / Accounts team |
+| Approve | Required — authorized approver (single level, same as Vendor Master) |
+| Block / Deactivate | Authorized user. Reason mandatory |
+| Multi-company | Customer can be active for multiple companies simultaneously |
+
+---
+
+### 96.3 — Payment Terms — Dynamic Last Used
+
+Same pattern as Vendor Master (Section 85.6.3):
+- No static default in Customer Master
+- New sales document auto-loads payment terms from last confirmed sales invoice for this customer
+- First transaction → blank → Stores/Accounts enters manually
+- After invoice confirmed → becomes new last-used for this customer
+
+---
+
+### 96.4 — Usage Points in PACE
+
+| Document | Field | Rule |
+|---|---|---|
+| Customer PO (Sales) | Customer | Reference → Customer Master |
+| Delivery Challan (Sales) | Customer | Auto from Customer PO |
+| Sales Invoice | Customer | Auto from Customer PO |
+
+---
+
+*— End of Section 96 —*
+
+---
+
+## Section 97 — Sales / Dispatch Module: RM/PM Outward (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** RM/PM outward sale only. FG dispatch in Logistics module (separate). Proper SO → Stock Issue → Delivery Challan → GST Invoice. No GST portal integration for now.
+
+---
+
+### 97.1 — Scope Boundary
+
+| In Scope (L2) | Out of Scope |
+|---|---|
+| RM / PM outward sale to external customers | FG dispatch → Logistics module |
+| RM / PM outward via STO (inter-company) | GST portal / e-invoice integration → later phase |
+| Sales Order, Delivery Challan, GST Invoice | Returns, Credit Note, Debit Note → later phase |
+| Stores + Accounts team handles | QC on outward → later phase |
+
+---
+
+### 97.2 — Two Triggers — Same Sale Process
+
+| Trigger | Who Creates Controlling Document | Flow |
+|---|---|---|
+| External Customer PO | Stores / Accounts creates SO in PACE | SO → Stock Issue → Delivery Challan → GST Invoice |
+| STO (inter-company) | Procurement creates STO (Section 92) | STO → Stock Issue → Delivery Challan (auto) → Transfer Invoice |
+
+Both follow the same dispatch workflow after the controlling document is created.
+
+---
+
+### 97.3 — Sales Order (SO) — External Customer
+
+**Proper SO document. Created in PACE when customer sends their PO.**
+
+#### SO Header Fields
+
+| Field | Type | Rules |
+|---|---|---|
+| SO Number | Auto | Global number series |
+| SO Date | Date | System date. Backdating allowed |
+| Company | Reference | Selling company |
+| Customer | Reference → Customer Master | Mandatory |
+| Customer PO Number | Text | Customer's own PO reference. Mandatory |
+| Customer PO Date | Date | Optional |
+| Delivery Address | Text | Defaults from Customer Master. Overridable |
+| Payment Terms | Reference → Payment Terms Master | Dynamic last-used from Customer Master |
+| Status | Auto | CREATED → ISSUED → INVOICED → CLOSED |
+| Created By | Auto | Stores / Accounts user |
+| Remarks | Text | Optional |
+
+#### SO Line Fields
+
+| Field | Type | Rules |
+|---|---|---|
+| Line Number | Auto | Sequential |
+| Material | Reference → Material Master | RM / PM only — other material types blocked |
+| Quantity | Decimal | Mandatory |
+| UOM | From Material Master | |
+| Rate | Decimal | Mandatory. Stores / Accounts enters |
+| Discount % | Decimal | Optional |
+| Net Rate | Auto | Rate − Discount |
+| GST Rate | From Material Master | Auto-populated. Overridable |
+| GST Amount | Auto | Calculated from Net Rate × Qty × GST Rate |
+| Total Value | Auto | Net Rate × Qty + GST |
+| Issue Storage Location | Reference | From which location stock will be issued. Default from Material Master |
+
+---
+
+### 97.4 — Stock Issue (Dispatch)
+
+```
+Stores opens SO (or STO)
+    ↓
+Selects lines to dispatch (full or partial)
+    ↓
+System checks stock availability at Issue Storage Location
+    → Insufficient stock → warning shown (no hard block — Stores decides)
+    ↓
+Stores confirms stock issue (no approval required)
+    ↓
+Movement posted: SALES_ISSUE (external) / STO_ISSUE (inter-company)
+    → Stock deducted from selling company
+    ↓
+Delivery Challan auto-generated
+    ↓
+Gate Exit recorded by Security
+```
+
+**Partial dispatch:** Allowed. SO remains open for balance. Balance can be dispatched in subsequent issues.
+
+---
+
+### 97.5 — Delivery Challan
+
+**Auto-generated on stock issue. Cannot be manually created.**
+
+| Field | Type | Rules |
+|---|---|---|
+| DC Number | Auto | Global number series |
+| DC Date | Auto | System date |
+| SO / STO Reference | Auto | |
+| Company (Seller) | Auto | |
+| Customer / Receiving Company | Auto | |
+| Delivery Address | Auto from SO | |
+| Material, Qty, UOM, Rate | Auto from SO lines issued | |
+| Total Value | Auto | |
+| Transporter | Text / Reference | Stores fills at dispatch time |
+| Vehicle Number | Text | Stores / Security fills |
+| LR Number | Text | Optional — can enter later |
+| Driver Name | Text | Optional |
+| Remarks | Text | Optional |
+
+---
+
+### 97.6 — GST Sales Invoice
+
+**Created by Accounts after Delivery Challan. GST format. No portal submission for now.**
+
+| Field | Type | Rules |
+|---|---|---|
+| Invoice Number | Auto | Global number series |
+| Invoice Date | Date | Accounts enters. Backdating allowed |
+| Company (Seller) | Auto | |
+| Customer | Auto from SO/DC | |
+| DC Reference | Reference → Delivery Challan | Mandatory |
+| SO Reference | Auto from DC | |
+| Material, Qty, Rate | Auto from DC | |
+| Taxable Value | Auto | |
+| GST Type | Auto | CGST+SGST (intra-state) / IGST (inter-state) — based on seller + buyer state |
+| GST Rate | Auto from SO line | |
+| GST Amount | Auto | |
+| Total Invoice Value | Auto | |
+| Payment Terms | Auto from SO | |
+| Remarks | Text | Optional |
+
+**GST portal integration:** Not in scope for July 1. Invoice is GST-format compliant for manual filing. Portal e-invoice integration in a later phase.
+
+---
+
+### 97.7 — Status Flow
+
+```
+SO: CREATED → (partial/full issue) → ISSUED → (invoice raised) → INVOICED → CLOSED
+DC: AUTO_GENERATED → (gate exit done) → DISPATCHED
+Invoice: DRAFT → POSTED
+```
+
+SO closes when all lines fully dispatched and invoiced, or when Stores/Accounts knocks off balance.
+
+---
+
+### 97.8 — Authority
+
+| Action | Who |
+|---|---|
+| Create SO | Stores / Accounts |
+| Create STO (for inter-company) | Procurement team |
+| Stock Issue | Stores (no approval required) |
+| Delivery Challan | Auto — no manual creation |
+| GST Invoice | Accounts |
+| Gate Exit | Security |
+
+---
+
+*— End of Section 97 —*
+
+---
+
+## Section 98 — Return to Vendor (RTV), Debit Note & Exchange (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** RTV triggers, movement types, Gate Exit, settlement modes (Debit Note / Next Invoice Adjust / Exchange), debit note pricing, exchange flow, import RTV, partial return.
+
+---
+
+### 98.1 — RTV Triggers
+
+| Reason | Example |
+|---|---|
+| QA Failure | Material fails lab/visual inspection after GRN |
+| Excess Delivery | Vendor sent more than PO qty, excess returned |
+| Wrong Material | Incorrect material delivered |
+| Damaged | Material arrived damaged |
+| Quality Deviation | Below spec but not full failure — partial return |
+| Any other reason | Free text reason field on RTV document |
+
+All reasons valid. Reason mandatory on every RTV.
+
+---
+
+### 98.2 — Stock Flow Before Return
+
+Material must be in **BLOCKED** stock before RTV can be posted.
+
+```
+Path 1 — QA Failure:
+  GRN → QA_STOCK → QA Fail (P321 fail) → BLOCKED → RTV (P122)
+
+Path 2 — Direct Return (no QA process):
+  Material in UNRESTRICTED → Move to BLOCKED (P344) → RTV (P122)
+```
+
+| Movement | Action |
+|---|---|
+| P321 (fail) | QA fail → QA_STOCK to BLOCKED |
+| P344 | Manual transfer → UNRESTRICTED to BLOCKED |
+| P122 | Return to Vendor → BLOCKED to OUT (stock leaves company) |
+
+**Rule:** P122 only allowed from BLOCKED stock. Material cannot be returned directly from UNRESTRICTED or QA_STOCK.
+
+---
+
+### 98.3 — RTV Document Fields
+
+#### RTV Header
+
+| Field | Type | Rules |
+|---|---|---|
+| RTV Number | Auto | Global number series |
+| RTV Date | Date | System date. Backdating allowed |
+| Company | Auto | |
+| Vendor | Auto from original GRN | |
+| Original GRN Reference | Reference → GRN | Mandatory |
+| Original PO Reference | Auto from GRN | |
+| Return Reason | Dropdown + Text | Category + free text. Mandatory |
+| Settlement Mode | Dropdown | DEBIT_NOTE / NEXT_INVOICE_ADJUST / EXCHANGE |
+| Exchange Reference | Reference → Exchange | Auto-created if Settlement Mode = EXCHANGE |
+| Status | Auto | CREATED → DISPATCHED → SETTLED |
+| Created By | Auto | Stores / Accounts user |
+| Remarks | Text | Optional |
+
+#### RTV Lines
+
+| Field | Type | Rules |
+|---|---|---|
+| Line Number | Auto | |
+| Material | Auto from GRN | |
+| Original GRN Qty | Decimal | Read-only. Reference |
+| Return Qty | Decimal | Stores enters. Can be partial (less than GRN qty) |
+| UOM | Auto from GRN | |
+| Storage Location | Auto from BLOCKED stock location | |
+| Movement Type | Auto | P122 |
+
+**Partial return:** Allowed. Return Qty can be less than original GRN Qty. Remaining stays in BLOCKED until disposition.
+
+---
+
+### 98.4 — Gate Exit on RTV
+
+When vendor's truck collects returned material:
+
+```
+RTV created → status: CREATED
+    ↓
+Stores moves material to staging (physical)
+    ↓
+Security: Gate Exit
+  → RTV reference
+  → Vehicle Number, Driver
+  → Transporter (optional)
+  → Actual Return Qty confirmed
+  → RST / Weighment (if BULK/TANKER — mandatory)
+    ↓
+P122 movement posted → stock leaves company
+RTV status → DISPATCHED
+```
+
+---
+
+### 98.5 — Settlement Modes
+
+#### Mode 1: DEBIT_NOTE
+
+Formal debit note raised against vendor.
+
+**Debit Note Pricing Rules (based on Freight Terms on original PO):**
+
+| Freight Term | Debit Note Value |
+|---|---|
+| FOR (vendor delivers to plant) | Material Value + Unloading Charges (at receipt) + Loading Charges (at return) |
+| Freight Separate (buyer pays freight) | Material Value + Freight + Other Landed Costs + Loading + Unloading |
+
+Landed Cost values (freight, insurance, handling) pulled from Landed Cost record (Section 87.9) linked to original GRN.
+
+| Debit Note Field | Type | Rules |
+|---|---|---|
+| Debit Note Number | Auto | Global number series |
+| Date | Date | Accounts enters |
+| RTV Reference | Auto | |
+| Vendor | Auto | |
+| Material Value | Auto | Return Qty × Original GRN Rate |
+| Freight (if applicable) | Auto from Landed Cost | Proportional to return qty |
+| Other Landed Costs | Auto from Landed Cost | Proportional |
+| Loading Charges | Manual | Accounts enters |
+| Unloading Charges | Manual | Accounts enters (from original receipt) |
+| Total Debit Note Value | Auto | Sum of all components |
+| Status | Dropdown | DRAFT → SENT → ACKNOWLEDGED → SETTLED |
+
+#### Mode 2: NEXT_INVOICE_ADJUST
+
+No formal debit note. Return value tracked as pending adjustment against vendor.
+
+```
+RTV dispatched (P122 done)
+    ↓
+System records: Vendor X has pending return credit = ₹Y
+    ↓
+Next invoice arrives from Vendor X
+    ↓
+Accounts processes invoice:
+  System shows: "Pending return adjustment: ₹Y"
+  Accounts deducts from invoice → pays net amount
+    ↓
+Adjustment marked as SETTLED
+```
+
+Pending adjustments visible in vendor account view. No debit note document created.
+
+#### Mode 3: EXCHANGE
+
+Vendor takes back defective material and sends replacement.
+
+```
+Step 1 — Return leg:
+  RTV (P122) + Gate Exit
+  Exchange Reference Number auto-created
+  Debit Note raised (or Next Invoice — Accounts decides)
+
+Step 2 — Replacement leg:
+  Vendor sends replacement
+  Normal GE → GRN (references same Exchange Reference Number)
+
+Step 3 — Settlement:
+  New Invoice − Return Value = Net payable/receivable
+  Accounts settles net amount
+```
+
+Both transactions linked via **Exchange Reference Number**. Document flow shows full exchange chain.
+
+---
+
+### 98.6 — Import RTV
+
+For import materials (foreign vendor), physical return is usually not practical.
+
+| Settlement Option | How it works |
+|---|---|
+| Credit Note from vendor | Vendor issues credit note → value adjusted in next payment |
+| Next Shipment Adjustment | Vendor adjusts qty/value in next shipment |
+| Replacement in next shipment | Exchange mode — replacement comes in next container |
+
+RTV document still created in PACE (for stock movement P122 and record). Settlement Mode = NEXT_INVOICE_ADJUST or EXCHANGE. Physical Gate Exit may not happen for import returns — Gate Exit optional in this case.
+
+---
+
+### 98.7 — RTV Status Flow
+
+```
+CREATED → (Gate Exit done) → DISPATCHED → (settlement done) → SETTLED
+```
+
+For EXCHANGE: both RTV and replacement GRN must be completed before status = SETTLED.
+
+---
+
+*— End of Section 98 —*
+
+---
+
+## Section 99 — Document Number Series — Complete Design (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** Number series format for all documents. Supersedes Section 33.6 for document scope. Section 33.1–33.5 (PO continuity rules) remain valid.
+
+---
+
+### 99.1 — Core Rules
+
+| Rule | Detail |
+|---|---|
+| PO | Company + Section specific. Prefix/suffix format. FY-based. Continues from last used number (Section 33) |
+| STO | Company + Section specific. Prefix/suffix format. Format to be defined per company at implementation |
+| All other operational documents | **Global** — one shared counter across all same-group companies. Pure numeric only. No prefix, no suffix, no FY |
+| Invoice | **Global**. Special format: YYYY + MM + incremental digits |
+| SAP alignment | Movement/operational documents are client-level global in SAP. PACE follows same principle |
+
+---
+
+### 99.2 — Document Number Format Table
+
+| Document | Scope | Format | Example | FY Reset |
+|---|---|---|---|---|
+| Purchase Order | Company + Section | Prefix/NNN/YYYY-YY (existing patterns) | AC/RP125/2026-27 | Yes |
+| STO | Company + Section | Prefix/STO/NNN/YYYY-YY (format TBD per company) | TBD | Yes |
+| CSN | Global | Pure numeric | 000001, 000002 | Never |
+| Gate Entry | Global | Pure numeric | 000001, 000002 | Never |
+| Gate Exit | Global | Pure numeric | 000001, 000002 | Never |
+| GRN | Global | Pure numeric | 000001,000002 | Never |
+| Delivery Challan | Global | Pure numeric | 000001, 000002 | Never |
+| Sales Order | Company | Pure numeric | 000001, 000002 | Never |
+| RTV | Global | Pure numeric | 000001, 000002 | Never |
+| Debit Note | Global | Pure numeric | 000001, 000002 | Never |
+| Exchange Reference | Global | Pure numeric | 000001, 000002 | Never |
+| Invoice (Sales + Purchase) | Global | YYYYMM + incremental | 202607000001 | Never |
+
+---
+
+### 99.3 — Invoice Number Format Detail
+
+```
+Format: YYYYMM + incremental digits (zero-padded)
+Example: 202607000001 (July 2026, first invoice)
+         202607000002 (July 2026, second invoice)
+         202608000001 (August 2026, first invoice of month)
+```
+
+| Component | Detail |
+|---|---|
+| YYYY | 4-digit year |
+| MM | 2-digit month (01–12) |
+| Incremental | Sequential digits — continues globally across months and years. Never resets |
+| Scope | Global — one counter across all same-group companies and all invoice types |
+
+Invoice number is globally unique and lifetime unique. The YYYY+MM prefix is for human readability — the incremental portion never resets.
+
+---
+
+### 99.4 — Conflict Resolution: Section 33.6
+
+Section 33.6 listed GRN, Gate Entry as "Company + Plant + FY" scoped. This is now **superseded** by Section 87.15 and this section.
+
+| Document | Section 33.6 (old) | Section 99 (current — AUTHORITATIVE) |
+|---|---|---|
+| GRN | Company + Plant + FY | Global, pure numeric |
+| Gate Entry | Company + Plant + FY | Global, pure numeric |
+| Process Order | Company + Plant/Section + FY | Governed by Layer 3 design |
+| Dispatch/Delivery | Company + Section + FY | Global, pure numeric |
+
+Section 33.6 is hereby **archived**. Section 99.2 is the authoritative number format reference.
+
+---
+
+### 99.5 — STO Number Format (To Be Defined)
+
+STO follows same prefix/suffix pattern as PO. Actual format is company and section specific. To be confirmed per company at implementation time, following the same continuity rules as PO (Section 33.3).
+
+---
+
+*— End of Section 99 —*
+
+---
+
+## Section 100 — Invoice Verification — Full Design (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** Invoice Verification (IV) for domestic and import. 3-way match. GST verification. Multiple GRNs per invoice. Import landed cost bills handled separately.
+
+---
+
+### 100.1 — Scope and Authority
+
+| Item | Detail |
+|---|---|
+| Who can post IV | Stores + Accounts (both) |
+| Process type | In-system (SAP MIRO equivalent) |
+| Domestic | Vendor GST invoice → 3-way match + GST verification |
+| Import — Vendor Invoice | 3-way match (same as domestic) |
+| Import — Other bills (freight, BOE, CHA, insurance) | Accounts enters separately → Landed Cost module (Section 87.9) |
+| Match required | Yes — system blocks posting if outside tolerance |
+| Tolerance | 50% (rate variance between PO rate and Invoice rate) |
+| Multiple GRNs | One IV can reference multiple GRN lines from same vendor |
+
+---
+
+### 100.2 — 3-Way Match Logic
+
+```
+PO Rate × GRN Qty = Expected Value
+Invoice Rate × Invoice Qty = Invoice Value
+
+Match Check:
+  |Invoice Rate − PO Rate| / PO Rate ≤ 50% → ✅ MATCH — can post
+  |Invoice Rate − PO Rate| / PO Rate > 50% → ❌ BLOCKED — cannot post
+```
+
+**Qty Match:**
+- Invoice Qty must equal GRN Qty (exact match)
+- If vendor invoices partial qty → only that qty posted. Balance remains open for next IV
+
+**Hard Block:** System will not allow posting if rate variance > 50%. No override without correcting the discrepancy. User must either:
+- Correct the invoice entry (if data entry error), OR
+- Amend the PO rate (via PO amendment + approval flow), then re-verify
+
+---
+
+### 100.3 — Invoice Verification Document Fields
+
+#### IV Header
+
+| Field | Type | Rules |
+|---|---|---|
+| IV Number | Auto | Global number series (pure numeric — Section 99) |
+| IV Date | Date | System date. Backdating allowed |
+| Company | Auto | From vendor/GRN |
+| Vendor | Reference → Vendor Master | Mandatory |
+| Vendor Invoice Number | Text | Vendor's own invoice number. Mandatory |
+| Vendor Invoice Date | Date | Date on vendor's physical invoice |
+| PO Reference | Reference → PO | Auto-loaded when GRN lines selected |
+| Status | Auto | DRAFT → MATCHED → POSTED / BLOCKED |
+| Posted By | Auto | User |
+| Remarks | Text | Optional |
+
+#### IV Lines (loaded from GRN selection)
+
+| Field | Type | Rules |
+|---|---|---|
+| Line Number | Auto | |
+| GRN Reference | Reference → GRN | Selected by user. Multiple GRNs allowed |
+| GRN Line | Reference | |
+| Material | Auto from GRN | |
+| GRN Qty | Decimal | Read-only. From GRN |
+| Invoice Qty | Decimal | User enters from vendor invoice |
+| PO Rate | Decimal | Read-only. From PO |
+| Invoice Rate | Decimal | User enters from vendor invoice |
+| Rate Variance % | Auto | |(Invoice Rate − PO Rate)| / PO Rate × 100 |
+| Match Status | Auto | ✅ MATCHED / ❌ BLOCKED |
+| Taxable Value | Auto | Invoice Rate × Invoice Qty |
+
+#### Domestic GST Fields (per line)
+
+| Field | Type | Rules |
+|---|---|---|
+| GST Rate | Auto from Material Master | Overridable |
+| GST Type | Auto | CGST+SGST (intra-state) / IGST (inter-state) |
+| CGST Amount | Auto | Taxable Value × CGST Rate |
+| SGST Amount | Auto | Taxable Value × SGST Rate |
+| IGST Amount | Auto | Taxable Value × IGST Rate (inter-state) |
+| Invoice GST Amount | Decimal | User enters GST amount from vendor invoice |
+| GST Match | Auto | System compares calculated vs entered. Flag if different |
+
+#### Import — Vendor Invoice (same as domestic 3-way match)
+
+No additional fields beyond the base IV. Other import costs (freight, BOE, CHA) go to Landed Cost.
+
+---
+
+### 100.4 — Import Bills — Landed Cost Entry
+
+For import consignments, bills arrive at different times and from different parties. Accounts enters these separately in the Landed Cost module:
+
+| Bill Type | Who Sends | Who Enters in PACE |
+|---|---|---|
+| Vendor Invoice | Overseas vendor | Accounts |
+| Freight Bill | Shipping line / forwarder | Accounts |
+| BOE (Bill of Entry) | Customs / CHA | Accounts |
+| CHA Charges | Clearing Agent | Accounts |
+| Insurance | Insurer | Accounts |
+| Port Charges | Port authority | Accounts |
+
+**Design rule:** Procurement does not know which bills will come or how many. Accounts receives bills as they arrive and enters in system against the CSN/GRN reference. Each bill is a separate Landed Cost entry (Section 87.9).
+
+---
+
+### 100.5 — IV Status Flow
+
+```
+DRAFT (user building IV)
+    ↓ All lines MATCHED
+MATCHED (ready to post)
+    ↓ User posts
+POSTED (liability created — payment can be processed)
+
+OR
+
+DRAFT
+    ↓ Any line BLOCKED (rate variance > 50%)
+BLOCKED (cannot post — user must resolve)
+    ↓ Discrepancy resolved (PO amended or invoice corrected)
+MATCHED → POSTED
+```
+
+---
+
+### 100.6 — Partial Invoice
+
+Vendor may invoice partial qty against a GRN:
+
+```
+GRN: RM-001 → 1,000 KG received
+Vendor Invoice 1: 600 KG → IV posted for 600 KG
+Vendor Invoice 2: 400 KG → IV posted for 400 KG (balance)
+```
+
+Each partial IV is a separate IV document. System tracks invoiced vs un-invoiced qty per GRN line. PO/GRN invoice status shows PARTIALLY_INVOICED until all qty invoiced.
+
+---
+
+### 100.7 — IV and Payment Flow
+
+```
+IV POSTED → Payment liability recorded in system
+            ↓
+            Accounts processes payment (via Tally during transition)
+            PACE IV reference used in Tally for cross-reference
+            ↓
+            Future: PACE handles full payment workflow
+```
+
+No payment can be processed without a posted IV. IV is the payment authorization document.
+
+---
+
+*— End of Section 100 —*
+
+---
+
+## Section 101 — Inward QA Module Design (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** Inward QA full design — trigger, QA document, test types, usage decision, partial QA, movement types, authority. Compiles decisions from Sections 6.2, 12, 21, 22, and this session.
+
+---
+
+### 101.1 — QA Trigger
+
+| Rule | Detail |
+|---|---|
+| Trigger | GRN posted with stock type = QA_STOCK |
+| QA required flag | Material Master: "QA required on inward = Y". Plant Extension can override per plant |
+| If QA = N | GRN posts directly to UNRESTRICTED. No QA document |
+| If QA = Y | GRN posts to QA_STOCK. QA document auto-created. Pending QA team action |
+| Who does QA | QA team (separate from Stores and Procurement) |
+
+---
+
+### 101.2 — QA Document (Inspection Lot)
+
+One QA document per GRN line that lands in QA_STOCK.
+
+#### QA Document Header
+
+| Field | Type | Rules |
+|---|---|---|
+| QA Document Number | Auto | Global number series (pure numeric) |
+| QA Date Created | Auto | On GRN posting |
+| Company | Auto from GRN | |
+| Plant | Auto from GRN | |
+| GRN Reference | Auto | |
+| PO Reference | Auto | |
+| Material | Auto from GRN | |
+| Vendor | Auto from GRN | |
+| Batch / Lot Number | Auto from GRN | If batch tracked |
+| QA_STOCK Qty | Auto from GRN | Total qty pending QA decision |
+| Status | Auto | PENDING → IN_PROGRESS → DECIDED |
+| Assigned To | Reference → QA User | QA team assigns to specific QA officer |
+
+#### QA Document Lines — Test Results
+
+| Field | Type | Rules |
+|---|---|---|
+| Test Type | Dropdown | VISUAL / MCT / LAB / OTHER |
+| Test Parameter | Text | What was tested (e.g., Moisture Content, Colour, Odour) |
+| Test Result | Text | Actual result entered |
+| Acceptable Range | Text | From Material Spec (reference) |
+| Pass / Fail | Dropdown | PASS / FAIL |
+| Tested By | Auto | Logged-in QA user |
+| Test Date | Date | |
+| Remarks | Text | Optional |
+
+**Phase-1 scope:** VISUAL and MCT tests captured manually. LAB test results entered manually by QA team. Lab integration (Phase-2) will allow direct import of lab results.
+
+---
+
+### 101.3 — Usage Decision
+
+After tests complete, QA officer/manager makes Usage Decision on the QA document.
+
+| Usage Decision | Meaning | Movement Type | Resulting Stock Type |
+|---|---|---|---|
+| RELEASE | Material accepted — passes QA | P321 | QA_STOCK → UNRESTRICTED |
+| BLOCK | Material held — further investigation needed | P344 | QA_STOCK → BLOCKED |
+| REJECT | Material rejected — return to vendor | P344 | QA_STOCK → BLOCKED (then RTV: P122) |
+| SCRAP | Material destroyed — no return | P553 | QA_STOCK → SCRAP (stock out) |
+| FOR_REPROCESS | Failed QA but approved for reuse as RM in production | Role-restricted | QA_STOCK → FOR_REPROCESS |
+
+#### Authority
+
+| Decision | Authority |
+|---|---|
+| RELEASE | QA User (authorized) |
+| BLOCK | QA User (authorized) |
+| REJECT | QA Manager (higher authority) |
+| SCRAP | QA Manager (higher authority) |
+| FOR_REPROCESS | Role-restricted authorized user (Section 21) |
+
+---
+
+### 101.4 — Partial QA Decision
+
+**Partial decision allowed — different portions of same lot can get different decisions.**
+
+```
+GRN: 1,000 KG → QA_STOCK
+
+QA Decision:
+  700 KG → RELEASE (P321) → UNRESTRICTED
+  200 KG → REJECT  (P344) → BLOCKED → RTV
+  100 KG → SCRAP   (P553) → out
+
+System posts three separate movements on same QA document.
+Total must equal original QA_STOCK qty.
+```
+
+Each partial decision line has its own qty, decision, movement type, and authority check.
+
+---
+
+### 101.5 — Stock Flow — Full Picture
+
+```
+GRN (P101) → QA_STOCK
+               ↓ Usage Decision
+       ┌────────────────────────────┐
+       ↓          ↓           ↓         ↓
+  UNRESTRICTED  BLOCKED   FOR_REPROCESS  SCRAP
+  (P321)        (P344)    (role-restricted) (P553)
+                  ↓
+              RTV (P122)
+              or hold
+```
+
+---
+
+### 101.6 — QA Parameters by Material Type
+
+Test parameters are material-specific. QA team configures which tests apply to which materials in Material Master (QA parameter list). Phase-1: manual configuration by SA/QA manager. Phase-2: full test plan with specification limits.
+
+| Material Category | Typical Tests (Phase-1) |
+|---|---|
+| RM — Chemical | Visual, MCT, Lab (manual entry) |
+| RM — Fibre | Visual, MCT |
+| PM — Carton / Box | Visual only |
+| PM — Bags | Visual only |
+| Bulk / Tanker | Visual, MCT, density check (manual) |
+
+QA team can add or skip tests per material as needed. No hard lock on test list in Phase-1.
+
+---
+
+### 101.7 — Layer Assignment
+
+| QA Stage | Layer | Status |
+|---|---|---|
+| Inward QA (after GRN) | **L2 — Procurement** | ✅ Designed here (Section 101) |
+| Production / In-process QA | L3 — Production | Design in L3 session |
+| FG QA (before dispatch) | L5 — Dispatch | Design in L5 session |
+| Return QA (customer return) | L5 — Dispatch | Design in L5 session |
+
+Inward QA is formally assigned to **Layer 2 (Procurement)** — it is part of the procurement receipt cycle (GRN → QA → stock release). All other QA stages belong to their respective layers.
+
+---
+
+*— End of Section 101 —*
+
+---
+
+## Section 102 — Inbound Gate Exit (Bulk / Tanker Tare Weight) (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** Gate Exit document for inbound delivery trucks (after unloading). Tare weight capture for Bulk/Tanker. Net Weight calculation. Flows to GRN.
+
+---
+
+### 102.1 — Purpose
+
+For BULK/TANKER inbound deliveries, quantity is determined by weighment:
+```
+Truck arrives loaded → Gate Entry → Gross Weight
+Material unloaded at Stores
+Empty truck exits → Gate Exit → Tare Weight
+Net Weight = Gross Weight − Tare Weight → flows to GRN
+```
+
+Standard (non-bulk) inbound deliveries do not require Gate Exit. Gate Exit is mandatory for BULK/TANKER inbound, optional for STANDARD.
+
+---
+
+### 102.2 — Inbound Gate Exit Document Fields
+
+#### Header
+
+| Field | Type | Rules |
+|---|---|---|
+| Gate Exit Number | Auto | Global number series (pure numeric) |
+| Gate Exit Date/Time | Auto + user-entry | System timestamp always recorded. User enters date/time of actual exit |
+| Company | Auto | |
+| Plant | Auto | |
+| Gate Entry Reference | Reference → GE | Mandatory. Links this exit to the arrival |
+| Vehicle Number | Auto from GE | Confirm or override |
+| Driver Name | Auto from GE | Optional. Confirm or override |
+| Gate Staff | Auto | Logged-in Security user |
+
+#### Weighment Fields
+
+| Field | Type | Mandatory | Rules |
+|---|---|---|---|
+| RST Number (Tare) | Text | BULK/TANKER: ✅ Yes. STANDARD: ❌ No | Weighbridge slip for tare. May be same slip as entry or separate |
+| Tare Weight | Decimal | BULK/TANKER: ✅ Yes. STANDARD: ❌ No | Empty truck weight (KG / MT) |
+| Net Weight | Decimal | Auto | Gross Weight (from GE) − Tare Weight. Auto-calculated. Read-only |
+| Net Weight Override | Decimal | Optional | If weighbridge issues final net directly — enter here. Overrides auto-calculation |
+
+---
+
+### 102.3 — Net Weight Flow
+
+```
+Gate Entry: Gross Weight = 28,500 KG
+Gate Exit:  Tare Weight  =  6,200 KG
+            Net Weight   = 22,300 KG (auto = 28,500 − 6,200)
+
+GRN: Received Qty defaults to 22,300 KG
+     Stores can override if needed
+     Discrepancy report generated if overridden
+```
+
+Net Weight from Gate Exit → auto-updates in Gate Entry record → GRN received qty defaults to this value.
+
+---
+
+### 102.4 — Rules
+
+| Rule | Detail |
+|---|---|
+| One Gate Exit per Gate Entry | Each inbound GE can have only one Gate Exit |
+| BULK/TANKER | Gate Exit mandatory before GRN can be posted |
+| STANDARD | Gate Exit optional — GRN can be posted without Gate Exit |
+| RST flexibility | Some weighbridges issue one RST with gross + tare + net. In this case, RST entered at Gate Entry (gross) and same RST referenced at Gate Exit (tare). Both valid |
+| Backdating | Allowed — same rule as Gate Entry |
+| Gate Exit after GRN | Not allowed — Gate Exit must be done before GRN for BULK/TANKER |
+
+---
+
+### 102.5 — Document Flow
+
+```
+CSN → GE (Gross Weight) → [Unloading] → Gate Exit (Tare Weight) → GRN (Net Weight) → QA → Stock
+```
+
+Full bi-directional navigation: GRN → Gate Exit → GE → CSN → PO.
+
+---
+
+*— End of Section 102 —*
+
+---
+
+## Section 103 — L2 Implementation Plan (11 May 2026)
+
+**Session Date:** 11 May 2026
+**Status:** ✅ FROZEN
+**Scope:** Full Layer 2 implementation plan. Gate structure, task list, dependencies, verification criteria. Codex implements — verification by document review against design sections.
+
+---
+
+### 103.1 — L2 Gate Structure
+
+Gate-13 (original single gate) is expanded into 9 sub-gates for L2. All sub-gates must complete before L3 begins.
+
+```
+Gate-13.1: L2 Masters
+  ├── Payment Terms Master
+  ├── Port Master
+  ├── Port-to-Plant Transit Master
+  ├── Material Category Master (procurement planning grouping)
+  ├── Lead Time Master — Import
+  ├── Lead Time Master — Domestic
+  ├── Transporter Master (INBOUND/OUTBOUND/BOTH + context-filtered dropdown)
+  └── CHA Master
+
+Gate-13.2: Purchase Order
+  ├── Vendor-Material Info Record (Approved Source List)
+  ├── Purchase Order — full lifecycle
+  │   ├── Header (all fields: Incoterms, Cost Center, Freight Terms, Payment Terms, Delivery Type flag)
+  │   ├── Lines (material, qty, rate, UOM, storage location, cost center)
+  │   ├── STANDARD / BULK / TANKER indicator
+  │   ├── LC Required flag (from Payment Terms)
+  │   ├── Has Rebate flag
+  │   ├── Indent Required flag (sticky from Vendor Master)
+  │   └── PO Confirm → CSN auto-creation trigger
+  ├── PO Amendment (rate + qty → approval. Others → no approval)
+  ├── PO Approval workflow
+  ├── PO Cancellation (no approval, reason mandatory)
+  ├── PO Knock-off (individual line or full PO)
+  └── PO Auto-mail (PDF on confirm → vendor email + CC)
+
+Gate-13.3: Consignment Tracking System (CSN)
+  ├── CSN auto-creation on PO confirm (one per line item)
+  ├── CSN types: IMPORT / DOMESTIC / BULK
+  ├── CSN full field list (Section 89.9 + Section 90.6)
+  │   ├── Import fields: Vessel, BL, BOE, LC, ETD, ETA cascade
+  │   ├── Domestic fields: LR Date, Transporter
+  │   ├── Common: Vendor Indent, Rebate, Vessel Booking Confirmed Date
+  │   └── Bulk CSN: simplified fields, multiple GE per CSN
+  ├── ETA Cascade engine
+  │   ├── Import: O → Y → AH → AI → AP → AR auto-recalculation
+  │   └── Domestic: PO Date / LR Date + Transit Days
+  ├── Mother CSN + Sub CSN structure
+  ├── Sub CSN → STO transform (in-place, origin reference preserved)
+  ├── CSN status flow (ORDERED → IN_TRANSIT → ARRIVED → GRN_DONE)
+  ├── Partial dispatch → balance CSN auto-create
+  ├── Alert system
+  │   ├── LC overdue / due-in-3-days alert
+  │   ├── Vessel Booking Confirmed Date missing alert (PO + 3 days)
+  │   └── Alert tab UI (LC tab / Vessel Booking tab / count badge)
+  └── Single Window Tracker view (flat list, filter, inline edit)
+
+Gate-13.4: Gate Entry + Inbound Gate Exit
+  ├── Gate Entry redesign — Header + Lines
+  │   ├── Header: vehicle, date/time, driver, gate staff
+  │   ├── Lines: PO/STO ref, CSN ref, invoice/BOE number, qty
+  │   └── Weighment fields: RST, Gross, Tare, Net (BULK/TANKER mandatory)
+  ├── GE-CSN auto-linking
+  ├── GE visibility: company-scoped open CSNs
+  ├── Backdating (allowed, system timestamp preserved)
+  ├── Inbound Gate Exit (Section 102)
+  │   ├── Tare weight entry (BULK/TANKER mandatory)
+  │   ├── Net Weight = Gross (from GE) − Tare (auto)
+  │   └── Net Weight flows to GRN
+  └── Gate Exit for STO receipt (same GE document, STO reference)
+
+Gate-13.5: GRN
+  ├── GRN document (one per GE)
+  ├── GRN field list (Section 93)
+  │   ├── Lines auto-loaded from GE
+  │   ├── Received Qty (Stores enters), GE Qty (read-only), Discrepancy (auto)
+  │   ├── Storage Location (3-level hierarchy)
+  │   ├── Stock Type (auto from Material Master QA flag)
+  │   ├── Batch/Lot (manual, if material requires)
+  │   └── Expiry Date (if FIFO + Expiry ON)
+  ├── Weighbridge tally (GE Gross + Gate Exit Tare → Net → GRN default)
+  ├── Post-GRN auto-updates (stock ledger, snapshot, PO balance, CSN status, last price)
+  ├── GRN reversal (P102, with approval)
+  └── GRN → IV link (invoiced status tracking)
+
+Gate-13.6: Inward QA
+  ├── QA document auto-create on GRN (if QA required = Y)
+  ├── QA document fields (Section 101)
+  │   ├── Test lines: test type, parameter, result, pass/fail
+  │   └── Assignment to QA officer
+  ├── Usage decision engine
+  │   ├── RELEASE → P321 (QA_STOCK → UNRESTRICTED)
+  │   ├── BLOCK → P344 (QA_STOCK → BLOCKED)
+  │   ├── REJECT → P344 → RTV queue
+  │   ├── SCRAP → P553
+  │   └── FOR_REPROCESS → role-restricted movement
+  ├── Partial QA decision (multiple qty splits, multiple movements)
+  └── Authority enforcement (QA user vs QA manager)
+
+Gate-13.7: STO + Inter-Company Distribution
+  ├── STO full lifecycle (Section 92)
+  │   ├── Types: CONSIGNMENT_DISTRIBUTION / INTER_PLANT
+  │   ├── Header + Lines (transfer price dynamic last-used)
+  │   ├── Status flow: CREATED → DISPATCHED → RECEIVED → CLOSED
+  │   └── Knock-off + cancellation
+  ├── Sub CSN → STO transform flow
+  ├── STO dispatch (sending side)
+  │   ├── Stock issue (STO_ISSUE movement)
+  │   ├── Delivery Challan auto-generation
+  │   └── Gate Exit (outbound, Section 92.6 + weighment for BULK/TANKER)
+  ├── STO receipt (receiving side)
+  │   ├── GE (STO reference + Delivery Challan number)
+  │   └── GRN (STO_RECEIPT movement)
+  ├── STO visibility (sending + receiving company Stores + Accounts)
+  └── LR Number flow: Gate Exit → CSN tracker sync
+
+Gate-13.8: Return to Vendor + Invoice Verification
+  ├── RTV document (Section 98)
+  │   ├── All trigger types (QA fail, excess, wrong, damaged)
+  │   ├── Stock path: BLOCKED → P122
+  │   ├── Partial return
+  │   └── Settlement modes: DEBIT_NOTE / NEXT_INVOICE_ADJUST / EXCHANGE
+  ├── RTV Gate Exit (truck collects returned material)
+  ├── Debit Note
+  │   ├── Pricing rules by Freight Term (Section 98.5)
+  │   └── Landed cost proportional allocation
+  ├── Next Invoice Adjust — pending credit tracking per vendor
+  ├── Exchange Reference — two linked transactions (RTV + replacement GRN)
+  ├── Invoice Verification — Section 100
+  │   ├── 3-way match (PO rate vs GRN qty vs Invoice — 50% tolerance)
+  │   ├── Hard block on mismatch
+  │   ├── Domestic GST fields (CGST/SGST/IGST verification)
+  │   ├── Multiple GRNs per IV
+  │   ├── Partial invoice tracking
+  │   └── IV → payment authorization
+  └── Import Landed Cost entry (Accounts — freight, BOE, CHA, insurance)
+
+Gate-13.9: Sales / Dispatch (RM/PM Outward)
+  ├── Customer Master (Section 96)
+  ├── Sales Order full lifecycle (Section 97)
+  │   ├── Header (Customer PO reference, Payment Terms)
+  │   └── Lines (RM/PM only, rate, GST rate, issue location)
+  ├── Stock issue — SALES_ISSUE movement (no approval)
+  ├── Delivery Challan auto-generation
+  ├── Gate Exit (outbound sales)
+  ├── GST Sales Invoice (Accounts creates — CGST/SGST/IGST auto)
+  └── SO status flow (CREATED → ISSUED → INVOICED → CLOSED)
+```
+
+---
+
+### 103.2 — Full Task List with Gate Assignment
+
+| # | Task | Gate | Design Ref | Depends On |
+|---|---|---|---|---|
+| 1 | Payment Terms Master — CRUD + governance | 13.1 | 87.4 | — |
+| 2 | Port Master — CRUD | 13.1 | 89.4 | — |
+| 3 | Port-to-Plant Transit Master — CRUD | 13.1 | 89.5 | Port Master |
+| 4 | Material Category Master — CRUD | 13.1 | 89.6 | — |
+| 5 | Lead Time Master Import — CRUD | 13.1 | 89.7 | Port Master, Material Category Master |
+| 6 | Lead Time Master Domestic — CRUD | 13.1 | 89.8 | — |
+| 7 | Transporter Master — CRUD + usage direction + context dropdown | 13.1 | 94 | — |
+| 8 | CHA Master — CRUD | 13.1 | 95 | Port Master |
+| 9 | Vendor-Material Info Record (Approved Source List) — CRUD | 13.2 | 85.7 | Vendor Master (L1) |
+| 10 | PO — header + lines (all fields) | 13.2 | 85.2, 87.2–87.9 | Vendor Master, Info Record |
+| 11 | PO — STANDARD/BULK/TANKER indicator | 13.2 | 91.1 | PO |
+| 12 | PO — LC Required flag from Payment Terms | 13.2 | 90.1 | PO, Payment Terms Master |
+| 13 | PO — Rebate flag + Indent flag (sticky from Vendor Master) | 13.2 | 90.3, 90.4 | PO |
+| 14 | PO Amendment (rate/qty → approval, others → free) | 13.2 | 87.11 | PO |
+| 15 | PO Approval workflow | 13.2 | 87.10 | PO |
+| 16 | PO Cancellation + Knock-off | 13.2 | 87.12, 87.6 | PO |
+| 17 | PO Auto-mail (PDF on confirm) | 13.2 | 85.2.7 | PO |
+| 18 | CSN auto-creation engine (PO confirm → one per line) | 13.3 | 88.2 | PO |
+| 19 | CSN full field list — IMPORT/DOMESTIC/BULK types | 13.3 | 89.9, 90.6, 91.2 | CSN engine |
+| 20 | ETA cascade engine (Import + Domestic) | 13.3 | 89.2, 89.3 | CSN, Lead Time Masters |
+| 21 | Mother CSN + Sub CSN structure | 13.3 | 88.3 | CSN |
+| 22 | Sub CSN → STO transform | 13.3 | 88.4 | CSN, STO (13.7) |
+| 23 | Partial dispatch → balance CSN auto-create | 13.3 | 88.8 | CSN |
+| 24 | CSN Alert engine (LC + Vessel Booking) | 13.3 | 90.1, 90.2, 90.7 | CSN |
+| 25 | Single Window Tracker view + alert tabs | 13.3 | 88.10, 90.7 | CSN, Alerts |
+| 26 | Gate Entry — Header + Lines redesign | 13.4 | 88.1 | CSN |
+| 27 | GE — Weighment fields (RST/Gross/Tare/Net) | 13.4 | 91.3 | GE |
+| 28 | GE — CSN auto-link + company-scoped visibility | 13.4 | 88.6 | GE, CSN |
+| 29 | Inbound Gate Exit (tare weight + net calculation) | 13.4 | 102 | GE |
+| 30 | GRN — full field list (one per GE) | 13.5 | 93 | GE, Gate Exit |
+| 31 | GRN — weighbridge tally + discrepancy report | 13.5 | 93.5 | GRN, Gate Exit |
+| 32 | GRN — post-GRN auto-updates (stock, PO, CSN, last price) | 13.5 | 93.6 | GRN, Stock Engine |
+| 33 | GRN reversal (P102) | 13.5 | 93.7 | GRN |
+| 34 | QA document auto-create from GRN | 13.6 | 101.1, 101.2 | GRN |
+| 35 | QA — test result entry (Visual/MCT/Lab) | 13.6 | 101.2 | QA document |
+| 36 | QA — usage decision engine + movements (P321/P344/P553) | 13.6 | 101.3 | QA document |
+| 37 | QA — partial decision (multiple qty splits) | 13.6 | 101.4 | QA usage decision |
+| 38 | QA — authority enforcement (QA user vs QA manager) | 13.6 | 101.3 | QA, ACL |
+| 39 | STO — full lifecycle (CONSIGNMENT_DISTRIBUTION + INTER_PLANT) | 13.7 | 92 | CSN, Stock Engine |
+| 40 | STO — dispatch (stock issue + DC auto-generate + Gate Exit) | 13.7 | 92.5, 92.6 | STO |
+| 41 | STO — receipt (GE + GRN at receiving company) | 13.7 | 92.7 | STO, GE, GRN |
+| 42 | STO — visibility rules (sending/receiving company) | 13.7 | 92.8 | STO, ACL |
+| 43 | RTV — document + movement (P344 + P122) | 13.8 | 98 | Stock Engine, QA |
+| 44 | RTV — Gate Exit | 13.8 | 98.4 | RTV, Gate Exit |
+| 45 | Debit Note — pricing rules by Freight Term | 13.8 | 98.5 | RTV, Landed Cost |
+| 46 | Next Invoice Adjust — pending credit tracking | 13.8 | 98.5 | RTV |
+| 47 | Exchange Reference — two linked transactions | 13.8 | 98.5 | RTV, GRN |
+| 48 | Invoice Verification — 3-way match + 50% tolerance | 13.8 | 100 | PO, GRN |
+| 49 | IV — GST fields (CGST/SGST/IGST verification) | 13.8 | 100.3 | IV |
+| 50 | IV — partial invoice + invoiced balance tracking | 13.8 | 100.6 | IV |
+| 51 | Landed Cost entry (Accounts — import bills) | 13.8 | 87.9, 100.4 | GRN |
+| 52 | Customer Master — CRUD + approval | 13.9 | 96 | — |
+| 53 | Sales Order — full lifecycle (RM/PM only) | 13.9 | 97 | Customer Master, Stock |
+| 54 | Stock issue — SALES_ISSUE + DC auto-generate | 13.9 | 97.4, 97.5 | SO, Stock Engine |
+| 55 | GST Sales Invoice (Accounts) | 13.9 | 97.6 | SO, DC |
+| 56 | Planning view per company (incoming CSNs) | 13.3 | 88.13 | CSN, STO |
+
+---
+
+### 103.3 — Gate Dependencies
+
+```
+Gate-13.1 (Masters) must complete first — no dependencies on other L2 gates
+    ↓
+Gate-13.2 (PO) — needs Masters + L1 Vendor Master
+    ↓
+Gate-13.3 (CSN) — needs PO + Masters
+    ↓
+Gate-13.4 (GE + Gate Exit) — needs CSN
+    ↓
+Gate-13.5 (GRN) — needs GE + Gate Exit
+    ↓
+Gate-13.6 (Inward QA) — needs GRN
+    ↓
+Gate-13.7 (STO) — needs CSN + GE + GRN (can run in parallel with 13.6)
+    ↓
+Gate-13.8 (RTV + IV) — needs GRN + QA + Stock Engine
+    ↓
+Gate-13.9 (Sales/Dispatch) — needs Customer Master + Stock Engine (can start after 13.1)
+```
+
+---
+
+### 103.4 — Verification Checklist per Gate
+
+For each gate, Codex implements and verification confirms:
+
+#### Gate-13.1 — Masters
+- [ ] All 8 masters created with correct fields
+- [ ] Governance rules enforced (who can CRUD)
+- [ ] Context-filtered dropdown on Transporter (INBOUND/OUTBOUND/BOTH)
+- [ ] Port → Port-to-Plant → Lead Time chain works correctly
+
+#### Gate-13.2 — PO
+- [ ] PO confirm triggers CSN auto-creation
+- [ ] Approved Source List hard block on PO line
+- [ ] STANDARD/BULK/TANKER indicator visible and functional
+- [ ] LC Required auto-sets from Payment Terms
+- [ ] Indent flag sticky behavior from Vendor Master
+- [ ] PO Amendment: rate/qty needs approval, others don't
+- [ ] PO Auto-mail sends PDF on confirm
+- [ ] PO number format matches company + section pattern (Section 33)
+
+#### Gate-13.3 — CSN
+- [ ] One CSN auto-created per PO line on confirm
+- [ ] CSN type = IMPORT/DOMESTIC based on PO; BULK if Delivery Type = BULK/TANKER
+- [ ] ETA to Plant recalculates on every date field entry
+- [ ] Mother/Sub CSN creation, edit, delete works
+- [ ] Sub CSN transforms in-place on STO mapping
+- [ ] Partial dispatch creates balance CSN automatically
+- [ ] LC alert fires on due date. Dismissed on LC Opened Date + LC Number entry
+- [ ] Vessel Booking alert fires after PO + 3 days with empty Vessel Booking Confirmed Date
+- [ ] Alert tabs show correct counts. Auto-clear on completion
+
+#### Gate-13.4 — GE + Gate Exit
+- [ ] GE is Header + Lines (multi-PO, multi-line)
+- [ ] Vendor auto-identified from PO (not manually entered)
+- [ ] Only company-scoped open CSNs shown to Security
+- [ ] RST/Gross/Tare mandatory for BULK/TANKER GE
+- [ ] Inbound Gate Exit: Tare entered → Net = GE Gross − Tare auto
+- [ ] Net Weight flows to GRN default
+
+#### Gate-13.5 — GRN
+- [ ] One GRN per GE — cannot span multiple GEs
+- [ ] GRN lines auto-loaded from GE
+- [ ] BULK/TANKER: GRN qty defaults to Net Weight. Stores can override
+- [ ] Discrepancy (GE Qty − GRN Qty) shown
+- [ ] Batch/Lot shown only if material has Batch Tracking = ON
+- [ ] Post-GRN: stock ledger, snapshot, PO balance, CSN status all updated
+- [ ] Last price updated on Vendor-Material Info Record
+- [ ] GRN reversal resets all auto-updates
+
+#### Gate-13.6 — Inward QA
+- [ ] QA document auto-created for materials with QA required = Y
+- [ ] Test lines can be added with type/parameter/result/pass-fail
+- [ ] Usage decision posts correct movement type
+- [ ] Partial decision: sum of partial qtys = original QA_STOCK qty
+- [ ] REJECT → BLOCKED stock, then available for RTV
+- [ ] FOR_REPROCESS: role-restricted, not available to regular QA users
+
+#### Gate-13.7 — STO
+- [ ] STO types (CONSIGNMENT_DISTRIBUTION / INTER_PLANT) behave identically after creation
+- [ ] Transfer price defaults to last used (Vendor-Material Info Record pattern)
+- [ ] Delivery Challan auto-generates on stock issue
+- [ ] Sending company sees STO in their dispatch queue
+- [ ] Receiving company sees STO in their inbound queue
+- [ ] STO Gate Exit: weighment mandatory for BULK/TANKER
+- [ ] STO receipt GE uses Delivery Challan number (not vendor invoice)
+
+#### Gate-13.8 — RTV + IV
+- [ ] RTV only allowed from BLOCKED stock (P122)
+- [ ] Direct return from UNRESTRICTED: P344 first, then P122
+- [ ] Three settlement modes available and functional
+- [ ] Debit Note value = correct formula per Freight Terms
+- [ ] Next Invoice Adjust shows pending credit on vendor's next IV
+- [ ] IV hard blocks if rate variance > 50%
+- [ ] GST type (CGST+SGST vs IGST) auto from seller + buyer state
+- [ ] Multiple GRNs can be selected in one IV
+- [ ] Partial invoice: invoiced balance tracked correctly per GRN line
+
+#### Gate-13.9 — Sales/Dispatch
+- [ ] SO only allows RM/PM materials (other types blocked)
+- [ ] Stock issue: no approval needed
+- [ ] DC auto-generated on stock issue — cannot be manually created
+- [ ] GST Invoice: CGST+SGST for intra-state, IGST for inter-state — auto
+- [ ] SO partial dispatch: SO stays open for balance
+- [ ] Invoice number format: YYYYMM + incremental (Section 99)
+
+---
+
+### 103.5 — Global Rules — Verify Across All Gates
+
+| Rule | Verify |
+|---|---|
+| Global number series (pure numeric) | GRN, GE, Gate Exit, CSN, DC, RTV, Debit Note, Exchange — all global, no prefix, no FY reset |
+| Invoice number format | YYYYMM + incremental. Global |
+| PO number format | Company + Section prefix/suffix. Continues from last used (Section 33) |
+| Audit trail | Every document creation, edit, posting has audit entry |
+| Bi-directional document flow | PO ↔ CSN ↔ GE ↔ GRN ↔ QA ↔ STO ↔ RTV — navigable in any direction |
+| Company scope | Every document is company-scoped. Users see only their company's data |
+| Stock posting engine | Every transaction uses stock posting engine. No direct stock edit |
+| ACL enforcement | Every action gated by ACL capability check |
+
+---
+
+### 103.6 — What Goes to Phase-2 (Post Go-Live)
+
+| Item | Reason Deferred |
+|---|---|
+| Single Window Tracker UI (full) | Concept frozen — UI design separate session |
+| Planning Dashboard UI | Concept frozen — UI design separate session |
+| Rebate Tracker full design | Flag captured — full workflow later |
+| Lab test result integration | Phase-2 (Section 6.2) |
+| GST portal / e-invoice integration | Phase-3 |
+| STO number series format | TBD per company at implementation |
+| Batch number format | User to provide existing format |
+
+---
+
+*— End of Section 103 —*
 
 ---
 

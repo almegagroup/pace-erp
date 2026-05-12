@@ -9,6 +9,7 @@ import { dispatchAclRoutes } from "../_routes/acl.routes.ts";
 import { dispatchWorkflowRoutes } from "../_routes/workflow.routes.ts";
 import { dispatchHrRoutes } from "../_routes/hr.routes.ts";
 import { dispatchOmRoutes } from "../_routes/om.routes.ts";
+import { dispatchProcurementRoutes } from "../_routes/procurement.routes.ts";
 import { dispatchMenuRoutes } from "../_routes/menu.routes.ts";
 import { dispatchSessionRoutes } from "../_routes/session.routes.ts";
 import { logoutHandler } from "../_core/auth/logout.handler.ts";
@@ -71,6 +72,15 @@ const om = await dispatchOmRoutes(
   contextResult
 );
 if (om) return om;
+
+const procurement = await dispatchProcurementRoutes(
+  routeKey,
+  req,
+  requestId,
+  sessionResult,
+  contextResult
+);
+if (procurement) return procurement;
 
 const menu = await dispatchMenuRoutes(
   routeKey,

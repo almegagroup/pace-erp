@@ -65,6 +65,14 @@ import SAOmNumberSeries from "../admin/sa/screens/SAOmNumberSeries.jsx";
 import SAOmMaterialCategoryGroups from "../admin/sa/screens/SAOmMaterialCategoryGroups.jsx";
 import SACostCenterMaster from "../admin/sa/screens/SACostCenterMaster.jsx";
 import SAMachineMaster from "../admin/sa/screens/SAMachineMaster.jsx";
+import SAPaymentTermsMaster from "../admin/sa/screens/SAPaymentTermsMaster.jsx";
+import SAPortMaster from "../admin/sa/screens/SAPortMaster.jsx";
+import SAPortTransitMaster from "../admin/sa/screens/SAPortTransitMaster.jsx";
+import SALeadTimeMasters from "../admin/sa/screens/SALeadTimeMasters.jsx";
+import SATransporterMaster from "../admin/sa/screens/SATransporterMaster.jsx";
+import SACHAMaster from "../admin/sa/screens/SACHAMaster.jsx";
+import SAOpeningStockListPage from "../admin/sa/screens/SAOpeningStockListPage.jsx";
+import SAOpeningStockDetailPage from "../admin/sa/screens/SAOpeningStockDetailPage.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
 import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
@@ -106,6 +114,37 @@ import AslDetailPage from "../pages/dashboard/om/asl/AslDetailPage.jsx";
 import CustomerListPage from "../pages/dashboard/om/customer/CustomerListPage.jsx";
 import CustomerCreatePage from "../pages/dashboard/om/customer/CustomerCreatePage.jsx";
 import CustomerDetailPage from "../pages/dashboard/om/customer/CustomerDetailPage.jsx";
+import POListPage from "../pages/dashboard/procurement/po/POListPage.jsx";
+import POCreatePage from "../pages/dashboard/procurement/po/POCreatePage.jsx";
+import PODetailPage from "../pages/dashboard/procurement/po/PODetailPage.jsx";
+import CSNTrackerPage from "../pages/dashboard/procurement/csn/CSNTrackerPage.jsx";
+import CSNDetailPage from "../pages/dashboard/procurement/csn/CSNDetailPage.jsx";
+import CSNAlertsPage from "../pages/dashboard/procurement/csn/CSNAlertsPage.jsx";
+import GateEntryListPage from "../pages/dashboard/procurement/gate/GateEntryListPage.jsx";
+import GateEntryCreatePage from "../pages/dashboard/procurement/gate/GateEntryCreatePage.jsx";
+import GateEntryDetailPage from "../pages/dashboard/procurement/gate/GateEntryDetailPage.jsx";
+import GRNListPage from "../pages/dashboard/procurement/grn/GRNListPage.jsx";
+import GRNDetailPage from "../pages/dashboard/procurement/grn/GRNDetailPage.jsx";
+import QAQueuePage from "../pages/dashboard/procurement/qa/QAQueuePage.jsx";
+import QADocumentPage from "../pages/dashboard/procurement/qa/QADocumentPage.jsx";
+import STOListPage from "../pages/dashboard/procurement/sto/STOListPage.jsx";
+import STOCreatePage from "../pages/dashboard/procurement/sto/STOCreatePage.jsx";
+import STODetailPage from "../pages/dashboard/procurement/sto/STODetailPage.jsx";
+import RTVListPage from "../pages/dashboard/procurement/rtv/RTVListPage.jsx";
+import RTVCreatePage from "../pages/dashboard/procurement/rtv/RTVCreatePage.jsx";
+import RTVDetailPage from "../pages/dashboard/procurement/rtv/RTVDetailPage.jsx";
+import IVListPage from "../pages/dashboard/procurement/accounts/IVListPage.jsx";
+import IVCreatePage from "../pages/dashboard/procurement/accounts/IVCreatePage.jsx";
+import IVDetailPage from "../pages/dashboard/procurement/accounts/IVDetailPage.jsx";
+import LandedCostListPage from "../pages/dashboard/procurement/accounts/LandedCostListPage.jsx";
+import LandedCostDetailPage from "../pages/dashboard/procurement/accounts/LandedCostDetailPage.jsx";
+import SOListPage from "../pages/dashboard/procurement/sales/SOListPage.jsx";
+import SOCreatePage from "../pages/dashboard/procurement/sales/SOCreatePage.jsx";
+import SODetailPage from "../pages/dashboard/procurement/sales/SODetailPage.jsx";
+import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvoiceListPage.jsx";
+import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
+import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocumentListPage.jsx";
+import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
 
 export default function AppRouter() {
   return (
@@ -243,6 +282,38 @@ export default function AppRouter() {
                     <Route
                       path="om/machines"
                       element={<SAMachineMaster />}
+                    />
+                    <Route
+                      path="payment-terms"
+                      element={<SAPaymentTermsMaster />}
+                    />
+                    <Route
+                      path="ports"
+                      element={<SAPortMaster />}
+                    />
+                    <Route
+                      path="port-transit"
+                      element={<SAPortTransitMaster />}
+                    />
+                    <Route
+                      path="lead-times"
+                      element={<SALeadTimeMasters />}
+                    />
+                    <Route
+                      path="transporters"
+                      element={<SATransporterMaster />}
+                    />
+                    <Route
+                      path="chas"
+                      element={<SACHAMaster />}
+                    />
+                    <Route
+                      path="opening-stock"
+                      element={<SAOpeningStockListPage />}
+                    />
+                    <Route
+                      path="opening-stock/:id"
+                      element={<SAOpeningStockDetailPage />}
                     />
                   </Route>
                 </Route>
@@ -411,6 +482,130 @@ export default function AppRouter() {
                   <Route
                     path="om/customer/detail"
                     element={<CustomerDetailPage />}
+                  />
+                  <Route
+                    path="procurement/purchase-orders"
+                    element={<POListPage />}
+                  />
+                  <Route
+                    path="procurement/purchase-orders/create"
+                    element={<POCreatePage />}
+                  />
+                  <Route
+                    path="procurement/purchase-orders/:id"
+                    element={<PODetailPage />}
+                  />
+                  <Route
+                    path="procurement/csn-tracker"
+                    element={<CSNTrackerPage />}
+                  />
+                  <Route
+                    path="procurement/csns/:id"
+                    element={<CSNDetailPage />}
+                  />
+                  <Route
+                    path="procurement/csn-alerts"
+                    element={<CSNAlertsPage />}
+                  />
+                  <Route
+                    path="procurement/gate-entries"
+                    element={<GateEntryListPage />}
+                  />
+                  <Route
+                    path="procurement/gate-entries/create"
+                    element={<GateEntryCreatePage />}
+                  />
+                  <Route
+                    path="procurement/gate-entries/:id"
+                    element={<GateEntryDetailPage />}
+                  />
+                  <Route
+                    path="procurement/grns"
+                    element={<GRNListPage />}
+                  />
+                  <Route
+                    path="procurement/grns/:id"
+                    element={<GRNDetailPage />}
+                  />
+                  <Route
+                    path="procurement/qa-queue"
+                    element={<QAQueuePage />}
+                  />
+                  <Route
+                    path="procurement/qa-documents/:id"
+                    element={<QADocumentPage />}
+                  />
+                  <Route
+                    path="procurement/stos"
+                    element={<STOListPage />}
+                  />
+                  <Route
+                    path="procurement/stos/create"
+                    element={<STOCreatePage />}
+                  />
+                  <Route
+                    path="procurement/stos/:id"
+                    element={<STODetailPage />}
+                  />
+                  <Route
+                    path="procurement/rtvs"
+                    element={<RTVListPage />}
+                  />
+                  <Route
+                    path="procurement/rtvs/create"
+                    element={<RTVCreatePage />}
+                  />
+                  <Route
+                    path="procurement/rtvs/:id"
+                    element={<RTVDetailPage />}
+                  />
+                  <Route
+                    path="procurement/accounts/invoice-verifications"
+                    element={<IVListPage />}
+                  />
+                  <Route
+                    path="procurement/accounts/invoice-verifications/create"
+                    element={<IVCreatePage />}
+                  />
+                  <Route
+                    path="procurement/accounts/invoice-verifications/:id"
+                    element={<IVDetailPage />}
+                  />
+                  <Route
+                    path="procurement/accounts/landed-costs"
+                    element={<LandedCostListPage />}
+                  />
+                  <Route
+                    path="procurement/accounts/landed-costs/:id"
+                    element={<LandedCostDetailPage />}
+                  />
+                  <Route
+                    path="procurement/sales-orders"
+                    element={<SOListPage />}
+                  />
+                  <Route
+                    path="procurement/sales-orders/create"
+                    element={<SOCreatePage />}
+                  />
+                  <Route
+                    path="procurement/sales-orders/:id"
+                    element={<SODetailPage />}
+                  />
+                  <Route
+                    path="procurement/sales-invoices"
+                    element={<SalesInvoiceListPage />}
+                  />
+                  <Route
+                    path="procurement/sales-invoices/:id"
+                    element={<SalesInvoiceDetailPage />}
+                  />
+                  <Route
+                    path="procurement/physical-inventory"
+                    element={<PIDocumentListPage />}
+                  />
+                  <Route
+                    path="procurement/physical-inventory/:id"
+                    element={<PIDocumentDetailPage />}
                   />
                 </Route>
               </Route>
