@@ -630,7 +630,104 @@ Gate-20 VERIFIED by Claude on 2026-05-12.
 - 20.3 operationScreens.js: PROC_PI_LIST + PROC_PI_DETAIL ✅
 - 20.3 AppRouter.jsx: imports + routes for procurement/physical-inventory and procurement/physical-inventory/:id ✅
 
-Gate-21 can begin.
+---
+
+## Gate-21 — Missing FE Pages (Debit Note, Exchange Ref, Blocked IV, Gate Exit Inbound)
+
+**Scope:** Backend already exists for all 4. FE pages only.
+**Dependency:** Gate-20 VERIFIED ✅
+**Status:** PENDING
+
+| ID | Item | Status | Notes |
+|---|---|---|---|
+| 21.1 | FE — DebitNoteListPage + DebitNoteDetailPage | PENDING | Backend: createDebitNoteHandler, listDebitNotesHandler ✅ |
+| 21.2 | FE — ExchangeRefListPage + ExchangeRefDetailPage | PENDING | Backend: createExchangeRefHandler, listExchangeRefsHandler ✅ |
+| 21.3 | FE — BlockedIVListPage | PENDING | Backend: listBlockedIVsHandler ✅ |
+| 21.4 | FE — GateExitInboundPage | PENDING | Backend: createGateExitInboundHandler ✅ |
+| 21.5 | operationScreens.js entries + AppRouter routes for all 4 | PENDING | - |
+| 21.6 | procurementApi.js functions for all 4 | PENDING | - |
+| 21.7 | Gate-21 verification pass by Claude | PENDING | - |
+
+---
+
+## Gate-22 — Procurement Planning View
+
+**Scope:** One-page cross-plant tracker — Section 35 of feasibility doc.
+**Formula:** Current unrestricted + QA + open PO + in-transit − reserved − scheduled dispatch − planned production req − safety stock = Net Available / Shortage
+**Dependency:** Gate-21 complete
+**Status:** PENDING
+
+| ID | Item | Status | Notes |
+|---|---|---|---|
+| 22.1 | BE — getProcurementPlanningHandler (read-only, aggregates stock_ledger + PO + CSN + material_plant_ext) | PENDING | - |
+| 22.2 | BE — route GET /api/procurement/planning | PENDING | - |
+| 22.3 | FE — ProcurementPlanningPage (cross-plant, filterable by material/plant, color-coded shortage/surplus) | PENDING | - |
+| 22.4 | operationScreens.js + AppRouter route | PENDING | - |
+| 22.5 | procurementApi.js — getProcurementPlanning() | PENDING | - |
+| 22.6 | Gate-22 verification pass by Claude | PENDING | - |
+
+---
+
+## Gate-23 — Plant Transfer
+
+**Scope:** One-step (P301/302), two-step (P303/305), storage location transfer (P311/312). Stock type transfer (P321/322 etc.) already seeded — movement only, no document needed.
+**Dependency:** Gate-22 complete
+**Status:** PENDING
+
+| ID | Item | Status | Notes |
+|---|---|---|---|
+| 23.1 | DB — plant_transfer_order table + PT number series | PENDING | - |
+| 23.2 | DB — Seed P301/P302 (one-step) movement types missing from Gate-11 | PENDING | Gate-11 has P303-P306, P311-P312 but NOT P301/P302 |
+| 23.3 | BE — createPTOHandler, listPTOsHandler, getPTOHandler, issueTransferHandler (P303), receiveTransferHandler (P305), oneStepTransferHandler (P301), storageLocationTransferHandler (P311) | PENDING | - |
+| 23.4 | BE — routes for all handlers | PENDING | - |
+| 23.5 | FE — PlantTransferListPage + PlantTransferDetailPage | PENDING | - |
+| 23.6 | operationScreens.js + AppRouter route | PENDING | - |
+| 23.7 | procurementApi.js functions | PENDING | - |
+| 23.8 | Gate-23 verification pass by Claude | PENDING | - |
+
+---
+
+## Gate-24 — Core Stock Reports
+
+**Scope:** Stock Ledger report, Current Stock (MMBE-style), Stock Valuation — Section 70 of feasibility doc. All read from stock_ledger/stock_snapshot.
+**Dependency:** Gate-23 complete
+**Status:** PENDING
+
+| ID | Item | Status | Notes |
+|---|---|---|---|
+| 24.1 | BE — getStockLedgerReportHandler (material+plant+date range, movement-by-movement) | PENDING | - |
+| 24.2 | BE — getCurrentStockHandler (MMBE-style — material+plant+sloc+stock_type grid) | PENDING | - |
+| 24.3 | BE — getStockValuationHandler (qty+rate+value by material+plant) | PENDING | - |
+| 24.4 | BE — routes for all 3 | PENDING | - |
+| 24.5 | FE — StockLedgerReportPage | PENDING | - |
+| 24.6 | FE — CurrentStockPage | PENDING | - |
+| 24.7 | FE — StockValuationPage | PENDING | - |
+| 24.8 | operationScreens.js + AppRouter routes | PENDING | - |
+| 24.9 | Gate-24 verification pass by Claude | PENDING | - |
+
+---
+
+## Gate-25 — Document Flow Tab
+
+**Scope:** Document flow tab on all existing operation document detail pages (PO, GRN, QA, STO, RTV, IV, Landed Cost, SO, Sales Invoice, PID). Section 71.2 of feasibility doc.
+**Dependency:** Gate-24 complete (all documents stable)
+**Status:** PENDING
+
+| ID | Item | Status | Notes |
+|---|---|---|---|
+| 25.1 | BE — getDocumentFlowHandler (given doc type + id, returns full chain: PO→CSN→Gate Entry→GRN→QA→IV etc.) | PENDING | - |
+| 25.2 | BE — route GET /api/procurement/document-flow | PENDING | - |
+| 25.3 | FE — DocumentFlowTab component (reusable, used by all detail pages) | PENDING | - |
+| 25.4 | Add DocumentFlowTab to: PODetailPage, GRNDetailPage, QADocumentPage, STODetailPage, RTVDetailPage, IVDetailPage, LandedCostDetailPage, SODetailPage, SalesInvoiceDetailPage, PIDocumentDetailPage | PENDING | - |
+| 25.5 | Gate-25 verification pass by Claude | PENDING | - |
+
+---
+
+## Gate-26+ — FG Domain (Admix + Powder)
+
+**Scope:** BOM master, Process Order lifecycle, Material Issue (P261), FG Receipt, FG QA, Dispatch Instruction, Goods Issue (P601), Customer Return, Reuse/Rework/Scrap.
+**Dependency:** All L2 gates (21–25) complete
+**Status:** DESIGN IN PROGRESS — see Section 83 of feasibility doc (Admix/Liquid discovery)
 
 ---
 
@@ -781,6 +878,7 @@ Gate-15C implementation complete. All 6 files updated. Awaiting Claude verificat
 | 2026-05-09 | 15 | 15.20 | VERIFIED | Claude | All 19 items verified. omApi.js has 30 functions (5 VMI extras needed by ASL pages — spec undercounted). financial_year_reset naming matches DB column exactly. ASL routes /dashboard/om/vendor-material-infos* match spec. AppRouter has all 15 OM imports wired. No useNavigate violations. No hardcoded URLs. |
 | 2026-05-12 | 16.0 | 16.0.2 | VERIFIED | Claude | All 7 checks passed. SECURITY DEFINER ✅ Atomic 3-step ✅ Weighted avg IN ✅ INSUFFICIENT_STOCK guard OUT ✅ GRANT service_role ✅ Column names match Gate-11 tables ✅ BEGIN/COMMIT ✅ Extra: movement_type/stock_type/storage_location validation present. |
 | 2026-05-12 | 16.4 | 16.4.4 | VERIFIED | Claude | All checks passed. gate_entry.handlers.ts: 7 handlers, BULK/TANKER guard, distributeNetWeight, net_weight_override, CSN arrival upsert. grn.handlers.ts: 6 handlers, post_stock_movement RPC per line, P101/STO_RECEIPT, QA_STOCK conditional, auto-QA-doc, reversal P102+p_reversal_of_id. Routes: all 9 GE+GRN routes wired, prior routes intact. |
+| 2026-05-18 | PERF | PERF.2 | COMPLETED | Codex | Added safe forward-only RLS planner patch for `erp_core.sessions`, `erp_core.users`, and `erp_core.signup_requests` via `supabase/migrations/20260518110000_perf_safe_auth_rls_initplan.sql`. No policy semantics changed. |
 
 ---
 
@@ -794,8 +892,8 @@ If Claude marks an item FAILED, it is logged here with reason. Codex must fix be
 
 ---
 
-*Last Updated: 2026-05-09*
-*Next Review: After Gate-15B and Gate-12B implementation by Codex*
+*Last Updated: 2026-05-18*
+*Next Review: After PERF safe pass and before any destructive linter cleanup*
 
 
 
