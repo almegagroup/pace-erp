@@ -16,6 +16,7 @@ import {
   knockOffPO,
   rejectPurchaseOrder,
 } from "../procurementApi.js";
+import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 async function readJsonSafe(response) {
   try {
@@ -422,6 +423,8 @@ export default function PODetailPage() {
               emptyMessage="No GRN summary rows available."
             />
           </ErpSectionCard>
+
+          <DocumentFlowSection docType="PO" docId={po.id} />
         </div>
       )}
 

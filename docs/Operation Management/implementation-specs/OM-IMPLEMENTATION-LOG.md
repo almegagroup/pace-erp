@@ -634,19 +634,26 @@ Gate-20 VERIFIED by Claude on 2026-05-12.
 
 ## Gate-21 — Missing FE Pages (Debit Note, Exchange Ref, Blocked IV, Gate Exit Inbound)
 
-**Scope:** Backend already exists for all 4. FE pages only.
+**Scope:** Backend already exists for all 4 flows. FE pages only. No new DB/BE/API needed.
 **Dependency:** Gate-20 VERIFIED ✅
-**Status:** PENDING
+**Codex Brief:** CODEX-GATE21-TASK-BRIEF.md
+**Status:** VERIFIED
 
 | ID | Item | Status | Notes |
 |---|---|---|---|
-| 21.1 | FE — DebitNoteListPage + DebitNoteDetailPage | PENDING | Backend: createDebitNoteHandler, listDebitNotesHandler ✅ |
-| 21.2 | FE — ExchangeRefListPage + ExchangeRefDetailPage | PENDING | Backend: createExchangeRefHandler, listExchangeRefsHandler ✅ |
-| 21.3 | FE — BlockedIVListPage | PENDING | Backend: listBlockedIVsHandler ✅ |
-| 21.4 | FE — GateExitInboundPage | PENDING | Backend: createGateExitInboundHandler ✅ |
-| 21.5 | operationScreens.js entries + AppRouter routes for all 4 | PENDING | - |
-| 21.6 | procurementApi.js functions for all 4 | PENDING | - |
-| 21.7 | Gate-21 verification pass by Claude | PENDING | - |
+| 21.1 | FE — DebitNoteListPage.jsx | VERIFIED | frontend/src/pages/dashboard/procurement/rtv/DebitNoteListPage.jsx — File-ID 21.1, openScreen before navigate ✅ |
+| 21.2 | FE — DebitNoteDetailPage.jsx | VERIFIED | frontend/src/pages/dashboard/procurement/rtv/DebitNoteDetailPage.jsx — File-ID 21.2, lifecycle buttons DRAFT→SENT→ACKNOWLEDGED→SETTLED ✅ |
+| 21.3 | FE — ExchangeRefListPage.jsx | VERIFIED | frontend/src/pages/dashboard/procurement/rtv/ExchangeRefListPage.jsx — File-ID 21.3, inline Link GRN expand-in-row ✅ |
+| 21.4 | FE — BlockedIVListPage.jsx | VERIFIED | frontend/src/pages/dashboard/procurement/accounts/BlockedIVListPage.jsx — File-ID 21.4, read-only, row → PROC_IV_DETAIL ✅ |
+| 21.5 | FE — GateExitInboundDetailPage.jsx | VERIFIED | frontend/src/pages/dashboard/procurement/gate/GateExitInboundDetailPage.jsx — File-ID 21.5, all weight fields ✅ |
+| 21.6 | operationScreens.js — add 5 screen codes | VERIFIED | All 5 present: PROC_DEBIT_NOTE_LIST, PROC_DEBIT_NOTE_DETAIL, PROC_EXCHANGE_REF_LIST, PROC_BLOCKED_IV_LIST, PROC_GATE_EXIT_INBOUND_DETAIL ✅ |
+| 21.7 | AppRouter.jsx — add 5 imports + 5 routes | VERIFIED | All 5 imports + 5 routes wired correctly ✅ |
+| 21.8 | GateEntryDetailPage.jsx — navigate to PROC_GATE_EXIT_INBOUND_DETAIL after gate exit creation | VERIFIED | openScreen + navigate on create AND on existing exit link ✅ |
+| 21.9 | Gate-21 verification pass by Claude | VERIFIED | All 8 checks passed. Claude 2026-05-18 |
+| 21.W1 | Wiring fix — IVListPage.jsx: add "View Blocked IVs" action button (conditional, count-labelled) → openScreen(PROC_BLOCKED_IV_LIST) + navigate | DONE | frontend/src/pages/dashboard/procurement/accounts/IVListPage.jsx — Claude 2026-05-18 |
+| 21.W2 | Wiring fix — RTVListPage.jsx: add "Debit Notes" + "Exchange Refs" action buttons → openScreen + navigate to respective list pages | DONE | frontend/src/pages/dashboard/procurement/rtv/RTVListPage.jsx — Claude 2026-05-18 |
+
+Gate-21 VERIFIED by Claude on 2026-05-18. All 8 checks passed. Post-verification wiring fixes W1+W2 applied 2026-05-18. Gate-22 can begin.
 
 ---
 
@@ -655,16 +662,18 @@ Gate-20 VERIFIED by Claude on 2026-05-12.
 **Scope:** One-page cross-plant tracker — Section 35 of feasibility doc.
 **Formula:** Current unrestricted + QA + open PO + in-transit − reserved − scheduled dispatch − planned production req − safety stock = Net Available / Shortage
 **Dependency:** Gate-21 complete
-**Status:** PENDING
+**Status:** VERIFIED
 
 | ID | Item | Status | Notes |
 |---|---|---|---|
-| 22.1 | BE — getProcurementPlanningHandler (read-only, aggregates stock_ledger + PO + CSN + material_plant_ext) | PENDING | - |
-| 22.2 | BE — route GET /api/procurement/planning | PENDING | - |
-| 22.3 | FE — ProcurementPlanningPage (cross-plant, filterable by material/plant, color-coded shortage/surplus) | PENDING | - |
-| 22.4 | operationScreens.js + AppRouter route | PENDING | - |
-| 22.5 | procurementApi.js — getProcurementPlanning() | PENDING | - |
-| 22.6 | Gate-22 verification pass by Claude | PENDING | - |
+| 22.1 | BE — getProcurementPlanningHandler (read-only, aggregates stock_ledger + PO + CSN + material_plant_ext) | VERIFIED | planning.handlers.ts — 5 parallel queries ✅ Query 6 material_master after ✅ formula correct ✅ normalizeQty 6dp ✅ zero-stock+open-PO rows included ✅ plant_id null guard on PO/CSN ✅ |
+| 22.2 | BE — route GET /api/procurement/planning | VERIFIED | procurement.routes.ts line 281 — case "GET:/api/procurement/planning" wired ✅ import at line 46 ✅ |
+| 22.3 | FE — ProcurementPlanningPage (cross-plant, filterable by material/plant, color-coded shortage/surplus) | VERIFIED | ProcurementPlanningPage.jsx — all 10 columns ✅ row/cell colour coding ✅ 3-chip summary ✅ shortage toggle re-fetches ✅ plant/material filter client-side ✅ no row navigation (terminal page) ✅ |
+| 22.4 | operationScreens.js + AppRouter route | VERIFIED | PROC_PLANNING_VIEW screen code ✅ after PROC_BLOCKED_IV_LIST ✅ AppRouter import + route path="procurement/planning" ✅ |
+| 22.5 | procurementApi.js — getProcurementPlanning() | VERIFIED | getProcurementPlanning(params) at line 448 ✅ fetchProcurement GET /api/procurement/planning ✅ |
+| 22.6 | Gate-22 verification pass by Claude | VERIFIED | All 6 checks passed. Claude 2026-05-18 |
+
+Gate-22 VERIFIED by Claude on 2026-05-18. All 6 checks passed. No issues found.
 
 ---
 
@@ -672,18 +681,20 @@ Gate-20 VERIFIED by Claude on 2026-05-12.
 
 **Scope:** One-step (P301/302), two-step (P303/305), storage location transfer (P311/312). Stock type transfer (P321/322 etc.) already seeded — movement only, no document needed.
 **Dependency:** Gate-22 complete
-**Status:** PENDING
+**Status:** VERIFIED
 
 | ID | Item | Status | Notes |
 |---|---|---|---|
-| 23.1 | DB — plant_transfer_order table + PT number series | PENDING | - |
-| 23.2 | DB — Seed P301/P302 (one-step) movement types missing from Gate-11 | PENDING | Gate-11 has P303-P306, P311-P312 but NOT P301/P302 |
-| 23.3 | BE — createPTOHandler, listPTOsHandler, getPTOHandler, issueTransferHandler (P303), receiveTransferHandler (P305), oneStepTransferHandler (P301), storageLocationTransferHandler (P311) | PENDING | - |
-| 23.4 | BE — routes for all handlers | PENDING | - |
-| 23.5 | FE — PlantTransferListPage + PlantTransferDetailPage | PENDING | - |
-| 23.6 | operationScreens.js + AppRouter route | PENDING | - |
-| 23.7 | procurementApi.js functions | PENDING | - |
-| 23.8 | Gate-23 verification pass by Claude | PENDING | - |
+| 23.1 | DB — plant_transfer_order table + PT number series | VERIFIED | Table DDL correct; transfer_type/status CHECK constraints; source_sloc_id/target_sloc_id NOT NULL; valuation_rate/transfer_value NULL (set at issue); issue_stock_document_id/receipt_stock_document_id as plain uuid; 5 indexes; GRANT correct; PT doc_type seeded with pad_width=6, starting_number=1 |
+| 23.2 | DB — Seed P301/P302 (one-step) movement types missing from Gate-11 | VERIFIED | P301 direction='TRANSFER', UNRESTRICTED→UNRESTRICTED, reversed_by='P302', reference_document_type='PLANT_TRANSFER_ORDER'; P302 reversal_of='P301'; ON CONFLICT DO NOTHING correct |
+| 23.3 | BE — createPTOHandler, listPTOsHandler, getPTOHandler, issueTransferHandler (P303), receiveTransferHandler (P305), oneStepTransferHandler (P301), storageLocationTransferHandler (P311) | VERIFIED | All 9 handlers present; getIdFromPath regex for getPTOHandler; postStockMovement helper correct; fetchSnapshot with .is("batch_id",null); oneStepTransferHandler: P301 OUT+IN → CLOSED; issueTransferHandler: P303 OUT UNRESTRICTED + P303 IN IN_TRANSIT at source → IN_TRANSIT; receiveTransferHandler: uses pto.valuation_rate (locked at issue) P305 OUT IN_TRANSIT + P305 IN UNRESTRICTED → CLOSED; cancelPTOHandler: DRAFT/APPROVED only; storageLocationTransferHandler: same-sloc guard, P311 OUT+IN, PT number generated; listPTOsHandler: returns both data and items for FE compatibility |
+| 23.4 | BE — routes for all handlers | VERIFIED | All 9 handlers imported; switch cases: POST/GET /api/procurement/ptos + POST /api/procurement/sloc-transfer; 6 regex routes: /ptos/:id GET, /ptos/:id/approve POST, /ptos/:id/one-step POST, /ptos/:id/issue POST, /ptos/:id/receive POST, /ptos/:id/cancel POST — all correct |
+| 23.5 | FE — PlantTransferListPage + PlantTransferDetailPage | VERIFIED | ListPage: handles both response.data and response.items; openScreen before navigate on row click and after create; inline create form with all required fields; transport fields conditional on transport_required toggle. DetailPage: 5 section cards; status-gated actions (canApprove/canOneStepTransfer/canIssue/canReceive/canCancel); window.confirm on all actions; window.prompt for cancellation; actualReceiptDate date input shown only when canReceive; goBack openScreen+navigate correct |
+| 23.6 | operationScreens.js + AppRouter route | VERIFIED | PROC_PLANT_TRANSFER_LIST route=/dashboard/procurement/transfer and PROC_PLANT_TRANSFER_DETAIL route=/dashboard/procurement/transfer/:id both present after PROC_PLANNING_VIEW; AppRouter imports both pages; routes procurement/transfer and procurement/transfer/:id registered after procurement/planning |
+| 23.7 | procurementApi.js functions | VERIFIED | All 9 functions present: listPTOs, getPTO, createPTO, approvePTO (no body), oneStepTransfer (no body), issueTransfer (no body), receiveTransfer (with body), cancelPTO (with body), slocTransfer; all URL/method/param signatures match handler expectations |
+| 23.8 | Gate-23 verification pass by Claude | VERIFIED | Gate-23 VERIFIED by Claude on 2026-05-20. All 8 checks passed. No issues found. |
+
+> Gate-23 VERIFIED by Claude on 2026-05-20. Migration DDL, P301/P302 seed, all 9 PTO handlers (one-step/two-step/sloc-transfer), route wiring, FE list + detail pages, screen registry, router — all correct. No issues found.
 
 ---
 
@@ -691,19 +702,21 @@ Gate-20 VERIFIED by Claude on 2026-05-12.
 
 **Scope:** Stock Ledger report, Current Stock (MMBE-style), Stock Valuation — Section 70 of feasibility doc. All read from stock_ledger/stock_snapshot.
 **Dependency:** Gate-23 complete
-**Status:** PENDING
+**Status:** VERIFIED
 
 | ID | Item | Status | Notes |
 |---|---|---|---|
-| 24.1 | BE — getStockLedgerReportHandler (material+plant+date range, movement-by-movement) | PENDING | - |
-| 24.2 | BE — getCurrentStockHandler (MMBE-style — material+plant+sloc+stock_type grid) | PENDING | - |
-| 24.3 | BE — getStockValuationHandler (qty+rate+value by material+plant) | PENDING | - |
-| 24.4 | BE — routes for all 3 | PENDING | - |
-| 24.5 | FE — StockLedgerReportPage | PENDING | - |
-| 24.6 | FE — CurrentStockPage | PENDING | - |
-| 24.7 | FE — StockValuationPage | PENDING | - |
-| 24.8 | operationScreens.js + AppRouter routes | PENDING | - |
-| 24.9 | Gate-24 verification pass by Claude | PENDING | - |
+| 24.1 | BE — getStockLedgerReportHandler (material+plant+date range, movement-by-movement) | VERIFIED | material_id required (400 if missing); optional plant_id/company_id/date_from/date_to filters; order by ledger_seq ASC; limit max 500; signed_qty computed (IN=+qty, OUT=-qty) before return |
+| 24.2 | BE — getCurrentStockHandler (MMBE-style — material+plant+sloc+stock_type grid) | VERIFIED | All filters optional; normalizeStockTypeFilter converts "QA"→"QUALITY_INSPECTION" (matches DB value); show_zero param controls gt("quantity",0) filter; orders by material_id+plant_id |
+| 24.3 | BE — getStockValuationHandler (qty+rate+value by material+plant) | VERIFIED | Fetches snapshot columns only; JS aggregation by material_id+plant_id; weighted_avg_rate computed; grand_total_value in response; normalizeNumber prevents float drift |
+| 24.4 | BE — routes for all 3 | VERIFIED | All 3 handlers imported; 3 switch cases after planning route: GET /stock-ledger, GET /current-stock, GET /stock-valuation; all correct |
+| 24.5 | FE — StockLedgerReportPage | VERIFIED | File-ID 24.2; fetch on button click only; material_id required guard; running balance computed via useMemo accumulating signed_qty; row count display; direction chip (emerald/rose) |
+| 24.6 | FE — CurrentStockPage | VERIFIED | File-ID 24.3; no required fields; pre-search dashed info box; stockTypeTone handles both QA and QUALITY_INSPECTION; show_zero checkbox; searched state gate |
+| 24.7 | FE — StockValuationPage | VERIFIED | File-ID 24.4; response.data + response.grand_total_value correctly destructured (fetchProcurement returns full object when data+total present); grand total row shown only when rows.length > 0 |
+| 24.8 | operationScreens.js + AppRouter routes | VERIFIED | PROC_STOCK_LEDGER/PROC_CURRENT_STOCK/PROC_STOCK_VALUATION after PROC_PLANT_TRANSFER_DETAIL; 3 imports + 3 routes in AppRouter after procurement/transfer/:id; 3 procurementApi functions appended |
+| 24.9 | Gate-24 verification pass by Claude | VERIFIED | Gate-24 VERIFIED by Claude on 2026-05-20. All 9 checks passed. No issues found. |
+
+> Gate-24 VERIFIED by Claude on 2026-05-20. All 3 handlers (stock ledger, current stock, stock valuation) correct. QA→QUALITY_INSPECTION normalization confirmed against Gate-11 movement_type_master seed. fetchProcurement unwrap behaviour correctly handled in all 3 FE pages. No issues found.
 
 ---
 
@@ -711,19 +724,54 @@ Gate-20 VERIFIED by Claude on 2026-05-12.
 
 **Scope:** Document flow tab on all existing operation document detail pages (PO, GRN, QA, STO, RTV, IV, Landed Cost, SO, Sales Invoice, PID). Section 71.2 of feasibility doc.
 **Dependency:** Gate-24 complete (all documents stable)
-**Status:** PENDING
+**Status:** VERIFIED
 
 | ID | Item | Status | Notes |
 |---|---|---|---|
-| 25.1 | BE — getDocumentFlowHandler (given doc type + id, returns full chain: PO→CSN→Gate Entry→GRN→QA→IV etc.) | PENDING | - |
-| 25.2 | BE — route GET /api/procurement/document-flow | PENDING | - |
-| 25.3 | FE — DocumentFlowTab component (reusable, used by all detail pages) | PENDING | - |
-| 25.4 | Add DocumentFlowTab to: PODetailPage, GRNDetailPage, QADocumentPage, STODetailPage, RTVDetailPage, IVDetailPage, LandedCostDetailPage, SODetailPage, SalesInvoiceDetailPage, PIDocumentDetailPage | PENDING | - |
-| 25.5 | Gate-25 verification pass by Claude | PENDING | - |
+| 25.1 | BE - getDocumentFlowHandler (given doc type + id, returns full chain: PO->CSN->Gate Entry->GRN->QA->IV etc.) | VERIFIED | `supabase/functions/api/_core/procurement/document_flow.handlers.ts` — 645 lines. DOC_META for all 13 doc types with correct column names (po_date, so_date, document_number, dn_number verified against existing handlers). resolveChain covers all 13 doc types including extra DEBIT_NOTE backward trace. fetchOne/fetchMany helpers, deduplication via Set<string>, NATURAL_ORDER sort. fetchIvIdsForGrns queries invoice_verification_line with .in("grn_id"). |
+| 25.2 | BE - route GET /api/procurement/document-flow | VERIFIED | `supabase/functions/api/_routes/procurement.routes.ts` — import `getDocumentFlowHandler` confirmed, `case "GET:/api/procurement/document-flow"` switch case confirmed. |
+| 25.3 | FE - DocumentFlowTab component (reusable, used by all detail pages) | VERIFIED | `frontend/src/pages/dashboard/procurement/DocumentFlowSection.jsx` (118 lines) — useEffect cancelled flag cleanup ✅, openScreen before navigate ✅, Array.isArray guard ✅, 13-entry DOC_TYPE_CONFIG ✅, fallback doc_number display (node.id.slice(0,8)) ✅. `procurementApi.js` — getDocumentFlow function appended ✅. |
+| 25.4 | Add DocumentFlowTab to: PODetailPage, GRNDetailPage, QADocumentPage, STODetailPage, RTVDetailPage, IVDetailPage, LandedCostDetailPage, SODetailPage, SalesInvoiceDetailPage, PIDocumentDetailPage | VERIFIED | All 10 pages confirmed via Grep — import present, `<DocumentFlowSection docType="..." docId={...} />` placed as last section. PODetailPage uses docId={po.id} (state var), all others use docId={detail.id}. docType strings: PO, GRN, QA, STO, RTV, IV, LANDED_COST, SO, SALES_INVOICE, PID. |
+| 25.5 | Gate-25 verification pass by Claude | VERIFIED | All 5 items fully verified via file read + Grep. 645-line handler correct. All 10 page integrations confirmed. Routes wired. API function present. |
+
+Gate-25 VERIFIED by Claude on 2026-05-20. All 5 checks passed. L2 (Gates 21–25) complete.
+
+
+## Gate-26 — Business Master Governance
+
+**Status:** DONE
+**Domain:** PROCUREMENT
+**Phase:** Business Master Access Expansion
+
+### Objective
+Open 7 business masters to L2_MANAGER+ ACL users via new procurement dashboard
+pages. SA screens remain intact and untouched.
+
+### Files Changed (26.1 through 26.10)
+
+| File-ID | Path | Change |
+|---------|------|--------|
+| 16.1.2  | supabase/functions/api/_core/procurement/l2_masters.handlers.ts | assertSARole → assertManagerOrSARole in 12 write handlers |
+| 26.2    | frontend/src/pages/dashboard/procurement/masters/PaymentTermsMasterPage.jsx | New — Payment Terms master for L2_MANAGER+ |
+| 26.3    | frontend/src/pages/dashboard/procurement/masters/PortMasterPage.jsx | New — Port master for L2_MANAGER+ |
+| 26.4    | frontend/src/pages/dashboard/procurement/masters/PortTransitMasterPage.jsx | New — Port Transit master for L2_MANAGER+ |
+| 26.5    | frontend/src/pages/dashboard/procurement/masters/MaterialCategoryMasterPage.jsx | New — Material Category (create-only) for L2_MANAGER+ |
+| 26.6    | frontend/src/pages/dashboard/procurement/masters/ImportLeadTimeMasterPage.jsx | New — Import Lead Time master for L2_MANAGER+ |
+| 26.7    | frontend/src/pages/dashboard/procurement/masters/DomesticLeadTimeMasterPage.jsx | New — Domestic Lead Time master for L2_MANAGER+ |
+| 26.8    | frontend/src/pages/dashboard/procurement/masters/TransporterMasterPage.jsx | New — Transporter master for L2_MANAGER+ |
+| 26.9    | frontend/src/pages/dashboard/procurement/masters/CHAMasterPage.jsx | New — CHA master + port assignment for L2_MANAGER+ |
+| 26.10   | frontend/src/navigation/screens/projects/operationModule/operationScreens.js | 7 new PROC_*_MASTER screen codes added |
+
+### Governance Notes
+- assertManagerOrSARole allows: SA, GA, DIRECTOR, L4_MANAGER, L3_MANAGER, L2_MANAGER
+- Read/list handlers remain unguarded (any authenticated user)
+- MaterialCategoryMasterPage is create-only — no update handler exists in backend
+- Lead time and port transit ID fields are plain text inputs — no dropdown loading
+- Routes nested under /dashboard/procurement/masters/
 
 ---
 
-## Gate-26+ — FG Domain (Admix + Powder)
+## Gate-27 — FG Domain (Admix + Powder)
 
 **Scope:** BOM master, Process Order lifecycle, Material Issue (P261), FG Receipt, FG QA, Dispatch Instruction, Goods Issue (P601), Customer Return, Reuse/Rework/Scrap.
 **Dependency:** All L2 gates (21–25) complete

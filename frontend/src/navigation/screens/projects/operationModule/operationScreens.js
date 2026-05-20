@@ -169,6 +169,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_GATE_EXIT_INBOUND_DETAIL: {
+    screen_code: "PROC_GATE_EXIT_INBOUND_DETAIL",
+    route: "/dashboard/procurement/gate-exits/inbound/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_GRN_LIST: {
     screen_code: "PROC_GRN_LIST",
     route: "/dashboard/procurement/grns",
@@ -249,6 +257,30 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_DEBIT_NOTE_LIST: {
+    screen_code: "PROC_DEBIT_NOTE_LIST",
+    route: "/dashboard/procurement/debit-notes",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_DEBIT_NOTE_DETAIL: {
+    screen_code: "PROC_DEBIT_NOTE_DETAIL",
+    route: "/dashboard/procurement/debit-notes/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_EXCHANGE_REF_LIST: {
+    screen_code: "PROC_EXCHANGE_REF_LIST",
+    route: "/dashboard/procurement/exchange-refs",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_IV_LIST: {
     screen_code: "PROC_IV_LIST",
     route: "/dashboard/procurement/accounts/invoice-verifications",
@@ -268,6 +300,62 @@ export const OPERATION_SCREENS = Object.freeze({
   PROC_IV_DETAIL: {
     screen_code: "PROC_IV_DETAIL",
     route: "/dashboard/procurement/accounts/invoice-verifications/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_BLOCKED_IV_LIST: {
+    screen_code: "PROC_BLOCKED_IV_LIST",
+    route: "/dashboard/procurement/accounts/blocked-ivs",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_PLANNING_VIEW: {
+    screen_code: "PROC_PLANNING_VIEW",
+    route: "/dashboard/procurement/planning",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_PLANT_TRANSFER_LIST: {
+    screen_code: "PROC_PLANT_TRANSFER_LIST",
+    route: "/dashboard/procurement/transfer",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_PLANT_TRANSFER_DETAIL: {
+    screen_code: "PROC_PLANT_TRANSFER_DETAIL",
+    route: "/dashboard/procurement/transfer/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_STOCK_LEDGER: {
+    screen_code: "PROC_STOCK_LEDGER",
+    route: "/dashboard/procurement/reports/stock-ledger",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_CURRENT_STOCK: {
+    screen_code: "PROC_CURRENT_STOCK",
+    route: "/dashboard/procurement/reports/current-stock",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_STOCK_VALUATION: {
+    screen_code: "PROC_STOCK_VALUATION",
+    route: "/dashboard/procurement/reports/stock-valuation",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
@@ -340,6 +428,70 @@ export const OPERATION_SCREENS = Object.freeze({
   PROC_PI_DETAIL: {
     screen_code: "PROC_PI_DETAIL",
     route: "/dashboard/procurement/physical-inventory/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_PAYMENT_TERMS_MASTER: {
+    screen_code: "PROC_PAYMENT_TERMS_MASTER",
+    route: "/dashboard/procurement/masters/payment-terms",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_PORT_MASTER: {
+    screen_code: "PROC_PORT_MASTER",
+    route: "/dashboard/procurement/masters/ports",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_PORT_TRANSIT_MASTER: {
+    screen_code: "PROC_PORT_TRANSIT_MASTER",
+    route: "/dashboard/procurement/masters/port-transit",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_MATERIAL_CATEGORY_MASTER: {
+    screen_code: "PROC_MATERIAL_CATEGORY_MASTER",
+    route: "/dashboard/procurement/masters/material-categories",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_IMPORT_LEAD_TIME_MASTER: {
+    screen_code: "PROC_IMPORT_LEAD_TIME_MASTER",
+    route: "/dashboard/procurement/masters/import-lead-times",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_DOMESTIC_LEAD_TIME_MASTER: {
+    screen_code: "PROC_DOMESTIC_LEAD_TIME_MASTER",
+    route: "/dashboard/procurement/masters/domestic-lead-times",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_TRANSPORTER_MASTER: {
+    screen_code: "PROC_TRANSPORTER_MASTER",
+    route: "/dashboard/procurement/masters/transporters",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_CHA_MASTER: {
+    screen_code: "PROC_CHA_MASTER",
+    route: "/dashboard/procurement/masters/cha",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

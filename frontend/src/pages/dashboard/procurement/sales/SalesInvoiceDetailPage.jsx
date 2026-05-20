@@ -12,6 +12,7 @@ import {
   getSalesOrder,
   postSalesInvoice,
 } from "../procurementApi.js";
+import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 function formatMoney(value) {
   const numeric = Number(value);
@@ -315,6 +316,8 @@ export default function SalesInvoiceDetailPage() {
               <ErpFieldPreview label="Total Invoice Value" value={formatMoney(detail.total_invoice_value)} />
             </div>
           </ErpSectionCard>
+
+          <DocumentFlowSection docType="SALES_INVOICE" docId={detail.id} />
         </div>
       )}
     </ErpScreenScaffold>

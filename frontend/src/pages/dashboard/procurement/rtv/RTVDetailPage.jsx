@@ -19,6 +19,7 @@ import {
   postRTV,
   settleDebitNote,
 } from "../procurementApi.js";
+import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -352,6 +353,8 @@ export default function RTVDetailPage() {
               Pending credit tracked on vendor&apos;s next Invoice Verification. No action needed here.
             </div>
           ) : null}
+
+          <DocumentFlowSection docType="RTV" docId={detail.id} />
         </div>
       )}
     </ErpScreenScaffold>

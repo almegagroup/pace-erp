@@ -43,6 +43,24 @@ import {
   reverseGRNHandler,
   updateGRNDraftHandler,
 } from "../_core/procurement/grn.handlers.ts";
+import { getProcurementPlanningHandler } from "../_core/procurement/planning.handlers.ts";
+import { getDocumentFlowHandler } from "../_core/procurement/document_flow.handlers.ts";
+import {
+  getCurrentStockHandler,
+  getStockLedgerReportHandler,
+  getStockValuationHandler,
+} from "../_core/procurement/stock_reports.handlers.ts";
+import {
+  approvePTOHandler,
+  cancelPTOHandler,
+  createPTOHandler,
+  getPTOHandler,
+  issueTransferHandler,
+  listPTOsHandler,
+  oneStepTransferHandler,
+  receiveTransferHandler,
+  storageLocationTransferHandler,
+} from "../_core/procurement/pto.handlers.ts";
 import {
   addIVLineHandler,
   createIVDraftHandler,
@@ -277,6 +295,22 @@ export async function dispatchProcurementRoutes(
       return await listIVsHandler(req, ctx);
     case "GET:/api/procurement/invoice-verifications/blocked":
       return await listBlockedIVsHandler(req, ctx);
+    case "GET:/api/procurement/planning":
+      return await getProcurementPlanningHandler(req, ctx);
+    case "GET:/api/procurement/document-flow":
+      return await getDocumentFlowHandler(req, ctx);
+    case "GET:/api/procurement/stock-ledger":
+      return await getStockLedgerReportHandler(req, ctx);
+    case "GET:/api/procurement/current-stock":
+      return await getCurrentStockHandler(req, ctx);
+    case "GET:/api/procurement/stock-valuation":
+      return await getStockValuationHandler(req, ctx);
+    case "POST:/api/procurement/ptos":
+      return await createPTOHandler(req, ctx);
+    case "GET:/api/procurement/ptos":
+      return await listPTOsHandler(req, ctx);
+    case "POST:/api/procurement/sloc-transfer":
+      return await storageLocationTransferHandler(req, ctx);
     case "POST:/api/procurement/landed-costs":
       return await createLandedCostHandler(req, ctx);
     case "GET:/api/procurement/landed-costs":
@@ -498,6 +532,30 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/landed-costs\/by-grn\/[^/]+$/.test(pathname) && req.method === "GET") {
     return await getLandedCostForGRNHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/ptos\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getPTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/ptos\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+    return await approvePTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/ptos\/[^/]+\/one-step$/.test(pathname) && req.method === "POST") {
+    return await oneStepTransferHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/ptos\/[^/]+\/issue$/.test(pathname) && req.method === "POST") {
+    return await issueTransferHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/ptos\/[^/]+\/receive$/.test(pathname) && req.method === "POST") {
+    return await receiveTransferHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/ptos\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+    return await cancelPTOHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/landed-costs\/[^/]+$/.test(pathname) && req.method === "GET") {

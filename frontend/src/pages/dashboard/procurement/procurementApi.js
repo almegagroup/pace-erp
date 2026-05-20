@@ -124,6 +124,10 @@ export function listMaterialCategories(params) {
   return fetchProcurement("GET", "/api/procurement/material-categories", undefined, params);
 }
 
+export function createMaterialCategory(payload) {
+  return fetchProcurement("POST", "/api/procurement/material-categories", payload);
+}
+
 export function listPurchaseOrders(params) {
   return fetchProcurement("GET", "/api/procurement/purchase-orders", undefined, params);
 }
@@ -445,6 +449,46 @@ export function listBlockedIVs(params) {
   return fetchProcurement("GET", "/api/procurement/invoice-verifications/blocked", undefined, params);
 }
 
+export function getProcurementPlanning(params) {
+  return fetchProcurement("GET", "/api/procurement/planning", undefined, params);
+}
+
+export function listPTOs(params) {
+  return fetchProcurement("GET", "/api/procurement/ptos", undefined, params);
+}
+
+export function getPTO(id) {
+  return fetchProcurement("GET", `/api/procurement/ptos/${encodeURIComponent(id)}`);
+}
+
+export function createPTO(data) {
+  return fetchProcurement("POST", "/api/procurement/ptos", data);
+}
+
+export function approvePTO(id) {
+  return fetchProcurement("POST", `/api/procurement/ptos/${encodeURIComponent(id)}/approve`);
+}
+
+export function oneStepTransfer(id) {
+  return fetchProcurement("POST", `/api/procurement/ptos/${encodeURIComponent(id)}/one-step`);
+}
+
+export function issueTransfer(id) {
+  return fetchProcurement("POST", `/api/procurement/ptos/${encodeURIComponent(id)}/issue`);
+}
+
+export function receiveTransfer(id, data) {
+  return fetchProcurement("POST", `/api/procurement/ptos/${encodeURIComponent(id)}/receive`, data);
+}
+
+export function cancelPTO(id, data) {
+  return fetchProcurement("POST", `/api/procurement/ptos/${encodeURIComponent(id)}/cancel`, data);
+}
+
+export function slocTransfer(data) {
+  return fetchProcurement("POST", "/api/procurement/sloc-transfer", data);
+}
+
 export function listLandedCosts(params) {
   return fetchProcurement("GET", "/api/procurement/landed-costs", undefined, params);
 }
@@ -639,4 +683,20 @@ export function requestPIRecount(id, itemId) {
 
 export function postPIDifferences(id) {
   return fetchProcurement("POST", `/api/procurement/physical-inventory/${encodeURIComponent(id)}/post`);
+}
+
+export function getStockLedgerReport(params) {
+  return fetchProcurement("GET", "/api/procurement/stock-ledger", undefined, params);
+}
+
+export function getCurrentStock(params) {
+  return fetchProcurement("GET", "/api/procurement/current-stock", undefined, params);
+}
+
+export function getStockValuation(params) {
+  return fetchProcurement("GET", "/api/procurement/stock-valuation", undefined, params);
+}
+
+export function getDocumentFlow(params) {
+  return fetchProcurement("GET", "/api/procurement/document-flow", undefined, params);
 }

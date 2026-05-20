@@ -154,6 +154,19 @@ export default function IVListPage() {
           tone: "neutral",
           onClick: () => setRefreshToken((value) => value + 1),
         },
+        ...(blockedRows.length > 0
+          ? [
+              {
+                key: "view-blocked",
+                label: `View ${blockedRows.length} Blocked IV${blockedRows.length === 1 ? "" : "s"}`,
+                tone: "warning",
+                onClick: () => {
+                  openScreen(OPERATION_SCREENS.PROC_BLOCKED_IV_LIST.screen_code);
+                  navigate("/dashboard/procurement/accounts/blocked-ivs");
+                },
+              },
+            ]
+          : []),
         {
           key: "create",
           label: "Create IV",

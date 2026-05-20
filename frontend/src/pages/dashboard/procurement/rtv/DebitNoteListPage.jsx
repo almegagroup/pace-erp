@@ -1,3 +1,13 @@
+/*
+ * File-ID: 21.1
+ * File-Path: frontend/src/pages/dashboard/procurement/rtv/DebitNoteListPage.jsx
+ * Gate: 21
+ * Phase: 21
+ * Domain: PROCUREMENT
+ * Purpose: List debit notes raised from RTV settlements
+ * Authority: Frontend
+ */
+
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
@@ -8,31 +18,19 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listVendors } from "../../om/omApi.js";
-import { getGRN, listRTVs } from "../procurementApi.js";
+import { listDebitNotes } from "../procurementApi.js";
 
 const LIMIT = 50;
 
-function settlementTone(mode) {
-  switch (String(mode || "").toUpperCase()) {
-    case "DEBIT_NOTE":
-      return "bg-sky-100 text-sky-800";
-    case "EXCHANGE":
-      return "bg-violet-100 text-violet-800";
-    case "NEXT_INVOICE_ADJUST":
-    default:
-      return "bg-amber-100 text-amber-800";
-  }
-}
-
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
-    case "DISPATCHED":
+    case "SENT":
       return "bg-sky-100 text-sky-800";
+    case "ACKNOWLEDGED":
+      return "bg-violet-100 text-violet-800";
     case "SETTLED":
       return "bg-emerald-100 text-emerald-800";
-    case "CANCELLED":
-      return "bg-rose-100 text-rose-800";
-    case "CREATED":
+    case "DRAFT":
     default:
       return "bg-amber-100 text-amber-800";
   }
@@ -42,17 +40,26 @@ function normalizeSearch(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-export default function RTVListPage() {
+function formatNumber(value) {
+  const amount = Number(value ?? 0);
+  if (!Number.isFinite(amount)) {
+    return "0.0000";
+  }
+  return amount.toLocaleString("en-IN", {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  });
+}
+
+export default function DebitNoteListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [rows, setRows] = useState([]);
   const [vendors, setVendors] = useState([]);
-  const [grnMap, setGrnMap] = useState(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [settlementMode, setSettlementMode] = useState("");
   const [vendorId, setVendorId] = useState("");
   const [page, setPage] = useState(1);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -60,66 +67,58 @@ export default function RTVListPage() {
 
   useEffect(() => {
     let active = true;
+
     async function load() {
       setLoading(true);
       setError("");
       try {
-        const [rtvData, vendorData] = await Promise.all([
-          listRTVs({
+        const [data, vendorData] = await Promise.all([
+          listDebitNotes({
             company_id: companyId || undefined,
-            status: status || undefined,
-            settlement_mode: settlementMode || undefined,
             vendor_id: vendorId || undefined,
+            status: status || undefined,
             limit: 200,
           }),
           listVendors({ limit: 200, offset: 0 }),
         ]);
-        const items = Array.isArray(rtvData?.items) ? rtvData.items : [];
-        const uniqueGrnIds = Array.from(new Set(items.map((row) => row.grn_id).filter(Boolean)));
-        const grnEntries = await Promise.all(
-          uniqueGrnIds.map(async (grnId) => {
-            try {
-              const detail = await getGRN(grnId);
-              return [grnId, detail];
-            } catch {
-              return [grnId, null];
-            }
-          })
-        );
         if (!active) {
           return;
         }
-        setRows(items);
+        setRows(Array.isArray(data?.items) ? data.items : []);
         setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-        setGrnMap(new Map(grnEntries));
       } catch (loadError) {
         if (!active) {
           return;
         }
         setRows([]);
         setVendors([]);
-        setGrnMap(new Map());
-        setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_RTV_LIST_FAILED");
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "PROCUREMENT_DEBIT_NOTE_LIST_FAILED"
+        );
       } finally {
         if (active) {
           setLoading(false);
         }
       }
     }
+
     void load();
     return () => {
       active = false;
     };
-  }, [companyId, refreshToken, settlementMode, status, vendorId]);
+  }, [companyId, refreshToken, status, vendorId]);
 
   useEffect(() => {
     setPage(1);
-  }, [search, status, settlementMode, vendorId]);
+  }, [search, status, vendorId]);
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]
   );
+
   const filteredRows = useMemo(() => {
     const needle = normalizeSearch(search);
     if (!needle) {
@@ -127,42 +126,38 @@ export default function RTVListPage() {
     }
     return rows.filter((row) => {
       const vendor = vendorMap.get(row.vendor_id);
-      const grn = grnMap.get(row.grn_id);
       const haystack = [
-        row.rtv_number,
+        row.dn_number,
+        row.rtv_id,
         vendor?.vendor_name,
         vendor?.vendor_code,
-        grn?.grn_number,
-        row.reason_category,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       return haystack.includes(needle);
     });
-  }, [grnMap, rows, search, vendorMap]);
+  }, [rows, search, vendorMap]);
 
   const total = filteredRows.length;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const safePage = Math.min(page, totalPages);
-  const pageRows = filteredRows.slice((safePage - 1) * LIMIT, safePage * LIMIT);
+  const pageRows = filteredRows.slice(
+    (safePage - 1) * LIMIT,
+    safePage * LIMIT
+  );
   const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
 
-  function openCreate() {
-    openScreen(OPERATION_SCREENS.PROC_RTV_CREATE.screen_code);
-    navigate("/dashboard/procurement/rtvs/create");
-  }
-
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_RTV_DETAIL.screen_code);
-    navigate(`/dashboard/procurement/rtvs/${encodeURIComponent(row.id)}`);
+    openScreen(OPERATION_SCREENS.PROC_DEBIT_NOTE_DETAIL.screen_code);
+    navigate(`/dashboard/procurement/debit-notes/${encodeURIComponent(row.id)}`);
   }
 
   return (
     <ErpMasterListTemplate
       eyebrow="Procurement"
-      title="Return To Vendor"
+      title="Debit Notes"
       actions={[
         {
           key: "refresh",
@@ -170,43 +165,23 @@ export default function RTVListPage() {
           tone: "neutral",
           onClick: () => setRefreshToken((value) => value + 1),
         },
-        {
-          key: "debit-notes",
-          label: "Debit Notes",
-          tone: "neutral",
-          onClick: () => {
-            openScreen(OPERATION_SCREENS.PROC_DEBIT_NOTE_LIST.screen_code);
-            navigate("/dashboard/procurement/debit-notes");
-          },
-        },
-        {
-          key: "exchange-refs",
-          label: "Exchange Refs",
-          tone: "neutral",
-          onClick: () => {
-            openScreen(OPERATION_SCREENS.PROC_EXCHANGE_REF_LIST.screen_code);
-            navigate("/dashboard/procurement/exchange-refs");
-          },
-        },
-        {
-          key: "create",
-          label: "Create RTV",
-          tone: "primary",
-          onClick: openCreate,
-        },
       ]}
-      notices={error ? [{ key: "rtv-list-error", tone: "error", message: error }] : []}
+      notices={
+        error
+          ? [{ key: "dn-list-error", tone: "error", message: error }]
+          : []
+      }
       filterSection={{
         eyebrow: "Search And Filter",
-        title: "Vendor return register",
+        title: "Debit note register",
         children: (
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_170px_220px_220px]">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_220px_220px]">
             <QuickFilterInput
               label="Search"
               value={search}
               onChange={setSearch}
               primaryFocus
-              placeholder="Search RTV number, vendor or GRN"
+              placeholder="Search DN number, vendor or RTV"
             />
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Status
@@ -216,22 +191,7 @@ export default function RTVListPage() {
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
-                {["CREATED", "DISPATCHED", "SETTLED", "CANCELLED"].map((entry) => (
-                  <option key={entry} value={entry}>
-                    {entry}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Settlement Mode
-              <select
-                value={settlementMode}
-                onChange={(event) => setSettlementMode(event.target.value)}
-                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-              >
-                <option value="">ALL</option>
-                {["DEBIT_NOTE", "NEXT_INVOICE_ADJUST", "EXCHANGE"].map((entry) => (
+                {["DRAFT", "SENT", "ACKNOWLEDGED", "SETTLED"].map((entry) => (
                   <option key={entry} value={entry}>
                     {entry}
                   </option>
@@ -257,8 +217,10 @@ export default function RTVListPage() {
         ),
       }}
       listSection={{
-        eyebrow: "RTV Register",
-        title: loading ? "Loading RTVs" : `${total} RTV row${total === 1 ? "" : "s"}`,
+        eyebrow: "Debit Note Register",
+        title: loading
+          ? "Loading debit notes"
+          : `${total} debit note row${total === 1 ? "" : "s"}`,
         children: (
           <div className="grid gap-3">
             <ErpPaginationStrip
@@ -271,7 +233,8 @@ export default function RTVListPage() {
             />
             <ErpDenseGrid
               columns={[
-                { key: "rtv_number", label: "RTV Number", width: "140px" },
+                { key: "dn_number", label: "DN Number", width: "150px" },
+                { key: "dn_date", label: "Date", width: "120px" },
                 {
                   key: "vendor_name",
                   label: "Vendor",
@@ -281,43 +244,34 @@ export default function RTVListPage() {
                     row.vendor_id ||
                     "—",
                 },
+                { key: "rtv_id", label: "RTV", width: "170px" },
                 {
-                  key: "grn_number",
-                  label: "GRN Number",
+                  key: "total_value",
+                  label: "Total Value",
                   width: "140px",
-                  render: (row) => grnMap.get(row.grn_id)?.grn_number || row.grn_id || "—",
-                },
-                { key: "reason_category", label: "Reason", width: "160px" },
-                {
-                  key: "settlement_mode",
-                  label: "Settlement",
-                  width: "150px",
-                  render: (row) => (
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${settlementTone(row.settlement_mode)}`}>
-                      {row.settlement_mode}
-                    </span>
-                  ),
+                  align: "right",
+                  render: (row) => formatNumber(row.total_value),
                 },
                 {
                   key: "status",
                   label: "Status",
-                  width: "130px",
+                  width: "150px",
                   render: (row) => (
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${statusTone(row.status)}`}>
-                      {row.status}
+                    <span
+                      className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${statusTone(
+                        row.status
+                      )}`}
+                    >
+                      {row.status || "—"}
                     </span>
                   ),
                 },
-                { key: "created_at", label: "Created", width: "140px" },
+                { key: "created_at", label: "Created", width: "180px" },
               ]}
               rows={pageRows}
               rowKey={(row) => row.id}
-              onRowActivate={openDetail}
-              getRowProps={(row) => ({
-                onDoubleClick: () => openDetail(row),
-                className: "cursor-pointer hover:bg-sky-50",
-              })}
-              emptyMessage={loading ? "Loading RTV register..." : "No RTV matched the current filter."}
+              onRowClick={openDetail}
+              emptyMessage={loading ? "Loading debit notes..." : "No debit notes found."}
             />
           </div>
         ),

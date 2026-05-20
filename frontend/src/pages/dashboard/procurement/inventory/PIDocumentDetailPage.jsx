@@ -18,6 +18,7 @@ import {
   postPIDifferences,
   requestPIRecount,
 } from "../procurementApi.js";
+import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 const PI_MATERIAL_TYPES = new Set(["RM", "PM", "INT"]);
@@ -467,6 +468,8 @@ export default function PIDocumentDetailPage() {
               </div>
             </ErpSectionCard>
           ) : null}
+
+          <DocumentFlowSection docType="PID" docId={detail.id} />
         </div>
       )}
     </ErpScreenScaffold>

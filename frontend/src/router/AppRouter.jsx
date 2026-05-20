@@ -8,6 +8,7 @@
  * Authority: Frontend
  */
 
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { MenuProvider } from "../context/MenuProvider.jsx";
 import AuthBootstrap from "../auth/AuthBootstrap.jsx";
@@ -123,6 +124,7 @@ import CSNAlertsPage from "../pages/dashboard/procurement/csn/CSNAlertsPage.jsx"
 import GateEntryListPage from "../pages/dashboard/procurement/gate/GateEntryListPage.jsx";
 import GateEntryCreatePage from "../pages/dashboard/procurement/gate/GateEntryCreatePage.jsx";
 import GateEntryDetailPage from "../pages/dashboard/procurement/gate/GateEntryDetailPage.jsx";
+import GateExitInboundDetailPage from "../pages/dashboard/procurement/gate/GateExitInboundDetailPage.jsx";
 import GRNListPage from "../pages/dashboard/procurement/grn/GRNListPage.jsx";
 import GRNDetailPage from "../pages/dashboard/procurement/grn/GRNDetailPage.jsx";
 import QAQueuePage from "../pages/dashboard/procurement/qa/QAQueuePage.jsx";
@@ -133,9 +135,19 @@ import STODetailPage from "../pages/dashboard/procurement/sto/STODetailPage.jsx"
 import RTVListPage from "../pages/dashboard/procurement/rtv/RTVListPage.jsx";
 import RTVCreatePage from "../pages/dashboard/procurement/rtv/RTVCreatePage.jsx";
 import RTVDetailPage from "../pages/dashboard/procurement/rtv/RTVDetailPage.jsx";
+import DebitNoteListPage from "../pages/dashboard/procurement/rtv/DebitNoteListPage.jsx";
+import DebitNoteDetailPage from "../pages/dashboard/procurement/rtv/DebitNoteDetailPage.jsx";
+import ExchangeRefListPage from "../pages/dashboard/procurement/rtv/ExchangeRefListPage.jsx";
 import IVListPage from "../pages/dashboard/procurement/accounts/IVListPage.jsx";
 import IVCreatePage from "../pages/dashboard/procurement/accounts/IVCreatePage.jsx";
 import IVDetailPage from "../pages/dashboard/procurement/accounts/IVDetailPage.jsx";
+import BlockedIVListPage from "../pages/dashboard/procurement/accounts/BlockedIVListPage.jsx";
+import ProcurementPlanningPage from "../pages/dashboard/procurement/planning/ProcurementPlanningPage.jsx";
+import PlantTransferListPage from "../pages/dashboard/procurement/transfer/PlantTransferListPage.jsx";
+import PlantTransferDetailPage from "../pages/dashboard/procurement/transfer/PlantTransferDetailPage.jsx";
+import StockLedgerReportPage from "../pages/dashboard/procurement/reports/StockLedgerReportPage.jsx";
+import CurrentStockPage from "../pages/dashboard/procurement/reports/CurrentStockPage.jsx";
+import StockValuationPage from "../pages/dashboard/procurement/reports/StockValuationPage.jsx";
 import LandedCostListPage from "../pages/dashboard/procurement/accounts/LandedCostListPage.jsx";
 import LandedCostDetailPage from "../pages/dashboard/procurement/accounts/LandedCostDetailPage.jsx";
 import SOListPage from "../pages/dashboard/procurement/sales/SOListPage.jsx";
@@ -145,6 +157,35 @@ import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvo
 import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
 import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocumentListPage.jsx";
 import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
+
+const PaymentTermsMasterPage = lazy(() =>
+  import("../pages/dashboard/procurement/masters/PaymentTermsMasterPage.jsx"),
+);
+const PortMasterPage = lazy(() =>
+  import("../pages/dashboard/procurement/masters/PortMasterPage.jsx"),
+);
+const PortTransitMasterPage = lazy(() =>
+  import("../pages/dashboard/procurement/masters/PortTransitMasterPage.jsx"),
+);
+const MaterialCategoryMasterPage = lazy(() =>
+  import(
+    "../pages/dashboard/procurement/masters/MaterialCategoryMasterPage.jsx"
+  ),
+);
+const ImportLeadTimeMasterPage = lazy(() =>
+  import("../pages/dashboard/procurement/masters/ImportLeadTimeMasterPage.jsx"),
+);
+const DomesticLeadTimeMasterPage = lazy(() =>
+  import(
+    "../pages/dashboard/procurement/masters/DomesticLeadTimeMasterPage.jsx"
+  ),
+);
+const TransporterMasterPage = lazy(() =>
+  import("../pages/dashboard/procurement/masters/TransporterMasterPage.jsx"),
+);
+const CHAMasterPage = lazy(() =>
+  import("../pages/dashboard/procurement/masters/CHAMasterPage.jsx"),
+);
 
 export default function AppRouter() {
   return (
@@ -157,7 +198,8 @@ export default function AppRouter() {
             <SessionWatchdog />
             <NavigationStackBridge />
 
-            <Routes>
+            <Suspense fallback={null}>
+              <Routes>
               <Route path="/" element={<LandingPage />} />
               <Route path="/login" element={<LoginScreen />} />
               <Route
@@ -520,6 +562,10 @@ export default function AppRouter() {
                     element={<GateEntryDetailPage />}
                   />
                   <Route
+                    path="procurement/gate-exits/inbound/:id"
+                    element={<GateExitInboundDetailPage />}
+                  />
+                  <Route
                     path="procurement/grns"
                     element={<GRNListPage />}
                   />
@@ -560,6 +606,18 @@ export default function AppRouter() {
                     element={<RTVDetailPage />}
                   />
                   <Route
+                    path="procurement/debit-notes"
+                    element={<DebitNoteListPage />}
+                  />
+                  <Route
+                    path="procurement/debit-notes/:id"
+                    element={<DebitNoteDetailPage />}
+                  />
+                  <Route
+                    path="procurement/exchange-refs"
+                    element={<ExchangeRefListPage />}
+                  />
+                  <Route
                     path="procurement/accounts/invoice-verifications"
                     element={<IVListPage />}
                   />
@@ -570,6 +628,34 @@ export default function AppRouter() {
                   <Route
                     path="procurement/accounts/invoice-verifications/:id"
                     element={<IVDetailPage />}
+                  />
+                  <Route
+                    path="procurement/accounts/blocked-ivs"
+                    element={<BlockedIVListPage />}
+                  />
+                  <Route
+                    path="procurement/planning"
+                    element={<ProcurementPlanningPage />}
+                  />
+                  <Route
+                    path="procurement/transfer"
+                    element={<PlantTransferListPage />}
+                  />
+                  <Route
+                    path="procurement/transfer/:id"
+                    element={<PlantTransferDetailPage />}
+                  />
+                  <Route
+                    path="procurement/reports/stock-ledger"
+                    element={<StockLedgerReportPage />}
+                  />
+                  <Route
+                    path="procurement/reports/current-stock"
+                    element={<CurrentStockPage />}
+                  />
+                  <Route
+                    path="procurement/reports/stock-valuation"
+                    element={<StockValuationPage />}
                   />
                   <Route
                     path="procurement/accounts/landed-costs"
@@ -607,11 +693,44 @@ export default function AppRouter() {
                     path="procurement/physical-inventory/:id"
                     element={<PIDocumentDetailPage />}
                   />
+                  <Route
+                    path="procurement/masters/payment-terms"
+                    element={<PaymentTermsMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/ports"
+                    element={<PortMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/port-transit"
+                    element={<PortTransitMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/material-categories"
+                    element={<MaterialCategoryMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/import-lead-times"
+                    element={<ImportLeadTimeMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/domestic-lead-times"
+                    element={<DomesticLeadTimeMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/transporters"
+                    element={<TransporterMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/cha"
+                    element={<CHAMasterPage />}
+                  />
                 </Route>
               </Route>
 
               <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+              </Routes>
+            </Suspense>
           </AuthBootstrap>
         </MenuProvider>
       </div>

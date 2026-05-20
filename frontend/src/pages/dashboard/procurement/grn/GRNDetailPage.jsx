@@ -6,6 +6,7 @@ import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listMaterials } from "../../om/omApi.js";
 import { getGRN, postGRN, reverseGRN, updateGRNDraft } from "../procurementApi.js";
+import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 function badgeTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -326,6 +327,8 @@ export default function GRNDetailPage() {
               </div>
             </div>
           </ErpSectionCard>
+
+          <DocumentFlowSection docType="GRN" docId={detail.id} />
         </div>
       )}
     </ErpScreenScaffold>

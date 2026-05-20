@@ -17,6 +17,7 @@ import {
   getSTO,
   updateGateExitWeight,
 } from "../procurementApi.js";
+import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -321,6 +322,8 @@ export default function STODetailPage() {
               </div>
             </ErpSectionCard>
           ) : null}
+
+          <DocumentFlowSection docType="STO" docId={detail.id} />
         </div>
       )}
     </ErpScreenScaffold>

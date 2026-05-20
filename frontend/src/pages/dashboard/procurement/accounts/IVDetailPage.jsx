@@ -9,6 +9,7 @@ import ErpScreenScaffold, {
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listMaterials, listVendors } from "../../om/omApi.js";
 import { addIVLine, getGRN, getIV, postIV, removeIVLine, runIVMatch } from "../procurementApi.js";
+import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -404,6 +405,8 @@ export default function IVDetailPage() {
               </div>
             </ErpSectionCard>
           ) : null}
+
+          <DocumentFlowSection docType="IV" docId={detail.id} />
         </div>
       )}
     </ErpScreenScaffold>

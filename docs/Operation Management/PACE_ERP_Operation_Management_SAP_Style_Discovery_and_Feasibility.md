@@ -6905,6 +6905,42 @@ User reviews → confirms → movement posted
 
 ---
 
+### 83.12 — FG Operation Type Classification and Material Master Maintenance
+
+#### SKU Structure (All FG Types)
+
+```
+SKU Code = Product Code (4) + Shade Code (4) + Pack Code (3) = 11 characters
+Base Material Identity = Product Code (4) + Shade Code (4) = 8 characters
+```
+
+Pack Code examples: 599 = barrel/drum, 000 = tanker/bulk
+
+#### FG Types by Section
+
+| Section | Operation Type | BOM | SKU | Who Maintains Material Master |
+|---|---|---|---|---|
+| Powder | Fixed BOM | Pre-defined fixed BOM | Pre-defined, fixed | SA — upfront, before production |
+| Hypershot (under Admix section) | Fixed BOM | Pre-defined fixed BOM | Pre-defined, fixed | SA — upfront, before production |
+| IWC (under Admix section) | Fixed BOM | Pre-defined fixed BOM | Pre-defined, fixed | SA — upfront, before production |
+| Admix (main Admix section) | No BOM | No fixed BOM — formula captured batch-by-batch | Not pre-defined — shade and pack determined per order | Cannot be SA-maintained upfront |
+
+#### Admix FG Material Master — Design Decision
+
+**SA cannot pre-define Admix FG material masters** because:
+- Shade code varies per customer order — not known in advance
+- Pack code varies per batch/dispatch — not known until dispatch stage
+
+**Resolution:** Admix FG material master creation and SKU assignment will be determined at Process Order / Dispatch stage. The exact ownership (who creates, when, via which screen) is **deferred to SOD design** — to be decided when Process Order and Dispatch modules are designed.
+
+**What is locked:**
+- SKU structure: Product(4) + Shade(4) + Pack(3) = 11 chars applies to ALL FG types
+- Material master DB structure: same table for all FG types — follows existing material_master design in MD
+- Powder, Hypershot, IWC: SA-maintained upfront ✅
+- Admix: SOD to define the creation/maintenance model at Process Order + Dispatch design stage
+
+---
+
 ### Round-3 Summary — Admix/Liquid Decisions Locked
 
 | Decision | Locked Value |
@@ -6916,6 +6952,7 @@ User reviews → confirms → movement posted
 | Two-order model | Process PO (formulation) + Packing PO (packing) — always separate |
 | Packing type lock | FG Declaration time |
 | Packing change | Reverse Packing PO + create new — cost + invoice updated |
+| Repack (post-return) | Standalone Repack Packing PO (source_type=REPACK) — returned material + PM → new SKU FG |
 | Intermediate RM | Separate independent Process PO, own material code, own stock |
 | FG reuse / return reuse | FOR_REPROCESS stock type, role-restricted, material code retained, cost flows through |
 | Batch number | Existing format (TBD), financial year reset, PACE-ERP continues sequence |
@@ -6924,11 +6961,14 @@ User reviews → confirms → movement posted
 | Vessel assignment | Per batch — master design pending |
 | Tolerance | Under + over delivery — values pending |
 | Stock types (final Phase-1) | UNRESTRICTED, QUALITY_INSPECTION, BLOCKED, IN_TRANSIT, FOR_REPROCESS |
+| FG SKU structure | Product(4) + Shade(4) + Pack(3) = 11 chars. All FG types use same structure. |
+| FG master maintenance | Powder/Hypershot/IWC: SA upfront. Admix: deferred to SOD — decided at Process Order + Dispatch design. |
+| New movement types needed | P231/P232 (FG Receipt/Reversal), P267/P268 (Issue FOR_REPROCESS to Production/Reversal) |
 
 ---
 
 **Round-3 Status: IN PROGRESS**
-**Pending:** Vessel master design, tolerance values, batch number format
+**Pending:** Vessel master design, tolerance values, batch number format, Admix FG master creation model (SOD to decide at Process Order + Dispatch stage)
 **Next:** Complete Admix discovery → move to other Operation Types
 
 ---

@@ -17,6 +17,7 @@ import {
   postLandedCost,
   updateLCLine,
 } from "../procurementApi.js";
+import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 const COST_TYPES = [
   "FREIGHT",
@@ -456,6 +457,8 @@ export default function LandedCostDetailPage() {
               ) : null}
             </>
           ) : null}
+
+          {detail ? <DocumentFlowSection docType="LANDED_COST" docId={detail.id} /> : null}
         </div>
       )}
     </ErpScreenScaffold>

@@ -18,6 +18,7 @@ import {
   submitUsageDecision,
   updateQATestLine,
 } from "../procurementApi.js";
+import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -803,6 +804,8 @@ export default function QADocumentPage() {
               />
             </ErpSectionCard>
           )}
+
+          <DocumentFlowSection docType="QA" docId={detail.id} />
         </div>
       )}
     </ErpScreenScaffold>

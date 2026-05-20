@@ -1,0 +1,708 @@
+/*
+ * File-ID: 23.3
+ * File-Path: supabase/functions/api/_core/procurement/pto.handlers.ts
+ * Gate: 23
+ * Phase: 23
+ * Domain: PROCUREMENT
+ * Purpose: Plant Transfer Order - ONE_STEP (P301) and TWO_STEP (P303/P305) handlers + SLOC transfer (P311).
+ * Authority: Backend
+ */
+
+import type { ContextResolution } from "../../_pipeline/context.ts";
+import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { errorResponse, okResponse } from "../response.ts";
+
+type JsonRecord = Record<string, unknown>;
+type ProcurementHandlerContext = {
+  context: Extract<ContextResolution, { status: "RESOLVED" }>;
+  request_id: string;
+  auth_user_id: string;
+  roleCode: string;
+};
+type PtoRow = Record<string, unknown>;
+
+const PTO_TRANSFER_TYPES = new Set(["ONE_STEP", "TWO_STEP"]);
+const PTO_STATUSES = new Set(["DRAFT", "APPROVED", "ISSUED", "IN_TRANSIT", "CLOSED", "CANCELLED"]);
+const PTO_TRANSFER_PRICE_TYPES = new Set(["AT_COST", "AT_AGREED_PRICE"]);
+
+function parseBody(req: Request): Promise<JsonRecord> {
+  return req.json().catch(() => ({} as JsonRecord));
+}
+
+function toTrimmedString(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function toUpperTrimmedString(value: unknown): string {
+  return toTrimmedString(value).toUpperCase();
+}
+
+function parsePositiveInt(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function parseNonNegativeInt(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function parsePositiveNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseOptionalBoolean(value: unknown, fallback = false): boolean {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const normalized = toUpperTrimmedString(value);
+  if (normalized === "TRUE") return true;
+  if (normalized === "FALSE") return false;
+  return fallback;
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function nowIsoString(): string {
+  return new Date().toISOString();
+}
+
+function ptoErrorResponse(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+  code: string,
+  status: number,
+  message: string,
+): Response {
+  return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
+}
+
+function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
+  // Protected by upstream pipeline.
+}
+
+function getIdFromPath(req: Request): string {
+  const pathname = new URL(req.url).pathname;
+  const match = pathname.match(/^\/api\/procurement\/ptos\/([^/]+)$/);
+  return match?.[1] ?? "";
+}
+
+async function generateProcurementDocNumber(docType: string): Promise<string> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .rpc("generate_doc_number", { p_doc_type: docType });
+  if (error || !data) {
+    throw new Error("PROCUREMENT_DOC_NUMBER_FAILED");
+  }
+  return String(data);
+}
+
+async function postStockMovement(params: {
+  documentNumber: string;
+  movementTypeCode: string;
+  companyId: string;
+  plantId: string;
+  storageLocationId: string;
+  materialId: string;
+  quantity: number;
+  uomCode: string;
+  unitValue: number;
+  stockTypeCode: string;
+  direction: "IN" | "OUT";
+  postedBy: string;
+  reversalOfId?: string;
+}): Promise<{ stockDocumentId: string; stockLedgerId: string }> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .rpc("post_stock_movement", {
+      p_document_number: params.documentNumber,
+      p_document_date: todayIsoDate(),
+      p_posting_date: todayIsoDate(),
+      p_movement_type_code: params.movementTypeCode,
+      p_company_id: params.companyId,
+      p_plant_id: params.plantId,
+      p_storage_location_id: params.storageLocationId,
+      p_material_id: params.materialId,
+      p_quantity: params.quantity,
+      p_base_uom_code: params.uomCode,
+      p_unit_value: params.unitValue,
+      p_stock_type_code: params.stockTypeCode,
+      p_direction: params.direction,
+      p_posted_by: params.postedBy,
+      p_reversal_of_id: params.reversalOfId ?? null,
+    });
+  if (error || !Array.isArray(data) || data.length === 0) {
+    throw new Error("PTO_STOCK_POSTING_FAILED");
+  }
+  return {
+    stockDocumentId: String((data[0] as Record<string, unknown>).stock_document_id),
+    stockLedgerId: String((data[0] as Record<string, unknown>).stock_ledger_id),
+  };
+}
+
+async function fetchSnapshot(
+  companyId: string,
+  plantId: string,
+  slocId: string,
+  materialId: string,
+  stockTypeCode: string,
+): Promise<{ quantity: number; valuation_rate: number } | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_snapshot")
+    .select("quantity, valuation_rate")
+    .eq("company_id", companyId)
+    .eq("plant_id", plantId)
+    .eq("storage_location_id", slocId)
+    .eq("material_id", materialId)
+    .eq("stock_type_code", stockTypeCode)
+    .is("batch_id", null)
+    .maybeSingle();
+  if (error) {
+    throw new Error("PTO_SNAPSHOT_FETCH_FAILED");
+  }
+  if (!data) return null;
+  return {
+    quantity: Number((data as Record<string, unknown>).quantity ?? 0),
+    valuation_rate: Number((data as Record<string, unknown>).valuation_rate ?? 0),
+  };
+}
+
+async function fetchPto(ptoId: string): Promise<PtoRow> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("plant_transfer_order")
+    .select("*")
+    .eq("id", ptoId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("PTO_FETCH_FAILED");
+  }
+  if (!data) {
+    throw new Error("PTO_NOT_FOUND");
+  }
+  return data as PtoRow;
+}
+
+async function updatePto(ptoId: string, patch: JsonRecord): Promise<PtoRow> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("plant_transfer_order")
+    .update(patch)
+    .eq("id", ptoId)
+    .select("*")
+    .single();
+
+  if (error || !data) {
+    throw new Error("PTO_UPDATE_FAILED");
+  }
+  return data as PtoRow;
+}
+
+function normalizeTransferValue(quantity: number, valuationRate: number): number {
+  return Number((quantity * valuationRate).toFixed(6));
+}
+
+export async function createPTOHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const body = await parseBody(req);
+    const transferType = toUpperTrimmedString(body.transfer_type);
+    const sourceCompanyId = toTrimmedString(body.source_company_id);
+    const sourcePlantId = toTrimmedString(body.source_plant_id);
+    const sourceSlocId = toTrimmedString(body.source_sloc_id);
+    const targetCompanyId = toTrimmedString(body.target_company_id);
+    const targetPlantId = toTrimmedString(body.target_plant_id);
+    const targetSlocId = toTrimmedString(body.target_sloc_id);
+    const materialId = toTrimmedString(body.material_id);
+    const transferQty = parsePositiveNumber(body.transfer_qty);
+    const uomCode = toTrimmedString(body.uom_code);
+    const transferPriceType = toUpperTrimmedString(body.transfer_price_type) || "AT_COST";
+
+    if (
+      !PTO_TRANSFER_TYPES.has(transferType)
+      || !sourceCompanyId
+      || !sourcePlantId
+      || !sourceSlocId
+      || !targetCompanyId
+      || !targetPlantId
+      || !targetSlocId
+      || !materialId
+      || !transferQty
+      || !uomCode
+      || !PTO_TRANSFER_PRICE_TYPES.has(transferPriceType)
+    ) {
+      return ptoErrorResponse(req, ctx, "PTO_CREATE_INVALID", 400, "Missing or invalid PTO fields.");
+    }
+
+    const ptoNumber = await generateProcurementDocNumber("PT");
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("plant_transfer_order")
+      .insert({
+        pto_number: ptoNumber,
+        transfer_type: transferType,
+        status: "DRAFT",
+        source_company_id: sourceCompanyId,
+        source_plant_id: sourcePlantId,
+        source_sloc_id: sourceSlocId,
+        target_company_id: targetCompanyId,
+        target_plant_id: targetPlantId,
+        target_sloc_id: targetSlocId,
+        source_gstin: toTrimmedString(body.source_gstin) || null,
+        target_gstin: toTrimmedString(body.target_gstin) || null,
+        gst_applicable: parseOptionalBoolean(body.gst_applicable, false),
+        tax_document_required: parseOptionalBoolean(body.tax_document_required, false),
+        material_id: materialId,
+        transfer_qty: transferQty,
+        uom_code: uomCode,
+        transfer_price_type: transferPriceType,
+        transport_required: parseOptionalBoolean(body.transport_required, false),
+        vehicle_number: toTrimmedString(body.vehicle_number) || null,
+        transporter_name: toTrimmedString(body.transporter_name) || null,
+        lr_number: toTrimmedString(body.lr_number) || null,
+        expected_dispatch_date: toTrimmedString(body.expected_dispatch_date) || null,
+        expected_receipt_date: toTrimmedString(body.expected_receipt_date) || null,
+        eway_bill_reference: toTrimmedString(body.eway_bill_reference) || null,
+        gst_invoice_reference: toTrimmedString(body.gst_invoice_reference) || null,
+        remarks: toTrimmedString(body.remarks) || null,
+        created_by: ctx.auth_user_id,
+        last_updated_by: ctx.auth_user_id,
+        last_updated_at: nowIsoString(),
+      })
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      return ptoErrorResponse(req, ctx, "PTO_CREATE_FAILED", 500, "Unable to create PTO.");
+    }
+
+    return okResponse(data, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PTO_CREATE_FAILED";
+    return ptoErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
+export async function listPTOsHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
+    const status = toUpperTrimmedString(url.searchParams.get("status"));
+    const transferType = toUpperTrimmedString(url.searchParams.get("transfer_type"));
+    const limit = parsePositiveInt(url.searchParams.get("limit"), 100);
+    const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
+
+    let query = serviceRoleClient
+      .schema("erp_procurement")
+      .from("plant_transfer_order")
+      .select("*", { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (companyId) {
+      query = query.or(`source_company_id.eq.${companyId},target_company_id.eq.${companyId}`);
+    }
+    if (status && PTO_STATUSES.has(status)) {
+      query = query.eq("status", status);
+    }
+    if (transferType && PTO_TRANSFER_TYPES.has(transferType)) {
+      query = query.eq("transfer_type", transferType);
+    }
+
+    const { data, error, count } = await query;
+    if (error) {
+      return ptoErrorResponse(req, ctx, "PTO_LIST_FAILED", 500, "Unable to list PTOs.");
+    }
+
+    return okResponse(
+      { data: data ?? [], total: count ?? 0, items: data ?? [] },
+      ctx.request_id,
+      req,
+    );
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PTO_LIST_FAILED";
+    return ptoErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
+export async function getPTOHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const ptoId = getIdFromPath(req);
+    if (!ptoId) {
+      return ptoErrorResponse(req, ctx, "PTO_ID_REQUIRED", 400, "PTO id is required.");
+    }
+    return okResponse(await fetchPto(ptoId), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PTO_FETCH_FAILED";
+    const status = code === "PTO_NOT_FOUND" ? 404 : 500;
+    return ptoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function approvePTOHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const ptoId = new URL(req.url).pathname.split("/")[4] ?? "";
+    const pto = await fetchPto(ptoId);
+    if (toUpperTrimmedString(pto.status) !== "DRAFT") {
+      return ptoErrorResponse(req, ctx, "PTO_INVALID_STATUS", 400, "Only DRAFT PTO can be approved.");
+    }
+
+    const updated = await updatePto(ptoId, {
+      status: "APPROVED",
+      approved_by: ctx.auth_user_id,
+      approved_at: nowIsoString(),
+      last_updated_by: ctx.auth_user_id,
+      last_updated_at: nowIsoString(),
+    });
+    return okResponse(updated, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PTO_APPROVE_FAILED";
+    const status = code === "PTO_NOT_FOUND" ? 404 : 500;
+    return ptoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function oneStepTransferHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const ptoId = new URL(req.url).pathname.split("/")[4] ?? "";
+    const pto = await fetchPto(ptoId);
+    if (toUpperTrimmedString(pto.status) !== "APPROVED") {
+      return ptoErrorResponse(req, ctx, "PTO_INVALID_STATUS", 400, "Only APPROVED PTO can be executed.");
+    }
+    if (toUpperTrimmedString(pto.transfer_type) !== "ONE_STEP") {
+      return ptoErrorResponse(req, ctx, "PTO_WRONG_TRANSFER_TYPE", 400, "PTO is not ONE_STEP.");
+    }
+
+    const quantity = Number(pto.transfer_qty ?? 0);
+    const snapshot = await fetchSnapshot(
+      String(pto.source_company_id),
+      String(pto.source_plant_id),
+      String(pto.source_sloc_id),
+      String(pto.material_id),
+      "UNRESTRICTED",
+    );
+    if (!snapshot || snapshot.quantity < quantity) {
+      return ptoErrorResponse(req, ctx, "INSUFFICIENT_STOCK", 400, "Insufficient unrestricted stock.");
+    }
+
+    const valuationRate = Number(snapshot.valuation_rate ?? 0);
+    const issuePosting = await postStockMovement({
+      documentNumber: String(pto.pto_number),
+      movementTypeCode: "P301",
+      companyId: String(pto.source_company_id),
+      plantId: String(pto.source_plant_id),
+      storageLocationId: String(pto.source_sloc_id),
+      materialId: String(pto.material_id),
+      quantity,
+      uomCode: String(pto.uom_code),
+      unitValue: valuationRate,
+      stockTypeCode: "UNRESTRICTED",
+      direction: "OUT",
+      postedBy: ctx.auth_user_id,
+    });
+    const receiptPosting = await postStockMovement({
+      documentNumber: String(pto.pto_number),
+      movementTypeCode: "P301",
+      companyId: String(pto.target_company_id),
+      plantId: String(pto.target_plant_id),
+      storageLocationId: String(pto.target_sloc_id),
+      materialId: String(pto.material_id),
+      quantity,
+      uomCode: String(pto.uom_code),
+      unitValue: valuationRate,
+      stockTypeCode: "UNRESTRICTED",
+      direction: "IN",
+      postedBy: ctx.auth_user_id,
+    });
+
+    const updated = await updatePto(ptoId, {
+      status: "CLOSED",
+      issued_by: ctx.auth_user_id,
+      issued_at: nowIsoString(),
+      valuation_rate: valuationRate,
+      transfer_value: normalizeTransferValue(quantity, valuationRate),
+      issue_stock_document_id: issuePosting.stockDocumentId,
+      receipt_stock_document_id: receiptPosting.stockDocumentId,
+      last_updated_by: ctx.auth_user_id,
+      last_updated_at: nowIsoString(),
+    });
+    return okResponse(updated, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PTO_ONE_STEP_FAILED";
+    const status =
+      code === "PTO_NOT_FOUND" ? 404 : code === "INSUFFICIENT_STOCK" || code === "PTO_WRONG_TRANSFER_TYPE" ? 400 : 500;
+    return ptoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function issueTransferHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const ptoId = new URL(req.url).pathname.split("/")[4] ?? "";
+    const pto = await fetchPto(ptoId);
+    if (toUpperTrimmedString(pto.status) !== "APPROVED") {
+      return ptoErrorResponse(req, ctx, "PTO_INVALID_STATUS", 400, "Only APPROVED PTO can be issued.");
+    }
+    if (toUpperTrimmedString(pto.transfer_type) !== "TWO_STEP") {
+      return ptoErrorResponse(req, ctx, "PTO_WRONG_TRANSFER_TYPE", 400, "PTO is not TWO_STEP.");
+    }
+
+    const quantity = Number(pto.transfer_qty ?? 0);
+    const snapshot = await fetchSnapshot(
+      String(pto.source_company_id),
+      String(pto.source_plant_id),
+      String(pto.source_sloc_id),
+      String(pto.material_id),
+      "UNRESTRICTED",
+    );
+    if (!snapshot || snapshot.quantity < quantity) {
+      return ptoErrorResponse(req, ctx, "INSUFFICIENT_STOCK", 400, "Insufficient unrestricted stock.");
+    }
+
+    const valuationRate = Number(snapshot.valuation_rate ?? 0);
+    const unrestrictedPosting = await postStockMovement({
+      documentNumber: String(pto.pto_number),
+      movementTypeCode: "P303",
+      companyId: String(pto.source_company_id),
+      plantId: String(pto.source_plant_id),
+      storageLocationId: String(pto.source_sloc_id),
+      materialId: String(pto.material_id),
+      quantity,
+      uomCode: String(pto.uom_code),
+      unitValue: valuationRate,
+      stockTypeCode: "UNRESTRICTED",
+      direction: "OUT",
+      postedBy: ctx.auth_user_id,
+    });
+    await postStockMovement({
+      documentNumber: String(pto.pto_number),
+      movementTypeCode: "P303",
+      companyId: String(pto.source_company_id),
+      plantId: String(pto.source_plant_id),
+      storageLocationId: String(pto.source_sloc_id),
+      materialId: String(pto.material_id),
+      quantity,
+      uomCode: String(pto.uom_code),
+      unitValue: valuationRate,
+      stockTypeCode: "IN_TRANSIT",
+      direction: "IN",
+      postedBy: ctx.auth_user_id,
+    });
+
+    const updated = await updatePto(ptoId, {
+      status: "IN_TRANSIT",
+      issued_by: ctx.auth_user_id,
+      issued_at: nowIsoString(),
+      valuation_rate: valuationRate,
+      transfer_value: normalizeTransferValue(quantity, valuationRate),
+      issue_stock_document_id: unrestrictedPosting.stockDocumentId,
+      last_updated_by: ctx.auth_user_id,
+      last_updated_at: nowIsoString(),
+    });
+    return okResponse(updated, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PTO_ISSUE_FAILED";
+    const status =
+      code === "PTO_NOT_FOUND" ? 404 : code === "INSUFFICIENT_STOCK" || code === "PTO_WRONG_TRANSFER_TYPE" ? 400 : 500;
+    return ptoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function receiveTransferHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const ptoId = new URL(req.url).pathname.split("/")[4] ?? "";
+    const body = await parseBody(req);
+    const pto = await fetchPto(ptoId);
+    if (toUpperTrimmedString(pto.status) !== "IN_TRANSIT") {
+      return ptoErrorResponse(req, ctx, "PTO_INVALID_STATUS", 400, "Only IN_TRANSIT PTO can be received.");
+    }
+
+    const quantity = Number(pto.transfer_qty ?? 0);
+    const valuationRate = Number(pto.valuation_rate ?? 0);
+    await postStockMovement({
+      documentNumber: String(pto.pto_number),
+      movementTypeCode: "P305",
+      companyId: String(pto.source_company_id),
+      plantId: String(pto.source_plant_id),
+      storageLocationId: String(pto.source_sloc_id),
+      materialId: String(pto.material_id),
+      quantity,
+      uomCode: String(pto.uom_code),
+      unitValue: valuationRate,
+      stockTypeCode: "IN_TRANSIT",
+      direction: "OUT",
+      postedBy: ctx.auth_user_id,
+    });
+    const receiptPosting = await postStockMovement({
+      documentNumber: String(pto.pto_number),
+      movementTypeCode: "P305",
+      companyId: String(pto.target_company_id),
+      plantId: String(pto.target_plant_id),
+      storageLocationId: String(pto.target_sloc_id),
+      materialId: String(pto.material_id),
+      quantity,
+      uomCode: String(pto.uom_code),
+      unitValue: valuationRate,
+      stockTypeCode: "UNRESTRICTED",
+      direction: "IN",
+      postedBy: ctx.auth_user_id,
+    });
+
+    const updated = await updatePto(ptoId, {
+      status: "CLOSED",
+      received_by: ctx.auth_user_id,
+      received_at: nowIsoString(),
+      actual_receipt_date: toTrimmedString(body.actual_receipt_date) || todayIsoDate(),
+      receipt_stock_document_id: receiptPosting.stockDocumentId,
+      last_updated_by: ctx.auth_user_id,
+      last_updated_at: nowIsoString(),
+    });
+    return okResponse(updated, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PTO_RECEIVE_FAILED";
+    const status = code === "PTO_NOT_FOUND" ? 404 : 500;
+    return ptoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function cancelPTOHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const ptoId = new URL(req.url).pathname.split("/")[4] ?? "";
+    const body = await parseBody(req);
+    const pto = await fetchPto(ptoId);
+    const status = toUpperTrimmedString(pto.status);
+    if (status !== "DRAFT" && status !== "APPROVED") {
+      return ptoErrorResponse(req, ctx, "PTO_CANNOT_CANCEL", 400, "Only DRAFT or APPROVED PTO can be cancelled.");
+    }
+
+    const updated = await updatePto(ptoId, {
+      status: "CANCELLED",
+      cancellation_reason: toTrimmedString(body.cancellation_reason) || null,
+      last_updated_by: ctx.auth_user_id,
+      last_updated_at: nowIsoString(),
+    });
+    return okResponse(updated, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PTO_CANCEL_FAILED";
+    const status = code === "PTO_NOT_FOUND" ? 404 : 500;
+    return ptoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function storageLocationTransferHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id);
+    const plantId = toTrimmedString(body.plant_id);
+    const sourceSlocId = toTrimmedString(body.source_sloc_id);
+    const targetSlocId = toTrimmedString(body.target_sloc_id);
+    const materialId = toTrimmedString(body.material_id);
+    const transferQty = parsePositiveNumber(body.transfer_qty);
+    const uomCode = toTrimmedString(body.uom_code);
+
+    if (!companyId || !plantId || !sourceSlocId || !targetSlocId || !materialId || !transferQty || !uomCode) {
+      return ptoErrorResponse(req, ctx, "PTO_SLOC_TRANSFER_INVALID", 400, "Missing required SLOC transfer fields.");
+    }
+    if (sourceSlocId === targetSlocId) {
+      return ptoErrorResponse(req, ctx, "PTO_SAME_SLOC", 400, "Source and target storage locations must differ.");
+    }
+
+    const snapshot = await fetchSnapshot(
+      companyId,
+      plantId,
+      sourceSlocId,
+      materialId,
+      "UNRESTRICTED",
+    );
+    if (!snapshot || snapshot.quantity < transferQty) {
+      return ptoErrorResponse(req, ctx, "INSUFFICIENT_STOCK", 400, "Insufficient unrestricted stock.");
+    }
+
+    const valuationRate = Number(snapshot.valuation_rate ?? 0);
+    const documentNumber = await generateProcurementDocNumber("PT");
+    const sourcePosting = await postStockMovement({
+      documentNumber,
+      movementTypeCode: "P311",
+      companyId,
+      plantId,
+      storageLocationId: sourceSlocId,
+      materialId,
+      quantity: transferQty,
+      uomCode,
+      unitValue: valuationRate,
+      stockTypeCode: "UNRESTRICTED",
+      direction: "OUT",
+      postedBy: ctx.auth_user_id,
+    });
+    const targetPosting = await postStockMovement({
+      documentNumber,
+      movementTypeCode: "P311",
+      companyId,
+      plantId,
+      storageLocationId: targetSlocId,
+      materialId,
+      quantity: transferQty,
+      uomCode,
+      unitValue: valuationRate,
+      stockTypeCode: "UNRESTRICTED",
+      direction: "IN",
+      postedBy: ctx.auth_user_id,
+    });
+
+    return okResponse(
+      {
+        ok: true,
+        source_stock_document_id: sourcePosting.stockDocumentId,
+        target_stock_document_id: targetPosting.stockDocumentId,
+      },
+      ctx.request_id,
+      req,
+    );
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PTO_SLOC_TRANSFER_FAILED";
+    const status = code === "INSUFFICIENT_STOCK" || code === "PTO_SAME_SLOC" ? 400 : 500;
+    return ptoErrorResponse(req, ctx, code, status, code);
+  }
+}

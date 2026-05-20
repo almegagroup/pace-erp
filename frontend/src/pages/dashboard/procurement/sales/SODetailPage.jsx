@@ -13,6 +13,7 @@ import {
   knockOffSOLine,
   listSalesInvoices,
 } from "../procurementApi.js";
+import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 function getStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -386,6 +387,8 @@ export default function SODetailPage() {
               />
             </div>
           </ErpSectionCard>
+
+          <DocumentFlowSection docType="SO" docId={detail.id} />
         </div>
       )}
     </ErpScreenScaffold>

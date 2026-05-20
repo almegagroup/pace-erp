@@ -1,10 +1,10 @@
 /*
  * File-ID: 16.1.2
  * File-Path: supabase/functions/api/_core/procurement/l2_masters.handlers.ts
- * Gate: 16.1
- * Phase: 16
+ * Gate: 26
+ * Phase: 26
  * Domain: PROCUREMENT
- * Purpose: Implement L2 procurement master data handlers.
+ * Purpose: Implement L2 procurement master data handlers. Gate-26: manager-or-SA access now applies to all write handlers to allow L2_MANAGER+ access.
  * Authority: Backend
  */
 
@@ -27,6 +27,14 @@ const PORT_TYPES = new Set(["SEA", "AIR", "LAND"]);
 const TRANSIT_MODES = new Set(["ROAD", "RAIL", "MULTI-MODAL"]);
 const TRANSPORTER_DIRECTIONS = new Set(["INBOUND", "OUTBOUND", "BOTH"]);
 const TRANSPORTER_MODES = new Set(["ROAD", "RAIL", "COURIER", "MULTI-MODAL"]);
+const MANAGER_OR_SA_ROLES = new Set([
+  "SA",
+  "GA",
+  "DIRECTOR",
+  "L4_MANAGER",
+  "L3_MANAGER",
+  "L2_MANAGER",
+]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -62,9 +70,9 @@ function parseNullableNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function assertSARole(ctx: ProcurementHandlerContext): void {
-  if (ctx.roleCode !== "SA") {
-    throw new Error("SA_REQUIRED");
+function assertManagerOrSARole(ctx: ProcurementHandlerContext): void {
+  if (!MANAGER_OR_SA_ROLES.has(ctx.roleCode)) {
+    throw new Error("MANAGER_OR_SA_REQUIRED");
   }
 }
 
@@ -194,7 +202,7 @@ export async function listPaymentTermsHandler(req: Request, ctx: ProcurementHand
 
 export async function createPaymentTermsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const name = toTrimmedString(body.name);
     const paymentMethod = toUpperTrimmedString(body.payment_method);
@@ -235,14 +243,14 @@ export async function createPaymentTermsHandler(req: Request, ctx: ProcurementHa
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PAYMENT_TERMS_CREATE_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Payment terms create failed");
   }
 }
 
 export async function updatePaymentTermsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const { data: existing, error: existingError } = await serviceRoleClient
@@ -308,7 +316,7 @@ export async function updatePaymentTermsHandler(req: Request, ctx: ProcurementHa
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PAYMENT_TERMS_UPDATE_FAILED";
     const status =
-      code === "SA_REQUIRED" ? 403
+      code === "MANAGER_OR_SA_REQUIRED" ? 403
         : code === "PROCUREMENT_PAYMENT_TERMS_NOT_FOUND" ? 404
         : code.includes("IN_USE") ? 409
         : code.includes("INVALID") ? 400
@@ -365,7 +373,7 @@ export async function listPortsHandler(req: Request, ctx: ProcurementHandlerCont
 
 export async function createPortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const portName = toTrimmedString(body.port_name);
     const portType = toUpperTrimmedString(body.port_type);
@@ -401,14 +409,14 @@ export async function createPortHandler(req: Request, ctx: ProcurementHandlerCon
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PORT_CREATE_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Port create failed");
   }
 }
 
 export async function updatePortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const updates: JsonRecord = {};
@@ -441,7 +449,7 @@ export async function updatePortHandler(req: Request, ctx: ProcurementHandlerCon
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PORT_UPDATE_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Port update failed");
   }
 }
@@ -469,7 +477,7 @@ export async function listTransitTimesHandler(req: Request, ctx: ProcurementHand
 
 export async function upsertTransitTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const portId = toTrimmedString(body.port_id);
     const companyId = toTrimmedString(body.company_id || body.plant_id);
@@ -502,7 +510,7 @@ export async function upsertTransitTimeHandler(req: Request, ctx: ProcurementHan
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_TRANSIT_UPSERT_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Transit upsert failed");
   }
 }
@@ -530,7 +538,7 @@ export async function listMaterialCategoriesHandler(req: Request, ctx: Procureme
 
 export async function createMaterialCategoryHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const categoryName = toTrimmedString(body.category_name);
     if (!categoryName) {
@@ -558,7 +566,7 @@ export async function createMaterialCategoryHandler(req: Request, ctx: Procureme
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_MATERIAL_CATEGORY_CREATE_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Material category create failed");
   }
 }
@@ -587,7 +595,7 @@ export async function listImportLeadTimesHandler(req: Request, ctx: ProcurementH
 
 export async function upsertImportLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
     const categoryId = toTrimmedString(body.material_category_id);
@@ -622,7 +630,7 @@ export async function upsertImportLeadTimeHandler(req: Request, ctx: Procurement
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_IMPORT_LEAD_TIME_UPSERT_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Import lead time upsert failed");
   }
 }
@@ -648,7 +656,7 @@ export async function listDomesticLeadTimesHandler(req: Request, ctx: Procuremen
 
 export async function upsertDomesticLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
     const companyId = toTrimmedString(body.company_id || body.plant_id);
@@ -676,7 +684,7 @@ export async function upsertDomesticLeadTimeHandler(req: Request, ctx: Procureme
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_DOMESTIC_LEAD_TIME_UPSERT_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Domestic lead time upsert failed");
   }
 }
@@ -708,7 +716,7 @@ export async function listTransportersHandler(req: Request, ctx: ProcurementHand
 
 export async function createTransporterHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const transporterName = toTrimmedString(body.transporter_name);
     const usageDirection = toUpperTrimmedString(body.usage_direction);
@@ -745,14 +753,14 @@ export async function createTransporterHandler(req: Request, ctx: ProcurementHan
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_TRANSPORTER_CREATE_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Transporter create failed");
   }
 }
 
 export async function updateTransporterHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const id = getIdFromPath(req);
     const body = await parseBody(req);
     const updates: JsonRecord = {};
@@ -786,7 +794,7 @@ export async function updateTransporterHandler(req: Request, ctx: ProcurementHan
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_TRANSPORTER_UPDATE_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Transporter update failed");
   }
 }
@@ -809,7 +817,7 @@ export async function listCHAsHandler(req: Request, ctx: ProcurementHandlerConte
 
 export async function createCHAHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const chaName = toTrimmedString(body.cha_name);
     const licenseNumber = toTrimmedString(body.cha_license_number);
@@ -844,14 +852,14 @@ export async function createCHAHandler(req: Request, ctx: ProcurementHandlerCont
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_CHA_CREATE_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "CHA create failed");
   }
 }
 
 export async function mapCHAToPortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const chaId = getIdFromPath(req);
     const body = await parseBody(req);
     if (!(await ensureChaExists(chaId))) {
@@ -883,7 +891,7 @@ export async function mapCHAToPortHandler(req: Request, ctx: ProcurementHandlerC
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_CHA_PORT_MAP_FAILED";
-    const status = code === "SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("REQUIRED") ? 400 : code.includes("DUPLICATE") ? 409 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("REQUIRED") ? 400 : code.includes("DUPLICATE") ? 409 : 500;
     return procurementErrorResponse(req, ctx, code, status, "CHA port mapping failed");
   }
 }
