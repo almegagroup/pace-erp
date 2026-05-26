@@ -1400,8 +1400,8 @@ export default function MenuShell() {
       id: `menu-${item.menu_code}`,
       group: "Navigation",
       label: `Open ${item.title}`,
-      hint: `${index + 1}`,
-      keywords: [item.title, item.route_path].filter(Boolean),
+      hint: item.tx_code ?? `${index + 1}`,
+      keywords: [item.title, item.route_path, item.tx_code].filter(Boolean),
       perform: () => handleMenuRoute(item.route_path),
       order: 200 + index,
     }));

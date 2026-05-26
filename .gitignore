@@ -44,4 +44,5 @@ erp.txt
 repo-context/
 .aider*
 .claud*
-.claude/ 
+.claude/
+.mcp.json

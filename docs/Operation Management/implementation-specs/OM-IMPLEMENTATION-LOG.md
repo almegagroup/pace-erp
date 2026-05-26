@@ -940,8 +940,20 @@ If Claude marks an item FAILED, it is logged here with reason. Codex must fix be
 
 ---
 
-*Last Updated: 2026-05-18*
-*Next Review: After PERF safe pass and before any destructive linter cleanup*
+## Post-Implementation Corrections
+
+**Reference File:** OM-CORRECTION-NOTES.md
+All corrections, improvements, and modifications found after implementation are tracked in OM-CORRECTION-NOTES.md.
+Once a fix is done and verified, it is logged here.
+
+| Fix-ID | Date | Area | Description | Fixed By |
+|--------|------|------|-------------|----------|
+| - | - | - | - | - |
+
+---
+
+*Last Updated: 2026-05-26*
+*Next Review: Work through OM-CORRECTION-NOTES.md items one by one*
 
 
 
