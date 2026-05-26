@@ -10,6 +10,7 @@
 
 import { Navigate, useLocation } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
+import { isRouteAllowed } from "./routeIndex.js";
 
 export default function RouteGuard({ children }) {
   const location = useLocation();
@@ -23,7 +24,7 @@ export default function RouteGuard({ children }) {
     return null;
   }
 
-  if (!allowedRoutes.has(location.pathname)) {
+  if (!isRouteAllowed(allowedRoutes, location.pathname)) {
     return <Navigate to="/" replace />;
   }
 

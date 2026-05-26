@@ -313,11 +313,26 @@ export default function MenuShell() {
       : 0;
 
   const activeTitle = useMemo(() => {
-    const menuMatch = menu.find((item) => item.route_path === location.pathname);
-    if (menuMatch?.title) {
-      return menuMatch.title;
+    // 1. Exact menu match (covers static routes)
+    const exactMenuMatch = menu.find((item) => item.route_path === location.pathname);
+    if (exactMenuMatch?.title) {
+      return exactMenuMatch.title;
     }
 
+    // 2. Pattern match for dynamic ":param" routes (e.g. PO Detail, GRN Detail)
+    //    Find a menu item whose route_path is a pattern that matches the current path.
+    const patternMenuMatch = menu.find((item) => {
+      if (!item.route_path?.includes(":")) return false;
+      const regex = new RegExp(
+        "^" + item.route_path.replace(/:[^/]+/g, "[^/]+") + "$"
+      );
+      return regex.test(location.pathname);
+    });
+    if (patternMenuMatch?.title) {
+      return patternMenuMatch.title;
+    }
+
+    // 3. Fall back to screen registry title (screen_code → human-readable label)
     const screenMatch = getScreenForRoute(location.pathname);
     if (screenMatch?.screen_code) {
       return formatScreenTitle(screenMatch.screen_code);
@@ -1572,6 +1587,7 @@ export default function MenuShell() {
                           menuButtonRefs.current[index] = element;
                         }}
                         type="button"
+                        title={node.item.title}
                         onFocus={() => {
                           setActiveZone("menu");
                           setMenuFocusIndex(index);
@@ -1654,6 +1670,7 @@ export default function MenuShell() {
                           drawerButtonRefs.current[index] = element;
                         }}
                         type="button"
+                        title={node.item.title}
                         onFocus={() => {
                           setActiveZone("menu");
                           setDrawerFocusIndex(index);
