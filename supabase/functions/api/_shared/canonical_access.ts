@@ -256,7 +256,7 @@ export async function resolveDefaultWorkContextId(
 
   const resolved = ((data ?? []) as DefaultWorkContextJoinRow[]).find((row) => {
     const wc = row.work_context;
-    return wc?.is_active === true && !wc.work_context_code?.startsWith("DEPT_");
+    return wc?.is_active === true;
   });
   return resolved?.work_context_id ?? null;
 }

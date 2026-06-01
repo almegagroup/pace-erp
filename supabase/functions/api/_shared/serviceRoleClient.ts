@@ -7,7 +7,7 @@
  * Authority: Backend-only
  */
 
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "npm:@supabase/supabase-js";
 import { buildRlsContextHeaders } from "./context_headers.ts";
 import type { ContextResolution } from "../_pipeline/context.ts";
 import type { DbClient } from "./db_client.ts";
