@@ -769,6 +769,19 @@ pages. SA screens remain intact and untouched.
 - Lead time and port transit ID fields are plain text inputs — no dropdown loading
 - Routes nested under /dashboard/procurement/masters/
 
+### Gate-26 Verification — VERIFIED by Claude on 2026-06-01
+
+| Check | Result |
+|-------|--------|
+| assertManagerOrSARole — 6 correct roles (SA, GA, DIRECTOR, L4_MANAGER, L3_MANAGER, L2_MANAGER) | ✅ |
+| All 12 write handlers use assertManagerOrSARole | ✅ |
+| 8 frontend pages exist with correct File-IDs (26.2–26.9) | ✅ |
+| AppRouter.jsx — all 8 lazy imports + Route entries wired | ✅ |
+| operationScreens.js — 8 PROC_*_MASTER screen codes, all with ACL universe | ✅ |
+| Minor bug (non-blocking): PaymentTermsMasterPage REFERENCE_DATE_OPTIONS includes "DELIVERY_DATE" but backend REFERENCE_DATES set does not — will cause 400 if selected | ⚠️ |
+
+Gate-26 VERIFIED. All governance changes correct. Minor enum mismatch in payment terms reference_date (DELIVERY_DATE) to be fixed in a future correction. Gate-27 can begin.
+
 ---
 
 ## Gate-27 — FG Domain (Admix + Powder)
