@@ -73,82 +73,148 @@ Frontend Sidebar
 
 ## 4. এই Session (2026-06-01) এ কী কী হয়েছে
 
-### A. ACL Full Setup — COMPLETE ✅
-- `acl.menu_master`: 65টা correct ACL page entries (13টা stale GRP_ACL_* deleted)
-- `acl.capabilities`, `acl.capability_menu_actions`, `acl.work_context_capabilities`: seeded
-- `erp_acl.work_contexts`: DEPT_ prefix work contexts created for all companies
-- `acl.acl_versions`: V1 created + captured for all 4 business companies
-- `precomputed_acl_view`: generated for all companies + users
-- `erp_menu.menu_snapshot`: generated for P0004, P0007, P0010, P0011, P0003, P0005
+### A. Bug Fix 1 — Login 403 for ACL Users ✅ FIXED
 
-### B. Login Bug Fixes — DONE ✅
-- `canonical_access.ts`: removed wrong DEPT_ filter in `resolveDefaultWorkContextId`
-- `serviceRoleClient.ts`, `authClient.ts`, `login.handler.ts`: bare import → `@supabase/supabase-js`
-- `supabase/functions/deno.json`: import map added (Deno resolves bare → npm:)
-- Migration `20260601032731`: fix menu_snapshot constraint + generate_menu_snapshot version bug
-- Migration `20260601032839`: fix menu_snapshot indices (work_context_id included)
+**Root cause:** `resolveDefaultWorkContextId` (canonical_access.ts) এ একটা filter ছিল:
+```typescript
+return wc?.is_active === true && !wc.work_context_code?.startsWith("DEPT_");
+```
+সব work context `DEPT_*` prefix এ তৈরি হয়েছিল → filter সব বাদ দিত → null return → 403।
+SA login হতো কারণ SA work context resolution skip করে।
 
-### C. Users Login Status
-- P0004 (DIRECTOR, 4 companies, MULTI mode): ✅ Login working, dashboard loading
-- P0007 (L2_AUDITOR, CMP003): ✅ Setup done
-- SA users: ✅ Always worked
+**Fix:** `!wc.work_context_code?.startsWith("DEPT_")` condition সরানো হয়েছে।
 
-### D. Gate-26 — VERIFIED ✅
-- Business Master Governance: assertManagerOrSARole in 12 handlers ✅
-- 8 frontend master pages + routes ✅
-- Minor bug: DELIVERY_DATE enum mismatch in PaymentTermsMasterPage (non-blocking)
+**Files changed:**
+- `supabase/functions/api/_shared/canonical_access.ts` — DEPT_ filter removed
 
 ---
 
-## 5. Current DB State (Exact)
+### B. Bug Fix 2 — Render Backend Crash (npm: import) ✅ FIXED
+
+**Root cause:** Previous fix added `npm:@supabase/supabase-js` prefix (Deno requires it).
+Render এর Node.js server same files import করে → `Cannot find module 'npm:@supabase/supabase-js'` crash।
+
+**Fix:** `supabase/functions/deno.json` import map তৈরি করা হয়েছে:
+```json
+{ "imports": { "@supabase/supabase-js": "npm:@supabase/supabase-js" } }
+```
+Deno import map দিয়ে resolve করে। Node.js bare import থেকে node_modules নেয়।
+
+**Files changed:**
+- `supabase/functions/deno.json` — new file, import map
+- `supabase/functions/api/_shared/serviceRoleClient.ts` — bare import restored
+- `supabase/functions/api/_core/auth/authClient.ts` — bare import restored
+- `supabase/functions/api/_core/auth/login.handler.ts` — bare import restored
+
+---
+
+### C. Bug Fix 3 — Dashboard Blank (menu_snapshot work_context_id) ✅ FIXED
+
+**Root cause (chain of 2 issues):**
+
+**Issue 1 — Unique constraint missing work_context_id:**
+পুরনো 3-param `generate_menu_snapshot` সব ACL rows এ `work_context_id = NULL` store করত।
+নতুন 4-param version `work_context_id = UUID` দিয়ে insert করতে গেলে:
+- version calculation শুধু নিজের UUID এর rows count করত → সবসময় version 1
+- Old NULL rows ও version 1 এ আছে
+- Unique constraint `(user_id, company_id, universe, snapshot_version, menu_code)` → conflict
+- INSERT fail → session snapshot তে 0 rows → dashboard blank
+
+**Issue 2 — generate_menu_snapshot version calculation bug:**
+4-param function এ version query তে `AND work_context_id = p_work_context_id` ছিল।
+Multiple work contexts একই company তে version collision করত।
+
+**Fix:**
+- Migration `20260601032731`:
+  - DELETE stale NULL work_context_id ACL rows
+  - DROP old `ux_menu_snapshot_acl` constraint
+  - CREATE new partial indices: SA (no work_context), ACL (with work_context_id)
+  - FIX 4-param `generate_menu_snapshot`: version query এ `work_context_id` filter সরানো
+- Migration `20260601032839`: corrective drop+recreate (IF NOT EXISTS স্কিপ করেছিল বলে)
+
+---
+
+### D. Migration Naming Fix ✅ FIXED
+
+**Root cause:** MCP `apply_migration` tool remote DB-তে নিজের timestamp (032731, 032839) দিয়ে record করে।
+Local files এ আমরা 000001, 000002 দিয়েছিলাম → `supabase db push` error:
+`Remote migration versions not found in local migrations directory`
+
+**Fix:** Local files rename করা হয়েছে remote timestamp এ মেলাতে।
+
+---
+
+### E. Users Current Login Status
+
+| User | Role | Companies | Work Contexts | Login |
+|------|------|-----------|---------------|-------|
+| SA/GA users | SA/GA | — | — | ✅ সবসময় |
+| P0004 | DIRECTOR | 4 | 4 (DEPT_*) | ✅ Working, GLOBAL_ACL MULTI mode |
+| P0007 | L2_AUDITOR | 1 (CMP003) | 1 | ✅ Working |
+| P0003 | L1_USER | 1 | 1 | ✅ Setup done |
+| P0005 | L2_USER | 1 | 1 | ✅ Setup done |
+| P0010 | L3_MANAGER | 4 | 4 | ✅ Setup done |
+| P0011 | L4_USER | 1 | 1 | ✅ Setup done |
+| P0006 | L2_MANAGER | 1 | **0** | ❌ Work context নেই |
+| P0008 | L3_USER | 1 | **0** | ❌ Work context নেই |
+| P0009 | L4_MANAGER | 2 | **0** | ❌ Work context নেই |
+| P0002 | L1_AUDITOR | **0** | **0** | ❌ Company + work context নেই |
+| P0001 | DIRECTOR | 4 | 0 | ⚠️ Intentionally skipped |
+
+---
+
+### F. Gate-26 — VERIFIED ✅
+- `assertManagerOrSARole` — 6 roles correct (SA, GA, DIRECTOR, L4_MANAGER, L3_MANAGER, L2_MANAGER)
+- 12টা write handler সব `assertManagerOrSARole` use করে
+- 8টা frontend master page (26.2–26.9) exist + AppRouter তে lazy import + Route wired
+- 8টা PROC_*_MASTER screen code operationScreens.js এ
+- ⚠️ Minor bug: `PaymentTermsMasterPage` এ `DELIVERY_DATE` dropdown option আছে কিন্তু backend `REFERENCE_DATES` set এ নেই → validation fail। Fix পরে করতে হবে।
+
+---
+
+## 5. Current DB State (2026-06-01)
 
 ### ✅ Complete
-- `erp_menu.menu_master`: 64 rows
+- `erp_menu.menu_master`: 65 rows (64 navigable pages + 9 groups — ACL universe)
 - `erp_menu.menu_tree`: 64 rows
+- `acl.menu_master`: 65 rows (resource_code = menu_code — correct mapping)
+- `acl.capabilities`: seeded (CAP_STORES, CAP_SUPPLY_CHAIN, CAP_HR_ADMIN, CAP_HR_ATTENDANCE, etc.)
+- `acl.capability_menu_actions`: seeded
+- `erp_acl.work_contexts`: DEPT_ prefix work contexts for all 4 companies
+- `acl.work_context_capabilities`: seeded for all relevant work contexts
+- `acl.acl_versions`: V1 active + source_captured for all 4 business companies
+- `acl.precomputed_acl_view`: generated for all companies + assigned users
+- `erp_menu.menu_snapshot`: generated with `work_context_id` (4-param function, correct)
+- `erp_cache.session_menu_snapshot`: GLOBAL_ACL for P0004 working
 
-### 🔴 Needs Fix
-- `acl.menu_master`: 10 wrong entries (delete করে নতুন করে দিতে হবে)
-- `acl.capabilities`: 0 rows
-- `acl.capability_menu_actions`: 0 rows
-- `erp_acl.work_contexts`: 0 rows
-- `acl.work_context_capabilities`: 0 rows
-- `erp_master.departments`: 0 rows
-- `erp_master.projects`: 0 rows
-- `erp_map.company_projects`: 0 rows
-- `acl.module_registry`: 0 rows
-- `acl.module_resource_map`: 0 rows
-- `acl.acl_versions`: 0 rows
+### ⚠️ Incomplete (login হবে না)
+- P0006, P0008, P0009: `erp_acl.user_work_contexts` তে entry নেই → login করলে 403
+- P0002: `erp_map.user_companies` তে entry নেই → company assignment সহ work context দিতে হবে
 
 ---
 
-## 6. Next Action — ACL Full Setup (16 Steps)
+## 6. Next Actions
 
-### 🔴 Step 1 — এটা আগে করো: `acl.menu_master` fix
+### 🔴 Immediate — Remaining User Setup
+P0006, P0008, P0009, P0002 এর work context assign করতে হবে।
+প্রতিটার জন্য:
+1. `erp_acl.user_work_contexts` এ entry দাও (correct DEPT_ work_context_id)
+2. `generate_menu_snapshot` চালাও (4-param)
+3. Login test করো
 
-```sql
--- আগে column structure দেখো
-SELECT column_name, data_type 
-FROM information_schema.columns 
-WHERE table_schema = 'acl' AND table_name = 'menu_master';
-
--- পুরনো entries দেখো
-SELECT * FROM acl.menu_master;
-
--- erp_menu এর navigable pages দেখো
-SELECT resource_code, menu_label, menu_group 
-FROM erp_menu.menu_master ORDER BY display_order;
-
--- পুরনো entries delete করো
-DELETE FROM acl.menu_master;
-
--- erp_menu থেকে 64টা page insert করো (menu_code = resource_code)
-INSERT INTO acl.menu_master (menu_code, menu_name, ...)
-SELECT resource_code, menu_label, ...
-FROM erp_menu.menu_master WHERE ...; -- column structure দেখে exact SQL বানাও
+### 🔶 Minor Bug Fix
+`PaymentTermsMasterPage.jsx` এ `REFERENCE_DATE_OPTIONS` fix করো:
+```javascript
+// Wrong:
+const REFERENCE_DATE_OPTIONS = ["INVOICE_DATE", "DELIVERY_DATE"];
+// Correct (match backend REFERENCE_DATES set):
+const REFERENCE_DATE_OPTIONS = ["INVOICE_DATE", "GRN_DATE", "BL_DATE", "SHIPMENT_DATE", "N_A"];
 ```
 
-### Step 2–16 (Detail)
-`docs/ACL_SETUP_PROGRESS.md` দেখো — প্রতিটা step এর exact SQL সহ।
+### 🔴 Next OM Gate — Gate-27
+L3 (Production & BOM) design শুরু করতে হবে।
+Reference: feasibility doc Section 83 (Admix/Liquid discovery)
+Scope: BOM master, Process Order, Material Issue (P261), FG Receipt, FG QA, Dispatch Instruction.
 
 ---
 
