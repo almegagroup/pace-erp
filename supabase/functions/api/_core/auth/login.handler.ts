@@ -3,7 +3,7 @@
  * Fully deterministic + debug observable + SA safe
  */
 
-import { createClient } from "npm:@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";
 import { ENV } from "../../_shared/env.ts";
 
 import { verifyPassword } from "./authDelegate.ts";

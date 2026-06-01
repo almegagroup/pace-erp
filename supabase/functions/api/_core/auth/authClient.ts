@@ -8,7 +8,7 @@
  * Authority: Backend
  */
 
-import { createClient } from "npm:@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";
 import { assertServiceRole } from "../../_shared/serviceRoleClient.ts";
 
 /* --------------------------------------------------
