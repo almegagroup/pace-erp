@@ -20,6 +20,7 @@ import {
   settleDebitNote,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -139,10 +140,8 @@ export default function RTVDetailPage() {
   }
 
   async function handlePostRTV() {
-    const confirmed = window.confirm("Stock will be returned to vendor (P122 movement).");
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "RTV", title: "Post this RTV?", message: "Stock will be returned to vendor (P122 movement).", confirmLabel: "Post RTV" });
+    if (!confirmed) return;
     await runAction(() => postRTV(id, {}), "RTV posted successfully.");
   }
 

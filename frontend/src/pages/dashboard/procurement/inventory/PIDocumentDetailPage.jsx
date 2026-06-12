@@ -19,6 +19,7 @@ import {
   requestPIRecount,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
 const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 const PI_MATERIAL_TYPES = new Set(["RM", "PM", "INT"]);
@@ -222,7 +223,7 @@ export default function PIDocumentDetailPage() {
 
   async function handlePostDifferences() {
     if (!detail?.id) return;
-    const confirmed = window.confirm("This will post stock differences to the inventory ledger. Cannot be undone.");
+    const confirmed = await openActionConfirm({ eyebrow: "Physical Inventory", title: "Post stock differences?", message: "This will post stock differences to the inventory ledger. Cannot be undone.", confirmLabel: "Post" });
     if (!confirmed) return;
     setSaving(true);
     setError("");

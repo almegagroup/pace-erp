@@ -28,6 +28,7 @@ import {
   updateOpeningStockLine,
 } from "../../../pages/dashboard/procurement/procurementApi.js";
 import { listMaterials, listStorageLocations } from "../../../pages/dashboard/om/omApi.js";
+import { openActionConfirm } from "../../../store/actionConfirm.js";
 
 const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 const ENTRY_MODES = Object.freeze({
@@ -345,7 +346,7 @@ export default function SAOpeningStockDetailPage({ documentId: documentIdProp = 
 
   async function handlePost() {
     if (!detail) return;
-    const confirmed = window.confirm("This will post stock movements to the ledger. Cannot be undone.");
+    const confirmed = await openActionConfirm({ eyebrow: "Opening Stock", title: "Post opening stock?", message: "This will post stock movements to the ledger. Cannot be undone.", confirmLabel: "Post" });
     if (!confirmed) return;
 
     setSaving(true);

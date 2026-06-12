@@ -13,6 +13,7 @@ import {
   postSalesInvoice,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
 function formatMoney(value) {
   const numeric = Number(value);
@@ -155,9 +156,8 @@ export default function SalesInvoiceDetailPage() {
   }
 
   async function handlePostExisting() {
-    if (!window.confirm("Post this sales invoice?")) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "Sales Invoice", title: "Post this invoice?", confirmLabel: "Post" });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");

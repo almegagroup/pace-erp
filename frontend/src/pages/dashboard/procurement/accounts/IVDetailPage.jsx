@@ -10,6 +10,7 @@ import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listMaterials, listVendors } from "../../om/omApi.js";
 import { addIVLine, getGRN, getIV, postIV, removeIVLine, runIVMatch } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -122,10 +123,8 @@ export default function IVDetailPage() {
   }
 
   async function handlePost() {
-    const confirmed = window.confirm("Post this invoice verification?");
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "Invoice Verification", title: "Post this IV?", confirmLabel: "Post" });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");
@@ -141,9 +140,8 @@ export default function IVDetailPage() {
   }
 
   async function handleRemoveLine(lineId) {
-    if (!window.confirm("Remove this IV line?")) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "Invoice Verification", title: "Remove this line?", confirmLabel: "Remove" });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");

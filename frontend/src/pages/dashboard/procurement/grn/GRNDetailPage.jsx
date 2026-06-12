@@ -5,6 +5,8 @@ import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listMaterials } from "../../om/omApi.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { getGRN, postGRN, reverseGRN, updateGRNDraft } from "../procurementApi.js";
 import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
@@ -121,7 +123,7 @@ export default function GRNDetailPage() {
 
   async function handlePost() {
     if (!detail?.id) return;
-    const confirmed = window.confirm("This will post stock movement. Cannot be undone without reversal.");
+    const confirmed = await openActionConfirm({ eyebrow: "GRN", title: "Post this GRN?", message: "This will post stock movement. Cannot be undone without reversal.", confirmLabel: "Post GRN" });
     if (!confirmed) return;
     setSaving(true);
     setError("");
@@ -140,10 +142,8 @@ export default function GRNDetailPage() {
 
   async function handleReverse() {
     if (!detail?.id) return;
-    const reason = window.prompt("Reversal reason", "");
+    const reason = await openActionPrompt({ eyebrow: "GRN", title: "Reverse this GRN?", label: "Reversal reason", required: true });
     if (!reason) return;
-    const confirmed = window.confirm("Reverse this posted GRN?");
-    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");

@@ -5,6 +5,7 @@ import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../
 import { useMenu } from "../../../../context/useMenu.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listVendors } from "../../om/omApi.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
   amendPurchaseOrder,
   approveAmendment,
@@ -159,7 +160,7 @@ export default function PODetailPage() {
   }
 
   async function handleApprove() {
-    const remarks = window.prompt("Approval remarks (optional)", "") ?? "";
+    const remarks = (await openActionPrompt({ eyebrow: "Purchase Order", title: "Approve this PO?", label: "Remarks (optional)", placeholder: "Optional approval remarks" })) ?? "";
     await runAction(
       () => approvePurchaseOrder(id, { remarks }),
       "Purchase order approved."
@@ -167,10 +168,8 @@ export default function PODetailPage() {
   }
 
   async function handleReject() {
-    const remarks = window.prompt("Reject reason", "");
-    if (!remarks) {
-      return;
-    }
+    const remarks = await openActionPrompt({ eyebrow: "Purchase Order", title: "Reject this PO?", label: "Reject reason", required: true });
+    if (!remarks) return;
     await runAction(
       () => rejectPurchaseOrder(id, { remarks }),
       "Purchase order rejected."
@@ -178,10 +177,8 @@ export default function PODetailPage() {
   }
 
   async function handleCancelPo() {
-    const reason = window.prompt("Cancellation reason", "");
-    if (!reason) {
-      return;
-    }
+    const reason = await openActionPrompt({ eyebrow: "Purchase Order", title: "Cancel this PO?", label: "Cancellation reason", required: true });
+    if (!reason) return;
     await runAction(
       () => cancelPurchaseOrder(id, { reason }),
       "Purchase order cancelled."
@@ -189,10 +186,8 @@ export default function PODetailPage() {
   }
 
   async function handleKnockOffPo() {
-    const reason = window.prompt("Knock-off reason", "");
-    if (!reason) {
-      return;
-    }
+    const reason = await openActionPrompt({ eyebrow: "Purchase Order", title: "Knock off this PO?", label: "Knock-off reason", required: true });
+    if (!reason) return;
     await runAction(
       () => knockOffPO(id, { reason }),
       "Purchase order knocked off."
@@ -200,10 +195,8 @@ export default function PODetailPage() {
   }
 
   async function handleKnockOffLine(lineId) {
-    const reason = window.prompt("Line knock-off reason", "");
-    if (!reason) {
-      return;
-    }
+    const reason = await openActionPrompt({ eyebrow: "Purchase Order", title: "Knock off this line?", label: "Knock-off reason", required: true });
+    if (!reason) return;
     await runAction(
       () => knockOffPOLine(id, lineId, { reason }),
       "PO line knocked off."

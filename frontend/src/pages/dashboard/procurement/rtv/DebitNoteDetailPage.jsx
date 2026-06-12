@@ -24,6 +24,7 @@ import {
   markDebitNoteSent,
   settleDebitNote,
 } from "../procurementApi.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -140,9 +141,8 @@ export default function DebitNoteDetailPage() {
         key: "mark-sent",
         label: saving ? "Marking..." : "Mark Sent",
         onClick: async () => {
-          if (!window.confirm("Mark this debit note as sent?")) {
-            return;
-          }
+          const ok1 = await openActionConfirm({ eyebrow: "Debit Note", title: "Mark as sent?", confirmLabel: "Mark Sent" });
+          if (!ok1) return;
           await runAction(() => markDebitNoteSent(id), "Debit note marked sent.");
         },
       };
@@ -152,9 +152,8 @@ export default function DebitNoteDetailPage() {
         key: "acknowledge",
         label: saving ? "Acknowledging..." : "Acknowledge",
         onClick: async () => {
-          if (!window.confirm("Acknowledge this debit note?")) {
-            return;
-          }
+          const ok2 = await openActionConfirm({ eyebrow: "Debit Note", title: "Acknowledge this debit note?", confirmLabel: "Acknowledge" });
+          if (!ok2) return;
           await runAction(
             () => acknowledgeDebitNote(id),
             "Debit note acknowledged."
@@ -167,9 +166,8 @@ export default function DebitNoteDetailPage() {
         key: "settle",
         label: saving ? "Settling..." : "Settle",
         onClick: async () => {
-          if (!window.confirm("Settle this debit note?")) {
-            return;
-          }
+          const ok3 = await openActionConfirm({ eyebrow: "Debit Note", title: "Settle this debit note?", confirmLabel: "Settle" });
+          if (!ok3) return;
           await runAction(() => settleDebitNote(id), "Debit note settled.");
         },
       };

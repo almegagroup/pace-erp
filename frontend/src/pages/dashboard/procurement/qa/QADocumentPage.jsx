@@ -19,6 +19,7 @@ import {
   updateQATestLine,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -252,9 +253,9 @@ export default function QADocumentPage() {
   }
 
   async function handleDeleteLine(lineId) {
-    if (!detail?.id || !window.confirm("Delete this test line?")) {
-      return;
-    }
+    if (!detail?.id) return;
+    const confirmed = await openActionConfirm({ eyebrow: "QA Document", title: "Delete this test line?", confirmLabel: "Delete" });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");
@@ -291,12 +292,8 @@ export default function QADocumentPage() {
     if (!detail?.id || decisionSubmitDisabled) {
       return;
     }
-    const confirmed = window.confirm(
-      "This will post stock movements. Cannot be undone."
-    );
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "QA Decision", title: "Submit QA decision?", message: "This will post stock movements. Cannot be undone.", confirmLabel: "Submit" });
+    if (!confirmed) return;
 
     setSaving(true);
     setError("");

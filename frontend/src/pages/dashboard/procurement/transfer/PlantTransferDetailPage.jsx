@@ -15,6 +15,8 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
@@ -112,30 +114,30 @@ export default function PlantTransferDetailPage() {
   }
 
   async function handleApprove() {
-    if (!detail || !window.confirm("Approve this plant transfer order?")) {
-      return;
-    }
+    if (!detail) return;
+    const confirmed = await openActionConfirm({ eyebrow: "Plant Transfer", title: "Approve this transfer order?", confirmLabel: "Approve" });
+    if (!confirmed) return;
     await runAction(() => approvePTO(detail.id), "Plant transfer order approved.");
   }
 
   async function handleOneStepTransfer() {
-    if (!detail || !window.confirm("Execute this one-step transfer?")) {
-      return;
-    }
+    if (!detail) return;
+    const confirmed = await openActionConfirm({ eyebrow: "Plant Transfer", title: "Execute one-step transfer?", message: "Stock will be moved immediately.", confirmLabel: "Execute" });
+    if (!confirmed) return;
     await runAction(() => oneStepTransfer(detail.id), "One-step transfer posted successfully.");
   }
 
   async function handleIssue() {
-    if (!detail || !window.confirm("Issue stock for this two-step transfer?")) {
-      return;
-    }
+    if (!detail) return;
+    const confirmed = await openActionConfirm({ eyebrow: "Plant Transfer", title: "Issue stock?", message: "Stock will be moved to in-transit.", confirmLabel: "Issue" });
+    if (!confirmed) return;
     await runAction(() => issueTransfer(detail.id), "Transfer issued and moved to in-transit.");
   }
 
   async function handleReceive() {
-    if (!detail || !window.confirm("Receive stock for this in-transit transfer?")) {
-      return;
-    }
+    if (!detail) return;
+    const confirmed = await openActionConfirm({ eyebrow: "Plant Transfer", title: "Receive in-transit stock?", confirmLabel: "Receive" });
+    if (!confirmed) return;
     await runAction(
       () => receiveTransfer(detail.id, { actual_receipt_date: actualReceiptDate }),
       "Transfer received successfully.",
@@ -143,13 +145,9 @@ export default function PlantTransferDetailPage() {
   }
 
   async function handleCancel() {
-    if (!detail) {
-      return;
-    }
-    const cancellationReason = window.prompt("Cancellation reason:", "");
-    if (cancellationReason === null) {
-      return;
-    }
+    if (!detail) return;
+    const cancellationReason = await openActionPrompt({ eyebrow: "Plant Transfer", title: "Cancel this transfer order?", label: "Cancellation reason" });
+    if (cancellationReason === null) return;
     await runAction(
       () => cancelPTO(detail.id, { cancellation_reason: cancellationReason }),
       "Plant transfer order cancelled.",

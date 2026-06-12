@@ -9,6 +9,8 @@ import ErpScreenScaffold, {
 import { useMenu } from "../../../../context/useMenu.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listMaterials } from "../../om/omApi.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
   cancelSTO,
   closeSTO,
@@ -134,12 +136,8 @@ export default function STODetailPage() {
           : "";
       return `${materialName} | Required: ${line.quantity} | Available: ${availableQty}.${warning}`;
     });
-    const confirmed = window.confirm(
-      `Dispatch this STO?\n\n${lineMessages.join("\n")}`
-    );
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "STO", title: "Dispatch this STO?", message: lineMessages.join("\n"), confirmLabel: "Dispatch" });
+    if (!confirmed) return;
     await runAction(
       () => dispatchSTO(detail.id, {}),
       "STO dispatched successfully."
@@ -150,10 +148,8 @@ export default function STODetailPage() {
     if (!detail) {
       return;
     }
-    const reason = window.prompt("Cancellation reason", "");
-    if (!reason) {
-      return;
-    }
+    const reason = await openActionPrompt({ eyebrow: "STO", title: "Cancel this STO?", label: "Cancellation reason", required: true });
+    if (!reason) return;
     await runAction(
       () => cancelSTO(detail.id, { cancellation_reason: reason }),
       "STO cancelled."
@@ -161,9 +157,9 @@ export default function STODetailPage() {
   }
 
   async function handleConfirmReceipt() {
-    if (!detail || !window.confirm("Confirm receipt for this dispatched STO?")) {
-      return;
-    }
+    if (!detail) return;
+    const confirmed = await openActionConfirm({ eyebrow: "STO", title: "Confirm receipt?", message: "Confirm receipt for this dispatched STO.", confirmLabel: "Confirm Receipt" });
+    if (!confirmed) return;
     await runAction(
       () => confirmSTOReceipt(detail.id),
       "STO receipt confirmed."
@@ -171,9 +167,9 @@ export default function STODetailPage() {
   }
 
   async function handleClose() {
-    if (!detail || !window.confirm("Close this STO?")) {
-      return;
-    }
+    if (!detail) return;
+    const confirmed = await openActionConfirm({ eyebrow: "STO", title: "Close this STO?", message: "This STO will be marked as closed.", confirmLabel: "Close STO" });
+    if (!confirmed) return;
     await runAction(
       () => closeSTO(detail.id),
       "STO closed."

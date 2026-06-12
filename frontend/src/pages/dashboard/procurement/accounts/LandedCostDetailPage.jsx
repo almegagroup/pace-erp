@@ -18,6 +18,7 @@ import {
   updateLCLine,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
 const COST_TYPES = [
   "FREIGHT",
@@ -179,9 +180,9 @@ export default function LandedCostDetailPage() {
   }
 
   async function handleDeleteLine(lineId) {
-    if (!detail?.id || !window.confirm("Delete this landed cost line?")) {
-      return;
-    }
+    if (!detail?.id) return;
+    const confirmed = await openActionConfirm({ eyebrow: "Landed Cost", title: "Delete this line?", confirmLabel: "Delete" });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");
@@ -200,10 +201,8 @@ export default function LandedCostDetailPage() {
     if (!detail?.id) {
       return;
     }
-    const confirmed = window.confirm("Post this landed cost document?");
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "Landed Cost", title: "Post this document?", confirmLabel: "Post" });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");

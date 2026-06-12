@@ -7,6 +7,8 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   createSubCSN,
@@ -191,9 +193,9 @@ export default function CSNDetailPage() {
   }
 
   async function handleDeleteSubCsn(subId) {
-    if (!detail?.id || !window.confirm("Delete this sub CSN?")) {
-      return;
-    }
+    if (!detail?.id) return;
+    const confirmed = await openActionConfirm({ eyebrow: "CSN", title: "Delete this sub CSN?", confirmLabel: "Delete" });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");
@@ -212,10 +214,8 @@ export default function CSNDetailPage() {
     if (!detail?.id || !detail?.company_id) {
       return;
     }
-    const actualEtd = window.prompt("Actual ETD (YYYY-MM-DD)", form.etd || "");
-    if (actualEtd === null) {
-      return;
-    }
+    const actualEtd = await openActionPrompt({ eyebrow: "CSN", title: "Mark In Transit", label: "Actual ETD (YYYY-MM-DD)", defaultValue: form.etd || "", placeholder: "YYYY-MM-DD" });
+    if (actualEtd === null) return;
     setSaving(true);
     setError("");
     setNotice("");
@@ -237,10 +237,8 @@ export default function CSNDetailPage() {
     if (!detail?.id || !detail?.company_id) {
       return;
     }
-    const arrivalDate = window.prompt("Arrival date (YYYY-MM-DD)", "");
-    if (arrivalDate === null) {
-      return;
-    }
+    const arrivalDate = await openActionPrompt({ eyebrow: "CSN", title: "Mark Arrived", label: "Arrival date (YYYY-MM-DD)", placeholder: "YYYY-MM-DD" });
+    if (arrivalDate === null) return;
     setSaving(true);
     setError("");
     setNotice("");

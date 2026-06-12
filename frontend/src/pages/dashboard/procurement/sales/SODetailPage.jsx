@@ -14,6 +14,8 @@ import {
   listSalesInvoices,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 
 function getStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -140,10 +142,8 @@ export default function SODetailPage() {
   }
 
   async function handleCancel() {
-    const reason = window.prompt("Cancellation reason", "");
-    if (!reason) {
-      return;
-    }
+    const reason = await openActionPrompt({ eyebrow: "Sales Order", title: "Cancel this SO?", label: "Cancellation reason", required: true });
+    if (!reason) return;
     await runAction(
       () => cancelSalesOrder(id, { reason }),
       "Sales order cancelled."
@@ -164,9 +164,8 @@ export default function SODetailPage() {
       return;
     }
 
-    if (!window.confirm("Issue stock for the selected lines?")) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "Sales Order", title: "Issue stock?", message: "Stock will be issued for the selected lines.", confirmLabel: "Issue Stock" });
+    if (!confirmed) return;
 
     setSaving(true);
     setError("");
@@ -190,10 +189,8 @@ export default function SODetailPage() {
   }
 
   async function handleKnockOff(lineId) {
-    const reason = window.prompt("Reason", "");
-    if (!reason) {
-      return;
-    }
+    const reason = await openActionPrompt({ eyebrow: "Sales Order", title: "Knock off this line?", label: "Reason", required: true });
+    if (!reason) return;
     await runAction(
       () => knockOffSOLine(id, lineId, { reason }),
       "SO line knocked off."
