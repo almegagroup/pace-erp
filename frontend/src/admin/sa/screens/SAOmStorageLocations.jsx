@@ -135,7 +135,8 @@ export default function SAOmStorageLocations() {
   /* ── Tab 1: row click ── */
   function handleRowClick(row) {
     setEditRow(row);
-    setForm({ location_code: row.code, location_name: row.name, location_type: row.location_type });
+    const normalizedType = LOCATION_TYPES.includes(row.location_type) ? row.location_type : "WAREHOUSE";
+    setForm({ location_code: row.code, location_name: row.name, location_type: normalizedType });
     setError("");
   }
   function handleCancelEdit() {
