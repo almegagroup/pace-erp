@@ -1610,7 +1610,7 @@ export default function MenuShell() {
                           <span className="min-w-0">
                             <span className="block truncate">{node.item.title}</span>
                             {node.item.tx_code ? (
-                              <span className="block font-mono text-xs text-slate-400 leading-tight">
+                              <span className="block font-mono text-[14px] text-slate-400 leading-tight">
                                 {node.item.tx_code}
                               </span>
                             ) : null}
@@ -1699,7 +1699,7 @@ export default function MenuShell() {
                         <span className="min-w-0">
                           <span className="block truncate">{node.item.title}</span>
                           {node.item.tx_code ? (
-                            <span className="block font-mono text-xs text-slate-400 leading-tight">
+                            <span className="block font-mono text-[14px] text-slate-400 leading-tight">
                               {node.item.tx_code}
                             </span>
                           ) : null}
