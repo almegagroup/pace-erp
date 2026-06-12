@@ -33,9 +33,9 @@ function label(code) {
 async function fetchAdminList(path, dataKey, fallback) {
   try {
     const res = await fetch(path, { credentials: "include" });
-    if (!res.ok) throw new Error(fallback);
-    const json = await res.json();
-    return json[dataKey] ?? json.data ?? json ?? [];
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json?.code ?? fallback);
+    return json?.data?.[dataKey] ?? json?.[dataKey] ?? [];
   } catch {
     return [];
   }
