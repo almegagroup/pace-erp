@@ -53,6 +53,7 @@ import {
   createUomHandler,
   listUomHandler,
   toggleUomHandler,
+  updateUomHandler,
 } from "../_core/om/uom.handlers.ts";
 import {
   createStorageLocationHandler,
@@ -157,6 +158,8 @@ export async function dispatchOmRoutes(
       return await listUomHandler(req, ctx);
     case "POST:/api/om/uom":
       return await createUomHandler(req, ctx);
+    case "PATCH:/api/om/uom":
+      return await updateUomHandler(req, ctx);
     case "POST:/api/om/uom/toggle":
       return await toggleUomHandler(req, ctx);
 

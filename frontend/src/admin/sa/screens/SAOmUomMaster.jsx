@@ -4,7 +4,7 @@
  * Gate: 15
  * Phase: 15
  * Domain: OPERATION_MANAGEMENT
- * Purpose: Render the SA-only UOM master list and inline create form.
+ * Purpose: Render the SA-only UOM master list and inline create/edit form.
  * Authority: Frontend
  */
 
@@ -12,16 +12,18 @@ import { useEffect, useRef, useState } from "react";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import { createUom, listUoms, toggleUom } from "../../../pages/dashboard/om/omApi.js";
+import { createUom, listUoms, toggleUom, updateUom } from "../../../pages/dashboard/om/omApi.js";
 
 const ERROR_MESSAGES = {
   OM_INVALID_UOM_CODE:  "UOM code is required and must be 1–10 alphanumeric characters.",
-  OM_INVALID_UOM_TYPE:  "UOM name and type are required.",
+  OM_INVALID_UOM_NAME:  "UOM name is required.",
+  OM_INVALID_UOM_TYPE:  "UOM type is invalid.",
   OM_UOM_EXISTS:        "A UOM with this code already exists.",
   OM_UOM_NOT_FOUND:     "UOM not found.",
   OM_SA_REQUIRED:       "Super Admin access required.",
   OM_ADMIN_REQUIRED:    "Admin access required.",
   OM_UOM_CREATE_FAILED: "Failed to create UOM. Please try again.",
+  OM_UOM_UPDATE_FAILED: "Failed to update UOM. Please try again.",
   OM_UOM_TOGGLE_FAILED: "Failed to update UOM status. Please try again.",
   OM_UOM_LIST_FAILED:   "Failed to load UOM list. Please refresh.",
 };
@@ -30,15 +32,18 @@ function friendlyError(code) {
   return ERROR_MESSAGES[code] ?? code;
 }
 
+const EMPTY_CREATE = { uom_code: "", uom_name: "", uom_type: "COUNT" };
+
 export default function SAOmUomMaster() {
-  const [rows, setRows] = useState([]);
-  const [form, setForm] = useState({ uom_code: "", uom_name: "", uom_type: "COUNT" });
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [toggling, setToggling] = useState(null); // holds uom code being toggled
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const noticeTimer = useRef(null);
+  const [rows, setRows]         = useState([]);
+  const [form, setForm]         = useState(EMPTY_CREATE);
+  const [editRow, setEditRow]   = useState(null); // null = create mode, row = edit mode
+  const [loading, setLoading]   = useState(true);
+  const [saving, setSaving]     = useState(false);
+  const [toggling, setToggling] = useState(null);
+  const [error, setError]       = useState("");
+  const [notice, setNotice]     = useState("");
+  const noticeTimer             = useRef(null);
 
   function showNotice(msg) {
     setNotice(msg);
@@ -52,9 +57,9 @@ export default function SAOmUomMaster() {
     try {
       const result = await listUoms({});
       setRows(Array.isArray(result?.data) ? result.data : []);
-    } catch (loadError) {
+    } catch (err) {
       setRows([]);
-      setError(friendlyError(loadError instanceof Error ? loadError.message : "OM_UOM_LIST_FAILED"));
+      setError(friendlyError(err instanceof Error ? err.message : "OM_UOM_LIST_FAILED"));
     } finally {
       setLoading(false);
     }
@@ -64,6 +69,18 @@ export default function SAOmUomMaster() {
     void loadRows();
     return () => clearTimeout(noticeTimer.current);
   }, []);
+
+  function handleRowClick(row) {
+    setEditRow(row);
+    setForm({ uom_code: row.code, uom_name: row.name, uom_type: row.uom_type });
+    setError("");
+  }
+
+  function handleCancelEdit() {
+    setEditRow(null);
+    setForm(EMPTY_CREATE);
+    setError("");
+  }
 
   async function handleCreate() {
     if (!form.uom_code.trim() || !form.uom_name.trim() || !form.uom_type) {
@@ -78,11 +95,35 @@ export default function SAOmUomMaster() {
         uom_name: form.uom_name.trim(),
         uom_type: form.uom_type,
       });
-      setForm({ uom_code: "", uom_name: "", uom_type: "COUNT" });
+      setForm(EMPTY_CREATE);
       showNotice("UOM created successfully.");
       await loadRows();
-    } catch (saveError) {
-      setError(friendlyError(saveError instanceof Error ? saveError.message : "OM_UOM_CREATE_FAILED"));
+    } catch (err) {
+      setError(friendlyError(err instanceof Error ? err.message : "OM_UOM_CREATE_FAILED"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleUpdate() {
+    if (!form.uom_name.trim()) {
+      setError(friendlyError("OM_INVALID_UOM_NAME"));
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      await updateUom({
+        code:     editRow.code,
+        name:     form.uom_name.trim(),
+        uom_type: form.uom_type,
+      });
+      showNotice(`UOM "${editRow.code}" updated successfully.`);
+      setEditRow(null);
+      setForm(EMPTY_CREATE);
+      await loadRows();
+    } catch (err) {
+      setError(friendlyError(err instanceof Error ? err.message : "OM_UOM_UPDATE_FAILED"));
     } finally {
       setSaving(false);
     }
@@ -94,13 +135,16 @@ export default function SAOmUomMaster() {
     try {
       await toggleUom({ code: row.code, active: !row.active });
       showNotice(`UOM "${row.code}" ${!row.active ? "activated" : "deactivated"}.`);
+      if (editRow?.code === row.code) handleCancelEdit();
       await loadRows();
-    } catch (toggleError) {
-      setError(friendlyError(toggleError instanceof Error ? toggleError.message : "OM_UOM_TOGGLE_FAILED"));
+    } catch (err) {
+      setError(friendlyError(err instanceof Error ? err.message : "OM_UOM_TOGGLE_FAILED"));
     } finally {
       setToggling(null);
     }
   }
+
+  const isEditMode = editRow !== null;
 
   return (
     <ErpScreenScaffold
@@ -108,7 +152,15 @@ export default function SAOmUomMaster() {
       title="UOM Master"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadRows() },
-        { key: "create", label: saving ? "Creating..." : "Create UOM", tone: "primary", onClick: () => void handleCreate(), disabled: saving },
+        ...(isEditMode
+          ? [
+              { key: "cancel", label: "Cancel Edit", tone: "neutral", onClick: handleCancelEdit },
+              { key: "save",   label: saving ? "Saving..." : "Save Changes", tone: "primary", onClick: () => void handleUpdate(), disabled: saving },
+            ]
+          : [
+              { key: "create", label: saving ? "Creating..." : "Create UOM", tone: "primary", onClick: () => void handleCreate(), disabled: saving },
+            ]
+        ),
       ]}
       notices={[
         ...(error  ? [{ key: "error",  tone: "error",   message: error  }] : []),
@@ -132,7 +184,7 @@ export default function SAOmUomMaster() {
                 label: "",
                 render: (row) => (
                   <button
-                    onClick={() => void handleToggle(row)}
+                    onClick={(e) => { e.stopPropagation(); void handleToggle(row); }}
                     disabled={toggling === row.code}
                     className={`px-2 py-0.5 text-xs font-medium rounded ${
                       row.active
@@ -147,20 +199,36 @@ export default function SAOmUomMaster() {
             ]}
             rows={rows}
             rowKey={(row) => row.id || row.code}
+            onRowClick={handleRowClick}
+            selectedRowKey={editRow?.code}
             emptyMessage={loading ? "Loading UOM rows..." : "No UOM rows are available."}
             maxHeight="420px"
           />
+          {!isEditMode && (
+            <p className="mt-2 text-xs text-slate-400">Click a row to edit.</p>
+          )}
         </ErpSectionCard>
 
-        <ErpSectionCard eyebrow="Create UOM" title="New unit of measure">
+        <ErpSectionCard
+          eyebrow={isEditMode ? `Editing — ${editRow.code}` : "Create UOM"}
+          title={isEditMode ? "Edit unit of measure" : "New unit of measure"}
+        >
           <div className="grid gap-3">
             <ErpDenseFormRow label="UOM Code" required>
               <input
                 value={form.uom_code}
-                onChange={(e) => setForm((f) => ({ ...f, uom_code: e.target.value.toUpperCase() }))}
-                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                onChange={(e) => !isEditMode && setForm((f) => ({ ...f, uom_code: e.target.value.toUpperCase() }))}
+                readOnly={isEditMode}
+                className={`h-8 w-full border px-2 text-sm text-slate-900 outline-none focus:border-sky-500 ${
+                  isEditMode
+                    ? "border-slate-200 bg-slate-50 text-slate-500 cursor-not-allowed"
+                    : "border-slate-300 bg-[#fffef7]"
+                }`}
                 placeholder="e.g. KG"
               />
+              {isEditMode && (
+                <p className="mt-1 text-xs text-slate-400">Code cannot be changed.</p>
+              )}
             </ErpDenseFormRow>
             <ErpDenseFormRow label="UOM Name" required>
               <input

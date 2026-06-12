@@ -124,6 +124,53 @@ export async function createUomHandler(
   }
 }
 
+export async function updateUomHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmSaContext(ctx);
+
+    const body = await parseBody(req);
+    const uomCode = toTrimmedString(body.code).toUpperCase();
+    const uomName = toTrimmedString(body.name);
+    const rawType = toTrimmedString(body.uom_type).toUpperCase();
+    const mappedType = rawType ? (UOM_TYPE_MAP[rawType] ?? "") : "";
+
+    if (!uomCode) {
+      return uomErrorResponse(req, ctx, "OM_INVALID_UOM_CODE", 400, "UOM code required");
+    }
+    if (!uomName) {
+      return uomErrorResponse(req, ctx, "OM_INVALID_UOM_NAME", 400, "UOM name required");
+    }
+    if (rawType && !mappedType) {
+      return uomErrorResponse(req, ctx, "OM_INVALID_UOM_TYPE", 400, "Invalid UOM type");
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (uomName) updates.name = uomName;
+    if (mappedType) updates.uom_type = mappedType;
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("uom_master")
+      .update(updates)
+      .eq("code", uomCode)
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      return uomErrorResponse(req, ctx, "OM_UOM_NOT_FOUND", 404, "UOM not found");
+    }
+
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_UOM_UPDATE_FAILED";
+    const status = code === "OM_SA_REQUIRED" ? 403 : 500;
+    return uomErrorResponse(req, ctx, code, status, "UOM update failed");
+  }
+}
+
 export async function toggleUomHandler(
   req: Request,
   ctx: OmHandlerContext,

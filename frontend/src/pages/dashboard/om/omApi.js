@@ -322,6 +322,18 @@ export async function createUom(payload) {
   );
 }
 
+export async function updateUom(payload) {
+  return fetchJson(
+    "/api/om/uom",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_UOM_UPDATE_FAILED"
+  );
+}
+
 export async function toggleUom(payload) {
   return fetchJson(
     "/api/om/uom/toggle",
