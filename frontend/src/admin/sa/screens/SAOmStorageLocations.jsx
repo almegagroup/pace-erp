@@ -61,8 +61,8 @@ const TABS = [
   { key: "assignments",  label: "Plant Assignments" },
 ];
 
-const LOCATION_TYPES = ["PHYSICAL", "LOGICAL", "TRANSIT", "WAREHOUSE", "SHOP_FLOOR", "QUARANTINE", "SCRAP", "EXTERNAL"];
-const EMPTY_CREATE = { location_code: "", location_name: "", location_type: "PHYSICAL" };
+const LOCATION_TYPES = ["WAREHOUSE", "SHOP_FLOOR", "TRANSIT", "SCRAP", "EXTERNAL", "LOGICAL"];
+const EMPTY_CREATE = { location_code: "", location_name: "", location_type: "WAREHOUSE" };
 
 export default function SAOmStorageLocations() {
   const [activeTab, setActiveTab] = useState("locations");
