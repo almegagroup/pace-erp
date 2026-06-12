@@ -215,6 +215,144 @@ export async function listStorageLocationsHandler(
   }
 }
 
+export async function updateStorageLocationHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmSaContext(ctx);
+    const body = await parseBody(req);
+    const locationId = toTrimmedString(body.id);
+    const locationName = toTrimmedString(body.location_name || body.name);
+    const locationType = LOCATION_TYPE_MAP[toTrimmedString(body.location_type).toUpperCase()] ?? "";
+
+    if (!locationId || !locationName || !locationType) {
+      return locationErrorResponse(req, ctx, "OM_LOCATION_UPDATE_FAILED", 400, "Invalid input");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_inventory")
+      .from("storage_location_master")
+      .update({ name: locationName, location_type: locationType, is_transit_location: locationType === "TRANSIT" })
+      .eq("id", locationId)
+      .select("*")
+      .single();
+
+    if (error || !data) throw new Error("OM_LOCATION_UPDATE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_LOCATION_UPDATE_FAILED";
+    return locationErrorResponse(req, ctx, code, 400, "Storage location update failed");
+  }
+}
+
+export async function toggleStorageLocationHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmSaContext(ctx);
+    const body = await parseBody(req);
+    const locationId = toTrimmedString(body.id);
+    const active = body.active === true;
+
+    if (!locationId) {
+      return locationErrorResponse(req, ctx, "OM_LOCATION_TOGGLE_FAILED", 400, "Missing id");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_inventory")
+      .from("storage_location_master")
+      .update({ active })
+      .eq("id", locationId)
+      .select("*")
+      .single();
+
+    if (error || !data) throw new Error("OM_LOCATION_TOGGLE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_LOCATION_TOGGLE_FAILED";
+    return locationErrorResponse(req, ctx, code, 400, "Storage location toggle failed");
+  }
+}
+
+export async function listPlantAssignmentsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
+    const plantId = toTrimmedString(url.searchParams.get("plant_id"));
+
+    if (!companyId || !plantId) {
+      return locationErrorResponse(req, ctx, "OM_LOCATION_LIST_FAILED", 400, "company_id and plant_id required");
+    }
+
+    const { data: maps, error: mapError } = await serviceRoleClient
+      .schema("erp_inventory")
+      .from("storage_location_plant_map")
+      .select("storage_location_id, company_id, plant_id, active, is_default_grn_location, allowed_stock_types")
+      .eq("company_id", companyId)
+      .eq("plant_id", plantId);
+
+    if (mapError) throw new Error("OM_LOCATION_LIST_FAILED");
+
+    const locationIds = (maps ?? []).map((r) => r.storage_location_id).filter(Boolean);
+    if (locationIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const { data: locs, error: locError } = await serviceRoleClient
+      .schema("erp_inventory")
+      .from("storage_location_master")
+      .select("id, code, name, location_type, active")
+      .in("id", locationIds)
+      .order("code");
+
+    if (locError) throw new Error("OM_LOCATION_LIST_FAILED");
+
+    const mapById = new Map((maps ?? []).map((r) => [r.storage_location_id, r]));
+    const merged = (locs ?? []).map((loc) => ({ ...loc, plant_map: mapById.get(loc.id) ?? null }));
+    return okResponse({ data: merged }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_LOCATION_LIST_FAILED";
+    return locationErrorResponse(req, ctx, code, 500, "Plant assignment list failed");
+  }
+}
+
+export async function unmapStorageLocationFromPlantHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmSaContext(ctx);
+    const body = await parseBody(req);
+    const storageLocationIds: string[] = Array.isArray(body.storage_location_ids)
+      ? body.storage_location_ids.map((v) => toTrimmedString(v)).filter(Boolean)
+      : [toTrimmedString(body.storage_location_id)].filter(Boolean);
+    const plantId = toTrimmedString(body.plant_id);
+    const companyId = toTrimmedString(body.company_id);
+
+    if (storageLocationIds.length === 0 || !plantId || !companyId) {
+      return locationErrorResponse(req, ctx, "OM_LOCATION_UNMAP_FAILED", 400, "Missing required fields");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_inventory")
+      .from("storage_location_plant_map")
+      .delete()
+      .in("storage_location_id", storageLocationIds)
+      .eq("plant_id", plantId)
+      .eq("company_id", companyId);
+
+    if (error) throw new Error("OM_LOCATION_UNMAP_FAILED");
+    return okResponse({ removed: storageLocationIds.length }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_LOCATION_UNMAP_FAILED";
+    return locationErrorResponse(req, ctx, code, 400, "Storage location unmap failed");
+  }
+}
+
 export async function mapStorageLocationToPlantHandler(
   req: Request,
   ctx: OmHandlerContext,

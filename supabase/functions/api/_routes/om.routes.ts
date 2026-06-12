@@ -58,7 +58,11 @@ import {
 import {
   createStorageLocationHandler,
   listStorageLocationsHandler,
+  listPlantAssignmentsHandler,
   mapStorageLocationToPlantHandler,
+  unmapStorageLocationFromPlantHandler,
+  updateStorageLocationHandler,
+  toggleStorageLocationHandler,
 } from "../_core/om/location.handlers.ts";
 import {
   createNumberSeriesHandler,
@@ -167,8 +171,16 @@ export async function dispatchOmRoutes(
       return await createStorageLocationHandler(req, ctx);
     case "GET:/api/om/storage-locations":
       return await listStorageLocationsHandler(req, ctx);
+    case "PATCH:/api/om/storage-location":
+      return await updateStorageLocationHandler(req, ctx);
+    case "POST:/api/om/storage-location/toggle":
+      return await toggleStorageLocationHandler(req, ctx);
+    case "GET:/api/om/storage-location/plant-assignments":
+      return await listPlantAssignmentsHandler(req, ctx);
     case "POST:/api/om/storage-location/plant-map":
       return await mapStorageLocationToPlantHandler(req, ctx);
+    case "POST:/api/om/storage-location/plant-unmap":
+      return await unmapStorageLocationFromPlantHandler(req, ctx);
 
     case "POST:/api/om/number-series":
       return await createNumberSeriesHandler(req, ctx);

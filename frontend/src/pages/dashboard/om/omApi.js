@@ -513,3 +513,48 @@ export async function mapStorageLocationToPlant(payload) {
     "OM_SLOC_PLANT_MAP_FAILED"
   );
 }
+
+export async function updateStorageLocation(payload) {
+  return fetchJson(
+    "/api/om/storage-location",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_LOCATION_UPDATE_FAILED"
+  );
+}
+
+export async function toggleStorageLocation(payload) {
+  return fetchJson(
+    "/api/om/storage-location/toggle",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_LOCATION_TOGGLE_FAILED"
+  );
+}
+
+export async function listPlantAssignments({ company_id, plant_id } = {}) {
+  const params = buildParams({ company_id, plant_id });
+  return fetchJson(
+    `/api/om/storage-location/plant-assignments?${params.toString()}`,
+    {},
+    "OM_LOCATION_LIST_FAILED"
+  );
+}
+
+export async function unmapStorageLocationsFromPlant(payload) {
+  return fetchJson(
+    "/api/om/storage-location/plant-unmap",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_LOCATION_UNMAP_FAILED"
+  );
+}
