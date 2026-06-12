@@ -689,14 +689,19 @@ export async function listMaterialCategoryGroupsHandler(
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("material_category_group")
-      .select("*")
+      .select("*, members:material_category_group_member(id, material_id, is_primary)")
       .order("group_name", { ascending: true });
 
     if (error) {
       throw new Error("OM_CATEGORY_GROUP_LIST_FAILED");
     }
 
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+    const enriched = (data ?? []).map((g: Record<string, unknown>) => ({
+      ...g,
+      member_count: Array.isArray(g.members) ? (g.members as unknown[]).length : 0,
+    }));
+
+    return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_CATEGORY_GROUP_LIST_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
@@ -764,5 +769,33 @@ export async function addMaterialCategoryMemberHandler(
     const code = (err as Error).message || "OM_CATEGORY_MEMBER_CREATE_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("EXISTS") ? 409 : 500;
     return materialErrorResponse(req, ctx, code, status, "Category member create failed");
+  }
+}
+
+export async function removeMaterialCategoryMemberHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+
+    const body = await parseBody(req);
+    const memberId = toTrimmedString(body.member_id);
+    if (!memberId) {
+      return materialErrorResponse(req, ctx, "OM_MEMBER_REMOVE_FAILED", 400, "Member ID required");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_category_group_member")
+      .delete()
+      .eq("id", memberId);
+
+    if (error) throw new Error("OM_MEMBER_REMOVE_FAILED");
+    return okResponse({ removed: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_MEMBER_REMOVE_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 400;
+    return materialErrorResponse(req, ctx, code, status, "Category member remove failed");
   }
 }

@@ -416,6 +416,18 @@ export async function addMaterialCategoryMember(payload) {
   );
 }
 
+export async function removeMaterialCategoryMember(memberId) {
+  return fetchJson(
+    "/api/om/material/category-group/member",
+    {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ member_id: memberId }),
+    },
+    "OM_MCG_MEMBER_REMOVE_FAILED"
+  );
+}
+
 export async function listCostCenters(params = {}) {
   const query = buildParams(params);
   return fetchJson(`/api/om/cost-centers?${query.toString()}`, {}, "OM_CC_LIST_FAILED");

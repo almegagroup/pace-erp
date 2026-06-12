@@ -12,6 +12,7 @@ import type { SessionResolution } from "../_pipeline/session.ts";
 import type { ContextResolution } from "../_pipeline/context.ts";
 import {
   addMaterialCategoryMemberHandler,
+  removeMaterialCategoryMemberHandler,
   changeMaterialStatusHandler,
   createMaterialCategoryGroupHandler,
   createMaterialHandler,
@@ -118,6 +119,8 @@ export async function dispatchOmRoutes(
       return await listMaterialCategoryGroupsHandler(req, ctx);
     case "POST:/api/om/material/category-group/member":
       return await addMaterialCategoryMemberHandler(req, ctx);
+    case "DELETE:/api/om/material/category-group/member":
+      return await removeMaterialCategoryMemberHandler(req, ctx);
 
     case "POST:/api/om/vendor":
       return await createVendorHandler(req, ctx);
