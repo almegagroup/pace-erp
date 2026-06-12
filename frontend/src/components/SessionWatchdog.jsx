@@ -102,22 +102,14 @@ export default function SessionWatchdog() {
       recordUserActivity();
     };
 
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        recordUserActivity();
-      }
-    };
-
     activityEvents.forEach((eventName) => {
       window.addEventListener(eventName, markActive, true);
     });
-    document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
       activityEvents.forEach((eventName) => {
         window.removeEventListener(eventName, markActive, true);
       });
-      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [location.pathname]);
 
@@ -125,6 +117,15 @@ export default function SessionWatchdog() {
     if (!isProtectedPath(location.pathname)) return undefined;
 
     let cancelled = false;
+
+    // Tab visible হলে cooldown bypass করে immediate check — background throttling এড়াতে
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        lastPassiveProbeAtRef.current = 0;
+        void tick();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     const tick = async () => {
       if (cancelled || probeInFlightRef.current) return;
@@ -188,6 +189,7 @@ export default function SessionWatchdog() {
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [location.pathname]);
 
