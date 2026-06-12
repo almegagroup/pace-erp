@@ -238,7 +238,7 @@ export async function updateCompanySeriesHandler(
   try {
     assertSARole(ctx);
     const segments = getPathSegments(req);
-    const seriesId = toTrimmedString(segments[5]);
+    const seriesId = toTrimmedString(segments[4]); // [api, procurement, number-series, company, {id}]
     if (!seriesId) {
       return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_ID_MISSING", 400, "Series ID is required.");
     }
@@ -273,18 +273,29 @@ export async function deleteCompanySeriesHandler(
   try {
     assertSARole(ctx);
     const segments = getPathSegments(req);
-    const seriesId = toTrimmedString(segments[5]);
+    const seriesId = toTrimmedString(segments[4]); // [api, procurement, number-series, company, {id}]
     if (!seriesId) {
       return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_ID_MISSING", 400, "Series ID is required.");
     }
-    // Block delete if any counter has been used
-    const { data: counters } = await serviceRoleClient
+    // Fetch series to get company_id + document_type for counter check
+    const { data: series } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_series")
+      .select("company_id, document_type")
+      .eq("id", seriesId)
+      .single();
+    if (!series) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_NOT_FOUND", 404, "Series not found.");
+    }
+    // Block delete if any counter has already generated documents
+    const { data: usedCounters } = await serviceRoleClient
       .schema("erp_procurement")
       .from("company_doc_number_counter")
       .select("last_number")
-      .eq("company_id", (await serviceRoleClient.schema("erp_procurement").from("company_doc_number_series").select("company_id").eq("id", seriesId).single()).data?.company_id ?? "")
+      .eq("company_id", series.company_id)
+      .eq("document_type", series.document_type)
       .gt("last_number", 0);
-    if (counters && counters.length > 0) {
+    if (usedCounters && usedCounters.length > 0) {
       return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_IN_USE", 409, "Cannot delete a series that has already generated documents.");
     }
     const { error } = await serviceRoleClient

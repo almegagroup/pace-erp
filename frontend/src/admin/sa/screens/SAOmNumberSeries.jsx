@@ -5,7 +5,7 @@
  * Purpose: SA number series management — global counters and company+FY series.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import {
@@ -369,8 +369,8 @@ export default function SAOmNumberSeries() {
                         const isSelected = selectedSeries?.id === row.id;
                         const isEditingThis = editingSeriesId === row.id;
                         return (
-                          <>
-                            <tr key={row.id}
+                          <React.Fragment key={row.id}>
+                            <tr
                               onClick={() => {
                                 if (editingSeriesId === row.id) return;
                                 setSelectedSeries(isSelected ? null : row);
@@ -438,7 +438,7 @@ export default function SAOmNumberSeries() {
 
                             {/* Inline FY Counters — expands under selected row */}
                             {isSelected && (
-                              <tr key={`${row.id}-fy`}>
+                              <tr>
                                 <td colSpan={6} className="bg-sky-50 px-4 py-4">
                                   <div className="grid gap-3">
                                     <div className="text-xs font-semibold uppercase tracking-[0.08em] text-sky-700">
@@ -502,7 +502,7 @@ export default function SAOmNumberSeries() {
                                 </td>
                               </tr>
                             )}
-                          </>
+                          </React.Fragment>
                         );
                       })}
                     </tbody>
