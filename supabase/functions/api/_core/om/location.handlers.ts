@@ -15,16 +15,9 @@ import { assertOmAdminContext, assertOmSaContext } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
-const LOCATION_TYPE_MAP: Record<string, string> = {
-  WAREHOUSE: "PHYSICAL",
-  SHOP_FLOOR: "PHYSICAL",
-  QUARANTINE: "PHYSICAL",
-  SCRAP: "LOGICAL",
-  TRANSIT: "TRANSIT",
-  EXTERNAL: "LOGICAL",
-  PHYSICAL: "PHYSICAL",
-  LOGICAL: "LOGICAL",
-};
+const VALID_LOCATION_TYPES = new Set([
+  "PHYSICAL", "LOGICAL", "TRANSIT", "WAREHOUSE", "SHOP_FLOOR", "SCRAP", "EXTERNAL",
+]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -80,9 +73,9 @@ export async function createStorageLocationHandler(
     const body = await parseBody(req);
     const locationCode = toTrimmedString(body.location_code || body.code).toUpperCase();
     const locationName = toTrimmedString(body.location_name || body.name);
-    const locationType = LOCATION_TYPE_MAP[toTrimmedString(body.location_type).toUpperCase()] ?? "";
+    const locationType = toTrimmedString(body.location_type).toUpperCase();
 
-    if (!locationCode || !locationName || !locationType) {
+    if (!locationCode || !locationName || !VALID_LOCATION_TYPES.has(locationType)) {
       return locationErrorResponse(req, ctx, "OM_LOCATION_CREATE_FAILED", 400, "Invalid storage location input");
     }
 
@@ -127,8 +120,7 @@ export async function listStorageLocationsHandler(
     const url = new URL(req.url);
     const plantId = toTrimmedString(url.searchParams.get("plant_id"));
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
-    const locationType = LOCATION_TYPE_MAP[toTrimmedString(url.searchParams.get("location_type")).toUpperCase()] ??
-      toTrimmedString(url.searchParams.get("location_type")).toUpperCase();
+    const locationType = toTrimmedString(url.searchParams.get("location_type")).toUpperCase();
     const isActive = url.searchParams.get("is_active");
 
     if (plantId) {
@@ -224,9 +216,9 @@ export async function updateStorageLocationHandler(
     const body = await parseBody(req);
     const locationId = toTrimmedString(body.id);
     const locationName = toTrimmedString(body.location_name || body.name);
-    const locationType = LOCATION_TYPE_MAP[toTrimmedString(body.location_type).toUpperCase()] ?? "";
+    const locationType = toTrimmedString(body.location_type).toUpperCase();
 
-    if (!locationId || !locationName || !locationType) {
+    if (!locationId || !locationName || !VALID_LOCATION_TYPES.has(locationType)) {
       return locationErrorResponse(req, ctx, "OM_LOCATION_UPDATE_FAILED", 400, "Invalid input");
     }
 
