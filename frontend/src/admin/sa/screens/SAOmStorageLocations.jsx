@@ -31,12 +31,12 @@ const ERROR_MESSAGES = {
   OM_LOCATION_TOGGLE_FAILED: "Failed to change location status. Please try again.",
   OM_LOCATION_LIST_FAILED:   "Failed to load storage locations. Please refresh.",
   OM_LOCATION_UNMAP_FAILED:  "Failed to remove location(s) from plant. Please try again.",
-  OM_SLOC_PLANT_MAP_FAILED:  "Failed to assign location to plant. Please try again.",
+  OM_SLOC_PLANT_MAP_FAILED:  "Failed to assign location to project. Please try again.",
   OM_LOCATION_EXISTS:        "A storage location with this code already exists.",
   OM_SA_REQUIRED:            "Super Admin access required.",
   OM_ADMIN_REQUIRED:         "Admin access required.",
   COMPANY_LIST_FAILED:       "Failed to load company list.",
-  PLANT_LIST_FAILED:         "Failed to load plant list.",
+  PLANT_LIST_FAILED:         "Failed to load project list.",
 };
 function friendlyError(code) {
   return ERROR_MESSAGES[code] ?? code;
@@ -58,7 +58,7 @@ async function fetchAdminList(path, dataKey, fallback) {
 /* ─── tabs ──────────────────────────────────────────────────────────── */
 const TABS = [
   { key: "locations",    label: "Locations" },
-  { key: "assignments",  label: "Plant Assignments" },
+  { key: "assignments",  label: "Project Assignments" },
 ];
 
 const LOCATION_TYPES = ["WAREHOUSE", "SHOP_FLOOR", "TRANSIT", "SCRAP", "EXTERNAL", "LOGICAL"];
@@ -279,7 +279,7 @@ export default function SAOmStorageLocations() {
     }
   }
 
-  /* ── Tab 2: assign selected locations to plant ── */
+  /* ── Tab 2: assign selected locations to project ── */
   async function handleAssign() {
     if (assignSelections.size === 0 || !selPlant || !selCompany) return;
     setSavingAssign(true);
@@ -294,7 +294,7 @@ export default function SAOmStorageLocations() {
           })
         )
       );
-      showNotice(`${assignSelections.size} location(s) assigned to plant.`);
+      showNotice(`${assignSelections.size} location(s) assigned to project.`);
       setAssignSelections(new Set());
       await loadAssigned(selCompany, selPlant);
     } catch (err) {
@@ -456,7 +456,7 @@ export default function SAOmStorageLocations() {
       {activeTab === "assignments" && (
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           {/* Left — filter + assigned */}
-          <ErpSectionCard eyebrow="Select Scope" title="Company & Plant">
+          <ErpSectionCard eyebrow="Select Scope" title="Company & Project">
             <div className="grid gap-3">
               <ErpDenseFormRow label="Company" required>
                 <select
@@ -472,14 +472,14 @@ export default function SAOmStorageLocations() {
                   ))}
                 </select>
               </ErpDenseFormRow>
-              <ErpDenseFormRow label="Plant" required>
+              <ErpDenseFormRow label="Project" required>
                 <select
                   value={selPlant}
                   onChange={(e) => handlePlantChange(e.target.value)}
                   disabled={!selCompany}
                   className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500 disabled:opacity-50"
                 >
-                  <option value="">— select plant —</option>
+                  <option value="">— select project —</option>
                   {plants.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.project_code} | {p.project_name}
@@ -509,7 +509,7 @@ export default function SAOmStorageLocations() {
                 {loadingAssign ? (
                   <p className="text-xs text-slate-400 py-2">Loading...</p>
                 ) : assignedRows.length === 0 ? (
-                  <p className="text-xs text-slate-400 py-2">No locations assigned to this plant yet.</p>
+                  <p className="text-xs text-slate-400 py-2">No locations assigned to this project yet.</p>
                 ) : (
                   <div className="border border-slate-200 divide-y divide-slate-100 max-h-64 overflow-y-auto">
                     {assignedRows.map((row) => (
@@ -542,11 +542,11 @@ export default function SAOmStorageLocations() {
           </ErpSectionCard>
 
           {/* Right — assign new locations */}
-          <ErpSectionCard eyebrow="Assign Locations" title="Add to plant">
+          <ErpSectionCard eyebrow="Assign Locations" title="Add to project">
             {!selPlant ? (
-              <p className="text-xs text-slate-400">Select a company and plant first.</p>
+              <p className="text-xs text-slate-400">Select a company and project first.</p>
             ) : unassignedRows.length === 0 ? (
-              <p className="text-xs text-slate-400">All active locations are already assigned to this plant.</p>
+              <p className="text-xs text-slate-400">All active locations are already assigned to this project.</p>
             ) : (
               <>
                 <p className="mb-2 text-xs text-slate-500">
