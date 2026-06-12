@@ -23,6 +23,7 @@ type MenuSnapshotRow = {
   parent_menu_code: string | null;
   display_order: number | null;
   snapshot_version?: number | null;
+  tx_code?: string | null;
 };
 
 export async function getActiveAclVersionIdForCompany(
@@ -105,7 +106,7 @@ export async function rebuildAdminSessionMenuSnapshot(
     .schema("erp_menu")
     .from("menu_snapshot")
     .select(
-      "menu_code, title, description, route_path, menu_type, parent_menu_code, display_order, snapshot_version",
+      "menu_code, title, description, route_path, menu_type, parent_menu_code, display_order, snapshot_version, tx_code",
     )
     .eq("user_id", authUserId)
     .eq("universe", "SA")
@@ -212,7 +213,7 @@ export async function rebuildAclSessionMenuSnapshot(
     .schema("erp_menu")
     .from("menu_snapshot")
     .select(
-      "menu_code, title, description, route_path, menu_type, parent_menu_code, display_order, snapshot_version",
+      "menu_code, title, description, route_path, menu_type, parent_menu_code, display_order, snapshot_version, tx_code",
     )
     .eq("user_id", authUserId)
     .eq("company_id", companyId)
