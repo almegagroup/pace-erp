@@ -453,23 +453,37 @@ export default function SAOmNumberSeries() {
                                               <th className="px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-700">Financial Year</th>
                                               <th className="px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-700 w-32">Starting #</th>
                                               <th className="px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-700 w-32">Current #</th>
+                                              <th className="px-3 py-1.5 w-24"></th>
                                             </tr>
                                           </thead>
                                           <tbody>
                                             {companyCounters.length === 0 && (
                                               <tr><td colSpan={3} className="px-3 py-3 text-xs text-slate-400">No FY counters yet. Create one →</td></tr>
                                             )}
-                                            {companyCounters.map((counter) => (
+                                            {companyCounters.map((counter) => {
+                                              const isUsed = Number(counter.last_number ?? 0) > 0;
+                                              return (
                                               <tr key={counter.id} className="border-b border-slate-100">
                                                 <td className="px-3 py-2 font-mono font-semibold text-slate-800">{counter.financial_year}</td>
                                                 <td className="px-3 py-2 text-slate-700">{counter.starting_number}</td>
                                                 <td className="px-3 py-2">
-                                                  <span className={Number(counter.last_number ?? 0) > 0 ? "font-semibold text-slate-900" : "text-slate-400"}>
-                                                    {Number(counter.last_number ?? 0) > 0 ? counter.last_number : "NOT USED"}
+                                                  <span className={isUsed ? "font-semibold text-slate-900" : "text-slate-400"}>
+                                                    {isUsed ? counter.last_number : "NOT USED"}
                                                   </span>
                                                 </td>
+                                                <td className="px-3 py-2 w-24">
+                                                  {!isUsed && (
+                                                    <button type="button"
+                                                      onClick={() => {
+                                                        setCounterForm({ financial_year: counter.financial_year, starting_number: String(counter.starting_number) });
+                                                      }}
+                                                      className="border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+                                                    >Edit</button>
+                                                  )}
+                                                </td>
                                               </tr>
-                                            ))}
+                                              );
+                                            })}
                                           </tbody>
                                         </table>
                                       </div>

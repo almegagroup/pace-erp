@@ -375,8 +375,30 @@ export async function createCompanyCounterHandler(
     if (fetchError) {
       return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_LOOKUP_FAILED", 500, "Unable to validate existing FY counter.");
     }
+
+    // If counter already exists: allow update only if NOT YET USED (last_number = 0)
     if (existing?.id) {
-      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_ALREADY_EXISTS", 409, "Counter already exists for this company, document type, and FY.");
+      const { data: existingFull } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("company_doc_number_counter")
+        .select("last_number")
+        .eq("id", existing.id)
+        .single();
+      if (Number(existingFull?.last_number ?? 0) > 0) {
+        return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_ALREADY_USED", 409, "Counter already has documents generated. Starting number cannot be changed.");
+      }
+      // Update starting_number of unused counter
+      const { data: updated, error: updateError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("company_doc_number_counter")
+        .update({ starting_number: Number(startingNumber) })
+        .eq("id", existing.id)
+        .select("*")
+        .single();
+      if (updateError || !updated) {
+        return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_UPDATE_FAILED", 500, "Unable to update FY counter starting number.");
+      }
+      return okResponse(updated, ctx.request_id, req);
     }
 
     const { data, error } = await serviceRoleClient
