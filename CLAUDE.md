@@ -71,7 +71,57 @@ Frontend Sidebar
 
 ---
 
-## 4. এই Session (2026-06-01) এ কী কী হয়েছে
+## 4. এই Session (2026-06-12) এ কী কী হয়েছে
+
+### A. tx_code Sidebar / Command Bar এ দেখাচ্ছিল না ✅ FIXED
+
+**Root cause (2-step):**
+1. `acl_runtime.ts` এর SA ও ACL SELECT string এ `tx_code` column ছিল না → snapshot JSON এ null
+2. `.schema("erp_menu").rpc()` silently fail করে — PostgREST `erp_menu` schema expose করে না। RPC call error ছাড়াই ignored হত, snapshot rebuild হত না।
+
+**Fix:**
+- `public.rebuild_sa_menu_snapshot` ও `public.rebuild_acl_menu_snapshot` wrapper functions তৈরি (erp_menu.generate_menu_snapshot কে internally call করে)
+- `acl_runtime.ts` এ SA ও ACL RPC call এ public wrappers use করা হয়েছে
+- SELECT strings এ `tx_code` add করা হয়েছে
+- Migration: `20260612043111_fix_menu_snapshot_rpc_public_wrappers.sql`
+- Sidebar এ tx_code font size → 14px (MenuShell.jsx)
+
+**Files changed:**
+- `supabase/functions/api/_shared/acl_runtime.ts`
+- `supabase/migrations/20260612043111_fix_menu_snapshot_rpc_public_wrappers.sql`
+- `frontend/src/layout/MenuShell.jsx`
+
+---
+
+### B. Inactivity Lock দেরিতে আসছিল / আসছিল না ✅ FIXED
+
+**Root cause:** `SessionWatchdog.jsx` এ `visibilitychange` listener `recordUserActivity()` call করত → tab এ ফিরলেই idle clock reset → lock কখনো fire করত না।
+
+**Secondary:** Browser background tab এ `setInterval` throttle করে → probe অনেক দেরিতে fire হত।
+
+**Fix:**
+- `visibilitychange` থেকে `recordUserActivity()` সরানো হয়েছে
+- Tab visible হলে `lastPassiveProbeAtRef.current = 0` + immediate `tick()` call → background throttling bypass হয়
+
+**File changed:** `frontend/src/components/SessionWatchdog.jsx`
+
+---
+
+### C. OM02 Storage Locations Page — Full Redesign ✅ DONE
+
+**2-tab layout:**
+- **Tab 1 — Locations:** Row-click inline edit (name + type), activate/deactivate toggle per row, friendly errors, create form on right
+- **Tab 2 — Plant Assignments:** Company + Plant dropdown → assigned locations list (checkbox multi-remove) + unassigned list (checkbox multi-assign)
+
+**Backend (4 new handlers):** update, toggle, list-plant-assignments, unmap
+**Routes:** PATCH/POST/GET/POST new endpoints in om.routes.ts
+**Frontend:** omApi.js +4 functions, SAOmStorageLocations.jsx full rewrite
+
+**Commit:** `c0526bc` — pushed to `dev`
+
+---
+
+## 4-old. পূর্ববর্তী Session (2026-06-01) এ কী কী হয়েছিল
 
 ### A. Bug Fix 1 — Login 403 for ACL Users ✅ FIXED
 
@@ -201,6 +251,9 @@ P0006, P0008, P0009, P0002 এর work context assign করতে হবে।
 1. `erp_acl.user_work_contexts` এ entry দাও (correct DEPT_ work_context_id)
 2. `generate_menu_snapshot` চালাও (4-param)
 3. Login test করো
+
+### 🔶 Page Review — OM03 পর্যন্ত
+OM02 ✅ done (2026-06-12). এরপর OM03 (Number Series), OM04, OM05... page by page review করতে হবে।
 
 ### 🔶 Minor Bug Fix
 `PaymentTermsMasterPage.jsx` এ `REFERENCE_DATE_OPTIONS` fix করো:

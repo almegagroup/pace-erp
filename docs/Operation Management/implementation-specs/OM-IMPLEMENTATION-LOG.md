@@ -1068,8 +1068,98 @@ Once a fix is done and verified, it is logged here.
 
 ---
 
-*Last Updated: 2026-05-26*
-*Next Review: Work through OM-CORRECTION-NOTES.md items one by one*
+## Session Polish — 2026-06-12
+
+Non-gate bugfixes and UX improvements done directly by Claude (no Codex task).
+
+### A — tx_code in Sidebar / Command Bar ✅ FIXED
+
+**Problem:** tx_code (e.g. OM01, PM03) was null in sidebar and Command Bar despite being set in `erp_menu.menu_master`.
+
+**Root cause chain:**
+1. `acl_runtime.ts` SELECT strings were missing `tx_code` column → null in snapshot JSON
+2. Even after adding `tx_code` to SELECT, snapshot was not being rebuilt — `.schema("erp_menu").rpc()` silently fails because `erp_menu` is not in PostgREST exposed schemas. The RPC call returned no error but did nothing.
+
+**Fix:**
+- Created public schema wrapper functions (`public.rebuild_sa_menu_snapshot`, `public.rebuild_acl_menu_snapshot`) that call the real `erp_menu.generate_menu_snapshot` internally
+- Changed SA and ACL RPC calls in `acl_runtime.ts` to use these public wrappers
+- Added `tx_code` to both SA and ACL SELECT strings
+- Created migration `20260612043111_fix_menu_snapshot_rpc_public_wrappers.sql`
+- tx_code font size in sidebar set to 14px (MenuShell.jsx)
+
+**Files changed:**
+| File | Change |
+|------|--------|
+| `supabase/functions/api/_shared/acl_runtime.ts` | tx_code added to SELECT strings; RPC calls changed to public wrappers |
+| `supabase/migrations/20260612043111_fix_menu_snapshot_rpc_public_wrappers.sql` | New — creates public wrapper functions + GRANTs |
+| `frontend/src/layout/MenuShell.jsx` | tx_code display at 14px in sidebar + Command Bar keywords |
+
+---
+
+### B — Inactivity Lock Delayed / Not Firing ✅ FIXED
+
+**Problem:** Inactivity lock was arriving very late or not at all when alt-tabbing away from the ERP.
+
+**Root cause:** `SessionWatchdog.jsx` had a `visibilitychange` listener that called `recordUserActivity()` on tab focus — this reset the idle clock every time user switched back, so the timer never expired.
+
+**Secondary problem:** Browser throttles `setInterval` in background tabs, so the 60s probe could fire much later than expected.
+
+**Fix:**
+- Removed `recordUserActivity()` from `visibilitychange` handler (was resetting idle clock)
+- Added immediate `tick()` call on tab focus to bypass background tab throttling
+- `lastPassiveProbeAtRef.current = 0` forces cooldown bypass on visibility restore
+
+**File changed:** `frontend/src/components/SessionWatchdog.jsx`
+
+---
+
+### C — OM02 Storage Locations Page Full Redesign ✅ DONE
+
+**Previous state:** Single page, raw UUID input for plant assignment, no edit, no toggle.
+
+**New design (2-tab):**
+
+**Tab 1 — Locations:**
+- Row-click inline edit (name + type editable, code read-only)
+- Activate / Deactivate toggle button per row
+- Friendly error messages (error code → human readable)
+- Create form on right panel (same pattern as SAOmUomMaster)
+
+**Tab 2 — Plant Assignments:**
+- Company dropdown (from `/api/admin/companies`) + Plant dropdown (from `/api/admin/projects`)
+- Left panel: assigned locations list with checkbox multi-select → "Remove X selected" batch unmap
+- Right panel: unassigned active locations with checkbox multi-select → "Assign (X)" batch assign
+
+**New backend handlers added to `location.handlers.ts`:**
+- `updateStorageLocationHandler` — PATCH name + type (SA only)
+- `toggleStorageLocationHandler` — POST toggle active (SA only)
+- `listPlantAssignmentsHandler` — GET assigned locations for company+plant (admin)
+- `unmapStorageLocationFromPlantHandler` — POST batch unmap from plant (SA only)
+
+**New routes (om.routes.ts):**
+- `PATCH /api/om/storage-location`
+- `POST /api/om/storage-location/toggle`
+- `GET /api/om/storage-location/plant-assignments`
+- `POST /api/om/storage-location/plant-unmap`
+
+**New omApi.js functions:**
+- `updateStorageLocation`, `toggleStorageLocation`, `listPlantAssignments`, `unmapStorageLocationsFromPlant`
+
+**Files changed:**
+| File | Change |
+|------|--------|
+| `supabase/functions/api/_core/om/location.handlers.ts` | +4 handlers (update, toggle, list-assignments, unmap) |
+| `supabase/functions/api/_routes/om.routes.ts` | +4 routes + imports |
+| `supabase/functions/api/_acl/route-acl-registry.ts` | +4 skipAcl entries |
+| `frontend/src/pages/dashboard/om/omApi.js` | +4 API helper functions |
+| `frontend/src/admin/sa/screens/SAOmStorageLocations.jsx` | Full rewrite — 2-tab layout |
+
+**Commit:** `c0526bc` — pushed to `dev` on 2026-06-12
+
+---
+
+*Last Updated: 2026-06-12*
+*Next: Continue page-by-page review — OM03 onwards*
 
 
 
