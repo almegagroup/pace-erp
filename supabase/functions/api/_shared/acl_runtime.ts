@@ -90,12 +90,8 @@ export async function rebuildAdminSessionMenuSnapshot(
   sessionId?: string | null,
 ): Promise<MenuSnapshotRow[]> {
   const { error: snapshotError } = await db
-    .schema("erp_menu")
-    .rpc("generate_menu_snapshot", {
+    .rpc("rebuild_sa_menu_snapshot", {
       p_user_id: authUserId,
-      p_company_id: null,
-      p_work_context_id: null,
-      p_universe: "SA",
     });
 
   if (snapshotError) {
@@ -197,12 +193,10 @@ export async function rebuildAclSessionMenuSnapshot(
   }
 
   const { error: menuBuildError } = await db
-    .schema("erp_menu")
-    .rpc("generate_menu_snapshot", {
+    .rpc("rebuild_acl_menu_snapshot", {
       p_user_id: authUserId,
       p_company_id: companyId,
       p_work_context_id: workContextId,
-      p_universe: "ACL",
     });
 
   if (menuBuildError) {
