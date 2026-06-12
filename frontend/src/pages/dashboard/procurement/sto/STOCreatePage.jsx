@@ -277,7 +277,7 @@ export default function STOCreatePage() {
                     </ErpDenseFormRow>
                     <ErpDenseFormRow label="Sending SLOC">
                       <LocationSelect
-                        companyId={draft.sending_company_id}
+                        companyId={form.sending_company_id}
                         projectCode="PRJ009"
                         value={line.sending_storage_location_id}
                         onChange={(id) => updateLine(index, { sending_storage_location_id: id })}
@@ -285,7 +285,7 @@ export default function STOCreatePage() {
                     </ErpDenseFormRow>
                     <ErpDenseFormRow label="Receiving SLOC">
                       <LocationSelect
-                        companyId={draft.receiving_company_id}
+                        companyId={form.receiving_company_id}
                         projectCode="PRJ009"
                         value={line.receiving_storage_location_id}
                         onChange={(id) => updateLine(index, { receiving_storage_location_id: id })}
