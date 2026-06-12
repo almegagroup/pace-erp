@@ -433,6 +433,30 @@ export async function createCostCenter(payload) {
   );
 }
 
+export async function updateCostCenter(payload) {
+  return fetchJson(
+    "/api/om/cost-center",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_CC_UPDATE_FAILED"
+  );
+}
+
+export async function toggleCostCenter(payload) {
+  return fetchJson(
+    "/api/om/cost-center/toggle",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_CC_TOGGLE_FAILED"
+  );
+}
+
 export async function listMachines(params = {}) {
   const query = buildParams(params);
   return fetchJson(`/api/om/machines?${query.toString()}`, {}, "OM_MACHINE_LIST_FAILED");

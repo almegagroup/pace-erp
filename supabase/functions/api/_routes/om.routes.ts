@@ -71,6 +71,8 @@ import {
 import {
   createCostCenterHandler,
   listCostCentersHandler,
+  toggleCostCenterHandler,
+  updateCostCenterHandler,
 } from "../_core/om/cost_center.handlers.ts";
 import {
   createMachineHandler,
@@ -188,8 +190,12 @@ export async function dispatchOmRoutes(
       return await listNumberSeriesHandler(req, ctx);
     case "POST:/api/om/cost-center":
       return await createCostCenterHandler(req, ctx);
+    case "PATCH:/api/om/cost-center":
+      return await updateCostCenterHandler(req, ctx);
     case "GET:/api/om/cost-centers":
       return await listCostCentersHandler(req, ctx);
+    case "POST:/api/om/cost-center/toggle":
+      return await toggleCostCenterHandler(req, ctx);
 
     case "POST:/api/om/machine":
       return await createMachineHandler(req, ctx);

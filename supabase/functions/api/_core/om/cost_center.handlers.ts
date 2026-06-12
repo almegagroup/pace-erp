@@ -78,6 +78,75 @@ export async function createCostCenterHandler(
   }
 }
 
+export async function updateCostCenterHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmSaContext(ctx);
+
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    if (!id) {
+      return costCenterErrorResponse(req, ctx, "OM_CC_UPDATE_FAILED", 400, "Cost center ID missing");
+    }
+    const patch: Record<string, unknown> = {};
+    if (body.cost_center_name !== undefined) patch.cost_center_name = toTrimmedString(body.cost_center_name);
+    if (body.description !== undefined) patch.description = toTrimmedString(body.description) || null;
+
+    if (Object.keys(patch).length === 0) {
+      return costCenterErrorResponse(req, ctx, "OM_CC_UPDATE_FAILED", 400, "No fields to update");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("cost_center_master")
+      .update(patch)
+      .eq("id", id)
+      .select("*")
+      .single();
+
+    if (error) throw new Error("OM_CC_UPDATE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_CC_UPDATE_FAILED";
+    const status = code === "OM_SA_REQUIRED" ? 403 : 400;
+    return costCenterErrorResponse(req, ctx, code, status, "Cost center update failed");
+  }
+}
+
+export async function toggleCostCenterHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmSaContext(ctx);
+
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    const active = body.active === true || body.active === false ? body.active : null;
+
+    if (!id || active === null) {
+      return costCenterErrorResponse(req, ctx, "OM_CC_TOGGLE_FAILED", 400, "ID and active flag required");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("cost_center_master")
+      .update({ active })
+      .eq("id", id)
+      .select("*")
+      .single();
+
+    if (error) throw new Error("OM_CC_TOGGLE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_CC_TOGGLE_FAILED";
+    const status = code === "OM_SA_REQUIRED" ? 403 : 400;
+    return costCenterErrorResponse(req, ctx, code, status, "Cost center toggle failed");
+  }
+}
+
 export async function listCostCentersHandler(
   req: Request,
   ctx: OmHandlerContext,
