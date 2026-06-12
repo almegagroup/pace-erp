@@ -784,11 +784,114 @@ Gate-26 VERIFIED. All governance changes correct. Minor enum mismatch in payment
 
 ---
 
-## Gate-27 — FG Domain (Admix + Powder)
+## Gate-27 — FG Domain: Liquid First (Admix + Hypershot + IWC), Powder Later
 
-**Scope:** BOM master, Process Order lifecycle, Material Issue (P261), FG Receipt, FG QA, Dispatch Instruction, Goods Issue (P601), Customer Return, Reuse/Rework/Scrap.
-**Dependency:** All L2 gates (21–25) complete
-**Status:** DESIGN IN PROGRESS — see Section 83 of feasibility doc (Admix/Liquid discovery)
+**Scope:** Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment, FG Receipt, FG QA, Dispatch Instruction (Liquid), Customer Return, Reuse/Rework/Scrap, FOR_REPROCESS flow.
+**Dependency:** All L2 gates (21–26) VERIFIED ✅
+**Status:** DESIGN IN PROGRESS
+
+---
+
+### Gate-27 Strategy Decision (2026-06-02)
+
+**Liquid-first approach (locked):**
+- Phase-1: Design + Implement Admix, Hypershot, IWC completely
+- Phase-2: Powder (separate go-live date, separate opening stock)
+- Rationale: Liquid go-live = 1 July 2026. Powder go-live = later (separate physical count at Powder go-live date)
+
+**L1/L2 Liquid readiness (verified 2026-06-02):**
+
+| Component | Status | Notes |
+|---|---|---|
+| Material Master (shade_code, pack_code, external_sku, production_mode) | ✅ Ready | Gate-12 — already built |
+| Stock Types (UNRESTRICTED, QA, BLOCKED, IN_TRANSIT, FOR_REPROCESS) | ✅ Ready | Gate-11 |
+| FOR_REPROCESS movements (P901–P906) | ✅ Ready | Gate-11 |
+| L2 Procurement for RM/PM | ✅ 100% Ready | No changes needed for Liquid RM/PM |
+| P231/P232 (FG Receipt from Production / Reversal) | ❌ Missing | Must add in Gate-27 |
+| P267/P268 (FOR_REPROCESS → Production Issue / Reversal) | ❌ Missing | Must add in Gate-27 |
+
+**FG Types in Liquid:**
+
+| Section | Type | BOM | SKU known upfront? |
+|---|---|---|---|
+| Admix (main) | ADMIX_STROKE | No fixed BOM — stroke per order | ❌ Shade/Pack determined per order |
+| Hypershot | FIXED_BOM | Pre-defined | ✅ SA maintains upfront |
+| IWC | FIXED_BOM | Pre-defined | ✅ SA maintains upfront |
+
+**SKU Structure (all FG types):**
+```
+Product Code (4) + Shade Code (4) + Pack Code (3) = 11 characters
+```
+
+**Two-Order Model (Admix) — UPDATED 2026-06-08:**
+- Process PO = RM only (stroke-based), created at Standard phase
+- Packing PO = PM only, created at Standard phase (immediately after Process PO), linked
+- 1 Process PO → N Packing POs (one-to-many)
+- Balance qty: Process PO actual output = Σ all Packing PO qty; balance > 0 → alert → new Packing PO needed
+- Pack type change: delink → delete old Packing PO → create new → relink (any stage, L3+ authorization)
+
+**Pending before design can be fully locked:**
+- [ ] Batch number format — business owner to provide existing format
+- [ ] Admix FG material master creation model — who creates, when, which screen (SOD decision at Process Order + Dispatch design stage)
+- [ ] Vessel/Machine tolerance values
+
+**Reform policy (locked 2026-06-02):**
+L1/L2 reform and UI polish will be done AFTER all layers (L3–L9) are implemented — unified polish pass for consistency across all screens.
+
+---
+
+### Gate-27 Concept Session — 2026-06-08
+
+**Session type:** General Admix Business Mechanism — concept foundation before formal sub-section lock
+
+**Key decisions locked (written to feasibility doc Sections 83.1, 83.4, 83.13–83.16):**
+
+| Topic | Decision |
+|---|---|
+| Document flow | FO (production time) → SO (dispatch time) → AP costing confirmation (soft gate) → dispatch |
+| Costing soft gate | Wrong stroke costing from AP → dispatch anyway → differential to Reco |
+| Process PO + Packing PO creation | Standard time — created together, linked immediately |
+| 1 Process PO → N Packing POs | One-to-many. Balance qty tracked. Balance > 0 → alert → new Packing PO |
+| Pack type change | Delink → delete → create new Packing PO → relink. Any stage. Auto stock reversal if needed. |
+| Pack types | Barrel (599, per barrel cost, PM=barrel+labels), Tanker (000, per KG, no PM), IBC (000, per KG, IBC itself=PM) |
+| Barrel mechanics | 2 PM types (210 KG / 230 KG barrel). Fill per barrel = variable, uniform per batch. Order qty divisible by fill. Balance barrel → additional Packing PO. |
+| Admix Pack BOM | None — PM selection fully manual in Packing PO. Verify stage catches errors. |
+| Hypershot/IWC Pack BOM | Fixed — auto-populated at Packing PO creation |
+| PACE costing | Weighted Average Rate (WAR) per item. Landed cost = item + freight + unloading. |
+| AP monthly rate | AP confirms rates at start of each month. Used for entire month. |
+| Sales Order costing | AP monthly rate + operational cost = what AP pays PACE |
+| Reco sources | Rate variance + Quantity variance (e.g. caustic always over-consumed) + Stroke mismatch |
+| Reco account | Bilateral clearing — monthly settlement. Either side pays. |
+| Procurement planning formula | (Current Unrestricted − Reserved) + In-Transit + QA. Pending PO excluded until In-Transit. |
+
+**Feasibility doc changes:**
+- 83.1: Revised — SO timing, costing soft gate, document flow diagram
+- 83.4: Major revision — Packing PO at Standard time, 1:N, balance qty, delink=delete, pack type change
+- 83.13: New — FG Costing System (WAR vs AP monthly rate, reco)
+- 83.14: New — Barrel Mechanics and Fill Quantity
+- 83.15: New — Pack BOM Design (Admix=none, Hypershot/IWC=fixed)
+- 83.16: New — Procurement Planning Formula
+
+**Next session:** Formal 83.1 sub-section lock → 83.2 → 83.3 ... one by one
+
+---
+
+### Gate-27 Implementation Items (PENDING — design not yet started)
+
+| ID | Item | Status |
+|---|---|---|
+| 27.1 | Add P231/P232/P267/P268 movement types to movement_type_master | PENDING |
+| 27.2 | Stroke Master DB (formulation templates) | PENDING |
+| 27.3 | Process PO DB (header + lines + approval + amendment) | PENDING |
+| 27.4 | Packing PO DB (header + lines + packing BOM) | PENDING |
+| 27.5 | FG Declaration flow | PENDING |
+| 27.6 | Machine/Mixer assignment (per Process PO) | PENDING |
+| 27.7 | FG Receipt movement (P231 posting) | PENDING |
+| 27.8 | FG QA (usage decision) | PENDING |
+| 27.9 | FOR_REPROCESS issue to production (P267 posting) | PENDING |
+| 27.10 | Batch number generation | PENDING |
+| 27.11 | Backend handlers (Process PO, Packing PO, FG Declaration, FG QA) | PENDING |
+| 27.12 | Frontend screens (Process PO, Packing PO, FG Declaration, FG QA) | PENDING |
 
 ---
 

@@ -212,9 +212,119 @@ const REFERENCE_DATE_OPTIONS = ["INVOICE_DATE", "GRN_DATE", "BL_DATE", "SHIPMENT
 ```
 
 ### 🔴 Next OM Gate — Gate-27
-L3 (Production & BOM) design শুরু করতে হবে।
-Reference: feasibility doc Section 83 (Admix/Liquid discovery)
-Scope: BOM master, Process Order, Material Issue (P261), FG Receipt, FG QA, Dispatch Instruction.
+L3 Production design — **Liquid first** (Admix + Hypershot + IWC), Powder পরে।
+Reference: feasibility doc Section 83 (Admix/Liquid discovery — IN PROGRESS)
+Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment, FG Receipt, FG QA, P231/P232/P267/P268 movement types।
+
+**Design strategy (2026-06-02 session decision):**
+- Admix, Hypershot, IWC — পুরো design + implement আগে
+- Powder — পরে (separate go-live, separate opening stock at Powder go-live date)
+- L1/L2 reform/polish — সব layer implement হওয়ার পরে একসাথে করবো (consistency এর জন্য)
+
+**L1/L2 Liquid readiness:**
+- Material Master: ✅ shade_code, pack_code, external_sku, production_mode সব আছে
+- L2 Procurement (RM/PM): ✅ 100% ready, কোনো change লাগবে না
+- Missing movement types: ❌ P231/P232 (FG Receipt/Reversal), P267/P268 (FOR_REPROCESS → Production/Reversal) — Gate-27 এ add করতে হবে
+
+**Go-live plan:**
+- 1 July 2026: Liquid (Admix/Hypershot/IWC) RM+PM+FG opening stock দিয়ে শুরু
+- Powder: পরে আলাদা go-live date এ Powder এর physical count দিয়ে opening দেবো
+
+**Gate-27 Design Progress:**
+
+| Session | Date | কী হলো |
+|---------|------|--------|
+| General Admix Concept Session | 2026-06-08 | পুরো Admix business mechanism বোঝানো হলো। Foundation locked। Feasibility doc updated। |
+| Formal Section Lock Session 1 | 2026-06-09 | 83.1–83.5 locked, 83.7/83.14/83.17 updated, 83.4 major revision |
+| Formal Section Lock Session 2 | 2026-06-10 | 83.4 production cycle locked, MTEST/PTEST added, batch number rules locked |
+| Formal Section Lock Session 3 | 2026-06-11 | 83.4 storage location + SAP equivalent locked, 83.18 Plan Feed page locked |
+
+**2026-06-09/10 Sessions — Decisions Locked:**
+
+**83.1 — Order Number Structure (LOCKED):**
+- FO linking to Packing PO happens POST-VERIFY (after internal confirmation) — not at creation
+- SO links to FO (not Packing PO directly) — at SO creation time in system
+- Balance Packing PO → no FO link (PACE internal stock)
+- FO cancel → delink all Packing POs → cancel → re-link with new FO if needed
+
+**83.2 — Production Types (LOCKED):**
+- Admix = MTO, Hypershot = HPS, IWC+Powder = MTS
+- Universal: Two-Order Model, Standard→Final→Verify, Process↔Packing link
+- Dispatch unit: Admix=Packing PO, HPS=Batch+qty, IWC=SKU+qty
+- HPS SO: batch-specific allocation, FIFO suggested, partial allowed
+
+**83.3 — Stroke Master (LOCKED):**
+- Header: Prodshade, Description, Stroke Number (numeric only), Created by/date
+- RM lines: RM + alternate + Dosage% (same RM can appear twice)
+- Validation: Prodshade+Stroke combo unique, Dosage total must = 100
+- QA creates → Manager reviews+edits → Manager Save = Approved
+
+**83.4 — Process PO / Packing PO (MAJOR UPDATE):**
+- **PO Types:** MTO, HPS, MTS, INT, MTEST (Process) | PMTO, PHPS, PMTS, PTEST (Packing)
+- **MTEST/PTEST:** AP test batches (5-10kg), no stroke/BOM, fully manual, one-step cycle, Pack Code 001
+- **Production Cycle:** Standard → QA Online Approval → [Start Batch] → Final → Verify
+- **QA Approval:** Between Standard and Final — checks SKU/Stroke/Qty. Approve=proceed, Reject=PO locked
+- **Start Batch:** Production clicks button post-QA approval → Batch Number generated (FIFO, per company)
+- **Batch Number generation timing:** At "Start Batch" click (not Standard, not QA approval)
+- **Final:** Actual qty entry. Can add items. Cannot remove (enter 0). No stock movement.
+- **Verify:** QA confirms actuals vs batch paper. Can edit qty, add items. Wrong formulation = prune+redo. Stock movement HERE (P261+PM+P231).
+- **Reversal:** Step-by-step from any stage back to beginning
+- **Availability check at PO creation:** Unrestricted stock only (no In-Transit, no QA). Exception: INT planned output for INT materials.
+- **Pack Type Change:** Delink → PRUNE → new Packing PO → relink (corrected from "auto-delete")
+- **SO → FO link** (corrected: SO links to FO, not Packing PO)
+
+**83.5 — Intermediate RM (LOCKED):**
+- Caustic Flakes + Water → Caustic Liquid (INT) — dual source (internal + purchased)
+- Simple cycle, no Standard/Final/Verify, no batch number
+- INT PO planned output counts as available for FG PO at Standard (prevents negative stock)
+- Hard check at Final: INT must be completed before FG PO can go to Final
+
+**83.7 — Batch Number Rules (LOCKED — 2026-06-10 final):**
+- MTO: Company level, SA configures Prefix+Count (all Admix Prodshades share one series)
+- HPS: **Per Prodshade**, SA configures Prefix+Count per Prodshade (same structure as IWC)
+- IWC: **Per Prodshade**, SA configures Prefix+Count per Prodshade
+- Powder: Manual entry by user (no system generation)
+- MTEST: Company level, custom Prefix+Count
+- Reset: per financial year, per company
+
+**83.14 — Barrel Mechanics (UPDATED):**
+- "Order qty always divisible" rule REMOVED
+- Balance barrel = separate Packing PO (same 599, lower fill qty) — no FO link
+- Fill qty per barrel = mandatory field on every Packing PO with 599
+
+**83.17 — Pack Code Master + Prodshade Pack Config (NEW — LOCKED):**
+- Pack codes: 599 (barrel, per barrel), 510 (IBC, per KG), 000 (tanker, per KG), 001 (MTEST only)
+- Prodshade Pack Config: Company + Prodshade level — Manager (Admix) or SA (others)
+- Config page: add/edit/delete pack codes + fill sizes per Prodshade
+- Prerequisite: config must exist before Process PO can be created
+
+**83.18 — Plan Feed Page (NEW — LOCKED — 2026-06-11):**
+- 3-tab page: Plan Feed (create) | Plan Edit | Total Table (summary)
+- Tab 1 — Create: FO Number (manual), Party (select or inline create), SKU, Description, Ordered Qty (KG), Pack Qty, Order Date, Scheduled Delivery Date
+- Tab 2 — Edit: FO Number lookup → edit all fields → cancel order; edit-locked once Process PO exists
+- Tab 3 — Summary: 10 separate columns — FO Number, Party Name, SKU, Description, Ordered Qty (KG), Pack Qty, KG Linked to Packing POs, Packing PO Count (clickable modal → PO list + Process PO + Batch + Qty), Dispatched Qty, Pending Dispatch
+- Summary rows sorted by Order Date + Scheduled Delivery Date; live updates; pagination; smart filters
+
+**83.4 — Storage Location Integration (LOCKED — 2026-06-11):**
+- Production Segment Location Config: company + segment → rm_sloc, pm_sloc, shopfloor_sloc, fg_sloc
+- Verify এ: P261 (RM from rm_sloc) + P261 (PM from pm_sloc) + P231 (FG → shopfloor_sloc S003)
+- P261 issue location: default = segment config, override allowed at Standard phase (cross-segment materials)
+- GRN landing: default = material_plant_ext.default_storage_location_id, Stores can override at GR time
+- S003 → F003 transfer: per Packing PO qty, FO link doesn't matter
+- F003 stock: Material + Batch + Packing PO ref + FO ref + Qty
+- FO ref on F003 stock populated when Packing PO gets FO link (before or after transfer)
+
+**83.4 — SAP Equivalent (LOCKED — 2026-06-11):**
+- ZCoR1 = Standard, ZCoR2 = edit/pruning, COR6 = Final+Verify, COID = PO list, CORS = reversal, ZBatVar = qty variance only
+- Activity confirmation → Section 104 defer
+- Individual RM/PM reversal → P262 from COR6 equivalent
+- Shop floor print → not required
+
+**⚠️ PENDING (next session):**
+- P261 issue location override — not yet confirmed by user
+- S003 → F003 transfer trigger — who, when (not yet discussed)
+- 83.4 Process PO / Packing PO header + line fields (not yet discussed)
+- 83.6, 83.8–83.12 review and lock
 
 ---
 
