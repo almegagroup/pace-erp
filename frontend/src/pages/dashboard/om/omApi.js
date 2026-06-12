@@ -416,6 +416,22 @@ export async function addMaterialCategoryMember(payload) {
   );
 }
 
+export async function updateMaterialCategoryGroup(payload) {
+  return fetchJson(
+    "/api/om/material/category-group",
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    "OM_MCG_UPDATE_FAILED"
+  );
+}
+
+export async function deleteMaterialCategoryGroup(id) {
+  return fetchJson(
+    "/api/om/material/category-group",
+    { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) },
+    "OM_MCG_DELETE_FAILED"
+  );
+}
+
 export async function removeMaterialCategoryMember(memberId) {
   return fetchJson(
     "/api/om/material/category-group/member",

@@ -130,6 +130,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "PATCH:/api/om/material":                           { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "EDIT"  },
   "GET:/api/om/material/category-groups":             { skipAcl: false, resourceCode: "OM_MATERIAL_LIST",   action: "VIEW"  },
   "POST:/api/om/material/category-group":             { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+  "PATCH:/api/om/material/category-group":            { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+  "DELETE:/api/om/material/category-group":           { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
   "POST:/api/om/material/category-group/member":      { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
   "DELETE:/api/om/material/category-group/member":    { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
   "GET:/api/om/material/uom-conversions":             { skipAcl: false, resourceCode: "OM_MATERIAL_LIST",   action: "VIEW"  },

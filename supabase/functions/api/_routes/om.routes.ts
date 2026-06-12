@@ -13,6 +13,8 @@ import type { ContextResolution } from "../_pipeline/context.ts";
 import {
   addMaterialCategoryMemberHandler,
   removeMaterialCategoryMemberHandler,
+  updateMaterialCategoryGroupHandler,
+  deleteMaterialCategoryGroupHandler,
   changeMaterialStatusHandler,
   createMaterialCategoryGroupHandler,
   createMaterialHandler,
@@ -115,6 +117,10 @@ export async function dispatchOmRoutes(
       return await listMaterialUomConversionsHandler(req, ctx);
     case "POST:/api/om/material/category-group":
       return await createMaterialCategoryGroupHandler(req, ctx);
+    case "PATCH:/api/om/material/category-group":
+      return await updateMaterialCategoryGroupHandler(req, ctx);
+    case "DELETE:/api/om/material/category-group":
+      return await deleteMaterialCategoryGroupHandler(req, ctx);
     case "GET:/api/om/material/category-groups":
       return await listMaterialCategoryGroupsHandler(req, ctx);
     case "POST:/api/om/material/category-group/member":

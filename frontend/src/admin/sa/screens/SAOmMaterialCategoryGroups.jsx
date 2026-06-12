@@ -14,9 +14,11 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import {
   addMaterialCategoryMember,
   createMaterialCategoryGroup,
+  deleteMaterialCategoryGroup,
   listMaterialCategoryGroups,
   listMaterials,
   removeMaterialCategoryMember,
+  updateMaterialCategoryGroup,
 } from "../../../pages/dashboard/om/omApi.js";
 
 const ERROR_LABELS = {
@@ -26,6 +28,9 @@ const ERROR_LABELS = {
   OM_MCG_MEMBER_REMOVE_FAILED: "Could not remove member.",
   OM_CATEGORY_GROUP_EXISTS:  "A group with this name already exists.",
   OM_MEMBER_EXISTS:          "This material is already a member of this group.",
+  OM_MCG_UPDATE_FAILED:      "Could not update group.",
+  OM_MCG_DELETE_FAILED:      "Could not delete group.",
+  OM_MCG_HAS_MEMBERS:        "Remove all members before deleting this group.",
 };
 
 function label(code) {
@@ -44,6 +49,10 @@ export default function SAOmMaterialCategoryGroups() {
   const [expandedId, setExpandedId]   = useState(null);
   const [matSearch, setMatSearch]     = useState("");
   const [memberForm, setMemberForm]   = useState({ material_id: "", is_primary: false });
+
+  // inline edit group
+  const [editId, setEditId]           = useState(null);
+  const [editDraft, setEditDraft]     = useState({});
 
   // create form
   const [form, setForm]               = useState({ group_name: "", description: "" });
@@ -78,6 +87,54 @@ export default function SAOmMaterialCategoryGroups() {
       : materials;
     return list.slice(0, 60);
   }, [matSearch, materials]);
+
+  // ── inline edit group ────────────────────────────────────────
+  function startEdit(group, e) {
+    e.stopPropagation();
+    setEditId(group.id);
+    setEditDraft({ group_name: group.group_name, description: group.description || "" });
+    setExpandedId(null);
+    setError("");
+    setNotice("");
+  }
+
+  function cancelEdit(e) {
+    e?.stopPropagation();
+    setEditId(null);
+    setEditDraft({});
+  }
+
+  async function saveEdit(group, e) {
+    e.stopPropagation();
+    if (!editDraft.group_name?.trim()) { setError("Group name is required."); return; }
+    setSaving(true); setError(""); setNotice("");
+    try {
+      await updateMaterialCategoryGroup({ id: group.id, group_name: editDraft.group_name.trim(), description: editDraft.description.trim() || null });
+      setNotice("Group updated.");
+      setEditId(null); setEditDraft({});
+      await loadData();
+    } catch (e) { setError(label(e instanceof Error ? e.message : "OM_MCG_UPDATE_FAILED")); }
+    finally { setSaving(false); }
+  }
+
+  async function handleDelete(group, e) {
+    e.stopPropagation();
+    const confirmed = await openActionConfirm({
+      eyebrow: "Category Group",
+      title: `Delete "${group.group_name}"?`,
+      message: "This cannot be undone. Group must have no members.",
+      confirmLabel: "Delete",
+    });
+    if (!confirmed) return;
+    setSaving(true); setError(""); setNotice("");
+    try {
+      await deleteMaterialCategoryGroup(group.id);
+      setNotice("Group deleted.");
+      if (expandedId === group.id) setExpandedId(null);
+      await loadData();
+    } catch (e) { setError(label(e instanceof Error ? e.message : "OM_MCG_DELETE_FAILED")); }
+    finally { setSaving(false); }
+  }
 
   // ── expand/collapse ──────────────────────────────────────────
   function toggleExpand(group) {
@@ -191,30 +248,52 @@ export default function SAOmMaterialCategoryGroups() {
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Description</th>
                   <th className="px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Members</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Status</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={5} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>
+                  <tr><td colSpan={6} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>
                 )}
                 {!loading && groups.length === 0 && (
-                  <tr><td colSpan={5} className="px-3 py-6 text-center text-sm text-slate-400">No category groups found.</td></tr>
+                  <tr><td colSpan={6} className="px-3 py-6 text-center text-sm text-slate-400">No category groups found.</td></tr>
                 )}
                 {groups.map((group) => {
                   const isOpen = expandedId === group.id;
+                  const isEditing = editId === group.id;
                   const members = Array.isArray(group.members) ? group.members : [];
                   return (
                     <React.Fragment key={group.id}>
                       <tr
-                        className={`border-b border-slate-100 cursor-pointer transition-colors ${isOpen ? "bg-sky-50" : "hover:bg-slate-50"}`}
-                        onClick={() => toggleExpand(group)}
+                        className={`border-b border-slate-100 transition-colors ${isEditing ? "bg-amber-50" : isOpen ? "bg-sky-50" : "hover:bg-slate-50 cursor-pointer"}`}
+                        onClick={() => { if (!isEditing) toggleExpand(group); }}
                       >
                         <td className="px-3 py-2 font-semibold text-slate-900">
-                          <span className="mr-1 text-slate-400">{isOpen ? "▾" : "▸"}</span>
-                          {group.group_name}
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              value={editDraft.group_name}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, group_name: e.target.value }))}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-7 w-full border border-amber-400 bg-white px-2 text-sm outline-none"
+                            />
+                          ) : (
+                            <><span className="mr-1 text-slate-400">{isOpen ? "▾" : "▸"}</span>{group.group_name}</>
+                          )}
                         </td>
                         <td className="px-3 py-2 font-mono text-xs text-slate-500">{group.group_code || "—"}</td>
-                        <td className="px-3 py-2 text-slate-500">{group.description || "—"}</td>
+                        <td className="px-3 py-2 text-slate-500">
+                          {isEditing ? (
+                            <input
+                              value={editDraft.description}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, description: e.target.value }))}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-7 w-full border border-amber-400 bg-white px-2 text-sm outline-none"
+                            />
+                          ) : (
+                            group.description || "—"
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-center">
                           <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">
                             {group.member_count ?? members.length}
@@ -225,11 +304,24 @@ export default function SAOmMaterialCategoryGroups() {
                             {group.active ? "ACTIVE" : "INACTIVE"}
                           </span>
                         </td>
+                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                          {isEditing ? (
+                            <div className="flex gap-1">
+                              <button type="button" disabled={saving} onClick={(e) => void saveEdit(group, e)} className="border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:opacity-50">Save</button>
+                              <button type="button" onClick={cancelEdit} className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700">Cancel</button>
+                            </div>
+                          ) : (
+                            <div className="flex gap-1">
+                              <button type="button" onClick={(e) => startEdit(group, e)} className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">Edit</button>
+                              <button type="button" disabled={saving} onClick={(e) => void handleDelete(group, e)} className="border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">Delete</button>
+                            </div>
+                          )}
+                        </td>
                       </tr>
 
                       {isOpen && (
                         <tr className="border-b border-sky-100 bg-sky-50/60">
-                          <td colSpan={5} className="px-4 py-4">
+                          <td colSpan={6} className="px-4 py-4">
                             {/* member list */}
                             <div className="mb-3">
                               <div className="mb-2 text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">

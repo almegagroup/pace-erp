@@ -799,3 +799,81 @@ export async function removeMaterialCategoryMemberHandler(
     return materialErrorResponse(req, ctx, code, status, "Category member remove failed");
   }
 }
+
+export async function updateMaterialCategoryGroupHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    if (!id) {
+      return materialErrorResponse(req, ctx, "OM_MCG_UPDATE_FAILED", 400, "Group ID missing");
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (body.group_name !== undefined) patch.group_name = toTrimmedString(body.group_name);
+    if (body.description !== undefined) patch.description = toTrimmedString(body.description) || null;
+
+    if (Object.keys(patch).length === 0) {
+      return materialErrorResponse(req, ctx, "OM_MCG_UPDATE_FAILED", 400, "No fields to update");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_category_group")
+      .update(patch)
+      .eq("id", id)
+      .select("*")
+      .single();
+
+    if (error) throw new Error("OM_MCG_UPDATE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_MCG_UPDATE_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 400;
+    return materialErrorResponse(req, ctx, code, status, "Category group update failed");
+  }
+}
+
+export async function deleteMaterialCategoryGroupHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    if (!id) {
+      return materialErrorResponse(req, ctx, "OM_MCG_DELETE_FAILED", 400, "Group ID missing");
+    }
+
+    // block delete if members exist
+    const { count, error: countError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_category_group_member")
+      .select("id", { count: "exact", head: true })
+      .eq("group_id", id);
+
+    if (countError) throw new Error("OM_MCG_DELETE_FAILED");
+    if ((count ?? 0) > 0) {
+      return materialErrorResponse(req, ctx, "OM_MCG_HAS_MEMBERS", 409, "Remove all members before deleting the group");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_category_group")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw new Error("OM_MCG_DELETE_FAILED");
+    return okResponse({ deleted: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_MCG_DELETE_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code === "OM_MCG_HAS_MEMBERS" ? 409 : 400;
+    return materialErrorResponse(req, ctx, code, status, "Category group delete failed");
+  }
+}
