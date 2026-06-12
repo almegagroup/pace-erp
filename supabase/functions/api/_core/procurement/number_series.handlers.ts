@@ -314,6 +314,46 @@ export async function deleteCompanySeriesHandler(
   }
 }
 
+export async function deleteCompanyCounterHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertSARole(ctx);
+    const segments = getPathSegments(req);
+    // path: api/procurement/number-series/counters/{id}
+    const counterId = toTrimmedString(segments[4]);
+    if (!counterId) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_ID_MISSING", 400, "Counter ID is required.");
+    }
+    const { data: counter } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_counter")
+      .select("last_number")
+      .eq("id", counterId)
+      .single();
+    if (!counter) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_NOT_FOUND", 404, "Counter not found.");
+    }
+    if (Number(counter.last_number ?? 0) > 0) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_IN_USE", 409, "Cannot delete a counter that has already generated documents.");
+    }
+    const { error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_counter")
+      .delete()
+      .eq("id", counterId);
+    if (error) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_DELETE_FAILED", 500, "Unable to delete counter.");
+    }
+    return okResponse({ deleted: true }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "NUMBER_SERIES_COUNTER_DELETE_FAILED";
+    const status = code === "SA_REQUIRED" ? 403 : 500;
+    return numberSeriesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
 export async function listCompanyCountersHandler(
   req: Request,
   ctx: ProcurementHandlerContext,

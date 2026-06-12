@@ -93,6 +93,7 @@ import {
 import {
   createCompanyCounterHandler,
   createCompanySeriesHandler,
+  deleteCompanyCounterHandler,
   deleteCompanySeriesHandler,
   listCompanyCountersHandler,
   listCompanySeriesHandler,
@@ -421,6 +422,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/number-series\/company\/[^/]+$/.test(pathname) && req.method === "DELETE") {
     return await deleteCompanySeriesHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/number-series\/counters\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteCompanyCounterHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/number-series\/company\/[^/]+\/[^/]+\/counters$/.test(pathname)) {

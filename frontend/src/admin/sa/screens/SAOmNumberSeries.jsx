@@ -30,6 +30,16 @@ async function listCompanies() {
   return json.data.companies;
 }
 
+async function deleteCompanyCounter(counterId) {
+  const response = await fetch(
+    `${import.meta.env.VITE_API_BASE}/api/procurement/number-series/counters/${encodeURIComponent(counterId)}`,
+    { method: "DELETE", credentials: "include" }
+  );
+  const json = await readJsonSafe(response);
+  if (!response.ok) throw new Error(json?.code ?? "COUNTER_DELETE_FAILED");
+  return json;
+}
+
 async function deleteCompanySeries(seriesId) {
   const response = await fetch(
     `${import.meta.env.VITE_API_BASE}/api/procurement/number-series/company/${encodeURIComponent(seriesId)}`,
@@ -201,6 +211,18 @@ export default function SAOmNumberSeries() {
       await loadCompanyRows();
     } catch (e) {
       setError(e instanceof Error ? e.message : "SERIES_DELETE_FAILED");
+    } finally { setSaving(false); }
+  }
+
+  async function handleDeleteCounter(counter) {
+    if (!window.confirm(`Delete FY counter "${counter.financial_year}"? This cannot be undone.`)) return;
+    setSaving(true); setError(""); setNotice("");
+    try {
+      await deleteCompanyCounter(counter.id);
+      setNotice("FY counter deleted.");
+      await loadCounters(selectedSeries);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "COUNTER_DELETE_FAILED");
     } finally { setSaving(false); }
   }
 
@@ -471,14 +493,18 @@ export default function SAOmNumberSeries() {
                                                     {isUsed ? counter.last_number : "NOT USED"}
                                                   </span>
                                                 </td>
-                                                <td className="px-3 py-2 w-24">
+                                                <td className="px-3 py-2 w-32">
                                                   {!isUsed && (
-                                                    <button type="button"
-                                                      onClick={() => {
-                                                        setCounterForm({ financial_year: counter.financial_year, starting_number: String(counter.starting_number) });
-                                                      }}
-                                                      className="border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600"
-                                                    >Edit</button>
+                                                    <div className="flex items-center gap-1">
+                                                      <button type="button"
+                                                        onClick={() => setCounterForm({ financial_year: counter.financial_year, starting_number: String(counter.starting_number) })}
+                                                        className="border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+                                                      >Edit</button>
+                                                      <button type="button" disabled={saving}
+                                                        onClick={() => void handleDeleteCounter(counter)}
+                                                        className="border border-rose-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-rose-700 disabled:opacity-50"
+                                                      >Delete</button>
+                                                    </div>
                                                   )}
                                                 </td>
                                               </tr>

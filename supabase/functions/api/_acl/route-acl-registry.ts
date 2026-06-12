@@ -655,6 +655,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
       POST: { skipAcl: true },
     },
   },
+  {
+    pattern: /^\/api\/procurement\/number-series\/counters\/[^/]+$/,
+    methods: { DELETE: { skipAcl: true } },
+  },
 
   // ── OM: Material (parametric) ──────────────────────────────────────────────
   {
