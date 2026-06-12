@@ -6,6 +6,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
+import { openActionConfirm } from "../../../store/actionConfirm.js";
 import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import {
@@ -202,7 +203,14 @@ export default function SAOmNumberSeries() {
 
   async function handleDeleteSeries(series) {
     const label = `${companyMap.get(series.company_id) ?? series.company_id} — ${series.document_type}`;
-    if (!window.confirm(`Delete series "${label}"? This cannot be undone.`)) return;
+    const confirmed = await openActionConfirm({
+      eyebrow: "Company Series",
+      title: `Delete "${label}" series?`,
+      message: "This series and its unused counters will be permanently deleted.",
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+    });
+    if (!confirmed) return;
     setSaving(true); setError(""); setNotice("");
     try {
       await deleteCompanySeries(series.id);
@@ -215,7 +223,14 @@ export default function SAOmNumberSeries() {
   }
 
   async function handleDeleteCounter(counter) {
-    if (!window.confirm(`Delete FY counter "${counter.financial_year}"? This cannot be undone.`)) return;
+    const confirmed = await openActionConfirm({
+      eyebrow: "FY Counter",
+      title: `Delete "${counter.financial_year}" counter?`,
+      message: "This counter has not been used. Deleting it cannot be undone.",
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+    });
+    if (!confirmed) return;
     setSaving(true); setError(""); setNotice("");
     try {
       await deleteCompanyCounter(counter.id);
