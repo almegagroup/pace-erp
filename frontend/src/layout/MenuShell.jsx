@@ -1606,7 +1606,16 @@ export default function MenuShell() {
                         <span className="font-mono text-[11px] text-slate-500">
                           {(index + 1).toString().padStart(2, "0")}
                         </span>
-                        {!collapsed ? <span className="truncate">{node.item.title}</span> : null}
+                        {!collapsed ? (
+                          <span className="min-w-0">
+                            <span className="block truncate">{node.item.title}</span>
+                            {node.item.tx_code ? (
+                              <span className="block font-mono text-[10px] text-slate-400 leading-tight">
+                                {node.item.tx_code}
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : null}
                         {!collapsed ? (
                           <span className="justify-self-end text-[11px] text-slate-400">
                             {hasChildren ? "+" : ""}
@@ -1687,7 +1696,14 @@ export default function MenuShell() {
                         <span className="font-mono text-[11px] text-slate-500">
                           {(index + 1).toString().padStart(2, "0")}
                         </span>
-                        <span className="truncate">{node.item.title}</span>
+                        <span className="min-w-0">
+                          <span className="block truncate">{node.item.title}</span>
+                          {node.item.tx_code ? (
+                            <span className="block font-mono text-[10px] text-slate-400 leading-tight">
+                              {node.item.tx_code}
+                            </span>
+                          ) : null}
+                        </span>
                         <span className="justify-self-end text-[11px] text-slate-400">
                           {hasChildren ? "+" : ""}
                         </span>
