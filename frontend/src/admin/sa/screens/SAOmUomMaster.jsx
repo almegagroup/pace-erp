@@ -199,8 +199,13 @@ export default function SAOmUomMaster() {
             ]}
             rows={rows}
             rowKey={(row) => row.id || row.code}
-            onRowClick={handleRowClick}
-            selectedRowKey={editRow?.code}
+            onRowActivate={(row) => handleRowClick(row)}
+            getRowProps={(row) => ({
+              onClick: () => handleRowClick(row),
+              className: editRow?.code === row.code
+                ? "cursor-pointer bg-sky-50 border-l-2 border-l-sky-500"
+                : "cursor-pointer hover:bg-slate-50",
+            })}
             emptyMessage={loading ? "Loading UOM rows..." : "No UOM rows are available."}
             maxHeight="420px"
           />
