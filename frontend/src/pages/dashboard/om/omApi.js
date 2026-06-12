@@ -322,6 +322,18 @@ export async function createUom(payload) {
   );
 }
 
+export async function toggleUom(payload) {
+  return fetchJson(
+    "/api/om/uom/toggle",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_UOM_TOGGLE_FAILED"
+  );
+}
+
 export async function listStorageLocations(params = {}) {
   const query = buildParams(params);
   return fetchJson(

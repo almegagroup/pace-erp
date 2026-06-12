@@ -161,6 +161,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // ── OM: Utility (used by forms — skipAcl) ────────────────────────────────
   "GET:/api/om/uoms":                                 { skipAcl: true },
   "POST:/api/om/uom":                                 { skipAcl: true },
+  "POST:/api/om/uom/toggle":                          { skipAcl: true },
   "GET:/api/om/storage-locations":                    { skipAcl: true },
   "POST:/api/om/storage-location":                    { skipAcl: true },
   "POST:/api/om/storage-location/plant-map":          { skipAcl: true },

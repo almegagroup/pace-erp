@@ -123,3 +123,38 @@ export async function createUomHandler(
     return uomErrorResponse(req, ctx, code, status, "UOM create failed");
   }
 }
+
+export async function toggleUomHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmSaContext(ctx);
+
+    const body = await parseBody(req);
+    const uomCode = toTrimmedString(body.code).toUpperCase();
+    const active = body.active === true || body.active === "true";
+
+    if (!uomCode) {
+      return uomErrorResponse(req, ctx, "OM_INVALID_UOM_CODE", 400, "UOM code required");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("uom_master")
+      .update({ active })
+      .eq("code", uomCode)
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      return uomErrorResponse(req, ctx, "OM_UOM_NOT_FOUND", 404, "UOM not found");
+    }
+
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_UOM_TOGGLE_FAILED";
+    const status = code === "OM_SA_REQUIRED" ? 403 : 500;
+    return uomErrorResponse(req, ctx, code, status, "UOM toggle failed");
+  }
+}
