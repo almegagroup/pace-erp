@@ -8,6 +8,7 @@ import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listMaterials, listVendors } from "../../om/omApi.js";
 import { addRTVLine, createRTV, getGRN, listGRNs } from "../procurementApi.js";
+import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
 
 const REASON_OPTIONS = [
   "SHORT_RECEIVED",
@@ -330,10 +331,11 @@ export default function RTVCreatePage() {
                   </div>
                   <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
                     <ErpDenseFormRow label="Storage Location">
-                      <input
+                      <LocationSelect
+                        companyId={companyId}
+                        projectCode="PRJ009"
                         value={line.storage_location_id}
-                        onChange={(event) => updateLine(index, { storage_location_id: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                        onChange={(id) => updateLine(index, { storage_location_id: id })}
                       />
                     </ErpDenseFormRow>
                     <ErpDenseFormRow label="Return Qty">

@@ -8,6 +8,7 @@ import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listMaterials } from "../../om/omApi.js";
 import { createSTO } from "../procurementApi.js";
+import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
 
 const STO_TYPE_OPTIONS = ["CONSIGNMENT_DISTRIBUTION", "INTER_PLANT"];
 
@@ -275,17 +276,19 @@ export default function STOCreatePage() {
                       />
                     </ErpDenseFormRow>
                     <ErpDenseFormRow label="Sending SLOC">
-                      <input
+                      <LocationSelect
+                        companyId={draft.sending_company_id}
+                        projectCode="PRJ009"
                         value={line.sending_storage_location_id}
-                        onChange={(event) => updateLine(index, { sending_storage_location_id: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                        onChange={(id) => updateLine(index, { sending_storage_location_id: id })}
                       />
                     </ErpDenseFormRow>
                     <ErpDenseFormRow label="Receiving SLOC">
-                      <input
+                      <LocationSelect
+                        companyId={draft.receiving_company_id}
+                        projectCode="PRJ009"
                         value={line.receiving_storage_location_id}
-                        onChange={(event) => updateLine(index, { receiving_storage_location_id: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                        onChange={(id) => updateLine(index, { receiving_storage_location_id: id })}
                       />
                     </ErpDenseFormRow>
                     <ErpDenseFormRow label="Transfer Price">

@@ -6,6 +6,7 @@ import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listMaterials } from "../../om/omApi.js";
 import { getGRN, postGRN, reverseGRN, updateGRNDraft } from "../procurementApi.js";
+import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 function badgeTone(status) {
@@ -242,10 +243,12 @@ export default function GRNDetailPage() {
                   width: "140px",
                   render: (row) =>
                     detail.status === "DRAFT" ? (
-                      <input
+                      <LocationSelect
+                        companyId={detail.company_id}
+                        projectCode="PRJ009"
                         value={row.storage_location_id ?? ""}
-                        onChange={(event) => updateLine(row.id, { storage_location_id: event.target.value })}
-                        className="h-7 w-full border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
+                        onChange={(id) => updateLine(row.id, { storage_location_id: id })}
+                        size="xs"
                       />
                     ) : (
                       row.storage_location_id || "—"
