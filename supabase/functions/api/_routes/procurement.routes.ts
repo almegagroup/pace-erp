@@ -93,9 +93,11 @@ import {
 import {
   createCompanyCounterHandler,
   createCompanySeriesHandler,
+  deleteCompanySeriesHandler,
   listCompanyCountersHandler,
   listCompanySeriesHandler,
   listGlobalSeriesHandler,
+  updateCompanySeriesHandler,
   updateGlobalStartingHandler,
 } from "../_core/procurement/number_series.handlers.ts";
 import {
@@ -411,6 +413,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/number-series\/global\/[^/]+$/.test(pathname) && req.method === "PATCH") {
     return await updateGlobalStartingHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/number-series\/company\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateCompanySeriesHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/number-series\/company\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteCompanySeriesHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/number-series\/company\/[^/]+\/[^/]+\/counters$/.test(pathname)) {

@@ -231,6 +231,78 @@ export async function createCompanySeriesHandler(
   }
 }
 
+export async function updateCompanySeriesHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertSARole(ctx);
+    const segments = getPathSegments(req);
+    const seriesId = toTrimmedString(segments[5]);
+    if (!seriesId) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_ID_MISSING", 400, "Series ID is required.");
+    }
+    const body = await parseBody(req);
+    const prefix = toTrimmedString(body.prefix);
+    const numberPadding = parsePositiveInt(body.number_padding, 5);
+    if (!prefix) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_UPDATE_INVALID", 400, "prefix is required.");
+    }
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_series")
+      .update({ prefix, number_padding: numberPadding })
+      .eq("id", seriesId)
+      .select("*")
+      .single();
+    if (error || !data) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_UPDATE_FAILED", 500, "Unable to update series.");
+    }
+    return okResponse(data, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "NUMBER_SERIES_COMPANY_UPDATE_FAILED";
+    const status = code === "SA_REQUIRED" ? 403 : 500;
+    return numberSeriesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function deleteCompanySeriesHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertSARole(ctx);
+    const segments = getPathSegments(req);
+    const seriesId = toTrimmedString(segments[5]);
+    if (!seriesId) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_ID_MISSING", 400, "Series ID is required.");
+    }
+    // Block delete if any counter has been used
+    const { data: counters } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_counter")
+      .select("last_number")
+      .eq("company_id", (await serviceRoleClient.schema("erp_procurement").from("company_doc_number_series").select("company_id").eq("id", seriesId).single()).data?.company_id ?? "")
+      .gt("last_number", 0);
+    if (counters && counters.length > 0) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_IN_USE", 409, "Cannot delete a series that has already generated documents.");
+    }
+    const { error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_series")
+      .delete()
+      .eq("id", seriesId);
+    if (error) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_DELETE_FAILED", 500, "Unable to delete series.");
+    }
+    return okResponse({ deleted: true }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "NUMBER_SERIES_COMPANY_DELETE_FAILED";
+    const status = code === "SA_REQUIRED" ? 403 : 500;
+    return numberSeriesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
 export async function listCompanyCountersHandler(
   req: Request,
   ctx: ProcurementHandlerContext,

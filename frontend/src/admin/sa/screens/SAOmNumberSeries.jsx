@@ -1,15 +1,11 @@
 /*
  * File-ID: 18.3.1
  * File-Path: frontend/src/admin/sa/screens/SAOmNumberSeries.jsx
- * Gate: 18
- * Phase: 18
- * Domain: PROCUREMENT
+ * Gate: 18 | Domain: PROCUREMENT
  * Purpose: SA number series management — global counters and company+FY series.
- * Authority: Frontend
  */
 
 import { useEffect, useMemo, useState } from "react";
-import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import {
@@ -22,24 +18,36 @@ import {
 } from "../../../pages/dashboard/procurement/procurementApi.js";
 
 async function readJsonSafe(response) {
-  try {
-    return await response.clone().json();
-  } catch {
-    return null;
-  }
+  try { return await response.clone().json(); } catch { return null; }
 }
 
 async function listCompanies() {
-  const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/companies`, {
-    credentials: "include",
-  });
+  const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/companies`, { credentials: "include" });
   const json = await readJsonSafe(response);
   if (!response.ok || !json?.ok || !Array.isArray(json?.data?.companies)) {
-    const error = new Error(json?.code ?? "COMPANY_LIST_FAILED");
-    error.status = response.status;
-    throw error;
+    throw new Error(json?.code ?? "COMPANY_LIST_FAILED");
   }
   return json.data.companies;
+}
+
+async function deleteCompanySeries(seriesId) {
+  const response = await fetch(
+    `${import.meta.env.VITE_API_BASE}/api/procurement/number-series/company/${encodeURIComponent(seriesId)}`,
+    { method: "DELETE", credentials: "include" }
+  );
+  const json = await readJsonSafe(response);
+  if (!response.ok) throw new Error(json?.code ?? "SERIES_DELETE_FAILED");
+  return json;
+}
+
+async function updateCompanySeries(seriesId, data) {
+  const response = await fetch(
+    `${import.meta.env.VITE_API_BASE}/api/procurement/number-series/company/${encodeURIComponent(seriesId)}`,
+    { method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }
+  );
+  const json = await readJsonSafe(response);
+  if (!response.ok) throw new Error(json?.code ?? "SERIES_UPDATE_FAILED");
+  return json;
 }
 
 function formatGlobalCurrent(row) {
@@ -56,25 +64,19 @@ const TABS = [
 export default function SAOmNumberSeries() {
   const [activeTab, setActiveTab] = useState("global");
 
-  // Global tab state
+  // Global
   const [globalRows, setGlobalRows] = useState([]);
   const [editingGlobal, setEditingGlobal] = useState({ doc_type: "", starting_number: "" });
 
-  // Company tab state
+  // Company
   const [companyRows, setCompanyRows] = useState([]);
   const [selectedSeries, setSelectedSeries] = useState(null);
   const [companyCounters, setCompanyCounters] = useState([]);
   const [companyFilter, setCompanyFilter] = useState("");
-  const [seriesForm, setSeriesForm] = useState({
-    company_id: "",
-    document_type: "PO",
-    prefix: "",
-    number_padding: "5",
-  });
-  const [counterForm, setCounterForm] = useState({
-    financial_year: "",
-    starting_number: "1",
-  });
+  const [editingSeriesId, setEditingSeriesId] = useState(null);
+  const [editSeriesForm, setEditSeriesForm] = useState({ prefix: "", number_padding: "" });
+  const [seriesForm, setSeriesForm] = useState({ company_id: "", document_type: "PO", prefix: "", number_padding: "5" });
+  const [counterForm, setCounterForm] = useState({ financial_year: "", starting_number: "1" });
 
   // Shared
   const [companies, setCompanies] = useState([]);
@@ -84,7 +86,7 @@ export default function SAOmNumberSeries() {
   const [notice, setNotice] = useState("");
 
   const companyMap = useMemo(
-    () => new Map(companies.map((entry) => [entry.id, `${entry.company_code} | ${entry.company_name}`])),
+    () => new Map(companies.map((c) => [c.id, `${c.company_code} | ${c.company_name}`])),
     [companies]
   );
 
@@ -99,10 +101,7 @@ export default function SAOmNumberSeries() {
   }
 
   async function loadCounters(series) {
-    if (!series?.company_id || !series?.document_type) {
-      setCompanyCounters([]);
-      return;
-    }
+    if (!series?.company_id || !series?.document_type) { setCompanyCounters([]); return; }
     const rows = await listCompanyCounters(series.company_id, series.document_type);
     setCompanyCounters(Array.isArray(rows) ? rows : []);
   }
@@ -120,9 +119,7 @@ export default function SAOmNumberSeries() {
       setCompanyRows(Array.isArray(companyData) ? companyData : []);
       setCompanies(companyList);
       if (selectedSeries) {
-        const refreshed = (Array.isArray(companyData) ? companyData : []).find(
-          (entry) => entry.id === selectedSeries.id
-        );
+        const refreshed = (Array.isArray(companyData) ? companyData : []).find((e) => e.id === selectedSeries.id);
         setSelectedSeries(refreshed || null);
         if (refreshed) {
           const counterData = await listCompanyCounters(refreshed.company_id, refreshed.document_type);
@@ -131,46 +128,36 @@ export default function SAOmNumberSeries() {
           setCompanyCounters([]);
         }
       }
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_NUMBER_SERIES_LOAD_FAILED");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "NUMBER_SERIES_LOAD_FAILED");
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    void loadAll();
-  }, [companyFilter]);
+  useEffect(() => { void loadAll(); }, [companyFilter]);
 
   async function handleGlobalSave(docType) {
     const startingNumber = Number(editingGlobal.starting_number);
     if (!docType || !Number.isFinite(startingNumber) || startingNumber <= 0) {
-      setError("Enter a valid starting number.");
-      return;
+      setError("Enter a valid starting number."); return;
     }
-    setSaving(true);
-    setError("");
-    setNotice("");
+    setSaving(true); setError(""); setNotice("");
     try {
       await updateGlobalStartingNumber(docType, { starting_number: startingNumber });
       setEditingGlobal({ doc_type: "", starting_number: "" });
       setNotice(`Starting number updated for ${docType}.`);
       await loadGlobalRows();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "GLOBAL_STARTING_NUMBER_UPDATE_FAILED");
-    } finally {
-      setSaving(false);
-    }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "GLOBAL_STARTING_NUMBER_UPDATE_FAILED");
+    } finally { setSaving(false); }
   }
 
   async function handleCreateSeries() {
     if (!seriesForm.company_id || !seriesForm.document_type || !seriesForm.prefix.trim()) {
-      setError("Company, document type, and prefix are required.");
-      return;
+      setError("Company, document type, and prefix are required."); return;
     }
-    setSaving(true);
-    setError("");
-    setNotice("");
+    setSaving(true); setError(""); setNotice("");
     try {
       const created = await createCompanyNumberSeries({
         company_id: seriesForm.company_id,
@@ -181,25 +168,47 @@ export default function SAOmNumberSeries() {
       setSeriesForm({ company_id: "", document_type: "PO", prefix: "", number_padding: "5" });
       setNotice("Series created.");
       await loadCompanyRows();
-      if (created?.id) {
-        setSelectedSeries(created);
-        await loadCounters(created);
-      }
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "COMPANY_NUMBER_SERIES_CREATE_FAILED");
-    } finally {
-      setSaving(false);
-    }
+      if (created?.id) { setSelectedSeries(created); await loadCounters(created); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "COMPANY_NUMBER_SERIES_CREATE_FAILED");
+    } finally { setSaving(false); }
+  }
+
+  async function handleEditSeriesSave(seriesId) {
+    if (!editSeriesForm.prefix.trim()) { setError("Prefix is required."); return; }
+    setSaving(true); setError(""); setNotice("");
+    try {
+      await updateCompanySeries(seriesId, {
+        prefix: editSeriesForm.prefix.trim(),
+        number_padding: Number(editSeriesForm.number_padding || 5),
+      });
+      setEditingSeriesId(null);
+      setNotice("Series updated.");
+      await loadCompanyRows();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "SERIES_UPDATE_FAILED");
+    } finally { setSaving(false); }
+  }
+
+  async function handleDeleteSeries(series) {
+    const label = `${companyMap.get(series.company_id) ?? series.company_id} — ${series.document_type}`;
+    if (!window.confirm(`Delete series "${label}"? This cannot be undone.`)) return;
+    setSaving(true); setError(""); setNotice("");
+    try {
+      await deleteCompanySeries(series.id);
+      if (selectedSeries?.id === series.id) { setSelectedSeries(null); setCompanyCounters([]); }
+      setNotice("Series deleted.");
+      await loadCompanyRows();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "SERIES_DELETE_FAILED");
+    } finally { setSaving(false); }
   }
 
   async function handleCreateCounter() {
     if (!selectedSeries?.company_id || !selectedSeries?.document_type || !counterForm.financial_year.trim()) {
-      setError("Select a series and enter a financial year.");
-      return;
+      setError("Select a series and enter a financial year."); return;
     }
-    setSaving(true);
-    setError("");
-    setNotice("");
+    setSaving(true); setError(""); setNotice("");
     try {
       await createCompanyCounter(selectedSeries.company_id, selectedSeries.document_type, {
         financial_year: counterForm.financial_year.trim(),
@@ -208,39 +217,30 @@ export default function SAOmNumberSeries() {
       setCounterForm({ financial_year: "", starting_number: "1" });
       setNotice("FY counter created.");
       await loadCounters(selectedSeries);
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "COMPANY_COUNTER_CREATE_FAILED");
-    } finally {
-      setSaving(false);
-    }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "COMPANY_COUNTER_CREATE_FAILED");
+    } finally { setSaving(false); }
   }
 
   return (
     <ErpScreenScaffold
       eyebrow="Super Admin Procurement"
       title="Number Series"
-      actions={[
-        {
-          key: "refresh",
-          label: loading ? "Refreshing..." : "Refresh",
-          tone: "neutral",
-          onClick: () => void loadAll(),
-          disabled: loading,
-        },
-      ]}
+      actions={[{
+        key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral",
+        onClick: () => void loadAll(), disabled: loading,
+      }]}
       notices={[
-        ...(error ? [{ key: "number-series-error", tone: "error", message: error }] : []),
-        ...(notice ? [{ key: "number-series-notice", tone: "success", message: notice }] : []),
+        ...(error ? [{ key: "err", tone: "error", message: error }] : []),
+        ...(notice ? [{ key: "ok", tone: "success", message: notice }] : []),
       ]}
     >
       {/* Tab bar */}
       <div className="flex border-b border-slate-200">
         {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
+          <button key={tab.key} type="button"
             onClick={() => { setActiveTab(tab.key); setError(""); setNotice(""); }}
-            className={`px-5 py-2.5 text-sm font-semibold tracking-[0.02em] transition-colors -mb-px border-b-2 ${
+            className={`px-5 py-2.5 text-sm font-semibold tracking-[0.02em] -mb-px border-b-2 transition-colors ${
               activeTab === tab.key
                 ? "border-sky-600 text-sky-700"
                 : "border-transparent text-slate-500 hover:text-slate-800"
@@ -255,266 +255,314 @@ export default function SAOmNumberSeries() {
 
         {/* ── Tab 1: Global Counters ── */}
         {activeTab === "global" && (
-          <ErpSectionCard
-            eyebrow="Global Document Numbers"
-            title="System-wide counters — no company, no financial year"
-          >
+          <ErpSectionCard eyebrow="Global Document Numbers" title="System-wide counters — no company, no financial year">
             <div className="grid gap-3">
               <div className="rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                 Starting number can only be changed before the first document of that type is generated (Current = NOT USED).
               </div>
-              <ErpDenseGrid
-                columns={[
-                  { key: "doc_type", label: "Document Type", width: "180px" },
-                  { key: "starting_number", label: "Starting #", width: "130px" },
-                  {
-                    key: "current_number",
-                    label: "Current #",
-                    width: "160px",
-                    render: (row) => formatGlobalCurrent(row),
-                  },
-                  {
-                    key: "action",
-                    label: "Edit Starting",
-                    width: "280px",
-                    render: (row) => {
+              <div className="overflow-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50">
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 w-48">Document Type</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 w-36">Starting #</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 w-36">Current #</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loading && (
+                      <tr><td colSpan={4} className="px-3 py-4 text-sm text-slate-400">Loading...</td></tr>
+                    )}
+                    {!loading && globalRows.length === 0 && (
+                      <tr><td colSpan={4} className="px-3 py-4 text-sm text-slate-400">No global counters found.</td></tr>
+                    )}
+                    {globalRows.map((row) => {
                       const canEdit = Number(row.last_number ?? 0) === 0;
-                      if (!canEdit) return <span className="text-slate-400 text-xs">Already in use</span>;
-                      if (editingGlobal.doc_type === row.doc_type) {
-                        return (
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="number"
-                              min="1"
-                              value={editingGlobal.starting_number}
-                              onChange={(event) =>
-                                setEditingGlobal({ doc_type: row.doc_type, starting_number: event.target.value })
-                              }
-                              className="h-7 w-28 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => void handleGlobalSave(row.doc_type)}
-                              disabled={saving}
-                              className="border border-sky-700 bg-sky-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-950 disabled:opacity-50"
-                            >
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setEditingGlobal({ doc_type: "", starting_number: "" })}
-                              className="border border-slate-300 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        );
-                      }
+                      const isEditing = editingGlobal.doc_type === row.doc_type;
                       return (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setEditingGlobal({ doc_type: row.doc_type, starting_number: String(row.starting_number ?? 1) })
-                          }
-                          className="border border-slate-300 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-700"
-                        >
-                          Edit Starting
-                        </button>
+                        <tr key={row.doc_type} className="border-b border-slate-100">
+                          <td className="px-3 py-2 font-mono text-sm font-semibold text-slate-800">{row.doc_type}</td>
+                          <td className="px-3 py-2 text-slate-700">{row.starting_number ?? 1}</td>
+                          <td className="px-3 py-2">
+                            <span className={Number(row.last_number ?? 0) > 0 ? "font-semibold text-slate-900" : "text-slate-400"}>
+                              {formatGlobalCurrent(row)}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            {!canEdit && <span className="text-xs text-slate-400">Already in use</span>}
+                            {canEdit && !isEditing && (
+                              <button type="button"
+                                onClick={() => setEditingGlobal({ doc_type: row.doc_type, starting_number: String(row.starting_number ?? 1) })}
+                                className="border border-slate-300 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-700"
+                              >
+                                Edit Starting
+                              </button>
+                            )}
+                            {canEdit && isEditing && (
+                              <div className="flex items-center gap-2">
+                                <input type="number" min="1"
+                                  value={editingGlobal.starting_number}
+                                  onChange={(e) => setEditingGlobal({ doc_type: row.doc_type, starting_number: e.target.value })}
+                                  className="h-7 w-24 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                />
+                                <button type="button" disabled={saving}
+                                  onClick={() => void handleGlobalSave(row.doc_type)}
+                                  className="border border-sky-700 bg-sky-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-950 disabled:opacity-50"
+                                >Save</button>
+                                <button type="button"
+                                  onClick={() => setEditingGlobal({ doc_type: "", starting_number: "" })}
+                                  className="border border-slate-300 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600"
+                                >Cancel</button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
                       );
-                    },
-                  },
-                ]}
-                rows={globalRows}
-                rowKey={(row) => row.doc_type}
-                emptyMessage={loading ? "Loading..." : "No global counters found."}
-                maxHeight="400px"
-              />
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </ErpSectionCard>
         )}
 
         {/* ── Tab 2: Company Series ── */}
         {activeTab === "company" && (
-          <>
-            {/* Top row: series list + create form */}
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_340px]">
-              <ErpSectionCard eyebrow="Company Series" title="PO and STO — per company, restarts each financial year">
-                <div className="grid gap-3">
-                  <ErpDenseFormRow label="Filter by Company">
-                    <select
-                      value={companyFilter}
-                      onChange={(event) => setCompanyFilter(event.target.value)}
-                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    >
-                      <option value="">All Companies</option>
-                      {companies.map((entry) => (
-                        <option key={entry.id} value={entry.id}>
-                          {entry.company_code} | {entry.company_name}
-                        </option>
-                      ))}
-                    </select>
-                  </ErpDenseFormRow>
-                  <p className="text-xs text-slate-500">Click a row to view and manage its FY counters below.</p>
-                  <ErpDenseGrid
-                    columns={[
-                      {
-                        key: "company_id",
-                        label: "Company",
-                        render: (row) => companyMap.get(row.company_id) ?? row.company_id,
-                      },
-                      { key: "document_type", label: "Doc Type", width: "110px" },
-                      { key: "prefix", label: "Prefix", width: "120px" },
-                      { key: "number_padding", label: "Padding", width: "90px" },
-                      {
-                        key: "active",
-                        label: "Active",
-                        width: "80px",
-                        render: (row) => (
-                          <span className={`text-xs font-semibold ${row.active ? "text-emerald-700" : "text-slate-400"}`}>
-                            {row.active ? "YES" : "NO"}
-                          </span>
-                        ),
-                      },
-                    ]}
-                    rows={companyRows}
-                    rowKey={(row) => row.id}
-                    onRowActivate={(row) => { setSelectedSeries(row); void loadCounters(row); }}
-                    getRowProps={(row) => ({
-                      onClick: () => { setSelectedSeries(row); void loadCounters(row); },
-                      className: `cursor-pointer hover:bg-sky-50 ${selectedSeries?.id === row.id ? "bg-sky-100 ring-1 ring-inset ring-sky-300" : ""}`,
-                    })}
-                    emptyMessage={loading ? "Loading..." : "No company series found. Create one on the right."}
-                    maxHeight="340px"
-                  />
-                </div>
-              </ErpSectionCard>
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_320px]">
 
-              <ErpSectionCard eyebrow="Create New Series" title="Add a company series">
-                <div className="grid gap-3">
-                  <ErpDenseFormRow label="Company" required>
-                    <select
-                      value={seriesForm.company_id}
-                      onChange={(event) => setSeriesForm((current) => ({ ...current, company_id: event.target.value }))}
-                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    >
-                      <option value="">Select company</option>
-                      {companies.map((entry) => (
-                        <option key={entry.id} value={entry.id}>
-                          {entry.company_code} | {entry.company_name}
-                        </option>
-                      ))}
-                    </select>
-                  </ErpDenseFormRow>
-                  <ErpDenseFormRow label="Document Type" required>
-                    <select
-                      value={seriesForm.document_type}
-                      onChange={(event) => setSeriesForm((current) => ({ ...current, document_type: event.target.value }))}
-                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    >
-                      <option value="PO">PO</option>
-                      <option value="STO">STO</option>
-                    </select>
-                  </ErpDenseFormRow>
-                  <ErpDenseFormRow label="Prefix" required>
-                    <input
-                      value={seriesForm.prefix}
-                      onChange={(event) => setSeriesForm((current) => ({ ...current, prefix: event.target.value }))}
-                      placeholder="e.g. PO-CMP001-"
-                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    />
-                  </ErpDenseFormRow>
-                  <ErpDenseFormRow label="Number Padding">
-                    <input
-                      type="number"
-                      min="1"
-                      max="10"
-                      value={seriesForm.number_padding}
-                      onChange={(event) => setSeriesForm((current) => ({ ...current, number_padding: event.target.value }))}
-                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    />
-                  </ErpDenseFormRow>
-                  <button
-                    type="button"
-                    onClick={() => void handleCreateSeries()}
-                    disabled={saving}
-                    className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50"
+            {/* Left: series list */}
+            <ErpSectionCard eyebrow="Company Series" title="PO and STO — per company, restarts each financial year">
+              <div className="grid gap-3">
+                <ErpDenseFormRow label="Filter by Company">
+                  <select value={companyFilter}
+                    onChange={(e) => setCompanyFilter(e.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                   >
-                    {saving ? "Creating..." : "Create Series"}
-                  </button>
-                </div>
-              </ErpSectionCard>
-            </div>
+                    <option value="">All Companies</option>
+                    {companies.map((c) => (
+                      <option key={c.id} value={c.id}>{c.company_code} | {c.company_name}</option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
 
-            {/* Bottom: FY Counters for selected series */}
-            <ErpSectionCard
-              eyebrow="FY Counters"
-              title={
-                selectedSeries
-                  ? `${companyMap.get(selectedSeries.company_id) ?? selectedSeries.company_id} — ${selectedSeries.document_type} (Prefix: ${selectedSeries.prefix})`
-                  : "Select a series above to manage FY counters"
-              }
-            >
-              {!selectedSeries ? (
-                <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                  Click any row in the Company Series list above to view and create FY counters.
-                </div>
-              ) : (
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-                  <ErpDenseGrid
-                    columns={[
-                      { key: "financial_year", label: "Financial Year", width: "160px" },
-                      { key: "starting_number", label: "Starting #", width: "130px" },
-                      {
-                        key: "last_number",
-                        label: "Current #",
-                        width: "130px",
-                        render: (row) => (
-                          <span className={Number(row.last_number ?? 0) > 0 ? "font-semibold text-slate-900" : "text-slate-400"}>
-                            {Number(row.last_number ?? 0) > 0 ? row.last_number : "NOT USED"}
-                          </span>
-                        ),
-                      },
-                    ]}
-                    rows={companyCounters}
-                    rowKey={(row) => row.id}
-                    emptyMessage="No FY counters yet. Create one on the right."
-                    maxHeight="260px"
-                  />
+                <div className="overflow-auto rounded border border-slate-200">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-800">
+                        <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-300">Company</th>
+                        <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-300 w-24">Doc Type</th>
+                        <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-300 w-28">Prefix</th>
+                        <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-300 w-20">Padding</th>
+                        <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-300 w-20">Active</th>
+                        <th className="px-3 py-2 w-28"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loading && (
+                        <tr><td colSpan={6} className="px-3 py-4 text-sm text-slate-400">Loading...</td></tr>
+                      )}
+                      {!loading && companyRows.length === 0 && (
+                        <tr><td colSpan={6} className="px-3 py-4 text-sm text-slate-400">No series found. Create one on the right.</td></tr>
+                      )}
+                      {companyRows.map((row) => {
+                        const isSelected = selectedSeries?.id === row.id;
+                        const isEditingThis = editingSeriesId === row.id;
+                        return (
+                          <>
+                            <tr key={row.id}
+                              onClick={() => {
+                                if (editingSeriesId === row.id) return;
+                                setSelectedSeries(isSelected ? null : row);
+                                if (!isSelected) void loadCounters(row);
+                                else setCompanyCounters([]);
+                              }}
+                              className={`cursor-pointer border-b border-slate-100 transition-colors ${isSelected ? "bg-sky-50" : "hover:bg-slate-50"}`}
+                            >
+                              <td className="px-3 py-2 text-slate-800">{companyMap.get(row.company_id) ?? row.company_id}</td>
+                              <td className="px-3 py-2 font-mono font-semibold text-slate-800">{row.document_type}</td>
+                              <td className="px-3 py-2 font-mono text-slate-700">
+                                {isEditingThis ? (
+                                  <input value={editSeriesForm.prefix}
+                                    onChange={(e) => setEditSeriesForm((f) => ({ ...f, prefix: e.target.value }))}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="h-7 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                                  />
+                                ) : row.prefix}
+                              </td>
+                              <td className="px-3 py-2 text-slate-700">
+                                {isEditingThis ? (
+                                  <input type="number" min="1" max="10" value={editSeriesForm.number_padding}
+                                    onChange={(e) => setEditSeriesForm((f) => ({ ...f, number_padding: e.target.value }))}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="h-7 w-16 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                                  />
+                                ) : row.number_padding}
+                              </td>
+                              <td className="px-3 py-2">
+                                <span className={`text-xs font-semibold ${row.active ? "text-emerald-700" : "text-slate-400"}`}>
+                                  {row.active ? "YES" : "NO"}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2">
+                                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                  {isEditingThis ? (
+                                    <>
+                                      <button type="button" disabled={saving}
+                                        onClick={() => void handleEditSeriesSave(row.id)}
+                                        className="border border-sky-700 bg-sky-100 px-2 py-1 text-[10px] font-semibold text-sky-900 disabled:opacity-50"
+                                      >Save</button>
+                                      <button type="button"
+                                        onClick={() => setEditingSeriesId(null)}
+                                        className="border border-slate-300 bg-white px-2 py-1 text-[10px] font-semibold text-slate-600"
+                                      >Cancel</button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <button type="button"
+                                        onClick={() => {
+                                          setEditingSeriesId(row.id);
+                                          setEditSeriesForm({ prefix: row.prefix, number_padding: String(row.number_padding) });
+                                        }}
+                                        className="border border-slate-300 bg-white px-2 py-1 text-[10px] font-semibold text-slate-700"
+                                      >Edit</button>
+                                      <button type="button" disabled={saving}
+                                        onClick={() => void handleDeleteSeries(row)}
+                                        className="border border-rose-300 bg-white px-2 py-1 text-[10px] font-semibold text-rose-700 disabled:opacity-50"
+                                      >Delete</button>
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
 
-                  <div className="grid gap-3 content-start">
-                    <p className="text-xs text-slate-500">
-                      Create a new counter for a financial year. Once a document is generated, the counter cannot be reset.
-                    </p>
-                    <ErpDenseFormRow label="Financial Year" required>
-                      <input
-                        value={counterForm.financial_year}
-                        onChange={(event) => setCounterForm((current) => ({ ...current, financial_year: event.target.value }))}
-                        placeholder="e.g. 25-26"
-                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Starting Number">
-                      <input
-                        type="number"
-                        min="1"
-                        value={counterForm.starting_number}
-                        onChange={(event) => setCounterForm((current) => ({ ...current, starting_number: event.target.value }))}
-                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      />
-                    </ErpDenseFormRow>
-                    <button
-                      type="button"
-                      onClick={() => void handleCreateCounter()}
-                      disabled={saving}
-                      className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {saving ? "Creating..." : "Create FY Counter"}
-                    </button>
-                  </div>
+                            {/* Inline FY Counters — expands under selected row */}
+                            {isSelected && (
+                              <tr key={`${row.id}-fy`}>
+                                <td colSpan={6} className="bg-sky-50 px-4 py-4">
+                                  <div className="grid gap-3">
+                                    <div className="text-xs font-semibold uppercase tracking-[0.08em] text-sky-700">
+                                      FY Counters — {row.prefix} ({row.document_type})
+                                    </div>
+                                    <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+                                      {/* Counter list */}
+                                      <div className="overflow-auto rounded border border-sky-200 bg-white">
+                                        <table className="w-full text-sm">
+                                          <thead>
+                                            <tr className="border-b border-sky-200 bg-sky-100">
+                                              <th className="px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-700">Financial Year</th>
+                                              <th className="px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-700 w-32">Starting #</th>
+                                              <th className="px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-sky-700 w-32">Current #</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {companyCounters.length === 0 && (
+                                              <tr><td colSpan={3} className="px-3 py-3 text-xs text-slate-400">No FY counters yet. Create one →</td></tr>
+                                            )}
+                                            {companyCounters.map((counter) => (
+                                              <tr key={counter.id} className="border-b border-slate-100">
+                                                <td className="px-3 py-2 font-mono font-semibold text-slate-800">{counter.financial_year}</td>
+                                                <td className="px-3 py-2 text-slate-700">{counter.starting_number}</td>
+                                                <td className="px-3 py-2">
+                                                  <span className={Number(counter.last_number ?? 0) > 0 ? "font-semibold text-slate-900" : "text-slate-400"}>
+                                                    {Number(counter.last_number ?? 0) > 0 ? counter.last_number : "NOT USED"}
+                                                  </span>
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+
+                                      {/* Create counter form */}
+                                      <div className="grid gap-2 content-start">
+                                        <div className="text-xs font-semibold text-slate-600">Add FY Counter</div>
+                                        <ErpDenseFormRow label="Financial Year">
+                                          <input value={counterForm.financial_year}
+                                            onChange={(e) => setCounterForm((f) => ({ ...f, financial_year: e.target.value }))}
+                                            placeholder="e.g. 26-27"
+                                            className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                          />
+                                        </ErpDenseFormRow>
+                                        <ErpDenseFormRow label="Starting Number">
+                                          <input type="number" min="1" value={counterForm.starting_number}
+                                            onChange={(e) => setCounterForm((f) => ({ ...f, starting_number: e.target.value }))}
+                                            className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                          />
+                                        </ErpDenseFormRow>
+                                        <button type="button" disabled={saving}
+                                          onClick={() => void handleCreateCounter()}
+                                          className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50"
+                                        >
+                                          {saving ? "Creating..." : "Create FY Counter"}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              )}
+              </div>
             </ErpSectionCard>
-          </>
+
+            {/* Right: create series form */}
+            <ErpSectionCard eyebrow="Create New Series" title="Add a company series">
+              <div className="grid gap-3">
+                <ErpDenseFormRow label="Company" required>
+                  <select value={seriesForm.company_id}
+                    onChange={(e) => setSeriesForm((f) => ({ ...f, company_id: e.target.value }))}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select company</option>
+                    {companies.map((c) => (
+                      <option key={c.id} value={c.id}>{c.company_code} | {c.company_name}</option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Document Type" required>
+                  <select value={seriesForm.document_type}
+                    onChange={(e) => setSeriesForm((f) => ({ ...f, document_type: e.target.value }))}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    <option value="PO">PO</option>
+                    <option value="STO">STO</option>
+                  </select>
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Prefix" required>
+                  <input value={seriesForm.prefix}
+                    onChange={(e) => setSeriesForm((f) => ({ ...f, prefix: e.target.value }))}
+                    placeholder="e.g. ASCPO"
+                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Number Padding">
+                  <input type="number" min="1" max="10" value={seriesForm.number_padding}
+                    onChange={(e) => setSeriesForm((f) => ({ ...f, number_padding: e.target.value }))}
+                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  />
+                </ErpDenseFormRow>
+                {seriesForm.prefix && (
+                  <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    Preview: <span className="font-mono font-semibold text-slate-900">
+                      {seriesForm.prefix}2627-{"1".padStart(Number(seriesForm.number_padding) || 5, "0")}
+                    </span>
+                  </div>
+                )}
+                <button type="button" disabled={saving} onClick={() => void handleCreateSeries()}
+                  className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50"
+                >
+                  {saving ? "Creating..." : "Create Series"}
+                </button>
+              </div>
+            </ErpSectionCard>
+
+          </div>
         )}
       </div>
     </ErpScreenScaffold>

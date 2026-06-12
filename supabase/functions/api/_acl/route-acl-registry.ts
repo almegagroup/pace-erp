@@ -642,6 +642,13 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { PATCH: { skipAcl: true } },
   },
   {
+    pattern: /^\/api\/procurement\/number-series\/company\/[^/]+$/,
+    methods: {
+      PATCH:  { skipAcl: true },
+      DELETE: { skipAcl: true },
+    },
+  },
+  {
     pattern: /^\/api\/procurement\/number-series\/company\/[^/]+\/[^/]+\/counters$/,
     methods: {
       GET:  { skipAcl: true },
