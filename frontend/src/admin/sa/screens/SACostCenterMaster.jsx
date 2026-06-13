@@ -10,6 +10,8 @@
 
 import { useEffect, useState } from "react";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+
+const BASE = import.meta.env.VITE_API_BASE ?? "";
 import {
   createCostCenter,
   listCostCenters,
@@ -32,7 +34,7 @@ function label(code) {
 
 async function fetchAdminList(path, dataKey, fallback) {
   try {
-    const res = await fetch(path, { credentials: "include" });
+    const res = await fetch(`${BASE}${path}`, { credentials: "include" });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json?.code ?? fallback);
     return json?.data?.[dataKey] ?? json?.[dataKey] ?? [];
