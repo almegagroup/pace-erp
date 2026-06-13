@@ -20,7 +20,8 @@ type ProcurementHandlerContext = {
   roleCode: string;
 };
 
-const PAYMENT_METHODS = new Set(["CREDIT", "ADVANCE", "LC", "TT", "DA", "DP", "MIXED"]);
+const PAYMENT_METHODS = new Set(["CREDIT", "ADVANCE"]);
+const PAYMENT_TYPES  = new Set(["LC", "TT", "DA", "DP", "MIXED", "N_A"]);
 const LC_TYPES = new Set(["AT_SIGHT", "USANCE", "N_A"]);
 const PORT_TYPES = new Set(["SEA", "AIR", "LAND"]);
 const TRANSIT_MODES = new Set(["ROAD", "RAIL", "MULTI-MODAL"]);
@@ -205,10 +206,11 @@ export async function createPaymentTermsHandler(req: Request, ctx: ProcurementHa
     const body = await parseBody(req);
     const name = toTrimmedString(body.name);
     const paymentMethod = toUpperTrimmedString(body.payment_method);
+    const paymentType   = toUpperTrimmedString(body.payment_type || "N_A");
     const referenceDateTypeId = toTrimmedString(body.reference_date_type_id);
     const lcType = toUpperTrimmedString(body.lc_type || "N_A");
 
-    if (!name || !PAYMENT_METHODS.has(paymentMethod) || !referenceDateTypeId || !LC_TYPES.has(lcType)) {
+    if (!name || !PAYMENT_METHODS.has(paymentMethod) || !PAYMENT_TYPES.has(paymentType) || !referenceDateTypeId || !LC_TYPES.has(lcType)) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PAYMENT_TERMS", 400, "Invalid payment terms payload");
     }
 
@@ -220,6 +222,7 @@ export async function createPaymentTermsHandler(req: Request, ctx: ProcurementHa
         code,
         name,
         payment_method: paymentMethod,
+        payment_type: paymentType,
         reference_date_type_id: referenceDateTypeId,
         credit_days: parseNullableInt(body.credit_days),
         advance_pct: parseNullableNumber(body.advance_pct),
@@ -271,6 +274,13 @@ export async function updatePaymentTermsHandler(req: Request, ctx: ProcurementHa
         return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PAYMENT_TERMS", 400, "Invalid payment method");
       }
       updates.payment_method = value;
+    }
+    if (body.payment_type !== undefined) {
+      const value = toUpperTrimmedString(body.payment_type);
+      if (!PAYMENT_TYPES.has(value)) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PAYMENT_TERMS", 400, "Invalid payment type");
+      }
+      updates.payment_type = value;
     }
     if (body.reference_date_type_id !== undefined) {
       const value = toTrimmedString(body.reference_date_type_id);

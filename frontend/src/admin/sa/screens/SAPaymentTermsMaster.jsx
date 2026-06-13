@@ -21,7 +21,8 @@ import {
   updatePaymentTerm,
 } from "../../../pages/dashboard/procurement/procurementApi.js";
 
-const PAYMENT_METHODS = ["CREDIT", "ADVANCE", "LC", "TT", "DA", "DP", "MIXED"];
+const PAYMENT_METHODS = ["CREDIT", "ADVANCE"];
+const PAYMENT_TYPES   = ["LC", "TT", "DA", "DP", "MIXED", "N_A"];
 const LC_TYPES        = ["AT_SIGHT", "USANCE", "N_A"];
 const SOURCE_DOCS     = ["CSN", "IV", "MANUAL"];
 const TABS = [
@@ -30,7 +31,7 @@ const TABS = [
 ];
 
 const EMPTY_TERM = {
-  name: "", payment_method: "CREDIT", reference_date_type_id: "",
+  name: "", payment_method: "CREDIT", payment_type: "N_A", reference_date_type_id: "",
   credit_days: "", advance_pct: "", lc_type: "N_A", usance_days: "", description: "",
 };
 const EMPTY_REF = { code: "", label: "", source_document: "CSN", source_field: "", description: "" };
@@ -81,6 +82,7 @@ export default function SAPaymentTermsMaster() {
     setEditDraft({
       name: row.name,
       payment_method: row.payment_method,
+      payment_type: row.payment_type ?? "N_A",
       reference_date_type_id: row.reference_date_type_id,
       credit_days: row.credit_days ?? "",
       advance_pct: row.advance_pct ?? "",
@@ -102,6 +104,7 @@ export default function SAPaymentTermsMaster() {
       await updatePaymentTerm(row.id, {
         name: editDraft.name.trim(),
         payment_method: editDraft.payment_method,
+        payment_type: editDraft.payment_type || "N_A",
         reference_date_type_id: editDraft.reference_date_type_id,
         credit_days: editDraft.credit_days === "" ? null : Number(editDraft.credit_days),
         advance_pct: editDraft.advance_pct === "" ? null : Number(editDraft.advance_pct),
@@ -152,6 +155,7 @@ export default function SAPaymentTermsMaster() {
       await createPaymentTerm({
         name: termForm.name.trim(),
         payment_method: termForm.payment_method,
+        payment_type: termForm.payment_type || "N_A",
         reference_date_type_id: termForm.reference_date_type_id,
         credit_days: termForm.credit_days === "" ? null : Number(termForm.credit_days),
         advance_pct: termForm.advance_pct === "" ? null : Number(termForm.advance_pct),
@@ -237,6 +241,7 @@ export default function SAPaymentTermsMaster() {
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Code</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Name</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Method</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Type</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Reference Date</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Credit Days</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Status</th>
@@ -244,8 +249,8 @@ export default function SAPaymentTermsMaster() {
                   </tr>
                 </thead>
                 <tbody>
-                  {loading && <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>}
-                  {!loading && terms.length === 0 && <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-400">No payment terms yet.</td></tr>}
+                  {loading && <tr><td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>}
+                  {!loading && terms.length === 0 && <tr><td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">No payment terms yet.</td></tr>}
                   {terms.map((row) => {
                     const isEditing = editId === row.id;
                     return (
@@ -275,6 +280,19 @@ export default function SAPaymentTermsMaster() {
                               </select>
                             ) : (
                               <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{row.payment_method}</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            {isEditing ? (
+                              <select value={editDraft.payment_type}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, payment_type: e.target.value }))}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-7 border border-sky-400 bg-white px-1 text-sm outline-none"
+                              >
+                                {PAYMENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                              </select>
+                            ) : (
+                              <span className="inline-flex rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800">{row.payment_type ?? "N_A"}</span>
                             )}
                           </td>
                           <td className="px-3 py-2 text-slate-600">
@@ -325,8 +343,16 @@ export default function SAPaymentTermsMaster() {
                         </tr>
                         {isEditing && (
                           <tr className="bg-sky-50">
-                            <td colSpan={7} className="px-3 pb-3">
+                            <td colSpan={8} className="px-3 pb-3">
                               <div className="grid grid-cols-3 gap-3 pt-1">
+                                <label className="grid gap-1 text-[11px] font-semibold text-slate-600">
+                                  Payment Type
+                                  <select value={editDraft.payment_type}
+                                    onChange={(e) => setEditDraft((d) => ({ ...d, payment_type: e.target.value }))}
+                                    className="h-7 border border-sky-300 bg-white px-1 text-sm outline-none">
+                                    {PAYMENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                                  </select>
+                                </label>
                                 <label className="grid gap-1 text-[11px] font-semibold text-slate-600">
                                   Advance %
                                   <input type="number" min="0" max="100" value={editDraft.advance_pct}
@@ -379,6 +405,13 @@ export default function SAPaymentTermsMaster() {
                 <select value={termForm.payment_method} onChange={(e) => setTermForm((f) => ({ ...f, payment_method: e.target.value }))}
                   className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500">
                   {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Payment Type
+                <select value={termForm.payment_type} onChange={(e) => setTermForm((f) => ({ ...f, payment_type: e.target.value }))}
+                  className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500">
+                  {PAYMENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
