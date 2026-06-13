@@ -95,7 +95,7 @@ function getIdFromPath(req: Request): string {
 }
 
 async function generateCode(rpcName: string): Promise<string> {
-  const { data, error } = await serviceRoleClient.schema("erp_master").rpc(rpcName);
+  const { data, error } = await serviceRoleClient.rpc(rpcName);
   if (error || !data) {
     throw new Error("PROCUREMENT_CODE_GENERATION_FAILED");
   }
