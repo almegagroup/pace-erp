@@ -9,7 +9,7 @@ import {
 } from "../../../pages/dashboard/procurement/procurementApi.js";
 
 const PAYMENT_METHOD_OPTIONS = ["CREDIT", "ADVANCE", "LC", "TT", "DA", "DP", "MIXED"];
-const REFERENCE_DATE_OPTIONS = ["INVOICE_DATE", "DELIVERY_DATE"];
+const REFERENCE_DATE_OPTIONS = ["INVOICE_DATE", "GRN_DATE", "BL_DATE", "SHIPMENT_DATE", "N_A"];
 
 function buildFormState(row) {
   return {
