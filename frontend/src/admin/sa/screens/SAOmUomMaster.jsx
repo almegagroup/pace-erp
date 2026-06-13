@@ -2,20 +2,17 @@
  * File-ID: 15.14
  * File-Path: frontend/src/admin/sa/screens/SAOmUomMaster.jsx
  * Gate: 15
- * Phase: 15
  * Domain: OPERATION_MANAGEMENT
- * Purpose: Render the SA-only UOM master list and inline create/edit form.
+ * Purpose: SA-only UOM master — inline row edit, per-row toggle, right-panel create.
  * Authority: Frontend
  */
 
-import { useEffect, useRef, useState } from "react";
-import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
-import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
+import React, { useEffect, useRef, useState } from "react";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { createUom, listUoms, toggleUom, updateUom } from "../../../pages/dashboard/om/omApi.js";
 
 const ERROR_MESSAGES = {
-  OM_INVALID_UOM_CODE:  "UOM code is required and must be 1–10 alphanumeric characters.",
+  OM_INVALID_UOM_CODE:  "UOM code is required (1–10 alphanumeric characters).",
   OM_INVALID_UOM_NAME:  "UOM name is required.",
   OM_INVALID_UOM_TYPE:  "UOM type is invalid.",
   OM_UOM_EXISTS:        "A UOM with this code already exists.",
@@ -28,27 +25,35 @@ const ERROR_MESSAGES = {
   OM_UOM_LIST_FAILED:   "Failed to load UOM list. Please refresh.",
 };
 
+const UOM_TYPES = ["COUNT", "WEIGHT", "VOLUME", "LENGTH", "PACKING"];
+const EMPTY_CREATE = { uom_code: "", uom_name: "", uom_type: "COUNT" };
+
 function friendlyError(code) {
   return ERROR_MESSAGES[code] ?? code;
 }
 
-const EMPTY_CREATE = { uom_code: "", uom_name: "", uom_type: "COUNT" };
-
 export default function SAOmUomMaster() {
   const [rows, setRows]         = useState([]);
-  const [form, setForm]         = useState(EMPTY_CREATE);
-  const [editRow, setEditRow]   = useState(null); // null = create mode, row = edit mode
   const [loading, setLoading]   = useState(true);
   const [saving, setSaving]     = useState(false);
-  const [toggling, setToggling] = useState(null);
   const [error, setError]       = useState("");
   const [notice, setNotice]     = useState("");
   const noticeTimer             = useRef(null);
 
-  function showNotice(msg) {
-    setNotice(msg);
+  // Inline edit state
+  const [editId, setEditId]     = useState(null);
+  const [editDraft, setEditDraft] = useState({ uom_name: "", uom_type: "COUNT" });
+
+  // Create form state
+  const [createForm, setCreateForm] = useState(EMPTY_CREATE);
+
+  function flash(msg, isError = false) {
     clearTimeout(noticeTimer.current);
-    noticeTimer.current = setTimeout(() => setNotice(""), 4000);
+    if (isError) { setError(msg); setNotice(""); }
+    else {
+      setNotice(msg); setError("");
+      noticeTimer.current = setTimeout(() => setNotice(""), 4000);
+    }
   }
 
   async function loadRows() {
@@ -59,7 +64,7 @@ export default function SAOmUomMaster() {
       setRows(Array.isArray(result?.data) ? result.data : []);
     } catch (err) {
       setRows([]);
-      setError(friendlyError(err instanceof Error ? err.message : "OM_UOM_LIST_FAILED"));
+      flash(friendlyError(err instanceof Error ? err.message : "OM_UOM_LIST_FAILED"), true);
     } finally {
       setLoading(false);
     }
@@ -70,192 +75,206 @@ export default function SAOmUomMaster() {
     return () => clearTimeout(noticeTimer.current);
   }, []);
 
-  function handleRowClick(row) {
-    setEditRow(row);
-    setForm({ uom_code: row.code, uom_name: row.name, uom_type: row.uom_type });
-    setError("");
+  // ── Inline edit ──────────────────────────────────────────────
+  function startEdit(row) {
+    setEditId(row.id ?? row.code);
+    setEditDraft({ uom_name: row.name, uom_type: row.uom_type });
+    setError(""); setNotice("");
   }
 
-  function handleCancelEdit() {
-    setEditRow(null);
-    setForm(EMPTY_CREATE);
-    setError("");
-  }
+  function cancelEdit() { setEditId(null); setEditDraft({ uom_name: "", uom_type: "COUNT" }); }
 
-  async function handleCreate() {
-    if (!form.uom_code.trim() || !form.uom_name.trim() || !form.uom_type) {
-      setError(friendlyError("OM_INVALID_UOM_CODE"));
-      return;
-    }
+  async function saveEdit(row) {
+    if (!editDraft.uom_name.trim()) { flash(friendlyError("OM_INVALID_UOM_NAME"), true); return; }
     setSaving(true);
-    setError("");
     try {
-      await createUom({
-        uom_code: form.uom_code.trim().toUpperCase(),
-        uom_name: form.uom_name.trim(),
-        uom_type: form.uom_type,
-      });
-      setForm(EMPTY_CREATE);
-      showNotice("UOM created successfully.");
+      await updateUom({ code: row.code, name: editDraft.uom_name.trim(), uom_type: editDraft.uom_type });
+      cancelEdit();
+      flash(`UOM "${row.code}" updated.`);
       await loadRows();
     } catch (err) {
-      setError(friendlyError(err instanceof Error ? err.message : "OM_UOM_CREATE_FAILED"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleUpdate() {
-    if (!form.uom_name.trim()) {
-      setError(friendlyError("OM_INVALID_UOM_NAME"));
-      return;
-    }
-    setSaving(true);
-    setError("");
-    try {
-      await updateUom({
-        code:     editRow.code,
-        name:     form.uom_name.trim(),
-        uom_type: form.uom_type,
-      });
-      showNotice(`UOM "${editRow.code}" updated successfully.`);
-      setEditRow(null);
-      setForm(EMPTY_CREATE);
-      await loadRows();
-    } catch (err) {
-      setError(friendlyError(err instanceof Error ? err.message : "OM_UOM_UPDATE_FAILED"));
-    } finally {
-      setSaving(false);
-    }
+      flash(friendlyError(err instanceof Error ? err.message : "OM_UOM_UPDATE_FAILED"), true);
+    } finally { setSaving(false); }
   }
 
   async function handleToggle(row) {
-    setToggling(row.code);
-    setError("");
+    setSaving(true);
     try {
       await toggleUom({ code: row.code, active: !row.active });
-      showNotice(`UOM "${row.code}" ${!row.active ? "activated" : "deactivated"}.`);
-      if (editRow?.code === row.code) handleCancelEdit();
+      if (editId === (row.id ?? row.code)) cancelEdit();
+      flash(`UOM "${row.code}" ${!row.active ? "activated" : "deactivated"}.`);
       await loadRows();
     } catch (err) {
-      setError(friendlyError(err instanceof Error ? err.message : "OM_UOM_TOGGLE_FAILED"));
-    } finally {
-      setToggling(null);
-    }
+      flash(friendlyError(err instanceof Error ? err.message : "OM_UOM_TOGGLE_FAILED"), true);
+    } finally { setSaving(false); }
   }
 
-  const isEditMode = editRow !== null;
+  // ── Create ───────────────────────────────────────────────────
+  async function handleCreate() {
+    if (!createForm.uom_code.trim() || !createForm.uom_name.trim()) {
+      flash(friendlyError("OM_INVALID_UOM_CODE"), true); return;
+    }
+    setSaving(true);
+    try {
+      await createUom({
+        uom_code: createForm.uom_code.trim().toUpperCase(),
+        uom_name: createForm.uom_name.trim(),
+        uom_type: createForm.uom_type,
+      });
+      setCreateForm(EMPTY_CREATE);
+      flash("UOM created successfully.");
+      await loadRows();
+    } catch (err) {
+      flash(friendlyError(err instanceof Error ? err.message : "OM_UOM_CREATE_FAILED"), true);
+    } finally { setSaving(false); }
+  }
 
   return (
     <ErpScreenScaffold
-      eyebrow="Super Admin Operation Management"
+      eyebrow="Super Admin — Operation Management"
       title="UOM Master"
-      actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadRows() },
-        ...(isEditMode
-          ? [
-              { key: "cancel", label: "Cancel Edit", tone: "neutral", onClick: handleCancelEdit },
-              { key: "save",   label: saving ? "Saving..." : "Save Changes", tone: "primary", onClick: () => void handleUpdate(), disabled: saving },
-            ]
-          : [
-              { key: "create", label: saving ? "Creating..." : "Create UOM", tone: "primary", onClick: () => void handleCreate(), disabled: saving },
-            ]
-        ),
-      ]}
+      actions={[{
+        key: "refresh", label: loading ? "Refreshing..." : "Refresh",
+        tone: "neutral", onClick: () => void loadRows(), disabled: loading,
+      }]}
       notices={[
-        ...(error  ? [{ key: "error",  tone: "error",   message: error  }] : []),
-        ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
+        ...(error  ? [{ key: "err", tone: "error",   message: error  }] : []),
+        ...(notice ? [{ key: "ok",  tone: "success", message: notice }] : []),
       ]}
     >
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_320px]">
+        {/* Left — list */}
         <ErpSectionCard eyebrow="UOM Register" title="All units of measure">
-          <ErpDenseGrid
-            columns={[
-              { key: "code",     label: "Code" },
-              { key: "name",     label: "Name" },
-              { key: "uom_type", label: "Type" },
-              {
-                key: "active",
-                label: "Active",
-                render: (row) => (row.active ? "YES" : "NO"),
-              },
-              {
-                key: "_toggle",
-                label: "",
-                render: (row) => (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); void handleToggle(row); }}
-                    disabled={toggling === row.code}
-                    className={`px-2 py-0.5 text-xs font-medium rounded ${
-                      row.active
-                        ? "bg-red-50 text-red-600 hover:bg-red-100"
-                        : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                    } disabled:opacity-50`}
-                  >
-                    {toggling === row.code ? "..." : row.active ? "Deactivate" : "Activate"}
-                  </button>
-                ),
-              },
-            ]}
-            rows={rows}
-            rowKey={(row) => row.id || row.code}
-            onRowActivate={(row) => handleRowClick(row)}
-            getRowProps={(row) => ({
-              onClick: () => handleRowClick(row),
-              className: editRow?.code === row.code
-                ? "cursor-pointer bg-sky-50 border-l-2 border-l-sky-500"
-                : "cursor-pointer hover:bg-slate-50",
-            })}
-            emptyMessage={loading ? "Loading UOM rows..." : "No UOM rows are available."}
-            maxHeight="420px"
-          />
-          {!isEditMode && (
-            <p className="mt-2 text-xs text-slate-400">Click a row to edit.</p>
-          )}
+          <div className="overflow-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Code</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Name</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Type</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Status</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr><td colSpan={5} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>
+                )}
+                {!loading && rows.length === 0 && (
+                  <tr><td colSpan={5} className="px-3 py-6 text-center text-sm text-slate-400">No UOMs found.</td></tr>
+                )}
+                {rows.map((row) => {
+                  const rowKey = row.id ?? row.code;
+                  const isEditing = editId === rowKey;
+                  return (
+                    <React.Fragment key={rowKey}>
+                      <tr
+                        className={`border-b border-slate-100 transition-colors ${isEditing ? "bg-sky-50" : "cursor-pointer hover:bg-slate-50"}`}
+                        onClick={() => { if (!isEditing) startEdit(row); }}
+                      >
+                        <td className="px-3 py-2 font-mono text-xs font-semibold text-slate-800">{row.code}</td>
+                        <td className="px-3 py-2 font-semibold text-slate-900">
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              value={editDraft.uom_name}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, uom_name: e.target.value }))}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-7 w-full border border-sky-400 bg-white px-2 text-sm outline-none"
+                            />
+                          ) : row.name}
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <select
+                              value={editDraft.uom_type}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, uom_type: e.target.value }))}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-7 border border-sky-400 bg-white px-1 text-sm outline-none"
+                            >
+                              {UOM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                          ) : (
+                            <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{row.uom_type}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${row.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                            {row.active ? "ACTIVE" : "INACTIVE"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                          {isEditing ? (
+                            <div className="flex gap-1">
+                              <button type="button" disabled={saving} onClick={() => void saveEdit(row)}
+                                className="border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:opacity-50">
+                                Save
+                              </button>
+                              <button type="button" onClick={cancelEdit}
+                                className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700">
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button type="button" disabled={saving} onClick={() => void handleToggle(row)}
+                              className={`border px-2 py-1 text-[11px] font-semibold disabled:opacity-50 ${
+                                row.active
+                                  ? "border-rose-300 bg-rose-50 text-rose-800"
+                                  : "border-emerald-400 bg-emerald-50 text-emerald-900"
+                              }`}>
+                              {row.active ? "Deactivate" : "Activate"}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-2 text-xs text-slate-400">Click a row to edit name or type.</p>
         </ErpSectionCard>
 
-        <ErpSectionCard
-          eyebrow={isEditMode ? `Editing — ${editRow.code}` : "Create UOM"}
-          title={isEditMode ? "Edit unit of measure" : "New unit of measure"}
-        >
+        {/* Right — create */}
+        <ErpSectionCard eyebrow="Create UOM" title="New unit of measure">
           <div className="grid gap-3">
-            <ErpDenseFormRow label="UOM Code" required>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              UOM Code <span className="text-rose-500">*</span>
               <input
-                value={form.uom_code}
-                onChange={(e) => !isEditMode && setForm((f) => ({ ...f, uom_code: e.target.value.toUpperCase() }))}
-                readOnly={isEditMode}
-                className={`h-8 w-full border px-2 text-sm text-slate-900 outline-none focus:border-sky-500 ${
-                  isEditMode
-                    ? "border-slate-200 bg-slate-50 text-slate-500 cursor-not-allowed"
-                    : "border-slate-300 bg-[#fffef7]"
-                }`}
+                value={createForm.uom_code}
+                onChange={(e) => setCreateForm((f) => ({ ...f, uom_code: e.target.value.toUpperCase() }))}
                 placeholder="e.g. KG"
+                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
               />
-              {isEditMode && (
-                <p className="mt-1 text-xs text-slate-400">Code cannot be changed.</p>
-              )}
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="UOM Name" required>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              UOM Name <span className="text-rose-500">*</span>
               <input
-                value={form.uom_name}
-                onChange={(e) => setForm((f) => ({ ...f, uom_name: e.target.value }))}
-                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                value={createForm.uom_name}
+                onChange={(e) => setCreateForm((f) => ({ ...f, uom_name: e.target.value }))}
                 placeholder="e.g. Kilogram"
+                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
               />
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="UOM Type" required>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              UOM Type <span className="text-rose-500">*</span>
               <select
-                value={form.uom_type}
-                onChange={(e) => setForm((f) => ({ ...f, uom_type: e.target.value }))}
-                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                value={createForm.uom_type}
+                onChange={(e) => setCreateForm((f) => ({ ...f, uom_type: e.target.value }))}
+                className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
               >
-                <option value="COUNT">COUNT</option>
-                <option value="WEIGHT">WEIGHT</option>
-                <option value="VOLUME">VOLUME</option>
-                <option value="LENGTH">LENGTH</option>
-                <option value="PACKING">PACKING</option>
+                {UOM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
-            </ErpDenseFormRow>
+            </label>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void handleCreate()}
+              className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50"
+            >
+              {saving ? "Creating..." : "Create UOM"}
+            </button>
           </div>
         </ErpSectionCard>
       </div>
