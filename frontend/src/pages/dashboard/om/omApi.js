@@ -502,6 +502,30 @@ export async function createMachine(payload) {
   );
 }
 
+export async function updateMachine(payload) {
+  return fetchJson(
+    "/api/om/machine",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_MACHINE_UPDATE_FAILED"
+  );
+}
+
+export async function toggleMachine(payload) {
+  return fetchJson(
+    "/api/om/machine/toggle",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_MACHINE_TOGGLE_FAILED"
+  );
+}
+
 export async function extendMaterialToCompany(payload) {
   const normalizedPayload = {
     ...payload,

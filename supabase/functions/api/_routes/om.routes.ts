@@ -80,6 +80,8 @@ import {
 import {
   createMachineHandler,
   listMachinesHandler,
+  updateMachineHandler,
+  toggleMachineHandler,
 } from "../_core/om/machine.handlers.ts";
 
 export async function dispatchOmRoutes(
@@ -210,6 +212,10 @@ export async function dispatchOmRoutes(
       return await createMachineHandler(req, ctx);
     case "GET:/api/om/machines":
       return await listMachinesHandler(req, ctx);
+    case "PATCH:/api/om/machine":
+      return await updateMachineHandler(req, ctx);
+    case "POST:/api/om/machine/toggle":
+      return await toggleMachineHandler(req, ctx);
 
     default:
       return null;
