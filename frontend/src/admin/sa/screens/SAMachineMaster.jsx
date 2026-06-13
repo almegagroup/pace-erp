@@ -15,6 +15,7 @@ import {
   listMachines,
   updateMachine,
   toggleMachine,
+  listUoms,
 } from "../../../pages/dashboard/om/omApi.js";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -49,6 +50,7 @@ export default function SAMachineMaster() {
   const [rows, setRows]           = useState([]);
   const [companies, setCompanies] = useState([]);
   const [costCenters, setCostCenters] = useState([]);
+  const [uoms, setUoms]           = useState([]);
   const [filterCompany, setFilterCompany] = useState("");
   const [loading, setLoading]     = useState(true);
   const [saving, setSaving]       = useState(false);
@@ -75,14 +77,16 @@ export default function SAMachineMaster() {
     setLoading(true);
     setError("");
     try {
-      const [machineResult, companyList, ccResult] = await Promise.all([
+      const [machineResult, companyList, ccResult, uomResult] = await Promise.all([
         listMachines(),
         fetchAdminList("/api/admin/companies", "companies"),
         fetchAdminList("/api/om/cost-centers", "data"),
+        listUoms({ is_active: "true" }),
       ]);
       setRows(Array.isArray(machineResult) ? machineResult : (machineResult?.data ?? []));
       setCompanies(Array.isArray(companyList) ? companyList : []);
       setCostCenters(Array.isArray(ccResult) ? ccResult : []);
+      setUoms(Array.isArray(uomResult) ? uomResult : (uomResult?.data ?? []));
     } catch (e) {
       setError(label(e instanceof Error ? e.message : "OM_MACHINE_LIST_FAILED"));
     } finally {
@@ -300,13 +304,15 @@ export default function SAMachineMaster() {
                                 placeholder="qty"
                                 className="h-7 w-20 border border-sky-400 bg-white px-1 text-sm outline-none"
                               />
-                              <input
+                              <select
                                 value={editDraft.capacity_uom_code}
-                                onChange={(e) => setEditDraft((d) => ({ ...d, capacity_uom_code: e.target.value.toUpperCase() }))}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, capacity_uom_code: e.target.value }))}
                                 onClick={(e) => e.stopPropagation()}
-                                placeholder="UOM"
-                                className="h-7 w-14 border border-sky-400 bg-white px-1 text-sm outline-none"
-                              />
+                                className="h-7 border border-sky-400 bg-white px-1 text-sm outline-none"
+                              >
+                                <option value="">—</option>
+                                {uoms.map((u) => <option key={u.code} value={u.code}>{u.code}</option>)}
+                              </select>
                             </div>
                           ) : (
                             row.capacity_per_batch
@@ -454,12 +460,14 @@ export default function SAMachineMaster() {
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
                 UOM
-                <input
+                <select
                   value={form.capacity_uom_code}
-                  onChange={(e) => setForm((f) => ({ ...f, capacity_uom_code: e.target.value.toUpperCase() }))}
-                  placeholder="KG / LT"
+                  onChange={(e) => setForm((f) => ({ ...f, capacity_uom_code: e.target.value }))}
                   className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
-                />
+                >
+                  <option value="">— none —</option>
+                  {uoms.map((u) => <option key={u.code} value={u.code}>{u.code} — {u.name}</option>)}
+                </select>
               </label>
             </div>
 
