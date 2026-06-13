@@ -56,6 +56,26 @@ export function updatePaymentTerm(id, payload) {
   return fetchProcurement("PUT", `/api/procurement/payment-terms/${encodeURIComponent(id)}`, payload);
 }
 
+export function deletePaymentTerm(id) {
+  return fetchProcurement("DELETE", `/api/procurement/payment-terms/${encodeURIComponent(id)}`);
+}
+
+export function togglePaymentTerm(payload) {
+  return fetchProcurement("POST", "/api/procurement/payment-terms/toggle", payload);
+}
+
+export function listReferenceDateTypes(params) {
+  return fetchProcurement("GET", "/api/procurement/reference-date-types", undefined, params);
+}
+
+export function createReferenceDateType(payload) {
+  return fetchProcurement("POST", "/api/procurement/reference-date-type", payload);
+}
+
+export function toggleReferenceDateType(payload) {
+  return fetchProcurement("POST", "/api/procurement/reference-date-type/toggle", payload);
+}
+
 export function listPorts(params) {
   return fetchProcurement("GET", "/api/procurement/ports", undefined, params);
 }

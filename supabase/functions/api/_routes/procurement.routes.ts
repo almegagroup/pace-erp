@@ -126,7 +126,9 @@ import {
   createMaterialCategoryHandler,
   createPaymentTermsHandler,
   createPortHandler,
+  createReferenceDateTypeHandler,
   createTransporterHandler,
+  deletePaymentTermsHandler,
   getPaymentTermsHandler,
   listCHAPortsHandler,
   listCHAsHandler,
@@ -135,9 +137,12 @@ import {
   listMaterialCategoriesHandler,
   listPaymentTermsHandler,
   listPortsHandler,
+  listReferenceDateTypesHandler,
   listTransitTimesHandler,
   listTransportersHandler,
   mapCHAToPortHandler,
+  togglePaymentTermsHandler,
+  toggleReferenceDateTypeHandler,
   updatePaymentTermsHandler,
   updatePortHandler,
   updateTransporterHandler,
@@ -236,6 +241,14 @@ export async function dispatchProcurementRoutes(
       return await listPaymentTermsHandler(req, ctx);
     case "POST:/api/procurement/payment-terms":
       return await createPaymentTermsHandler(req, ctx);
+    case "POST:/api/procurement/payment-terms/toggle":
+      return await togglePaymentTermsHandler(req, ctx);
+    case "GET:/api/procurement/reference-date-types":
+      return await listReferenceDateTypesHandler(req, ctx);
+    case "POST:/api/procurement/reference-date-type":
+      return await createReferenceDateTypeHandler(req, ctx);
+    case "POST:/api/procurement/reference-date-type/toggle":
+      return await toggleReferenceDateTypeHandler(req, ctx);
     case "GET:/api/procurement/ports":
       return await listPortsHandler(req, ctx);
     case "POST:/api/procurement/ports":
@@ -401,6 +414,9 @@ export async function dispatchProcurementRoutes(
     }
     if (req.method === "PUT") {
       return await updatePaymentTermsHandler(req, ctx);
+    }
+    if (req.method === "DELETE") {
+      return await deletePaymentTermsHandler(req, ctx);
     }
   }
 

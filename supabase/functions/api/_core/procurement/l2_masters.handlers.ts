@@ -21,7 +21,6 @@ type ProcurementHandlerContext = {
 };
 
 const PAYMENT_METHODS = new Set(["CREDIT", "ADVANCE", "LC", "TT", "DA", "DP", "MIXED"]);
-const REFERENCE_DATES = new Set(["INVOICE_DATE", "GRN_DATE", "BL_DATE", "SHIPMENT_DATE", "N_A"]);
 const LC_TYPES = new Set(["AT_SIGHT", "USANCE", "N_A"]);
 const PORT_TYPES = new Set(["SEA", "AIR", "LAND"]);
 const TRANSIT_MODES = new Set(["ROAD", "RAIL", "MULTI-MODAL"]);
@@ -176,7 +175,7 @@ export async function listPaymentTermsHandler(req: Request, ctx: ProcurementHand
     let query = serviceRoleClient
       .schema("erp_master")
       .from("payment_terms_master")
-      .select("*", { count: "exact" })
+      .select("*, reference_date_type:reference_date_type_id(id, code, label, source_document)", { count: "exact" })
       .order("name", { ascending: true })
       .range(offset, offset + limit - 1);
 
@@ -206,10 +205,10 @@ export async function createPaymentTermsHandler(req: Request, ctx: ProcurementHa
     const body = await parseBody(req);
     const name = toTrimmedString(body.name);
     const paymentMethod = toUpperTrimmedString(body.payment_method);
-    const referenceDate = toUpperTrimmedString(body.reference_date || "INVOICE_DATE");
+    const referenceDateTypeId = toTrimmedString(body.reference_date_type_id);
     const lcType = toUpperTrimmedString(body.lc_type || "N_A");
 
-    if (!name || !PAYMENT_METHODS.has(paymentMethod) || !REFERENCE_DATES.has(referenceDate) || !LC_TYPES.has(lcType)) {
+    if (!name || !PAYMENT_METHODS.has(paymentMethod) || !referenceDateTypeId || !LC_TYPES.has(lcType)) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PAYMENT_TERMS", 400, "Invalid payment terms payload");
     }
 
@@ -221,7 +220,7 @@ export async function createPaymentTermsHandler(req: Request, ctx: ProcurementHa
         code,
         name,
         payment_method: paymentMethod,
-        reference_date: referenceDate,
+        reference_date_type_id: referenceDateTypeId,
         credit_days: parseNullableInt(body.credit_days),
         advance_pct: parseNullableNumber(body.advance_pct),
         lc_type: lcType,
@@ -273,12 +272,12 @@ export async function updatePaymentTermsHandler(req: Request, ctx: ProcurementHa
       }
       updates.payment_method = value;
     }
-    if (body.reference_date !== undefined) {
-      const value = toUpperTrimmedString(body.reference_date);
-      if (!REFERENCE_DATES.has(value)) {
-        return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PAYMENT_TERMS", 400, "Invalid reference date");
+    if (body.reference_date_type_id !== undefined) {
+      const value = toTrimmedString(body.reference_date_type_id);
+      if (!value) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PAYMENT_TERMS", 400, "Invalid reference date type");
       }
-      updates.reference_date = value;
+      updates.reference_date_type_id = value;
     }
     if (body.lc_type !== undefined) {
       const value = toUpperTrimmedString(body.lc_type);
@@ -343,6 +342,132 @@ export async function getPaymentTermsHandler(req: Request, ctx: ProcurementHandl
     const code = (err as Error).message || "PROCUREMENT_PAYMENT_TERMS_LOOKUP_FAILED";
     const status = code === "PROCUREMENT_PAYMENT_TERMS_NOT_FOUND" ? 404 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Payment terms lookup failed");
+  }
+}
+
+export async function deletePaymentTermsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const id = getIdFromPath(req);
+    if (!id) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PAYMENT_TERMS", 400, "ID required");
+
+    const openPoCount = await countOpenPosForPaymentTerm(id);
+    if (openPoCount > 0) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PAYMENT_TERM_IN_USE", 409, "Cannot delete payment term referenced by open PO");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("payment_terms_master")
+      .delete()
+      .eq("id", id);
+    if (error) throw new Error("PROCUREMENT_PAYMENT_TERMS_DELETE_FAILED");
+    return okResponse({ ok: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_PAYMENT_TERMS_DELETE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("IN_USE") ? 409 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Payment terms delete failed");
+  }
+}
+
+export async function togglePaymentTermsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    const active = body.active === true || body.active === "true";
+    if (!id) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PAYMENT_TERMS", 400, "ID required");
+
+    if (!active) {
+      const openPoCount = await countOpenPosForPaymentTerm(id);
+      if (openPoCount > 0) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_PAYMENT_TERM_IN_USE", 409, "Cannot deactivate payment term referenced by open PO");
+      }
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("payment_terms_master")
+      .update({ active, last_updated_at: new Date().toISOString(), last_updated_by: ctx.auth_user_id })
+      .eq("id", id);
+    if (error) throw new Error("PROCUREMENT_PAYMENT_TERMS_TOGGLE_FAILED");
+    return okResponse({ ok: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_PAYMENT_TERMS_TOGGLE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("IN_USE") ? 409 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Payment terms toggle failed");
+  }
+}
+
+export async function listReferenceDateTypesHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const activeOnly = url.searchParams.get("active") !== "false";
+    let query = serviceRoleClient
+      .schema("erp_master")
+      .from("reference_date_types")
+      .select("*")
+      .order("label", { ascending: true });
+    if (activeOnly) query = query.eq("is_active", true);
+    const { data, error } = await query;
+    if (error) throw new Error("PROCUREMENT_REF_DATE_LIST_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_REF_DATE_LIST_FAILED";
+    return procurementErrorResponse(req, ctx, code, 500, "Reference date types list failed");
+  }
+}
+
+export async function createReferenceDateTypeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const code = toUpperTrimmedString(body.code);
+    const label = toTrimmedString(body.label);
+    const sourceDocument = toUpperTrimmedString(body.source_document);
+    const sourceField = toTrimmedString(body.source_field) || null;
+
+    if (!code || !label || !["CSN", "IV", "MANUAL"].includes(sourceDocument)) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REF_DATE_TYPE", 400, "Invalid reference date type payload");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("reference_date_types")
+      .insert({ code, label, source_document: sourceDocument, source_field: sourceField, description: toTrimmedString(body.description) || null, created_by: ctx.auth_user_id })
+      .select("*")
+      .single();
+    if (error) {
+      if (error.code === "23505") return procurementErrorResponse(req, ctx, "PROCUREMENT_REF_DATE_EXISTS", 409, "Reference date type code already exists");
+      throw new Error("PROCUREMENT_REF_DATE_CREATE_FAILED");
+    }
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_REF_DATE_CREATE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("EXISTS") ? 409 : code.includes("INVALID") ? 400 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Reference date type create failed");
+  }
+}
+
+export async function toggleReferenceDateTypeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    const isActive = body.is_active === true || body.is_active === "true";
+    if (!id) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REF_DATE_TYPE", 400, "ID required");
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("reference_date_types")
+      .update({ is_active: isActive })
+      .eq("id", id);
+    if (error) throw new Error("PROCUREMENT_REF_DATE_TOGGLE_FAILED");
+    return okResponse({ ok: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_REF_DATE_TOGGLE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Reference date type toggle failed");
   }
 }
 

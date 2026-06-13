@@ -104,6 +104,10 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // ── Procurement: L2 Masters (Payment Terms, Ports, etc.) ─────────────────
   "GET:/api/procurement/payment-terms":               { skipAcl: false, resourceCode: "PROC_PAYMENT_TERMS_MASTER",      action: "VIEW"  },
   "POST:/api/procurement/payment-terms":              { skipAcl: false, resourceCode: "PROC_PAYMENT_TERMS_MASTER",      action: "WRITE" },
+  "POST:/api/procurement/payment-terms/toggle":       { skipAcl: false, resourceCode: "PROC_PAYMENT_TERMS_MASTER",      action: "WRITE" },
+  "GET:/api/procurement/reference-date-types":        { skipAcl: true },
+  "POST:/api/procurement/reference-date-type":        { skipAcl: false, resourceCode: "PROC_PAYMENT_TERMS_MASTER",      action: "WRITE" },
+  "POST:/api/procurement/reference-date-type/toggle": { skipAcl: false, resourceCode: "PROC_PAYMENT_TERMS_MASTER",      action: "WRITE" },
   "GET:/api/procurement/ports":                       { skipAcl: false, resourceCode: "PROC_PORT_MASTER",               action: "VIEW"  },
   "POST:/api/procurement/ports":                      { skipAcl: false, resourceCode: "PROC_PORT_MASTER",               action: "WRITE" },
   "GET:/api/procurement/port-transit":                { skipAcl: false, resourceCode: "PROC_PORT_TRANSIT_MASTER",       action: "VIEW"  },
