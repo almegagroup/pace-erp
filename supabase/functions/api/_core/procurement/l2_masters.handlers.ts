@@ -94,12 +94,30 @@ function getIdFromPath(req: Request): string {
   return getPathSegments(req)[3] ?? "";
 }
 
-async function generateCode(rpcName: string): Promise<string> {
-  const { data, error } = await serviceRoleClient.rpc(rpcName);
-  if (error || !data) {
-    throw new Error("PROCUREMENT_CODE_GENERATION_FAILED");
+async function generateCodeFromSequence(
+  tableName: string,
+  prefix: string,
+  padLength: number,
+): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { data: seq, error: readErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from(tableName)
+      .select("last_number")
+      .single();
+    if (readErr || !seq) throw new Error("PROCUREMENT_CODE_GENERATION_FAILED");
+    const next = (seq.last_number as number) + 1;
+    const { error: updateErr, count } = await serviceRoleClient
+      .schema("erp_master")
+      .from(tableName)
+      .update({ last_number: next })
+      .eq("last_number", seq.last_number)
+      .select("last_number", { count: "exact", head: true });
+    if (!updateErr && (count ?? 0) > 0) {
+      return `${prefix}${String(next).padStart(padLength, "0")}`;
+    }
   }
-  return String(data);
+  throw new Error("PROCUREMENT_CODE_GENERATION_FAILED");
 }
 
 async function ensureCompanyExists(companyId: string): Promise<boolean> {
@@ -214,7 +232,7 @@ export async function createPaymentTermsHandler(req: Request, ctx: ProcurementHa
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PAYMENT_TERMS", 400, "Invalid payment terms payload");
     }
 
-    const code = await generateCode("generate_payment_terms_code");
+    const code = await generateCodeFromSequence("payment_terms_code_sequence", "PT-", 3);
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("payment_terms_master")
@@ -515,7 +533,7 @@ export async function createPortHandler(req: Request, ctx: ProcurementHandlerCon
     if (!portName || !PORT_TYPES.has(portType)) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PORT", 400, "Invalid port payload");
     }
-    const portCode = await generateCode("generate_port_code");
+    const portCode = await generateCodeFromSequence("port_code_sequence", "PORT-", 4);
     const defaultChaId = toTrimmedString(body.default_cha_id);
     if (defaultChaId && !(await ensureChaExists(defaultChaId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CHA_NOT_FOUND", 404, "CHA not found");
@@ -679,7 +697,7 @@ export async function createMaterialCategoryHandler(req: Request, ctx: Procureme
     if (!categoryName) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_MATERIAL_CATEGORY", 400, "Category name is required");
     }
-    const categoryCode = await generateCode("generate_material_category_code");
+    const categoryCode = await generateCodeFromSequence("material_category_code_sequence", "MC-", 4);
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("material_category_master")
@@ -859,7 +877,7 @@ export async function createTransporterHandler(req: Request, ctx: ProcurementHan
     if (!transporterName || !TRANSPORTER_DIRECTIONS.has(usageDirection) || !TRANSPORTER_MODES.has(mode)) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_TRANSPORTER", 400, "Invalid transporter payload");
     }
-    const transporterCode = await generateCode("generate_transporter_code");
+    const transporterCode = await generateCodeFromSequence("transporter_code_sequence", "TR-", 5);
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("transporter_master")
@@ -959,7 +977,7 @@ export async function createCHAHandler(req: Request, ctx: ProcurementHandlerCont
     if (!chaName || !licenseNumber) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_CHA", 400, "CHA name and license number are required");
     }
-    const chaCode = await generateCode("generate_cha_code");
+    const chaCode = await generateCodeFromSequence("cha_code_sequence", "CHA-", 4);
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("cha_master")
