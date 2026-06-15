@@ -105,10 +105,7 @@ async function generateCodeFromSequence(
       .from(tableName)
       .select("last_number")
       .single();
-    if (readErr || !seq) {
-      console.error("[GEN_CODE_READ_FAIL]", tableName, readErr?.code, readErr?.message);
-      throw new Error("PROCUREMENT_CODE_GENERATION_FAILED");
-    }
+    if (readErr || !seq) throw new Error("PROCUREMENT_CODE_GENERATION_FAILED");
     const next = (seq.last_number as number) + 1;
     const { data: updated, error: updateErr } = await serviceRoleClient
       .schema("erp_master")
@@ -119,7 +116,6 @@ async function generateCodeFromSequence(
     if (!updateErr && updated && updated.length > 0) {
       return `${prefix}${String(next).padStart(padLength, "0")}`;
     }
-    console.error("[GEN_CODE_UPDATE_FAIL]", tableName, "attempt", attempt, updateErr?.code, updateErr?.message, "updated", updated?.length);
   }
   throw new Error("PROCUREMENT_CODE_GENERATION_FAILED");
 }
@@ -267,7 +263,6 @@ export async function createPaymentTermsHandler(req: Request, ctx: ProcurementHa
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PAYMENT_TERMS_CREATE_FAILED";
-    console.error("[PT_CREATE_FAIL]", code, String(err));
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Payment terms create failed");
   }
