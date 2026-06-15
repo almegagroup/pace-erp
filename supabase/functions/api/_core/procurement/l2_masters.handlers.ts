@@ -198,11 +198,12 @@ export async function listPaymentTermsHandler(req: Request, ctx: ProcurementHand
       .order("name", { ascending: true })
       .range(offset, offset + limit - 1);
 
-    if (activeParam == null || activeParam === "") {
+    if (activeParam == null) {
       query = query.eq("active", true);
-    } else {
+    } else if (activeParam !== "") {
       query = query.eq("active", activeParam === "true");
     }
+    // activeParam === "" → no filter, show all (used by SA master page)
 
     if (companyId && !(await ensureCompanyExists(companyId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_NOT_FOUND", 404, "Company not found");
@@ -393,6 +394,7 @@ export async function deletePaymentTermsHandler(req: Request, ctx: ProcurementHa
     return okResponse({ ok: true }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PAYMENT_TERMS_DELETE_FAILED";
+    console.error("[PT_DELETE_FAIL]", code, String(err));
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("IN_USE") ? 409 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Payment terms delete failed");
   }
