@@ -110,16 +110,16 @@ async function generateCodeFromSequence(
       throw new Error("PROCUREMENT_CODE_GENERATION_FAILED");
     }
     const next = (seq.last_number as number) + 1;
-    const { error: updateErr, count } = await serviceRoleClient
+    const { data: updated, error: updateErr } = await serviceRoleClient
       .schema("erp_master")
       .from(tableName)
       .update({ last_number: next })
       .eq("last_number", seq.last_number)
-      .select("last_number", { count: "exact", head: true });
-    if (!updateErr && (count ?? 0) > 0) {
+      .select("last_number");
+    if (!updateErr && updated && updated.length > 0) {
       return `${prefix}${String(next).padStart(padLength, "0")}`;
     }
-    console.error("[GEN_CODE_UPDATE_FAIL]", tableName, "attempt", attempt, updateErr?.code, updateErr?.message, "count", count);
+    console.error("[GEN_CODE_UPDATE_FAIL]", tableName, "attempt", attempt, updateErr?.code, updateErr?.message, "updated", updated?.length);
   }
   throw new Error("PROCUREMENT_CODE_GENERATION_FAILED");
 }
