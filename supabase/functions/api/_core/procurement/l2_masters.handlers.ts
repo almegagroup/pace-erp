@@ -245,6 +245,7 @@ export async function createPaymentTermsHandler(req: Request, ctx: ProcurementHa
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PAYMENT_TERMS_CREATE_FAILED";
+    console.error("[PT_CREATE_FAIL]", code, String(err));
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Payment terms create failed");
   }
