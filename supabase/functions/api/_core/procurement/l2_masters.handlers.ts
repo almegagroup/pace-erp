@@ -511,9 +511,9 @@ export async function listPortsHandler(req: Request, ctx: ProcurementHandlerCont
       .from("port_master")
       .select("*")
       .order("port_name", { ascending: true });
-    if (activeParam == null || activeParam === "") {
+    if (activeParam == null) {
       query = query.eq("active", true);
-    } else {
+    } else if (activeParam !== "") {
       query = query.eq("active", activeParam === "true");
     }
     if (country) query = query.ilike("country", country);

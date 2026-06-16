@@ -4,13 +4,14 @@ import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.j
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { createPort, listPorts, updatePort } from "../../../pages/dashboard/procurement/procurementApi.js";
 
-const PORT_TYPE_OPTIONS = ["SEA", "AIR", "ROAD", "RAIL"];
+const PORT_TYPE_OPTIONS = ["SEA", "AIR", "LAND"];
 
 function buildFormState(row) {
   return {
     port_code: row?.port_code ?? "",
     port_name: row?.port_name ?? "",
     country: row?.country ?? "",
+    state: row?.state ?? "",
     port_type: row?.port_type ?? "SEA",
     is_active: row?.active ?? true,
   };
@@ -96,9 +97,9 @@ export default function SAPortMaster() {
     try {
       let saved;
       const payload = {
-        port_code: form.port_code.trim() || undefined,
         port_name: form.port_name.trim(),
         country: form.country.trim(),
+        state: form.state.trim() || undefined,
         port_type: form.port_type,
         active: form.is_active,
       };
@@ -164,6 +165,10 @@ export default function SAPortMaster() {
                 <strong>{selectedRow.country || "—"}</strong>
               </div>
               <div className="flex items-center justify-between border-b border-slate-200 py-1">
+                <span>State</span>
+                <strong>{selectedRow.state || "—"}</strong>
+              </div>
+              <div className="flex items-center justify-between border-b border-slate-200 py-1">
                 <span>Port Type</span>
                 <strong>{selectedRow.port_type || "—"}</strong>
               </div>
@@ -181,10 +186,17 @@ export default function SAPortMaster() {
       {modalOpen ? (
         <ModalShell title={modalMode === "edit" ? "Edit Port" : "Create Port"} onClose={() => setModalOpen(false)}>
           <div className="grid gap-3 md:grid-cols-2">
-            <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Port Code
-              <input value={form.port_code} onChange={(event) => setForm((current) => ({ ...current, port_code: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
-            </label>
+            {modalMode === "edit" ? (
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Port Code
+                <input value={form.port_code} disabled className="h-8 border border-slate-300 bg-slate-100 px-2 text-sm text-slate-500 outline-none" />
+              </label>
+            ) : (
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Port Code
+                <input value="Auto-generated on save" disabled className="h-8 border border-slate-300 bg-slate-100 px-2 text-sm text-slate-500 outline-none" />
+              </label>
+            )}
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
               Port Name
               <input value={form.port_name} onChange={(event) => setForm((current) => ({ ...current, port_name: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
@@ -192,6 +204,10 @@ export default function SAPortMaster() {
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
               Country
               <input value={form.country} onChange={(event) => setForm((current) => ({ ...current, country: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              State
+              <input value={form.state} onChange={(event) => setForm((current) => ({ ...current, state: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
               Port Type
