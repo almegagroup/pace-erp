@@ -88,6 +88,14 @@ export function updatePort(id, payload) {
   return fetchProcurement("PUT", `/api/procurement/ports/${encodeURIComponent(id)}`, payload);
 }
 
+export function deletePort(id) {
+  return fetchProcurement("DELETE", `/api/procurement/ports/${encodeURIComponent(id)}`);
+}
+
+export function togglePort(payload) {
+  return fetchProcurement("POST", "/api/procurement/ports/toggle", payload);
+}
+
 export function listTransitTimes(params) {
   return fetchProcurement("GET", "/api/procurement/port-transit", undefined, params);
 }

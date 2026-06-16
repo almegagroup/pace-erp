@@ -129,6 +129,7 @@ import {
   createReferenceDateTypeHandler,
   createTransporterHandler,
   deletePaymentTermsHandler,
+  deletePortHandler,
   getPaymentTermsHandler,
   listCHAPortsHandler,
   listCHAsHandler,
@@ -142,6 +143,7 @@ import {
   listTransportersHandler,
   mapCHAToPortHandler,
   togglePaymentTermsHandler,
+  togglePortHandler,
   toggleReferenceDateTypeHandler,
   updatePaymentTermsHandler,
   updatePortHandler,
@@ -253,6 +255,8 @@ export async function dispatchProcurementRoutes(
       return await listPortsHandler(req, ctx);
     case "POST:/api/procurement/ports":
       return await createPortHandler(req, ctx);
+    case "POST:/api/procurement/ports/toggle":
+      return await togglePortHandler(req, ctx);
     case "GET:/api/procurement/port-transit":
       return await listTransitTimesHandler(req, ctx);
     case "POST:/api/procurement/port-transit":
@@ -420,8 +424,13 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/ports\/[^/]+$/.test(pathname) && req.method === "PUT") {
-    return await updatePortHandler(req, ctx);
+  if (/^\/api\/procurement\/ports\/[^/]+$/.test(pathname)) {
+    if (req.method === "PUT") {
+      return await updatePortHandler(req, ctx);
+    }
+    if (req.method === "DELETE") {
+      return await deletePortHandler(req, ctx);
+    }
   }
 
   if (/^\/api\/procurement\/transporters\/[^/]+$/.test(pathname) && req.method === "PUT") {

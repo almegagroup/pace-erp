@@ -110,6 +110,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/reference-date-type/toggle": { skipAcl: false, resourceCode: "PROC_PAYMENT_TERMS_MASTER",      action: "WRITE" },
   "GET:/api/procurement/ports":                       { skipAcl: false, resourceCode: "PROC_PORT_MASTER",               action: "VIEW"  },
   "POST:/api/procurement/ports":                      { skipAcl: false, resourceCode: "PROC_PORT_MASTER",               action: "WRITE" },
+  "POST:/api/procurement/ports/toggle":               { skipAcl: false, resourceCode: "PROC_PORT_MASTER",               action: "WRITE" },
   "GET:/api/procurement/port-transit":                { skipAcl: false, resourceCode: "PROC_PORT_TRANSIT_MASTER",       action: "VIEW"  },
   "POST:/api/procurement/port-transit":               { skipAcl: false, resourceCode: "PROC_PORT_TRANSIT_MASTER",       action: "WRITE" },
   "GET:/api/procurement/material-categories":         { skipAcl: false, resourceCode: "PROC_MATERIAL_CATEGORY_MASTER",  action: "VIEW"  },
@@ -639,7 +640,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/procurement\/ports\/[^/]+$/,
-    methods: { PUT: { skipAcl: false, resourceCode: "PROC_PORT_MASTER", action: "EDIT" } },
+    methods: {
+      PUT: { skipAcl: false, resourceCode: "PROC_PORT_MASTER", action: "EDIT" },
+      DELETE: { skipAcl: false, resourceCode: "PROC_PORT_MASTER", action: "DELETE" },
+    },
   },
   {
     pattern: /^\/api\/procurement\/transporters\/[^/]+$/,

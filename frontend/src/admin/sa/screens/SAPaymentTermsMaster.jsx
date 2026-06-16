@@ -58,7 +58,7 @@ export default function SAPaymentTermsMaster() {
     setError("");
     try {
       const [termsResult, refResult] = await Promise.all([
-        listPaymentTerms({ is_active: "" }),
+        listPaymentTerms({ is_active: "all" }),
         listReferenceDateTypes({ active: "false" }),
       ]);
       setTerms(Array.isArray(termsResult) ? termsResult : (termsResult?.data ?? []));

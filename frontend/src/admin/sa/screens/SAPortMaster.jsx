@@ -1,65 +1,66 @@
-import { useEffect, useMemo, useState } from "react";
-import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
-import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import React, { useEffect, useRef, useState } from "react";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import { createPort, listPorts, updatePort } from "../../../pages/dashboard/procurement/procurementApi.js";
+import {
+  createPort,
+  deletePort,
+  listPorts,
+  togglePort,
+  updatePort,
+} from "../../../pages/dashboard/procurement/procurementApi.js";
+
+const ERROR_MESSAGES = {
+  PROCUREMENT_INVALID_PORT:        "Port name and a valid port type are required.",
+  PROCUREMENT_DUPLICATE_CODE:      "A port with this code already exists.",
+  PROCUREMENT_PORT_IN_USE:         "Cannot remove — port is referenced by transit times, lead times, or CHA mapping. Deactivate instead.",
+  PROCUREMENT_CHA_NOT_FOUND:       "Selected CHA not found.",
+  MANAGER_OR_SA_REQUIRED:          "Manager or Super Admin access required.",
+  PROCUREMENT_PORT_LIST_FAILED:    "Failed to load ports. Please refresh.",
+  PROCUREMENT_PORT_CREATE_FAILED:  "Failed to create port. Please try again.",
+  PROCUREMENT_PORT_UPDATE_FAILED:  "Failed to update port. Please try again.",
+  PROCUREMENT_PORT_DELETE_FAILED:  "Failed to delete port. Please try again.",
+  PROCUREMENT_PORT_TOGGLE_FAILED:  "Failed to update port status. Please try again.",
+};
 
 const PORT_TYPE_OPTIONS = ["SEA", "AIR", "LAND"];
+const EMPTY_CREATE = { port_name: "", country: "India", state: "", port_type: "SEA" };
 
-function buildFormState(row) {
-  return {
-    port_code: row?.port_code ?? "",
-    port_name: row?.port_name ?? "",
-    country: row?.country ?? "",
-    state: row?.state ?? "",
-    port_type: row?.port_type ?? "SEA",
-    is_active: row?.active ?? true,
-  };
-}
-
-function ModalShell({ title, onClose, children }) {
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4">
-      <div className="w-full max-w-xl border border-slate-300 bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
-          <button type="button" onClick={onClose} className="border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700">
-            Close
-          </button>
-        </div>
-        <div className="p-4">{children}</div>
-      </div>
-    </div>
-  );
+function friendlyError(code) {
+  return ERROR_MESSAGES[code] ?? code;
 }
 
 export default function SAPortMaster() {
   const [rows, setRows] = useState([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState("create");
-  const [form, setForm] = useState(buildFormState());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const noticeTimer = useRef(null);
 
-  const selectedRow = useMemo(
-    () => rows.find((row) => row.id === selectedId) ?? null,
-    [rows, selectedId]
-  );
+  // Inline edit state
+  const [editId, setEditId] = useState(null);
+  const [editDraft, setEditDraft] = useState({ port_name: "", country: "", state: "", port_type: "SEA" });
+
+  // Create form state
+  const [createForm, setCreateForm] = useState(EMPTY_CREATE);
+
+  function flash(msg, isError = false) {
+    clearTimeout(noticeTimer.current);
+    if (isError) { setError(msg); setNotice(""); }
+    else {
+      setNotice(msg); setError("");
+      noticeTimer.current = setTimeout(() => setNotice(""), 4000);
+    }
+  }
 
   async function loadRows() {
     setLoading(true);
     setError("");
     try {
-      const data = await listPorts({ is_active: "" });
-      const nextRows = Array.isArray(data) ? data : [];
-      setRows(nextRows);
-      setSelectedId((current) => current || nextRows[0]?.id || "");
-    } catch (loadError) {
+      const data = await listPorts({ is_active: "all" });
+      setRows(Array.isArray(data) ? data : []);
+    } catch (err) {
       setRows([]);
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PORT_LIST_FAILED");
+      flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_PORT_LIST_FAILED"), true);
     } finally {
       setLoading(false);
     }
@@ -67,169 +68,279 @@ export default function SAPortMaster() {
 
   useEffect(() => {
     void loadRows();
+    return () => clearTimeout(noticeTimer.current);
   }, []);
 
-  function openCreateModal() {
-    setModalMode("create");
-    setForm(buildFormState());
-    setModalOpen(true);
+  // ── Inline edit ──────────────────────────────────────────────
+  function startEdit(row) {
+    setEditId(row.id);
+    setEditDraft({
+      port_name: row.port_name ?? "",
+      country: row.country ?? "",
+      state: row.state ?? "",
+      port_type: row.port_type ?? "SEA",
+    });
+    setError(""); setNotice("");
   }
 
-  function openEditModal() {
-    if (!selectedRow) {
-      setError("Select a port before editing.");
-      return;
-    }
-    setModalMode("edit");
-    setForm(buildFormState(selectedRow));
-    setModalOpen(true);
+  function cancelEdit() {
+    setEditId(null);
+    setEditDraft({ port_name: "", country: "", state: "", port_type: "SEA" });
   }
 
-  async function handleSave() {
-    if (!form.port_name.trim() || !form.country.trim()) {
-      setError("Port name and country are required.");
+  async function saveEdit(row) {
+    if (!editDraft.port_name.trim() || !editDraft.country.trim()) {
+      flash(friendlyError("PROCUREMENT_INVALID_PORT"), true);
       return;
     }
-
     setSaving(true);
-    setError("");
-    setNotice("");
     try {
-      let saved;
-      const payload = {
-        port_name: form.port_name.trim(),
-        country: form.country.trim(),
-        state: form.state.trim() || undefined,
-        port_type: form.port_type,
-        active: form.is_active,
-      };
-      if (modalMode === "edit" && selectedRow) {
-        saved = await updatePort(selectedRow.id, payload);
-        setNotice(`Port updated: ${saved?.port_code ?? selectedRow.port_code}`);
-      } else {
-        saved = await createPort(payload);
-        setNotice(`Port created: ${saved?.port_code ?? "PORT-generated"}`);
-      }
-      setModalOpen(false);
+      await updatePort(row.id, {
+        port_name: editDraft.port_name.trim(),
+        country: editDraft.country.trim(),
+        state: editDraft.state.trim() || null,
+        port_type: editDraft.port_type,
+      });
+      cancelEdit();
+      flash(`Port "${row.port_code}" updated.`);
       await loadRows();
-      if (saved?.id) {
-        setSelectedId(saved.id);
-      }
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PORT_SAVE_FAILED");
-    } finally {
-      setSaving(false);
+    } catch (err) {
+      flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_PORT_UPDATE_FAILED"), true);
+    } finally { setSaving(false); }
+  }
+
+  async function handleToggle(row) {
+    setSaving(true);
+    try {
+      await togglePort({ id: row.id, active: !row.active });
+      if (editId === row.id) cancelEdit();
+      flash(`Port "${row.port_code}" ${!row.active ? "activated" : "deactivated"}.`);
+      await loadRows();
+    } catch (err) {
+      flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_PORT_TOGGLE_FAILED"), true);
+    } finally { setSaving(false); }
+  }
+
+  async function handleDelete(row) {
+    setSaving(true);
+    try {
+      await deletePort(row.id);
+      flash(`Port "${row.port_code}" deleted.`);
+      await loadRows();
+    } catch (err) {
+      flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_PORT_DELETE_FAILED"), true);
+    } finally { setSaving(false); }
+  }
+
+  // ── Create ───────────────────────────────────────────────────
+  async function handleCreate() {
+    if (!createForm.port_name.trim() || !createForm.country.trim()) {
+      flash(friendlyError("PROCUREMENT_INVALID_PORT"), true);
+      return;
     }
+    setSaving(true);
+    try {
+      const saved = await createPort({
+        port_name: createForm.port_name.trim(),
+        country: createForm.country.trim(),
+        state: createForm.state.trim() || undefined,
+        port_type: createForm.port_type,
+      });
+      setCreateForm(EMPTY_CREATE);
+      flash(`Port created: ${saved?.port_code ?? "PORT-generated"}`);
+      await loadRows();
+    } catch (err) {
+      flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_PORT_CREATE_FAILED"), true);
+    } finally { setSaving(false); }
   }
 
   return (
     <ErpScreenScaffold
-      eyebrow="Super Admin Procurement"
+      eyebrow="Super Admin — Procurement"
       title="Port Master"
+      actions={[{
+        key: "refresh", label: loading ? "Refreshing..." : "Refresh",
+        tone: "neutral", onClick: () => void loadRows(), disabled: loading,
+      }]}
       notices={[
-        ...(error ? [{ key: "ports-error", tone: "error", message: error }] : []),
-        ...(notice ? [{ key: "ports-notice", tone: "success", message: notice }] : []),
-      ]}
-      actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadRows() },
-        { key: "create", label: "Create", tone: "primary", onClick: openCreateModal },
-        { key: "edit", label: "Edit", tone: "neutral", onClick: openEditModal, disabled: !selectedRow },
+        ...(error ? [{ key: "err", tone: "error", message: error }] : []),
+        ...(notice ? [{ key: "ok", tone: "success", message: notice }] : []),
       ]}
     >
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-        <ErpSectionCard eyebrow="Register" title="Port register">
-          <ErpSelectionSection label="All Ports" />
-          <ErpDenseGrid
-            columns={[
-              { key: "port_code", label: "Port Code", width: "120px" },
-              { key: "port_name", label: "Port Name" },
-              { key: "country", label: "Country", width: "120px" },
-              { key: "is_active", label: "Active", width: "80px", render: (row) => (row.active ? "YES" : "NO") },
-            ]}
-            rows={rows}
-            rowKey={(row) => row.id ?? row.port_code}
-            getRowProps={(row) => ({
-              onClick: () => setSelectedId(row.id),
-              className: row.id === selectedId ? "!bg-sky-50 !border-l-[3px] !border-l-sky-600" : undefined,
-            })}
-            emptyMessage={loading ? "Loading ports..." : "No ports found."}
-            maxHeight="460px"
-          />
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_320px]">
+        {/* Left — list */}
+        <ErpSectionCard eyebrow="Port Register" title="All ports">
+          <div className="overflow-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Code</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Port Name</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Country</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">State</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Type</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Status</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>
+                )}
+                {!loading && rows.length === 0 && (
+                  <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-400">No ports found.</td></tr>
+                )}
+                {rows.map((row) => {
+                  const isEditing = editId === row.id;
+                  return (
+                    <React.Fragment key={row.id}>
+                      <tr
+                        className={`border-b border-slate-100 transition-colors ${isEditing ? "bg-sky-50" : "cursor-pointer hover:bg-slate-50"}`}
+                        onClick={() => { if (!isEditing) startEdit(row); }}
+                      >
+                        <td className="px-3 py-2 font-mono text-xs font-semibold text-slate-800">{row.port_code}</td>
+                        <td className="px-3 py-2 font-semibold text-slate-900">
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              value={editDraft.port_name}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, port_name: e.target.value }))}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-7 w-full border border-sky-400 bg-white px-2 text-sm outline-none"
+                            />
+                          ) : row.port_name}
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <input
+                              value={editDraft.country}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, country: e.target.value }))}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-7 w-full border border-sky-400 bg-white px-2 text-sm outline-none"
+                            />
+                          ) : (row.country || "—")}
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <input
+                              value={editDraft.state}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, state: e.target.value }))}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-7 w-full border border-sky-400 bg-white px-2 text-sm outline-none"
+                            />
+                          ) : (row.state || "—")}
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <select
+                              value={editDraft.port_type}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, port_type: e.target.value }))}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-7 border border-sky-400 bg-white px-1 text-sm outline-none"
+                            >
+                              {PORT_TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                          ) : (
+                            <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{row.port_type}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${row.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                            {row.active ? "ACTIVE" : "INACTIVE"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                          {isEditing ? (
+                            <div className="flex gap-1">
+                              <button type="button" disabled={saving} onClick={() => void saveEdit(row)}
+                                className="border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:opacity-50">
+                                Save
+                              </button>
+                              <button type="button" onClick={cancelEdit}
+                                className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700">
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex gap-1">
+                              <button type="button" disabled={saving} onClick={() => void handleToggle(row)}
+                                className={`border px-2 py-1 text-[11px] font-semibold disabled:opacity-50 ${
+                                  row.active
+                                    ? "border-rose-300 bg-rose-50 text-rose-800"
+                                    : "border-emerald-400 bg-emerald-50 text-emerald-900"
+                                }`}>
+                                {row.active ? "Deactivate" : "Activate"}
+                              </button>
+                              <button type="button" disabled={saving} onClick={() => void handleDelete(row)}
+                                className="border border-rose-400 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">
+                                Delete
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-2 text-xs text-slate-400">Click a row to edit name, country, state, or type. Delete is blocked if the port is referenced elsewhere.</p>
         </ErpSectionCard>
 
-        <ErpSectionCard eyebrow="Selection" title={selectedRow ? `${selectedRow.port_code} | ${selectedRow.port_name}` : "Choose port"}>
-          {selectedRow ? (
-            <div className="grid gap-2 text-[12px] text-slate-700">
-              <div className="flex items-center justify-between border-b border-slate-200 py-1">
-                <span>Country</span>
-                <strong>{selectedRow.country || "—"}</strong>
-              </div>
-              <div className="flex items-center justify-between border-b border-slate-200 py-1">
-                <span>State</span>
-                <strong>{selectedRow.state || "—"}</strong>
-              </div>
-              <div className="flex items-center justify-between border-b border-slate-200 py-1">
-                <span>Port Type</span>
-                <strong>{selectedRow.port_type || "—"}</strong>
-              </div>
-              <div className="flex items-center justify-between py-1">
-                <span>Active</span>
-                <strong>{selectedRow.active ? "YES" : "NO"}</strong>
-              </div>
-            </div>
-          ) : (
-            <p className="text-sm text-slate-500">Select a port from the register to inspect it.</p>
-          )}
-        </ErpSectionCard>
-      </div>
-
-      {modalOpen ? (
-        <ModalShell title={modalMode === "edit" ? "Edit Port" : "Create Port"} onClose={() => setModalOpen(false)}>
-          <div className="grid gap-3 md:grid-cols-2">
-            {modalMode === "edit" ? (
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Port Code
-                <input value={form.port_code} disabled className="h-8 border border-slate-300 bg-slate-100 px-2 text-sm text-slate-500 outline-none" />
-              </label>
-            ) : (
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Port Code
-                <input value="Auto-generated on save" disabled className="h-8 border border-slate-300 bg-slate-100 px-2 text-sm text-slate-500 outline-none" />
-              </label>
-            )}
+        {/* Right — create */}
+        <ErpSectionCard eyebrow="Create Port" title="New port">
+          <div className="grid gap-3">
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Port Name
-              <input value={form.port_name} onChange={(event) => setForm((current) => ({ ...current, port_name: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              Port Code
+              <input value="Auto-generated on save" disabled className="h-8 border border-slate-300 bg-slate-100 px-2 text-sm text-slate-500 outline-none" />
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Country
-              <input value={form.country} onChange={(event) => setForm((current) => ({ ...current, country: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              Port Name <span className="text-rose-500">*</span>
+              <input
+                value={createForm.port_name}
+                onChange={(e) => setCreateForm((f) => ({ ...f, port_name: e.target.value }))}
+                placeholder="e.g. Chittagong Port"
+                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+              />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              Country <span className="text-rose-500">*</span>
+              <input
+                value={createForm.country}
+                onChange={(e) => setCreateForm((f) => ({ ...f, country: e.target.value }))}
+                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+              />
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
               State
-              <input value={form.state} onChange={(event) => setForm((current) => ({ ...current, state: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              <input
+                value={createForm.state}
+                onChange={(e) => setCreateForm((f) => ({ ...f, state: e.target.value }))}
+                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+              />
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Port Type
-              <select value={form.port_type} onChange={(event) => setForm((current) => ({ ...current, port_type: event.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
-                {PORT_TYPE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              Port Type <span className="text-rose-500">*</span>
+              <select
+                value={createForm.port_type}
+                onChange={(e) => setCreateForm((f) => ({ ...f, port_type: e.target.value }))}
+                className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+              >
+                {PORT_TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </label>
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-700 md:col-span-2">
-              <input type="checkbox" checked={form.is_active} onChange={(event) => setForm((current) => ({ ...current, is_active: event.target.checked }))} />
-              Active
-            </label>
-          </div>
-          <div className="mt-4 flex justify-end gap-2">
-            <button type="button" onClick={() => setModalOpen(false)} className="border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">
-              Cancel
-            </button>
-            <button type="button" disabled={saving} onClick={() => void handleSave()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
-              {saving ? "Saving..." : modalMode === "edit" ? "Save Changes" : "Create Port"}
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void handleCreate()}
+              className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50"
+            >
+              {saving ? "Creating..." : "Create Port"}
             </button>
           </div>
-        </ModalShell>
-      ) : null}
+        </ErpSectionCard>
+      </div>
     </ErpScreenScaffold>
   );
 }

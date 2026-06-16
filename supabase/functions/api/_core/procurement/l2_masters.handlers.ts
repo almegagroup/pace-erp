@@ -198,12 +198,13 @@ export async function listPaymentTermsHandler(req: Request, ctx: ProcurementHand
       .order("name", { ascending: true })
       .range(offset, offset + limit - 1);
 
-    if (activeParam == null) {
-      query = query.eq("active", true);
-    } else if (activeParam !== "") {
+    if (activeParam === "all") {
+      // no filter, show all (used by SA master page)
+    } else if (activeParam === "true" || activeParam === "false") {
       query = query.eq("active", activeParam === "true");
+    } else {
+      query = query.eq("active", true);
     }
-    // activeParam === "" → no filter, show all (used by SA master page)
 
     if (companyId && !(await ensureCompanyExists(companyId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_NOT_FOUND", 404, "Company not found");
@@ -511,10 +512,12 @@ export async function listPortsHandler(req: Request, ctx: ProcurementHandlerCont
       .from("port_master")
       .select("*")
       .order("port_name", { ascending: true });
-    if (activeParam == null) {
-      query = query.eq("active", true);
-    } else if (activeParam !== "") {
+    if (activeParam === "all") {
+      // no filter, show all (used by SA master page)
+    } else if (activeParam === "true" || activeParam === "false") {
       query = query.eq("active", activeParam === "true");
+    } else {
+      query = query.eq("active", true);
     }
     if (country) query = query.ilike("country", country);
     const { data, error } = await query;
@@ -606,6 +609,72 @@ export async function updatePortHandler(req: Request, ctx: ProcurementHandlerCon
     const code = (err as Error).message || "PROCUREMENT_PORT_UPDATE_FAILED";
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Port update failed");
+  }
+}
+
+async function countPortReferences(portId: string): Promise<number> {
+  const [transit, leadTime, chaMap] = await Promise.all([
+    serviceRoleClient.schema("erp_master").from("port_plant_transit_master").select("id").eq("port_id", portId),
+    serviceRoleClient.schema("erp_master").from("lead_time_master_import").select("id").eq("port_of_discharge_id", portId),
+    serviceRoleClient.schema("erp_master").from("cha_port_map").select("id").eq("port_id", portId),
+  ]);
+  if (transit.error || leadTime.error || chaMap.error) {
+    throw new Error("PROCUREMENT_PORT_USAGE_LOOKUP_FAILED");
+  }
+  return (transit.data?.length ?? 0) + (leadTime.data?.length ?? 0) + (chaMap.data?.length ?? 0);
+}
+
+export async function deletePortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const id = getIdFromPath(req);
+    if (!id) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PORT", 400, "ID required");
+
+    const refCount = await countPortReferences(id);
+    if (refCount > 0) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PORT_IN_USE", 409, "Cannot delete port referenced by transit times, lead times, or CHA mapping");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("port_master")
+      .delete()
+      .eq("id", id);
+    if (error) throw new Error("PROCUREMENT_PORT_DELETE_FAILED");
+    return okResponse({ ok: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_PORT_DELETE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("IN_USE") ? 409 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Port delete failed");
+  }
+}
+
+export async function togglePortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    const active = body.active === true || body.active === "true";
+    if (!id) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PORT", 400, "ID required");
+
+    if (!active) {
+      const refCount = await countPortReferences(id);
+      if (refCount > 0) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_PORT_IN_USE", 409, "Cannot deactivate port referenced by transit times, lead times, or CHA mapping");
+      }
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("port_master")
+      .update({ active })
+      .eq("id", id);
+    if (error) throw new Error("PROCUREMENT_PORT_TOGGLE_FAILED");
+    return okResponse({ ok: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_PORT_TOGGLE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("IN_USE") ? 409 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Port toggle failed");
   }
 }
 
