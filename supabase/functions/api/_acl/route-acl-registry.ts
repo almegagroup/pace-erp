@@ -634,6 +634,7 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: {
       GET: { skipAcl: false, resourceCode: "PROC_PAYMENT_TERMS_MASTER", action: "VIEW" },
       PUT: { skipAcl: false, resourceCode: "PROC_PAYMENT_TERMS_MASTER", action: "EDIT" },
+      DELETE: { skipAcl: false, resourceCode: "PROC_PAYMENT_TERMS_MASTER", action: "DELETE" },
     },
   },
   {
