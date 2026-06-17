@@ -1,102 +1,151 @@
-import { useEffect, useState } from "react";
-import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
-import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import { useEffect, useRef, useState } from "react";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import {
-  listDomesticLeadTimes,
+  deleteImportLeadTime,
+  deleteDomesticLeadTime,
+  listCompanies,
   listImportLeadTimes,
-  upsertDomesticLeadTime,
+  listDomesticLeadTimes,
+  listMaterialCategories,
+  listPorts,
   upsertImportLeadTime,
+  upsertDomesticLeadTime,
 } from "../../../pages/dashboard/procurement/procurementApi.js";
+import { listVendors } from "../../../pages/dashboard/om/omApi.js";
+
+const EMPTY_IMPORT = { vendor_id: "", material_category_id: "", port_of_discharge_id: "", sail_time_days: "", clearance_days: "", effective_from: "", effective_to: "" };
+const EMPTY_DOMESTIC = { vendor_id: "", company_id: "", transit_days: "", effective_from: "", effective_to: "" };
 
 export default function SALeadTimeMasters() {
   const [activeTab, setActiveTab] = useState("Import");
+  const noticeTimer = useRef(null);
+
+  const [vendors, setVendors] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [dischargePorts, setDischargePorts] = useState([]);
+  const [companies, setCompanies] = useState([]);
+
   const [importRows, setImportRows] = useState([]);
+  const [importForm, setImportForm] = useState(EMPTY_IMPORT);
+
   const [domesticRows, setDomesticRows] = useState([]);
-  const [importForm, setImportForm] = useState({
-    port_id: "",
-    material_category_id: "",
-    lead_days: "",
-  });
-  const [domesticForm, setDomesticForm] = useState({
-    plant_id: "",
-    material_category_id: "",
-    transit_days: "",
-  });
+  const [domesticForm, setDomesticForm] = useState(EMPTY_DOMESTIC);
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  function flash(msg, isError = false) {
+    clearTimeout(noticeTimer.current);
+    if (isError) { setError(msg); setNotice(""); }
+    else {
+      setNotice(msg); setError("");
+      noticeTimer.current = setTimeout(() => setNotice(""), 4000);
+    }
+  }
+
+  async function loadMasterData() {
+    const [vRes, cRes, pRes, coRes] = await Promise.allSettled([
+      listVendors({ is_active: "true" }),
+      listMaterialCategories({ is_active: "true" }),
+      listPorts({ is_active: "true", port_role: "DISCHARGE" }),
+      listCompanies(),
+    ]);
+    if (vRes.status === "fulfilled") setVendors(Array.isArray(vRes.value) ? vRes.value : []);
+    if (cRes.status === "fulfilled") setCategories(Array.isArray(cRes.value) ? cRes.value : []);
+    if (pRes.status === "fulfilled") setDischargePorts(Array.isArray(pRes.value) ? pRes.value : []);
+    if (coRes.status === "fulfilled") {
+      const v = coRes.value;
+      setCompanies(Array.isArray(v) ? v : (v?.data ?? []));
+    }
+  }
+
   async function loadRows() {
     setLoading(true);
-    setError("");
     try {
       const [imports, domestics] = await Promise.all([
-        listImportLeadTimes(),
-        listDomesticLeadTimes(),
+        listImportLeadTimes({ is_active: "all" }),
+        listDomesticLeadTimes({ is_active: "all" }),
       ]);
       setImportRows(Array.isArray(imports) ? imports : []);
       setDomesticRows(Array.isArray(domestics) ? domestics : []);
-    } catch (loadError) {
-      setImportRows([]);
-      setDomesticRows([]);
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_LEAD_TIME_LIST_FAILED");
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "PROCUREMENT_LEAD_TIME_LIST_FAILED", true);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    void loadRows();
+    void Promise.all([loadMasterData(), loadRows()]);
+    return () => clearTimeout(noticeTimer.current);
   }, []);
 
   async function handleImportSave() {
-    if (!importForm.port_id.trim() || !importForm.material_category_id.trim() || importForm.lead_days === "") {
-      setError("Port, material category, and lead days are required.");
-      return;
+    if (!importForm.vendor_id || !importForm.material_category_id || !importForm.port_of_discharge_id || importForm.sail_time_days === "" || importForm.clearance_days === "" || !importForm.effective_from) {
+      flash("All fields except Effective To are required.", true); return;
     }
     setSaving(true);
-    setError("");
-    setNotice("");
     try {
       await upsertImportLeadTime({
-        port_id: importForm.port_id.trim(),
-        material_category_id: importForm.material_category_id.trim(),
-        lead_days: Number(importForm.lead_days),
+        vendor_id: importForm.vendor_id,
+        material_category_id: importForm.material_category_id,
+        port_of_discharge_id: importForm.port_of_discharge_id,
+        sail_time_days: Number(importForm.sail_time_days),
+        clearance_days: Number(importForm.clearance_days),
+        effective_from: importForm.effective_from,
+        effective_to: importForm.effective_to || null,
       });
-      setNotice("Import lead time saved.");
-      setImportForm({ port_id: "", material_category_id: "", lead_days: "" });
+      flash("Import lead time saved.");
+      setImportForm(EMPTY_IMPORT);
       await loadRows();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_IMPORT_LEAD_TIME_UPSERT_FAILED");
-    } finally {
-      setSaving(false);
-    }
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "PROCUREMENT_IMPORT_LEAD_TIME_UPSERT_FAILED", true);
+    } finally { setSaving(false); }
+  }
+
+  async function handleImportDelete(id) {
+    setSaving(true);
+    try {
+      await deleteImportLeadTime(id);
+      flash("Import lead time deleted.");
+      await loadRows();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "PROCUREMENT_IMPORT_LEAD_TIME_DELETE_FAILED", true);
+    } finally { setSaving(false); }
   }
 
   async function handleDomesticSave() {
-    if (!domesticForm.plant_id.trim() || !domesticForm.material_category_id.trim() || domesticForm.transit_days === "") {
-      setError("Plant, material category, and transit days are required.");
-      return;
+    if (!domesticForm.vendor_id || !domesticForm.company_id || domesticForm.transit_days === "" || !domesticForm.effective_from) {
+      flash("All fields except Effective To are required.", true); return;
     }
     setSaving(true);
-    setError("");
-    setNotice("");
     try {
       await upsertDomesticLeadTime({
-        plant_id: domesticForm.plant_id.trim(),
-        material_category_id: domesticForm.material_category_id.trim(),
+        vendor_id: domesticForm.vendor_id,
+        company_id: domesticForm.company_id,
         transit_days: Number(domesticForm.transit_days),
+        effective_from: domesticForm.effective_from,
+        effective_to: domesticForm.effective_to || null,
       });
-      setNotice("Domestic lead time saved.");
-      setDomesticForm({ plant_id: "", material_category_id: "", transit_days: "" });
+      flash("Domestic lead time saved.");
+      setDomesticForm(EMPTY_DOMESTIC);
       await loadRows();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_DOMESTIC_LEAD_TIME_UPSERT_FAILED");
-    } finally {
-      setSaving(false);
-    }
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "PROCUREMENT_DOMESTIC_LEAD_TIME_UPSERT_FAILED", true);
+    } finally { setSaving(false); }
+  }
+
+  async function handleDomesticDelete(id) {
+    setSaving(true);
+    try {
+      await deleteDomesticLeadTime(id);
+      flash("Domestic lead time deleted.");
+      await loadRows();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "PROCUREMENT_DOMESTIC_LEAD_TIME_DELETE_FAILED", true);
+    } finally { setSaving(false); }
   }
 
   return (
@@ -104,95 +153,201 @@ export default function SALeadTimeMasters() {
       eyebrow="Super Admin Procurement"
       title="Lead Time Masters"
       notices={[
-        ...(error ? [{ key: "lead-times-error", tone: "error", message: error }] : []),
-        ...(notice ? [{ key: "lead-times-notice", tone: "success", message: notice }] : []),
+        ...(error ? [{ key: "err", tone: "error", message: error }] : []),
+        ...(notice ? [{ key: "ok", tone: "success", message: notice }] : []),
       ]}
-      actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadRows() },
-      ]}
+      actions={[{ key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadRows(), disabled: loading }]}
     >
-      <div className="flex gap-2">
+      <div className="flex gap-2 mb-4">
         {["Import", "Domestic"].map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            onClick={() => setActiveTab(tab)}
-            className={`border px-3 py-2 text-sm font-semibold ${activeTab === tab ? "border-sky-700 bg-sky-100 text-sky-950" : "border-slate-300 bg-white text-slate-700"}`}
-          >
+          <button key={tab} type="button" onClick={() => setActiveTab(tab)}
+            className={`border px-3 py-2 text-sm font-semibold ${activeTab === tab ? "border-sky-700 bg-sky-100 text-sky-950" : "border-slate-300 bg-white text-slate-700"}`}>
             {tab}
           </button>
         ))}
       </div>
 
       {activeTab === "Import" ? (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)]">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_340px]">
           <ErpSectionCard eyebrow="Import" title="Import lead times">
-            <ErpSelectionSection label="Import Register" />
-            <ErpDenseGrid
-              columns={[
-                { key: "port_id", label: "Port ID", render: (row) => row.port_id ?? row.port_of_discharge_id },
-                { key: "material_category_id", label: "Material Category ID" },
-                { key: "lead_days", label: "Lead Days", render: (row) => row.lead_days ?? row.sail_time_days ?? "—" },
-              ]}
-              rows={importRows}
-              rowKey={(row) => row.id ?? `${row.port_id ?? row.port_of_discharge_id}:${row.material_category_id}`}
-              emptyMessage={loading ? "Loading import lead times..." : "No import lead times found."}
-              maxHeight="460px"
-            />
+            <div className="overflow-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Vendor</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Material Category</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Discharge Port</th>
+                    <th className="px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Sail Days</th>
+                    <th className="px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Clearance Days</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Eff. From</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Eff. To</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Status</th>
+                    <th className="px-3 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading && <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>}
+                  {!loading && importRows.length === 0 && <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">No import lead times found.</td></tr>}
+                  {importRows.map((row) => (
+                    <tr key={row.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-3 py-2 text-xs">
+                        <span className="font-mono font-semibold text-slate-800">{row.vendor?.vendor_code ?? "—"}</span>
+                        <span className="ml-1 text-slate-500">{row.vendor?.vendor_name}</span>
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <span className="font-mono font-semibold text-slate-800">{row.category?.category_code ?? "—"}</span>
+                        <span className="ml-1 text-slate-500">{row.category?.category_name}</span>
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <span className="font-mono font-semibold text-slate-800">{row.port?.port_code ?? "—"}</span>
+                        <span className="ml-1 text-slate-500">{row.port?.port_name}</span>
+                      </td>
+                      <td className="px-3 py-2 text-center font-semibold">{row.sail_time_days}</td>
+                      <td className="px-3 py-2 text-center font-semibold">{row.clearance_days}</td>
+                      <td className="px-3 py-2 text-xs">{row.effective_from}</td>
+                      <td className="px-3 py-2 text-xs">{row.effective_to ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${row.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                          {row.active ? "ACTIVE" : "INACTIVE"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <button type="button" disabled={saving} onClick={() => void handleImportDelete(row.id)} className="border border-rose-400 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </ErpSectionCard>
-          <ErpSectionCard eyebrow="Upsert" title="Import lead time form">
-            <ErpSelectionSection label="Import Form" />
+
+          <ErpSectionCard eyebrow="Add" title="New import lead time">
             <div className="grid gap-3">
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Port ID
-                <input value={importForm.port_id} onChange={(event) => setImportForm((current) => ({ ...current, port_id: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                Vendor <span className="text-rose-500">*</span>
+                <select value={importForm.vendor_id} onChange={(e) => setImportForm((f) => ({ ...f, vendor_id: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
+                  <option value="">— Select Vendor —</option>
+                  {vendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_code} — {v.vendor_name}</option>)}
+                </select>
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Material Category ID
-                <input value={importForm.material_category_id} onChange={(event) => setImportForm((current) => ({ ...current, material_category_id: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                Material Category <span className="text-rose-500">*</span>
+                <select value={importForm.material_category_id} onChange={(e) => setImportForm((f) => ({ ...f, material_category_id: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
+                  <option value="">— Select Category —</option>
+                  {categories.map((c) => <option key={c.id} value={c.id}>{c.category_code} — {c.category_name}</option>)}
+                </select>
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Lead Days
-                <input type="number" min="0" value={importForm.lead_days} onChange={(event) => setImportForm((current) => ({ ...current, lead_days: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                Port of Discharge <span className="text-rose-500">*</span>
+                <select value={importForm.port_of_discharge_id} onChange={(e) => setImportForm((f) => ({ ...f, port_of_discharge_id: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
+                  <option value="">— Select Port —</option>
+                  {dischargePorts.map((p) => <option key={p.id} value={p.id}>{p.port_code} — {p.port_name}</option>)}
+                </select>
               </label>
-              <button type="button" disabled={saving} onClick={() => void handleImportSave()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Sail Days <span className="text-rose-500">*</span>
+                  <input type="number" min="0" value={importForm.sail_time_days} onChange={(e) => setImportForm((f) => ({ ...f, sail_time_days: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Clearance Days <span className="text-rose-500">*</span>
+                  <input type="number" min="0" value={importForm.clearance_days} onChange={(e) => setImportForm((f) => ({ ...f, clearance_days: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Effective From <span className="text-rose-500">*</span>
+                  <input type="date" value={importForm.effective_from} onChange={(e) => setImportForm((f) => ({ ...f, effective_from: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Effective To
+                  <input type="date" value={importForm.effective_to} onChange={(e) => setImportForm((f) => ({ ...f, effective_to: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                </label>
+              </div>
+              <button type="button" disabled={saving} onClick={() => void handleImportSave()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
                 {saving ? "Saving..." : "Save Import Lead Time"}
               </button>
             </div>
           </ErpSectionCard>
         </div>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)]">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_340px]">
           <ErpSectionCard eyebrow="Domestic" title="Domestic lead times">
-            <ErpSelectionSection label="Domestic Register" />
-            <ErpDenseGrid
-              columns={[
-                { key: "plant_id", label: "Plant ID", render: (row) => row.plant_id ?? row.company_id },
-                { key: "material_category_id", label: "Material Category ID" },
-                { key: "transit_days", label: "Transit Days" },
-              ]}
-              rows={domesticRows}
-              rowKey={(row) => row.id ?? `${row.plant_id ?? row.company_id}:${row.material_category_id}`}
-              emptyMessage={loading ? "Loading domestic lead times..." : "No domestic lead times found."}
-              maxHeight="460px"
-            />
+            <div className="overflow-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Vendor</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Company</th>
+                    <th className="px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Transit Days</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Eff. From</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Eff. To</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Status</th>
+                    <th className="px-3 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading && <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>}
+                  {!loading && domesticRows.length === 0 && <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-400">No domestic lead times found.</td></tr>}
+                  {domesticRows.map((row) => (
+                    <tr key={row.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-3 py-2 text-xs">
+                        <span className="font-mono font-semibold text-slate-800">{row.vendor?.vendor_code ?? "—"}</span>
+                        <span className="ml-1 text-slate-500">{row.vendor?.vendor_name}</span>
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <span className="font-mono font-semibold text-slate-800">{row.company?.company_code ?? "—"}</span>
+                        <span className="ml-1 text-slate-500">{row.company?.company_name}</span>
+                      </td>
+                      <td className="px-3 py-2 text-center font-semibold">{row.transit_days}</td>
+                      <td className="px-3 py-2 text-xs">{row.effective_from}</td>
+                      <td className="px-3 py-2 text-xs">{row.effective_to ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${row.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                          {row.active ? "ACTIVE" : "INACTIVE"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <button type="button" disabled={saving} onClick={() => void handleDomesticDelete(row.id)} className="border border-rose-400 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </ErpSectionCard>
-          <ErpSectionCard eyebrow="Upsert" title="Domestic lead time form">
-            <ErpSelectionSection label="Domestic Form" />
+
+          <ErpSectionCard eyebrow="Add" title="New domestic lead time">
             <div className="grid gap-3">
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Plant ID
-                <input value={domesticForm.plant_id} onChange={(event) => setDomesticForm((current) => ({ ...current, plant_id: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                Vendor <span className="text-rose-500">*</span>
+                <select value={domesticForm.vendor_id} onChange={(e) => setDomesticForm((f) => ({ ...f, vendor_id: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
+                  <option value="">— Select Vendor —</option>
+                  {vendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_code} — {v.vendor_name}</option>)}
+                </select>
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Material Category ID
-                <input value={domesticForm.material_category_id} onChange={(event) => setDomesticForm((current) => ({ ...current, material_category_id: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                Company <span className="text-rose-500">*</span>
+                <select value={domesticForm.company_id} onChange={(e) => setDomesticForm((f) => ({ ...f, company_id: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
+                  <option value="">— Select Company —</option>
+                  {companies.map((c) => <option key={c.id} value={c.id}>{c.company_code} — {c.company_name}</option>)}
+                </select>
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Transit Days
-                <input type="number" min="0" value={domesticForm.transit_days} onChange={(event) => setDomesticForm((current) => ({ ...current, transit_days: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                Transit Days <span className="text-rose-500">*</span>
+                <input type="number" min="0" value={domesticForm.transit_days} onChange={(e) => setDomesticForm((f) => ({ ...f, transit_days: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
               </label>
-              <button type="button" disabled={saving} onClick={() => void handleDomesticSave()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Effective From <span className="text-rose-500">*</span>
+                  <input type="date" value={domesticForm.effective_from} onChange={(e) => setDomesticForm((f) => ({ ...f, effective_from: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Effective To
+                  <input type="date" value={domesticForm.effective_to} onChange={(e) => setDomesticForm((f) => ({ ...f, effective_to: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                </label>
+              </div>
+              <button type="button" disabled={saving} onClick={() => void handleDomesticSave()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
                 {saving ? "Saving..." : "Save Domestic Lead Time"}
               </button>
             </div>

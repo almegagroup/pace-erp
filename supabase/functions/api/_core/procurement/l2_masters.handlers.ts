@@ -24,6 +24,7 @@ const PAYMENT_METHODS = new Set(["CREDIT", "ADVANCE"]);
 const PAYMENT_TYPES  = new Set(["LC", "TT", "DA", "DP", "MIXED", "N_A"]);
 const LC_TYPES = new Set(["AT_SIGHT", "USANCE", "N_A"]);
 const PORT_TYPES = new Set(["SEA", "AIR", "LAND"]);
+const PORT_ROLES = new Set(["DISCHARGE", "LOADING", "BOTH"]);
 const TRANSIT_MODES = new Set(["ROAD", "RAIL", "MULTI-MODAL"]);
 const TRANSPORTER_DIRECTIONS = new Set(["INBOUND", "OUTBOUND", "BOTH"]);
 const TRANSPORTER_MODES = new Set(["ROAD", "RAIL", "COURIER", "MULTI-MODAL"]);
@@ -507,19 +508,21 @@ export async function listPortsHandler(req: Request, ctx: ProcurementHandlerCont
     const url = new URL(req.url);
     const country = toTrimmedString(url.searchParams.get("country"));
     const activeParam = url.searchParams.get("is_active");
+    const portRole = toUpperTrimmedString(url.searchParams.get("port_role") ?? "");
     let query = serviceRoleClient
       .schema("erp_master")
       .from("port_master")
       .select("*")
       .order("port_name", { ascending: true });
     if (activeParam === "all") {
-      // no filter, show all (used by SA master page)
+      // no filter
     } else if (activeParam === "true" || activeParam === "false") {
       query = query.eq("active", activeParam === "true");
     } else {
       query = query.eq("active", true);
     }
     if (country) query = query.ilike("country", country);
+    if (portRole && PORT_ROLES.has(portRole)) query = query.eq("port_role", portRole);
     const { data, error } = await query;
     if (error) throw new Error("PROCUREMENT_PORT_LIST_FAILED");
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
@@ -538,6 +541,10 @@ export async function createPortHandler(req: Request, ctx: ProcurementHandlerCon
     if (!portName || !PORT_TYPES.has(portType)) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PORT", 400, "Invalid port payload");
     }
+    const portRole = toUpperTrimmedString(body.port_role || "DISCHARGE");
+    if (!PORT_ROLES.has(portRole)) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PORT", 400, "Invalid port role");
+    }
     const portCode = await generateCodeFromSequence("port_code_sequence", "PORT-", 4);
     const defaultChaId = toTrimmedString(body.default_cha_id);
     if (defaultChaId && !(await ensureChaExists(defaultChaId))) {
@@ -550,6 +557,7 @@ export async function createPortHandler(req: Request, ctx: ProcurementHandlerCon
         port_code: portCode,
         port_name: portName,
         port_type: portType,
+        port_role: portRole,
         state: toTrimmedString(body.state) || null,
         country: toTrimmedString(body.country) || "India",
         default_cha_id: defaultChaId || null,
@@ -585,6 +593,13 @@ export async function updatePortHandler(req: Request, ctx: ProcurementHandlerCon
         return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PORT", 400, "Invalid port type");
       }
       updates.port_type = value;
+    }
+    if (body.port_role !== undefined) {
+      const value = toUpperTrimmedString(body.port_role);
+      if (!PORT_ROLES.has(value)) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PORT", 400, "Invalid port role");
+      }
+      updates.port_role = value;
     }
     if (body.state !== undefined) updates.state = toTrimmedString(body.state) || null;
     if (body.country !== undefined) updates.country = toTrimmedString(body.country) || "India";
@@ -831,12 +846,17 @@ export async function listImportLeadTimesHandler(req: Request, ctx: ProcurementH
     const url = new URL(req.url);
     const portId = toTrimmedString(url.searchParams.get("port_id"));
     const categoryId = toTrimmedString(url.searchParams.get("material_category_id"));
+    const activeParam = url.searchParams.get("is_active");
     let query = serviceRoleClient
       .schema("erp_master")
       .from("lead_time_master_import")
-      .select("*")
-      .eq("active", true)
+      .select(`*, vendor:vendor_id(vendor_code, vendor_name), category:material_category_id(category_code, category_name), port:port_of_discharge_id(port_code, port_name)`)
       .order("effective_from", { ascending: false });
+    if (activeParam === "all") {
+      // no filter
+    } else {
+      query = query.eq("active", true);
+    }
     if (portId) query = query.eq("port_of_discharge_id", portId);
     if (categoryId) query = query.eq("material_category_id", categoryId);
     const { data, error } = await query;
@@ -845,6 +865,24 @@ export async function listImportLeadTimesHandler(req: Request, ctx: ProcurementH
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_IMPORT_LEAD_TIME_LIST_FAILED";
     return procurementErrorResponse(req, ctx, code, 500, "Import lead time list failed");
+  }
+}
+
+export async function deleteImportLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const id = getIdFromPath(req);
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("lead_time_master_import")
+      .delete()
+      .eq("id", id);
+    if (error) throw new Error("PROCUREMENT_IMPORT_LEAD_TIME_DELETE_FAILED");
+    return okResponse({ ok: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_IMPORT_LEAD_TIME_DELETE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Import lead time delete failed");
   }
 }
 
@@ -870,7 +908,6 @@ export async function upsertImportLeadTimeHandler(req: Request, ctx: Procurement
       .insert({
         vendor_id: vendorId,
         material_category_id: categoryId,
-        port_of_loading: toTrimmedString(body.port_of_loading),
         port_of_discharge_id: portId,
         sail_time_days: parseNullableInt(body.sail_time_days) ?? 0,
         clearance_days: parseNullableInt(body.clearance_days) ?? 0,
@@ -892,13 +929,19 @@ export async function upsertImportLeadTimeHandler(req: Request, ctx: Procurement
 
 export async function listDomesticLeadTimesHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    const companyId = toTrimmedString(new URL(req.url).searchParams.get("plant_id") || new URL(req.url).searchParams.get("company_id"));
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("plant_id") || url.searchParams.get("company_id"));
+    const activeParam = url.searchParams.get("is_active");
     let query = serviceRoleClient
       .schema("erp_master")
       .from("lead_time_master_domestic")
-      .select("*")
-      .eq("active", true)
+      .select(`*, vendor:vendor_id(vendor_code, vendor_name), company:company_id(company_code, company_name)`)
       .order("effective_from", { ascending: false });
+    if (activeParam === "all") {
+      // no filter
+    } else {
+      query = query.eq("active", true);
+    }
     if (companyId) query = query.eq("company_id", companyId);
     const { data, error } = await query;
     if (error) throw new Error("PROCUREMENT_DOMESTIC_LEAD_TIME_LIST_FAILED");
@@ -906,6 +949,24 @@ export async function listDomesticLeadTimesHandler(req: Request, ctx: Procuremen
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_DOMESTIC_LEAD_TIME_LIST_FAILED";
     return procurementErrorResponse(req, ctx, code, 500, "Domestic lead time list failed");
+  }
+}
+
+export async function deleteDomesticLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const id = getIdFromPath(req);
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("lead_time_master_domestic")
+      .delete()
+      .eq("id", id);
+    if (error) throw new Error("PROCUREMENT_DOMESTIC_LEAD_TIME_DELETE_FAILED");
+    return okResponse({ ok: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_DOMESTIC_LEAD_TIME_DELETE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Domestic lead time delete failed");
   }
 }
 

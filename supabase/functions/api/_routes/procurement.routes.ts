@@ -123,6 +123,8 @@ import {
 } from "../_core/procurement/physical_inventory.handlers.ts";
 import {
   createCHAHandler,
+  deleteImportLeadTimeHandler,
+  deleteDomesticLeadTimeHandler,
   deleteTransitTimeHandler,
   listProcurementCompaniesHandler,
   createMaterialCategoryHandler,
@@ -524,6 +526,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/port-transit\/[^/]+$/.test(pathname) && req.method === "DELETE") {
     return await deleteTransitTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/lead-times\/import\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteImportLeadTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/lead-times\/domestic\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteDomesticLeadTimeHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/chas\/[^/]+\/ports\/[^/]+$/.test(pathname)) {

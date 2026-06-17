@@ -15,6 +15,7 @@ import {
   deleteSubCSN,
   getCSN,
   listCSNs,
+  listPorts,
   markCSNArrived,
   markCSNInTransit,
   updateCSN,
@@ -23,7 +24,7 @@ import {
 function buildForm(detail) {
   return {
     dispatch_qty: detail?.dispatch_qty ?? "",
-    port_of_loading: detail?.port_of_loading ?? "",
+    port_of_loading_id: detail?.port_of_loading_id ?? "",
     port_of_discharge_id: detail?.port_of_discharge_id ?? "",
     vessel_name: detail?.vessel_name ?? "",
     voyage_number: detail?.voyage_number ?? "",
@@ -94,6 +95,7 @@ export default function CSNDetailPage() {
   const [relatedCsns, setRelatedCsns] = useState([]);
   const [form, setForm] = useState(buildForm(null));
   const [subDispatchQty, setSubDispatchQty] = useState("");
+  const [loadingPorts, setLoadingPorts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -144,6 +146,9 @@ export default function CSNDetailPage() {
 
   useEffect(() => {
     void loadDetail();
+    listPorts({ is_active: "true", port_role: "LOADING" }).then((data) => {
+      setLoadingPorts(Array.isArray(data) ? data : []);
+    }).catch(() => {});
   }, [id, runtimeContext?.selectedCompanyId]);
 
   function patchField(key, value) {
@@ -322,7 +327,10 @@ export default function CSNDetailPage() {
             <ErpSectionCard eyebrow="Import Fields" title="Import leg planning">
               <div className="grid gap-3 lg:grid-cols-2">
                 <ErpDenseFormRow label="Port Of Loading">
-                  <input value={form.port_of_loading} onChange={(event) => patchField("port_of_loading", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+                  <select value={form.port_of_loading_id} onChange={(event) => patchField("port_of_loading_id", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
+                    <option value="">— Select —</option>
+                    {loadingPorts.map((p) => <option key={p.id} value={p.id}>{p.port_code} — {p.port_name}</option>)}
+                  </select>
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Discharge Port ID">
                   <input value={form.port_of_discharge_id} onChange={(event) => patchField("port_of_discharge_id", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />

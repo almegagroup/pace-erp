@@ -54,7 +54,7 @@ const TRACKER_INLINE_FIELDS = new Set([
   "lc_number",
 ]);
 const MOTHER_PROPAGATION_FIELDS = [
-  "port_of_loading",
+  "port_of_loading_id",
   "port_of_discharge_id",
   "vessel_name",
   "voyage_number",
@@ -541,7 +541,7 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
     const updates: JsonRecord = {};
     const mutableFields = [
       "dispatch_qty",
-      "port_of_loading",
+      "port_of_loading_id",
       "port_of_discharge_id",
       "transit_days_snapshot",
       "vessel_name",
