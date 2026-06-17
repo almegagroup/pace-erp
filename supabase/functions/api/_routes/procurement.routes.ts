@@ -135,6 +135,7 @@ import {
   deleteCHAHandler,
   deletePaymentTermsHandler,
   deletePortHandler,
+  deleteTransporterHandler,
   getPaymentTermsHandler,
   listCHAPortsHandler,
   listCHAsHandler,
@@ -446,8 +447,9 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/transporters\/[^/]+$/.test(pathname) && req.method === "PUT") {
-    return await updateTransporterHandler(req, ctx);
+  if (/^\/api\/procurement\/transporters\/[^/]+$/.test(pathname)) {
+    if (req.method === "PUT") return await updateTransporterHandler(req, ctx);
+    if (req.method === "DELETE") return await deleteTransporterHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/number-series\/global\/[^/]+$/.test(pathname) && req.method === "PATCH") {

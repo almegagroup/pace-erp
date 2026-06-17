@@ -148,6 +148,10 @@ export function updateTransporter(id, payload) {
   return fetchProcurement("PUT", `/api/procurement/transporters/${encodeURIComponent(id)}`, payload);
 }
 
+export function deleteTransporter(id) {
+  return fetchProcurement("DELETE", `/api/procurement/transporters/${encodeURIComponent(id)}`);
+}
+
 export function listCHAs(params) {
   return fetchProcurement("GET", "/api/procurement/chas", undefined, params);
 }

@@ -274,15 +274,6 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  SA_OM_MCG: {
-    screen_code: "SA_OM_MCG",
-    label: "Material Category Groups",
-    route: "/sa/om/material-category-groups",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
   SA_OM_COST_CENTER: {
     screen_code: "SA_OM_COST_CENTER",
     label: "Cost Centers",
@@ -301,49 +292,17 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  SA_PAYMENT_TERMS: {
-    screen_code: "SA_PAYMENT_TERMS",
-    route: "/sa/payment-terms",
+  SA_MATERIAL_CREATE: {
+    screen_code: "SA_MATERIAL_CREATE",
+    route: "/sa/om/material/create",
     universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
 
-  SA_PORT_MASTER: {
-    screen_code: "SA_PORT_MASTER",
-    route: "/sa/ports",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  SA_PORT_TRANSIT: {
-    screen_code: "SA_PORT_TRANSIT",
-    route: "/sa/port-transit",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  SA_LEAD_TIMES: {
-    screen_code: "SA_LEAD_TIMES",
-    route: "/sa/lead-times",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  SA_TRANSPORTERS: {
-    screen_code: "SA_TRANSPORTERS",
-    route: "/sa/transporters",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  SA_CHA_MASTER: {
-    screen_code: "SA_CHA_MASTER",
-    route: "/sa/chas",
+  SA_VENDOR_CREATE: {
+    screen_code: "SA_VENDOR_CREATE",
+    route: "/sa/om/vendor/create",
     universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

@@ -15,11 +15,15 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { ADMIN_SCREENS } from "../../../../navigation/screens/adminScreens.js";
+import { useMenu } from "../../../../context/useMenu.js";
 import { listMaterials } from "../omApi.js";
 
 const LIMIT = 50;
 
 export default function MaterialListPage() {
+  const { shellProfile } = useMenu();
+  const isSA = shellProfile?.roleCode === "SA" || shellProfile?.roleCode === "GA";
   const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -85,7 +89,7 @@ export default function MaterialListPage() {
       title="Material Master"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
-        { key: "create", label: "Create Material", tone: "primary", onClick: () => openScreen(OPERATION_SCREENS.OM_MATERIAL_CREATE.screen_code) },
+        ...(isSA ? [{ key: "create", label: "Create Material", tone: "primary", onClick: () => openScreen(ADMIN_SCREENS.SA_MATERIAL_CREATE.screen_code) }] : []),
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
       filterSection={{

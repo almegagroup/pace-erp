@@ -1,235 +1,264 @@
-import { useEffect, useMemo, useState } from "react";
-import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
-import ErpSelectionSection from "../../../components/forms/ErpSelectionSection.jsx";
+import React, { useEffect, useRef, useState } from "react";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import {
   createTransporter,
+  deleteTransporter,
   listTransporters,
   updateTransporter,
 } from "../../../pages/dashboard/procurement/procurementApi.js";
 
 const DIRECTION_OPTIONS = ["IMPORT", "DOMESTIC", "BOTH"];
 
-function buildFormState(row) {
-  return {
-    name: row?.name ?? row?.transporter_name ?? "",
-    direction: row?.direction ?? row?.usage_direction ?? "BOTH",
-    contact_person: row?.contact_person ?? "",
-    contact_phone: row?.contact_phone ?? row?.phone ?? "",
-    gst_number: row?.gst_number ?? "",
-    is_active: row?.active ?? true,
-  };
-}
+const ERROR_MESSAGES = {
+  PROCUREMENT_TRANSPORTER_IN_USE:        "Cannot delete — transporter is referenced. Deactivate instead.",
+  PROCUREMENT_TRANSPORTER_DELETE_FAILED: "Failed to delete transporter. Please try again.",
+  PROCUREMENT_TRANSPORTER_UPDATE_FAILED: "Failed to update transporter. Please try again.",
+  PROCUREMENT_TRANSPORTER_SAVE_FAILED:   "Failed to save transporter. Please try again.",
+  PROCUREMENT_TRANSPORTER_LIST_FAILED:   "Failed to load transporters. Please refresh.",
+  MANAGER_OR_SA_REQUIRED:                "Manager or Super Admin access required.",
+};
 
-function ModalShell({ title, onClose, children }) {
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4">
-      <div className="w-full max-w-xl border border-slate-300 bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
-          <button type="button" onClick={onClose} className="border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700">
-            Close
-          </button>
-        </div>
-        <div className="p-4">{children}</div>
-      </div>
-    </div>
-  );
+const EMPTY_CREATE = { transporter_name: "", usage_direction: "BOTH", contact_person: "", phone: "", gst_number: "" };
+
+function friendlyError(code) {
+  return ERROR_MESSAGES[code] ?? code;
 }
 
 export default function SATransporterMaster() {
   const [rows, setRows] = useState([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState("create");
-  const [form, setForm] = useState(buildFormState());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [editId, setEditId] = useState(null);
+  const [editDraft, setEditDraft] = useState({});
+  const [form, setForm] = useState({ ...EMPTY_CREATE });
+  const noticeTimer = useRef(null);
 
-  const selectedRow = useMemo(
-    () => rows.find((row) => row.id === selectedId) ?? null,
-    [rows, selectedId]
-  );
+  function flash(msg, isError = false) {
+    clearTimeout(noticeTimer.current);
+    if (isError) { setError(msg); setNotice(""); }
+    else {
+      setNotice(msg); setError("");
+      noticeTimer.current = setTimeout(() => setNotice(""), 4000);
+    }
+  }
 
-  async function loadRows() {
+  async function loadData() {
     setLoading(true);
     setError("");
     try {
-      const data = await listTransporters({ is_active: "" });
-      const nextRows = Array.isArray(data) ? data : [];
-      setRows(nextRows);
-      setSelectedId((current) => current || nextRows[0]?.id || "");
-    } catch (loadError) {
-      setRows([]);
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_TRANSPORTER_LIST_FAILED");
-    } finally {
-      setLoading(false);
-    }
+      const data = await listTransporters({ is_active: "all" });
+      setRows(Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : []);
+    } catch (err) {
+      flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_TRANSPORTER_LIST_FAILED"), true);
+    } finally { setLoading(false); }
   }
 
   useEffect(() => {
-    void loadRows();
+    void loadData();
+    return () => clearTimeout(noticeTimer.current);
   }, []);
 
-  function openCreateModal() {
-    setModalMode("create");
-    setForm(buildFormState());
-    setModalOpen(true);
+  function startEdit(row) {
+    setEditId(row.id);
+    setEditDraft({
+      transporter_name: row.transporter_name ?? "",
+      usage_direction: row.usage_direction ?? "BOTH",
+      contact_person: row.contact_person ?? "",
+      phone: row.phone ?? "",
+      gst_number: row.gst_number ?? "",
+    });
+    setError(""); setNotice("");
   }
 
-  function openEditModal() {
-    if (!selectedRow) {
-      setError("Select a transporter before editing.");
-      return;
-    }
-    setModalMode("edit");
-    setForm(buildFormState(selectedRow));
-    setModalOpen(true);
-  }
+  function cancelEdit() { setEditId(null); setEditDraft({}); }
 
-  async function handleSave() {
-    if (!form.name.trim()) {
-      setError("Transporter name is required.");
-      return;
-    }
-
+  async function saveEdit(row) {
+    if (!editDraft.transporter_name?.trim()) { flash("Transporter name is required.", true); return; }
     setSaving(true);
-    setError("");
-    setNotice("");
     try {
-      let saved;
-      const payload = {
-        transporter_name: form.name.trim(),
-        usage_direction: form.direction,
+      await updateTransporter(row.id, {
+        transporter_name: editDraft.transporter_name.trim(),
+        usage_direction: editDraft.usage_direction,
+        contact_person: editDraft.contact_person.trim() || null,
+        phone: editDraft.phone.trim() || null,
+        gst_number: editDraft.gst_number.trim() || null,
+      });
+      cancelEdit();
+      flash(`Transporter "${row.transporter_code}" updated.`);
+      await loadData();
+    } catch (err) {
+      flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_TRANSPORTER_UPDATE_FAILED"), true);
+    } finally { setSaving(false); }
+  }
+
+  async function handleToggle(row) {
+    setSaving(true);
+    try {
+      await updateTransporter(row.id, { active: !row.active });
+      flash(`Transporter "${row.transporter_code}" ${!row.active ? "activated" : "deactivated"}.`);
+      await loadData();
+    } catch (err) {
+      flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_TRANSPORTER_UPDATE_FAILED"), true);
+    } finally { setSaving(false); }
+  }
+
+  async function handleDelete(row) {
+    setSaving(true);
+    try {
+      await deleteTransporter(row.id);
+      flash(`Transporter "${row.transporter_code}" deleted.`);
+      await loadData();
+    } catch (err) {
+      flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_TRANSPORTER_DELETE_FAILED"), true);
+    } finally { setSaving(false); }
+  }
+
+  async function handleCreate() {
+    if (!form.transporter_name.trim()) { flash("Transporter name is required.", true); return; }
+    setSaving(true);
+    try {
+      const saved = await createTransporter({
+        transporter_name: form.transporter_name.trim(),
+        usage_direction: form.usage_direction,
         contact_person: form.contact_person.trim() || null,
-        phone: form.contact_phone.trim() || null,
+        phone: form.phone.trim() || null,
         gst_number: form.gst_number.trim() || null,
-        active: form.is_active,
-      };
-      if (modalMode === "edit" && selectedRow) {
-        saved = await updateTransporter(selectedRow.id, payload);
-        setNotice(`Transporter updated: ${saved?.transporter_code ?? selectedRow.transporter_code}`);
-      } else {
-        saved = await createTransporter(payload);
-        setNotice(`Transporter created: ${saved?.transporter_code ?? "TRN-generated"}`);
-      }
-      setModalOpen(false);
-      await loadRows();
-      if (saved?.id) {
-        setSelectedId(saved.id);
-      }
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_TRANSPORTER_SAVE_FAILED");
-    } finally {
-      setSaving(false);
-    }
+      });
+      setForm({ ...EMPTY_CREATE });
+      flash(`Transporter created: ${saved?.transporter_code ?? "TRN-generated"}`);
+      await loadData();
+    } catch (err) {
+      flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_TRANSPORTER_SAVE_FAILED"), true);
+    } finally { setSaving(false); }
   }
 
   return (
     <ErpScreenScaffold
-      eyebrow="Super Admin Procurement"
+      eyebrow="Procurement Masters"
       title="Transporter Master"
+      actions={[{
+        key: "refresh", label: loading ? "Refreshing..." : "Refresh",
+        tone: "neutral", onClick: () => void loadData(), disabled: loading,
+      }]}
       notices={[
-        ...(error ? [{ key: "transporters-error", tone: "error", message: error }] : []),
-        ...(notice ? [{ key: "transporters-notice", tone: "success", message: notice }] : []),
-      ]}
-      actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadRows() },
-        { key: "create", label: "Create", tone: "primary", onClick: openCreateModal },
-        { key: "edit", label: "Edit", tone: "neutral", onClick: openEditModal, disabled: !selectedRow },
+        ...(error  ? [{ key: "err", tone: "error",   message: error  }] : []),
+        ...(notice ? [{ key: "ok",  tone: "success",  message: notice }] : []),
       ]}
     >
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-        <ErpSectionCard eyebrow="Register" title="Transporter register">
-          <ErpSelectionSection label="Available Transporters" />
-          <ErpDenseGrid
-            columns={[
-              { key: "transporter_code", label: "Code", width: "120px" },
-              { key: "name", label: "Name", render: (row) => row.name || row.transporter_name },
-              { key: "direction", label: "Direction", width: "100px", render: (row) => row.direction || row.usage_direction },
-              { key: "contact_person", label: "Contact Person", width: "140px" },
-              { key: "contact_phone", label: "Contact Phone", width: "130px", render: (row) => row.contact_phone || row.phone || "—" },
-              { key: "is_active", label: "Active", width: "80px", render: (row) => (row.active ? "YES" : "NO") },
-            ]}
-            rows={rows}
-            rowKey={(row) => row.id ?? row.transporter_code}
-            getRowProps={(row) => ({
-              onClick: () => setSelectedId(row.id),
-              className: row.id === selectedId ? "!bg-sky-50 !border-l-[3px] !border-l-sky-600" : undefined,
-            })}
-            emptyMessage={loading ? "Loading transporters..." : "No transporters found."}
-            maxHeight="460px"
-          />
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_300px]">
+        <ErpSectionCard eyebrow="Transporter Register" title="All transporters">
+          <div className="overflow-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  {["Code", "Name", "Direction", "Contact Person", "Phone", "GST", "Status", ""].map((h) => (
+                    <th key={h} className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {loading && <tr><td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>}
+                {!loading && rows.length === 0 && <tr><td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">No transporters found.</td></tr>}
+                {rows.map((row) => {
+                  const isEditing = editId === row.id;
+                  return (
+                    <React.Fragment key={row.id}>
+                      <tr
+                        className={`border-b border-slate-100 transition-colors ${isEditing ? "bg-sky-50" : "cursor-pointer hover:bg-slate-50"}`}
+                        onClick={() => { if (!isEditing) startEdit(row); }}
+                      >
+                        <td className="px-3 py-2 font-mono text-xs font-semibold text-slate-800">{row.transporter_code}</td>
+                        <td className="px-3 py-2 font-semibold text-slate-900">
+                          {isEditing ? (
+                            <input autoFocus value={editDraft.transporter_name} onChange={(e) => setEditDraft((d) => ({ ...d, transporter_name: e.target.value }))} onClick={(e) => e.stopPropagation()} className="h-7 w-full border border-sky-400 bg-white px-2 text-sm outline-none" />
+                          ) : row.transporter_name}
+                        </td>
+                        <td className="px-3 py-2">
+                          {isEditing ? (
+                            <select value={editDraft.usage_direction} onChange={(e) => setEditDraft((d) => ({ ...d, usage_direction: e.target.value }))} onClick={(e) => e.stopPropagation()} className="h-7 border border-sky-400 bg-white px-1 text-sm outline-none">
+                              {DIRECTION_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+                            </select>
+                          ) : (
+                            <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{row.usage_direction}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">
+                          {isEditing ? (
+                            <input value={editDraft.contact_person} onChange={(e) => setEditDraft((d) => ({ ...d, contact_person: e.target.value }))} onClick={(e) => e.stopPropagation()} className="h-7 w-full border border-sky-400 bg-white px-2 text-sm outline-none" />
+                          ) : (row.contact_person || "—")}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">
+                          {isEditing ? (
+                            <input value={editDraft.phone} onChange={(e) => setEditDraft((d) => ({ ...d, phone: e.target.value }))} onClick={(e) => e.stopPropagation()} className="h-7 w-full border border-sky-400 bg-white px-2 text-sm outline-none" />
+                          ) : (row.phone || "—")}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs text-slate-600">
+                          {isEditing ? (
+                            <input value={editDraft.gst_number} onChange={(e) => setEditDraft((d) => ({ ...d, gst_number: e.target.value }))} onClick={(e) => e.stopPropagation()} className="h-7 w-full border border-sky-400 bg-white px-2 text-sm outline-none" />
+                          ) : (row.gst_number || "—")}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${row.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                            {row.active ? "ACTIVE" : "INACTIVE"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                          {isEditing ? (
+                            <div className="flex gap-1">
+                              <button type="button" disabled={saving} onClick={() => void saveEdit(row)} className="border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:opacity-50">Save</button>
+                              <button type="button" onClick={cancelEdit} className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700">Cancel</button>
+                            </div>
+                          ) : (
+                            <div className="flex gap-1">
+                              <button type="button" disabled={saving} onClick={() => void handleToggle(row)} className={`border px-2 py-1 text-[11px] font-semibold disabled:opacity-50 ${row.active ? "border-rose-300 bg-rose-50 text-rose-800" : "border-emerald-400 bg-emerald-50 text-emerald-900"}`}>
+                                {row.active ? "Deactivate" : "Activate"}
+                              </button>
+                              <button type="button" disabled={saving} onClick={() => void handleDelete(row)} className="border border-rose-400 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">Delete</button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-2 text-xs text-slate-400">Click a row to edit. Delete is blocked if referenced in a PO.</p>
         </ErpSectionCard>
 
-        <ErpSectionCard eyebrow="Selection" title={selectedRow ? `${selectedRow.transporter_code} | ${selectedRow.name || selectedRow.transporter_name}` : "Choose transporter"}>
-          {selectedRow ? (
-            <div className="grid gap-2 text-[12px] text-slate-700">
-              <div className="flex items-center justify-between border-b border-slate-200 py-1">
-                <span>Direction</span>
-                <strong>{selectedRow.direction || selectedRow.usage_direction || "—"}</strong>
-              </div>
-              <div className="flex items-center justify-between border-b border-slate-200 py-1">
-                <span>Contact Person</span>
-                <strong>{selectedRow.contact_person || "—"}</strong>
-              </div>
-              <div className="flex items-center justify-between border-b border-slate-200 py-1">
-                <span>Contact Phone</span>
-                <strong>{selectedRow.contact_phone || selectedRow.phone || "—"}</strong>
-              </div>
-              <div className="flex items-center justify-between py-1">
-                <span>GST Number</span>
-                <strong>{selectedRow.gst_number || "—"}</strong>
-              </div>
-            </div>
-          ) : (
-            <p className="text-sm text-slate-500">Select a transporter from the register to inspect it.</p>
-          )}
-        </ErpSectionCard>
-      </div>
-
-      {modalOpen ? (
-        <ModalShell title={modalMode === "edit" ? "Edit Transporter" : "Create Transporter"} onClose={() => setModalOpen(false)}>
-          <div className="grid gap-3 md:grid-cols-2">
+        <ErpSectionCard eyebrow="Create Transporter" title="New transporter">
+          <div className="grid gap-3">
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Name
-              <input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              Name <span className="text-rose-500">*</span>
+              <input value={form.transporter_name} onChange={(e) => setForm((f) => ({ ...f, transporter_name: e.target.value }))} placeholder="e.g. Blue Dart Logistics" className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Direction
-              <select value={form.direction} onChange={(event) => setForm((current) => ({ ...current, direction: event.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
-                {DIRECTION_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              Direction <span className="text-rose-500">*</span>
+              <select value={form.usage_direction} onChange={(e) => setForm((f) => ({ ...f, usage_direction: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
+                {DIRECTION_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
               </select>
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
               Contact Person
-              <input value={form.contact_person} onChange={(event) => setForm((current) => ({ ...current, contact_person: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              <input value={form.contact_person} onChange={(e) => setForm((f) => ({ ...f, contact_person: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Contact Phone
-              <input value={form.contact_phone} onChange={(event) => setForm((current) => ({ ...current, contact_phone: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              Phone
+              <input value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
             </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-2">
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
               GST Number
-              <input value={form.gst_number} onChange={(event) => setForm((current) => ({ ...current, gst_number: event.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              <input value={form.gst_number} onChange={(e) => setForm((f) => ({ ...f, gst_number: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
             </label>
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-700 md:col-span-2">
-              <input type="checkbox" checked={form.is_active} onChange={(event) => setForm((current) => ({ ...current, is_active: event.target.checked }))} />
-              Active
-            </label>
-          </div>
-          <div className="mt-4 flex justify-end gap-2">
-            <button type="button" onClick={() => setModalOpen(false)} className="border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">
-              Cancel
-            </button>
-            <button type="button" disabled={saving} onClick={() => void handleSave()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
-              {saving ? "Saving..." : modalMode === "edit" ? "Save Changes" : "Create Transporter"}
+            <button type="button" disabled={saving} onClick={() => void handleCreate()} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
+              {saving ? "Creating..." : "Create Transporter"}
             </button>
           </div>
-        </ModalShell>
-      ) : null}
+        </ErpSectionCard>
+      </div>
     </ErpScreenScaffold>
   );
 }

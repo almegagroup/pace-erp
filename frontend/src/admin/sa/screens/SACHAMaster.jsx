@@ -222,7 +222,7 @@ export default function SACHAMaster() {
 
   return (
     <ErpScreenScaffold
-      eyebrow="Super Admin — Procurement"
+      eyebrow="Procurement Masters"
       title="CHA Master"
       actions={[{
         key: "refresh", label: loading ? "Refreshing..." : "Refresh",

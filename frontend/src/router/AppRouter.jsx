@@ -72,6 +72,8 @@ import SAPortTransitMaster from "../admin/sa/screens/SAPortTransitMaster.jsx";
 import SALeadTimeMasters from "../admin/sa/screens/SALeadTimeMasters.jsx";
 import SATransporterMaster from "../admin/sa/screens/SATransporterMaster.jsx";
 import SACHAMaster from "../admin/sa/screens/SACHAMaster.jsx";
+import MaterialCreatePage from "../pages/dashboard/om/material/MaterialCreatePage.jsx";
+import VendorCreatePage from "../pages/dashboard/om/vendor/VendorCreatePage.jsx";
 import SAOpeningStockListPage from "../admin/sa/screens/SAOpeningStockListPage.jsx";
 import SAOpeningStockDetailPage from "../admin/sa/screens/SAOpeningStockDetailPage.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
@@ -104,10 +106,8 @@ import HrYearlyLeaveSummaryPage from "../pages/dashboard/hr/attendance/HrYearlyL
 import HrDepartmentAttendanceReportPage from "../pages/dashboard/hr/attendance/HrDepartmentAttendanceReportPage.jsx";
 import HrLeaveUsageReportPage from "../pages/dashboard/hr/attendance/HrLeaveUsageReportPage.jsx";
 import MaterialListPage from "../pages/dashboard/om/material/MaterialListPage.jsx";
-import MaterialCreatePage from "../pages/dashboard/om/material/MaterialCreatePage.jsx";
 import MaterialDetailPage from "../pages/dashboard/om/material/MaterialDetailPage.jsx";
 import VendorListPage from "../pages/dashboard/om/vendor/VendorListPage.jsx";
-import VendorCreatePage from "../pages/dashboard/om/vendor/VendorCreatePage.jsx";
 import VendorDetailPage from "../pages/dashboard/om/vendor/VendorDetailPage.jsx";
 import AslListPage from "../pages/dashboard/om/asl/AslListPage.jsx";
 import AslCreatePage from "../pages/dashboard/om/asl/AslCreatePage.jsx";
@@ -158,34 +158,6 @@ import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesIn
 import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocumentListPage.jsx";
 import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
 
-const PaymentTermsMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/PaymentTermsMasterPage.jsx"),
-);
-const PortMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/PortMasterPage.jsx"),
-);
-const PortTransitMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/PortTransitMasterPage.jsx"),
-);
-const MaterialCategoryMasterPage = lazy(() =>
-  import(
-    "../pages/dashboard/procurement/masters/MaterialCategoryMasterPage.jsx"
-  ),
-);
-const ImportLeadTimeMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/ImportLeadTimeMasterPage.jsx"),
-);
-const DomesticLeadTimeMasterPage = lazy(() =>
-  import(
-    "../pages/dashboard/procurement/masters/DomesticLeadTimeMasterPage.jsx"
-  ),
-);
-const TransporterMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/TransporterMasterPage.jsx"),
-);
-const CHAMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/CHAMasterPage.jsx"),
-);
 
 export default function AppRouter() {
   return (
@@ -326,28 +298,12 @@ export default function AppRouter() {
                       element={<SAMachineMaster />}
                     />
                     <Route
-                      path="payment-terms"
-                      element={<SAPaymentTermsMaster />}
+                      path="om/material/create"
+                      element={<MaterialCreatePage />}
                     />
                     <Route
-                      path="ports"
-                      element={<SAPortMaster />}
-                    />
-                    <Route
-                      path="port-transit"
-                      element={<SAPortTransitMaster />}
-                    />
-                    <Route
-                      path="lead-times"
-                      element={<SALeadTimeMasters />}
-                    />
-                    <Route
-                      path="transporters"
-                      element={<SATransporterMaster />}
-                    />
-                    <Route
-                      path="chas"
-                      element={<SACHAMaster />}
+                      path="om/vendor/create"
+                      element={<VendorCreatePage />}
                     />
                     <Route
                       path="opening-stock"
@@ -488,18 +444,10 @@ export default function AppRouter() {
                   />
                   <Route path="om/materials" element={<MaterialListPage />} />
                   <Route
-                    path="om/material/create"
-                    element={<MaterialCreatePage />}
-                  />
-                  <Route
                     path="om/material/detail"
                     element={<MaterialDetailPage />}
                   />
                   <Route path="om/vendors" element={<VendorListPage />} />
-                  <Route
-                    path="om/vendor/create"
-                    element={<VendorCreatePage />}
-                  />
                   <Route
                     path="om/vendor/detail"
                     element={<VendorDetailPage />}
@@ -695,35 +643,31 @@ export default function AppRouter() {
                   />
                   <Route
                     path="procurement/masters/payment-terms"
-                    element={<PaymentTermsMasterPage />}
+                    element={<SAPaymentTermsMaster />}
                   />
                   <Route
                     path="procurement/masters/ports"
-                    element={<PortMasterPage />}
+                    element={<SAPortMaster />}
                   />
                   <Route
                     path="procurement/masters/port-transit"
-                    element={<PortTransitMasterPage />}
+                    element={<SAPortTransitMaster />}
                   />
                   <Route
                     path="procurement/masters/material-categories"
-                    element={<MaterialCategoryMasterPage />}
+                    element={<SAOmMaterialCategoryGroups />}
                   />
                   <Route
-                    path="procurement/masters/import-lead-times"
-                    element={<ImportLeadTimeMasterPage />}
-                  />
-                  <Route
-                    path="procurement/masters/domestic-lead-times"
-                    element={<DomesticLeadTimeMasterPage />}
+                    path="procurement/masters/lead-times"
+                    element={<SALeadTimeMasters />}
                   />
                   <Route
                     path="procurement/masters/transporters"
-                    element={<TransporterMasterPage />}
+                    element={<SATransporterMaster />}
                   />
                   <Route
                     path="procurement/masters/cha"
-                    element={<CHAMasterPage />}
+                    element={<SACHAMaster />}
                   />
                 </Route>
               </Route>

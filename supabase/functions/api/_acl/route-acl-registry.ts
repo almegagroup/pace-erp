@@ -649,7 +649,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/procurement\/transporters\/[^/]+$/,
-    methods: { PUT: { skipAcl: false, resourceCode: "PROC_TRANSPORTER_MASTER", action: "EDIT" } },
+    methods: {
+      PUT:    { skipAcl: false, resourceCode: "PROC_TRANSPORTER_MASTER", action: "EDIT" },
+      DELETE: { skipAcl: false, resourceCode: "PROC_TRANSPORTER_MASTER", action: "DELETE" },
+    },
   },
   {
     pattern: /^\/api\/procurement\/port-transit\/[^/]+$/,

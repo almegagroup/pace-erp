@@ -11,8 +11,8 @@ export const OPERATION_SCREENS = Object.freeze({
 
   OM_MATERIAL_CREATE: {
     screen_code: "OM_MATERIAL_CREATE",
-    route: "/dashboard/om/material/create",
-    universe: "ACL",
+    route: "/sa/om/material/create",
+    universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
@@ -35,8 +35,8 @@ export const OPERATION_SCREENS = Object.freeze({
 
   OM_VENDOR_CREATE: {
     screen_code: "OM_VENDOR_CREATE",
-    route: "/dashboard/om/vendor/create",
-    universe: "ACL",
+    route: "/sa/om/vendor/create",
+    universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
@@ -467,15 +467,7 @@ export const OPERATION_SCREENS = Object.freeze({
 
   PROC_IMPORT_LEAD_TIME_MASTER: {
     screen_code: "PROC_IMPORT_LEAD_TIME_MASTER",
-    route: "/dashboard/procurement/masters/import-lead-times",
-    universe: "ACL",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  PROC_DOMESTIC_LEAD_TIME_MASTER: {
-    screen_code: "PROC_DOMESTIC_LEAD_TIME_MASTER",
-    route: "/dashboard/procurement/masters/domestic-lead-times",
+    route: "/dashboard/procurement/masters/lead-times",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

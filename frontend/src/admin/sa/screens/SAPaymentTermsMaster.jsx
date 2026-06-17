@@ -205,7 +205,7 @@ export default function SAPaymentTermsMaster() {
 
   return (
     <ErpScreenScaffold
-      eyebrow="Super Admin — Operation Management"
+      eyebrow="Procurement Masters"
       title="Payment Terms"
       actions={[{
         key: "refresh", label: loading ? "Refreshing..." : "Refresh",

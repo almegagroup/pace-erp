@@ -226,7 +226,7 @@ export default function SAOmMaterialCategoryGroups() {
 
   return (
     <ErpScreenScaffold
-      eyebrow="Super Admin — Operation Management"
+      eyebrow="Procurement Masters"
       title="Material Category Groups"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadData(), disabled: loading },

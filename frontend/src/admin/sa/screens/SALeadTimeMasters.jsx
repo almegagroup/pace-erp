@@ -150,7 +150,7 @@ export default function SALeadTimeMasters() {
 
   return (
     <ErpScreenScaffold
-      eyebrow="Super Admin Procurement"
+      eyebrow="Procurement Masters"
       title="Lead Time Masters"
       notices={[
         ...(error ? [{ key: "err", tone: "error", message: error }] : []),

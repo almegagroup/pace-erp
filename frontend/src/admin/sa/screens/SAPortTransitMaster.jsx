@@ -105,7 +105,7 @@ export default function SAPortTransitMaster() {
 
   return (
     <ErpScreenScaffold
-      eyebrow="Super Admin — Procurement"
+      eyebrow="Procurement Masters"
       title="Port Transit Master"
       actions={[{
         key: "refresh", label: loading ? "Refreshing..." : "Refresh",

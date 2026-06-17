@@ -250,7 +250,7 @@ export default function SAPortMaster() {
 
   return (
     <ErpScreenScaffold
-      eyebrow="Super Admin — Procurement"
+      eyebrow="Procurement Masters"
       title="Port Master"
       actions={[{ key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadRows(), disabled: loading }]}
     >
