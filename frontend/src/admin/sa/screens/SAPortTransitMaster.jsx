@@ -54,7 +54,7 @@ export default function SAPortTransitMaster() {
     try {
       const [transitData, portData, companyData] = await Promise.all([
         listTransitTimes(),
-        listPorts({ is_active: "true" }),
+        listPorts({ is_active: "true", port_role: "DISCHARGE" }),
         listCompanies(),
       ]);
       setRows(Array.isArray(transitData) ? transitData : []);
