@@ -86,7 +86,7 @@ export default function SACHAMaster() {
     try {
       const [mapped, ports] = await Promise.all([
         listCHAPorts(chaId),
-        listPorts({ is_active: "true" }),
+        listPorts({ is_active: "true", port_role: "DISCHARGE" }),
       ]);
       setAssignedPorts(Array.isArray(mapped) ? mapped : []);
       setAllPorts(Array.isArray(ports) ? ports : []);

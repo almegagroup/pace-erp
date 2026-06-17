@@ -96,6 +96,7 @@ export default function CSNDetailPage() {
   const [form, setForm] = useState(buildForm(null));
   const [subDispatchQty, setSubDispatchQty] = useState("");
   const [loadingPorts, setLoadingPorts] = useState([]);
+  const [dischargePorts, setDischargePorts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -148,6 +149,9 @@ export default function CSNDetailPage() {
     void loadDetail();
     listPorts({ is_active: "true", port_role: "LOADING" }).then((data) => {
       setLoadingPorts(Array.isArray(data) ? data : []);
+    }).catch(() => {});
+    listPorts({ is_active: "true", port_role: "DISCHARGE" }).then((data) => {
+      setDischargePorts(Array.isArray(data) ? data : []);
     }).catch(() => {});
   }, [id, runtimeContext?.selectedCompanyId]);
 
@@ -332,8 +336,11 @@ export default function CSNDetailPage() {
                     {loadingPorts.map((p) => <option key={p.id} value={p.id}>{p.port_code} — {p.port_name}</option>)}
                   </select>
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="Discharge Port ID">
-                  <input value={form.port_of_discharge_id} onChange={(event) => patchField("port_of_discharge_id", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+                <ErpDenseFormRow label="Discharge Port">
+                  <select value={form.port_of_discharge_id} onChange={(event) => patchField("port_of_discharge_id", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
+                    <option value="">— Select —</option>
+                    {dischargePorts.map((p) => <option key={p.id} value={p.id}>{p.port_code} — {p.port_name}</option>)}
+                  </select>
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Vessel Name">
                   <input value={form.vessel_name} onChange={(event) => patchField("vessel_name", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
