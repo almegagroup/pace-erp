@@ -248,7 +248,10 @@ function calculateETACascade(
   if (csnType === "IMPORT") {
     const sailTime = Number(importLeadTime?.sail_time_days ?? 0);
     const clearanceDays = Number(importLeadTime?.clearance_days ?? 0);
-    const portTransitDays = Number(portPlantTransit?.transit_days ?? 0);
+    // Use snapshot if set (frozen at port-assignment time); fall back to live master for old/unset CSNs
+    const portTransitDays = csn.transit_days_snapshot != null
+      ? Number(csn.transit_days_snapshot)
+      : Number(portPlantTransit?.transit_days ?? 0);
     const etd = toTrimmedString(csn.etd);
     const blDate = toTrimmedString(csn.bl_date);
     const etaAtPortManual = csn.eta_at_port_is_manual_override === true;
@@ -330,8 +333,22 @@ async function recalculateAndBuildUpdates(
   const importLeadTime = await getImportLeadTime(merged);
   const domesticLeadTime = await getDomesticLeadTime(merged);
   const portPlantTransit = await getPortPlantTransit(merged);
+
+  // Auto-snapshot: when port_of_discharge_id is being set and no snapshot exists yet,
+  // capture current master value so future master changes don't affect this CSN.
+  const autoSnapshot: JsonRecord = {};
+  if (
+    inputUpdates.port_of_discharge_id != null &&
+    merged.transit_days_snapshot == null &&
+    inputUpdates.transit_days_snapshot == null &&
+    portPlantTransit?.transit_days != null
+  ) {
+    autoSnapshot.transit_days_snapshot = Number(portPlantTransit.transit_days);
+    merged.transit_days_snapshot = autoSnapshot.transit_days_snapshot;
+  }
+
   const cascade = calculateETACascade(merged, importLeadTime, domesticLeadTime, portPlantTransit, poDate);
-  return { ...inputUpdates, ...cascade };
+  return { ...inputUpdates, ...autoSnapshot, ...cascade };
 }
 
 async function syncSubCsnsFromMother(motherId: string, updates: JsonRecord): Promise<void> {
@@ -526,6 +543,7 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
       "dispatch_qty",
       "port_of_loading",
       "port_of_discharge_id",
+      "transit_days_snapshot",
       "vessel_name",
       "voyage_number",
       "bl_number",
@@ -564,7 +582,7 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
     for (const field of mutableFields) {
       if (body[field] !== undefined) {
         updates[field] = body[field] === "" ? null : body[field];
-        if (DATE_FIELDS.has(field)) {
+        if (DATE_FIELDS.has(field) || field === "transit_days_snapshot" || field === "port_of_discharge_id") {
           shouldRecalculate = true;
         }
       }

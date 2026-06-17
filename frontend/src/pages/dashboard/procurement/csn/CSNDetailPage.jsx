@@ -55,6 +55,7 @@ function buildForm(detail) {
     received_qty: detail?.received_qty ?? "",
     invoice_number: detail?.invoice_number ?? "",
     remarks: detail?.remarks ?? "",
+    transit_days_snapshot: detail?.transit_days_snapshot ?? "",
   };
 }
 
@@ -340,6 +341,18 @@ export default function CSNDetailPage() {
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Scheduled ETA Port">
                   <input type="date" value={form.scheduled_eta_to_port || ""} onChange={(event) => patchField("scheduled_eta_to_port", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Transit Days (Port→Plant)">
+                  <div className="grid gap-1">
+                    <input
+                      type="number" min="0"
+                      value={form.transit_days_snapshot}
+                      onChange={(event) => patchField("transit_days_snapshot", event.target.value === "" ? "" : Number(event.target.value))}
+                      placeholder="Auto-filled when port is set"
+                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                    />
+                    <span className="text-[10px] text-slate-400">Frozen at port assignment. Edit only to correct this specific shipment.</span>
+                  </div>
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="LC Required">
                   <div className="text-sm text-slate-700">{detail.lc_required ? "Yes" : "No"}</div>
