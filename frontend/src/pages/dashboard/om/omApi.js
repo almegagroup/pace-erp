@@ -634,3 +634,40 @@ export async function unmapStorageLocationsFromPlant(payload) {
     "OM_LOCATION_UNMAP_FAILED"
   );
 }
+
+export async function listMaterialCompanyExtensions(materialId) {
+  const params = buildParams({ material_id: materialId });
+  return fetchJson(`/api/om/material/company-extensions?${params.toString()}`, {}, "OM_MATERIAL_COMPANY_EXT_LIST_FAILED");
+}
+
+export async function listMaterialPlantExtensions(materialId) {
+  const params = buildParams({ material_id: materialId });
+  return fetchJson(`/api/om/material/plant-extensions?${params.toString()}`, {}, "OM_MATERIAL_PLANT_EXT_LIST_FAILED");
+}
+
+export async function listVendorCompanyMaps(vendorId) {
+  const params = buildParams({ vendor_id: vendorId });
+  return fetchJson(`/api/om/vendor/company-maps?${params.toString()}`, {}, "OM_VENDOR_COMPANY_MAP_LIST_FAILED");
+}
+
+async function fetchAdminJsonSafe(path, fallbackCode) {
+  const response = await fetch(`${BASE}${path}`, { credentials: "include" });
+  const json = await readJsonSafe(response);
+  if (!response.ok || !json?.ok) {
+    const error = new Error(json?.code ?? fallbackCode);
+    error.status = response.status;
+    throw error;
+  }
+  return json.data;
+}
+
+export async function listCompaniesForOm() {
+  const data = await fetchAdminJsonSafe("/api/admin/companies", "COMPANY_LIST_FAILED");
+  return Array.isArray(data?.companies) ? data.companies : [];
+}
+
+export async function listProjectsByCompany(companyId) {
+  const params = companyId ? `?company_id=${encodeURIComponent(companyId)}` : "";
+  const data = await fetchAdminJsonSafe(`/api/admin/projects${params}`, "PROJECT_LIST_FAILED");
+  return Array.isArray(data?.projects) ? data.projects : [];
+}

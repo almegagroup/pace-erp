@@ -25,6 +25,8 @@ import {
   listMaterialCategoryGroupsHandler,
   listMaterialsHandler,
   listMaterialUomConversionsHandler,
+  listMaterialCompanyExtensionsHandler,
+  listMaterialPlantExtensionsHandler,
   updateMaterialHandler,
 } from "../_core/om/material.handlers.ts";
 import {
@@ -33,6 +35,7 @@ import {
   createVendorHandler,
   getVendorHandler,
   getVendorPaymentTermsHandler,
+  listVendorCompanyMapsHandler,
   listVendorsHandler,
   mapVendorToCompanyHandler,
   updateVendorHandler,
@@ -117,6 +120,10 @@ export async function dispatchOmRoutes(
       return await createMaterialUomConversionHandler(req, ctx);
     case "GET:/api/om/material/uom-conversions":
       return await listMaterialUomConversionsHandler(req, ctx);
+    case "GET:/api/om/material/company-extensions":
+      return await listMaterialCompanyExtensionsHandler(req, ctx);
+    case "GET:/api/om/material/plant-extensions":
+      return await listMaterialPlantExtensionsHandler(req, ctx);
     case "POST:/api/om/material/category-group":
       return await createMaterialCategoryGroupHandler(req, ctx);
     case "PATCH:/api/om/material/category-group":
@@ -146,6 +153,8 @@ export async function dispatchOmRoutes(
       return await addVendorPaymentTermsHandler(req, ctx);
     case "GET:/api/om/vendor/payment-terms":
       return await getVendorPaymentTermsHandler(req, ctx);
+    case "GET:/api/om/vendor/company-maps":
+      return await listVendorCompanyMapsHandler(req, ctx);
 
     case "POST:/api/om/vendor-material-info":
       return await createVendorMaterialInfoHandler(req, ctx);

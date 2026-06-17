@@ -512,3 +512,28 @@ export async function getVendorPaymentTermsHandler(
     return vendorErrorResponse(req, ctx, code, status, "Vendor payment terms lookup failed");
   }
 }
+
+export async function listVendorCompanyMapsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const vendorId = toTrimmedString(new URL(req.url).searchParams.get("vendor_id"));
+    if (!vendorId) {
+      return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 400, "vendor_id required");
+    }
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_company_map")
+      .select("*, companies:company_id(id, company_code, company_name)")
+      .eq("vendor_id", vendorId)
+      .order("created_at", { ascending: true });
+    if (error) throw new Error("OM_VENDOR_COMPANY_MAP_LIST_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_COMPANY_MAP_LIST_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor company map list failed");
+  }
+}

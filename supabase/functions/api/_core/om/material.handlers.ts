@@ -877,3 +877,53 @@ export async function deleteMaterialCategoryGroupHandler(
     return materialErrorResponse(req, ctx, code, status, "Category group delete failed");
   }
 }
+
+export async function listMaterialCompanyExtensionsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const materialId = toTrimmedString(new URL(req.url).searchParams.get("material_id"));
+    if (!materialId) {
+      return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 400, "material_id required");
+    }
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_company_ext")
+      .select("*, companies:company_id(id, company_code, company_name)")
+      .eq("material_id", materialId)
+      .order("created_at", { ascending: true });
+    if (error) throw new Error("OM_MATERIAL_COMPANY_EXT_LIST_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_MATERIAL_COMPANY_EXT_LIST_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return materialErrorResponse(req, ctx, code, status, "Material company extension list failed");
+  }
+}
+
+export async function listMaterialPlantExtensionsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const materialId = toTrimmedString(new URL(req.url).searchParams.get("material_id"));
+    if (!materialId) {
+      return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 400, "material_id required");
+    }
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_plant_ext")
+      .select("*, companies:company_id(id, company_code, company_name), projects:plant_id(id, project_code, project_name)")
+      .eq("material_id", materialId)
+      .order("created_at", { ascending: true });
+    if (error) throw new Error("OM_MATERIAL_PLANT_EXT_LIST_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_MATERIAL_PLANT_EXT_LIST_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return materialErrorResponse(req, ctx, code, status, "Material plant extension list failed");
+  }
+}
