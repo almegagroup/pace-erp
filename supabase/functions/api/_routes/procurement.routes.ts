@@ -124,6 +124,7 @@ import {
 import {
   createCHAHandler,
   deleteTransitTimeHandler,
+  listProcurementCompaniesHandler,
   createMaterialCategoryHandler,
   createPaymentTermsHandler,
   createPortHandler,
@@ -287,6 +288,8 @@ export async function dispatchProcurementRoutes(
       return await listCHAsHandler(req, ctx);
     case "POST:/api/procurement/chas":
       return await createCHAHandler(req, ctx);
+    case "GET:/api/procurement/companies":
+      return await listProcurementCompaniesHandler(req, ctx);
     case "POST:/api/procurement/chas/toggle":
       return await toggleCHAHandler(req, ctx);
     case "GET:/api/procurement/number-series/global":

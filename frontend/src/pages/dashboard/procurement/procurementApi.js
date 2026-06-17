@@ -109,7 +109,7 @@ export function deleteTransitTime(id) {
 }
 
 export function listCompanies() {
-  return fetchProcurement("GET", "/api/admin/companies");
+  return fetchProcurement("GET", "/api/procurement/companies");
 }
 
 export function listImportLeadTimes(params) {

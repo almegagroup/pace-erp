@@ -739,6 +739,22 @@ export async function upsertTransitTimeHandler(req: Request, ctx: ProcurementHan
   }
 }
 
+export async function listProcurementCompaniesHandler(_req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("companies")
+      .select("id, company_code, company_name")
+      .eq("company_kind", "BUSINESS")
+      .order("company_code", { ascending: true });
+    if (error) throw new Error("PROCUREMENT_COMPANY_LIST_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, _req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_COMPANY_LIST_FAILED";
+    return procurementErrorResponse(_req, ctx, code, 500, "Company list failed");
+  }
+}
+
 export async function deleteTransitTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     assertManagerOrSARole(ctx);
