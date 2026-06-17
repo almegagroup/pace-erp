@@ -286,10 +286,6 @@ export default function AppRouter() {
                       element={<SAOmNumberSeries />}
                     />
                     <Route
-                      path="om/material-category-groups"
-                      element={<SAOmMaterialCategoryGroups />}
-                    />
-                    <Route
                       path="om/cost-centers"
                       element={<SACostCenterMaster />}
                     />
