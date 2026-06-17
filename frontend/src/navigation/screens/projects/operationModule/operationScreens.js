@@ -9,14 +9,6 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  OM_MATERIAL_CREATE: {
-    screen_code: "OM_MATERIAL_CREATE",
-    route: "/sa/om/material/create",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
   OM_MATERIAL_DETAIL: {
     screen_code: "OM_MATERIAL_DETAIL",
     route: "/dashboard/om/material/detail",
@@ -29,14 +21,6 @@ export const OPERATION_SCREENS = Object.freeze({
     screen_code: "OM_VENDOR_LIST",
     route: "/dashboard/om/vendors",
     universe: "ACL",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  OM_VENDOR_CREATE: {
-    screen_code: "OM_VENDOR_CREATE",
-    route: "/sa/om/vendor/create",
-    universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
