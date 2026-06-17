@@ -123,6 +123,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/transporters":               { skipAcl: false, resourceCode: "PROC_TRANSPORTER_MASTER",        action: "WRITE" },
   "GET:/api/procurement/chas":                        { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "VIEW"  },
   "POST:/api/procurement/chas":                       { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "WRITE" },
+  "POST:/api/procurement/chas/toggle":                { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "EDIT"  },
 
   // ── Procurement: Number Series (SA-level) ────────────────────────────────
   "GET:/api/procurement/number-series/global":        { skipAcl: true },
@@ -650,8 +651,22 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { PUT: { skipAcl: false, resourceCode: "PROC_TRANSPORTER_MASTER", action: "EDIT" } },
   },
   {
+    pattern: /^\/api\/procurement\/chas\/[^/]+$/,
+    methods: {
+      PATCH:  { skipAcl: false, resourceCode: "PROC_CHA_MASTER", action: "EDIT"   },
+      DELETE: { skipAcl: false, resourceCode: "PROC_CHA_MASTER", action: "DELETE" },
+    },
+  },
+  {
     pattern: /^\/api\/procurement\/chas\/[^/]+\/ports$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_CHA_MASTER", action: "EDIT" } },
+    methods: {
+      GET:  { skipAcl: false, resourceCode: "PROC_CHA_MASTER", action: "VIEW" },
+      POST: { skipAcl: false, resourceCode: "PROC_CHA_MASTER", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/procurement\/chas\/[^/]+\/ports\/[^/]+$/,
+    methods: { DELETE: { skipAcl: false, resourceCode: "PROC_CHA_MASTER", action: "EDIT" } },
   },
   {
     pattern: /^\/api\/procurement\/number-series\/global\/[^/]+$/,

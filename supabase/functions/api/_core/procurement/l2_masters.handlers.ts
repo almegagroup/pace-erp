@@ -1025,12 +1025,13 @@ export async function updateTransporterHandler(req: Request, ctx: ProcurementHan
 
 export async function listCHAsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    const { data, error } = await serviceRoleClient
-      .schema("erp_master")
-      .from("cha_master")
-      .select("*")
-      .eq("active", true)
-      .order("cha_name", { ascending: true });
+    const url = new URL(req.url);
+    const activeParam = url.searchParams.get("is_active");
+    let query = serviceRoleClient.schema("erp_master").from("cha_master").select("*").order("cha_name", { ascending: true });
+    if (activeParam === "all") { /* no filter */ }
+    else if (activeParam === "false") query = query.eq("active", false);
+    else query = query.eq("active", true);
+    const { data, error } = await query;
     if (error) throw new Error("PROCUREMENT_CHA_LIST_FAILED");
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (err) {
@@ -1044,10 +1045,10 @@ export async function createCHAHandler(req: Request, ctx: ProcurementHandlerCont
     assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const chaName = toTrimmedString(body.cha_name);
-    const licenseNumber = toTrimmedString(body.cha_license_number);
-    if (!chaName || !licenseNumber) {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_CHA", 400, "CHA name and license number are required");
+    if (!chaName) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_CHA", 400, "CHA name is required");
     }
+    const licenseNumber = toTrimmedString(body.cha_license_number) || "";
     const chaCode = await generateCodeFromSequence("cha_code_sequence", "CHA-", 4);
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
@@ -1120,6 +1121,79 @@ export async function mapCHAToPortHandler(req: Request, ctx: ProcurementHandlerC
   }
 }
 
+export async function updateCHAHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const chaId = getIdFromPath(req);
+    if (!(await ensureChaExists(chaId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CHA_NOT_FOUND", 404, "CHA not found");
+    }
+    const body = await parseBody(req);
+    const updates: Record<string, unknown> = {};
+    if (body.cha_name !== undefined) {
+      const v = toTrimmedString(body.cha_name);
+      if (!v) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_CHA", 400, "CHA name cannot be empty");
+      updates.cha_name = v;
+    }
+    if (body.cha_license_number !== undefined) updates.cha_license_number = toTrimmedString(body.cha_license_number) || "";
+    if (body.contact_person !== undefined) updates.contact_person = toTrimmedString(body.contact_person) || null;
+    if (body.phone !== undefined) updates.phone = toTrimmedString(body.phone) || null;
+    if (body.email !== undefined) updates.email = toTrimmedString(body.email) || null;
+    if (body.gst_number !== undefined) updates.gst_number = toTrimmedString(body.gst_number) || null;
+    if (body.pan_number !== undefined) updates.pan_number = toTrimmedString(body.pan_number) || null;
+    if (body.address !== undefined) updates.address = toTrimmedString(body.address) || null;
+    if (Object.keys(updates).length === 0) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_CHA", 400, "No fields to update");
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master").from("cha_master").update(updates).eq("id", chaId).select("*").single();
+    if (error) throw new Error("PROCUREMENT_CHA_UPDATE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CHA_UPDATE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code === "PROCUREMENT_CHA_NOT_FOUND" ? 404 : code.includes("INVALID") ? 400 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CHA update failed");
+  }
+}
+
+export async function toggleCHAHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const chaId = toTrimmedString(body.id);
+    const active = Boolean(body.active);
+    if (!chaId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_CHA", 400, "CHA id required");
+    if (!(await ensureChaExists(chaId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CHA_NOT_FOUND", 404, "CHA not found");
+    }
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master").from("cha_master").update({ active }).eq("id", chaId).select("*").single();
+    if (error) throw new Error("PROCUREMENT_CHA_TOGGLE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CHA_TOGGLE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code === "PROCUREMENT_CHA_NOT_FOUND" ? 404 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CHA toggle failed");
+  }
+}
+
+export async function deleteCHAHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const chaId = getIdFromPath(req);
+    if (!(await ensureChaExists(chaId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CHA_NOT_FOUND", 404, "CHA not found");
+    }
+    // Cascade: remove port mappings first
+    await serviceRoleClient.schema("erp_master").from("cha_port_map").delete().eq("cha_id", chaId);
+    const { error } = await serviceRoleClient.schema("erp_master").from("cha_master").delete().eq("id", chaId);
+    if (error) throw new Error("PROCUREMENT_CHA_DELETE_FAILED");
+    return okResponse({ data: { id: chaId } }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CHA_DELETE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code === "PROCUREMENT_CHA_NOT_FOUND" ? 404 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CHA delete failed");
+  }
+}
+
 export async function listCHAPortsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const chaId = getIdFromPath(req);
@@ -1129,7 +1203,7 @@ export async function listCHAPortsHandler(req: Request, ctx: ProcurementHandlerC
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("cha_port_map")
-      .select("*")
+      .select("id, cha_id, port_id, created_at, port_master(port_code, port_name, port_type, country)")
       .eq("cha_id", chaId)
       .order("created_at", { ascending: false });
     if (error) throw new Error("PROCUREMENT_CHA_PORT_LIST_FAILED");
@@ -1138,5 +1212,23 @@ export async function listCHAPortsHandler(req: Request, ctx: ProcurementHandlerC
     const code = (err as Error).message || "PROCUREMENT_CHA_PORT_LIST_FAILED";
     const status = code === "PROCUREMENT_CHA_NOT_FOUND" ? 404 : 500;
     return procurementErrorResponse(req, ctx, code, status, "CHA port list failed");
+  }
+}
+
+export async function unmapCHAPortHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const parts = new URL(req.url).pathname.split("/");
+    const chaId = parts[4];
+    const portId = parts[6];
+    if (!chaId || !portId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_CHA", 400, "CHA id and port id required");
+    const { error } = await serviceRoleClient
+      .schema("erp_master").from("cha_port_map").delete().eq("cha_id", chaId).eq("port_id", portId);
+    if (error) throw new Error("PROCUREMENT_CHA_PORT_UNMAP_FAILED");
+    return okResponse({ data: { cha_id: chaId, port_id: portId } }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CHA_PORT_UNMAP_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CHA port unmap failed");
   }
 }

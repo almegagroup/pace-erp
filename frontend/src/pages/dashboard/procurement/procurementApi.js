@@ -140,12 +140,28 @@ export function createCHA(payload) {
   return fetchProcurement("POST", "/api/procurement/chas", payload);
 }
 
+export function updateCHA(id, payload) {
+  return fetchProcurement("PATCH", `/api/procurement/chas/${encodeURIComponent(id)}`, payload);
+}
+
+export function deleteCHA(id) {
+  return fetchProcurement("DELETE", `/api/procurement/chas/${encodeURIComponent(id)}`);
+}
+
+export function toggleCHA(payload) {
+  return fetchProcurement("POST", "/api/procurement/chas/toggle", payload);
+}
+
 export function listCHAPorts(id) {
   return fetchProcurement("GET", `/api/procurement/chas/${encodeURIComponent(id)}/ports`);
 }
 
 export function mapCHAToPort(id, payload) {
   return fetchProcurement("POST", `/api/procurement/chas/${encodeURIComponent(id)}/ports`, payload);
+}
+
+export function unmapCHAPort(chaId, portId) {
+  return fetchProcurement("DELETE", `/api/procurement/chas/${encodeURIComponent(chaId)}/ports/${encodeURIComponent(portId)}`);
 }
 
 export function listMaterialCategories(params) {

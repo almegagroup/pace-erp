@@ -128,6 +128,7 @@ import {
   createPortHandler,
   createReferenceDateTypeHandler,
   createTransporterHandler,
+  deleteCHAHandler,
   deletePaymentTermsHandler,
   deletePortHandler,
   getPaymentTermsHandler,
@@ -142,9 +143,12 @@ import {
   listTransitTimesHandler,
   listTransportersHandler,
   mapCHAToPortHandler,
+  toggleCHAHandler,
   togglePaymentTermsHandler,
   togglePortHandler,
   toggleReferenceDateTypeHandler,
+  unmapCHAPortHandler,
+  updateCHAHandler,
   updatePaymentTermsHandler,
   updatePortHandler,
   updateTransporterHandler,
@@ -281,6 +285,8 @@ export async function dispatchProcurementRoutes(
       return await listCHAsHandler(req, ctx);
     case "POST:/api/procurement/chas":
       return await createCHAHandler(req, ctx);
+    case "POST:/api/procurement/chas/toggle":
+      return await toggleCHAHandler(req, ctx);
     case "GET:/api/procurement/number-series/global":
       return await listGlobalSeriesHandler(req, ctx);
     case "GET:/api/procurement/number-series/company":
@@ -511,12 +517,27 @@ export async function dispatchProcurementRoutes(
     return await postDifferencesHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/chas\/[^/]+\/ports\/[^/]+$/.test(pathname)) {
+    if (req.method === "DELETE") {
+      return await unmapCHAPortHandler(req, ctx);
+    }
+  }
+
   if (/^\/api\/procurement\/chas\/[^/]+\/ports$/.test(pathname)) {
     if (req.method === "GET") {
       return await listCHAPortsHandler(req, ctx);
     }
     if (req.method === "POST") {
       return await mapCHAToPortHandler(req, ctx);
+    }
+  }
+
+  if (/^\/api\/procurement\/chas\/[^/]+$/.test(pathname)) {
+    if (req.method === "PATCH") {
+      return await updateCHAHandler(req, ctx);
+    }
+    if (req.method === "DELETE") {
+      return await deleteCHAHandler(req, ctx);
     }
   }
 
