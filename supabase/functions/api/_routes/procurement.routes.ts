@@ -123,6 +123,7 @@ import {
 } from "../_core/procurement/physical_inventory.handlers.ts";
 import {
   createCHAHandler,
+  deleteTransitTimeHandler,
   createMaterialCategoryHandler,
   createPaymentTermsHandler,
   createPortHandler,
@@ -265,6 +266,7 @@ export async function dispatchProcurementRoutes(
       return await listTransitTimesHandler(req, ctx);
     case "POST:/api/procurement/port-transit":
       return await upsertTransitTimeHandler(req, ctx);
+
     case "GET:/api/procurement/material-categories":
       return await listMaterialCategoriesHandler(req, ctx);
     case "POST:/api/procurement/material-categories":
@@ -515,6 +517,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/physical-inventory\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
     return await postDifferencesHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/port-transit\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteTransitTimeHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/chas\/[^/]+\/ports\/[^/]+$/.test(pathname)) {

@@ -739,6 +739,21 @@ export async function upsertTransitTimeHandler(req: Request, ctx: ProcurementHan
   }
 }
 
+export async function deleteTransitTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const id = getIdFromPath(req);
+    if (!id) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_TRANSIT", 400, "Transit id required");
+    const { error } = await serviceRoleClient.schema("erp_master").from("port_plant_transit_master").delete().eq("id", id);
+    if (error) throw new Error("PROCUREMENT_TRANSIT_DELETE_FAILED");
+    return okResponse({ data: { id } }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_TRANSIT_DELETE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Transit delete failed");
+  }
+}
+
 export async function listMaterialCategoriesHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const companyId = toTrimmedString(new URL(req.url).searchParams.get("company_id"));

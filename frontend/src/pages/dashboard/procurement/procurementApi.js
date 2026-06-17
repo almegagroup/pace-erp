@@ -104,6 +104,14 @@ export function upsertTransitTime(payload) {
   return fetchProcurement("POST", "/api/procurement/port-transit", payload);
 }
 
+export function deleteTransitTime(id) {
+  return fetchProcurement("DELETE", `/api/procurement/port-transit/${encodeURIComponent(id)}`);
+}
+
+export function listCompanies() {
+  return fetchProcurement("GET", "/api/admin/companies");
+}
+
 export function listImportLeadTimes(params) {
   return fetchProcurement("GET", "/api/procurement/lead-times/import", undefined, params);
 }
