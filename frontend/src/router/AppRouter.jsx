@@ -298,8 +298,16 @@ export default function AppRouter() {
                       element={<MaterialCreatePage />}
                     />
                     <Route
+                      path="om/material/detail"
+                      element={<MaterialDetailPage />}
+                    />
+                    <Route
                       path="om/vendor/create"
                       element={<VendorCreatePage />}
+                    />
+                    <Route
+                      path="om/vendor/detail"
+                      element={<VendorDetailPage />}
                     />
                     <Route
                       path="opening-stock"
