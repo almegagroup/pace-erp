@@ -72,7 +72,7 @@ import SAPortTransitMaster from "../admin/sa/screens/SAPortTransitMaster.jsx";
 import SALeadTimeMasters from "../admin/sa/screens/SALeadTimeMasters.jsx";
 import SATransporterMaster from "../admin/sa/screens/SATransporterMaster.jsx";
 import SACHAMaster from "../admin/sa/screens/SACHAMaster.jsx";
-import MaterialCreatePage from "../pages/dashboard/om/material/MaterialCreatePage.jsx";
+import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
 import VendorCreatePage from "../pages/dashboard/om/vendor/VendorCreatePage.jsx";
 import SAOpeningStockListPage from "../admin/sa/screens/SAOpeningStockListPage.jsx";
 import SAOpeningStockDetailPage from "../admin/sa/screens/SAOpeningStockDetailPage.jsx";
@@ -294,12 +294,8 @@ export default function AppRouter() {
                       element={<SAMachineMaster />}
                     />
                     <Route
-                      path="om/material/create"
-                      element={<MaterialCreatePage />}
-                    />
-                    <Route
-                      path="om/material/detail"
-                      element={<MaterialDetailPage />}
+                      path="om/materials"
+                      element={<SAMaterialMaster />}
                     />
                     <Route
                       path="om/vendor/create"

@@ -292,20 +292,12 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  SA_MATERIAL_CREATE: {
-    screen_code: "SA_MATERIAL_CREATE",
-    route: "/sa/om/material/create",
+  SA_MATERIAL_MASTER: {
+    screen_code: "SA_MATERIAL_MASTER",
+    route: "/sa/om/materials",
     universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  SA_MATERIAL_DETAIL: {
-    screen_code: "SA_MATERIAL_DETAIL",
-    route: "/sa/om/material/detail",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
+    keepAlive: true,
   },
 
   SA_VENDOR_CREATE: {

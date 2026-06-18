@@ -15,6 +15,12 @@ import {
   removeMaterialCategoryMemberHandler,
   updateMaterialCategoryGroupHandler,
   deleteMaterialCategoryGroupHandler,
+  bulkSaveMaterialsHandler,
+  importMaterialsCsvHandler,
+  listCompanyMappingHandler,
+  bulkMapMaterialsHandler,
+  bulkUnmapMaterialsHandler,
+  importCompanyMappingHandler,
   changeMaterialStatusHandler,
   createMaterialCategoryGroupHandler,
   createMaterialHandler,
@@ -124,6 +130,18 @@ export async function dispatchOmRoutes(
       return await listMaterialCompanyExtensionsHandler(req, ctx);
     case "GET:/api/om/material/plant-extensions":
       return await listMaterialPlantExtensionsHandler(req, ctx);
+    case "POST:/api/om/materials/bulk-save":
+      return await bulkSaveMaterialsHandler(req, ctx);
+    case "POST:/api/om/materials/import":
+      return await importMaterialsCsvHandler(req, ctx);
+    case "GET:/api/om/material/company-mapping":
+      return await listCompanyMappingHandler(req, ctx);
+    case "POST:/api/om/material/company-map-bulk":
+      return await bulkMapMaterialsHandler(req, ctx);
+    case "DELETE:/api/om/material/company-unmap-bulk":
+      return await bulkUnmapMaterialsHandler(req, ctx);
+    case "POST:/api/om/material/company-mapping-import":
+      return await importCompanyMappingHandler(req, ctx);
     case "POST:/api/om/material/category-group":
       return await createMaterialCategoryGroupHandler(req, ctx);
     case "PATCH:/api/om/material/category-group":

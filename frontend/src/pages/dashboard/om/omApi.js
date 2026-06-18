@@ -99,6 +99,75 @@ export async function changeMaterialStatus(payload) {
   );
 }
 
+export async function bulkSaveMaterials(payload) {
+  return fetchJson(
+    "/api/om/materials/bulk-save",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_BULK_SAVE_FAILED"
+  );
+}
+
+export async function importMaterialsCsv(csvText) {
+  return fetchJson(
+    "/api/om/materials/import",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ csv_text: csvText }),
+    },
+    "OM_CSV_IMPORT_FAILED"
+  );
+}
+
+export async function listCompanyMapping({ company_id, search } = {}) {
+  const params = buildParams({ company_id, search });
+  return fetchJson(
+    `/api/om/material/company-mapping?${params.toString()}`,
+    {},
+    "OM_COMPANY_MAPPING_FAILED"
+  );
+}
+
+export async function bulkMapMaterials(payload) {
+  return fetchJson(
+    "/api/om/material/company-map-bulk",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_MATERIAL_MAP_FAILED"
+  );
+}
+
+export async function bulkUnmapMaterials(payload) {
+  return fetchJson(
+    "/api/om/material/company-unmap-bulk",
+    {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_MATERIAL_UNMAP_FAILED"
+  );
+}
+
+export async function importCompanyMapping(csvText) {
+  return fetchJson(
+    "/api/om/material/company-mapping-import",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ csv_text: csvText }),
+    },
+    "OM_MAPPING_IMPORT_FAILED"
+  );
+}
+
 export async function createMaterialUomConversion(payload) {
   return fetchJson(
     "/api/om/material/uom-conversion",

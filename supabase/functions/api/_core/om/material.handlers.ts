@@ -4,7 +4,7 @@
  * Gate: 14
  * Phase: 14
  * Domain: MASTER
- * Purpose: Implement material master CRUD, extension, UOM conversion, and category group handlers.
+ * Purpose: Material master CRUD, bulk save, CSV import, company mapping, UOM conversion, category group.
  * Authority: Backend
  */
 
@@ -28,9 +28,7 @@ const MATERIAL_TRANSITIONS = new Map<string, Set<string>>([
 
 function mapMaterialStatusInput(value: unknown): string {
   const normalized = String(value ?? "").trim().toUpperCase();
-  if (normalized === "DISCONTINUED") {
-    return "BLOCKED";
-  }
+  if (normalized === "DISCONTINUED") return "BLOCKED";
   return normalized;
 }
 
@@ -63,7 +61,6 @@ async function ensureUomExists(code: string): Promise<boolean> {
     .select("code")
     .eq("code", code)
     .maybeSingle();
-
   return !error && Boolean(data?.code);
 }
 
@@ -74,18 +71,6 @@ async function ensureCompanyExists(companyId: string): Promise<boolean> {
     .select("id")
     .eq("id", companyId)
     .maybeSingle();
-
-  return !error && Boolean(data?.id);
-}
-
-async function ensurePlantExists(plantId: string): Promise<boolean> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_master")
-    .from("projects")
-    .select("id")
-    .eq("id", plantId)
-    .maybeSingle();
-
   return !error && Boolean(data?.id);
 }
 
@@ -96,11 +81,7 @@ async function getMaterialById(id: string): Promise<Record<string, unknown> | nu
     .select("*")
     .eq("id", id)
     .maybeSingle();
-
-  if (error) {
-    throw new Error("OM_MATERIAL_LOOKUP_FAILED");
-  }
-
+  if (error) throw new Error("OM_MATERIAL_LOOKUP_FAILED");
   return (data as Record<string, unknown> | null) ?? null;
 }
 
@@ -124,15 +105,15 @@ function deriveConversionFactor(body: JsonRecord): number | null {
     const factor = Number(body.conversion_factor);
     return Number.isFinite(factor) && factor > 0 ? factor : null;
   }
-
   const numerator = Number(body.numerator);
   const denominator = Number(body.denominator);
   if (Number.isFinite(numerator) && Number.isFinite(denominator) && denominator > 0) {
     return numerator / denominator;
   }
-
   return null;
 }
+
+// ── Single Create ─────────────────────────────────────────────────────────────
 
 export async function createMaterialHandler(
   req: Request,
@@ -140,7 +121,6 @@ export async function createMaterialHandler(
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const body = await parseBody(req);
     const materialType = toTrimmedString(body.material_type).toUpperCase();
     const materialName = toTrimmedString(body.material_name);
@@ -151,11 +131,9 @@ export async function createMaterialHandler(
     if (!ALLOWED_MATERIAL_TYPES.has(materialType)) {
       return materialErrorResponse(req, ctx, "OM_INVALID_MATERIAL_TYPE", 400, "Invalid material type");
     }
-
     if (!materialName || !baseUomCode) {
       return materialErrorResponse(req, ctx, "OM_INVALID_MATERIAL_INPUT", 400, "Material name and base UOM are required");
     }
-
     if (!(await ensureUomExists(baseUomCode)) ||
       !(await ensureUomExists(purchaseUomCode)) ||
       !(await ensureUomExists(issueUomCode))) {
@@ -164,18 +142,16 @@ export async function createMaterialHandler(
 
     const { data: materialCode, error: codeError } = await serviceRoleClient
       .rpc("generate_material_pace_code", { p_material_type: materialType });
-
-    if (codeError || !materialCode) {
-      throw new Error("OM_MATERIAL_CREATE_FAILED");
-    }
+    if (codeError || !materialCode) throw new Error("OM_MATERIAL_CREATE_FAILED");
 
     const payload = {
       pace_code: String(materialCode),
       external_code: toTrimmedString(body.external_code) || null,
       material_name: materialName,
+      document_name: toTrimmedString(body.document_name) || null,
       short_name: deriveShortName(materialName, body.short_name),
       material_type: materialType,
-      material_group: toTrimmedString(body.material_group) || null,
+      material_category: toTrimmedString(body.material_category) || null,
       description: toTrimmedString(body.description) || null,
       specification: toTrimmedString(body.specification) || null,
       base_uom_code: baseUomCode,
@@ -212,10 +188,7 @@ export async function createMaterialHandler(
       .select("*")
       .single();
 
-    if (error || !data) {
-      throw new Error("OM_MATERIAL_CREATE_FAILED");
-    }
-
+    if (error || !data) throw new Error("OM_MATERIAL_CREATE_FAILED");
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_MATERIAL_CREATE_FAILED";
@@ -224,43 +197,306 @@ export async function createMaterialHandler(
   }
 }
 
+// ── Bulk Save (create + update in one call) ───────────────────────────────────
+
+export async function bulkSaveMaterialsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const body = await parseBody(req);
+    const creates: JsonRecord[] = Array.isArray(body.creates) ? body.creates : [];
+    const updates: JsonRecord[] = Array.isArray(body.updates) ? body.updates : [];
+
+    const created: unknown[] = [];
+    const updated: unknown[] = [];
+    const errors: { index: number; context: string; error: string }[] = [];
+
+    // Process creates
+    for (let i = 0; i < creates.length; i++) {
+      const row = creates[i];
+      try {
+        const materialType = toTrimmedString(row.material_type).toUpperCase();
+        const materialName = toTrimmedString(row.material_name);
+        const baseUomCode = toTrimmedString(row.base_uom_code).toUpperCase();
+
+        if (!ALLOWED_MATERIAL_TYPES.has(materialType)) {
+          errors.push({ index: i, context: "create", error: "OM_INVALID_MATERIAL_TYPE" });
+          continue;
+        }
+        if (!materialName || !baseUomCode) {
+          errors.push({ index: i, context: "create", error: "OM_INVALID_MATERIAL_INPUT" });
+          continue;
+        }
+
+        // Check duplicate name
+        const { count } = await serviceRoleClient
+          .schema("erp_master")
+          .from("material_master")
+          .select("id", { count: "exact", head: true })
+          .ilike("material_name", materialName);
+        if ((count ?? 0) > 0) {
+          errors.push({ index: i, context: "create", error: "OM_MATERIAL_NAME_DUPLICATE" });
+          continue;
+        }
+
+        const { data: materialCode, error: codeError } = await serviceRoleClient
+          .rpc("generate_material_pace_code", { p_material_type: materialType });
+        if (codeError || !materialCode) {
+          errors.push({ index: i, context: "create", error: "OM_PACE_CODE_FAILED" });
+          continue;
+        }
+
+        const purchaseUomCode = toTrimmedString(row.purchase_uom_code || row.base_uom_code).toUpperCase() || baseUomCode;
+        const issueUomCode = toTrimmedString(row.issue_uom_code || row.base_uom_code).toUpperCase() || baseUomCode;
+
+        const { data, error } = await serviceRoleClient
+          .schema("erp_master")
+          .from("material_master")
+          .insert({
+            pace_code: String(materialCode),
+            external_code: toTrimmedString(row.external_code) || null,
+            material_name: materialName,
+            document_name: toTrimmedString(row.document_name) || null,
+            short_name: deriveShortName(materialName, row.short_name),
+            material_type: materialType,
+            material_category: toTrimmedString(row.material_category) || null,
+            description: toTrimmedString(row.description) || null,
+            specification: toTrimmedString(row.specification) || null,
+            base_uom_code: baseUomCode,
+            purchase_uom_code: purchaseUomCode,
+            issue_uom_code: issueUomCode,
+            hsn_code: toTrimmedString(row.hsn_code) || null,
+            qa_required_on_inward: row.qa_required_on_inward !== false,
+            valuation_method: toTrimmedString(row.valuation_method).toUpperCase() || "WEIGHTED_AVERAGE",
+            status: "DRAFT",
+            created_by: ctx.auth_user_id,
+          })
+          .select("*")
+          .single();
+
+        if (error || !data) {
+          errors.push({ index: i, context: "create", error: "OM_MATERIAL_CREATE_FAILED" });
+        } else {
+          created.push(data);
+        }
+      } catch {
+        errors.push({ index: i, context: "create", error: "OM_MATERIAL_CREATE_FAILED" });
+      }
+    }
+
+    // Process updates
+    for (let i = 0; i < updates.length; i++) {
+      const row = updates[i];
+      try {
+        const id = toTrimmedString(row.id);
+        if (!id) {
+          errors.push({ index: i, context: "update", error: "OM_MATERIAL_ID_MISSING" });
+          continue;
+        }
+
+        const existing = await getMaterialById(id);
+        if (!existing) {
+          errors.push({ index: i, context: "update", error: "OM_MATERIAL_NOT_FOUND" });
+          continue;
+        }
+
+        const patch: JsonRecord = {
+          last_updated_at: new Date().toISOString(),
+          last_updated_by: ctx.auth_user_id,
+        };
+
+        const mutableFields = [
+          "material_name", "document_name", "short_name", "material_category",
+          "external_code", "hsn_code", "description", "specification",
+          "shade_code", "pack_code", "external_sku",
+          "procurement_type", "import_domestic_flag",
+          "batch_tracking_required", "fifo_tracking_enabled", "expiry_tracking_enabled",
+          "shelf_life_days", "min_shelf_life_at_grn_days",
+          "qa_required_on_inward", "qa_required_on_fg",
+          "valuation_method", "valuation_class", "production_mode",
+          "bom_exists", "delivery_tolerance_enabled",
+          "under_delivery_tolerance_pct", "over_delivery_tolerance_pct",
+        ];
+
+        for (const field of mutableFields) {
+          if (row[field] !== undefined) patch[field] = row[field];
+        }
+
+        // Check duplicate name if name is changing
+        if (row.material_name !== undefined) {
+          const newName = toTrimmedString(row.material_name);
+          if (newName !== String(existing.material_name ?? "")) {
+            const { count } = await serviceRoleClient
+              .schema("erp_master")
+              .from("material_master")
+              .select("id", { count: "exact", head: true })
+              .ilike("material_name", newName)
+              .neq("id", id);
+            if ((count ?? 0) > 0) {
+              errors.push({ index: i, context: "update", error: "OM_MATERIAL_NAME_DUPLICATE" });
+              continue;
+            }
+          }
+        }
+
+        const { data, error } = await serviceRoleClient
+          .schema("erp_master")
+          .from("material_master")
+          .update(patch)
+          .eq("id", id)
+          .select("*")
+          .single();
+
+        if (error || !data) {
+          errors.push({ index: i, context: "update", error: "OM_MATERIAL_UPDATE_FAILED" });
+        } else {
+          updated.push(data);
+        }
+      } catch {
+        errors.push({ index: i, context: "update", error: "OM_MATERIAL_UPDATE_FAILED" });
+      }
+    }
+
+    return okResponse({ created, updated, errors }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_BULK_SAVE_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return materialErrorResponse(req, ctx, code, status, "Bulk save failed");
+  }
+}
+
+// ── CSV Import ────────────────────────────────────────────────────────────────
+
+export async function importMaterialsCsvHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const body = await parseBody(req);
+    const csvText = toTrimmedString(body.csv_text);
+    if (!csvText) {
+      return materialErrorResponse(req, ctx, "OM_CSV_EMPTY", 400, "CSV text is empty");
+    }
+
+    const lines = csvText.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length < 2) {
+      return materialErrorResponse(req, ctx, "OM_CSV_NO_DATA", 400, "CSV has no data rows");
+    }
+
+    // Parse header
+    const headers = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/["\s]/g, ""));
+    const results: { row: number; material_name: string; pace_code: string | null; status: string; error: string | null }[] = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+      const row: Record<string, string> = {};
+      headers.forEach((h, idx) => { row[h] = cols[idx] ?? ""; });
+
+      const materialName = (row["material_name"] ?? "").trim();
+      const materialType = (row["material_type"] ?? "RM").trim().toUpperCase();
+      const baseUomCode = (row["base_uom_code"] ?? "").trim().toUpperCase();
+
+      if (!materialName) {
+        results.push({ row: i, material_name: "", pace_code: null, status: "SKIPPED", error: "material_name is empty" });
+        continue;
+      }
+      if (!ALLOWED_MATERIAL_TYPES.has(materialType)) {
+        results.push({ row: i, material_name: materialName, pace_code: null, status: "ERROR", error: `Invalid material_type: ${materialType}` });
+        continue;
+      }
+      if (!baseUomCode) {
+        results.push({ row: i, material_name: materialName, pace_code: null, status: "ERROR", error: "base_uom_code is required" });
+        continue;
+      }
+
+      // Check duplicate
+      const { count } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id", { count: "exact", head: true })
+        .ilike("material_name", materialName);
+      if ((count ?? 0) > 0) {
+        results.push({ row: i, material_name: materialName, pace_code: null, status: "DUPLICATE", error: "Material name already exists" });
+        continue;
+      }
+
+      const { data: materialCode, error: codeError } = await serviceRoleClient
+        .rpc("generate_material_pace_code", { p_material_type: materialType });
+      if (codeError || !materialCode) {
+        results.push({ row: i, material_name: materialName, pace_code: null, status: "ERROR", error: "Failed to generate PACE code" });
+        continue;
+      }
+
+      const { data, error } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .insert({
+          pace_code: String(materialCode),
+          material_name: materialName,
+          document_name: (row["document_name"] ?? "").trim() || null,
+          short_name: materialName,
+          material_type: materialType,
+          material_category: (row["material_category"] ?? "").trim() || null,
+          external_code: (row["external_code"] ?? "").trim() || null,
+          base_uom_code: baseUomCode,
+          purchase_uom_code: baseUomCode,
+          issue_uom_code: baseUomCode,
+          hsn_code: (row["hsn_code"] ?? "").trim() || null,
+          qa_required_on_inward: true,
+          valuation_method: "WEIGHTED_AVERAGE",
+          status: "DRAFT",
+          created_by: ctx.auth_user_id,
+        })
+        .select("pace_code")
+        .single();
+
+      if (error || !data) {
+        results.push({ row: i, material_name: materialName, pace_code: null, status: "ERROR", error: "Insert failed" });
+      } else {
+        results.push({ row: i, material_name: materialName, pace_code: String((data as Record<string, unknown>).pace_code ?? ""), status: "CREATED", error: null });
+      }
+    }
+
+    return okResponse({ results }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_CSV_IMPORT_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return materialErrorResponse(req, ctx, code, status, "CSV import failed");
+  }
+}
+
+// ── List ──────────────────────────────────────────────────────────────────────
+
 export async function listMaterialsHandler(
   req: Request,
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const url = new URL(req.url);
     const materialType = toTrimmedString(url.searchParams.get("material_type")).toUpperCase();
     const statusFilter = mapMaterialStatusInput(url.searchParams.get("status"));
     const search = normalizeSearch(toTrimmedString(url.searchParams.get("search")));
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
+    const limit = parsePositiveInt(url.searchParams.get("limit"), 1000);
     const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
 
     let query = serviceRoleClient
       .schema("erp_master")
       .from("material_master")
-      .select("*", { count: "exact" })
-      .order("created_at", { ascending: false })
+      .select("id,pace_code,external_code,material_name,document_name,short_name,material_type,material_category,base_uom_code,hsn_code,status,created_at", { count: "exact" })
+      .order("material_type", { ascending: true })
+      .order("material_name", { ascending: true })
       .range(offset, offset + limit - 1);
 
-    if (materialType) {
-      query = query.eq("material_type", materialType);
-    }
-    if (statusFilter) {
-      query = query.eq("status", statusFilter);
-    }
-    if (search) {
-      query = query.or(`pace_code.ilike.%${search}%,material_name.ilike.%${search}%`);
-    }
+    if (materialType) query = query.eq("material_type", materialType);
+    if (statusFilter) query = query.eq("status", statusFilter);
+    if (search) query = query.or(`pace_code.ilike.%${search}%,material_name.ilike.%${search}%,external_code.ilike.%${search}%`);
 
     const { data, error, count } = await query;
-
-    if (error) {
-      throw new Error("OM_MATERIAL_LIST_FAILED");
-    }
-
+    if (error) throw new Error("OM_MATERIAL_LIST_FAILED");
     return okResponse({ data: data ?? [], total: count ?? 0 }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_MATERIAL_LIST_FAILED";
@@ -275,17 +511,10 @@ export async function getMaterialHandler(
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const id = toTrimmedString(new URL(req.url).searchParams.get("id"));
-    if (!id) {
-      return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
-    }
-
+    if (!id) return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
     const material = await getMaterialById(id);
-    if (!material) {
-      return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
-    }
-
+    if (!material) return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
     return okResponse({ data: material }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_MATERIAL_LOOKUP_FAILED";
@@ -294,23 +523,20 @@ export async function getMaterialHandler(
   }
 }
 
+// ── Update ────────────────────────────────────────────────────────────────────
+
 export async function updateMaterialHandler(
   req: Request,
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
-    if (!id) {
-      return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
-    }
+    if (!id) return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
 
     const existing = await getMaterialById(id);
-    if (!existing) {
-      return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
-    }
+    if (!existing) return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
 
     const currentStatus = String(existing.status ?? "");
     if (!MUTABLE_MATERIAL_STATUSES.has(currentStatus)) {
@@ -323,40 +549,22 @@ export async function updateMaterialHandler(
     };
 
     const mutableFields = [
-      "material_name",
-      "short_name",
-      "material_group",
-      "description",
-      "specification",
-      "shade_code",
-      "pack_code",
-      "external_sku",
-      "hsn_code",
-      "procurement_type",
-      "import_domestic_flag",
-      "batch_tracking_required",
-      "fifo_tracking_enabled",
-      "expiry_tracking_enabled",
-      "shelf_life_days",
-      "min_shelf_life_at_grn_days",
-      "qa_required_on_inward",
-      "qa_required_on_fg",
-      "valuation_method",
-      "valuation_class",
-      "production_mode",
-      "bom_exists",
-      "delivery_tolerance_enabled",
-      "under_delivery_tolerance_pct",
-      "over_delivery_tolerance_pct",
+      "material_name", "document_name", "short_name", "material_category",
+      "description", "specification",
+      "shade_code", "pack_code", "external_sku", "hsn_code",
+      "procurement_type", "import_domestic_flag",
+      "batch_tracking_required", "fifo_tracking_enabled", "expiry_tracking_enabled",
+      "shelf_life_days", "min_shelf_life_at_grn_days",
+      "qa_required_on_inward", "qa_required_on_fg",
+      "valuation_method", "valuation_class", "production_mode",
+      "bom_exists", "delivery_tolerance_enabled",
+      "under_delivery_tolerance_pct", "over_delivery_tolerance_pct",
       "external_code",
     ];
 
     for (const field of mutableFields) {
-      if (body[field] !== undefined) {
-        updates[field] = body[field];
-      }
+      if (body[field] !== undefined) updates[field] = body[field];
     }
-
     if (body.is_batch_managed !== undefined) {
       updates.batch_tracking_required = body.is_batch_managed === true;
     }
@@ -373,10 +581,7 @@ export async function updateMaterialHandler(
       .select("*")
       .single();
 
-    if (error || !data) {
-      throw new Error("OM_MATERIAL_UPDATE_FAILED");
-    }
-
+    if (error || !data) throw new Error("OM_MATERIAL_UPDATE_FAILED");
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_MATERIAL_UPDATE_FAILED";
@@ -385,28 +590,25 @@ export async function updateMaterialHandler(
   }
 }
 
+// ── Status Change ─────────────────────────────────────────────────────────────
+
 export async function changeMaterialStatusHandler(
   req: Request,
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
     const newStatus = mapMaterialStatusInput(body.new_status);
 
-    if (!id) {
-      return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
-    }
+    if (!id) return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
     if (!MATERIAL_DB_STATUSES.has(newStatus)) {
       return materialErrorResponse(req, ctx, "OM_INVALID_STATUS_TRANSITION", 422, "Status transition not allowed");
     }
 
     const existing = await getMaterialById(id);
-    if (!existing) {
-      return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
-    }
+    if (!existing) return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
 
     const currentStatus = String(existing.status ?? "");
     const allowed = MATERIAL_TRANSITIONS.get(currentStatus);
@@ -419,7 +621,6 @@ export async function changeMaterialStatusHandler(
       last_updated_at: new Date().toISOString(),
       last_updated_by: ctx.auth_user_id,
     };
-
     if (newStatus === "ACTIVE") {
       updates.approved_by = ctx.auth_user_id;
       updates.approved_at = new Date().toISOString();
@@ -433,10 +634,7 @@ export async function changeMaterialStatusHandler(
       .select("*")
       .single();
 
-    if (error || !data) {
-      throw new Error("OM_MATERIAL_STATUS_UPDATE_FAILED");
-    }
-
+    if (error || !data) throw new Error("OM_MATERIAL_STATUS_UPDATE_FAILED");
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_MATERIAL_STATUS_UPDATE_FAILED";
@@ -445,13 +643,241 @@ export async function changeMaterialStatusHandler(
   }
 }
 
+// ── Company Mapping ───────────────────────────────────────────────────────────
+
+export async function listCompanyMappingHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
+    const search = normalizeSearch(toTrimmedString(url.searchParams.get("search")));
+
+    if (!companyId) {
+      return materialErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 400, "company_id required");
+    }
+
+    // All materials
+    let matQuery = serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .select("id,pace_code,material_name,material_type,base_uom_code,status")
+      .order("material_type", { ascending: true })
+      .order("material_name", { ascending: true });
+
+    if (search) {
+      matQuery = matQuery.or(`material_name.ilike.%${search}%,pace_code.ilike.%${search}%`);
+    }
+
+    const { data: allMaterials, error: matError } = await matQuery;
+    if (matError) throw new Error("OM_MATERIAL_LIST_FAILED");
+
+    // Mapped material IDs for this company
+    const { data: mapped, error: mapError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_company_ext")
+      .select("material_id,status")
+      .eq("company_id", companyId);
+
+    if (mapError) throw new Error("OM_COMPANY_MAPPING_FETCH_FAILED");
+
+    const mappedSet = new Set((mapped ?? []).map((m: Record<string, unknown>) => String(m.material_id)));
+
+    const enriched = (allMaterials ?? []).map((m: Record<string, unknown>) => ({
+      ...m,
+      is_mapped: mappedSet.has(String(m.id)),
+    }));
+
+    return okResponse({ data: enriched }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_COMPANY_MAPPING_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return materialErrorResponse(req, ctx, code, status, "Company mapping list failed");
+  }
+}
+
+export async function bulkMapMaterialsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id);
+    const materialIds: string[] = Array.isArray(body.material_ids)
+      ? body.material_ids.map((id: unknown) => toTrimmedString(id)).filter(Boolean)
+      : [];
+
+    if (!companyId) return materialErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 400, "company_id required");
+    if (materialIds.length === 0) return materialErrorResponse(req, ctx, "OM_NO_MATERIALS", 400, "No material IDs provided");
+    if (!(await ensureCompanyExists(companyId))) {
+      return materialErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found");
+    }
+
+    const rows = materialIds.map((materialId) => ({
+      material_id: materialId,
+      company_id: companyId,
+      procurement_allowed: true,
+      status: "ACTIVE",
+      created_by: ctx.auth_user_id,
+    }));
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_company_ext")
+      .upsert(rows, { onConflict: "material_id,company_id", ignoreDuplicates: true })
+      .select("material_id");
+
+    if (error) throw new Error("OM_MATERIAL_MAP_FAILED");
+    return okResponse({ mapped: (data ?? []).length, total: materialIds.length }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_MATERIAL_MAP_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return materialErrorResponse(req, ctx, code, status, "Bulk map failed");
+  }
+}
+
+export async function bulkUnmapMaterialsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id);
+    const materialIds: string[] = Array.isArray(body.material_ids)
+      ? body.material_ids.map((id: unknown) => toTrimmedString(id)).filter(Boolean)
+      : [];
+
+    if (!companyId) return materialErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 400, "company_id required");
+    if (materialIds.length === 0) return materialErrorResponse(req, ctx, "OM_NO_MATERIALS", 400, "No material IDs provided");
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_company_ext")
+      .delete()
+      .eq("company_id", companyId)
+      .in("material_id", materialIds);
+
+    if (error) throw new Error("OM_MATERIAL_UNMAP_FAILED");
+    return okResponse({ unmapped: materialIds.length }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_MATERIAL_UNMAP_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return materialErrorResponse(req, ctx, code, status, "Bulk unmap failed");
+  }
+}
+
+export async function importCompanyMappingHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const body = await parseBody(req);
+    const csvText = toTrimmedString(body.csv_text);
+    if (!csvText) return materialErrorResponse(req, ctx, "OM_CSV_EMPTY", 400, "CSV text is empty");
+
+    const lines = csvText.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length < 2) return materialErrorResponse(req, ctx, "OM_CSV_NO_DATA", 400, "CSV has no data rows");
+
+    const headers = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/["\s]/g, ""));
+    const results: {
+      row: number;
+      material_name: string;
+      company_code: string;
+      company_name: string | null;
+      status: string;
+      error: string | null;
+    }[] = [];
+
+    // Pre-load all companies for lookup
+    const { data: companies } = await serviceRoleClient
+      .schema("erp_master")
+      .from("companies")
+      .select("id,company_code,company_name");
+
+    const companyByCode = new Map(
+      (companies ?? []).map((c: Record<string, unknown>) => [
+        String(c.company_code ?? "").toUpperCase(),
+        c,
+      ])
+    );
+
+    // Pre-load all materials for lookup by name
+    const { data: materials } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .select("id,material_name");
+
+    const materialByName = new Map(
+      (materials ?? []).map((m: Record<string, unknown>) => [
+        String(m.material_name ?? "").toLowerCase(),
+        m,
+      ])
+    );
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+      const row: Record<string, string> = {};
+      headers.forEach((h, idx) => { row[h] = cols[idx] ?? ""; });
+
+      const materialName = (row["material_name"] ?? "").trim();
+      const companyCode = (row["company_code"] ?? "").trim().toUpperCase();
+
+      if (!materialName || !companyCode) {
+        results.push({ row: i, material_name: materialName, company_code: companyCode, company_name: null, status: "SKIPPED", error: "material_name or company_code is empty" });
+        continue;
+      }
+
+      const company = companyByCode.get(companyCode) as Record<string, unknown> | undefined;
+      if (!company) {
+        results.push({ row: i, material_name: materialName, company_code: companyCode, company_name: null, status: "ERROR", error: `Company not found: ${companyCode}` });
+        continue;
+      }
+
+      const material = materialByName.get(materialName.toLowerCase()) as Record<string, unknown> | undefined;
+      if (!material) {
+        results.push({ row: i, material_name: materialName, company_code: companyCode, company_name: String(company.company_name ?? ""), status: "ERROR", error: `Material not found: ${materialName}` });
+        continue;
+      }
+
+      const { error } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_company_ext")
+        .upsert({
+          material_id: String(material.id),
+          company_id: String(company.id),
+          procurement_allowed: true,
+          status: "ACTIVE",
+          created_by: ctx.auth_user_id,
+        }, { onConflict: "material_id,company_id", ignoreDuplicates: true });
+
+      if (error) {
+        results.push({ row: i, material_name: materialName, company_code: companyCode, company_name: String(company.company_name ?? ""), status: "ERROR", error: "Insert failed" });
+      } else {
+        results.push({ row: i, material_name: materialName, company_code: companyCode, company_name: String(company.company_name ?? ""), status: "MAPPED", error: null });
+      }
+    }
+
+    return okResponse({ results }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_MAPPING_IMPORT_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return materialErrorResponse(req, ctx, code, status, "Company mapping import failed");
+  }
+}
+
+// ── Company/Plant Extension ───────────────────────────────────────────────────
+
 export async function extendMaterialToCompanyHandler(
   req: Request,
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const body = await parseBody(req);
     const materialId = toTrimmedString(body.material_id);
     const companyId = toTrimmedString(body.company_id);
@@ -482,10 +908,7 @@ export async function extendMaterialToCompanyHandler(
       .select("*")
       .single();
 
-    if (error || !data) {
-      throw new Error("OM_MATERIAL_EXTEND_FAILED");
-    }
-
+    if (error || !data) throw new Error("OM_MATERIAL_EXTEND_FAILED");
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_MATERIAL_EXTEND_FAILED";
@@ -500,7 +923,6 @@ export async function extendMaterialToPlantHandler(
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const body = await parseBody(req);
     const materialId = toTrimmedString(body.material_id);
     const companyId = toTrimmedString(body.company_id);
@@ -534,10 +956,7 @@ export async function extendMaterialToPlantHandler(
       .select("*")
       .single();
 
-    if (error || !data) {
-      throw new Error("OM_MATERIAL_EXTEND_FAILED");
-    }
-
+    if (error || !data) throw new Error("OM_MATERIAL_EXTEND_FAILED");
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_MATERIAL_EXTEND_FAILED";
@@ -546,13 +965,14 @@ export async function extendMaterialToPlantHandler(
   }
 }
 
+// ── UOM Conversion ────────────────────────────────────────────────────────────
+
 export async function createMaterialUomConversionHandler(
   req: Request,
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const body = await parseBody(req);
     const materialId = toTrimmedString(body.material_id);
     const fromUomCode = toTrimmedString(body.from_uom_code).toUpperCase();
@@ -604,11 +1024,8 @@ export async function listMaterialUomConversionsHandler(
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const materialId = toTrimmedString(new URL(req.url).searchParams.get("material_id"));
-    if (!materialId) {
-      return okResponse({ data: [] }, ctx.request_id, req);
-    }
+    if (!materialId) return okResponse({ data: [] }, ctx.request_id, req);
 
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
@@ -617,10 +1034,7 @@ export async function listMaterialUomConversionsHandler(
       .eq("material_id", materialId)
       .order("created_at", { ascending: false });
 
-    if (error) {
-      throw new Error("OM_UOM_CONVERSION_LIST_FAILED");
-    }
-
+    if (error) throw new Error("OM_UOM_CONVERSION_LIST_FAILED");
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_UOM_CONVERSION_LIST_FAILED";
@@ -629,13 +1043,14 @@ export async function listMaterialUomConversionsHandler(
   }
 }
 
+// ── Category Group ────────────────────────────────────────────────────────────
+
 export async function createMaterialCategoryGroupHandler(
   req: Request,
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const body = await parseBody(req);
     const groupName = toTrimmedString(body.group_name);
     const groupCode = (
@@ -680,16 +1095,13 @@ export async function listMaterialCategoryGroupsHandler(
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("material_category_group")
       .select("*, members:material_category_group_member(id, material_id, is_primary)")
       .order("group_name", { ascending: true });
 
-    if (error) {
-      throw new Error("OM_CATEGORY_GROUP_LIST_FAILED");
-    }
+    if (error) throw new Error("OM_CATEGORY_GROUP_LIST_FAILED");
 
     const enriched = (data ?? []).map((g: Record<string, unknown>) => ({
       ...g,
@@ -710,7 +1122,6 @@ export async function addMaterialCategoryMemberHandler(
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const body = await parseBody(req);
     const groupId = toTrimmedString(body.group_id);
     const materialId = toTrimmedString(body.material_id);
@@ -726,7 +1137,6 @@ export async function addMaterialCategoryMemberHandler(
     if (groupError || !groupRow?.id) {
       return materialErrorResponse(req, ctx, "OM_GROUP_NOT_FOUND", 404, "Group not found");
     }
-
     if (!(await getMaterialById(materialId))) {
       return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
     }
@@ -773,7 +1183,6 @@ export async function removeMaterialCategoryMemberHandler(
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const body = await parseBody(req);
     const memberId = toTrimmedString(body.member_id);
     if (!memberId) {
@@ -801,12 +1210,9 @@ export async function updateMaterialCategoryGroupHandler(
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
-    if (!id) {
-      return materialErrorResponse(req, ctx, "OM_MCG_UPDATE_FAILED", 400, "Group ID missing");
-    }
+    if (!id) return materialErrorResponse(req, ctx, "OM_MCG_UPDATE_FAILED", 400, "Group ID missing");
 
     const patch: Record<string, unknown> = {};
     if (body.group_name !== undefined) patch.group_name = toTrimmedString(body.group_name);
@@ -839,14 +1245,10 @@ export async function deleteMaterialCategoryGroupHandler(
 ): Promise<Response> {
   try {
     assertOmAdminContext(ctx);
-
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
-    if (!id) {
-      return materialErrorResponse(req, ctx, "OM_MCG_DELETE_FAILED", 400, "Group ID missing");
-    }
+    if (!id) return materialErrorResponse(req, ctx, "OM_MCG_DELETE_FAILED", 400, "Group ID missing");
 
-    // block delete if members exist
     const { count, error: countError } = await serviceRoleClient
       .schema("erp_master")
       .from("material_category_group_member")
@@ -872,6 +1274,8 @@ export async function deleteMaterialCategoryGroupHandler(
     return materialErrorResponse(req, ctx, code, status, "Category group delete failed");
   }
 }
+
+// ── Extension List Handlers ───────────────────────────────────────────────────
 
 export async function listMaterialCompanyExtensionsHandler(
   req: Request,
