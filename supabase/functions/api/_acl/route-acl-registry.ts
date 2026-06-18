@@ -146,6 +146,15 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/om/material/status":                     { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "EDIT"  },
   "POST:/api/om/material/extend-company":             { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
   "POST:/api/om/material/extend-plant":               { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+  "GET:/api/om/material":                             { skipAcl: false, resourceCode: "OM_MATERIAL_LIST",   action: "VIEW"  },
+  "GET:/api/om/material/company-extensions":          { skipAcl: false, resourceCode: "OM_MATERIAL_LIST",   action: "VIEW"  },
+  "GET:/api/om/material/plant-extensions":            { skipAcl: false, resourceCode: "OM_MATERIAL_LIST",   action: "VIEW"  },
+  "POST:/api/om/materials/bulk-save":                 { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+  "POST:/api/om/materials/import":                    { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+  "GET:/api/om/material/company-mapping":             { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "VIEW"  },
+  "POST:/api/om/material/company-map-bulk":           { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+  "DELETE:/api/om/material/company-unmap-bulk":       { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
+  "POST:/api/om/material/company-mapping-import":     { skipAcl: false, resourceCode: "OM_MATERIAL_CREATE", action: "WRITE" },
 
   // ── OM: Vendor ───────────────────────────────────────────────────────────
   "GET:/api/om/vendors":                              { skipAcl: false, resourceCode: "OM_VENDOR_LIST",   action: "VIEW"  },
