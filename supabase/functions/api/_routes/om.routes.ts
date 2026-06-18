@@ -16,6 +16,7 @@ import {
   updateMaterialCategoryGroupHandler,
   deleteMaterialCategoryGroupHandler,
   bulkSaveMaterialsHandler,
+  deleteMaterialsHandler,
   importMaterialsCsvHandler,
   listCompanyMappingHandler,
   bulkMapMaterialsHandler,
@@ -132,6 +133,8 @@ export async function dispatchOmRoutes(
       return await listMaterialPlantExtensionsHandler(req, ctx);
     case "POST:/api/om/materials/bulk-save":
       return await bulkSaveMaterialsHandler(req, ctx);
+    case "DELETE:/api/om/materials":
+      return await deleteMaterialsHandler(req, ctx);
     case "POST:/api/om/materials/import":
       return await importMaterialsCsvHandler(req, ctx);
     case "GET:/api/om/material/company-mapping":

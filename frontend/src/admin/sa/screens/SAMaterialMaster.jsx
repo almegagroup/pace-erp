@@ -20,6 +20,7 @@ import {
   bulkUnmapMaterials,
   importCompanyMapping,
   changeMaterialStatus,
+  deleteMaterials,
   listCompaniesForOm,
   listUoms,
 } from "../../../pages/dashboard/om/omApi.js";
@@ -251,6 +252,47 @@ function MaterialMasterTab({ uoms }) {
     load(page);
   }
 
+  async function handleDeactivate() {
+    if (selectedIds.size === 0) return;
+    setSaving(true);
+    setError("");
+    let failed = 0;
+    for (const id of selectedIds) {
+      try {
+        await changeMaterialStatus({ id, new_status: "INACTIVE" });
+      } catch {
+        failed++;
+      }
+    }
+    setSaving(false);
+    setSelectedIds(new Set());
+    if (failed > 0) setError(`${failed} row(s) could not be deactivated.`);
+    else setNotice("Selected materials deactivated.");
+    load(page);
+  }
+
+  async function handleDelete() {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Delete ${selectedIds.size} material(s)? This cannot be undone.`)) return;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await deleteMaterials([...selectedIds]);
+      const failedRows = result?.errors ?? [];
+      setSelectedIds(new Set());
+      if (failedRows.length > 0) {
+        setError(`${failedRows.length} material(s) could not be deleted — they may have active transactions or mappings.`);
+      } else {
+        setNotice(`${result?.deleted?.length ?? 0} material(s) deleted.`);
+      }
+      load(page);
+    } catch (e) {
+      setError(friendly(e.message));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   /* CSV import */
   async function handleImport() {
     if (!csvText.trim()) { setError("Paste CSV content first."); return; }
@@ -336,13 +378,29 @@ function MaterialMasterTab({ uoms }) {
           CSV Import
         </button>
         {selectedIds.size > 0 && (
-          <button
-            onClick={handleActivate}
-            disabled={saving}
-            className="h-8 border border-emerald-500 bg-emerald-500 px-3 text-sm text-white hover:bg-emerald-600 disabled:opacity-50"
-          >
-            Activate ({selectedIds.size})
-          </button>
+          <>
+            <button
+              onClick={handleActivate}
+              disabled={saving}
+              className="h-8 border border-emerald-500 bg-emerald-500 px-3 text-sm text-white hover:bg-emerald-600 disabled:opacity-50"
+            >
+              Activate ({selectedIds.size})
+            </button>
+            <button
+              onClick={handleDeactivate}
+              disabled={saving}
+              className="h-8 border border-amber-500 bg-amber-500 px-3 text-sm text-white hover:bg-amber-600 disabled:opacity-50"
+            >
+              Deactivate ({selectedIds.size})
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={saving}
+              className="h-8 border border-red-500 bg-red-500 px-3 text-sm text-white hover:bg-red-600 disabled:opacity-50"
+            >
+              Delete ({selectedIds.size})
+            </button>
+          </>
         )}
         {hasEdits && (
           <button

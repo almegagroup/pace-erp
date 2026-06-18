@@ -144,6 +144,18 @@ export async function bulkMapMaterials(payload) {
   );
 }
 
+export async function deleteMaterials(ids) {
+  return fetchJson(
+    "/api/om/materials",
+    {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    },
+    "OM_MATERIAL_DELETE_FAILED"
+  );
+}
+
 export async function bulkUnmapMaterials(payload) {
   return fetchJson(
     "/api/om/material/company-unmap-bulk",

@@ -647,6 +647,52 @@ export async function changeMaterialStatusHandler(
   }
 }
 
+// ── Bulk Delete ───────────────────────────────────────────────────────────────
+
+export async function deleteMaterialsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const body = await parseBody(req);
+    const ids: string[] = Array.isArray(body.ids)
+      ? body.ids.map((id: unknown) => toTrimmedString(id)).filter(Boolean)
+      : [];
+
+    if (ids.length === 0) {
+      return materialErrorResponse(req, ctx, "OM_NO_MATERIALS", 400, "No material IDs provided");
+    }
+
+    const deleted: string[] = [];
+    const errors: { id: string; error: string }[] = [];
+
+    for (const id of ids) {
+      const { error } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .delete()
+        .eq("id", id);
+
+      if (error) {
+        // FK violation = has transactions/extensions
+        const userFriendly = error.code === "23503"
+          ? "OM_MATERIAL_HAS_DEPENDENCIES"
+          : "OM_MATERIAL_DELETE_FAILED";
+        errors.push({ id, error: userFriendly });
+      } else {
+        deleted.push(id);
+      }
+    }
+
+    return okResponse({ deleted, errors }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_MATERIAL_DELETE_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return materialErrorResponse(req, ctx, code, status, "Material delete failed");
+  }
+}
+
 // ── Company Mapping ───────────────────────────────────────────────────────────
 
 export async function listCompanyMappingHandler(
