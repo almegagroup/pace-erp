@@ -21,6 +21,7 @@ import {
   importCompanyMapping,
   changeMaterialStatus,
   listCompaniesForOm,
+  listUoms,
 } from "../../../pages/dashboard/om/omApi.js";
 
 /* ─── constants ─────────────────────────────────────────────────────────── */
@@ -60,6 +61,19 @@ function friendly(code) {
   return ERROR_MESSAGES[code] ?? code;
 }
 
+function useUoms() {
+  const [uoms, setUoms] = useState([]);
+  useEffect(() => {
+    listUoms({ is_active: true, limit: 500 })
+      .then((result) => {
+        if (Array.isArray(result?.data)) setUoms(result.data);
+        else if (Array.isArray(result)) setUoms(result);
+      })
+      .catch(() => {});
+  }, []);
+  return uoms;
+}
+
 function useCompanies() {
   const [companies, setCompanies] = useState([]);
   useEffect(() => {
@@ -76,7 +90,7 @@ function useCompanies() {
    TAB 1 — Material Master Grid
 ══════════════════════════════════════════════════════════════════════════ */
 
-function MaterialMasterTab() {
+function MaterialMasterTab({ uoms }) {
   /* grid data & pagination */
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
@@ -444,6 +458,7 @@ function MaterialMasterTab() {
                 row={nr}
                 onPatch={(f, v) => patchNewRow(nr._key, f, v)}
                 onRemove={() => removeNewRow(nr._key)}
+                uoms={uoms}
               />
             ))}
 
@@ -467,6 +482,7 @@ function MaterialMasterTab() {
                   onActivateEdit={() => setEditingId(row.id)}
                   onPatch={(f, v) => patchBuffer(row.id, f, v)}
                   onDoneEdit={() => setEditingId(null)}
+                  uoms={uoms}
                 />
               ))
             )}
@@ -500,9 +516,10 @@ function MaterialMasterTab() {
 
 /* ── New Row (unsaved) ───────────────────────────────────────────────────── */
 
-function NewRow({ row, onPatch, onRemove }) {
+function NewRow({ row, onPatch, onRemove, uoms }) {
   const cellCls = "border-b border-slate-200 bg-[#fffef0] px-1 py-0.5";
   const inputCls = "h-7 w-full border border-sky-300 bg-white px-1.5 text-xs text-slate-900 outline-none focus:border-sky-500";
+  const selectCls = "h-7 w-full border border-sky-300 bg-white px-1 text-xs text-slate-900 outline-none";
 
   return (
     <tr className="bg-amber-50">
@@ -512,7 +529,7 @@ function NewRow({ row, onPatch, onRemove }) {
         <select
           value={row.material_type}
           onChange={(e) => onPatch("material_type", e.target.value)}
-          className="h-7 w-full border border-sky-300 bg-white px-1 text-xs text-slate-900 outline-none"
+          className={selectCls}
         >
           {MATERIAL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
@@ -540,12 +557,16 @@ function NewRow({ row, onPatch, onRemove }) {
         />
       </td>
       <td className={cellCls}>
-        <input
+        <select
           value={row.base_uom_code}
-          onChange={(e) => onPatch("base_uom_code", e.target.value.toUpperCase())}
-          placeholder="e.g. KG"
-          className={inputCls + " uppercase"}
-        />
+          onChange={(e) => onPatch("base_uom_code", e.target.value)}
+          className={selectCls}
+        >
+          <option value="">— UOM —</option>
+          {uoms.map((u) => (
+            <option key={u.code} value={u.code}>{u.code} | {u.name}</option>
+          ))}
+        </select>
       </td>
       <td className={cellCls}>
         <input
@@ -577,7 +598,7 @@ function NewRow({ row, onPatch, onRemove }) {
 
 /* ── Existing Row ────────────────────────────────────────────────────────── */
 
-function ExistingRow({ row, isEditing, isSelected, onToggleSelect, onActivateEdit, onPatch, onDoneEdit }) {
+function ExistingRow({ row, isEditing, isSelected, onToggleSelect, onActivateEdit, onPatch, onDoneEdit, uoms }) {
   const cellCls = "border-b border-slate-200 px-2 py-1";
   const inputCls = "h-7 w-full border border-sky-300 bg-[#fffef7] px-1.5 text-xs text-slate-900 outline-none focus:border-sky-500";
   const readCls = "text-xs text-slate-800";
@@ -644,7 +665,21 @@ function ExistingRow({ row, isEditing, isSelected, onToggleSelect, onActivateEdi
         )}
       </td>
       <td className={cellCls}>
-        <span className={readCls + " font-mono"}>{row.base_uom_code}</span>
+        {isEditing ? (
+          <select
+            defaultValue={row.base_uom_code}
+            onChange={(e) => onPatch("base_uom_code", e.target.value)}
+            className="h-7 w-full border border-sky-300 bg-white px-1 text-xs text-slate-900 outline-none"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <option value="">— UOM —</option>
+            {uoms.map((u) => (
+              <option key={u.code} value={u.code}>{u.code} | {u.name}</option>
+            ))}
+          </select>
+        ) : (
+          <span className={readCls + " font-mono"}>{row.base_uom_code}</span>
+        )}
       </td>
       <td className={cellCls}>
         {isEditing ? (
@@ -1073,6 +1108,7 @@ const TABS = [
 
 export default function SAMaterialMaster() {
   const [activeTab, setActiveTab] = useState("master");
+  const uoms = useUoms();
 
   return (
     <ErpScreenScaffold eyebrow="SA — Operation Management" title="Material Master">
@@ -1094,7 +1130,7 @@ export default function SAMaterialMaster() {
       </div>
 
       <ErpSectionCard>
-        {activeTab === "master" && <MaterialMasterTab />}
+        {activeTab === "master" && <MaterialMasterTab uoms={uoms} />}
         {activeTab === "mapping" && <CompanyMappingTab />}
       </ErpSectionCard>
     </ErpScreenScaffold>
