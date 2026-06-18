@@ -270,7 +270,9 @@ export async function bulkSaveMaterialsHandler(
             hsn_code: toTrimmedString(row.hsn_code) || null,
             qa_required_on_inward: row.qa_required_on_inward !== false,
             valuation_method: toTrimmedString(row.valuation_method).toUpperCase() || "WEIGHTED_AVERAGE",
-            status: "DRAFT",
+            status: "ACTIVE",
+            approved_by: ctx.auth_user_id,
+            approved_at: new Date().toISOString(),
             created_by: ctx.auth_user_id,
           })
           .select("*")
@@ -447,7 +449,9 @@ export async function importMaterialsCsvHandler(
           hsn_code: (row["hsn_code"] ?? "").trim() || null,
           qa_required_on_inward: true,
           valuation_method: "WEIGHTED_AVERAGE",
-          status: "DRAFT",
+          status: "ACTIVE",
+          approved_by: ctx.auth_user_id,
+          approved_at: new Date().toISOString(),
           created_by: ctx.auth_user_id,
         })
         .select("pace_code")
