@@ -203,8 +203,6 @@ export default function PlantTransferDetailPage() {
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
               <ErpFieldPreview label="Status" value={detail.status || "—"} tone={statusTone(detail.status)} />
               <ErpFieldPreview label="Transfer Type" value={detail.transfer_type || "—"} tone={transferTypeTone(detail.transfer_type)} />
-              <ErpFieldPreview label="Source Plant ID" value={detail.source_plant_id || "—"} />
-              <ErpFieldPreview label="Target Plant ID" value={detail.target_plant_id || "—"} />
               <ErpFieldPreview label="Material ID" value={detail.material_id || "—"} />
               <ErpFieldPreview label="Transfer Qty + UOM" value={`${detail.transfer_qty ?? "—"} ${detail.uom_code || ""}`.trim()} />
               <ErpFieldPreview label="Valuation Rate" value={formatNullableNumber(detail.valuation_rate)} />
@@ -217,8 +215,6 @@ export default function PlantTransferDetailPage() {
             <div className="grid gap-3 md:grid-cols-2">
               <ErpFieldPreview label="Source Company ID" value={detail.source_company_id || "—"} />
               <ErpFieldPreview label="Target Company ID" value={detail.target_company_id || "—"} />
-              <ErpFieldPreview label="Source Plant ID" value={detail.source_plant_id || "—"} />
-              <ErpFieldPreview label="Target Plant ID" value={detail.target_plant_id || "—"} />
               <ErpFieldPreview label="Source SLOC ID" value={detail.source_sloc_id || "—"} />
               <ErpFieldPreview label="Target SLOC ID" value={detail.target_sloc_id || "—"} />
               <ErpFieldPreview label="Source GSTIN" value={detail.source_gstin || "—"} />

@@ -145,27 +145,22 @@ async function hydratePID(documentId: string): Promise<JsonRecord> {
   };
 }
 
-async function getStorageLocationScope(storageLocationId: string, plantId?: string): Promise<{ company_id: string; plant_id: string }> {
-  let query = serviceRoleClient
+async function getStorageLocationScope(storageLocationId: string): Promise<{ company_id: string }> {
+  const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
     .from("storage_location_plant_map")
-    .select("company_id, plant_id")
+    .select("company_id")
     .eq("storage_location_id", storageLocationId)
     .eq("active", true)
-    .limit(1);
+    .limit(1)
+    .maybeSingle();
 
-  if (plantId) {
-    query = query.eq("plant_id", plantId);
-  }
-
-  const { data, error } = await query.maybeSingle();
-  if (error || !data?.company_id || !data?.plant_id) {
+  if (error || !data?.company_id) {
     throw new Error("PI_STORAGE_LOCATION_SCOPE_NOT_FOUND");
   }
 
   return {
     company_id: String(data.company_id),
-    plant_id: String(data.plant_id),
   };
 }
 
@@ -188,17 +183,15 @@ async function getMaterialInfo(materialIds: string[]): Promise<Map<string, JsonR
 }
 
 async function getBookSnapshots(
-  plantId: string,
   storageLocationId: string,
   targetItems?: Array<{ material_id: string; stock_type: string }>,
 ): Promise<Array<{ material_id: string; stock_type: string; book_qty: number; base_uom_code: string }>> {
-  const { company_id } = await getStorageLocationScope(storageLocationId, plantId);
+  const { company_id } = await getStorageLocationScope(storageLocationId);
   let query = serviceRoleClient
     .schema("erp_inventory")
     .from("stock_ledger")
     .select("material_id, stock_type_code, base_uom_code, direction, quantity")
     .eq("company_id", company_id)
-    .eq("plant_id", plantId)
     .eq("storage_location_id", storageLocationId);
 
   const targetMaterialIds = targetItems?.map((item) => item.material_id).filter(Boolean) ?? [];
@@ -268,12 +261,11 @@ async function getBookSnapshots(
 
 async function getItemCandidates(
   mode: string,
-  plantId: string,
   storageLocationId: string,
   rawItems: JsonRecord[],
 ): Promise<Array<{ material_id: string; stock_type: string; book_qty: number; base_uom_code: string }>> {
   if (mode === "LOCATION_WISE") {
-    return getBookSnapshots(plantId, storageLocationId);
+    return getBookSnapshots(storageLocationId);
   }
 
   const targetItems = rawItems
@@ -287,16 +279,15 @@ async function getItemCandidates(
     return [];
   }
 
-  return getBookSnapshots(plantId, storageLocationId, targetItems);
+  return getBookSnapshots(storageLocationId, targetItems);
 }
 
-async function checkPostingBlock(materialId: string, plantId: string, storageLocationId: string): Promise<boolean> {
+async function checkPostingBlock(materialId: string, storageLocationId: string): Promise<boolean> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
     .from("physical_inventory_block")
     .select("id")
     .eq("material_id", materialId)
-    .eq("plant_id", plantId)
     .eq("storage_location_id", storageLocationId)
     .maybeSingle();
 
@@ -335,7 +326,6 @@ export async function createPIDHandler(
   try {
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
-    const plantId = toTrimmedString(body.plant_id);
     const storageLocationId = toTrimmedString(body.storage_location_id);
     const countDate = toTrimmedString(body.count_date);
     const postingDate = toTrimmedString(body.posting_date) || countDate;
@@ -343,13 +333,13 @@ export async function createPIDHandler(
     const notes = toTrimmedString(body.notes);
     const rawItems = Array.isArray(body.items) ? (body.items as JsonRecord[]) : [];
 
-    if (!plantId || !storageLocationId || !countDate || !postingDate || !PID_MODES.has(mode)) {
-      return piErrorResponse(req, ctx, "PI_CREATE_INVALID", 400, "plant_id, storage_location_id, count_date, posting_date, and valid mode are required.");
+    if (!storageLocationId || !countDate || !postingDate || !PID_MODES.has(mode)) {
+      return piErrorResponse(req, ctx, "PI_CREATE_INVALID", 400, "storage_location_id, count_date, posting_date, and valid mode are required.");
     }
 
-    const candidates = await getItemCandidates(mode, plantId, storageLocationId, rawItems);
+    const candidates = await getItemCandidates(mode, storageLocationId, rawItems);
     for (const candidate of candidates) {
-      const blocked = await checkPostingBlock(candidate.material_id, plantId, storageLocationId);
+      const blocked = await checkPostingBlock(candidate.material_id, storageLocationId);
       if (blocked) {
         return piErrorResponse(req, ctx, "MATERIAL_POSTING_BLOCKED", 409, "Material has an active physical inventory count in progress.");
       }
@@ -361,7 +351,6 @@ export async function createPIDHandler(
       .from("physical_inventory_document")
       .insert({
         document_number: documentNumber,
-        plant_id: plantId,
         storage_location_id: storageLocationId,
         count_date: countDate,
         posting_date: postingDate,
@@ -398,7 +387,6 @@ export async function createPIDHandler(
 
       const blockPayload = candidates.map((candidate) => ({
         material_id: candidate.material_id,
-        plant_id: plantId,
         storage_location_id: storageLocationId,
         pi_document_id: document.id,
       }));
@@ -434,7 +422,6 @@ export async function listPIDsHandler(
   try {
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
-    const plantId = toTrimmedString(url.searchParams.get("plant_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 100);
 
@@ -445,9 +432,6 @@ export async function listPIDsHandler(
       .order("created_at", { ascending: false })
       .limit(limit);
 
-    if (plantId) {
-      query = query.eq("plant_id", plantId);
-    }
     if (status && PID_STATUSES.has(status)) {
       query = query.eq("status", status);
     }
@@ -546,13 +530,12 @@ export async function addPIItemHandler(
       return piErrorResponse(req, ctx, "PI_ITEM_MATERIAL_INVALID", 400, "Only RM, PM, and Intermediate materials are allowed.");
     }
 
-    const blocked = await checkPostingBlock(materialId, String(document.plant_id), String(document.storage_location_id));
+    const blocked = await checkPostingBlock(materialId, String(document.storage_location_id));
     if (blocked) {
       return piErrorResponse(req, ctx, "MATERIAL_POSTING_BLOCKED", 409, "Material has an active physical inventory count in progress.");
     }
 
     const [snapshot] = await getBookSnapshots(
-      String(document.plant_id),
       String(document.storage_location_id),
       [{ material_id: materialId, stock_type: stockType }],
     );
@@ -598,7 +581,6 @@ export async function addPIItemHandler(
       .from("physical_inventory_block")
       .insert({
         material_id: materialId,
-        plant_id: document.plant_id,
         storage_location_id: document.storage_location_id,
         pi_document_id: documentId,
       });
@@ -751,7 +733,7 @@ export async function postDifferencesHandler(
     }
 
     const items = await fetchPIItems(documentId);
-    const locationScope = await getStorageLocationScope(String(document.storage_location_id), String(document.plant_id));
+    const locationScope = await getStorageLocationScope(String(document.storage_location_id));
 
     for (const item of items) {
       const physicalQty = parseNullableNumber(item.physical_qty);
@@ -773,7 +755,6 @@ export async function postDifferencesHandler(
             p_posting_date: document.posting_date,
             p_movement_type_code: movementType,
             p_company_id: locationScope.company_id,
-            p_plant_id: document.plant_id,
             p_storage_location_id: document.storage_location_id,
             p_material_id: item.material_id,
             p_quantity: Math.abs(differenceQty),
@@ -809,7 +790,6 @@ export async function postDifferencesHandler(
         .delete()
         .eq("pi_document_id", documentId)
         .eq("material_id", String(item.material_id))
-        .eq("plant_id", String(document.plant_id))
         .eq("storage_location_id", String(document.storage_location_id));
 
       if (blockDeleteError) {

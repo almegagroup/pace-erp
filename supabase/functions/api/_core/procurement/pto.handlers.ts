@@ -107,7 +107,6 @@ async function postStockMovement(params: {
   documentNumber: string;
   movementTypeCode: string;
   companyId: string;
-  plantId: string;
   storageLocationId: string;
   materialId: string;
   quantity: number;
@@ -126,7 +125,6 @@ async function postStockMovement(params: {
       p_posting_date: todayIsoDate(),
       p_movement_type_code: params.movementTypeCode,
       p_company_id: params.companyId,
-      p_plant_id: params.plantId,
       p_storage_location_id: params.storageLocationId,
       p_material_id: params.materialId,
       p_quantity: params.quantity,
@@ -148,7 +146,6 @@ async function postStockMovement(params: {
 
 async function fetchSnapshot(
   companyId: string,
-  plantId: string,
   slocId: string,
   materialId: string,
   stockTypeCode: string,
@@ -158,7 +155,6 @@ async function fetchSnapshot(
     .from("stock_snapshot")
     .select("quantity, valuation_rate")
     .eq("company_id", companyId)
-    .eq("plant_id", plantId)
     .eq("storage_location_id", slocId)
     .eq("material_id", materialId)
     .eq("stock_type_code", stockTypeCode)
@@ -219,10 +215,8 @@ export async function createPTOHandler(
     const body = await parseBody(req);
     const transferType = toUpperTrimmedString(body.transfer_type);
     const sourceCompanyId = toTrimmedString(body.source_company_id);
-    const sourcePlantId = toTrimmedString(body.source_plant_id);
     const sourceSlocId = toTrimmedString(body.source_sloc_id);
     const targetCompanyId = toTrimmedString(body.target_company_id);
-    const targetPlantId = toTrimmedString(body.target_plant_id);
     const targetSlocId = toTrimmedString(body.target_sloc_id);
     const materialId = toTrimmedString(body.material_id);
     const transferQty = parsePositiveNumber(body.transfer_qty);
@@ -232,10 +226,8 @@ export async function createPTOHandler(
     if (
       !PTO_TRANSFER_TYPES.has(transferType)
       || !sourceCompanyId
-      || !sourcePlantId
       || !sourceSlocId
       || !targetCompanyId
-      || !targetPlantId
       || !targetSlocId
       || !materialId
       || !transferQty
@@ -254,10 +246,8 @@ export async function createPTOHandler(
         transfer_type: transferType,
         status: "DRAFT",
         source_company_id: sourceCompanyId,
-        source_plant_id: sourcePlantId,
         source_sloc_id: sourceSlocId,
         target_company_id: targetCompanyId,
-        target_plant_id: targetPlantId,
         target_sloc_id: targetSlocId,
         source_gstin: toTrimmedString(body.source_gstin) || null,
         target_gstin: toTrimmedString(body.target_gstin) || null,
@@ -403,7 +393,6 @@ export async function oneStepTransferHandler(
     const quantity = Number(pto.transfer_qty ?? 0);
     const snapshot = await fetchSnapshot(
       String(pto.source_company_id),
-      String(pto.source_plant_id),
       String(pto.source_sloc_id),
       String(pto.material_id),
       "UNRESTRICTED",
@@ -417,7 +406,6 @@ export async function oneStepTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P301",
       companyId: String(pto.source_company_id),
-      plantId: String(pto.source_plant_id),
       storageLocationId: String(pto.source_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -431,7 +419,6 @@ export async function oneStepTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P301",
       companyId: String(pto.target_company_id),
-      plantId: String(pto.target_plant_id),
       storageLocationId: String(pto.target_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -480,7 +467,6 @@ export async function issueTransferHandler(
     const quantity = Number(pto.transfer_qty ?? 0);
     const snapshot = await fetchSnapshot(
       String(pto.source_company_id),
-      String(pto.source_plant_id),
       String(pto.source_sloc_id),
       String(pto.material_id),
       "UNRESTRICTED",
@@ -494,7 +480,6 @@ export async function issueTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P303",
       companyId: String(pto.source_company_id),
-      plantId: String(pto.source_plant_id),
       storageLocationId: String(pto.source_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -508,7 +493,6 @@ export async function issueTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P303",
       companyId: String(pto.source_company_id),
-      plantId: String(pto.source_plant_id),
       storageLocationId: String(pto.source_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -557,7 +541,6 @@ export async function receiveTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P305",
       companyId: String(pto.source_company_id),
-      plantId: String(pto.source_plant_id),
       storageLocationId: String(pto.source_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -571,7 +554,6 @@ export async function receiveTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P305",
       companyId: String(pto.target_company_id),
-      plantId: String(pto.target_plant_id),
       storageLocationId: String(pto.target_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -635,14 +617,13 @@ export async function storageLocationTransferHandler(
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
-    const plantId = toTrimmedString(body.plant_id);
     const sourceSlocId = toTrimmedString(body.source_sloc_id);
     const targetSlocId = toTrimmedString(body.target_sloc_id);
     const materialId = toTrimmedString(body.material_id);
     const transferQty = parsePositiveNumber(body.transfer_qty);
     const uomCode = toTrimmedString(body.uom_code);
 
-    if (!companyId || !plantId || !sourceSlocId || !targetSlocId || !materialId || !transferQty || !uomCode) {
+    if (!companyId || !sourceSlocId || !targetSlocId || !materialId || !transferQty || !uomCode) {
       return ptoErrorResponse(req, ctx, "PTO_SLOC_TRANSFER_INVALID", 400, "Missing required SLOC transfer fields.");
     }
     if (sourceSlocId === targetSlocId) {
@@ -651,7 +632,6 @@ export async function storageLocationTransferHandler(
 
     const snapshot = await fetchSnapshot(
       companyId,
-      plantId,
       sourceSlocId,
       materialId,
       "UNRESTRICTED",
@@ -666,7 +646,6 @@ export async function storageLocationTransferHandler(
       documentNumber,
       movementTypeCode: "P311",
       companyId,
-      plantId,
       storageLocationId: sourceSlocId,
       materialId,
       quantity: transferQty,
@@ -680,7 +659,6 @@ export async function storageLocationTransferHandler(
       documentNumber,
       movementTypeCode: "P311",
       companyId,
-      plantId,
       storageLocationId: targetSlocId,
       materialId,
       quantity: transferQty,

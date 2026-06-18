@@ -118,21 +118,17 @@ export async function listStorageLocationsHandler(
     assertOmAdminContext(ctx);
 
     const url = new URL(req.url);
-    const plantId = toTrimmedString(url.searchParams.get("plant_id"));
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const locationType = toTrimmedString(url.searchParams.get("location_type")).toUpperCase();
     const isActive = url.searchParams.get("is_active");
 
-    if (plantId) {
+    if (companyId) {
       let mapQuery = serviceRoleClient
         .schema("erp_inventory")
         .from("storage_location_plant_map")
-        .select("storage_location_id, company_id, plant_id, is_default_grn_location, allowed_stock_types, active")
-        .eq("plant_id", plantId);
+        .select("storage_location_id, company_id, is_default_grn_location, allowed_stock_types, active")
+        .eq("company_id", companyId);
 
-      if (companyId) {
-        mapQuery = mapQuery.eq("company_id", companyId);
-      }
       if (isActive === "true") {
         mapQuery = mapQuery.eq("active", true);
       } else if (isActive === "false") {
@@ -173,7 +169,7 @@ export async function listStorageLocationsHandler(
       const mapByLocationId = new Map((maps ?? []).map((row) => [row.storage_location_id, row]));
       const merged = (locations ?? []).map((row) => ({
         ...row,
-        plant_map: mapByLocationId.get(row.id) ?? null,
+        company_map: mapByLocationId.get(row.id) ?? null,
       }));
 
       return okResponse({ data: merged }, ctx.request_id, req);
@@ -276,18 +272,16 @@ export async function listPlantAssignmentsHandler(
     assertOmAdminContext(ctx);
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
-    const plantId = toTrimmedString(url.searchParams.get("plant_id"));
 
-    if (!companyId || !plantId) {
-      return locationErrorResponse(req, ctx, "OM_LOCATION_LIST_FAILED", 400, "company_id and plant_id required");
+    if (!companyId) {
+      return locationErrorResponse(req, ctx, "OM_LOCATION_LIST_FAILED", 400, "company_id required");
     }
 
     const { data: maps, error: mapError } = await serviceRoleClient
       .schema("erp_inventory")
       .from("storage_location_plant_map")
-      .select("storage_location_id, company_id, plant_id, active, is_default_grn_location, allowed_stock_types")
-      .eq("company_id", companyId)
-      .eq("plant_id", plantId);
+      .select("storage_location_id, company_id, active, is_default_grn_location, allowed_stock_types")
+      .eq("company_id", companyId);
 
     if (mapError) throw new Error("OM_LOCATION_LIST_FAILED");
 
@@ -322,10 +316,9 @@ export async function unmapStorageLocationFromPlantHandler(
     const storageLocationIds: string[] = Array.isArray(body.storage_location_ids)
       ? body.storage_location_ids.map((v) => toTrimmedString(v)).filter(Boolean)
       : [toTrimmedString(body.storage_location_id)].filter(Boolean);
-    const plantId = toTrimmedString(body.plant_id);
     const companyId = toTrimmedString(body.company_id);
 
-    if (storageLocationIds.length === 0 || !plantId || !companyId) {
+    if (storageLocationIds.length === 0 || !companyId) {
       return locationErrorResponse(req, ctx, "OM_LOCATION_UNMAP_FAILED", 400, "Missing required fields");
     }
 
@@ -334,7 +327,6 @@ export async function unmapStorageLocationFromPlantHandler(
       .from("storage_location_plant_map")
       .delete()
       .in("storage_location_id", storageLocationIds)
-      .eq("plant_id", plantId)
       .eq("company_id", companyId);
 
     if (error) throw new Error("OM_LOCATION_UNMAP_FAILED");
@@ -354,14 +346,10 @@ export async function mapStorageLocationToPlantHandler(
 
     const body = await parseBody(req);
     const storageLocationId = toTrimmedString(body.storage_location_id);
-    const plantId = toTrimmedString(body.plant_id);
     const companyId = toTrimmedString(body.company_id);
 
     if (!(await getLocationById(storageLocationId))) {
       return locationErrorResponse(req, ctx, "OM_LOCATION_NOT_FOUND", 404, "Storage location not found");
-    }
-    if (!(await ensurePlantExists(plantId))) {
-      return locationErrorResponse(req, ctx, "OM_PLANT_NOT_FOUND", 404, "Plant not found");
     }
     if (!companyId) {
       return locationErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found");
@@ -372,7 +360,6 @@ export async function mapStorageLocationToPlantHandler(
       .from("storage_location_plant_map")
       .upsert({
         storage_location_id: storageLocationId,
-        plant_id: plantId,
         company_id: companyId,
         is_default_grn_location: body.is_default_grn_location === true,
         allowed_stock_types: Array.isArray(body.allowed_stock_types)
@@ -380,7 +367,7 @@ export async function mapStorageLocationToPlantHandler(
           : ["UNRESTRICTED"],
         active: body.is_active !== false && body.active !== false,
         created_by: ctx.auth_user_id,
-      }, { onConflict: "storage_location_id,company_id,plant_id" })
+      }, { onConflict: "storage_location_id,company_id" })
       .select("*")
       .single();
 

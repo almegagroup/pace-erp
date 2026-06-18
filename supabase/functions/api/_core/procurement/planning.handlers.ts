@@ -25,7 +25,6 @@ type PlanningRow = {
   material_code: string;
   material_name: string;
   base_uom_code: string;
-  plant_id: string;
   company_id: string;
   unrestricted_qty: number;
   qa_qty: number;
@@ -101,12 +100,8 @@ function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline/ACL layer.
 }
 
-function buildKey(companyId: string, plantId: string, materialId: string): string {
-  return `${companyId}::${plantId}::${materialId}`;
-}
-
-function buildMaterialPlantKey(materialId: string, plantId: string): string {
-  return `${materialId}::${plantId}`;
+function buildKey(companyId: string, materialId: string): string {
+  return `${companyId}::${materialId}`;
 }
 
 function getNestedRow(
@@ -130,7 +125,6 @@ export async function getProcurementPlanningHandler(
 
     const url = new URL(req.url);
     const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? "");
-    const plantIdFilter = toTrimmedString(url.searchParams.get("plant_id") ?? "");
     const materialIdFilter = toTrimmedString(url.searchParams.get("material_id") ?? "");
     const shortageOnly = url.searchParams.get("shortage_only") === "true";
     const limit = parsePositiveInt(url.searchParams.get("limit"), 200);
@@ -146,7 +140,7 @@ export async function getProcurementPlanningHandler(
         let query = serviceRoleClient
           .schema("erp_inventory")
           .from("stock_snapshot")
-          .select("company_id, plant_id, material_id, stock_type_code, quantity");
+          .select("company_id, material_id, stock_type_code, quantity");
 
         if (companyId) {
           query = query.eq("company_id", companyId);
@@ -162,10 +156,9 @@ export async function getProcurementPlanningHandler(
         let query = serviceRoleClient
           .schema("erp_procurement")
           .from("purchase_order_line")
-          .select("material_id, open_qty, line_status, purchase_order!inner(company_id, plant_id, status)")
+          .select("material_id, open_qty, line_status, purchase_order!inner(company_id, status)")
           .in("line_status", ["OPEN", "PARTIALLY_RECEIVED"])
-          .in("purchase_order.status", ["APPROVED", "CONFIRMED"])
-          .not("purchase_order.plant_id", "is", null);
+          .in("purchase_order.status", ["APPROVED", "CONFIRMED"]);
 
         if (companyId) {
           query = query.eq("purchase_order.company_id", companyId);
@@ -181,9 +174,8 @@ export async function getProcurementPlanningHandler(
         let query = serviceRoleClient
           .schema("erp_procurement")
           .from("consignment_note")
-          .select("material_id, dispatch_qty, status, purchase_order!inner(company_id, plant_id)")
-          .eq("status", "IN_TRANSIT")
-          .not("purchase_order.plant_id", "is", null);
+          .select("material_id, dispatch_qty, status, purchase_order!inner(company_id)")
+          .eq("status", "IN_TRANSIT");
 
         if (companyId) {
           query = query.eq("purchase_order.company_id", companyId);
@@ -199,7 +191,7 @@ export async function getProcurementPlanningHandler(
         let query = serviceRoleClient
           .schema("erp_master")
           .from("material_plant_ext")
-          .select("company_id, plant_id, material_id, safety_stock_qty, reorder_point_qty, min_order_qty, lead_time_days, status")
+          .select("company_id, material_id, safety_stock_qty, reorder_point_qty, min_order_qty, lead_time_days, status")
           .eq("status", "ACTIVE");
 
         if (companyId) {
@@ -216,7 +208,7 @@ export async function getProcurementPlanningHandler(
         let query = serviceRoleClient
           .schema("erp_inventory")
           .from("stock_ledger")
-          .select("material_id, plant_id, posting_date, direction, movement_type_code")
+          .select("material_id, posting_date, direction, movement_type_code")
           .eq("direction", "IN")
           .in("movement_type_code", ["P101", "P103", "P561", "P563", "P565"]);
 
@@ -238,12 +230,11 @@ export async function getProcurementPlanningHandler(
 
     for (const row of snapshotResp) {
       const companyIdValue = toTrimmedString(row.company_id);
-      const plantIdValue = toTrimmedString(row.plant_id);
       const materialIdValue = toTrimmedString(row.material_id);
-      if (!companyIdValue || !plantIdValue || !materialIdValue) {
+      if (!companyIdValue || !materialIdValue) {
         continue;
       }
-      const key = buildKey(companyIdValue, plantIdValue, materialIdValue);
+      const key = buildKey(companyIdValue, materialIdValue);
       const stockTypeCode = toUpperTrimmedString(row.stock_type_code);
       const stockTypeMap = snapshotMap.get(key) ?? {};
       stockTypeMap[stockTypeCode] = normalizeQty(
@@ -257,12 +248,11 @@ export async function getProcurementPlanningHandler(
     for (const row of poResp) {
       const purchaseOrder = getNestedRow(row.purchase_order);
       const companyIdValue = toTrimmedString(purchaseOrder?.company_id);
-      const plantIdValue = toTrimmedString(purchaseOrder?.plant_id);
       const materialIdValue = toTrimmedString(row.material_id);
-      if (!companyIdValue || !plantIdValue || !materialIdValue) {
+      if (!companyIdValue || !materialIdValue) {
         continue;
       }
-      const key = buildKey(companyIdValue, plantIdValue, materialIdValue);
+      const key = buildKey(companyIdValue, materialIdValue);
       poMap.set(
         key,
         normalizeQty((poMap.get(key) ?? 0) + (parseNullableNumber(row.open_qty) ?? 0)),
@@ -274,12 +264,11 @@ export async function getProcurementPlanningHandler(
     for (const row of csnResp) {
       const purchaseOrder = getNestedRow(row.purchase_order);
       const companyIdValue = toTrimmedString(purchaseOrder?.company_id);
-      const plantIdValue = toTrimmedString(purchaseOrder?.plant_id);
       const materialIdValue = toTrimmedString(row.material_id);
-      if (!companyIdValue || !plantIdValue || !materialIdValue) {
+      if (!companyIdValue || !materialIdValue) {
         continue;
       }
-      const key = buildKey(companyIdValue, plantIdValue, materialIdValue);
+      const key = buildKey(companyIdValue, materialIdValue);
       csnMap.set(
         key,
         normalizeQty((csnMap.get(key) ?? 0) + (parseNullableNumber(row.dispatch_qty) ?? 0)),
@@ -290,12 +279,11 @@ export async function getProcurementPlanningHandler(
 
     for (const row of safetyResp) {
       const companyIdValue = toTrimmedString(row.company_id);
-      const plantIdValue = toTrimmedString(row.plant_id);
       const materialIdValue = toTrimmedString(row.material_id);
-      if (!companyIdValue || !plantIdValue || !materialIdValue) {
+      if (!companyIdValue || !materialIdValue) {
         continue;
       }
-      const key = buildKey(companyIdValue, plantIdValue, materialIdValue);
+      const key = buildKey(companyIdValue, materialIdValue);
       safetyMap.set(key, {
         safety_stock_qty: normalizeQty(row.safety_stock_qty),
         reorder_point_qty: normalizeQty(row.reorder_point_qty),
@@ -307,16 +295,14 @@ export async function getProcurementPlanningHandler(
     }
 
     for (const row of lastGrResp) {
-      const plantIdValue = toTrimmedString(row.plant_id);
       const materialIdValue = toTrimmedString(row.material_id);
       const postingDate = toTrimmedString(row.posting_date);
-      if (!plantIdValue || !materialIdValue || !postingDate) {
+      if (!materialIdValue || !postingDate) {
         continue;
       }
-      const key = buildMaterialPlantKey(materialIdValue, plantIdValue);
-      const existingDate = lastGrMap.get(key) ?? "";
+      const existingDate = lastGrMap.get(materialIdValue) ?? "";
       if (!existingDate || postingDate > existingDate) {
-        lastGrMap.set(key, postingDate);
+        lastGrMap.set(materialIdValue, postingDate);
       }
     }
 
@@ -344,8 +330,8 @@ export async function getProcurementPlanningHandler(
     }
 
     let items = Array.from(keySet).map((key): PlanningRow | null => {
-      const [rowCompanyId, rowPlantId, rowMaterialId] = key.split("::");
-      if (!rowCompanyId || !rowPlantId || !rowMaterialId) {
+      const [rowCompanyId, rowMaterialId] = key.split("::");
+      if (!rowCompanyId || !rowMaterialId) {
         return null;
       }
 
@@ -373,7 +359,6 @@ export async function getProcurementPlanningHandler(
         material_code: toTrimmedString(material?.material_code),
         material_name: toTrimmedString(material?.material_name),
         base_uom_code: toTrimmedString(material?.base_uom_code),
-        plant_id: rowPlantId,
         company_id: rowCompanyId,
         unrestricted_qty: unrestrictedQty,
         qa_qty: qaQty,
@@ -385,17 +370,13 @@ export async function getProcurementPlanningHandler(
         planned_production_req_qty: 0,
         safety_stock_qty: safetyStockQty,
         net_available: netAvailable,
-        last_gr_date: lastGrMap.get(buildMaterialPlantKey(rowMaterialId, rowPlantId)) ?? null,
+        last_gr_date: lastGrMap.get(rowMaterialId) ?? null,
         suggested_pr_qty: suggestedPrQty,
         reorder_point_qty: normalizeQty(safetyMeta.reorder_point_qty),
         min_order_qty: normalizeQty(safetyMeta.min_order_qty),
         lead_time_days: safetyMeta.lead_time_days,
       };
     }).filter((row): row is PlanningRow => row !== null);
-
-    if (plantIdFilter) {
-      items = items.filter((row) => row.plant_id === plantIdFilter);
-    }
 
     if (materialIdFilter) {
       items = items.filter((row) => row.material_id === materialIdFilter);

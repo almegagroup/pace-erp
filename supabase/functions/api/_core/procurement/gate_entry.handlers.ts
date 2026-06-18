@@ -308,7 +308,6 @@ export async function createGateEntryHandler(
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
-    const plantId = toTrimmedString(body.plant_id) || null;
     const geDate = toTrimmedString(body.entry_date ?? body.ge_date) || todayIsoDate();
     const vehicleNumber = toTrimmedString(body.vehicle_number);
     const gateStaffId = toTrimmedString(body.gate_staff_id) || ctx.auth_user_id;
@@ -386,7 +385,6 @@ export async function createGateEntryHandler(
         ge_number: geNumber,
         ge_date: geDate,
         company_id: companyId,
-        plant_id: plantId,
         ge_type: geType,
         vehicle_number: vehicleNumber,
         driver_name: toTrimmedString(body.driver_name) || null,
@@ -533,7 +531,6 @@ export async function updateGateEntryHandler(
         method: "POST",
         body: JSON.stringify({
           company_id: gateEntry.company_id,
-          plant_id: gateEntry.plant_id,
           entry_date: geDate || gateEntry.ge_date,
           vehicle_number: vehicleNumber || gateEntry.vehicle_number,
           driver_name: driverName || gateEntry.driver_name,
@@ -679,7 +676,6 @@ export async function createGateExitInboundHandler(
         exit_date: toTrimmedString(body.exit_date) || todayIsoDate(),
         exit_time: toTrimmedString(body.exit_time) || null,
         company_id: gateEntry.company_id,
-        plant_id: gateEntry.plant_id,
         gate_entry_id: gateEntryId,
         vehicle_number: toTrimmedString(body.vehicle_number) || gateEntry.vehicle_number,
         driver_name: toTrimmedString(body.driver_name) || gateEntry.driver_name || null,

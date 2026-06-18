@@ -178,28 +178,24 @@ async function fetchMaterial(materialId: string): Promise<MaterialRow> {
   return data as MaterialRow;
 }
 
-async function getPlantForLocation(companyId: string, storageLocationId: string): Promise<string> {
+async function verifyLocationMapped(companyId: string, storageLocationId: string): Promise<void> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
     .from("storage_location_plant_map")
-    .select("plant_id")
+    .select("storage_location_id")
     .eq("company_id", companyId)
     .eq("storage_location_id", storageLocationId)
     .eq("active", true)
-    .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
 
-  if (error || !data?.plant_id) {
-    throw new Error("GRN_PLANT_MAP_NOT_FOUND");
+  if (error || !data) {
+    throw new Error("GRN_LOCATION_MAP_NOT_FOUND");
   }
-
-  return String(data.plant_id);
 }
 
 async function hasPhysicalInventoryBlock(
   materialId: string,
-  plantId: string,
   storageLocationId: string,
 ): Promise<boolean> {
   const { data, error } = await serviceRoleClient
@@ -207,7 +203,6 @@ async function hasPhysicalInventoryBlock(
     .from("physical_inventory_block")
     .select("id")
     .eq("material_id", materialId)
-    .eq("plant_id", plantId)
     .eq("storage_location_id", storageLocationId)
     .maybeSingle();
 
@@ -325,7 +320,6 @@ async function createQaDocumentForLine(
     .insert({
       qa_number: qaNumber,
       company_id: grn.company_id,
-      plant_id: null,
       grn_id: grn.id,
       grn_line_id: line.id,
       po_id: line.po_line_id ? grn.po_id : null,
@@ -673,10 +667,9 @@ export async function postGRNHandler(
         return procurementErrorResponse(req, ctx, "GRN_STORAGE_REQUIRED", 400, "Every GRN line must have storage_location_id before posting.");
       }
 
-      const plantId = await getPlantForLocation(String(grn.company_id), String(line.storage_location_id));
+      await verifyLocationMapped(String(grn.company_id), String(line.storage_location_id));
       const postingBlocked = await hasPhysicalInventoryBlock(
         String(line.material_id),
-        plantId,
         String(line.storage_location_id),
       );
       if (postingBlocked) {
@@ -702,7 +695,6 @@ export async function postGRNHandler(
           p_posting_date: grn.posting_date,
           p_movement_type_code: movementTypeCode,
           p_company_id: grn.company_id,
-          p_plant_id: plantId,
           p_storage_location_id: line.storage_location_id,
           p_material_id: line.material_id,
           p_quantity: receivedQty,
@@ -894,7 +886,6 @@ export async function reverseGRNHandler(
           p_posting_date: todayIsoDate(),
           p_movement_type_code: "P102",
           p_company_id: grn.company_id,
-          p_plant_id: null,
           p_storage_location_id: line.storage_location_id,
           p_material_id: line.material_id,
           p_quantity: receivedQty,

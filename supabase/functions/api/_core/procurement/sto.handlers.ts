@@ -188,28 +188,8 @@ async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promi
   };
 }
 
-async function getPlantForLocation(companyId: string, storageLocationId: string): Promise<string> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_inventory")
-    .from("storage_location_plant_map")
-    .select("plant_id")
-    .eq("company_id", companyId)
-    .eq("storage_location_id", storageLocationId)
-    .eq("active", true)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (error || !data?.plant_id) {
-    throw new Error("STO_PLANT_MAP_NOT_FOUND");
-  }
-
-  return String(data.plant_id);
-}
-
 async function hasPhysicalInventoryBlock(
   materialId: string,
-  plantId: string,
   storageLocationId: string,
 ): Promise<boolean> {
   const { data, error } = await serviceRoleClient
@@ -217,7 +197,6 @@ async function hasPhysicalInventoryBlock(
     .from("physical_inventory_block")
     .select("id")
     .eq("material_id", materialId)
-    .eq("plant_id", plantId)
     .eq("storage_location_id", storageLocationId)
     .maybeSingle();
 
@@ -234,13 +213,11 @@ async function getSnapshotForLine(companyId: string, line: StoLineRow): Promise<
     throw new Error("STO_SENDING_LOCATION_REQUIRED");
   }
 
-  const plantId = await getPlantForLocation(companyId, sendingLocationId);
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
     .from("stock_snapshot")
     .select("*")
     .eq("company_id", companyId)
-    .eq("plant_id", plantId)
     .eq("storage_location_id", sendingLocationId)
     .eq("material_id", String(line.material_id))
     .eq("stock_type_code", "UNRESTRICTED")
@@ -251,7 +228,7 @@ async function getSnapshotForLine(companyId: string, line: StoLineRow): Promise<
     throw new Error("INSUFFICIENT_STOCK");
   }
 
-  return { ...data, plant_id: plantId };
+  return data;
 }
 
 async function getSubCsnById(csnId: string, companyId: string): Promise<JsonRecord> {
@@ -645,7 +622,6 @@ export async function dispatchSTOHandler(
 
       const postingBlocked = await hasPhysicalInventoryBlock(
         String(line.material_id),
-        String(snapshot.plant_id),
         String(line.sending_storage_location_id),
       );
       if (postingBlocked) {
@@ -666,7 +642,6 @@ export async function dispatchSTOHandler(
           p_posting_date: todayIsoDate(),
           p_movement_type_code: "STO_ISSUE",
           p_company_id: sto.sending_company_id,
-          p_plant_id: snapshot.plant_id,
           p_storage_location_id: line.sending_storage_location_id,
           p_material_id: line.material_id,
           p_quantity: requiredQty,
@@ -765,7 +740,6 @@ export async function dispatchSTOHandler(
         exit_time: toTrimmedString(body.exit_time) || null,
         exit_type: "STO",
         company_id: sto.sending_company_id,
-        plant_id: null,
         sto_id: stoId,
         dc_id: dc.id,
         vehicle_number: toTrimmedString(body.vehicle_number) || "STO-VEHICLE",

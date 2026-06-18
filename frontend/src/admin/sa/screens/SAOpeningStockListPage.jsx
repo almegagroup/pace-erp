@@ -49,16 +49,6 @@ async function listCompanies() {
   return json.data.companies;
 }
 
-async function listProjectsByCompany(companyId) {
-  if (!companyId) return [];
-  const response = await fetch(
-    `${import.meta.env.VITE_API_BASE}/api/admin/projects?company_id=${encodeURIComponent(companyId)}`,
-    { credentials: "include" },
-  );
-  const json = await readJsonSafe(response);
-  if (!response.ok || !json?.ok) return [];
-  return Array.isArray(json?.data?.projects) ? json.data.projects : [];
-}
 
 function formatDate(value) {
   if (!value) return "-";
@@ -70,14 +60,12 @@ export default function SAOpeningStockListPage() {
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [companies, setCompanies] = useState([]);
-  const [formPlants, setFormPlants] = useState([]);
   const [filters, setFilters] = useState({
     company_id: "",
     status: "",
   });
   const [form, setForm] = useState({
     company_id: "",
-    plant_id: "",
     cut_off_date: "2026-06-30",
     notes: "",
   });
@@ -138,14 +126,9 @@ export default function SAOpeningStockListPage() {
     void loadScreenData(filters);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (!form.company_id) { setFormPlants([]); setForm((p) => ({ ...p, plant_id: "" })); return; }
-    listProjectsByCompany(form.company_id).then((plants) => setFormPlants(plants)).catch(() => setFormPlants([]));
-  }, [form.company_id]); // eslint-disable-line react-hooks/exhaustive-deps
-
   async function handleCreateDocument() {
-    if (!form.company_id || !form.plant_id || !form.cut_off_date) {
-      setError("Company, plant, and cut-off date are required.");
+    if (!form.company_id || !form.cut_off_date) {
+      setError("Company and cut-off date are required.");
       return;
     }
 
@@ -155,14 +138,12 @@ export default function SAOpeningStockListPage() {
     try {
       const created = await createOpeningStockDocument({
         company_id: form.company_id,
-        plant_id: form.plant_id,
         cut_off_date: form.cut_off_date,
         notes: form.notes.trim() || null,
       });
       setNotice(`Opening stock document ${created.document_number ?? "created"} is ready in DRAFT.`);
       setForm((current) => ({
         ...current,
-        plant_id: "",
         notes: "",
       }));
       await loadScreenData(filters);
@@ -276,7 +257,6 @@ export default function SAOpeningStockListPage() {
                     label: "Company",
                     render: (row) => companyMap.get(row.company_id) ?? row.company_id,
                   },
-                  { key: "plant_id", label: "Plant", width: "150px" },
                   {
                     key: "cut_off_date",
                     label: "Cut-off Date",
@@ -339,21 +319,6 @@ export default function SAOpeningStockListPage() {
                   {companyOptions.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
-                    </option>
-                  ))}
-                </select>
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Plant" required>
-                <select
-                  value={form.plant_id}
-                  onChange={(event) => setForm((current) => ({ ...current, plant_id: event.target.value }))}
-                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                  disabled={!form.company_id}
-                >
-                  <option value="">{form.company_id ? "Select plant" : "Select company first"}</option>
-                  {formPlants.map((plant) => (
-                    <option key={plant.id} value={plant.id}>
-                      {plant.project_code} | {plant.project_name}
                     </option>
                   ))}
                 </select>

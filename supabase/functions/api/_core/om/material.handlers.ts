@@ -504,7 +504,6 @@ export async function extendMaterialToPlantHandler(
     const body = await parseBody(req);
     const materialId = toTrimmedString(body.material_id);
     const companyId = toTrimmedString(body.company_id);
-    const plantId = toTrimmedString(body.plant_id);
 
     if (!(await getMaterialById(materialId))) {
       return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
@@ -512,14 +511,10 @@ export async function extendMaterialToPlantHandler(
     if (!(await ensureCompanyExists(companyId))) {
       return materialErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found");
     }
-    if (!(await ensurePlantExists(plantId))) {
-      return materialErrorResponse(req, ctx, "OM_PLANT_NOT_FOUND", 404, "Plant not found");
-    }
 
     const payload = {
       material_id: materialId,
       company_id: companyId,
-      plant_id: plantId,
       default_storage_location_id: toTrimmedString(body.default_storage_location_id) || null,
       qa_required_on_inward_override: body.qa_required_on_inward_override ?? null,
       safety_stock_qty: body.safety_stock ?? body.safety_stock_qty ?? null,
@@ -535,7 +530,7 @@ export async function extendMaterialToPlantHandler(
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("material_plant_ext")
-      .upsert(payload, { onConflict: "material_id,company_id,plant_id" })
+      .upsert(payload, { onConflict: "material_id,company_id" })
       .select("*")
       .single();
 
@@ -916,7 +911,7 @@ export async function listMaterialPlantExtensionsHandler(
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("material_plant_ext")
-      .select("*, companies:company_id(id, company_code, company_name), projects:plant_id(id, project_code, project_name)")
+      .select("*, companies:company_id(id, company_code, company_name)")
       .eq("material_id", materialId)
       .order("created_at", { ascending: true });
     if (error) throw new Error("OM_MATERIAL_PLANT_EXT_LIST_FAILED");

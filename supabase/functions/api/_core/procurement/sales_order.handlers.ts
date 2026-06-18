@@ -207,28 +207,8 @@ async function hydrateSo(soId: string, ctx?: ProcurementHandlerContext): Promise
   };
 }
 
-async function getPlantForLocation(companyId: string, storageLocationId: string): Promise<string> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_inventory")
-    .from("storage_location_plant_map")
-    .select("plant_id")
-    .eq("company_id", companyId)
-    .eq("storage_location_id", storageLocationId)
-    .eq("active", true)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (error || !data?.plant_id) {
-    throw new Error("SO_PLANT_MAP_NOT_FOUND");
-  }
-
-  return String(data.plant_id);
-}
-
 async function hasPhysicalInventoryBlock(
   materialId: string,
-  plantId: string,
   storageLocationId: string,
 ): Promise<boolean> {
   const { data, error } = await serviceRoleClient
@@ -236,7 +216,6 @@ async function hasPhysicalInventoryBlock(
     .from("physical_inventory_block")
     .select("id")
     .eq("material_id", materialId)
-    .eq("plant_id", plantId)
     .eq("storage_location_id", storageLocationId)
     .maybeSingle();
 
@@ -252,13 +231,11 @@ async function getSnapshotForIssue(
   storageLocationId: string,
   materialId: string,
 ): Promise<JsonRecord> {
-  const plantId = await getPlantForLocation(companyId, storageLocationId);
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
     .from("stock_snapshot")
     .select("*")
     .eq("company_id", companyId)
-    .eq("plant_id", plantId)
     .eq("storage_location_id", storageLocationId)
     .eq("material_id", materialId)
     .eq("stock_type_code", "UNRESTRICTED")
@@ -269,7 +246,7 @@ async function getSnapshotForIssue(
     throw new Error("INSUFFICIENT_STOCK");
   }
 
-  return { ...data, plant_id: plantId };
+  return data;
 }
 
 async function fetchSalesInvoice(invoiceId: string): Promise<SalesInvoiceRow> {
@@ -713,9 +690,8 @@ export async function issueSOStockHandler(
 
     const soLines = await fetchSoLines(soId);
     const soLineMap = new Map(soLines.map((line) => [String(line.id), line]));
-    const dispatchResults: Array<{ soLine: SoLineRow; issueQty: number; stockDocumentId: string; plantId: string; netRate: number }> = [];
+    const dispatchResults: Array<{ soLine: SoLineRow; issueQty: number; stockDocumentId: string; netRate: number }> = [];
     let totalDispatchQty = 0;
-    let firstPlantId: string | null = null;
 
     for (const requestLine of requestedLines) {
       const soLineId = toTrimmedString(requestLine.so_line_id);
@@ -750,7 +726,6 @@ export async function issueSOStockHandler(
 
       const postingBlocked = await hasPhysicalInventoryBlock(
         String(soLine.material_id),
-        String(snapshot.plant_id),
         storageLocationId,
       );
       if (postingBlocked) {
@@ -771,7 +746,6 @@ export async function issueSOStockHandler(
           p_posting_date: todayIsoDate(),
           p_movement_type_code: "SALES_ISSUE",
           p_company_id: so.company_id,
-          p_plant_id: snapshot.plant_id,
           p_storage_location_id: storageLocationId,
           p_material_id: soLine.material_id,
           p_quantity: issueQty,
@@ -816,13 +790,9 @@ export async function issueSOStockHandler(
         soLine: { ...soLine, issue_storage_location_id: storageLocationId },
         issueQty,
         stockDocumentId,
-        plantId: String(snapshot.plant_id),
         netRate: parseNullableNumber(soLine.net_rate) ?? 0,
       });
       totalDispatchQty += issueQty;
-      if (!firstPlantId) {
-        firstPlantId = String(snapshot.plant_id);
-      }
     }
 
     const dcNumber = await generateProcurementDocNumber("DC");
@@ -887,7 +857,6 @@ export async function issueSOStockHandler(
         exit_time: toTrimmedString(body.exit_time) || null,
         exit_type: "SALES",
         company_id: so.company_id,
-        plant_id: firstPlantId,
         sto_id: null,
         sales_order_id: soId,
         dc_id: dc.id,

@@ -614,8 +614,8 @@ export async function toggleStorageLocation(payload) {
   );
 }
 
-export async function listPlantAssignments({ company_id, plant_id } = {}) {
-  const params = buildParams({ company_id, plant_id });
+export async function listPlantAssignments({ company_id } = {}) {
+  const params = buildParams({ company_id });
   return fetchJson(
     `/api/om/storage-location/plant-assignments?${params.toString()}`,
     {},

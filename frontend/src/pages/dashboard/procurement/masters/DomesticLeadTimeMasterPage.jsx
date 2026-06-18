@@ -15,6 +15,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import {
+  listCompanies,
   listDomesticLeadTimes,
   upsertDomesticLeadTime,
 } from "../procurementApi.js";
@@ -27,8 +28,9 @@ function normalizeRows(result) {
 
 export default function DomesticLeadTimeMasterPage() {
   const [rows, setRows] = useState([]);
+  const [companies, setCompanies] = useState([]);
   const [form, setForm] = useState({
-    plant_id: "",
+    company_id: "",
     material_category_id: "",
     transit_days: "",
   });
@@ -41,8 +43,13 @@ export default function DomesticLeadTimeMasterPage() {
     setLoading(true);
     setError("");
     try {
-      const result = await listDomesticLeadTimes();
+      const [result, companyResult] = await Promise.all([
+        listDomesticLeadTimes(),
+        listCompanies(),
+      ]);
       setRows(normalizeRows(result));
+      const nextCompanies = Array.isArray(companyResult?.data?.companies) ? companyResult.data.companies : Array.isArray(companyResult) ? companyResult : [];
+      setCompanies(nextCompanies);
     } catch (loadError) {
       setRows([]);
       setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_DOMESTIC_LEAD_TIME_LIST_FAILED");
@@ -56,8 +63,8 @@ export default function DomesticLeadTimeMasterPage() {
   }, []);
 
   async function handleSave() {
-    if (!form.plant_id.trim() || !form.material_category_id.trim() || form.transit_days === "") {
-      setError("Plant ID, material category ID, and transit days are required.");
+    if (!form.company_id || !form.material_category_id.trim() || form.transit_days === "") {
+      setError("Company, material category ID, and transit days are required.");
       return;
     }
 
@@ -66,13 +73,13 @@ export default function DomesticLeadTimeMasterPage() {
     setNotice("");
     try {
       await upsertDomesticLeadTime({
-        plant_id: form.plant_id.trim(),
+        company_id: form.company_id,
         material_category_id: form.material_category_id.trim(),
         transit_days: Number(form.transit_days),
       });
       setNotice("Domestic lead time saved.");
       setForm({
-        plant_id: "",
+        company_id: "",
         material_category_id: "",
         transit_days: "",
       });
@@ -102,12 +109,12 @@ export default function DomesticLeadTimeMasterPage() {
           <ErpSelectionSection label="Existing Domestic Lead Times" />
           <ErpDenseGrid
             columns={[
-              { key: "plant_id", label: "Plant ID", render: (row) => row.plant_id ?? row.company_id },
+              { key: "company_id", label: "Company", render: (row) => row.company?.company_code || row.company_id },
               { key: "material_category_id", label: "Material Category ID" },
               { key: "transit_days", label: "Transit Days", width: "110px" },
             ]}
             rows={rows}
-            rowKey={(row) => row.id ?? `${row.plant_id ?? row.company_id}:${row.material_category_id}`}
+            rowKey={(row) => row.id ?? `${row.company_id}:${row.material_category_id}`}
             emptyMessage={loading ? "Loading domestic lead times..." : "No domestic lead times found."}
             maxHeight="460px"
           />
@@ -117,12 +124,19 @@ export default function DomesticLeadTimeMasterPage() {
           <ErpSelectionSection label="Domestic Lead Time Form" />
           <div className="grid gap-3">
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Plant ID
-              <input
-                value={form.plant_id}
-                onChange={(event) => setForm((current) => ({ ...current, plant_id: event.target.value }))}
-                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
-              />
+              Company
+              <select
+                value={form.company_id}
+                onChange={(event) => setForm((current) => ({ ...current, company_id: event.target.value }))}
+                className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+              >
+                <option value="">Select company</option>
+                {companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.company_code} | {company.company_name}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
               Material Category ID

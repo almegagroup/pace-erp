@@ -118,7 +118,6 @@ export default function PIDocumentDetailPage() {
         listMaterials({ limit: 500, offset: 0, status: "ACTIVE" }),
         listStorageLocations({
           company_id: selectedCompanyId || undefined,
-          plant_id: document.plant_id,
           is_active: true,
         }).catch(() => []),
       ]);
@@ -282,7 +281,7 @@ export default function PIDocumentDetailPage() {
         <div className="grid gap-4">
           <div className="grid gap-4 xl:grid-cols-3">
             <ErpFieldPreview label="Status" value={detail.status || "—"} tone={statusTone(detail.status)} />
-            <ErpFieldPreview label="Plant" value={detail.plant_id || "—"} caption={`Storage: ${locationMap.get(detail.storage_location_id)?.code ?? detail.storage_location_id ?? "—"}`} />
+            <ErpFieldPreview label="Storage Location" value={locationMap.get(detail.storage_location_id)?.code ?? detail.storage_location_id ?? "—"} />
             <ErpFieldPreview label="Progress" value={`Counted ${countedItems}/${items.length}`} caption={`Pending ${pendingItems}`} />
           </div>
 

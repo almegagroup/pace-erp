@@ -185,17 +185,16 @@ export async function createOpeningStockDocumentHandler(
     assertSARole(ctx);
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
-    const plantId = toTrimmedString(body.plant_id);
     const cutOffDate = toTrimmedString(body.cut_off_date);
     const notes = toTrimmedString(body.notes);
 
-    if (!companyId || !plantId || !cutOffDate) {
+    if (!companyId || !cutOffDate) {
       return openingStockErrorResponse(
         req,
         ctx,
         "OPENING_STOCK_DOCUMENT_CREATE_INVALID",
         400,
-        "company_id, plant_id, and cut_off_date are required.",
+        "company_id and cut_off_date are required.",
       );
     }
 
@@ -204,7 +203,6 @@ export async function createOpeningStockDocumentHandler(
       .from("opening_stock_document")
       .select("id")
       .eq("company_id", companyId)
-      .eq("plant_id", plantId)
       .eq("cut_off_date", cutOffDate)
       .maybeSingle();
 
@@ -224,7 +222,7 @@ export async function createOpeningStockDocumentHandler(
         ctx,
         "OPENING_STOCK_DOCUMENT_ALREADY_EXISTS",
         409,
-        "An opening stock document already exists for this company, plant, and cut-off date.",
+        "An opening stock document already exists for this company and cut-off date.",
       );
     }
 
@@ -235,7 +233,6 @@ export async function createOpeningStockDocumentHandler(
       .insert({
         document_number: documentNumber,
         company_id: companyId,
-        plant_id: plantId,
         cut_off_date: cutOffDate,
         status: "DRAFT",
         notes: notes || null,
@@ -725,7 +722,6 @@ export async function postOpeningStockDocumentHandler(
           p_posting_date: document.cut_off_date,
           p_movement_type_code: line.movement_type_code,
           p_company_id: document.company_id,
-          p_plant_id: document.plant_id,
           p_storage_location_id: line.storage_location_id,
           p_material_id: line.material_id,
           p_quantity: line.quantity,

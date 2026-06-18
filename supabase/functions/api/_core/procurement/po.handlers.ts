@@ -533,7 +533,6 @@ export async function createPOHandler(
         po_number: poNumber,
         po_date: poDate,
         company_id: companyId,
-        plant_id: toTrimmedString(body.plant_id) || null,
         vendor_id: vendorId,
         vendor_type: vendorType,
         incoterm,
@@ -732,7 +731,6 @@ export async function updatePOHandler(
       .from("purchase_order")
       .update({
         po_date: toTrimmedString(body.po_date) || po.po_date,
-        plant_id: toTrimmedString(body.plant_id) || po.plant_id || null,
         vendor_id: vendorId,
         vendor_type: vendorType,
         incoterm: incoterm || null,

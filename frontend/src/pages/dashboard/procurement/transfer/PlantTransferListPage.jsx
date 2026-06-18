@@ -63,10 +63,8 @@ function buildInitialForm(selectedCompanyId) {
   return {
     transfer_type: "ONE_STEP",
     source_company_id: selectedCompanyId || "",
-    source_plant_id: "",
     source_sloc_id: "",
     target_company_id: "",
-    target_plant_id: "",
     target_sloc_id: "",
     material_id: "",
     transfer_qty: "",
@@ -295,15 +293,6 @@ export default function PlantTransferListPage() {
                         required
                       />
                     </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Source Plant ID">
-                      <input
-                        type="text"
-                        value={formData.source_plant_id}
-                        onChange={(event) => handleFormChange("source_plant_id", event.target.value)}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        required
-                      />
-                    </ErpDenseFormRow>
                     <ErpDenseFormRow label="Source SLOC ID">
                       <input
                         type="text"
@@ -318,15 +307,6 @@ export default function PlantTransferListPage() {
                         type="text"
                         value={formData.target_company_id}
                         onChange={(event) => handleFormChange("target_company_id", event.target.value)}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        required
-                      />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Target Plant ID">
-                      <input
-                        type="text"
-                        value={formData.target_plant_id}
-                        onChange={(event) => handleFormChange("target_plant_id", event.target.value)}
                         className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                         required
                       />
@@ -489,8 +469,6 @@ export default function PlantTransferListPage() {
                     </span>
                   ),
                 },
-                { key: "source_plant_id", label: "Source Plant" },
-                { key: "target_plant_id", label: "Target Plant" },
                 { key: "material_id", label: "Material" },
                 {
                   key: "transfer_qty",

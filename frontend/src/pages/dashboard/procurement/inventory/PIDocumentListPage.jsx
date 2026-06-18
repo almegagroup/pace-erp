@@ -44,10 +44,9 @@ export default function PIDocumentListPage() {
   const selectedCompanyId = runtimeContext?.selectedCompanyId || "";
   const [rows, setRows] = useState([]);
   const [storageLocations, setStorageLocations] = useState([]);
-  const [filters, setFilters] = useState({ plant_id: "", status: "" });
+  const [filters, setFilters] = useState({ status: "" });
   const [form, setForm] = useState({
     mode: "LOCATION_WISE",
-    plant_id: "",
     storage_location_id: "",
     count_date: new Date().toISOString().slice(0, 10),
     posting_date: new Date().toISOString().slice(0, 10),
@@ -82,7 +81,6 @@ export default function PIDocumentListPage() {
     setError("");
     try {
       const result = await listPIDocuments({
-        plant_id: nextFilters.plant_id || undefined,
         status: nextFilters.status || undefined,
       });
       setRows(Array.isArray(result?.items) ? result.items : []);
@@ -102,15 +100,14 @@ export default function PIDocumentListPage() {
     let active = true;
 
     async function loadLocations() {
-      if (!form.plant_id.trim()) {
+      if (!selectedCompanyId) {
         setStorageLocations([]);
         setForm((current) => ({ ...current, storage_location_id: "" }));
         return;
       }
       try {
         const result = await listStorageLocations({
-          company_id: selectedCompanyId || undefined,
-          plant_id: form.plant_id.trim(),
+          company_id: selectedCompanyId,
           is_active: true,
         });
         if (!active) return;
@@ -125,7 +122,7 @@ export default function PIDocumentListPage() {
     return () => {
       active = false;
     };
-  }, [form.plant_id, selectedCompanyId]);
+  }, [selectedCompanyId]);
 
   const locationOptions = useMemo(
     () =>
@@ -161,8 +158,8 @@ export default function PIDocumentListPage() {
   );
 
   async function handleCreateDocument() {
-    if (!form.plant_id.trim() || !form.storage_location_id || !form.count_date || !form.posting_date) {
-      setError("Plant, storage location, count date, and posting date are required.");
+    if (!form.storage_location_id || !form.count_date || !form.posting_date) {
+      setError("Storage location, count date, and posting date are required.");
       return;
     }
 
@@ -172,7 +169,6 @@ export default function PIDocumentListPage() {
     try {
       const created = await createPIDocument({
         mode: form.mode,
-        plant_id: form.plant_id.trim(),
         storage_location_id: form.storage_location_id,
         count_date: form.count_date,
         posting_date: form.posting_date,
@@ -247,14 +243,6 @@ export default function PIDocumentListPage() {
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
             <div className="grid gap-3">
               <div className="grid gap-3 md:grid-cols-2">
-                <ErpDenseFormRow label="Plant Filter">
-                  <input
-                    value={filters.plant_id}
-                    onChange={(event) => void applyFilters({ plant_id: event.target.value })}
-                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    placeholder="Plant ID"
-                  />
-                </ErpDenseFormRow>
                 <ErpDenseFormRow label="Status Filter">
                   <select
                     value={filters.status}
@@ -273,7 +261,6 @@ export default function PIDocumentListPage() {
                 columns={[
                   { key: "document_number", label: "Document #", width: "140px" },
                   { key: "mode", label: "Mode", width: "130px" },
-                  { key: "plant_id", label: "Plant", width: "120px" },
                   { key: "storage_location_id", label: "Storage Location", width: "160px" },
                   { key: "count_date", label: "Count Date", width: "110px", render: (row) => formatDate(row.count_date) },
                   { key: "posting_date", label: "Posting Date", width: "110px", render: (row) => formatDate(row.posting_date) },
@@ -318,20 +305,6 @@ export default function PIDocumentListPage() {
                       </option>
                     ))}
                   </select>
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Plant ID" required>
-                  <input
-                    value={form.plant_id}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        plant_id: event.target.value,
-                        storage_location_id: "",
-                      }))
-                    }
-                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    placeholder="Plant ID"
-                  />
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Storage Location" required>
                   <select

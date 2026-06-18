@@ -43,7 +43,6 @@ function directionTone(direction) {
 export default function StockLedgerReportPage() {
   useMenu();
   const [materialId, setMaterialId] = useState("");
-  const [plantId, setPlantId] = useState("");
   const [companyId, setCompanyId] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -78,7 +77,6 @@ export default function StockLedgerReportPage() {
     try {
       const response = await getStockLedgerReport({
         material_id: materialId.trim(),
-        plant_id: plantId.trim() || undefined,
         company_id: companyId.trim() || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
@@ -121,14 +119,6 @@ export default function StockLedgerReportPage() {
                 onChange={(event) => setMaterialId(event.target.value)}
                 placeholder="Material UUID"
                 className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-              />
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="Plant ID">
-              <input
-                type="text"
-                value={plantId}
-                onChange={(event) => setPlantId(event.target.value)}
-                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </ErpDenseFormRow>
             <ErpDenseFormRow label="Company ID">

@@ -91,18 +91,6 @@ function getStatusTone(status) {
   }
 }
 
-function isLocationMappedToPlant(location, plantId) {
-  const normalizedPlantId = String(plantId ?? "").trim();
-  if (!normalizedPlantId) return true;
-  const directPlantId = String(location.plant_id ?? "").trim();
-  if (directPlantId && directPlantId === normalizedPlantId) return true;
-  const companyFieldPlantId = String(location.company_id ?? "").trim();
-  if (companyFieldPlantId && companyFieldPlantId === normalizedPlantId) return true;
-  if (Array.isArray(location.plant_ids)) {
-    return location.plant_ids.map((entry) => String(entry)).includes(normalizedPlantId);
-  }
-  return !directPlantId && !companyFieldPlantId;
-}
 
 async function fetchCompanyName(companyId) {
   if (!companyId) return null;
@@ -115,16 +103,6 @@ async function fetchCompanyName(companyId) {
   } catch { return null; }
 }
 
-async function fetchPlantName(companyId, plantId) {
-  if (!companyId || !plantId) return null;
-  try {
-    const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/projects?company_id=${encodeURIComponent(companyId)}`, { credentials: "include" });
-    const json = await response.json().catch(() => null);
-    const projects = Array.isArray(json?.data?.projects) ? json.data.projects : [];
-    const match = projects.find((p) => p.id === plantId);
-    return match ? `${match.project_code} | ${match.project_name}` : null;
-  } catch { return null; }
-}
 
 export default function SAOpeningStockDetailPage({ documentId: documentIdProp = "" }) {
   const navigate = useNavigate();
@@ -132,7 +110,6 @@ export default function SAOpeningStockDetailPage({ documentId: documentIdProp = 
   const documentId = documentIdProp || params.id || "";
   const [detail, setDetail] = useState(null);
   const [companyLabel, setCompanyLabel] = useState("");
-  const [plantLabel, setPlantLabel] = useState("");
   const [materials, setMaterials] = useState([]);
   const [locations, setLocations] = useState([]);
   const [entryMode, setEntryMode] = useState(ENTRY_MODES.SINGLE);
@@ -160,8 +137,8 @@ export default function SAOpeningStockDetailPage({ documentId: documentIdProp = 
   );
 
   const filteredLocations = useMemo(
-    () => locations.filter((location) => isLocationMappedToPlant(location, detail?.plant_id)),
-    [detail?.plant_id, locations],
+    () => locations,
+    [locations],
   );
 
   const locationOptions = useMemo(
@@ -191,14 +168,12 @@ export default function SAOpeningStockDetailPage({ documentId: documentIdProp = 
     try {
       const document = await getOpeningStockDocument(documentId);
       setDetail(document);
-      const [materialRows, locationRows, cLabel, pLabel] = await Promise.all([
+      const [materialRows, locationRows, cLabel] = await Promise.all([
         listMaterials({ limit: 500, status: "ACTIVE" }),
-        listStorageLocations({ plant_id: document.plant_id }),
+        listStorageLocations({ company_id: document.company_id }),
         fetchCompanyName(document.company_id),
-        fetchPlantName(document.company_id, document.plant_id),
       ]);
       setCompanyLabel(cLabel ?? document.company_id ?? "");
-      setPlantLabel(pLabel ?? document.plant_id ?? "");
       setMaterials(Array.isArray(materialRows?.data) ? materialRows.data : Array.isArray(materialRows) ? materialRows : []);
       setLocations(Array.isArray(locationRows?.data) ? locationRows.data : Array.isArray(locationRows) ? locationRows : []);
     } catch (loadError) {
@@ -436,7 +411,7 @@ export default function SAOpeningStockDetailPage({ documentId: documentIdProp = 
         <div className="grid gap-4">
           <div className="grid gap-4 xl:grid-cols-3">
             <ErpFieldPreview label="Document #" value={detail.document_number} tone={getStatusTone(detail.status)} badge={detail.status} />
-            <ErpFieldPreview label="Company" value={companyLabel || detail.company_id} caption={`Plant: ${plantLabel || detail.plant_id || "-"}`} />
+            <ErpFieldPreview label="Company" value={companyLabel || detail.company_id} />
             <ErpFieldPreview label="Cut-off Date" value={formatDate(detail.cut_off_date)} caption={`Created: ${formatDateTime(detail.created_at)}`} />
           </div>
 

@@ -57,7 +57,7 @@ export async function createNumberSeriesHandler(
 
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
-    const sectionId = toTrimmedString(body.plant_id || body.section_id) || null;
+    const sectionId = toTrimmedString(body.section_id) || null;
     const documentType = toTrimmedString(body.document_type).toUpperCase();
     const prefix = toTrimmedString(body.prefix || body.series_code);
     const suffix = toTrimmedString(body.suffix) || null;

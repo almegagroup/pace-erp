@@ -227,27 +227,8 @@ async function getSnapshot(companyId: string, materialId: string, storageLocatio
   return data as JsonRecord | null;
 }
 
-async function getPlantForSnapshot(companyId: string, storageLocationId: string): Promise<string> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_inventory")
-    .from("storage_location_plant_map")
-    .select("plant_id")
-    .eq("company_id", companyId)
-    .eq("storage_location_id", storageLocationId)
-    .eq("active", true)
-    .limit(1)
-    .maybeSingle();
-
-  if (error || !data?.plant_id) {
-    throw new Error("RTV_PLANT_MAP_NOT_FOUND");
-  }
-
-  return String(data.plant_id);
-}
-
 async function hasPhysicalInventoryBlock(
   materialId: string,
-  plantId: string,
   storageLocationId: string,
 ): Promise<boolean> {
   const { data, error } = await serviceRoleClient
@@ -255,7 +236,6 @@ async function hasPhysicalInventoryBlock(
     .from("physical_inventory_block")
     .select("id")
     .eq("material_id", materialId)
-    .eq("plant_id", plantId)
     .eq("storage_location_id", storageLocationId)
     .maybeSingle();
 
@@ -534,10 +514,8 @@ export async function postRTVHandler(
       const unitValue = parseNullableNumber(line.grn_rate) ?? 0;
       const isDirectPath = hasDirectOverride(line, directLineIds);
       const blockedSnapshot = await getSnapshot(companyId, materialId, storageLocationId, "BLOCKED");
-      const blockedPlantId = await getPlantForSnapshot(companyId, storageLocationId);
       const postingBlocked = await hasPhysicalInventoryBlock(
         materialId,
-        blockedPlantId,
         storageLocationId,
       );
       if (postingBlocked) {
@@ -565,7 +543,6 @@ export async function postRTVHandler(
             p_posting_date: todayIsoDate(),
             p_movement_type_code: "P344",
             p_company_id: companyId,
-            p_plant_id: blockedPlantId,
             p_storage_location_id: storageLocationId,
             p_material_id: materialId,
             p_quantity: returnQty,
@@ -589,7 +566,6 @@ export async function postRTVHandler(
             p_posting_date: todayIsoDate(),
             p_movement_type_code: "P344",
             p_company_id: companyId,
-            p_plant_id: blockedPlantId,
             p_storage_location_id: storageLocationId,
             p_material_id: materialId,
             p_quantity: returnQty,
@@ -619,7 +595,6 @@ export async function postRTVHandler(
           p_posting_date: todayIsoDate(),
           p_movement_type_code: "P122",
           p_company_id: companyId,
-          p_plant_id: blockedPlantId,
           p_storage_location_id: storageLocationId,
           p_material_id: materialId,
           p_quantity: returnQty,
@@ -662,7 +637,6 @@ export async function postRTVHandler(
         exit_time: toTrimmedString(body.exit_time) || null,
         exit_type: "RTV",
         company_id: rtv.company_id,
-        plant_id: null,
         rtv_id: rtvId,
         dc_id: null,
         vehicle_number: toTrimmedString(body.vehicle_number) || "RTV-VEHICLE",

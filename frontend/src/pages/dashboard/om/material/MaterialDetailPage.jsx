@@ -28,7 +28,6 @@ import {
   listUoms,
   updateMaterial,
   listCompaniesForOm,
-  listProjectsByCompany,
 } from "../omApi.js";
 
 function getAllowedStatusTargets(status) {
@@ -58,10 +57,8 @@ export default function MaterialDetailPage() {
 
   const [conversionForm, setConversionForm] = useState({ from_uom_code: "", to_uom_code: "", conversion_factor: "1" });
   const [companyExtForm, setCompanyExtForm] = useState({ company_id: "", procurement_allowed: true, hsn_override: "" });
-  const [plantExtCompanyId, setPlantExtCompanyId] = useState("");
-  const [plantOptions, setPlantOptions] = useState([]);
   const [plantExtForm, setPlantExtForm] = useState({
-    company_id: "", plant_id: "", safety_stock: "", reorder_point: "", min_order_qty: "", lead_time_days: "",
+    company_id: "", safety_stock: "", reorder_point: "", min_order_qty: "", lead_time_days: "",
   });
 
   const [approvedVendors, setApprovedVendors] = useState([]);
@@ -121,15 +118,6 @@ export default function MaterialDetailPage() {
     return () => { active = false; };
   }, [id]);
 
-  useEffect(() => {
-    if (!plantExtCompanyId) { setPlantOptions([]); return; }
-    let active = true;
-    listProjectsByCompany(plantExtCompanyId)
-      .then((projects) => { if (active) setPlantOptions(Array.isArray(projects) ? projects : []); })
-      .catch(() => { if (active) setPlantOptions([]); });
-    return () => { active = false; };
-  }, [plantExtCompanyId]);
-
   function setField(key, value) { setForm((prev) => ({ ...prev, [key]: value })); }
 
   async function handleSave() {
@@ -182,13 +170,12 @@ export default function MaterialDetailPage() {
   }
 
   async function handlePlantExtSave() {
-    if (!material?.id || !plantExtForm.company_id || !plantExtForm.plant_id) { setError("OM_PLANT_NOT_FOUND"); return; }
+    if (!material?.id || !plantExtForm.company_id) { setError("OM_COMPANY_NOT_FOUND"); return; }
     setSaving(true); setError(""); setNotice("");
     try {
-      await extendMaterialToPlant({
+      await extendMaterialToPlant({ // backend uses material_plant_ext table (plant = company)
         material_id: material.id,
         company_id: plantExtForm.company_id,
-        plant_id: plantExtForm.plant_id,
         safety_stock: plantExtForm.safety_stock === "" ? null : Number(plantExtForm.safety_stock),
         reorder_point: plantExtForm.reorder_point === "" ? null : Number(plantExtForm.reorder_point),
         min_order_qty: plantExtForm.min_order_qty === "" ? null : Number(plantExtForm.min_order_qty),
@@ -196,9 +183,8 @@ export default function MaterialDetailPage() {
       });
       const updated = await listMaterialPlantExtensions(id);
       setPlantExtensions(Array.isArray(updated?.data) ? updated.data : []);
-      setPlantExtForm({ company_id: "", plant_id: "", safety_stock: "", reorder_point: "", min_order_qty: "", lead_time_days: "" });
-      setPlantExtCompanyId("");
-      setNotice("Plant extension saved.");
+      setPlantExtForm({ company_id: "", safety_stock: "", reorder_point: "", min_order_qty: "", lead_time_days: "" });
+      setNotice("Company extension saved.");
     } catch (err) { setError(err instanceof Error ? err.message : "OM_MATERIAL_EXTEND_PLANT_FAILED"); }
     finally { setSaving(false); }
   }
@@ -381,28 +367,18 @@ export default function MaterialDetailPage() {
             </div>
           </ErpSectionCard>
 
-          {/* ── Plant Extensions ── */}
-          <ErpSectionCard eyebrow="Plant Extensions" title="Extend material to plants">
+          {/* ── Company Extensions (Planning Params) ── */}
+          <ErpSectionCard eyebrow="Company Extensions" title="Extend material to company">
             <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
               <div className="grid gap-3">
                 <ErpDenseFormRow label="Company" required>
                   <select
-                    value={plantExtCompanyId}
-                    onChange={(e) => {
-                      const cid = e.target.value;
-                      setPlantExtCompanyId(cid);
-                      setPlantExtForm((p) => ({ ...p, company_id: cid, plant_id: "" }));
-                    }}
+                    value={plantExtForm.company_id}
+                    onChange={(e) => setPlantExtForm((p) => ({ ...p, company_id: e.target.value }))}
                     className={SELECT_CLS}
                   >
                     <option value="">Select company</option>
                     {companyOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                  </select>
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Plant" required>
-                  <select value={plantExtForm.plant_id} onChange={(e) => setPlantExtForm((p) => ({ ...p, plant_id: e.target.value }))} className={SELECT_CLS} disabled={!plantExtCompanyId}>
-                    <option value="">{plantExtCompanyId ? "Select plant" : "Select company first"}</option>
-                    {plantOptions.map((pl) => <option key={pl.id} value={pl.id}>{pl.project_code} | {pl.project_name}</option>)}
                   </select>
                 </ErpDenseFormRow>
                 <div className="grid gap-3 md:grid-cols-2">
@@ -421,20 +397,19 @@ export default function MaterialDetailPage() {
                 </div>
                 <button type="button" onClick={() => void handlePlantExtSave()} disabled={saving}
                   className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900">
-                  {saving ? "Saving..." : "Extend to Plant"}
+                  {saving ? "Saving..." : "Save Extension"}
                 </button>
               </div>
               <ErpDenseGrid
                 columns={[
                   { key: "company", label: "Company", render: (row) => row.companies ? `${row.companies.company_code}` : companyMap.get(row.company_id)?.company_code ?? row.company_id },
-                  { key: "plant", label: "Plant", render: (row) => row.projects ? `${row.projects.project_code} | ${row.projects.project_name}` : row.plant_id },
                   { key: "lead_time_days", label: "Lead Time" },
                   { key: "safety_stock_qty", label: "Safety Stock" },
                   { key: "status", label: "Status" },
                 ]}
                 rows={plantExtensions}
-                rowKey={(row) => row.id ?? `${row.company_id}-${row.plant_id}`}
-                emptyMessage="Not extended to any plant yet."
+                rowKey={(row) => row.id ?? `${row.company_id}`}
+                emptyMessage="Not extended to any company yet."
                 maxHeight="280px"
               />
             </div>

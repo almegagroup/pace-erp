@@ -27,7 +27,6 @@ function formatNumber(value, decimals) {
 
 export default function StockValuationPage() {
   useMenu();
-  const [plantId, setPlantId] = useState("");
   const [companyId, setCompanyId] = useState("");
   const [materialId, setMaterialId] = useState("");
   const [rows, setRows] = useState([]);
@@ -42,7 +41,6 @@ export default function StockValuationPage() {
     setSearched(true);
     try {
       const response = await getStockValuation({
-        plant_id: plantId.trim() || undefined,
         company_id: companyId.trim() || undefined,
         material_id: materialId.trim() || undefined,
       });
@@ -75,14 +73,6 @@ export default function StockValuationPage() {
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Filters" title="Valuation filters">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <ErpDenseFormRow label="Plant ID">
-              <input
-                type="text"
-                value={plantId}
-                onChange={(event) => setPlantId(event.target.value)}
-                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-              />
-            </ErpDenseFormRow>
             <ErpDenseFormRow label="Company ID">
               <input
                 type="text"
@@ -112,7 +102,6 @@ export default function StockValuationPage() {
               <ErpDenseGrid
                 columns={[
                   { key: "material_id", label: "Material ID", width: "220px" },
-                  { key: "plant_id", label: "Plant ID", width: "180px" },
                   { key: "company_id", label: "Company ID", width: "200px" },
                   {
                     key: "total_qty",
@@ -138,7 +127,7 @@ export default function StockValuationPage() {
                   },
                 ]}
                 rows={rows}
-                rowKey={(row) => `${row.material_id}-${row.plant_id}`}
+                rowKey={(row) => `${row.material_id}-${row.company_id}`}
                 emptyMessage={loading ? "Running stock valuation..." : "No valuation rows matched the selected filters."}
               />
               {rows.length > 0 ? (

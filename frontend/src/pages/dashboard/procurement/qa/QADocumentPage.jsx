@@ -391,7 +391,6 @@ export default function QADocumentPage() {
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
               <ErpFieldPreview label="Storage Location" value={primaryStorageLocation?.storage_location_name || primaryStorageLocation?.storage_location_code || grn?.lines?.[0]?.storage_location_id || "—"} />
               <ErpFieldPreview label="Stock Type" value={grn?.lines?.[0]?.target_stock_type || "QUALITY_INSPECTION"} />
-              <ErpFieldPreview label="Plant" value={detail.plant_id || "—"} />
               <ErpFieldPreview label="GRN Posting Date" value={grn?.posting_date || "—"} />
               <ErpFieldPreview label="Created At" value={detail.created_at || "—"} />
             </div>

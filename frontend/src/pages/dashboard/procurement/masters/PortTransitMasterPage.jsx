@@ -16,6 +16,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import {
+  listCompanies,
   listPorts,
   listTransitTimes,
   upsertTransitTime,
@@ -30,9 +31,10 @@ function normalizeRows(result) {
 export default function PortTransitMasterPage() {
   const [rows, setRows] = useState([]);
   const [ports, setPorts] = useState([]);
+  const [companies, setCompanies] = useState([]);
   const [form, setForm] = useState({
     port_id: "",
-    plant_id: "",
+    company_id: "",
     transit_days: "",
   });
   const [loading, setLoading] = useState(true);
@@ -57,14 +59,17 @@ export default function PortTransitMasterPage() {
     setLoading(true);
     setError("");
     try {
-      const [transitResult, portResult] = await Promise.all([
+      const [transitResult, portResult, companyResult] = await Promise.all([
         listTransitTimes(),
         listPorts({ is_active: "" }),
+        listCompanies(),
       ]);
       const nextRows = normalizeRows(transitResult);
       const nextPorts = normalizeRows(portResult);
+      const nextCompanies = Array.isArray(companyResult?.data?.companies) ? companyResult.data.companies : Array.isArray(companyResult) ? companyResult : [];
       setRows(nextRows);
       setPorts(nextPorts);
+      setCompanies(nextCompanies);
       setForm((current) => ({
         ...current,
         port_id: current.port_id || nextPorts[0]?.id || "",
@@ -83,8 +88,8 @@ export default function PortTransitMasterPage() {
   }, []);
 
   async function handleSubmit() {
-    if (!form.port_id || !form.plant_id.trim() || form.transit_days === "") {
-      setError("Port, plant ID, and transit days are required.");
+    if (!form.port_id || !form.company_id || form.transit_days === "") {
+      setError("Port, company, and transit days are required.");
       return;
     }
 
@@ -94,13 +99,13 @@ export default function PortTransitMasterPage() {
     try {
       await upsertTransitTime({
         port_id: form.port_id,
-        plant_id: form.plant_id.trim(),
+        company_id: form.company_id,
         transit_days: Number(form.transit_days),
       });
       setNotice("Transit time saved.");
       setForm((current) => ({
         ...current,
-        plant_id: "",
+        company_id: "",
         transit_days: "",
       }));
       await loadScreenData();
@@ -134,11 +139,11 @@ export default function PortTransitMasterPage() {
                 label: "Port",
                 render: (row) => portMap[row.port_id]?.port_name || row.port_name || row.port_id,
               },
-              { key: "plant_id", label: "Plant ID", width: "170px", render: (row) => row.plant_id || row.company_id || "—" },
+              { key: "company_id", label: "Company", width: "170px", render: (row) => row.company?.company_code || row.company_id || "—" },
               { key: "transit_days", label: "Transit Days", width: "110px" },
             ]}
             rows={rows}
-            rowKey={(row) => row.id ?? `${row.port_id}:${row.company_id ?? row.plant_id}`}
+            rowKey={(row) => row.id ?? `${row.port_id}:${row.company_id}`}
             emptyMessage={loading ? "Loading transit times..." : "No transit rows found."}
             maxHeight="460px"
           />
@@ -158,12 +163,19 @@ export default function PortTransitMasterPage() {
               />
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Plant ID
-              <input
-                value={form.plant_id}
-                onChange={(event) => setForm((current) => ({ ...current, plant_id: event.target.value }))}
-                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
-              />
+              Company
+              <select
+                value={form.company_id}
+                onChange={(event) => setForm((current) => ({ ...current, company_id: event.target.value }))}
+                className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+              >
+                <option value="">Select company</option>
+                {companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.company_code} | {company.company_name}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="grid gap-1 text-xs font-semibold text-slate-700">
               Transit Days

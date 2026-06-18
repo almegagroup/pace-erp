@@ -697,7 +697,7 @@ export async function listTransitTimesHandler(req: Request, ctx: ProcurementHand
   try {
     const url = new URL(req.url);
     const portId = toTrimmedString(url.searchParams.get("port_id"));
-    const companyId = toTrimmedString(url.searchParams.get("company_id") || url.searchParams.get("plant_id"));
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
     let query = serviceRoleClient
       .schema("erp_master")
       .from("port_plant_transit_master")
@@ -719,7 +719,7 @@ export async function upsertTransitTimeHandler(req: Request, ctx: ProcurementHan
     assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const portId = toTrimmedString(body.port_id);
-    const companyId = toTrimmedString(body.company_id || body.plant_id);
+    const companyId = toTrimmedString(body.company_id);
     const transitDays = parseNullableInt(body.transit_days);
     const mode = toUpperTrimmedString(body.mode || "ROAD");
     if (!portId || !companyId || transitDays == null || transitDays < 0 || !TRANSIT_MODES.has(mode)) {
@@ -930,7 +930,7 @@ export async function upsertImportLeadTimeHandler(req: Request, ctx: Procurement
 export async function listDomesticLeadTimesHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const url = new URL(req.url);
-    const companyId = toTrimmedString(url.searchParams.get("plant_id") || url.searchParams.get("company_id"));
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const activeParam = url.searchParams.get("is_active");
     let query = serviceRoleClient
       .schema("erp_master")
@@ -975,7 +975,7 @@ export async function upsertDomesticLeadTimeHandler(req: Request, ctx: Procureme
     assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
-    const companyId = toTrimmedString(body.company_id || body.plant_id);
+    const companyId = toTrimmedString(body.company_id);
     if (!(await ensureVendorExists(vendorId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_VENDOR_NOT_FOUND", 404, "Vendor not found");
     }
