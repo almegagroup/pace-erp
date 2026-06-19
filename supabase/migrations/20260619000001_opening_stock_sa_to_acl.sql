@@ -57,7 +57,24 @@ FROM acl.menu_master am
 WHERE am.menu_code IN ('PROC_OPENING_STOCK_LIST', 'PROC_OPENING_STOCK_DETAIL')
 ON CONFLICT DO NOTHING;
 
--- ─── 4. Rebuild ACL snapshots for all companies ─────────────────────────────
+-- ─── 4. Backfill version_capability_menu_actions ─────────────────────────────
+-- capture_acl_version_source is a one-time operation (guards on source_captured_at IS NULL).
+-- For already-captured versions, we must INSERT directly into version_capability_menu_actions.
+INSERT INTO acl.version_capability_menu_actions (acl_version_id, capability_code, menu_id, action, allowed)
+SELECT
+  av.acl_version_id,
+  cma.capability_code,
+  cma.menu_id,
+  cma.action,
+  cma.allowed
+FROM acl.acl_versions av
+CROSS JOIN acl.capability_menu_actions cma
+JOIN acl.menu_master am ON am.id = cma.menu_id
+WHERE av.is_active = true
+  AND am.menu_code IN ('PROC_OPENING_STOCK_LIST', 'PROC_OPENING_STOCK_DETAIL')
+ON CONFLICT DO NOTHING;
+
+-- ─── 5. Rebuild precomputed_acl_view for all companies ───────────────────────
 DO $$
 DECLARE
   r RECORD;
@@ -73,7 +90,7 @@ BEGIN
   END LOOP;
 END $$;
 
--- ─── 5. Rebuild menu snapshots for all snapshot users ────────────────────────
+-- ─── 6. Rebuild menu snapshots for all snapshot users ────────────────────────
 DO $$
 DECLARE
   r RECORD;
