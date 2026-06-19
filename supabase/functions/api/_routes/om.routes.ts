@@ -38,14 +38,22 @@ import {
 } from "../_core/om/material.handlers.ts";
 import {
   addVendorPaymentTermsHandler,
+  bulkMapVendorsHandler,
+  bulkUnmapVendorsHandler,
   changeVendorStatusHandler,
   createVendorHandler,
+  deleteVendorsHandler,
+  getVendorContactsHandler,
+  getVendorEmailsHandler,
   getVendorHandler,
   getVendorPaymentTermsHandler,
+  listVendorCompanyMappingHandler,
   listVendorCompanyMapsHandler,
   listVendorsHandler,
   mapVendorToCompanyHandler,
   updateVendorHandler,
+  upsertVendorContactsHandler,
+  upsertVendorEmailsHandler,
 } from "../_core/om/vendor.handlers.ts";
 import {
   changeVendorMaterialInfoStatusHandler,
@@ -176,6 +184,22 @@ export async function dispatchOmRoutes(
       return await getVendorPaymentTermsHandler(req, ctx);
     case "GET:/api/om/vendor/company-maps":
       return await listVendorCompanyMapsHandler(req, ctx);
+    case "DELETE:/api/om/vendors":
+      return await deleteVendorsHandler(req, ctx);
+    case "GET:/api/om/vendor/contacts":
+      return await getVendorContactsHandler(req, ctx);
+    case "POST:/api/om/vendor/contacts":
+      return await upsertVendorContactsHandler(req, ctx);
+    case "GET:/api/om/vendor/emails":
+      return await getVendorEmailsHandler(req, ctx);
+    case "POST:/api/om/vendor/emails":
+      return await upsertVendorEmailsHandler(req, ctx);
+    case "GET:/api/om/vendor/company-mapping":
+      return await listVendorCompanyMappingHandler(req, ctx);
+    case "POST:/api/om/vendor/company-map-bulk":
+      return await bulkMapVendorsHandler(req, ctx);
+    case "DELETE:/api/om/vendor/company-unmap-bulk":
+      return await bulkUnmapVendorsHandler(req, ctx);
 
     case "POST:/api/om/vendor-material-info":
       return await createVendorMaterialInfoHandler(req, ctx);

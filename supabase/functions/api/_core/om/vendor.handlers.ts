@@ -1,10 +1,10 @@
 /*
  * File-ID: 14.3
  * File-Path: supabase/functions/api/_core/om/vendor.handlers.ts
- * Gate: 14
+ * Gate: 14 (revised)
  * Phase: 14
  * Domain: MASTER
- * Purpose: Implement vendor master, company mapping, and append-only payment terms handlers.
+ * Purpose: Vendor master, contacts, emails, company mapping, and payment terms handlers.
  * Authority: Backend
  */
 
@@ -17,9 +17,8 @@ type JsonRecord = Record<string, unknown>;
 
 const ALLOWED_VENDOR_TYPES = new Set(["DOMESTIC", "IMPORT"]);
 const VENDOR_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL", "ACTIVE", "INACTIVE", "BLOCKED"]);
-const MUTABLE_VENDOR_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL"]);
 const VENDOR_TRANSITIONS = new Map<string, Set<string>>([
-  ["DRAFT", new Set(["PENDING_APPROVAL"])],
+  ["DRAFT", new Set(["PENDING_APPROVAL", "ACTIVE", "INACTIVE"])],
   ["PENDING_APPROVAL", new Set(["ACTIVE", "DRAFT"])],
   ["ACTIVE", new Set(["INACTIVE", "BLOCKED"])],
   ["INACTIVE", new Set(["ACTIVE"])],
@@ -65,7 +64,6 @@ async function ensureCompanyExists(companyId: string): Promise<boolean> {
     .select("id")
     .eq("id", companyId)
     .maybeSingle();
-
   return !error && Boolean(data?.id);
 }
 
@@ -76,20 +74,11 @@ async function getVendorById(id: string): Promise<Record<string, unknown> | null
     .select("*")
     .eq("id", id)
     .maybeSingle();
-
-  if (error) {
-    throw new Error("OM_VENDOR_LOOKUP_FAILED");
-  }
-
+  if (error) throw new Error("OM_VENDOR_LOOKUP_FAILED");
   return (data as Record<string, unknown> | null) ?? null;
 }
 
-function normalizeCcEmailList(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map((entry) => String(entry).trim()).filter(Boolean);
-  }
-  return [];
-}
+/* ── Create ─────────────────────────────────────────────────────────────── */
 
 export async function createVendorHandler(
   req: Request,
@@ -102,7 +91,10 @@ export async function createVendorHandler(
     const vendorName = toTrimmedString(body.vendor_name);
     const vendorType = toTrimmedString(body.vendor_type).toUpperCase();
 
-    if (!vendorName || !ALLOWED_VENDOR_TYPES.has(vendorType)) {
+    if (!vendorName) {
+      return vendorErrorResponse(req, ctx, "OM_INVALID_VENDOR_NAME", 400, "Vendor name is required");
+    }
+    if (!ALLOWED_VENDOR_TYPES.has(vendorType)) {
       return vendorErrorResponse(req, ctx, "OM_INVALID_VENDOR_TYPE", 400, "Invalid vendor type");
     }
 
@@ -125,18 +117,17 @@ export async function createVendorHandler(
         gst_category: toTrimmedString(body.gst_category) || null,
         iec_code: toTrimmedString(body.iec_code) || null,
         import_license: toTrimmedString(body.import_license) || null,
+        country_code: toTrimmedString(body.country_code) || null,
+        currency_code: toTrimmedString(body.currency_code).toUpperCase() || "BDT",
         registered_address: toTrimmedString(body.registered_address) || null,
         correspondence_address: toTrimmedString(body.correspondence_address) || null,
-        primary_contact_person: toTrimmedString(body.primary_contact_person) || null,
-        phone: toTrimmedString(body.phone) || null,
-        primary_email: toTrimmedString(body.primary_email) || null,
-        cc_email_list: normalizeCcEmailList(body.cc_email_list),
         bank_name: toTrimmedString(body.bank_name) || null,
         bank_branch: toTrimmedString(body.bank_branch) || null,
         bank_account_number: toTrimmedString(body.bank_account_number) || null,
         bank_routing_number: toTrimmedString(body.bank_routing_number) || null,
-        currency_code: toTrimmedString(body.currency_code).toUpperCase() || "BDT",
-        status: "DRAFT",
+        status: "ACTIVE",
+        approved_by: ctx.auth_user_id,
+        approved_at: new Date().toISOString(),
         created_by: ctx.auth_user_id,
       })
       .select("*")
@@ -153,6 +144,8 @@ export async function createVendorHandler(
     return vendorErrorResponse(req, ctx, code, status, "Vendor create failed");
   }
 }
+
+/* ── List ────────────────────────────────────────────────────────────────── */
 
 export async function listVendorsHandler(
   req: Request,
@@ -175,20 +168,12 @@ export async function listVendorsHandler(
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
-    if (vendorType) {
-      query = query.eq("vendor_type", vendorType);
-    }
-    if (statusFilter) {
-      query = query.eq("status", statusFilter);
-    }
-    if (search) {
-      query = query.or(`vendor_code.ilike.%${search}%,vendor_name.ilike.%${search}%`);
-    }
+    if (vendorType) query = query.eq("vendor_type", vendorType);
+    if (statusFilter) query = query.eq("status", statusFilter);
+    if (search) query = query.or(`vendor_code.ilike.%${search}%,vendor_name.ilike.%${search}%`);
 
     const { data, error, count } = await query;
-    if (error) {
-      throw new Error("OM_VENDOR_LIST_FAILED");
-    }
+    if (error) throw new Error("OM_VENDOR_LIST_FAILED");
 
     return okResponse({ data: data ?? [], total: count ?? 0 }, ctx.request_id, req);
   } catch (err) {
@@ -198,6 +183,8 @@ export async function listVendorsHandler(
   }
 }
 
+/* ── Get (with contacts + emails) ──────────────────────────────────────── */
+
 export async function getVendorHandler(
   req: Request,
   ctx: OmHandlerContext,
@@ -206,35 +193,36 @@ export async function getVendorHandler(
     assertOmAdminContext(ctx);
 
     const id = toTrimmedString(new URL(req.url).searchParams.get("id"));
-    if (!id) {
-      return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
-    }
+    if (!id) return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
 
     const vendor = await getVendorById(id);
-    if (!vendor) {
-      return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
-    }
+    if (!vendor) return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
 
-    const { data: latestPaymentTerms, error: termsError } = await serviceRoleClient
-      .schema("erp_master")
-      .from("vendor_payment_terms_log")
-      .select("*")
-      .eq("vendor_id", id)
-      .order("recorded_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const [{ data: contacts }, { data: emails }, { data: latestPaymentTerms }] = await Promise.all([
+      serviceRoleClient.schema("erp_master").from("vendor_contacts")
+        .select("*").eq("vendor_id", id).order("created_at", { ascending: true }),
+      serviceRoleClient.schema("erp_master").from("vendor_emails")
+        .select("*").eq("vendor_id", id).order("created_at", { ascending: true }),
+      serviceRoleClient.schema("erp_master").from("vendor_payment_terms_log")
+        .select("*").eq("vendor_id", id).order("recorded_at", { ascending: false }).limit(1).maybeSingle(),
+    ]);
 
-    if (termsError) {
-      throw new Error("OM_VENDOR_LOOKUP_FAILED");
-    }
-
-    return okResponse({ data: { ...vendor, latest_payment_terms: latestPaymentTerms ?? null } }, ctx.request_id, req);
+    return okResponse({
+      data: {
+        ...vendor,
+        contacts: contacts ?? [],
+        emails: emails ?? [],
+        latest_payment_terms: latestPaymentTerms ?? null,
+      },
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_VENDOR_LOOKUP_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
     return vendorErrorResponse(req, ctx, code, status, "Vendor lookup failed");
   }
 }
+
+/* ── Update ──────────────────────────────────────────────────────────────── */
 
 export async function updateVendorHandler(
   req: Request,
@@ -245,19 +233,10 @@ export async function updateVendorHandler(
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
-    if (!id) {
-      return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
-    }
+    if (!id) return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
 
     const existing = await getVendorById(id);
-    if (!existing) {
-      return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
-    }
-
-    const currentStatus = String(existing.status ?? "");
-    if (!MUTABLE_VENDOR_STATUSES.has(currentStatus)) {
-      return vendorErrorResponse(req, ctx, "OM_VENDOR_LOCKED", 422, "Vendor is locked");
-    }
+    if (!existing) return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
 
     const updates: JsonRecord = {
       last_updated_at: new Date().toISOString(),
@@ -265,34 +244,17 @@ export async function updateVendorHandler(
     };
 
     const mutableFields = [
-      "vendor_name",
-      "bin_number",
-      "tin_number",
-      "trade_license",
-      "gst_number",
-      "gst_category",
-      "iec_code",
-      "import_license",
-      "registered_address",
-      "correspondence_address",
-      "primary_contact_person",
-      "phone",
-      "primary_email",
-      "bank_name",
-      "bank_branch",
-      "bank_account_number",
-      "bank_routing_number",
-      "currency_code",
+      "vendor_name", "bin_number", "tin_number", "trade_license",
+      "gst_number", "gst_category", "iec_code", "import_license",
+      "country_code", "currency_code",
+      "registered_address", "correspondence_address",
+      "bank_name", "bank_branch", "bank_account_number", "bank_routing_number",
     ];
 
     for (const field of mutableFields) {
       if (body[field] !== undefined) {
-        updates[field] = body[field];
+        updates[field] = toTrimmedString(body[field]) || null;
       }
-    }
-
-    if (body.cc_email_list !== undefined) {
-      updates.cc_email_list = normalizeCcEmailList(body.cc_email_list);
     }
 
     if (Object.keys(updates).length === 2) {
@@ -307,17 +269,17 @@ export async function updateVendorHandler(
       .select("*")
       .single();
 
-    if (error || !data) {
-      throw new Error("OM_VENDOR_UPDATE_FAILED");
-    }
+    if (error || !data) throw new Error("OM_VENDOR_UPDATE_FAILED");
 
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_VENDOR_UPDATE_FAILED";
-    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("LOCKED") ? 422 : code.includes("NO_CHANGES") ? 400 : 500;
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("NO_CHANGES") ? 400 : 500;
     return vendorErrorResponse(req, ctx, code, status, "Vendor update failed");
   }
 }
+
+/* ── Status Change ───────────────────────────────────────────────────────── */
 
 export async function changeVendorStatusHandler(
   req: Request,
@@ -330,17 +292,13 @@ export async function changeVendorStatusHandler(
     const id = toTrimmedString(body.id);
     const newStatus = toTrimmedString(body.new_status).toUpperCase();
 
-    if (!id) {
-      return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
-    }
+    if (!id) return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
     if (!VENDOR_STATUSES.has(newStatus)) {
-      return vendorErrorResponse(req, ctx, "OM_INVALID_STATUS_TRANSITION", 422, "Status transition not allowed");
+      return vendorErrorResponse(req, ctx, "OM_INVALID_STATUS_TRANSITION", 422, "Invalid status");
     }
 
     const existing = await getVendorById(id);
-    if (!existing) {
-      return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
-    }
+    if (!existing) return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
 
     const currentStatus = String(existing.status ?? "");
     const allowed = VENDOR_TRANSITIONS.get(currentStatus);
@@ -366,9 +324,7 @@ export async function changeVendorStatusHandler(
       .select("*")
       .single();
 
-    if (error || !data) {
-      throw new Error("OM_VENDOR_STATUS_UPDATE_FAILED");
-    }
+    if (error || !data) throw new Error("OM_VENDOR_STATUS_UPDATE_FAILED");
 
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
@@ -377,6 +333,343 @@ export async function changeVendorStatusHandler(
     return vendorErrorResponse(req, ctx, code, status, "Vendor status update failed");
   }
 }
+
+/* ── Delete (bulk) ───────────────────────────────────────────────────────── */
+
+export async function deleteVendorsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+
+    const body = await parseBody(req);
+    const ids: string[] = Array.isArray(body.ids)
+      ? body.ids.map(String).filter(Boolean)
+      : [];
+
+    if (ids.length === 0) {
+      return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "ids array required");
+    }
+
+    const deleted: string[] = [];
+    const errors: { id: string; error: string }[] = [];
+
+    for (const id of ids) {
+      const { error } = await serviceRoleClient
+        .schema("erp_master")
+        .from("vendor_master")
+        .delete()
+        .eq("id", id);
+
+      if (error) {
+        const code = error.code === "23503" ? "OM_VENDOR_HAS_DEPENDENCIES" : "OM_VENDOR_DELETE_FAILED";
+        errors.push({ id, error: code });
+      } else {
+        deleted.push(id);
+      }
+    }
+
+    return okResponse({ deleted, errors }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_DELETE_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor delete failed");
+  }
+}
+
+/* ── Contacts — Get ──────────────────────────────────────────────────────── */
+
+export async function getVendorContactsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const vendorId = toTrimmedString(new URL(req.url).searchParams.get("vendor_id"));
+    if (!vendorId) return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "vendor_id required");
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_contacts")
+      .select("*")
+      .eq("vendor_id", vendorId)
+      .order("created_at", { ascending: true });
+
+    if (error) throw new Error("OM_VENDOR_CONTACTS_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_CONTACTS_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor contacts fetch failed");
+  }
+}
+
+/* ── Contacts — Upsert (replace all) ────────────────────────────────────── */
+
+export async function upsertVendorContactsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+
+    const body = await parseBody(req);
+    const vendorId = toTrimmedString(body.vendor_id);
+    const contacts = Array.isArray(body.contacts) ? body.contacts : [];
+
+    if (!vendorId) return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "vendor_id required");
+    if (!(await getVendorById(vendorId))) {
+      return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
+    }
+
+    await serviceRoleClient.schema("erp_master").from("vendor_contacts").delete().eq("vendor_id", vendorId);
+
+    if (contacts.length > 0) {
+      const rows = contacts
+        .filter((c: JsonRecord) => toTrimmedString(c.contact_name))
+        .map((c: JsonRecord) => ({
+          vendor_id: vendorId,
+          contact_name: toTrimmedString(c.contact_name),
+          phone: toTrimmedString(c.phone) || null,
+          designation: toTrimmedString(c.designation) || null,
+          is_primary: Boolean(c.is_primary),
+          created_by: ctx.auth_user_id,
+        }));
+
+      if (rows.length > 0) {
+        const { error } = await serviceRoleClient.schema("erp_master").from("vendor_contacts").insert(rows);
+        if (error) throw new Error("OM_VENDOR_CONTACTS_SAVE_FAILED");
+      }
+    }
+
+    const { data } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_contacts")
+      .select("*")
+      .eq("vendor_id", vendorId)
+      .order("created_at", { ascending: true });
+
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_CONTACTS_SAVE_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor contacts save failed");
+  }
+}
+
+/* ── Emails — Get ────────────────────────────────────────────────────────── */
+
+export async function getVendorEmailsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const vendorId = toTrimmedString(new URL(req.url).searchParams.get("vendor_id"));
+    if (!vendorId) return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "vendor_id required");
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_emails")
+      .select("*")
+      .eq("vendor_id", vendorId)
+      .order("created_at", { ascending: true });
+
+    if (error) throw new Error("OM_VENDOR_EMAILS_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_EMAILS_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor emails fetch failed");
+  }
+}
+
+/* ── Emails — Upsert (replace all) ──────────────────────────────────────── */
+
+export async function upsertVendorEmailsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+
+    const body = await parseBody(req);
+    const vendorId = toTrimmedString(body.vendor_id);
+    const emails = Array.isArray(body.emails) ? body.emails : [];
+
+    if (!vendorId) return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "vendor_id required");
+    if (!(await getVendorById(vendorId))) {
+      return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
+    }
+
+    await serviceRoleClient.schema("erp_master").from("vendor_emails").delete().eq("vendor_id", vendorId);
+
+    if (emails.length > 0) {
+      const rows = emails
+        .filter((e: JsonRecord) => toTrimmedString(e.email))
+        .map((e: JsonRecord) => ({
+          vendor_id: vendorId,
+          email: toTrimmedString(e.email),
+          label: toTrimmedString(e.label) || null,
+          is_primary: Boolean(e.is_primary),
+          created_by: ctx.auth_user_id,
+        }));
+
+      if (rows.length > 0) {
+        const { error } = await serviceRoleClient.schema("erp_master").from("vendor_emails").insert(rows);
+        if (error) throw new Error("OM_VENDOR_EMAILS_SAVE_FAILED");
+      }
+    }
+
+    const { data } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_emails")
+      .select("*")
+      .eq("vendor_id", vendorId)
+      .order("created_at", { ascending: true });
+
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_EMAILS_SAVE_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor emails save failed");
+  }
+}
+
+/* ── Company Mapping — List ──────────────────────────────────────────────── */
+
+export async function listVendorCompanyMappingHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
+    const search = normalizeSearch(toTrimmedString(url.searchParams.get("search")));
+    const vendorType = toTrimmedString(url.searchParams.get("vendor_type")).toUpperCase();
+
+    if (!companyId) {
+      return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "company_id required");
+    }
+
+    let query = serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_master")
+      .select("id, vendor_code, vendor_name, vendor_type, status");
+
+    if (vendorType) query = query.eq("vendor_type", vendorType);
+    if (search) query = query.or(`vendor_code.ilike.%${search}%,vendor_name.ilike.%${search}%`);
+
+    const { data: allVendors, error: vendorErr } = await query.order("vendor_name");
+    if (vendorErr) throw new Error("OM_VENDOR_LIST_FAILED");
+
+    const { data: mappings, error: mapErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_company_map")
+      .select("vendor_id")
+      .eq("company_id", companyId)
+      .eq("active", true);
+
+    if (mapErr) throw new Error("OM_VENDOR_LIST_FAILED");
+
+    const mappedIds = new Set((mappings ?? []).map((m: JsonRecord) => String(m.vendor_id)));
+    const result = (allVendors ?? []).map((v: JsonRecord) => ({
+      ...v,
+      is_mapped: mappedIds.has(String(v.id)),
+    }));
+
+    return okResponse({ data: result }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_MAPPING_LIST_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor mapping list failed");
+  }
+}
+
+/* ── Company Mapping — Bulk Map ──────────────────────────────────────────── */
+
+export async function bulkMapVendorsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+
+    const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id);
+    const vendorIds: string[] = Array.isArray(body.vendor_ids)
+      ? body.vendor_ids.map(String).filter(Boolean)
+      : [];
+
+    if (!companyId || vendorIds.length === 0) {
+      return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "company_id and vendor_ids required");
+    }
+    if (!(await ensureCompanyExists(companyId))) {
+      return vendorErrorResponse(req, ctx, "OM_COMPANY_NOT_FOUND", 404, "Company not found");
+    }
+
+    const rows = vendorIds.map((vendorId) => ({
+      vendor_id: vendorId,
+      company_id: companyId,
+      active: true,
+      created_by: ctx.auth_user_id,
+    }));
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_company_map")
+      .upsert(rows, { onConflict: "vendor_id,company_id" });
+
+    if (error) throw new Error("OM_VENDOR_COMPANY_MAP_FAILED");
+
+    return okResponse({ mapped: vendorIds.length }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_COMPANY_MAP_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor bulk map failed");
+  }
+}
+
+/* ── Company Mapping — Bulk Unmap ────────────────────────────────────────── */
+
+export async function bulkUnmapVendorsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+
+    const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id);
+    const vendorIds: string[] = Array.isArray(body.vendor_ids)
+      ? body.vendor_ids.map(String).filter(Boolean)
+      : [];
+
+    if (!companyId || vendorIds.length === 0) {
+      return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "company_id and vendor_ids required");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_company_map")
+      .update({ active: false, last_updated_at: new Date().toISOString() })
+      .eq("company_id", companyId)
+      .in("vendor_id", vendorIds);
+
+    if (error) throw new Error("OM_VENDOR_COMPANY_UNMAP_FAILED");
+
+    return okResponse({ unmapped: vendorIds.length }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_COMPANY_UNMAP_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor bulk unmap failed");
+  }
+}
+
+/* ── Company Map (single) ────────────────────────────────────────────────── */
 
 export async function mapVendorToCompanyHandler(
   req: Request,
@@ -408,9 +701,7 @@ export async function mapVendorToCompanyHandler(
       .select("*")
       .single();
 
-    if (error || !data) {
-      throw new Error("OM_VENDOR_COMPANY_MAP_FAILED");
-    }
+    if (error || !data) throw new Error("OM_VENDOR_COMPANY_MAP_FAILED");
 
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
@@ -419,6 +710,35 @@ export async function mapVendorToCompanyHandler(
     return vendorErrorResponse(req, ctx, code, status, "Vendor company map failed");
   }
 }
+
+/* ── List Company Maps (for vendor detail) ───────────────────────────────── */
+
+export async function listVendorCompanyMapsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const vendorId = toTrimmedString(new URL(req.url).searchParams.get("vendor_id"));
+    if (!vendorId) return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 400, "vendor_id required");
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_company_map")
+      .select("*, companies:company_id(id, company_code, company_name)")
+      .eq("vendor_id", vendorId)
+      .order("created_at", { ascending: true });
+
+    if (error) throw new Error("OM_VENDOR_COMPANY_MAP_LIST_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_COMPANY_MAP_LIST_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor company map list failed");
+  }
+}
+
+/* ── Payment Terms ───────────────────────────────────────────────────────── */
 
 export async function addVendorPaymentTermsHandler(
   req: Request,
@@ -463,9 +783,7 @@ export async function addVendorPaymentTermsHandler(
       .select("*")
       .single();
 
-    if (error || !data) {
-      throw new Error("OM_PAYMENT_TERMS_CREATE_FAILED");
-    }
+    if (error || !data) throw new Error("OM_PAYMENT_TERMS_CREATE_FAILED");
 
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
@@ -493,47 +811,16 @@ export async function getVendorPaymentTermsHandler(
       .order("recorded_at", { ascending: false })
       .limit(10);
 
-    if (vendorId) {
-      query = query.eq("vendor_id", vendorId);
-    }
-    if (companyId) {
-      query = query.eq("company_id", companyId);
-    }
+    if (vendorId) query = query.eq("vendor_id", vendorId);
+    if (companyId) query = query.eq("company_id", companyId);
 
     const { data, error } = await query;
-    if (error) {
-      throw new Error("OM_PAYMENT_TERMS_LOOKUP_FAILED");
-    }
+    if (error) throw new Error("OM_PAYMENT_TERMS_LOOKUP_FAILED");
 
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_PAYMENT_TERMS_LOOKUP_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
     return vendorErrorResponse(req, ctx, code, status, "Vendor payment terms lookup failed");
-  }
-}
-
-export async function listVendorCompanyMapsHandler(
-  req: Request,
-  ctx: OmHandlerContext,
-): Promise<Response> {
-  try {
-    assertOmAdminContext(ctx);
-    const vendorId = toTrimmedString(new URL(req.url).searchParams.get("vendor_id"));
-    if (!vendorId) {
-      return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 400, "vendor_id required");
-    }
-    const { data, error } = await serviceRoleClient
-      .schema("erp_master")
-      .from("vendor_company_map")
-      .select("*, companies:company_id(id, company_code, company_name)")
-      .eq("vendor_id", vendorId)
-      .order("created_at", { ascending: true });
-    if (error) throw new Error("OM_VENDOR_COMPANY_MAP_LIST_FAILED");
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
-  } catch (err) {
-    const code = (err as Error).message || "OM_VENDOR_COMPANY_MAP_LIST_FAILED";
-    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
-    return vendorErrorResponse(req, ctx, code, status, "Vendor company map list failed");
   }
 }

@@ -89,7 +89,7 @@ export default function VendorListPage() {
       title="Vendor Master"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
-        ...(isSA ? [{ key: "create", label: "Create Vendor", tone: "primary", onClick: () => openScreen(ADMIN_SCREENS.SA_VENDOR_CREATE.screen_code) }] : []),
+        ...(isSA ? [{ key: "create", label: "Vendor Master", tone: "primary", onClick: () => openScreen(ADMIN_SCREENS.SA_VENDOR_MASTER.screen_code) }] : []),
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
       filterSection={{

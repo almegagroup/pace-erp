@@ -73,7 +73,7 @@ import SALeadTimeMasters from "../admin/sa/screens/SALeadTimeMasters.jsx";
 import SATransporterMaster from "../admin/sa/screens/SATransporterMaster.jsx";
 import SACHAMaster from "../admin/sa/screens/SACHAMaster.jsx";
 import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
-import VendorCreatePage from "../pages/dashboard/om/vendor/VendorCreatePage.jsx";
+import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
 import SAOpeningStockListPage from "../admin/sa/screens/SAOpeningStockListPage.jsx";
 import SAOpeningStockDetailPage from "../admin/sa/screens/SAOpeningStockDetailPage.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
@@ -298,12 +298,8 @@ export default function AppRouter() {
                       element={<SAMaterialMaster />}
                     />
                     <Route
-                      path="om/vendor/create"
-                      element={<VendorCreatePage />}
-                    />
-                    <Route
-                      path="om/vendor/detail"
-                      element={<VendorDetailPage />}
+                      path="om/vendors"
+                      element={<SAVendorMaster />}
                     />
                     <Route
                       path="opening-stock"

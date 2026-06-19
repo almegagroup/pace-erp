@@ -274,6 +274,81 @@ export async function getVendorPaymentTerms(vendorId, companyId) {
   );
 }
 
+export async function deleteVendors(ids) {
+  return fetchJson(
+    "/api/om/vendors",
+    {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    },
+    "OM_VENDOR_DELETE_FAILED"
+  );
+}
+
+export async function getVendorContacts(vendor_id) {
+  const params = buildParams({ vendor_id });
+  return fetchJson(`/api/om/vendor/contacts?${params.toString()}`, {}, "OM_VENDOR_CONTACTS_FAILED");
+}
+
+export async function upsertVendorContacts(payload) {
+  return fetchJson(
+    "/api/om/vendor/contacts",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_VENDOR_CONTACTS_FAILED"
+  );
+}
+
+export async function getVendorEmails(vendor_id) {
+  const params = buildParams({ vendor_id });
+  return fetchJson(`/api/om/vendor/emails?${params.toString()}`, {}, "OM_VENDOR_EMAILS_FAILED");
+}
+
+export async function upsertVendorEmails(payload) {
+  return fetchJson(
+    "/api/om/vendor/emails",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_VENDOR_EMAILS_FAILED"
+  );
+}
+
+export async function listVendorCompanyMapping({ company_id, search, vendor_type } = {}) {
+  const params = buildParams({ company_id, search, vendor_type });
+  return fetchJson(`/api/om/vendor/company-mapping?${params.toString()}`, {}, "OM_VENDOR_MAPPING_LIST_FAILED");
+}
+
+export async function bulkMapVendors(payload) {
+  return fetchJson(
+    "/api/om/vendor/company-map-bulk",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_VENDOR_MAP_FAILED"
+  );
+}
+
+export async function bulkUnmapVendors(payload) {
+  return fetchJson(
+    "/api/om/vendor/company-unmap-bulk",
+    {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_VENDOR_UNMAP_FAILED"
+  );
+}
+
 export async function createVendorMaterialInfo(payload) {
   return fetchJson(
     "/api/om/vendor-material-info",
