@@ -9,8 +9,9 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import {
   listVendors,
   createVendor,
@@ -120,14 +121,6 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
   const [gstLooking, setGstLooking] = useState(false);
   const [gstNotice, setGstNotice]   = useState("");
 
-  /* ESC → close panel, don't navigate back */
-  useEffect(() => {
-    function onKey(e) {
-      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
-    }
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
 
   const patch = (key, val) => setFields((p) => ({ ...p, [key]: val }));
 
@@ -194,23 +187,38 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
   const inpS = "h-7 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500";
   const lbl  = "mb-0.5 block text-xs font-medium text-slate-600";
 
+  const headerNode = (
+    <div className="px-4 py-3">
+      <div className="text-xs font-medium text-slate-500">{vendorType === "DOMESTIC" ? "Domestic Vendor" : "Import Vendor"}</div>
+      <div className="text-base font-semibold text-slate-800">{isCreate ? "New Vendor" : (initialVendor?.vendor_name ?? "Edit Vendor")}</div>
+      {!isCreate && <div className="font-mono text-xs text-slate-400">{initialVendor?.vendor_code}</div>}
+    </div>
+  );
+
+  const footerNode = (
+    <>
+      <button onClick={onClose} className="h-8 border border-slate-300 px-4 text-sm text-slate-700 hover:bg-slate-50">Cancel</button>
+      <button onClick={handleSave} disabled={saving} className="h-8 border border-sky-600 bg-sky-600 px-5 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
+        {saving ? "Saving…" : (isCreate ? "Create Vendor" : "Save Changes")}
+      </button>
+    </>
+  );
+
   return (
-    <div className="fixed inset-0 z-40 flex">
-      <div className="flex-1 bg-black/20" onClick={onClose} />
-      <div className="flex h-full w-[500px] flex-col overflow-hidden border-l border-slate-200 bg-white shadow-2xl">
+    <DrawerBase
+      visible
+      title={null}
+      onClose={onClose}
+      onEscape={onClose}
+      width="500px"
+      actions={footerNode}
+      contentProps={{ style: { padding: "0" } }}
+    >
+      {/* Header inside content */}
+      <div className="border-b border-slate-200 bg-white">{headerNode}</div>
 
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <div>
-            <div className="text-xs font-medium text-slate-500">{vendorType === "DOMESTIC" ? "Domestic Vendor" : "Import Vendor"}</div>
-            <div className="text-base font-semibold text-slate-800">{isCreate ? "New Vendor" : (initialVendor?.vendor_name ?? "Edit Vendor")}</div>
-            {!isCreate && <div className="font-mono text-xs text-slate-400">{initialVendor?.vendor_code}</div>}
-          </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700">✕</button>
-        </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto px-4 py-4">
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto px-4 py-4">
           {error && <div className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
 
           {/* Basic Info */}
@@ -365,17 +373,8 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
               );
             })}
           </Section>
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
-          <button onClick={onClose} className="h-8 border border-slate-300 px-4 text-sm text-slate-700 hover:bg-slate-50">Cancel</button>
-          <button onClick={handleSave} disabled={saving} className="h-8 border border-sky-600 bg-sky-600 px-5 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
-            {saving ? "Saving…" : (isCreate ? "Create Vendor" : "Save Changes")}
-          </button>
-        </div>
       </div>
-    </div>
+    </DrawerBase>
   );
 }
 
