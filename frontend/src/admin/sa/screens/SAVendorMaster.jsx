@@ -138,7 +138,7 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
     setGstLooking(true); setError(""); setGstNotice("");
     try {
       const profile = await lookupGst(gst);
-      if (profile.legal_name && !fields.vendor_name.trim()) {
+      if (profile.legal_name) {
         patch("vendor_name", profile.legal_name);
       }
       if (profile.full_address && !fields.registered_address.trim()) {
