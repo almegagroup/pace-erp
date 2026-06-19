@@ -100,6 +100,7 @@ export async function createVendorHandler(
 
     const { data: vendorCode, error: codeError } = await serviceRoleClient.rpc("generate_vendor_code");
     if (codeError || !vendorCode) {
+      console.error("[vendor.create] generate_vendor_code RPC failed:", JSON.stringify(codeError));
       throw new Error("OM_VENDOR_CREATE_FAILED");
     }
 
@@ -136,12 +137,14 @@ export async function createVendorHandler(
       .single();
 
     if (error || !data) {
+      console.error("[vendor.create] INSERT failed:", JSON.stringify(error));
       throw new Error("OM_VENDOR_CREATE_FAILED");
     }
 
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_VENDOR_CREATE_FAILED";
+    console.error("[vendor.create] caught error:", code, (err as Error).stack ?? "");
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("INVALID") ? 400 : 500;
     return vendorErrorResponse(req, ctx, code, status, "Vendor create failed");
   }
