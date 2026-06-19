@@ -104,6 +104,8 @@ function MaterialMasterTab({ uoms }) {
 
   /* in-memory edit buffer: { [id]: patchObj } for existing rows */
   const editBufferRef = useRef({});
+  /* tracks whether buffer has edits — needed to trigger re-render since ref changes don't */
+  const [bufferDirty, setBufferDirty] = useState(false);
   /* new rows buffer: array of draft objects */
   const [newRows, setNewRows] = useState([]);
   /* which existing row is being edited */
@@ -152,7 +154,7 @@ function MaterialMasterTab({ uoms }) {
       ...editBufferRef.current,
       [id]: { ...(editBufferRef.current[id] ?? {}), [field]: value },
     };
-    /* force re-render by updating rows with merged values */
+    setBufferDirty(true);
     setRows((prev) =>
       prev.map((r) => (r.id === id ? { ...r, [field]: value } : r))
     );
@@ -222,6 +224,7 @@ function MaterialMasterTab({ uoms }) {
       }
 
       editBufferRef.current = {};
+      setBufferDirty(false);
       setNewRows([]);
       setEditingId(null);
       load(page);
@@ -334,8 +337,7 @@ function MaterialMasterTab({ uoms }) {
       prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))
     );
 
-  const hasEdits =
-    Object.keys(editBufferRef.current).length > 0 || newRows.length > 0;
+  const hasEdits = bufferDirty || newRows.length > 0;
 
   return (
     <div className="flex flex-col gap-4">

@@ -19,7 +19,7 @@ const ALLOWED_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "FG", "TRA", "CONS"])
 const MUTABLE_MATERIAL_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL"]);
 const MATERIAL_DB_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL", "ACTIVE", "INACTIVE", "BLOCKED"]);
 const MATERIAL_TRANSITIONS = new Map<string, Set<string>>([
-  ["DRAFT", new Set(["PENDING_APPROVAL"])],
+  ["DRAFT", new Set(["PENDING_APPROVAL", "ACTIVE", "INACTIVE"])],
   ["PENDING_APPROVAL", new Set(["ACTIVE", "DRAFT"])],
   ["ACTIVE", new Set(["INACTIVE", "BLOCKED"])],
   ["INACTIVE", new Set(["ACTIVE"])],
