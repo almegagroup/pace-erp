@@ -74,8 +74,6 @@ import SATransporterMaster from "../admin/sa/screens/SATransporterMaster.jsx";
 import SACHAMaster from "../admin/sa/screens/SACHAMaster.jsx";
 import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
 import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
-import SAOpeningStockListPage from "../admin/sa/screens/SAOpeningStockListPage.jsx";
-import SAOpeningStockDetailPage from "../admin/sa/screens/SAOpeningStockDetailPage.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
 import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
@@ -157,6 +155,8 @@ import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvo
 import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
 import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocumentListPage.jsx";
 import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
+import OpeningStockListPage from "../pages/dashboard/procurement/opening-stock/OpeningStockListPage.jsx";
+import OpeningStockDetailPage from "../pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx";
 
 
 export default function AppRouter() {
@@ -301,14 +301,7 @@ export default function AppRouter() {
                       path="om/vendors"
                       element={<SAVendorMaster />}
                     />
-                    <Route
-                      path="opening-stock"
-                      element={<SAOpeningStockListPage />}
-                    />
-                    <Route
-                      path="opening-stock/:id"
-                      element={<SAOpeningStockDetailPage />}
-                    />
+
                   </Route>
                 </Route>
               </Route>
@@ -628,6 +621,14 @@ export default function AppRouter() {
                   <Route
                     path="procurement/sales-invoices/:id"
                     element={<SalesInvoiceDetailPage />}
+                  />
+                  <Route
+                    path="procurement/opening-stock"
+                    element={<OpeningStockListPage />}
+                  />
+                  <Route
+                    path="procurement/opening-stock/:id"
+                    element={<OpeningStockDetailPage />}
                   />
                   <Route
                     path="procurement/physical-inventory"

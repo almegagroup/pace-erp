@@ -106,9 +106,10 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/:id"],
     ["/dashboard/procurement/physical-inventory",      "/dashboard/procurement/physical-inventory/:id"],
 
+    ["/dashboard/procurement/opening-stock", "/dashboard/procurement/opening-stock/:id"],
+
     // ── SA ────────────────────────────────────────────────────────────────────
     ["/sa/users",              "/sa/users/report"],
-    ["/sa/opening-stock",      "/sa/opening-stock/:id"],
   ];
 
   for (const [baseRoute, companionRoute] of companionRoutePairs) {

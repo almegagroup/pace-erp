@@ -401,6 +401,22 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_OPENING_STOCK_LIST: {
+    screen_code: "PROC_OPENING_STOCK_LIST",
+    route: "/dashboard/procurement/opening-stock",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_OPENING_STOCK_DETAIL: {
+    screen_code: "PROC_OPENING_STOCK_DETAIL",
+    route: "/dashboard/procurement/opening-stock/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_PI_LIST: {
     screen_code: "PROC_PI_LIST",
     route: "/dashboard/procurement/physical-inventory",

@@ -74,9 +74,11 @@ function openingStockErrorResponse(
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
 
-function assertSARole(ctx: ProcurementHandlerContext): void {
-  if (ctx.roleCode !== "SA") {
-    throw new Error("SA_REQUIRED");
+const MANAGER_OR_SA_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
+
+function assertManagerOrSARole(ctx: ProcurementHandlerContext): void {
+  if (!MANAGER_OR_SA_ROLES.has(ctx.roleCode)) {
+    throw new Error("MANAGER_OR_SA_REQUIRED");
   }
 }
 
@@ -182,7 +184,7 @@ export async function createOpeningStockDocumentHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
     const cutOffDate = toTrimmedString(body.cut_off_date);
@@ -264,7 +266,7 @@ export async function listOpeningStockDocumentsHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
@@ -346,7 +348,7 @@ export async function getOpeningStockDocumentHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     if (!documentId) {
       return openingStockErrorResponse(
@@ -371,7 +373,7 @@ export async function addOpeningStockLineHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const body = await parseBody(req);
     const materialId = toTrimmedString(body.material_id);
@@ -467,7 +469,7 @@ export async function updateOpeningStockLineHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const lineId = getLineIdFromPath(req);
     const body = await parseBody(req);
@@ -539,7 +541,7 @@ export async function removeOpeningStockLineHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const lineId = getLineIdFromPath(req);
     const document = await fetchOpeningStockDocument(documentId);
@@ -581,7 +583,7 @@ export async function submitOpeningStockDocumentHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const document = await fetchOpeningStockDocument(documentId);
     if (toUpperTrimmedString(document.status) !== "DRAFT") {
@@ -638,7 +640,7 @@ export async function approveOpeningStockDocumentHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const document = await fetchOpeningStockDocument(documentId);
     if (toUpperTrimmedString(document.status) !== "SUBMITTED") {
@@ -684,7 +686,7 @@ export async function postOpeningStockDocumentHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertSARole(ctx);
+    assertManagerOrSARole(ctx);
     const documentId = getDocumentIdFromPath(req);
     const document = await fetchOpeningStockDocument(documentId);
     if (toUpperTrimmedString(document.status) !== "APPROVED") {
