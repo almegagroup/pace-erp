@@ -43,6 +43,7 @@ import {
   changeVendorStatusHandler,
   createVendorHandler,
   deleteVendorsHandler,
+  getVendorBanksHandler,
   getVendorContactsHandler,
   getVendorEmailsHandler,
   getVendorHandler,
@@ -52,6 +53,7 @@ import {
   listVendorsHandler,
   mapVendorToCompanyHandler,
   updateVendorHandler,
+  upsertVendorBanksHandler,
   upsertVendorContactsHandler,
   upsertVendorEmailsHandler,
 } from "../_core/om/vendor.handlers.ts";
@@ -186,6 +188,10 @@ export async function dispatchOmRoutes(
       return await listVendorCompanyMapsHandler(req, ctx);
     case "DELETE:/api/om/vendors":
       return await deleteVendorsHandler(req, ctx);
+    case "GET:/api/om/vendor/banks":
+      return await getVendorBanksHandler(req, ctx);
+    case "POST:/api/om/vendor/banks":
+      return await upsertVendorBanksHandler(req, ctx);
     case "GET:/api/om/vendor/contacts":
       return await getVendorContactsHandler(req, ctx);
     case "POST:/api/om/vendor/contacts":

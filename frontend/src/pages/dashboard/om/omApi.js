@@ -286,6 +286,23 @@ export async function deleteVendors(ids) {
   );
 }
 
+export async function getVendorBanks(vendor_id) {
+  const params = buildParams({ vendor_id });
+  return fetchJson(`/api/om/vendor/banks?${params.toString()}`, {}, "OM_VENDOR_BANKS_FAILED");
+}
+
+export async function upsertVendorBanks(payload) {
+  return fetchJson(
+    "/api/om/vendor/banks",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_VENDOR_BANKS_FAILED"
+  );
+}
+
 export async function getVendorContacts(vendor_id) {
   const params = buildParams({ vendor_id });
   return fetchJson(`/api/om/vendor/contacts?${params.toString()}`, {}, "OM_VENDOR_CONTACTS_FAILED");

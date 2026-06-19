@@ -121,10 +121,6 @@ export async function createVendorHandler(
         currency_code: toTrimmedString(body.currency_code).toUpperCase() || "BDT",
         registered_address: toTrimmedString(body.registered_address) || null,
         correspondence_address: toTrimmedString(body.correspondence_address) || null,
-        bank_name: toTrimmedString(body.bank_name) || null,
-        bank_branch: toTrimmedString(body.bank_branch) || null,
-        bank_account_number: toTrimmedString(body.bank_account_number) || null,
-        bank_routing_number: toTrimmedString(body.bank_routing_number) || null,
         status: "ACTIVE",
         approved_by: ctx.auth_user_id,
         approved_at: new Date().toISOString(),
@@ -198,10 +194,12 @@ export async function getVendorHandler(
     const vendor = await getVendorById(id);
     if (!vendor) return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
 
-    const [{ data: contacts }, { data: emails }, { data: latestPaymentTerms }] = await Promise.all([
+    const [{ data: contacts }, { data: emails }, { data: banks }, { data: latestPaymentTerms }] = await Promise.all([
       serviceRoleClient.schema("erp_master").from("vendor_contacts")
         .select("*").eq("vendor_id", id).order("created_at", { ascending: true }),
       serviceRoleClient.schema("erp_master").from("vendor_emails")
+        .select("*").eq("vendor_id", id).order("created_at", { ascending: true }),
+      serviceRoleClient.schema("erp_master").from("vendor_banks")
         .select("*").eq("vendor_id", id).order("created_at", { ascending: true }),
       serviceRoleClient.schema("erp_master").from("vendor_payment_terms_log")
         .select("*").eq("vendor_id", id).order("recorded_at", { ascending: false }).limit(1).maybeSingle(),
@@ -212,6 +210,7 @@ export async function getVendorHandler(
         ...vendor,
         contacts: contacts ?? [],
         emails: emails ?? [],
+        banks: banks ?? [],
         latest_payment_terms: latestPaymentTerms ?? null,
       },
     }, ctx.request_id, req);
@@ -248,7 +247,6 @@ export async function updateVendorHandler(
       "gst_number", "gst_category", "iec_code", "import_license",
       "country_code", "currency_code",
       "registered_address", "correspondence_address",
-      "bank_name", "bank_branch", "bank_account_number", "bank_routing_number",
     ];
 
     for (const field of mutableFields) {
@@ -666,6 +664,88 @@ export async function bulkUnmapVendorsHandler(
     const code = (err as Error).message || "OM_VENDOR_COMPANY_UNMAP_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
     return vendorErrorResponse(req, ctx, code, status, "Vendor bulk unmap failed");
+  }
+}
+
+/* ── Banks — Get ─────────────────────────────────────────────────────────── */
+
+export async function getVendorBanksHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+    const vendorId = toTrimmedString(new URL(req.url).searchParams.get("vendor_id"));
+    if (!vendorId) return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "vendor_id required");
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_banks")
+      .select("*")
+      .eq("vendor_id", vendorId)
+      .order("created_at", { ascending: true });
+
+    if (error) throw new Error("OM_VENDOR_BANKS_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_BANKS_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor banks fetch failed");
+  }
+}
+
+/* ── Banks — Upsert (replace all) ───────────────────────────────────────── */
+
+export async function upsertVendorBanksHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmAdminContext(ctx);
+
+    const body = await parseBody(req);
+    const vendorId = toTrimmedString(body.vendor_id);
+    const banks = Array.isArray(body.banks) ? body.banks : [];
+
+    if (!vendorId) return vendorErrorResponse(req, ctx, "OM_INVALID_REQUEST", 400, "vendor_id required");
+    if (!(await getVendorById(vendorId))) {
+      return vendorErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
+    }
+
+    await serviceRoleClient.schema("erp_master").from("vendor_banks").delete().eq("vendor_id", vendorId);
+
+    if (banks.length > 0) {
+      const rows = banks
+        .filter((b: JsonRecord) => toTrimmedString(b.bank_name))
+        .map((b: JsonRecord) => ({
+          vendor_id: vendorId,
+          bank_name: toTrimmedString(b.bank_name),
+          bank_branch: toTrimmedString(b.bank_branch) || null,
+          bank_account_number: toTrimmedString(b.bank_account_number) || null,
+          bank_routing_number: toTrimmedString(b.bank_routing_number) || null,
+          is_primary: Boolean(b.is_primary),
+          is_active: b.is_active !== false,
+          created_by: ctx.auth_user_id,
+        }));
+
+      if (rows.length > 0) {
+        const { error } = await serviceRoleClient.schema("erp_master").from("vendor_banks").insert(rows);
+        if (error) throw new Error("OM_VENDOR_BANKS_SAVE_FAILED");
+      }
+    }
+
+    const { data } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_banks")
+      .select("*")
+      .eq("vendor_id", vendorId)
+      .order("created_at", { ascending: true });
+
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_BANKS_SAVE_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    return vendorErrorResponse(req, ctx, code, status, "Vendor banks save failed");
   }
 }
 
