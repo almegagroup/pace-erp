@@ -102,7 +102,8 @@ const BLANK = {
   vendor_name: "", bin_number: "", tin_number: "", trade_license: "",
   gst_number: "", gst_category: "", iec_code: "", import_license: "",
   country_code: "", currency_code: "BDT",
-  registered_address: "", correspondence_address: "",
+  reg_address_line1: "", reg_address_city: "", reg_address_state: "", reg_address_pin: "",
+  corr_address_line1: "", corr_address_city: "", corr_address_state: "", corr_address_pin: "",
 };
 
 function uid() { return Date.now() + Math.random(); }
@@ -131,12 +132,10 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
     setGstLooking(true); setError(""); setGstNotice("");
     try {
       const profile = await lookupGst(gst);
-      if (profile.legal_name) {
-        patch("vendor_name", profile.legal_name);
-      }
-      if (profile.full_address && !fields.registered_address.trim()) {
-        patch("registered_address", profile.full_address);
-      }
+      if (profile.legal_name) patch("vendor_name", profile.legal_name);
+      if (profile.full_address) patch("reg_address_line1", profile.full_address);
+      if (profile.state_name)   patch("reg_address_state", profile.state_name);
+      if (profile.pin_code)     patch("reg_address_pin",   profile.pin_code);
       setGstNotice(`GST found: ${profile.legal_name ?? "—"}`);
     } catch {
       setError("GST lookup failed. Check the GST number.");
@@ -293,14 +292,45 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
           </Section>
 
           {/* Address */}
-          <Section title="Address">
+          <Section title="Registered Address">
             <div>
-              <div className={lbl}>Registered Address</div>
-              <textarea value={fields.registered_address} onChange={(e) => patch("registered_address", e.target.value)} rows={2} className="w-full border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 outline-none focus:border-sky-500" />
+              <div className={lbl}>Address Line</div>
+              <input value={fields.reg_address_line1} onChange={(e) => patch("reg_address_line1", e.target.value)} className={inp} placeholder="Street / area" />
             </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <div className={lbl}>City</div>
+                <input value={fields.reg_address_city} onChange={(e) => patch("reg_address_city", e.target.value)} className={inp} />
+              </div>
+              <div>
+                <div className={lbl}>State</div>
+                <input value={fields.reg_address_state} onChange={(e) => patch("reg_address_state", e.target.value)} className={inp} />
+              </div>
+              <div>
+                <div className={lbl}>PIN / ZIP</div>
+                <input value={fields.reg_address_pin} onChange={(e) => patch("reg_address_pin", e.target.value)} className={inp} />
+              </div>
+            </div>
+          </Section>
+
+          <Section title="Correspondence Address">
             <div>
-              <div className={lbl}>Correspondence Address</div>
-              <textarea value={fields.correspondence_address} onChange={(e) => patch("correspondence_address", e.target.value)} rows={2} className="w-full border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 outline-none focus:border-sky-500" />
+              <div className={lbl}>Address Line</div>
+              <input value={fields.corr_address_line1} onChange={(e) => patch("corr_address_line1", e.target.value)} className={inp} placeholder="Street / area (if different)" />
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <div className={lbl}>City</div>
+                <input value={fields.corr_address_city} onChange={(e) => patch("corr_address_city", e.target.value)} className={inp} />
+              </div>
+              <div>
+                <div className={lbl}>State</div>
+                <input value={fields.corr_address_state} onChange={(e) => patch("corr_address_state", e.target.value)} className={inp} />
+              </div>
+              <div>
+                <div className={lbl}>PIN / ZIP</div>
+                <input value={fields.corr_address_pin} onChange={(e) => patch("corr_address_pin", e.target.value)} className={inp} />
+              </div>
             </div>
           </Section>
 

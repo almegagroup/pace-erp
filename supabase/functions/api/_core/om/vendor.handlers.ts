@@ -119,8 +119,14 @@ export async function createVendorHandler(
         import_license: toTrimmedString(body.import_license) || null,
         country_code: toTrimmedString(body.country_code) || null,
         currency_code: toTrimmedString(body.currency_code).toUpperCase() || "BDT",
-        registered_address: toTrimmedString(body.registered_address) || null,
-        correspondence_address: toTrimmedString(body.correspondence_address) || null,
+        reg_address_line1:  toTrimmedString(body.reg_address_line1)  || null,
+        reg_address_city:   toTrimmedString(body.reg_address_city)   || null,
+        reg_address_state:  toTrimmedString(body.reg_address_state)  || null,
+        reg_address_pin:    toTrimmedString(body.reg_address_pin)    || null,
+        corr_address_line1: toTrimmedString(body.corr_address_line1) || null,
+        corr_address_city:  toTrimmedString(body.corr_address_city)  || null,
+        corr_address_state: toTrimmedString(body.corr_address_state) || null,
+        corr_address_pin:   toTrimmedString(body.corr_address_pin)   || null,
         status: "ACTIVE",
         approved_by: ctx.auth_user_id,
         approved_at: new Date().toISOString(),
@@ -246,7 +252,8 @@ export async function updateVendorHandler(
       "vendor_name", "bin_number", "tin_number", "trade_license",
       "gst_number", "gst_category", "iec_code", "import_license",
       "country_code", "currency_code",
-      "registered_address", "correspondence_address",
+      "reg_address_line1", "reg_address_city", "reg_address_state", "reg_address_pin",
+      "corr_address_line1", "corr_address_city", "corr_address_state", "corr_address_pin",
     ];
 
     for (const field of mutableFields) {
