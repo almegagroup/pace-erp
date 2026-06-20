@@ -39,8 +39,8 @@ export default function AslCreatePage() {
       setError("");
       try {
         const [vendorResult, materialResult, uomResult] = await Promise.all([
-          listVendors({ status: "ACTIVE", limit: 50, offset: 0 }),
-          listMaterials({ status: "ACTIVE", limit: 50, offset: 0 }),
+          listVendors({ status: "ACTIVE", limit: 500, offset: 0 }),
+          listMaterials({ status: "ACTIVE", limit: 500, offset: 0 }),
           listUoms({ is_active: true }),
         ]);
         if (!active) {

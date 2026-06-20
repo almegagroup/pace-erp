@@ -165,8 +165,13 @@ export default function AslDetailPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          <ErpSectionCard eyebrow="Header" title={`${record.vendor_id} | ${record.material_id}`}>
-            <div className="grid gap-3 md:grid-cols-4">
+          <ErpSectionCard
+            eyebrow="Header"
+            title={`${record.vendor_code ?? record.vendor_id} | ${record.pace_code ?? record.material_id}`}
+          >
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+              <ErpFieldPreview label="Vendor" value={record.vendor_name ?? record.vendor_code ?? "-"} />
+              <ErpFieldPreview label="Material" value={record.material_name ?? record.pace_code ?? "-"} />
               <ErpFieldPreview label="Status" value={record.status} tone="sky" />
               <ErpFieldPreview label="PO UOM" value={record.po_uom_code} />
               <ErpFieldPreview label="Factor" value={String(record.conversion_factor ?? "-")} />

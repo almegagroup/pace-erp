@@ -21,8 +21,8 @@ const LIMIT = 50;
 
 export default function AslListPage() {
   const [rows, setRows] = useState([]);
-  const [vendorId, setVendorId] = useState("");
-  const [materialId, setMaterialId] = useState("");
+  const [vendorSearch, setVendorSearch] = useState("");
+  const [materialSearch, setMaterialSearch] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -36,8 +36,8 @@ export default function AslListPage() {
       setError("");
       try {
         const result = await listVendorMaterialInfos({
-          vendor_id: vendorId || undefined,
-          material_id: materialId || undefined,
+          vendor_search: vendorSearch || undefined,
+          material_search: materialSearch || undefined,
           status: status || undefined,
           limit: LIMIT,
           offset: (page - 1) * LIMIT,
@@ -64,7 +64,7 @@ export default function AslListPage() {
     return () => {
       active = false;
     };
-  }, [materialId, page, status, vendorId]);
+  }, [materialSearch, page, status, vendorSearch]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / LIMIT)), [total]);
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
@@ -84,21 +84,23 @@ export default function AslListPage() {
         title: "Vendor-material pair filter",
         children: (
           <div className="grid gap-3 lg:grid-cols-3">
-            <ErpDenseFormRow label="Vendor ID">
+            <ErpDenseFormRow label="Vendor">
               <input
-                value={vendorId}
+                placeholder="Code or name..."
+                value={vendorSearch}
                 onChange={(event) => {
-                  setVendorId(event.target.value);
+                  setVendorSearch(event.target.value);
                   setPage(1);
                 }}
                 className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </ErpDenseFormRow>
-            <ErpDenseFormRow label="Material ID">
+            <ErpDenseFormRow label="Material">
               <input
-                value={materialId}
+                placeholder="PACE code or name..."
+                value={materialSearch}
                 onChange={(event) => {
-                  setMaterialId(event.target.value);
+                  setMaterialSearch(event.target.value);
                   setPage(1);
                 }}
                 className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
@@ -136,10 +138,11 @@ export default function AslListPage() {
             />
             <ErpDenseGrid
               columns={[
-                { key: "vendor_id", label: "Vendor ID" },
-                { key: "material_id", label: "Material ID" },
+                { key: "vendor_code", label: "Vendor Code" },
+                { key: "vendor_name", label: "Vendor Name" },
+                { key: "pace_code", label: "PACE Code" },
+                { key: "material_name", label: "Material Name" },
                 { key: "po_uom_code", label: "PO UOM" },
-                { key: "conversion_factor", label: "Factor" },
                 { key: "status", label: "Status" },
               ]}
               rows={rows}

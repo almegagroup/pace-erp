@@ -99,6 +99,39 @@ async function getVmiRow(
   return (data as Record<string, unknown> | null) ?? null;
 }
 
+async function enrichVmiRows(rows: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
+  if (rows.length === 0) return rows;
+
+  const vendorIds = [...new Set(rows.map((r) => r.vendor_id as string).filter(Boolean))];
+  const materialIds = [...new Set(rows.map((r) => r.material_id as string).filter(Boolean))];
+
+  const [vendorResult, materialResult] = await Promise.all([
+    serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_code, vendor_name").in("id", vendorIds),
+    serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name").in("id", materialIds),
+  ]);
+
+  const vendorMap = new Map<string, Record<string, unknown>>();
+  for (const v of (vendorResult.data ?? []) as Record<string, unknown>[]) {
+    vendorMap.set(v.id as string, v);
+  }
+  const materialMap = new Map<string, Record<string, unknown>>();
+  for (const m of (materialResult.data ?? []) as Record<string, unknown>[]) {
+    materialMap.set(m.id as string, m);
+  }
+
+  return rows.map((row) => {
+    const vendor = vendorMap.get(row.vendor_id as string) ?? {};
+    const material = materialMap.get(row.material_id as string) ?? {};
+    return {
+      ...row,
+      vendor_code: vendor.vendor_code ?? null,
+      vendor_name: vendor.vendor_name ?? null,
+      pace_code: material.pace_code ?? null,
+      material_name: material.material_name ?? null,
+    };
+  });
+}
+
 export async function createVendorMaterialInfoHandler(
   req: Request,
   ctx: OmHandlerContext,
@@ -173,11 +206,41 @@ export async function listVendorMaterialInfosHandler(
     assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
-    const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
-    const materialId = toTrimmedString(url.searchParams.get("material_id"));
+    const vendorSearch = toTrimmedString(url.searchParams.get("vendor_search")).replace(/[%_]/g, "");
+    const materialSearch = toTrimmedString(url.searchParams.get("material_search")).replace(/[%_]/g, "");
     const statusFilter = toTrimmedString(url.searchParams.get("status")).toUpperCase();
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
     const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
+
+    // When searching by vendor name/code or material name/code, resolve IDs first
+    let vendorIds: string[] | null = null;
+    let materialIds: string[] | null = null;
+
+    if (vendorSearch) {
+      const { data: vendorRows } = await serviceRoleClient
+        .schema("erp_master")
+        .from("vendor_master")
+        .select("id")
+        .or(`vendor_code.ilike.%${vendorSearch}%,vendor_name.ilike.%${vendorSearch}%`)
+        .limit(500);
+      vendorIds = (vendorRows ?? []).map((v: Record<string, unknown>) => v.id as string);
+      if (vendorIds.length === 0) {
+        return okResponse({ data: [], total: 0 }, ctx.request_id, req);
+      }
+    }
+
+    if (materialSearch) {
+      const { data: materialRows } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id")
+        .or(`pace_code.ilike.%${materialSearch}%,material_name.ilike.%${materialSearch}%`)
+        .limit(500);
+      materialIds = (materialRows ?? []).map((m: Record<string, unknown>) => m.id as string);
+      if (materialIds.length === 0) {
+        return okResponse({ data: [], total: 0 }, ctx.request_id, req);
+      }
+    }
 
     let query = serviceRoleClient
       .schema("erp_master")
@@ -186,11 +249,11 @@ export async function listVendorMaterialInfosHandler(
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
-    if (vendorId) {
-      query = query.eq("vendor_id", vendorId);
+    if (vendorIds !== null) {
+      query = query.in("vendor_id", vendorIds);
     }
-    if (materialId) {
-      query = query.eq("material_id", materialId);
+    if (materialIds !== null) {
+      query = query.in("material_id", materialIds);
     }
     if (statusFilter) {
       query = query.eq("status", statusFilter);
@@ -201,7 +264,9 @@ export async function listVendorMaterialInfosHandler(
       throw new Error("OM_VMI_LIST_FAILED");
     }
 
-    return okResponse({ data: data ?? [], total: count ?? 0 }, ctx.request_id, req);
+    const enriched = await enrichVmiRows((data ?? []) as Record<string, unknown>[]);
+
+    return okResponse({ data: enriched, total: count ?? 0 }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_VMI_LIST_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
@@ -244,7 +309,8 @@ export async function getVendorMaterialInfoHandler(
       return vmiErrorResponse(req, ctx, "OM_VMI_NOT_FOUND", 404, "Vendor material info not found");
     }
 
-    return okResponse({ data }, ctx.request_id, req);
+    const [enriched] = await enrichVmiRows([data]);
+    return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_VMI_LOOKUP_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;

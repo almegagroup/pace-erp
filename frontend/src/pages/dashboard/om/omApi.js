@@ -379,13 +379,13 @@ export async function createVendorMaterialInfo(payload) {
 }
 
 export async function listVendorMaterialInfos({
-  vendor_id,
-  material_id,
+  vendor_search,
+  material_search,
   status,
   limit = 50,
   offset = 0,
 } = {}) {
-  const params = buildParams({ vendor_id, material_id, status, limit, offset });
+  const params = buildParams({ vendor_search, material_search, status, limit, offset });
   return fetchJson(
     `/api/om/vendor-material-infos?${params.toString()}`,
     {},
