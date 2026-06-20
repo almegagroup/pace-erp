@@ -28,3 +28,11 @@ export function assertOmAdminContext(ctx: OmHandlerContext): void {
     throw new Error("OM_ADMIN_REQUIRED");
   }
 }
+
+const MANAGER_OR_SA_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
+
+export function assertManagerOrSARole(ctx: OmHandlerContext): void {
+  if (!MANAGER_OR_SA_ROLES.has(ctx.roleCode)) {
+    throw new Error("MANAGER_OR_SA_REQUIRED");
+  }
+}

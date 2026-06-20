@@ -11,7 +11,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertOmAdminContext } from "./shared.ts";
+import { assertManagerOrSARole } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -89,7 +89,7 @@ export async function createCustomerHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const customerName = toTrimmedString(body.customer_name);
@@ -143,7 +143,7 @@ export async function listCustomersHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const customerType = toTrimmedString(url.searchParams.get("customer_type")).toUpperCase();
@@ -187,7 +187,7 @@ export async function getCustomerHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const id = toTrimmedString(new URL(req.url).searchParams.get("id"));
     if (!id) {
@@ -212,7 +212,7 @@ export async function updateCustomerHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
@@ -278,7 +278,7 @@ export async function changeCustomerStatusHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
@@ -333,7 +333,7 @@ export async function mapCustomerToCompanyHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const customerId = toTrimmedString(body.customer_id);

@@ -11,7 +11,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertOmAdminContext } from "./shared.ts";
+import { assertManagerOrSARole } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -120,7 +120,7 @@ export async function createMaterialHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const materialType = toTrimmedString(body.material_type).toUpperCase();
     const materialName = toTrimmedString(body.material_name);
@@ -204,7 +204,7 @@ export async function bulkSaveMaterialsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const creates: JsonRecord[] = Array.isArray(body.creates) ? body.creates : [];
     const updates: JsonRecord[] = Array.isArray(body.updates) ? body.updates : [];
@@ -376,7 +376,7 @@ export async function importMaterialsCsvHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const csvText = toTrimmedString(body.csv_text);
     if (!csvText) {
@@ -479,7 +479,7 @@ export async function listMaterialsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const url = new URL(req.url);
     const materialType = toTrimmedString(url.searchParams.get("material_type")).toUpperCase();
     const statusFilter = mapMaterialStatusInput(url.searchParams.get("status"));
@@ -514,7 +514,7 @@ export async function getMaterialHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const id = toTrimmedString(new URL(req.url).searchParams.get("id"));
     if (!id) return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
     const material = await getMaterialById(id);
@@ -534,7 +534,7 @@ export async function updateMaterialHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
     if (!id) return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
@@ -601,7 +601,7 @@ export async function changeMaterialStatusHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
     const newStatus = mapMaterialStatusInput(body.new_status);
@@ -654,7 +654,7 @@ export async function deleteMaterialsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const ids: string[] = Array.isArray(body.ids)
       ? body.ids.map((id: unknown) => toTrimmedString(id)).filter(Boolean)
@@ -700,7 +700,7 @@ export async function listCompanyMappingHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const search = normalizeSearch(toTrimmedString(url.searchParams.get("search")));
@@ -753,7 +753,7 @@ export async function bulkMapMaterialsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
     const materialIds: string[] = Array.isArray(body.material_ids)
@@ -794,7 +794,7 @@ export async function bulkUnmapMaterialsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
     const materialIds: string[] = Array.isArray(body.material_ids)
@@ -825,7 +825,7 @@ export async function importCompanyMappingHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const csvText = toTrimmedString(body.csv_text);
     if (!csvText) return materialErrorResponse(req, ctx, "OM_CSV_EMPTY", 400, "CSV text is empty");
@@ -927,7 +927,7 @@ export async function extendMaterialToCompanyHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const materialId = toTrimmedString(body.material_id);
     const companyId = toTrimmedString(body.company_id);
@@ -972,7 +972,7 @@ export async function extendMaterialToPlantHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const materialId = toTrimmedString(body.material_id);
     const companyId = toTrimmedString(body.company_id);
@@ -1022,7 +1022,7 @@ export async function createMaterialUomConversionHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const materialId = toTrimmedString(body.material_id);
     const fromUomCode = toTrimmedString(body.from_uom_code).toUpperCase();
@@ -1073,7 +1073,7 @@ export async function listMaterialUomConversionsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const materialId = toTrimmedString(new URL(req.url).searchParams.get("material_id"));
     if (!materialId) return okResponse({ data: [] }, ctx.request_id, req);
 
@@ -1100,7 +1100,7 @@ export async function createMaterialCategoryGroupHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const groupName = toTrimmedString(body.group_name);
     const groupCode = (
@@ -1144,7 +1144,7 @@ export async function listMaterialCategoryGroupsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("material_category_group")
@@ -1171,7 +1171,7 @@ export async function addMaterialCategoryMemberHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const groupId = toTrimmedString(body.group_id);
     const materialId = toTrimmedString(body.material_id);
@@ -1232,7 +1232,7 @@ export async function removeMaterialCategoryMemberHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const memberId = toTrimmedString(body.member_id);
     if (!memberId) {
@@ -1259,7 +1259,7 @@ export async function updateMaterialCategoryGroupHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
     if (!id) return materialErrorResponse(req, ctx, "OM_MCG_UPDATE_FAILED", 400, "Group ID missing");
@@ -1294,7 +1294,7 @@ export async function deleteMaterialCategoryGroupHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
     if (!id) return materialErrorResponse(req, ctx, "OM_MCG_DELETE_FAILED", 400, "Group ID missing");
@@ -1332,7 +1332,7 @@ export async function listMaterialCompanyExtensionsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const materialId = toTrimmedString(new URL(req.url).searchParams.get("material_id"));
     if (!materialId) {
       return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 400, "material_id required");
@@ -1357,7 +1357,7 @@ export async function listMaterialPlantExtensionsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
     const materialId = toTrimmedString(new URL(req.url).searchParams.get("material_id"));
     if (!materialId) {
       return materialErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 400, "material_id required");
