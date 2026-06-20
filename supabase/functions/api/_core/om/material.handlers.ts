@@ -1074,22 +1074,54 @@ export async function listMaterialUomConversionsHandler(
 ): Promise<Response> {
   try {
     assertManagerOrSARole(ctx);
-    const materialId = toTrimmedString(new URL(req.url).searchParams.get("material_id"));
-    if (!materialId) return okResponse({ data: [] }, ctx.request_id, req);
+    const params = new URL(req.url).searchParams;
+    const materialId = toTrimmedString(params.get("material_id"));
 
-    const { data, error } = await serviceRoleClient
+    let query = serviceRoleClient
       .schema("erp_master")
       .from("material_uom_conversion")
       .select("*")
-      .eq("material_id", materialId)
       .order("created_at", { ascending: false });
 
+    if (materialId) query = query.eq("material_id", materialId);
+
+    const { data, error } = await query;
     if (error) throw new Error("OM_UOM_CONVERSION_LIST_FAILED");
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_UOM_CONVERSION_LIST_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
     return materialErrorResponse(req, ctx, code, status, "Material UOM conversion list failed");
+  }
+}
+
+export async function updateMaterialUomConversionHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    const conversionFactor = deriveConversionFactor(body);
+
+    if (!id) return materialErrorResponse(req, ctx, "OM_UOM_CONVERSION_NOT_FOUND", 400, "Missing id");
+    if (!conversionFactor) return materialErrorResponse(req, ctx, "OM_INVALID_UOM_CONVERSION", 400, "Invalid conversion factor");
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_uom_conversion")
+      .update({ conversion_factor: conversionFactor })
+      .eq("id", id)
+      .select("*")
+      .single();
+
+    if (error || !data) throw new Error("OM_UOM_CONVERSION_UPDATE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_UOM_CONVERSION_UPDATE_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    return materialErrorResponse(req, ctx, code, status, "Material UOM conversion update failed");
   }
 }
 

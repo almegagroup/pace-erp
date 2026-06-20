@@ -201,6 +201,18 @@ export async function listMaterialUomConversions(materialId) {
   );
 }
 
+export async function updateMaterialUomConversion(payload) {
+  return fetchJson(
+    "/api/om/material/uom-conversion",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_UOM_CONVERSION_UPDATE_FAILED"
+  );
+}
+
 export async function createVendor(payload) {
   return fetchJson(
     "/api/om/vendor",

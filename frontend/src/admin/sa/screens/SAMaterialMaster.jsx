@@ -23,6 +23,9 @@ import {
   deleteMaterials,
   listCompaniesForOm,
   listUoms,
+  listMaterialUomConversions,
+  createMaterialUomConversion,
+  updateMaterialUomConversion,
 } from "../../../pages/dashboard/om/omApi.js";
 
 /* ─── constants ─────────────────────────────────────────────────────────── */
@@ -838,7 +841,267 @@ function ExistingRow({ row, isEditing, isSelected, onToggleSelect, onActivateEdi
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   TAB 2 — Company Mapping
+   TAB 2 — UOM Conversions
+══════════════════════════════════════════════════════════════════════════ */
+
+const CONV_PAGE_SIZE = 50;
+
+function UomConversionsTab({ uoms }) {
+  const [materials, setMaterials] = useState([]);
+  const [conversions, setConversions] = useState({}); // map: material_id → [conversion rows]
+  const [typeFilter, setTypeFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState({}); // map: material_id → bool
+  const [factors, setFactors] = useState({}); // map: `${material_id}_alt1` or `_alt2` → string value
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+
+  const uomMap = Object.fromEntries(uoms.map((u) => [u.code, u.name]));
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await listMaterials({
+        material_type: typeFilter || undefined,
+        search: search || undefined,
+        limit: CONV_PAGE_SIZE,
+        offset: (page - 1) * CONV_PAGE_SIZE,
+      });
+      const rows = Array.isArray(result?.data) ? result.data : [];
+      setMaterials(rows);
+      setTotal(Number(result?.total ?? 0));
+
+      // load conversions for all materials with alt UOM set
+      const withAlt = rows.filter((m) => m.purchase_uom_code || m.issue_uom_code);
+      if (withAlt.length > 0) {
+        const results = await Promise.all(
+          withAlt.map((m) => listMaterialUomConversions(m.id).then((r) => ({ id: m.id, data: r?.data ?? [] })))
+        );
+        const convMap = {};
+        const factMap = {};
+        results.forEach(({ id, data }) => {
+          convMap[id] = data;
+          const mat = rows.find((m) => m.id === id);
+          if (!mat) return;
+          data.forEach((row) => {
+            if (mat.purchase_uom_code && row.from_uom_code === mat.purchase_uom_code) {
+              factMap[`${id}_alt1`] = String(row.conversion_factor);
+            }
+            if (mat.issue_uom_code && row.from_uom_code === mat.issue_uom_code) {
+              factMap[`${id}_alt2`] = String(row.conversion_factor);
+            }
+          });
+        });
+        setConversions(convMap);
+        setFactors((prev) => ({ ...prev, ...factMap }));
+      } else {
+        setConversions({});
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OM_MATERIAL_LIST_FAILED");
+    } finally {
+      setLoading(false);
+    }
+  }, [typeFilter, search, page]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  function getConvRow(materialId, fromUom) {
+    return (conversions[materialId] ?? []).find((r) => r.from_uom_code === fromUom) ?? null;
+  }
+
+  async function saveConversion(mat, altKey) {
+    const fromUom = altKey === "alt1" ? mat.purchase_uom_code : mat.issue_uom_code;
+    const toUom = altKey === "alt1" ? mat.base_uom_code : mat.purchase_uom_code;
+    const factorStr = factors[`${mat.id}_${altKey}`] ?? "";
+    const factor = parseFloat(factorStr);
+    if (!fromUom || !toUom || !factor || factor <= 0) {
+      setError("Factor must be a positive number.");
+      return;
+    }
+    const existing = getConvRow(mat.id, fromUom);
+    setSaving((prev) => ({ ...prev, [`${mat.id}_${altKey}`]: true }));
+    setError("");
+    setNotice("");
+    try {
+      if (existing) {
+        await updateMaterialUomConversion({ id: existing.id, conversion_factor: factor });
+      } else {
+        await createMaterialUomConversion({
+          material_id: mat.id,
+          from_uom_code: fromUom,
+          to_uom_code: toUom,
+          conversion_factor: factor,
+        });
+      }
+      setNotice(`${mat.pace_code} — ${fromUom} conversion saved.`);
+      void load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OM_UOM_CONVERSION_CREATE_FAILED");
+    } finally {
+      setSaving((prev) => ({ ...prev, [`${mat.id}_${altKey}`]: false }));
+    }
+  }
+
+  const totalPages = Math.max(1, Math.ceil(total / CONV_PAGE_SIZE));
+
+  return (
+    <div className="grid gap-4">
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3">
+        <select
+          value={typeFilter}
+          onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
+          className="h-8 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+        >
+          <option value="">All Types</option>
+          {MATERIAL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <input
+          placeholder="Search PACE code or name..."
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500 w-64"
+        />
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="h-8 border border-slate-300 bg-white px-3 text-xs font-semibold uppercase tracking-[0.08em] text-slate-700"
+        >
+          Refresh
+        </button>
+      </div>
+
+      {/* Notices */}
+      {error && <div className="border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
+      {notice && <div className="border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{notice}</div>}
+
+      {/* Grid */}
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr className="border-b border-slate-200 bg-slate-50 text-left">
+              <th className="px-3 py-2 font-semibold text-slate-600">PACE Code</th>
+              <th className="px-3 py-2 font-semibold text-slate-600">Name</th>
+              <th className="px-3 py-2 font-semibold text-slate-600">Type</th>
+              <th className="px-3 py-2 font-semibold text-slate-600">Base UOM</th>
+              <th className="px-3 py-2 font-semibold text-slate-600">Alt UOM 1</th>
+              <th className="px-3 py-2 font-semibold text-slate-600">1 Alt1 = ? Base</th>
+              <th className="px-3 py-2 font-semibold text-slate-600"></th>
+              <th className="px-3 py-2 font-semibold text-slate-600">Alt UOM 2</th>
+              <th className="px-3 py-2 font-semibold text-slate-600">1 Alt2 = ? Alt1</th>
+              <th className="px-3 py-2 font-semibold text-slate-600"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={10} className="px-3 py-6 text-center text-slate-400">Loading materials...</td></tr>
+            ) : materials.length === 0 ? (
+              <tr><td colSpan={10} className="px-3 py-6 text-center text-slate-400">No materials matched the filter.</td></tr>
+            ) : materials.map((mat) => {
+              const alt1 = mat.purchase_uom_code;
+              const alt2 = mat.issue_uom_code;
+              const conv1 = alt1 ? getConvRow(mat.id, alt1) : null;
+              const conv2 = alt2 ? getConvRow(mat.id, alt2) : null;
+              const isSaving1 = saving[`${mat.id}_alt1`] ?? false;
+              const isSaving2 = saving[`${mat.id}_alt2`] ?? false;
+              const factor1 = factors[`${mat.id}_alt1`] ?? (conv1 ? String(conv1.conversion_factor) : "");
+              const factor2 = factors[`${mat.id}_alt2`] ?? (conv2 ? String(conv2.conversion_factor) : "");
+
+              return (
+                <tr key={mat.id} className="border-b border-slate-100 hover:bg-slate-50">
+                  <td className="px-3 py-2 font-mono text-slate-700">{mat.pace_code}</td>
+                  <td className="px-3 py-2 text-slate-800">{mat.material_name}</td>
+                  <td className="px-3 py-2 text-slate-500">{mat.material_type}</td>
+                  <td className="px-3 py-2 text-slate-700">
+                    <span title={uomMap[mat.base_uom_code]}>{mat.base_uom_code}</span>
+                  </td>
+
+                  {/* Alt UOM 1 */}
+                  <td className="px-3 py-2 text-slate-700">
+                    {alt1 ? <span title={uomMap[alt1]}>{alt1}</span> : <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="px-3 py-2">
+                    {alt1 ? (
+                      <input
+                        type="number"
+                        min="0.0001"
+                        step="any"
+                        value={factor1}
+                        onChange={(e) => setFactors((prev) => ({ ...prev, [`${mat.id}_alt1`]: e.target.value }))}
+                        className="h-7 w-24 border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+                        placeholder="e.g. 32"
+                      />
+                    ) : <span className="text-slate-200">—</span>}
+                  </td>
+                  <td className="px-3 py-2">
+                    {alt1 ? (
+                      <button
+                        type="button"
+                        onClick={() => void saveConversion(mat, "alt1")}
+                        disabled={isSaving1 || !factor1}
+                        className="h-7 border border-sky-300 bg-sky-50 px-2 text-xs font-semibold text-sky-700 disabled:opacity-40"
+                      >
+                        {conv1 ? (isSaving1 ? "..." : "Update") : (isSaving1 ? "..." : "Save")}
+                      </button>
+                    ) : null}
+                  </td>
+
+                  {/* Alt UOM 2 */}
+                  <td className="px-3 py-2 text-slate-700">
+                    {alt2 ? <span title={uomMap[alt2]}>{alt2}</span> : <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="px-3 py-2">
+                    {alt2 ? (
+                      <input
+                        type="number"
+                        min="0.0001"
+                        step="any"
+                        value={factor2}
+                        onChange={(e) => setFactors((prev) => ({ ...prev, [`${mat.id}_alt2`]: e.target.value }))}
+                        className="h-7 w-24 border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+                        placeholder="e.g. 4"
+                      />
+                    ) : <span className="text-slate-200">—</span>}
+                  </td>
+                  <td className="px-3 py-2">
+                    {alt2 ? (
+                      <button
+                        type="button"
+                        onClick={() => void saveConversion(mat, "alt2")}
+                        disabled={isSaving2 || !alt1 || !factor2}
+                        className="h-7 border border-sky-300 bg-sky-50 px-2 text-xs font-semibold text-sky-700 disabled:opacity-40"
+                        title={!alt1 ? "Alt UOM 1 must be set before saving Alt UOM 2 conversion" : ""}
+                      >
+                        {conv2 ? (isSaving2 ? "..." : "Update") : (isSaving2 ? "..." : "Save")}
+                      </button>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="border border-slate-300 bg-white px-2 py-1 disabled:opacity-40">Prev</button>
+          <span>Page {page} / {totalPages} ({total} materials)</span>
+          <button disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)} className="border border-slate-300 bg-white px-2 py-1 disabled:opacity-40">Next</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TAB 3 — Company Mapping
 ══════════════════════════════════════════════════════════════════════════ */
 
 function CompanyMappingTab() {
@@ -1225,6 +1488,7 @@ function MappingList({ rows, selected, onToggle, onToggleAll, loading }) {
 
 const TABS = [
   { key: "master", label: "Material Master" },
+  { key: "conversions", label: "UOM Conversions" },
   { key: "mapping", label: "Company Mapping" },
 ];
 
@@ -1253,6 +1517,7 @@ export default function SAMaterialMaster() {
 
       <ErpSectionCard>
         {activeTab === "master" && <MaterialMasterTab uoms={uoms} />}
+        {activeTab === "conversions" && <UomConversionsTab uoms={uoms} />}
         {activeTab === "mapping" && <CompanyMappingTab />}
       </ErpSectionCard>
     </ErpScreenScaffold>

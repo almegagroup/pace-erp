@@ -16,13 +16,11 @@ import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   changeMaterialStatus,
-  createMaterialUomConversion,
   extendMaterialToCompany,
   extendMaterialToPlant,
   getMaterial,
   listMaterialCompanyExtensions,
   listMaterialPlantExtensions,
-  listMaterialUomConversions,
   listVendorMaterialInfos,
   listVendors,
   listUoms,
@@ -51,11 +49,9 @@ export default function MaterialDetailPage() {
   const [form, setForm] = useState(null);
   const [uoms, setUoms] = useState([]);
   const [companies, setCompanies] = useState([]);
-  const [conversions, setConversions] = useState([]);
   const [companyExtensions, setCompanyExtensions] = useState([]);
   const [plantExtensions, setPlantExtensions] = useState([]);
 
-  const [conversionForm, setConversionForm] = useState({ from_uom_code: "", to_uom_code: "", conversion_factor: "1" });
   const [companyExtForm, setCompanyExtForm] = useState({ company_id: "", procurement_allowed: true, hsn_override: "" });
   const [plantExtForm, setPlantExtForm] = useState({
     company_id: "", safety_stock: "", reorder_point: "", min_order_qty: "", lead_time_days: "",
@@ -85,10 +81,9 @@ export default function MaterialDetailPage() {
       setLoading(true);
       setError("");
       try {
-        const [materialResult, uomResult, conversionResult, companyList, companyExtResult, plantExtResult] = await Promise.all([
+        const [materialResult, uomResult, companyList, companyExtResult, plantExtResult] = await Promise.all([
           getMaterial(id),
           listUoms({ is_active: true }),
-          listMaterialUomConversions(id),
           listCompaniesForOm(),
           listMaterialCompanyExtensions(id),
           listMaterialPlantExtensions(id),
@@ -103,11 +98,9 @@ export default function MaterialDetailPage() {
           base_uom_code: materialRow?.base_uom_code ?? "",
         });
         setUoms(Array.isArray(uomResult?.data) ? uomResult.data : []);
-        setConversions(Array.isArray(conversionResult?.data) ? conversionResult.data : []);
         setCompanies(Array.isArray(companyList) ? companyList : []);
         setCompanyExtensions(Array.isArray(companyExtResult?.data) ? companyExtResult.data : []);
         setPlantExtensions(Array.isArray(plantExtResult?.data) ? plantExtResult.data : []);
-        setConversionForm((prev) => ({ ...prev, from_uom_code: materialRow?.base_uom_code ?? prev.from_uom_code }));
       } catch (loadError) {
         if (active) setError(loadError instanceof Error ? loadError.message : "OM_MATERIAL_LOOKUP_FAILED");
       } finally {
@@ -141,18 +134,6 @@ export default function MaterialDetailPage() {
       setMaterial(result?.data ?? material);
       setNotice(`Material moved to ${newStatus}.`);
     } catch (err) { setError(err instanceof Error ? err.message : "OM_MATERIAL_STATUS_UPDATE_FAILED"); }
-    finally { setSaving(false); }
-  }
-
-  async function handleAddConversion() {
-    if (!material?.id) return;
-    setSaving(true); setError(""); setNotice("");
-    try {
-      const result = await createMaterialUomConversion({ material_id: material.id, from_uom_code: conversionForm.from_uom_code, to_uom_code: conversionForm.to_uom_code, conversion_factor: Number(conversionForm.conversion_factor) });
-      setConversions((prev) => [result?.data, ...prev].filter(Boolean));
-      setConversionForm({ from_uom_code: material.base_uom_code || "", to_uom_code: "", conversion_factor: "1" });
-      setNotice("UOM conversion added.");
-    } catch (err) { setError(err instanceof Error ? err.message : "OM_UOM_CONVERSION_CREATE_FAILED"); }
     finally { setSaving(false); }
   }
 
@@ -286,45 +267,6 @@ export default function MaterialDetailPage() {
                   Move To {t}
                 </button>
               ))}
-            </div>
-          </ErpSectionCard>
-
-          {/* ── UOM Conversions ── */}
-          <ErpSectionCard eyebrow="UOM Conversions" title="Add and review conversion rows">
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-              <div className="grid gap-3">
-                <ErpDenseFormRow label="From UOM">
-                  <select value={conversionForm.from_uom_code} onChange={(e) => setConversionForm((p) => ({ ...p, from_uom_code: e.target.value }))} className={SELECT_CLS}>
-                    <option value="">Select UOM</option>
-                    {uoms.map((u) => <option key={`from-${u.id || u.code}`} value={u.code}>{u.code} | {u.name}</option>)}
-                  </select>
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="To UOM">
-                  <select value={conversionForm.to_uom_code} onChange={(e) => setConversionForm((p) => ({ ...p, to_uom_code: e.target.value }))} className={SELECT_CLS}>
-                    <option value="">Select UOM</option>
-                    {uoms.map((u) => <option key={`to-${u.id || u.code}`} value={u.code}>{u.code} | {u.name}</option>)}
-                  </select>
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Conversion Factor">
-                  <input type="number" min="0.0001" step="0.0001" value={conversionForm.conversion_factor} onChange={(e) => setConversionForm((p) => ({ ...p, conversion_factor: e.target.value }))} className={INPUT_CLS} />
-                </ErpDenseFormRow>
-                <button type="button" onClick={() => void handleAddConversion()} disabled={saving}
-                  className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900">
-                  Add Conversion
-                </button>
-              </div>
-              <ErpDenseGrid
-                columns={[
-                  { key: "from_uom_code", label: "From" },
-                  { key: "to_uom_code", label: "To" },
-                  { key: "conversion_factor", label: "Factor" },
-                  { key: "variable_conversion", label: "Variable", render: (row) => (row.variable_conversion ? "YES" : "NO") },
-                ]}
-                rows={conversions}
-                rowKey={(row) => row.id}
-                emptyMessage="No conversion rows created yet."
-                maxHeight="300px"
-              />
             </div>
           </ErpSectionCard>
 

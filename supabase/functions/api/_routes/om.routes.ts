@@ -35,6 +35,7 @@ import {
   listMaterialCompanyExtensionsHandler,
   listMaterialPlantExtensionsHandler,
   updateMaterialHandler,
+  updateMaterialUomConversionHandler,
 } from "../_core/om/material.handlers.ts";
 import {
   addVendorPaymentTermsHandler,
@@ -137,6 +138,8 @@ export async function dispatchOmRoutes(
       return await createMaterialUomConversionHandler(req, ctx);
     case "GET:/api/om/material/uom-conversions":
       return await listMaterialUomConversionsHandler(req, ctx);
+    case "PATCH:/api/om/material/uom-conversion":
+      return await updateMaterialUomConversionHandler(req, ctx);
     case "GET:/api/om/material/company-extensions":
       return await listMaterialCompanyExtensionsHandler(req, ctx);
     case "GET:/api/om/material/plant-extensions":

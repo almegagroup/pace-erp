@@ -25,7 +25,6 @@ export default function AslCreatePage() {
     po_uom_code: "",
     conversion_factor: "1",
     vendor_material_code: "",
-    lead_time_days: "",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -84,7 +83,6 @@ export default function AslCreatePage() {
         po_uom_code: form.po_uom_code,
         conversion_factor: Number(form.conversion_factor),
         vendor_material_code: form.vendor_material_code || undefined,
-        lead_time_days: form.lead_time_days ? Number(form.lead_time_days) : undefined,
       });
       setNotice("Approved source row created.");
       openScreen(OPERATION_SCREENS.OM_ASL_LIST.screen_code, { mode: "replace" });
@@ -172,15 +170,6 @@ export default function AslCreatePage() {
               <input
                 value={form.vendor_material_code}
                 onChange={(event) => updateField("vendor_material_code", event.target.value)}
-                className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-              />
-            </ErpDenseFormRow>
-            <ErpDenseFormRow label="Lead Time Days">
-              <input
-                type="number"
-                min="0"
-                value={form.lead_time_days}
-                onChange={(event) => updateField("lead_time_days", event.target.value)}
                 className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </ErpDenseFormRow>
