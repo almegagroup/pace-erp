@@ -78,8 +78,10 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/om/vendors",                "/dashboard/om/vendor/detail"],
     ["/dashboard/om/vendor/create",          "/dashboard/om/vendor/detail"],
     ["/dashboard/om/vendor-material-infos",  "/dashboard/om/vendor-material-info/detail"],
+    ["/dashboard/om/vendor-material-infos",  "/dashboard/om/vendor-material-info/create"],
     ["/dashboard/om/vendor-material-info/create", "/dashboard/om/vendor-material-info/detail"],
     ["/dashboard/om/customers",              "/dashboard/om/customer/detail"],
+    ["/dashboard/om/customers",              "/dashboard/om/customer/create"],
     ["/dashboard/om/customer/create",        "/dashboard/om/customer/detail"],
 
     // ── Procurement — :id detail routes ───────────────────────────────────────
