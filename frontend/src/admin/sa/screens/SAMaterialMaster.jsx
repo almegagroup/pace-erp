@@ -169,6 +169,8 @@ function MaterialMasterTab({ uoms }) {
         material_type: "RM",
         material_name: "",
         base_uom_code: "",
+        purchase_uom_code: "",
+        issue_uom_code: "",
         material_category: "",
         external_code: "",
         document_name: "",
@@ -504,6 +506,8 @@ function MaterialMasterTab({ uoms }) {
               <th className="border-b border-slate-300 px-2 py-1.5 text-left text-xs font-semibold text-slate-600">Document Name</th>
               <th className="border-b border-slate-300 px-2 py-1.5 text-left text-xs font-semibold text-slate-600">Category</th>
               <th className="border-b border-slate-300 px-2 py-1.5 text-left text-xs font-semibold text-slate-600">Base UOM *</th>
+              <th className="border-b border-slate-300 px-2 py-1.5 text-left text-xs font-semibold text-slate-600">Alt UOM 1</th>
+              <th className="border-b border-slate-300 px-2 py-1.5 text-left text-xs font-semibold text-slate-600">Alt UOM 2</th>
               <th className="border-b border-slate-300 px-2 py-1.5 text-left text-xs font-semibold text-slate-600">External Code</th>
               <th className="border-b border-slate-300 px-2 py-1.5 text-left text-xs font-semibold text-slate-600">HSN Code</th>
               <th className="border-b border-slate-300 px-2 py-1.5 text-left text-xs font-semibold text-slate-600">Status</th>
@@ -525,11 +529,11 @@ function MaterialMasterTab({ uoms }) {
             {/* Existing rows */}
             {loading ? (
               <tr>
-                <td colSpan={11} className="px-3 py-6 text-center text-sm text-slate-400">Loading…</td>
+                <td colSpan={13} className="px-3 py-6 text-center text-sm text-slate-400">Loading…</td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-3 py-6 text-center text-sm text-slate-400">No materials found.</td>
+                <td colSpan={13} className="px-3 py-6 text-center text-sm text-slate-400">No materials found.</td>
               </tr>
             ) : (
               rows.map((row) => (
@@ -625,6 +629,30 @@ function NewRow({ row, onPatch, onRemove, uoms }) {
           <option value="">— UOM —</option>
           {uoms.map((u) => (
             <option key={u.code} value={u.code}>{u.code} | {u.name}</option>
+          ))}
+        </select>
+      </td>
+      <td className={cellCls}>
+        <select
+          value={row.purchase_uom_code}
+          onChange={(e) => onPatch("purchase_uom_code", e.target.value)}
+          className={selectCls}
+        >
+          <option value="">—</option>
+          {uoms.map((u) => (
+            <option key={u.code} value={u.code}>{u.code}</option>
+          ))}
+        </select>
+      </td>
+      <td className={cellCls}>
+        <select
+          value={row.issue_uom_code}
+          onChange={(e) => onPatch("issue_uom_code", e.target.value)}
+          className={selectCls}
+        >
+          <option value="">—</option>
+          {uoms.map((u) => (
+            <option key={u.code} value={u.code}>{u.code}</option>
           ))}
         </select>
       </td>
@@ -739,6 +767,40 @@ function ExistingRow({ row, isEditing, isSelected, onToggleSelect, onActivateEdi
           </select>
         ) : (
           <span className={readCls + " font-mono"}>{row.base_uom_code}</span>
+        )}
+      </td>
+      <td className={cellCls}>
+        {isEditing ? (
+          <select
+            defaultValue={row.purchase_uom_code ?? ""}
+            onChange={(e) => onPatch("purchase_uom_code", e.target.value || null)}
+            className="h-7 w-full border border-sky-300 bg-white px-1 text-xs text-slate-900 outline-none"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <option value="">—</option>
+            {uoms.map((u) => (
+              <option key={u.code} value={u.code}>{u.code}</option>
+            ))}
+          </select>
+        ) : (
+          <span className={readCls + " font-mono"}>{row.purchase_uom_code ?? "—"}</span>
+        )}
+      </td>
+      <td className={cellCls}>
+        {isEditing ? (
+          <select
+            defaultValue={row.issue_uom_code ?? ""}
+            onChange={(e) => onPatch("issue_uom_code", e.target.value || null)}
+            className="h-7 w-full border border-sky-300 bg-white px-1 text-xs text-slate-900 outline-none"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <option value="">—</option>
+            {uoms.map((u) => (
+              <option key={u.code} value={u.code}>{u.code}</option>
+            ))}
+          </select>
+        ) : (
+          <span className={readCls + " font-mono"}>{row.issue_uom_code ?? "—"}</span>
         )}
       </td>
       <td className={cellCls}>

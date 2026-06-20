@@ -125,8 +125,8 @@ export async function createMaterialHandler(
     const materialType = toTrimmedString(body.material_type).toUpperCase();
     const materialName = toTrimmedString(body.material_name);
     const baseUomCode = toTrimmedString(body.base_uom_code).toUpperCase();
-    const purchaseUomCode = toTrimmedString(body.purchase_uom_code || body.base_uom_code).toUpperCase();
-    const issueUomCode = toTrimmedString(body.issue_uom_code || body.base_uom_code).toUpperCase();
+    const purchaseUomCode = toTrimmedString(body.purchase_uom_code).toUpperCase() || null;
+    const issueUomCode = toTrimmedString(body.issue_uom_code).toUpperCase() || null;
 
     if (!ALLOWED_MATERIAL_TYPES.has(materialType)) {
       return materialErrorResponse(req, ctx, "OM_INVALID_MATERIAL_TYPE", 400, "Invalid material type");
@@ -248,8 +248,8 @@ export async function bulkSaveMaterialsHandler(
           continue;
         }
 
-        const purchaseUomCode = toTrimmedString(row.purchase_uom_code || row.base_uom_code).toUpperCase() || baseUomCode;
-        const issueUomCode = toTrimmedString(row.issue_uom_code || row.base_uom_code).toUpperCase() || baseUomCode;
+        const purchaseUomCode = toTrimmedString(row.purchase_uom_code).toUpperCase() || null;
+        const issueUomCode = toTrimmedString(row.issue_uom_code).toUpperCase() || null;
 
         const { data, error } = await serviceRoleClient
           .schema("erp_master")
@@ -444,8 +444,8 @@ export async function importMaterialsCsvHandler(
           material_category: (row["material_category"] ?? "").trim() || null,
           external_code: (row["external_code"] ?? "").trim() || null,
           base_uom_code: baseUomCode,
-          purchase_uom_code: baseUomCode,
-          issue_uom_code: baseUomCode,
+          purchase_uom_code: (row["purchase_uom_code"] ?? "").trim().toUpperCase() || null,
+          issue_uom_code: (row["issue_uom_code"] ?? "").trim().toUpperCase() || null,
           hsn_code: (row["hsn_code"] ?? "").trim() || null,
           qa_required_on_inward: true,
           valuation_method: "WEIGHTED_AVERAGE",
