@@ -1323,42 +1323,48 @@ Only DOMESTIC and IMPORT exist in Phase-1. No "BOTH" type.
 
 ### 14.3 Vendor Master — Core Fields
 
+> **IMPLEMENTATION UPDATE (2026-06-19):** Address fields split into 4 separate columns each. Contacts, emails, and banks moved to separate child tables (multi-row). Only Vendor Name is mandatory at create time. SA creates vendors directly as ACTIVE.
+
 | Field Group | Field | Mandatory | Notes |
 |---|---|---|---|
-| **Basic** | Vendor Code | Yes | System auto-generated |
-| | Vendor Name | Yes | Legal/trade name |
-| | Vendor Type | Yes | DOMESTIC / IMPORT |
-| **Identity** | BIN Number | Domestic | API validation — triggers auto-fill |
-| | TIN | Optional | |
-| | Trade License | Optional | |
-| **GST (Domestic)** | GST Number | Domestic | API auto-fill: Name, Address, Category |
-| | GST Category | Domestic | From API |
-| **Address** | Registered Address | Yes | Auto from API for Domestic |
-| | Correspondence Address | Optional | |
-| **Contact** | Primary Contact Person | Yes | |
-| | Phone | Yes | |
-| | Primary Email | Yes | For PO auto-mail |
-| | CC Email List | Optional | All CC'd on PO auto-mail |
-| **Import** | IEC Code | Import | Importer Exporter Code |
-| | Import License | Import | |
-| **Bank** | Bank Name | Optional | Mandatory in future |
-| | Branch | Optional | |
-| | Account Number | Optional | |
-| | Routing Number | Optional | |
+| **Basic** | Vendor Code | Yes | System auto-generated (V-00001 format) |
+| | Vendor Name | Yes | Only mandatory field at create time |
+| | Vendor Type | No | DOMESTIC / IMPORT |
+| | Country Code | No | Import vendors — ISO country code |
+| | Currency Code | No | Default: BDT |
+| **Identity** | BIN Number | No | |
+| | TIN | No | |
+| | Trade License | No | |
+| **GST (Domestic)** | GST Number | No | API auto-fill: always overwrites Name + registered address (line1, state, pin) |
+| | GST Category | No | From API |
+| **Import** | IEC Code | No | Importer Exporter Code |
+| | Import License | No | |
+| **Registered Address** | reg_address_line1 | No | Auto from GST API for Domestic (always overwritten on GST fill) |
+| | reg_address_city | No | |
+| | reg_address_state | No | Auto from GST API |
+| | reg_address_pin | No | Auto from GST API |
+| **Correspondence Address** | corr_address_line1 | No | |
+| | corr_address_city | No | |
+| | corr_address_state | No | |
+| | corr_address_pin | No | |
+| **Contacts** | vendor_contacts table | No | Multi-row child table: contact_name, phone, designation, is_primary |
+| **Emails** | vendor_emails table | No | Multi-row child table: email, label, is_primary (for PO auto-mail) |
+| **Banks** | vendor_banks table | No | Multi-row child table: bank_name, branch, account_number, routing_number, is_primary, is_active |
 | **Payment** | Payment Terms | ❌ No static field | Dynamic — last used per vendor (see 14.5) |
-| | Currency | Yes | Auto: BDT for Domestic, Foreign for Import |
-| **Status** | Status | Yes | ACTIVE / INACTIVE / BLOCKED |
-| **Audit** | Created By | Yes | Procurement team only |
-| | Approved By | Yes | Any authorized approver (single level) |
+| **Status** | Status | Yes | SA creates directly as ACTIVE |
+| **Audit** | Created By | Yes | SA only (OM07 screen) |
 
 ### 14.4 Vendor Status Lifecycle
 
+> **IMPLEMENTATION UPDATE (2026-06-19):** Approval workflow not implemented in Phase-1. SA creates vendors directly as ACTIVE via OM07 screen.
+
 ```
-DRAFT → PENDING_APPROVAL → ACTIVE → INACTIVE / BLOCKED
+SA creates → ACTIVE (immediately)
 ```
 
+- Original design (DRAFT → PENDING_APPROVAL → ACTIVE) deferred to a future phase.
 - **BLOCKED:** No new POs. Existing open POs — Procurement team decides separately.
-- **INACTIVE (Deactivated):** Historical POs remain. No new POs. Requires: (1) Ledger balanced — no open payables, (2) Approval required.
+- **INACTIVE (Deactivated):** Historical POs remain. No new POs.
 
 ### 14.5 Payment Terms — Dynamic Last Used
 
@@ -1375,23 +1381,24 @@ DRAFT → PENDING_APPROVAL → ACTIVE → INACTIVE / BLOCKED
 ### 14.6 PO Auto-Mail
 
 On PO confirmation, system emails the PDF to:
-- Vendor primary email
-- All CC emails from CC list
+- Vendor primary email (from vendor_emails table, is_primary = true)
+- All other emails from vendor_emails table (as CC)
 
 ### 14.7 Multi-Company Support
 
-A vendor can be active in multiple companies simultaneously. Company-level mapping controls in which companies this vendor is usable.
+A vendor can be active in multiple companies simultaneously. Company-level mapping controls in which companies this vendor is usable (vendor_company_map table).
 
 ### 14.8 Vendor Governance Rules
 
+> **IMPLEMENTATION UPDATE (2026-06-19):** Phase-1 implementation — SA manages vendors via OM07 screen. Approval flow deferred.
+
 | Action | Who | Rule |
 |---|---|---|
-| Create | Procurement team | Only |
-| Edit | Procurement team | |
-| Approve | Any authorized approver | Single level |
-| Block | Procurement team + Approval | |
-| Deactivate | Procurement team + Approval | Ledger must be balanced first |
-| Multi-company assign | Procurement team | |
+| Create | SA only | Via OM07 admin screen. Vendor created directly as ACTIVE. |
+| Edit | SA only | All fields editable post-create |
+| Contacts / Emails / Banks | SA only | Managed as multi-row child records |
+| Block | SA only | Procurement team decision, SA executes |
+| Multi-company assign | SA only | Via vendor detail |
 
 ### 14.9 Critical Vendor Master Rules
 
@@ -1399,7 +1406,8 @@ A vendor can be active in multiple companies simultaneously. Company-level mappi
 2. Vendor must have a Vendor-Material Info Record for the specific material before PO line can be saved (see Section 15).
 3. Blocking a vendor does not cancel existing open POs — Procurement team decides separately.
 4. Vendor GSTIN is Phase-1 reference field — mandatory for GST invoice in Phase-3.
-5. Bank details are optional in Phase-1 — will be made mandatory in a future phase.
+5. Bank details stored in vendor_banks child table — multi-row, is_primary flag for default bank.
+6. GST auto-fill always overwrites: vendor_name, reg_address_line1, reg_address_state, reg_address_pin — regardless of existing values.
 
 ---
 
@@ -8679,16 +8687,21 @@ Only these two types exist in Phase-1.
 
 #### 85.6.2 Vendor Master Fields
 
+> **IMPLEMENTATION UPDATE (2026-06-19):** Address split into 4-column groups. Contacts/emails/banks are separate child tables. Only Vendor Name mandatory.
+
 | Field Group | Fields |
 |---|---|
-| Basic | Vendor Code (auto), Vendor Name, Vendor Type (Domestic/Import) |
-| Identity | BIN number (Domestic — API validated), TIN (optional), Trade License |
-| GST | GST Number — API auto-fill triggers: Name, Address, Category auto-populated |
-| Address | Registered address (auto from API for Domestic), correspondence address |
-| Contact | Primary contact person, Phone, Email, CC Email list (for PO auto-mail) |
-| Bank | Bank Name, Branch, Account Number, Routing Number — **Optional now, mandatory later** |
-| Status | Active / Blocked / Pending Approval |
-| Company Mapping | Active in one or multiple companies |
+| Basic | Vendor Code (auto, V-00001 format), Vendor Name (mandatory), Vendor Type (Domestic/Import), Country Code, Currency Code |
+| Identity | BIN number, TIN, Trade License |
+| GST | GST Number — API auto-fill: **always overwrites** Vendor Name + reg_address_line1/state/pin |
+| Registered Address | reg_address_line1, reg_address_city, reg_address_state, reg_address_pin |
+| Correspondence Address | corr_address_line1, corr_address_city, corr_address_state, corr_address_pin |
+| Import | IEC Code, Import License |
+| Contacts | vendor_contacts table — multi-row (contact_name, phone, designation, is_primary) |
+| Emails | vendor_emails table — multi-row (email, label, is_primary — used for PO auto-mail) |
+| Banks | vendor_banks table — multi-row (bank_name, branch, account_number, routing_number, is_primary, is_active) |
+| Status | SA creates directly as ACTIVE |
+| Company Mapping | Active in one or multiple companies via vendor_company_map |
 
 #### 85.6.3 Payment Terms — Dynamic Last Used
 
@@ -8705,13 +8718,15 @@ Only these two types exist in Phase-1.
 
 #### 85.6.4 Vendor Governance
 
+> **IMPLEMENTATION UPDATE (2026-06-19):** Phase-1 — SA manages vendors via OM07 screen. Approval flow deferred.
+
 | Action | Rule |
 |---|---|
-| Create vendor | Procurement team only |
-| Edit vendor | Procurement team |
-| Approve vendor | Required — any authorized approver (single level) |
-| Block/Deactivate vendor | Ledger must be balanced (no open payables) + approval required |
-| Multi-company | Vendor can be active in multiple companies simultaneously |
+| Create vendor | SA only — via OM07 screen. Created directly as ACTIVE (no approval step). |
+| Edit vendor | SA only |
+| Manage contacts / emails / banks | SA only — child records via OM07 |
+| Block/Deactivate vendor | SA only |
+| Multi-company | SA assigns via vendor_company_map |
 
 #### 85.6.5 PO Auto-Mail
 

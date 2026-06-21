@@ -1158,8 +1158,114 @@ Non-gate bugfixes and UX improvements done directly by Claude (no Codex task).
 
 ---
 
-*Last Updated: 2026-06-12*
+*Last Updated: 2026-06-19*
 *Next: Continue page-by-page review — OM03 onwards*
+
+---
+
+## Session Polish — 2026-06-19
+
+Non-gate bugfixes and feature implementations done directly by Claude (no Codex task).
+Scope: Vendor Master (OM07) full implementation — SA admin screen.
+
+---
+
+### A — Vendor Master DB Redesign ✅ DONE
+
+**Migrations applied (all via `supabase db push --include-all --linked`):**
+
+| Migration | What |
+|-----------|------|
+| `20260619000000_vendor_master_redesign.sql` | Drop old flat contact/email columns; add country_code; create vendor_contacts + vendor_emails tables; create public.generate_vendor_code() wrapper |
+| `20260619010000_fix_om07_vendor_master_route.sql` | Fix OM07 route registration |
+| `20260619020000_vendor_banks_table.sql` | Create vendor_banks table (multi-row: bank_name, branch, account_number, routing_number, is_primary, is_active) |
+| `20260619030000_reload_postgrest_vendor_wrapper.sql` | NOTIFY pgrst reload after wrapper creation |
+| `20260619040000_vendor_address_split.sql` | Add reg_address_line1/city/state/pin + corr_address_line1/city/state/pin; migrate old registered_address → reg_address_line1; drop old address columns |
+| `20260619050000_fix_vendor_code_rpc.sql` | Recreate public.generate_vendor_code() without SET search_path='' (PostgREST skips functions with SET search_path during schema introspection) |
+| `20260619060000_fix_vendor_code_where_clause.sql` | Add WHERE id = 1 to UPDATE (pg error 21000: UPDATE requires WHERE clause) |
+
+**DB state after migration:**
+- `erp_master.vendor_master`: 8 new address columns, old address/contact/email columns dropped
+- `erp_master.vendor_contacts`: new child table
+- `erp_master.vendor_emails`: new child table
+- `erp_master.vendor_banks`: new child table
+- `public.generate_vendor_code()`: working, returns V-00001..V-99999 format
+
+---
+
+### B — generate_vendor_code RPC Fix ✅ FIXED
+
+**Problem:** Vendor create returned 500 error consistently.
+
+**Root cause (2-step):**
+1. `public.generate_vendor_code()` had `SET search_path = ''` → PostgREST skips this function during schema introspection → `/rest/v1/rpc/generate_vendor_code` returns 400 silently → backend returns 500
+2. After removing `SET search_path = ''`, plain `UPDATE erp_master.vendor_code_sequence SET last_number = last_number + 1` with no WHERE clause → PostgreSQL error 21000 (PostgREST/pg safety: unconditional UPDATE rejected)
+
+**Fix:**
+- Migration 050000: Remove `SET search_path = ''`
+- Migration 060000: Add `WHERE id = 1` (vendor_code_sequence has exactly one row)
+
+**Diagnosed via:** Render backend logs showing `[vendor.create] generate_vendor_code RPC failed: {"code":"21000","message":"UPDATE requires a WHERE clause"}`
+
+**Key lesson:** `SET search_path = ''` on any PostgreSQL function causes PostgREST to silently skip it — the function becomes unreachable via `/rest/v1/rpc/`. Never use this on public wrapper functions.
+
+---
+
+### C — Vendor Master Backend Update ✅ DONE
+
+**File:** `supabase/functions/api/_core/om/vendor.handlers.ts`
+
+**Changes:**
+- `createVendorHandler`: INSERT now includes all 8 address fields (reg_address_line1/city/state/pin + corr_address_line1/city/state/pin)
+- `updateVendorHandler`: mutableFields updated — added 8 address fields, removed old `registered_address`/`correspondence_address`
+- Added `console.error` logging to createVendorHandler for diagnosis (generate_vendor_code RPC failure + INSERT failure)
+
+---
+
+### D — Vendor Master Frontend (SAVendorMaster.jsx) ✅ DONE
+
+**File:** `frontend/src/admin/sa/screens/SAVendorMaster.jsx`
+
+**Changes:**
+1. **ESC key fix:** Replaced custom overlay with `DrawerBase` pattern so `BlockingLayer` intercepts ESC correctly — matches the rest of SA admin screens
+2. **GST auto-fill (always overwrite):** When GST number is looked up, vendor_name + reg_address_line1/state/pin are always overwritten (not "only if empty" — always fresh from API)
+3. **Address sections:** Two separate `<Section>` blocks — "Registered Address" (line1, city, state, pin) and "Correspondence Address" (line1, city, state, pin) — replacing old single textarea fields
+4. **BLANK form state:** Updated to include all 8 address fields, country_code, currency_code (default BDT); removed old flat contact/email/address fields
+5. **Only vendor_name mandatory** at create time — all other fields optional
+
+**BLANK object:**
+```js
+const BLANK = {
+  vendor_name: "", bin_number: "", tin_number: "", trade_license: "",
+  gst_number: "", gst_category: "", iec_code: "", import_license: "",
+  country_code: "", currency_code: "BDT",
+  reg_address_line1: "", reg_address_city: "", reg_address_state: "", reg_address_pin: "",
+  corr_address_line1: "", corr_address_city: "", corr_address_state: "", corr_address_pin: "",
+};
+```
+
+---
+
+### E — DB Verification ✅ VERIFIED
+
+Confirmed via MCP SQL queries on dev project (ytapuwiqicmvpanmzelb):
+- V-00004: GUJARAT POLYBONDS — DOMESTIC, GST auto-fill worked (reg_address_line1 populated from API)
+- V-00005: HS COMPANY — IMPORT, manual entry, all fields saved correctly
+- vendor_banks, vendor_contacts, vendor_emails tables exist and accessible
+
+---
+
+### Summary — 2026-06-19
+
+| Area | Status | Files |
+|------|--------|-------|
+| DB: address split (8 new columns, old dropped) | ✅ | Migration 040000 |
+| DB: vendor_contacts + vendor_emails tables | ✅ | Migration 000000 |
+| DB: vendor_banks table | ✅ | Migration 020000 |
+| DB: generate_vendor_code RPC fix | ✅ | Migration 050000 + 060000 |
+| BE: vendor.handlers.ts address fields | ✅ | vendor.handlers.ts |
+| FE: SAVendorMaster.jsx full update | ✅ | SAVendorMaster.jsx |
+| Feasibility doc: Section 14.3 + 85.6.2 updated | ✅ | Feasibility MD |
 
 
 

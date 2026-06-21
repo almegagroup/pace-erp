@@ -63,17 +63,9 @@ import SAMenuGovernance from "../admin/sa/screens/SAMenuGovernance.jsx";
 import SAOmUomMaster from "../admin/sa/screens/SAOmUomMaster.jsx";
 import SAOmStorageLocations from "../admin/sa/screens/SAOmStorageLocations.jsx";
 import SAOmNumberSeries from "../admin/sa/screens/SAOmNumberSeries.jsx";
-import SAOmMaterialCategoryGroups from "../admin/sa/screens/SAOmMaterialCategoryGroups.jsx";
 import SACostCenterMaster from "../admin/sa/screens/SACostCenterMaster.jsx";
 import SAMachineMaster from "../admin/sa/screens/SAMachineMaster.jsx";
-import SAPaymentTermsMaster from "../admin/sa/screens/SAPaymentTermsMaster.jsx";
-import SAPortMaster from "../admin/sa/screens/SAPortMaster.jsx";
-import SAPortTransitMaster from "../admin/sa/screens/SAPortTransitMaster.jsx";
-import SALeadTimeMasters from "../admin/sa/screens/SALeadTimeMasters.jsx";
-import SATransporterMaster from "../admin/sa/screens/SATransporterMaster.jsx";
-import SACHAMaster from "../admin/sa/screens/SACHAMaster.jsx";
 import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
-import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
 import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
@@ -106,6 +98,7 @@ import HrLeaveUsageReportPage from "../pages/dashboard/hr/attendance/HrLeaveUsag
 import MaterialListPage from "../pages/dashboard/om/material/MaterialListPage.jsx";
 import MaterialDetailPage from "../pages/dashboard/om/material/MaterialDetailPage.jsx";
 import VendorListPage from "../pages/dashboard/om/vendor/VendorListPage.jsx";
+import VendorCreatePage from "../pages/dashboard/om/vendor/VendorCreatePage.jsx";
 import VendorDetailPage from "../pages/dashboard/om/vendor/VendorDetailPage.jsx";
 import AslListPage from "../pages/dashboard/om/asl/AslListPage.jsx";
 import AslCreatePage from "../pages/dashboard/om/asl/AslCreatePage.jsx";
@@ -297,10 +290,6 @@ export default function AppRouter() {
                       path="om/materials"
                       element={<SAMaterialMaster />}
                     />
-                    <Route
-                      path="om/vendors"
-                      element={<SAVendorMaster />}
-                    />
 
                   </Route>
                 </Route>
@@ -437,6 +426,10 @@ export default function AppRouter() {
                     element={<MaterialDetailPage />}
                   />
                   <Route path="om/vendors" element={<VendorListPage />} />
+                  <Route
+                    path="om/vendor/create"
+                    element={<VendorCreatePage />}
+                  />
                   <Route
                     path="om/vendor/detail"
                     element={<VendorDetailPage />}
@@ -637,34 +630,6 @@ export default function AppRouter() {
                   <Route
                     path="procurement/physical-inventory/:id"
                     element={<PIDocumentDetailPage />}
-                  />
-                  <Route
-                    path="procurement/masters/payment-terms"
-                    element={<SAPaymentTermsMaster />}
-                  />
-                  <Route
-                    path="procurement/masters/ports"
-                    element={<SAPortMaster />}
-                  />
-                  <Route
-                    path="procurement/masters/port-transit"
-                    element={<SAPortTransitMaster />}
-                  />
-                  <Route
-                    path="procurement/masters/material-categories"
-                    element={<SAOmMaterialCategoryGroups />}
-                  />
-                  <Route
-                    path="procurement/masters/lead-times"
-                    element={<SALeadTimeMasters />}
-                  />
-                  <Route
-                    path="procurement/masters/transporters"
-                    element={<SATransporterMaster />}
-                  />
-                  <Route
-                    path="procurement/masters/cha"
-                    element={<SACHAMaster />}
                   />
                 </Route>
               </Route>

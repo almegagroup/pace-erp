@@ -13,13 +13,9 @@ import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { ADMIN_SCREENS } from "../../../../navigation/screens/adminScreens.js";
-import { useMenu } from "../../../../context/useMenu.js";
 import { createVendor } from "../omApi.js";
 
 export default function VendorCreatePage() {
-  const { shellProfile } = useMenu();
-  const isSA = shellProfile?.roleCode === "SA" || shellProfile?.roleCode === "GA";
   const [form, setForm] = useState({
     vendor_name: "",
     vendor_type: "DOMESTIC",
@@ -58,11 +54,7 @@ export default function VendorCreatePage() {
         currency_code: form.currency_code.trim() || undefined,
       });
       setNotice("Vendor created.");
-      if (isSA) {
-        openScreen(ADMIN_SCREENS.SA_VENDOR_DETAIL.screen_code, { mode: "replace", context: { id: result?.data?.id } });
-      } else {
-        openScreen(OPERATION_SCREENS.OM_VENDOR_LIST.screen_code, { mode: "replace" });
-      }
+      openScreen(OPERATION_SCREENS.OM_VENDOR_DETAIL.screen_code, { mode: "replace", context: { id: result?.data?.id } });
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OM_VENDOR_CREATE_FAILED");
     } finally {

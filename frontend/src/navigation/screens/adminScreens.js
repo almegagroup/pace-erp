@@ -300,14 +300,6 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: true,
   },
 
-  SA_VENDOR_MASTER: {
-    screen_code: "SA_VENDOR_MASTER",
-    route: "/sa/om/vendors",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: true,
-  },
-
   GA_HOME: {
     screen_code: "GA_HOME",
     route: "/ga/home",

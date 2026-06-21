@@ -15,15 +15,11 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { ADMIN_SCREENS } from "../../../../navigation/screens/adminScreens.js";
-import { useMenu } from "../../../../context/useMenu.js";
 import { listVendors } from "../omApi.js";
 
 const LIMIT = 50;
 
 export default function VendorListPage() {
-  const { shellProfile } = useMenu();
-  const isSA = shellProfile?.roleCode === "SA" || shellProfile?.roleCode === "GA";
   const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -89,7 +85,7 @@ export default function VendorListPage() {
       title="Vendor Master"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
-        ...(isSA ? [{ key: "create", label: "Vendor Master", tone: "primary", onClick: () => openScreen(ADMIN_SCREENS.SA_VENDOR_MASTER.screen_code) }] : []),
+        { key: "create", label: "Create Vendor", tone: "primary", onClick: () => openScreen(OPERATION_SCREENS.OM_VENDOR_CREATE.screen_code) },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
       filterSection={{

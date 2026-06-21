@@ -25,6 +25,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  OM_VENDOR_CREATE: {
+    screen_code: "OM_VENDOR_CREATE",
+    route: "/dashboard/om/vendor/create",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   OM_VENDOR_DETAIL: {
     screen_code: "OM_VENDOR_DETAIL",
     route: "/dashboard/om/vendor/detail",
