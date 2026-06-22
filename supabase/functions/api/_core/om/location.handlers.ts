@@ -11,7 +11,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertOmAdminContext, assertOmSaContext } from "./shared.ts";
+import { assertManagerOrSARole, assertOmAdminContext, assertOmSaContext } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -115,7 +115,7 @@ export async function listStorageLocationsHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
@@ -198,7 +198,7 @@ export async function listStorageLocationsHandler(
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_LOCATION_LIST_FAILED";
-    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
     return locationErrorResponse(req, ctx, code, status, "Storage location list failed");
   }
 }
