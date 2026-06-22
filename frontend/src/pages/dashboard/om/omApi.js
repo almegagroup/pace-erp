@@ -772,6 +772,35 @@ export async function mapCustomerToCompany(payload) {
   );
 }
 
+export async function listParentCustomers(params = {}) {
+  const query = buildParams(params);
+  return fetchJson(`/api/om/parent-customers?${query.toString()}`, {}, "OM_PARENT_CUSTOMER_LIST_FAILED");
+}
+
+export async function createParentCustomer(payload) {
+  return fetchJson(
+    "/api/om/parent-customer",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_PARENT_CUSTOMER_CREATE_FAILED"
+  );
+}
+
+export async function updateParentCustomer(payload) {
+  return fetchJson(
+    "/api/om/parent-customer",
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_PARENT_CUSTOMER_UPDATE_FAILED"
+  );
+}
+
 export async function mapStorageLocationToPlant(payload) {
   return fetchJson(
     "/api/om/storage-location/plant-map",

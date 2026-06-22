@@ -82,7 +82,7 @@ export default function CustomerListPage() {
   return (
     <ErpMasterListTemplate
       eyebrow="Operation Management"
-      title="Customer Master"
+      title="RM/PM Sales Customer"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
         { key: "create", label: "Create Customer", tone: "primary", onClick: () => openScreen(OPERATION_SCREENS.OM_CUSTOMER_CREATE.screen_code) },
@@ -162,7 +162,12 @@ export default function CustomerListPage() {
                   ),
                 },
                 { key: "customer_type", label: "Type" },
-                { key: "currency_code", label: "Currency" },
+                { key: "vendor_code", label: "Linked Vendor", render: (row) => row.vendor_code || "-" },
+                {
+                  key: "parent_customer_name",
+                  label: "Parent Company",
+                  render: (row) => (row.parent_customer_code ? `${row.parent_customer_code} | ${row.parent_customer_name}` : "-"),
+                },
                 { key: "status", label: "Status" },
               ]}
               rows={rows}

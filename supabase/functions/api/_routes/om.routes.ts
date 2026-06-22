@@ -75,6 +75,11 @@ import {
   updateCustomerHandler,
 } from "../_core/om/customer.handlers.ts";
 import {
+  createParentCustomerHandler,
+  listParentCustomersHandler,
+  updateParentCustomerHandler,
+} from "../_core/om/parent_customer.handlers.ts";
+import {
   createUomHandler,
   listUomHandler,
   toggleUomHandler,
@@ -236,6 +241,13 @@ export async function dispatchOmRoutes(
       return await changeCustomerStatusHandler(req, ctx);
     case "POST:/api/om/customer/company-map":
       return await mapCustomerToCompanyHandler(req, ctx);
+
+    case "GET:/api/om/parent-customers":
+      return await listParentCustomersHandler(req, ctx);
+    case "POST:/api/om/parent-customer":
+      return await createParentCustomerHandler(req, ctx);
+    case "PATCH:/api/om/parent-customer":
+      return await updateParentCustomerHandler(req, ctx);
 
     case "GET:/api/om/uoms":
       return await listUomHandler(req, ctx);

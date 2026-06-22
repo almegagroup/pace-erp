@@ -191,6 +191,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/om/customer/status":                     { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
   "POST:/api/om/customer/company-map":                { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
 
+  // ── OM: Parent Customer (groups RM/PM Sales Customer rows) ──────────────
+  "GET:/api/om/parent-customers":                     { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },
+  "POST:/api/om/parent-customer":                     { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "WRITE" },
+  "PATCH:/api/om/parent-customer":                    { skipAcl: false, resourceCode: "OM_CUSTOMER_CREATE", action: "EDIT"  },
+
   // ── OM: Utility (used by forms — skipAcl) ────────────────────────────────
   "GET:/api/om/uoms":                                 { skipAcl: true },
   "POST:/api/om/uom":                                 { skipAcl: true },

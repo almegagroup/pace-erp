@@ -4,7 +4,8 @@
  * Gate: 15
  * Phase: 15
  * Domain: OPERATION_MANAGEMENT
- * Purpose: Render customer detail, edit, and status workflows.
+ * Purpose: Render RM/PM Sales Customer detail, edit, status, and company
+ *          mapping workflows, including Parent Company and Vendor link.
  * Authority: Frontend
  */
 
@@ -13,7 +14,13 @@ import { useSearchParams } from "react-router-dom";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
-import { changeCustomerStatus, getCustomer, mapCustomerToCompany, updateCustomer } from "../omApi.js";
+import {
+  changeCustomerStatus,
+  getCustomer,
+  listParentCustomers,
+  mapCustomerToCompany,
+  updateCustomer,
+} from "../omApi.js";
 
 function getAllowedStatusTargets(status) {
   const transitions = {
@@ -32,6 +39,7 @@ export default function CustomerDetailPage() {
   const searchId = searchParams.get("id");
   const id = searchId || context.id || "";
   const [customer, setCustomer] = useState(null);
+  const [parentCustomers, setParentCustomers] = useState([]);
   const [form, setForm] = useState(null);
   const [companyMapForm, setCompanyMapForm] = useState({ company_id: "" });
   const [showCompanyMapping, setShowCompanyMapping] = useState(false);
@@ -40,6 +48,8 @@ export default function CustomerDetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  const isVendorLinked = Boolean(customer?.vendor_id);
 
   useEffect(() => {
     if (!searchId && context.id) {
@@ -58,14 +68,20 @@ export default function CustomerDetailPage() {
       setLoading(true);
       setError("");
       try {
-        const result = await getCustomer(id);
+        const [result, parentResult] = await Promise.all([
+          getCustomer(id),
+          listParentCustomers(),
+        ]);
         if (!active) {
           return;
         }
         const row = result?.data ?? null;
         setCustomer(row);
+        setParentCustomers(Array.isArray(parentResult?.data) ? parentResult.data : []);
         setForm({
           customer_name: row?.customer_name ?? "",
+          gst_number: row?.gst_number ?? "",
+          parent_customer_id: row?.parent_customer_id ?? "",
           delivery_address: row?.delivery_address ?? "",
           billing_address: row?.billing_address ?? "",
           primary_contact_person: row?.primary_contact_person ?? "",
@@ -106,7 +122,8 @@ export default function CustomerDetailPage() {
     try {
       const result = await updateCustomer({
         id: customer.id,
-        customer_name: form.customer_name,
+        ...(isVendorLinked ? {} : { customer_name: form.customer_name, gst_number: form.gst_number }),
+        parent_customer_id: form.parent_customer_id || "",
         delivery_address: form.delivery_address,
         billing_address: form.billing_address,
         primary_contact_person: form.primary_contact_person,
@@ -168,7 +185,7 @@ export default function CustomerDetailPage() {
   return (
     <ErpScreenScaffold
       eyebrow="Operation Management"
-      title="Customer Detail"
+      title="RM/PM Sales Customer Detail"
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         { key: "edit", label: editMode ? "Cancel Edit" : "Edit", tone: "neutral", onClick: () => setEditMode((current) => !current), disabled: loading || !customer },
@@ -191,18 +208,55 @@ export default function CustomerDetailPage() {
               <ErpFieldPreview label="Type" value={customer.customer_type} />
               <ErpFieldPreview label="Currency" value={customer.currency_code} />
               <ErpFieldPreview label="GST Number" value={customer.gst_number} />
+              <ErpFieldPreview
+                label="Linked Vendor"
+                value={isVendorLinked ? `${customer.vendor_code} (name/GST mirror this vendor)` : "Independent customer"}
+              />
+              <ErpFieldPreview
+                label="Parent Company"
+                value={customer.parent_customer_code ? `${customer.parent_customer_code} | ${customer.parent_customer_name}` : "-"}
+              />
             </div>
           </ErpSectionCard>
 
           <ErpSectionCard eyebrow="View Or Edit" title="Customer fields">
             {editMode ? (
               <div className="grid gap-3">
-                <ErpDenseFormRow label="Customer Name" required>
-                  <input
-                    value={form.customer_name}
-                    onChange={(event) => setField("customer_name", event.target.value)}
-                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                  />
+                {isVendorLinked ? (
+                  <p className="border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                    Name and GST come live from the linked vendor ({customer.vendor_code}) — edit the vendor record to change them.
+                  </p>
+                ) : (
+                  <>
+                    <ErpDenseFormRow label="Customer Name" required>
+                      <input
+                        value={form.customer_name}
+                        onChange={(event) => setField("customer_name", event.target.value)}
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="GST Number">
+                      <input
+                        value={form.gst_number}
+                        onChange={(event) => setField("gst_number", event.target.value)}
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      />
+                    </ErpDenseFormRow>
+                  </>
+                )}
+                <ErpDenseFormRow label="Parent Company">
+                  <select
+                    value={form.parent_customer_id}
+                    onChange={(event) => setField("parent_customer_id", event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    <option value="">No parent company</option>
+                    {parentCustomers.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.parent_customer_code} | {entry.parent_customer_name}
+                      </option>
+                    ))}
+                  </select>
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Delivery Address" required>
                   <textarea
