@@ -14,10 +14,9 @@ import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { listPaymentTerms } from "../../procurement/procurementApi.js";
 import { createVendorMaterialInfo, listMaterials, listUoms, listVendors } from "../omApi.js";
-
-const CURRENCY_OPTIONS = ["BDT", "USD", "EUR", "INR", "CNY"];
 
 function makeUomRow() {
   return { key: crypto.randomUUID(), uom_code: "", conversion_factor: "1", is_default: false };
@@ -296,9 +295,9 @@ export default function AslCreatePage() {
                     className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                   >
                     <option value="">Select currency</option>
-                    {CURRENCY_OPTIONS.map((code) => (
-                      <option key={code} value={code}>
-                        {code}
+                    {CURRENCY_OPTIONS.map((entry) => (
+                      <option key={entry.code} value={entry.code}>
+                        {entry.code} | {entry.country}
                       </option>
                     ))}
                   </select>

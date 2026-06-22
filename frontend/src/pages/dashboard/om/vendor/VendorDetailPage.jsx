@@ -13,6 +13,7 @@ import { useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   addVendorPaymentTerms,
@@ -240,8 +241,14 @@ export default function VendorDetailPage() {
                 <ErpDenseFormRow label="Primary Email">
                   <input value={form.primary_email} onChange={(e) => setField("primary_email", e.target.value)} className={INPUT_CLS} />
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="Currency Code">
-                  <input value={form.currency_code} onChange={(e) => setField("currency_code", e.target.value.toUpperCase())} className={INPUT_CLS} />
+                <ErpDenseFormRow label="Currency">
+                  <select value={form.currency_code} onChange={(e) => setField("currency_code", e.target.value)} className={INPUT_CLS}>
+                    {CURRENCY_OPTIONS.map((entry) => (
+                      <option key={entry.code} value={entry.code}>
+                        {entry.code} | {entry.country}
+                      </option>
+                    ))}
+                  </select>
                 </ErpDenseFormRow>
               </div>
             ) : (

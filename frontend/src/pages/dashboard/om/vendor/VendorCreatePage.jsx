@@ -11,6 +11,7 @@
 import { useState } from "react";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
+import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { createVendor } from "../omApi.js";
@@ -131,12 +132,18 @@ export default function VendorCreatePage() {
               className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
             />
           </ErpDenseFormRow>
-          <ErpDenseFormRow label="Currency Code">
-            <input
+          <ErpDenseFormRow label="Currency">
+            <select
               value={form.currency_code}
-              onChange={(event) => updateField("currency_code", event.target.value.toUpperCase())}
-              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-            />
+              onChange={(event) => updateField("currency_code", event.target.value)}
+              className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+            >
+              {CURRENCY_OPTIONS.map((entry) => (
+                <option key={entry.code} value={entry.code}>
+                  {entry.code} | {entry.country}
+                </option>
+              ))}
+            </select>
           </ErpDenseFormRow>
         </div>
       }

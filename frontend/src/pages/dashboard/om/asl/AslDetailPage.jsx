@@ -15,6 +15,7 @@ import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { listPaymentTerms } from "../../procurement/procurementApi.js";
 import {
   changeVendorMaterialInfoStatus,
@@ -31,8 +32,6 @@ const ASL_TRANSITIONS = {
   INACTIVE: ["ACTIVE"],
   BLOCKED: ["ACTIVE"],
 };
-
-const CURRENCY_OPTIONS = ["BDT", "USD", "EUR", "INR", "CNY"];
 
 function makeUomRow(source) {
   return {
@@ -391,9 +390,9 @@ export default function AslDetailPage() {
                       className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                     >
                       <option value="">Select currency</option>
-                      {CURRENCY_OPTIONS.map((code) => (
-                        <option key={code} value={code}>
-                          {code}
+                      {CURRENCY_OPTIONS.map((entry) => (
+                        <option key={entry.code} value={entry.code}>
+                          {entry.code} | {entry.country}
                         </option>
                       ))}
                     </select>
