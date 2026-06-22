@@ -136,6 +136,13 @@ import BlockedIVListPage from "../pages/dashboard/procurement/accounts/BlockedIV
 import ProcurementPlanningPage from "../pages/dashboard/procurement/planning/ProcurementPlanningPage.jsx";
 import PlantTransferListPage from "../pages/dashboard/procurement/transfer/PlantTransferListPage.jsx";
 import PlantTransferDetailPage from "../pages/dashboard/procurement/transfer/PlantTransferDetailPage.jsx";
+import PaymentTermsMasterPage from "../pages/dashboard/procurement/masters/PaymentTermsMasterPage.jsx";
+import PortMasterPage from "../pages/dashboard/procurement/masters/PortMasterPage.jsx";
+import PortTransitMasterPage from "../pages/dashboard/procurement/masters/PortTransitMasterPage.jsx";
+import MaterialCategoryMasterPage from "../pages/dashboard/procurement/masters/MaterialCategoryMasterPage.jsx";
+import ImportLeadTimeMasterPage from "../pages/dashboard/procurement/masters/ImportLeadTimeMasterPage.jsx";
+import TransporterMasterPage from "../pages/dashboard/procurement/masters/TransporterMasterPage.jsx";
+import CHAMasterPage from "../pages/dashboard/procurement/masters/CHAMasterPage.jsx";
 import StockLedgerReportPage from "../pages/dashboard/procurement/reports/StockLedgerReportPage.jsx";
 import CurrentStockPage from "../pages/dashboard/procurement/reports/CurrentStockPage.jsx";
 import StockValuationPage from "../pages/dashboard/procurement/reports/StockValuationPage.jsx";
@@ -574,6 +581,34 @@ export default function AppRouter() {
                   <Route
                     path="procurement/transfer/:id"
                     element={<PlantTransferDetailPage />}
+                  />
+                  <Route
+                    path="procurement/masters/payment-terms"
+                    element={<PaymentTermsMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/ports"
+                    element={<PortMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/port-transit"
+                    element={<PortTransitMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/material-categories"
+                    element={<MaterialCategoryMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/lead-times"
+                    element={<ImportLeadTimeMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/transporters"
+                    element={<TransporterMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/cha"
+                    element={<CHAMasterPage />}
                   />
                   <Route
                     path="procurement/reports/stock-ledger"
