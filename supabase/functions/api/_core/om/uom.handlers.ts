@@ -11,7 +11,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertOmAdminContext, assertOmSaContext } from "./shared.ts";
+import { assertManagerOrSARole, assertOmSaContext } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -48,7 +48,7 @@ export async function listUomHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const isActive = new URL(req.url).searchParams.get("is_active");
     let query = serviceRoleClient
@@ -71,7 +71,7 @@ export async function listUomHandler(
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_UOM_LIST_FAILED";
-    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
     return uomErrorResponse(req, ctx, code, status, "UOM list failed");
   }
 }
