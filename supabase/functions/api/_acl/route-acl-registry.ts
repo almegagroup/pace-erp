@@ -182,6 +182,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/om/vendor-material-info":                { skipAcl: false, resourceCode: "OM_VENDOR_CREATE", action: "WRITE" },
   "PATCH:/api/om/vendor-material-info":               { skipAcl: false, resourceCode: "OM_VENDOR_CREATE", action: "EDIT"  },
   "POST:/api/om/vendor-material-info/status":         { skipAcl: false, resourceCode: "OM_VENDOR_CREATE", action: "EDIT"  },
+  "DELETE:/api/om/vendor-material-info":              { skipAcl: false, resourceCode: "OM_VENDOR_CREATE", action: "WRITE" },
 
   // ── OM: Customer ─────────────────────────────────────────────────────────
   "GET:/api/om/customers":                            { skipAcl: false, resourceCode: "OM_CUSTOMER_LIST",   action: "VIEW"  },

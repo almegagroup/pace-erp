@@ -63,6 +63,7 @@ import {
   createVendorMaterialInfoHandler,
   getVendorMaterialInfoHandler,
   listVendorMaterialInfosHandler,
+  unmapVendorMaterialInfoHandler,
   updateVendorMaterialInfoHandler,
 } from "../_core/om/vendor_material_info.handlers.ts";
 import {
@@ -220,6 +221,8 @@ export async function dispatchOmRoutes(
       return await updateVendorMaterialInfoHandler(req, ctx);
     case "POST:/api/om/vendor-material-info/status":
       return await changeVendorMaterialInfoStatusHandler(req, ctx);
+    case "DELETE:/api/om/vendor-material-info":
+      return await unmapVendorMaterialInfoHandler(req, ctx);
 
     case "POST:/api/om/customer":
       return await createCustomerHandler(req, ctx);

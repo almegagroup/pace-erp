@@ -438,6 +438,15 @@ export async function changeVendorMaterialInfoStatus(payload) {
   );
 }
 
+export async function unmapVendorMaterialInfo(id) {
+  const params = buildParams({ id });
+  return fetchJson(
+    `/api/om/vendor-material-info?${params.toString()}`,
+    { method: "DELETE" },
+    "OM_VMI_UNMAP_FAILED"
+  );
+}
+
 export async function createCustomer(payload) {
   return fetchJson(
     "/api/om/customer",

@@ -13,12 +13,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listPaymentTerms } from "../../procurement/procurementApi.js";
 import {
   changeVendorMaterialInfoStatus,
   getVendorMaterialInfo,
   listUoms,
+  unmapVendorMaterialInfo,
   updateVendorMaterialInfo,
 } from "../omApi.js";
 
@@ -74,6 +76,7 @@ export default function AslDetailPage() {
   const [currencyRows, setCurrencyRows] = useState([]);
   const [paymentTermRows, setPaymentTermRows] = useState([]);
   const [editMode, setEditMode] = useState(false);
+  const [confirmUnmap, setConfirmUnmap] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -197,6 +200,28 @@ export default function AslDetailPage() {
 
   const allowedTargets = ASL_TRANSITIONS[String(record?.status || "").toUpperCase()] ?? [];
 
+  async function handleUnmap() {
+    if (!record?.id) {
+      return;
+    }
+    if (!confirmUnmap) {
+      setConfirmUnmap(true);
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await unmapVendorMaterialInfo(record.id);
+      openScreen(OPERATION_SCREENS.OM_ASL_LIST.screen_code, { mode: "replace" });
+    } catch (unmapError) {
+      setError(unmapError instanceof Error ? unmapError.message : "OM_VMI_UNMAP_FAILED");
+      setConfirmUnmap(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleStatusChange(newStatus) {
     if (!record?.id) {
       return;
@@ -226,10 +251,20 @@ export default function AslDetailPage() {
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         { key: "edit", label: editMode ? "Cancel Edit" : "Edit", tone: "neutral", onClick: () => setEditMode((current) => !current), disabled: loading || !record },
         { key: "save", label: saving ? "Saving..." : "Save", tone: "primary", onClick: () => void handleSave(), disabled: saving || !editMode },
+        {
+          key: "unmap",
+          label: saving ? "Working..." : confirmUnmap ? "Confirm Unmap" : "Unmap",
+          tone: "danger",
+          onClick: () => void handleUnmap(),
+          disabled: saving || !record,
+        },
       ]}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
+        ...(confirmUnmap
+          ? [{ key: "confirm-unmap", tone: "info", message: "Click \"Confirm Unmap\" again to permanently remove this vendor-material link and its UOM/currency/payment-term lists." }]
+          : []),
       ]}
     >
       {loading || !record || !form ? (

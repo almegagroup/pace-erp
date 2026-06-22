@@ -617,6 +617,68 @@ export async function updateVendorMaterialInfoHandler(
   }
 }
 
+async function hasBlockingPoLines(vmiId: string): Promise<boolean> {
+  const { count, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("purchase_order_line")
+    .select("id", { count: "exact", head: true })
+    .eq("vendor_material_info_id", vmiId)
+    .in("line_status", ["OPEN", "PARTIALLY_RECEIVED"]);
+
+  if (error) {
+    throw new Error("OM_VMI_PO_USAGE_LOOKUP_FAILED");
+  }
+
+  return (count ?? 0) > 0;
+}
+
+export async function unmapVendorMaterialInfoHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+
+    const url = new URL(req.url);
+    const id = toTrimmedString(url.searchParams.get("id"));
+    if (!id) {
+      return vmiErrorResponse(req, ctx, "OM_VMI_NOT_FOUND", 404, "Vendor material info not found");
+    }
+
+    const existing = await getVmiRow(id);
+    if (!existing) {
+      return vmiErrorResponse(req, ctx, "OM_VMI_NOT_FOUND", 404, "Vendor material info not found");
+    }
+
+    if (await hasBlockingPoLines(id)) {
+      return vmiErrorResponse(
+        req,
+        ctx,
+        "OM_VMI_HAS_OPEN_PO",
+        409,
+        "Cannot unmap — open or in-transit PO lines reference this vendor-material pair",
+      );
+    }
+
+    // UOM/currency/payment-term rows cascade-delete with the parent VMI row.
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_material_info")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      throw new Error("OM_VMI_UNMAP_FAILED");
+    }
+
+    return okResponse({ data: { id } }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VMI_UNMAP_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("HAS_OPEN_PO") ? 409 : 500;
+    return vmiErrorResponse(req, ctx, code, status, "Vendor material info unmap failed");
+  }
+}
+
 export async function changeVendorMaterialInfoStatusHandler(
   req: Request,
   ctx: OmHandlerContext,
