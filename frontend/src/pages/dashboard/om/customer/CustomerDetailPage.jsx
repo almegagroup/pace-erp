@@ -11,6 +11,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
@@ -18,6 +19,8 @@ import { getActiveScreenContext, popScreen } from "../../../../navigation/screen
 import {
   changeCustomerStatus,
   getCustomer,
+  listCompaniesForOm,
+  listCustomerCompanyMaps,
   listParentCustomers,
   mapCustomerToCompany,
   updateCustomer,
@@ -42,8 +45,9 @@ export default function CustomerDetailPage() {
   const [customer, setCustomer] = useState(null);
   const [parentCustomers, setParentCustomers] = useState([]);
   const [form, setForm] = useState(null);
-  const [companyMapForm, setCompanyMapForm] = useState({ company_id: "" });
-  const [showCompanyMapping, setShowCompanyMapping] = useState(false);
+  const [companies, setCompanies] = useState([]);
+  const [companyMaps, setCompanyMaps] = useState([]);
+  const [mapCompanyId, setMapCompanyId] = useState("");
   const [editMode, setEditMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -69,9 +73,11 @@ export default function CustomerDetailPage() {
       setLoading(true);
       setError("");
       try {
-        const [result, parentResult] = await Promise.all([
+        const [result, parentResult, companyList, companyMapResult] = await Promise.all([
           getCustomer(id),
           listParentCustomers(),
+          listCompaniesForOm(),
+          listCustomerCompanyMaps(id),
         ]);
         if (!active) {
           return;
@@ -79,6 +85,8 @@ export default function CustomerDetailPage() {
         const row = result?.data ?? null;
         setCustomer(row);
         setParentCustomers(Array.isArray(parentResult?.data) ? parentResult.data : []);
+        setCompanies(Array.isArray(companyList) ? companyList : []);
+        setCompanyMaps(Array.isArray(companyMapResult?.data) ? companyMapResult.data : []);
         setForm({
           customer_name: row?.customer_name ?? "",
           gst_number: row?.gst_number ?? "",
@@ -144,7 +152,7 @@ export default function CustomerDetailPage() {
   }
 
   async function handleCompanyMapSave() {
-    if (!customer?.id || !companyMapForm.company_id.trim()) {
+    if (!customer?.id || !mapCompanyId) {
       setError("OM_COMPANY_NOT_FOUND");
       return;
     }
@@ -154,9 +162,11 @@ export default function CustomerDetailPage() {
     try {
       await mapCustomerToCompany({
         customer_id: customer.id,
-        company_id: companyMapForm.company_id.trim(),
+        company_id: mapCompanyId,
       });
-      setCompanyMapForm({ company_id: "" });
+      const updated = await listCustomerCompanyMaps(customer.id);
+      setCompanyMaps(Array.isArray(updated?.data) ? updated.data : []);
+      setMapCompanyId("");
       setNotice("Customer mapped to company");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OM_CUSTOMER_COMPANY_MAP_FAILED");
@@ -344,34 +354,49 @@ export default function CustomerDetailPage() {
             </div>
           </ErpSectionCard>
 
-          <ErpSectionCard eyebrow="Company Mapping" title="Company Mapping">
-            <div className="grid gap-3">
-              <button
-                type="button"
-                onClick={() => setShowCompanyMapping((current) => !current)}
-                className="justify-self-start border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-900"
-              >
-                {showCompanyMapping ? "Hide" : "Show"} Company Mapping
-              </button>
-              {showCompanyMapping ? (
-                <div className="grid gap-3 border border-dashed border-slate-300 bg-slate-50 p-3">
-                  <ErpDenseFormRow label="Company ID" required>
-                    <input
-                      value={companyMapForm.company_id}
-                      onChange={(event) => setCompanyMapForm({ company_id: event.target.value })}
-                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    />
-                  </ErpDenseFormRow>
-                  <button
-                    type="button"
-                    onClick={() => void handleCompanyMapSave()}
-                    disabled={saving}
-                    className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900"
+          <ErpSectionCard eyebrow="Company Mapping" title="Map customer to companies">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+              <div className="grid gap-3">
+                <ErpDenseFormRow label="Company" required>
+                  <select
+                    value={mapCompanyId}
+                    onChange={(event) => setMapCompanyId(event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                   >
-                    Map to Company
-                  </button>
-                </div>
-              ) : null}
+                    <option value="">Select company</option>
+                    {companies.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.company_code} | {entry.company_name}
+                      </option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+                <button
+                  type="button"
+                  onClick={() => void handleCompanyMapSave()}
+                  disabled={saving}
+                  className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900"
+                >
+                  {saving ? "Saving..." : "Map to Company"}
+                </button>
+              </div>
+              <ErpDenseGrid
+                columns={[
+                  {
+                    key: "company",
+                    label: "Company",
+                    render: (row) =>
+                      row.companies
+                        ? `${row.companies.company_code} | ${row.companies.company_name}`
+                        : companies.find((c) => c.id === row.company_id)?.company_name ?? row.company_id,
+                  },
+                  { key: "active", label: "Active", render: (row) => (row.active ? "YES" : "NO") },
+                ]}
+                rows={companyMaps}
+                rowKey={(row) => row.id ?? row.company_id}
+                emptyMessage="Not mapped to any company yet."
+                maxHeight="200px"
+              />
             </div>
           </ErpSectionCard>
         </div>

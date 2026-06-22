@@ -772,6 +772,11 @@ export async function mapCustomerToCompany(payload) {
   );
 }
 
+export async function listCustomerCompanyMaps(customerId) {
+  const params = buildParams({ customer_id: customerId });
+  return fetchJson(`/api/om/customer/company-maps?${params.toString()}`, {}, "OM_CUSTOMER_COMPANY_MAP_LIST_FAILED");
+}
+
 export async function listParentCustomers(params = {}) {
   const query = buildParams(params);
   return fetchJson(`/api/om/parent-customers?${query.toString()}`, {}, "OM_PARENT_CUSTOMER_LIST_FAILED");

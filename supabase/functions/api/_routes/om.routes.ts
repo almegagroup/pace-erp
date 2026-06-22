@@ -70,6 +70,7 @@ import {
   changeCustomerStatusHandler,
   createCustomerHandler,
   getCustomerHandler,
+  listCustomerCompanyMapsHandler,
   listCustomersHandler,
   mapCustomerToCompanyHandler,
   updateCustomerHandler,
@@ -241,6 +242,8 @@ export async function dispatchOmRoutes(
       return await changeCustomerStatusHandler(req, ctx);
     case "POST:/api/om/customer/company-map":
       return await mapCustomerToCompanyHandler(req, ctx);
+    case "GET:/api/om/customer/company-maps":
+      return await listCustomerCompanyMapsHandler(req, ctx);
 
     case "GET:/api/om/parent-customers":
       return await listParentCustomersHandler(req, ctx);

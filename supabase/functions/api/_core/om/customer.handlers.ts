@@ -461,3 +461,33 @@ export async function mapCustomerToCompanyHandler(
     return customerErrorResponse(req, ctx, code, status, "Customer company map failed");
   }
 }
+
+export async function listCustomerCompanyMapsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const customerId = toTrimmedString(new URL(req.url).searchParams.get("customer_id"));
+    if (!customerId) {
+      return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 400, "customer_id required");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("customer_company_map")
+      .select("*, companies:company_id(id, company_code, company_name)")
+      .eq("customer_id", customerId)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      throw new Error("OM_CUSTOMER_COMPANY_MAP_LIST_FAILED");
+    }
+
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_CUSTOMER_COMPANY_MAP_LIST_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
+    return customerErrorResponse(req, ctx, code, status, "Customer company map list failed");
+  }
+}
