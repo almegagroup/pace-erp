@@ -175,40 +175,46 @@ export async function createCustomerHandler(
 
     const { data: customerCode, error: codeError } = await serviceRoleClient.rpc("generate_customer_code");
     if (codeError || !customerCode) {
+      console.error("[createCustomerHandler] generate_customer_code RPC failed:", JSON.stringify(codeError));
       throw new Error("OM_CUSTOMER_CREATE_FAILED");
     }
+
+    const insertPayload = {
+      customer_code: String(customerCode),
+      vendor_id: vendorId || null,
+      parent_customer_id: parentCustomerId || null,
+      // Vendor-linked: name/GST resolve live from vendor_master (see enrichCustomerRows) — not stored here.
+      customer_name: vendorId ? null : customerName,
+      customer_type: customerType,
+      delivery_address: deliveryAddress,
+      billing_address: toTrimmedString(body.billing_address) || null,
+      gst_number: vendorId ? null : toTrimmedString(body.gst_number) || null,
+      pan_number: toTrimmedString(body.pan_number) || null,
+      primary_contact_person: toTrimmedString(body.primary_contact_person) || null,
+      phone: toTrimmedString(body.phone) || null,
+      primary_email: toTrimmedString(body.primary_email) || null,
+      currency_code: toTrimmedString(body.currency_code).toUpperCase() || "BDT",
+      status: "DRAFT",
+      created_by: ctx.auth_user_id,
+    };
+    console.log("[createCustomerHandler] insert payload:", JSON.stringify(insertPayload));
 
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("customer_master")
-      .insert({
-        customer_code: String(customerCode),
-        vendor_id: vendorId || null,
-        parent_customer_id: parentCustomerId || null,
-        // Vendor-linked: name/GST resolve live from vendor_master (see enrichCustomerRows) — not stored here.
-        customer_name: vendorId ? null : customerName,
-        customer_type: customerType,
-        delivery_address: deliveryAddress,
-        billing_address: toTrimmedString(body.billing_address) || null,
-        gst_number: vendorId ? null : toTrimmedString(body.gst_number) || null,
-        pan_number: toTrimmedString(body.pan_number) || null,
-        primary_contact_person: toTrimmedString(body.primary_contact_person) || null,
-        phone: toTrimmedString(body.phone) || null,
-        primary_email: toTrimmedString(body.primary_email) || null,
-        currency_code: toTrimmedString(body.currency_code).toUpperCase() || "BDT",
-        status: "DRAFT",
-        created_by: ctx.auth_user_id,
-      })
+      .insert(insertPayload)
       .select("*")
       .single();
 
     if (error || !data) {
+      console.error("[createCustomerHandler] insert failed:", JSON.stringify(error));
       throw new Error("OM_CUSTOMER_CREATE_FAILED");
     }
 
     const [enriched] = await enrichCustomerRows([data as Record<string, unknown>]);
     return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {
+    console.error("[createCustomerHandler] caught error:", err);
     const code = (err as Error).message || "OM_CUSTOMER_CREATE_FAILED";
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") ? 400 : 500;
     return customerErrorResponse(req, ctx, code, status, "Customer create failed");

@@ -48,6 +48,7 @@ export async function createParentCustomerHandler(
 
     const { data: code, error: codeError } = await serviceRoleClient.rpc("generate_parent_customer_code");
     if (codeError || !code) {
+      console.error("[createParentCustomerHandler] generate_parent_customer_code RPC failed:", JSON.stringify(codeError));
       throw new Error("OM_PARENT_CUSTOMER_CREATE_FAILED");
     }
 
@@ -66,11 +67,13 @@ export async function createParentCustomerHandler(
       .single();
 
     if (error || !data) {
+      console.error("[createParentCustomerHandler] insert failed:", JSON.stringify(error));
       throw new Error("OM_PARENT_CUSTOMER_CREATE_FAILED");
     }
 
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
+    console.error("[createParentCustomerHandler] caught error:", err);
     const code = (err as Error).message || "OM_PARENT_CUSTOMER_CREATE_FAILED";
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("INVALID") ? 400 : 500;
     return parentCustomerErrorResponse(req, ctx, code, status, "Parent customer create failed");
