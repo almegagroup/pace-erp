@@ -17,15 +17,27 @@ type HandlerContext = {
   request_id: string;
 };
 
+// Used for SA bootstrap/governance AND as the company picker behind several
+// ACL pages (Vendor/Material/Customer "Company Mapping" sections), so
+// managers need read access here too — not just SA/GA.
+const MANAGER_OR_SA_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
+
 function assertAdmin(
   ctx: HandlerContext,
 ): asserts ctx is {
-  context: Extract<ContextResolution, { status: "RESOLVED" }> & { isAdmin: true };
+  context: Extract<ContextResolution, { status: "RESOLVED" }>;
   request_id: string;
 } {
-  if (ctx.context.status !== "RESOLVED" || ctx.context.isAdmin !== true) {
+  if (ctx.context.status !== "RESOLVED") {
     throw new Error("ADMIN_ONLY");
   }
+  if (ctx.context.isAdmin === true) {
+    return;
+  }
+  if (MANAGER_OR_SA_ROLES.has(ctx.context.roleCode)) {
+    return;
+  }
+  throw new Error("ADMIN_ONLY");
 }
 
 type CompanyRow = {
