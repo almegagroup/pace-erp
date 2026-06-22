@@ -25,7 +25,7 @@ import {
 
 function getAllowedStatusTargets(status) {
   const transitions = {
-    DRAFT: ["PENDING_APPROVAL"],
+    DRAFT: ["ACTIVE", "INACTIVE", "PENDING_APPROVAL"],
     PENDING_APPROVAL: ["ACTIVE", "DRAFT"],
     ACTIVE: ["INACTIVE", "BLOCKED"],
     INACTIVE: ["ACTIVE"],

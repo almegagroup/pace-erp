@@ -18,7 +18,7 @@ type JsonRecord = Record<string, unknown>;
 const ALLOWED_CUSTOMER_TYPES = new Set(["DOMESTIC", "EXPORT"]);
 const CUSTOMER_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL", "ACTIVE", "INACTIVE", "BLOCKED"]);
 const CUSTOMER_TRANSITIONS = new Map<string, Set<string>>([
-  ["DRAFT", new Set(["PENDING_APPROVAL"])],
+  ["DRAFT", new Set(["ACTIVE", "INACTIVE", "PENDING_APPROVAL"])],
   ["PENDING_APPROVAL", new Set(["ACTIVE", "DRAFT"])],
   ["ACTIVE", new Set(["INACTIVE", "BLOCKED"])],
   ["INACTIVE", new Set(["ACTIVE"])],
