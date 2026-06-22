@@ -12,15 +12,28 @@
 import { useEffect, useState } from "react";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
+import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { createCustomer, createParentCustomer, listParentCustomers, listVendors } from "../omApi.js";
+import { createCustomer, createParentCustomer, getVendor, listParentCustomers, listVendors } from "../omApi.js";
+
+function formatVendorAddress(vendor) {
+  if (!vendor) return "";
+  const parts = [
+    vendor.reg_address_line1,
+    vendor.reg_address_city,
+    vendor.reg_address_state,
+    vendor.reg_address_pin,
+  ].filter(Boolean);
+  return parts.join(", ");
+}
 
 export default function CustomerCreatePage() {
   const [source, setSource] = useState("INDEPENDENT");
   const [vendors, setVendors] = useState([]);
   const [parentCustomers, setParentCustomers] = useState([]);
   const [loadingDeps, setLoadingDeps] = useState(true);
+  const [loadingVendorProfile, setLoadingVendorProfile] = useState(false);
   const [showNewParent, setShowNewParent] = useState(false);
   const [newParent, setNewParent] = useState({ parent_customer_name: "", gst_number: "", address: "" });
   const [creatingParent, setCreatingParent] = useState(false);
@@ -30,6 +43,7 @@ export default function CustomerCreatePage() {
     parent_customer_id: "",
     customer_name: "",
     customer_type: "DOMESTIC",
+    currency_code: "BDT",
     delivery_address: "",
     billing_address: "",
     gst_number: "",
@@ -40,6 +54,32 @@ export default function CustomerCreatePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  async function handleVendorSelect(vendorId) {
+    updateField("vendor_id", vendorId);
+    if (!vendorId) return;
+    setLoadingVendorProfile(true);
+    try {
+      const result = await getVendor(vendorId);
+      const vendor = result?.data;
+      if (!vendor) return;
+      const primaryContact = (vendor.contacts ?? []).find((entry) => entry.is_primary) ?? (vendor.contacts ?? [])[0];
+      const primaryEmail = (vendor.emails ?? []).find((entry) => entry.is_primary) ?? (vendor.emails ?? [])[0];
+      setForm((current) => ({
+        ...current,
+        delivery_address: formatVendorAddress(vendor),
+        billing_address: current.billing_address || formatVendorAddress(vendor),
+        primary_contact_person: primaryContact?.contact_name ?? current.primary_contact_person,
+        phone: primaryContact?.phone ?? current.phone,
+        primary_email: primaryEmail?.email ?? current.primary_email,
+        currency_code: vendor.currency_code || current.currency_code,
+      }));
+    } catch {
+      // Vendor profile fetch failing shouldn't block the rest of the form — fields stay manually editable.
+    } finally {
+      setLoadingVendorProfile(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -122,6 +162,7 @@ export default function CustomerCreatePage() {
         parent_customer_id: form.parent_customer_id || undefined,
         customer_name: isVendorLinked ? undefined : form.customer_name.trim(),
         customer_type: form.customer_type,
+        currency_code: form.currency_code,
         delivery_address: form.delivery_address.trim(),
         billing_address: form.billing_address.trim() || undefined,
         gst_number: isVendorLinked ? undefined : form.gst_number.trim() || undefined,
@@ -171,7 +212,7 @@ export default function CustomerCreatePage() {
             <ErpDenseFormRow label="Vendor" required>
               <select
                 value={form.vendor_id}
-                onChange={(event) => updateField("vendor_id", event.target.value)}
+                onChange={(event) => void handleVendorSelect(event.target.value)}
                 className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">Select vendor</option>
@@ -184,6 +225,7 @@ export default function CustomerCreatePage() {
               {selectedVendor ? (
                 <p className="mt-1 text-xs text-slate-500">
                   Name and GST will always mirror this vendor's record — editing the vendor later updates this customer automatically.
+                  {loadingVendorProfile ? " Loading vendor address/contact..." : " Address, contact, phone, and email below were copied from the vendor — edit freely, they won't re-sync."}
                 </p>
               ) : null}
             </ErpDenseFormRow>
@@ -273,6 +315,19 @@ export default function CustomerCreatePage() {
             >
               <option value="DOMESTIC">DOMESTIC</option>
               <option value="EXPORT">EXPORT</option>
+            </select>
+          </ErpDenseFormRow>
+          <ErpDenseFormRow label="Currency" required>
+            <select
+              value={form.currency_code}
+              onChange={(event) => updateField("currency_code", event.target.value)}
+              className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+            >
+              {CURRENCY_OPTIONS.map((entry) => (
+                <option key={entry.code} value={entry.code}>
+                  {entry.code} | {entry.country}
+                </option>
+              ))}
             </select>
           </ErpDenseFormRow>
           <ErpDenseFormRow label="Delivery Address" required>

@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   changeCustomerStatus,
@@ -81,6 +82,7 @@ export default function CustomerDetailPage() {
         setForm({
           customer_name: row?.customer_name ?? "",
           gst_number: row?.gst_number ?? "",
+          currency_code: row?.currency_code ?? "BDT",
           parent_customer_id: row?.parent_customer_id ?? "",
           delivery_address: row?.delivery_address ?? "",
           billing_address: row?.billing_address ?? "",
@@ -124,6 +126,7 @@ export default function CustomerDetailPage() {
         id: customer.id,
         ...(isVendorLinked ? {} : { customer_name: form.customer_name, gst_number: form.gst_number }),
         parent_customer_id: form.parent_customer_id || "",
+        currency_code: form.currency_code,
         delivery_address: form.delivery_address,
         billing_address: form.billing_address,
         primary_contact_person: form.primary_contact_person,
@@ -254,6 +257,19 @@ export default function CustomerDetailPage() {
                     {parentCustomers.map((entry) => (
                       <option key={entry.id} value={entry.id}>
                         {entry.parent_customer_code} | {entry.parent_customer_name}
+                      </option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Currency">
+                  <select
+                    value={form.currency_code}
+                    onChange={(event) => setField("currency_code", event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    {CURRENCY_OPTIONS.map((entry) => (
+                      <option key={entry.code} value={entry.code}>
+                        {entry.code} | {entry.country}
                       </option>
                     ))}
                   </select>
