@@ -17,7 +17,6 @@ type JsonRecord = Record<string, unknown>;
 
 const ALLOWED_CUSTOMER_TYPES = new Set(["DOMESTIC", "EXPORT"]);
 const CUSTOMER_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL", "ACTIVE", "INACTIVE", "BLOCKED"]);
-const MUTABLE_CUSTOMER_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL"]);
 const CUSTOMER_TRANSITIONS = new Map<string, Set<string>>([
   ["DRAFT", new Set(["PENDING_APPROVAL"])],
   ["PENDING_APPROVAL", new Set(["ACTIVE", "DRAFT"])],
@@ -194,7 +193,9 @@ export async function createCustomerHandler(
       phone: toTrimmedString(body.phone) || null,
       primary_email: toTrimmedString(body.primary_email) || null,
       currency_code: toTrimmedString(body.currency_code).toUpperCase() || "BDT",
-      status: "DRAFT",
+      status: "ACTIVE",
+      approved_by: ctx.auth_user_id,
+      approved_at: new Date().toISOString(),
       created_by: ctx.auth_user_id,
     };
     console.log("[createCustomerHandler] insert payload:", JSON.stringify(insertPayload));
@@ -308,11 +309,6 @@ export async function updateCustomerHandler(
     const existing = await getCustomerById(id);
     if (!existing) {
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 404, "Customer not found");
-    }
-
-    const currentStatus = String(existing.status ?? "");
-    if (!MUTABLE_CUSTOMER_STATUSES.has(currentStatus)) {
-      return customerErrorResponse(req, ctx, "OM_CUSTOMER_LOCKED", 422, "Customer is locked");
     }
 
     const isVendorLinked = Boolean(existing.vendor_id);
