@@ -99,15 +99,79 @@ async function getVmiRow(
   return (data as Record<string, unknown> | null) ?? null;
 }
 
+async function fetchChildLists(
+  vmiIds: string[],
+): Promise<{
+  uomMap: Map<string, Record<string, unknown>[]>;
+  currencyMap: Map<string, Record<string, unknown>[]>;
+  paymentTermMap: Map<string, Record<string, unknown>[]>;
+}> {
+  if (vmiIds.length === 0) {
+    return { uomMap: new Map(), currencyMap: new Map(), paymentTermMap: new Map() };
+  }
+
+  const [uomResult, currencyResult, paymentTermResult] = await Promise.all([
+    serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_material_uom")
+      .select("id, vmi_id, uom_code, conversion_factor, is_default")
+      .in("vmi_id", vmiIds),
+    serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_material_currency")
+      .select("id, vmi_id, currency_code, is_default")
+      .in("vmi_id", vmiIds),
+    serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_material_payment_term")
+      .select("id, vmi_id, payment_term_id, is_default, payment_terms_master:payment_term_id (code, name)")
+      .in("vmi_id", vmiIds),
+  ]);
+
+  const uomMap = new Map<string, Record<string, unknown>[]>();
+  for (const row of (uomResult.data ?? []) as Record<string, unknown>[]) {
+    const list = uomMap.get(row.vmi_id as string) ?? [];
+    list.push(row);
+    uomMap.set(row.vmi_id as string, list);
+  }
+
+  const currencyMap = new Map<string, Record<string, unknown>[]>();
+  for (const row of (currencyResult.data ?? []) as Record<string, unknown>[]) {
+    const list = currencyMap.get(row.vmi_id as string) ?? [];
+    list.push(row);
+    currencyMap.set(row.vmi_id as string, list);
+  }
+
+  const paymentTermMap = new Map<string, Record<string, unknown>[]>();
+  for (const row of (paymentTermResult.data ?? []) as Record<string, unknown>[]) {
+    const term = row.payment_terms_master as Record<string, unknown> | null;
+    const flat = {
+      id: row.id,
+      vmi_id: row.vmi_id,
+      payment_term_id: row.payment_term_id,
+      is_default: row.is_default,
+      payment_term_code: term?.code ?? null,
+      payment_term_name: term?.name ?? null,
+    };
+    const list = paymentTermMap.get(row.vmi_id as string) ?? [];
+    list.push(flat);
+    paymentTermMap.set(row.vmi_id as string, list);
+  }
+
+  return { uomMap, currencyMap, paymentTermMap };
+}
+
 async function enrichVmiRows(rows: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
   if (rows.length === 0) return rows;
 
   const vendorIds = [...new Set(rows.map((r) => r.vendor_id as string).filter(Boolean))];
   const materialIds = [...new Set(rows.map((r) => r.material_id as string).filter(Boolean))];
+  const vmiIds = [...new Set(rows.map((r) => r.id as string).filter(Boolean))];
 
-  const [vendorResult, materialResult] = await Promise.all([
+  const [vendorResult, materialResult, childLists] = await Promise.all([
     serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_code, vendor_name").in("id", vendorIds),
-    serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name").in("id", materialIds),
+    serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, base_uom_code").in("id", materialIds),
+    fetchChildLists(vmiIds),
   ]);
 
   const vendorMap = new Map<string, Record<string, unknown>>();
@@ -122,14 +186,134 @@ async function enrichVmiRows(rows: Record<string, unknown>[]): Promise<Record<st
   return rows.map((row) => {
     const vendor = vendorMap.get(row.vendor_id as string) ?? {};
     const material = materialMap.get(row.material_id as string) ?? {};
+    const uoms = childLists.uomMap.get(row.id as string) ?? [];
+    const currencies = childLists.currencyMap.get(row.id as string) ?? [];
+    const paymentTerms = childLists.paymentTermMap.get(row.id as string) ?? [];
+    const defaultUom = uoms.find((u) => u.is_default) ?? null;
+    const defaultCurrency = currencies.find((c) => c.is_default) ?? null;
     return {
       ...row,
       vendor_code: vendor.vendor_code ?? null,
       vendor_name: vendor.vendor_name ?? null,
       pace_code: material.pace_code ?? null,
       material_name: material.material_name ?? null,
+      base_uom_code: material.base_uom_code ?? null,
+      uoms,
+      currencies,
+      payment_terms: paymentTerms,
+      default_uom_code: defaultUom?.uom_code ?? null,
+      default_currency_code: defaultCurrency?.currency_code ?? null,
     };
   });
+}
+
+function normalizeUomList(input: unknown): { uom_code: string; conversion_factor: number; is_default: boolean }[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((entry) => {
+      const row = entry as Record<string, unknown>;
+      const uomCode = toTrimmedString(row.uom_code).toUpperCase();
+      const factor = Number(row.conversion_factor);
+      return {
+        uom_code: uomCode,
+        conversion_factor: Number.isFinite(factor) && factor > 0 ? factor : NaN,
+        is_default: row.is_default === true,
+      };
+    })
+    .filter((row) => row.uom_code && Number.isFinite(row.conversion_factor));
+}
+
+function normalizeCurrencyList(input: unknown): { currency_code: string; is_default: boolean }[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((entry) => {
+      const row = entry as Record<string, unknown>;
+      return {
+        currency_code: toTrimmedString(row.currency_code).toUpperCase(),
+        is_default: row.is_default === true,
+      };
+    })
+    .filter((row) => row.currency_code);
+}
+
+function normalizePaymentTermList(input: unknown): { payment_term_id: string; is_default: boolean }[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((entry) => {
+      const row = entry as Record<string, unknown>;
+      return {
+        payment_term_id: toTrimmedString(row.payment_term_id),
+        is_default: row.is_default === true,
+      };
+    })
+    .filter((row) => row.payment_term_id);
+}
+
+function ensureExactlyOneDefault<T extends { is_default: boolean }>(rows: T[]): T[] {
+  if (rows.length === 0) return rows;
+  const hasDefault = rows.some((row) => row.is_default);
+  if (hasDefault) {
+    let seen = false;
+    return rows.map((row) => {
+      if (row.is_default && !seen) {
+        seen = true;
+        return row;
+      }
+      return { ...row, is_default: false };
+    });
+  }
+  return rows.map((row, index) => (index === 0 ? { ...row, is_default: true } : row));
+}
+
+async function replaceVmiUoms(
+  vmiId: string,
+  list: { uom_code: string; conversion_factor: number; is_default: boolean }[],
+  authUserId: string,
+): Promise<void> {
+  await serviceRoleClient.schema("erp_master").from("vendor_material_uom").delete().eq("vmi_id", vmiId);
+  if (list.length === 0) return;
+  const normalized = ensureExactlyOneDefault(list);
+  const { error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("vendor_material_uom")
+    .insert(normalized.map((row) => ({ vmi_id: vmiId, ...row, created_by: authUserId })));
+  if (error) {
+    throw new Error("OM_INVALID_UOM");
+  }
+}
+
+async function replaceVmiCurrencies(
+  vmiId: string,
+  list: { currency_code: string; is_default: boolean }[],
+  authUserId: string,
+): Promise<void> {
+  await serviceRoleClient.schema("erp_master").from("vendor_material_currency").delete().eq("vmi_id", vmiId);
+  if (list.length === 0) return;
+  const normalized = ensureExactlyOneDefault(list);
+  const { error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("vendor_material_currency")
+    .insert(normalized.map((row) => ({ vmi_id: vmiId, ...row, created_by: authUserId })));
+  if (error) {
+    throw new Error("OM_INVALID_CURRENCY");
+  }
+}
+
+async function replaceVmiPaymentTerms(
+  vmiId: string,
+  list: { payment_term_id: string; is_default: boolean }[],
+  authUserId: string,
+): Promise<void> {
+  await serviceRoleClient.schema("erp_master").from("vendor_material_payment_term").delete().eq("vmi_id", vmiId);
+  if (list.length === 0) return;
+  const normalized = ensureExactlyOneDefault(list);
+  const { error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("vendor_material_payment_term")
+    .insert(normalized.map((row) => ({ vmi_id: vmiId, ...row, created_by: authUserId })));
+  if (error) {
+    throw new Error("OM_INVALID_PAYMENT_TERM");
+  }
 }
 
 export async function createVendorMaterialInfoHandler(
@@ -152,15 +336,22 @@ export async function createVendorMaterialInfoHandler(
       return vmiErrorResponse(req, ctx, "OM_MATERIAL_NOT_FOUND", 404, "Material not found");
     }
 
-    const poUomCode = toTrimmedString(body.po_uom_code || body.base_uom_code || material.base_uom_code).toUpperCase();
-    if (!poUomCode || !(await ensureUomExists(poUomCode))) {
-      return vmiErrorResponse(req, ctx, "OM_INVALID_UOM", 400, "Invalid UOM");
+    const uomList = normalizeUomList(body.uoms);
+    if (uomList.length === 0) {
+      return vmiErrorResponse(req, ctx, "OM_INVALID_UOM", 400, "At least one UOM is required");
+    }
+    for (const row of uomList) {
+      if (!(await ensureUomExists(row.uom_code))) {
+        return vmiErrorResponse(req, ctx, "OM_INVALID_UOM", 400, `Invalid UOM: ${row.uom_code}`);
+      }
     }
 
-    const conversionFactor = Number(body.conversion_factor ?? 1);
-    if (!Number.isFinite(conversionFactor) || conversionFactor <= 0) {
-      return vmiErrorResponse(req, ctx, "OM_INVALID_CONVERSION_FACTOR", 400, "Invalid conversion factor");
+    const currencyList = normalizeCurrencyList(body.currencies);
+    if (currencyList.length === 0) {
+      return vmiErrorResponse(req, ctx, "OM_INVALID_CURRENCY", 400, "At least one currency is required");
     }
+
+    const paymentTermList = normalizePaymentTermList(body.payment_terms);
 
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
@@ -171,10 +362,6 @@ export async function createVendorMaterialInfoHandler(
         vendor_material_code: toTrimmedString(body.vendor_material_code) || null,
         vendor_material_description: toTrimmedString(body.vendor_material_description) || null,
         pack_size_description: toTrimmedString(body.pack_size_description) || "Standard",
-        po_uom_code: poUomCode,
-        conversion_factor: conversionFactor,
-        variable_conversion: body.variable_conversion === true,
-        lead_time_days: body.lead_time_days != null ? Number(body.lead_time_days) : null,
         last_purchase_price: body.price_per_base_uom != null ? Number(body.price_per_base_uom) : null,
         last_purchase_currency: toTrimmedString(body.currency_code) || null,
         status: "ACTIVE",
@@ -190,7 +377,13 @@ export async function createVendorMaterialInfoHandler(
       throw new Error("OM_VMI_CREATE_FAILED");
     }
 
-    return okResponse({ data }, ctx.request_id, req);
+    const vmiId = (data as Record<string, unknown>).id as string;
+    await replaceVmiUoms(vmiId, uomList, ctx.auth_user_id);
+    await replaceVmiCurrencies(vmiId, currencyList, ctx.auth_user_id);
+    await replaceVmiPaymentTerms(vmiId, paymentTermList, ctx.auth_user_id);
+
+    const [enriched] = await enrichVmiRows([data as Record<string, unknown>]);
+    return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_VMI_CREATE_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("EXISTS") ? 409 : code.includes("INVALID") ? 400 : 500;
@@ -345,7 +538,6 @@ export async function updateVendorMaterialInfoHandler(
       "vendor_material_code",
       "vendor_material_description",
       "pack_size_description",
-      "lead_time_days",
       "last_purchase_price",
       "last_purchase_currency",
       "last_grn_date",
@@ -363,25 +555,34 @@ export async function updateVendorMaterialInfoHandler(
     if (body.currency_code !== undefined) {
       updates.last_purchase_currency = body.currency_code;
     }
-    if (body.po_uom_code !== undefined) {
-      const poUomCode = toTrimmedString(body.po_uom_code).toUpperCase();
-      if (!poUomCode || !(await ensureUomExists(poUomCode))) {
-        return vmiErrorResponse(req, ctx, "OM_INVALID_UOM", 400, "Invalid UOM");
+
+    let uomList: ReturnType<typeof normalizeUomList> | null = null;
+    if (body.uoms !== undefined) {
+      uomList = normalizeUomList(body.uoms);
+      if (uomList.length === 0) {
+        return vmiErrorResponse(req, ctx, "OM_INVALID_UOM", 400, "At least one UOM is required");
       }
-      updates.po_uom_code = poUomCode;
-    }
-    if (body.conversion_factor !== undefined) {
-      const factor = Number(body.conversion_factor);
-      if (!Number.isFinite(factor) || factor <= 0) {
-        return vmiErrorResponse(req, ctx, "OM_INVALID_CONVERSION_FACTOR", 400, "Invalid conversion factor");
+      for (const row of uomList) {
+        if (!(await ensureUomExists(row.uom_code))) {
+          return vmiErrorResponse(req, ctx, "OM_INVALID_UOM", 400, `Invalid UOM: ${row.uom_code}`);
+        }
       }
-      updates.conversion_factor = factor;
-    }
-    if (body.variable_conversion !== undefined) {
-      updates.variable_conversion = body.variable_conversion === true;
     }
 
-    if (Object.keys(updates).length === 2) {
+    let currencyList: ReturnType<typeof normalizeCurrencyList> | null = null;
+    if (body.currencies !== undefined) {
+      currencyList = normalizeCurrencyList(body.currencies);
+      if (currencyList.length === 0) {
+        return vmiErrorResponse(req, ctx, "OM_INVALID_CURRENCY", 400, "At least one currency is required");
+      }
+    }
+
+    let paymentTermList: ReturnType<typeof normalizePaymentTermList> | null = null;
+    if (body.payment_terms !== undefined) {
+      paymentTermList = normalizePaymentTermList(body.payment_terms);
+    }
+
+    if (Object.keys(updates).length === 2 && uomList === null && currencyList === null && paymentTermList === null) {
       return vmiErrorResponse(req, ctx, "OM_VMI_NO_CHANGES", 400, "No changes provided");
     }
 
@@ -397,7 +598,18 @@ export async function updateVendorMaterialInfoHandler(
       throw new Error("OM_VMI_UPDATE_FAILED");
     }
 
-    return okResponse({ data }, ctx.request_id, req);
+    if (uomList !== null) {
+      await replaceVmiUoms(id, uomList, ctx.auth_user_id);
+    }
+    if (currencyList !== null) {
+      await replaceVmiCurrencies(id, currencyList, ctx.auth_user_id);
+    }
+    if (paymentTermList !== null) {
+      await replaceVmiPaymentTerms(id, paymentTermList, ctx.auth_user_id);
+    }
+
+    const [enriched] = await enrichVmiRows([data as Record<string, unknown>]);
+    return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_VMI_UPDATE_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") ? 400 : 500;

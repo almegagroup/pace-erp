@@ -193,7 +193,44 @@ async function getApprovedAslRow(
   }
 
   const status = toUpperTrimmedString(row.status);
-  return status === "ACTIVE" || status === "APPROVED" ? row : null;
+  if (status !== "ACTIVE" && status !== "APPROVED") {
+    return null;
+  }
+
+  const { data: uomRows, error: uomError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("vendor_material_uom")
+    .select("uom_code, conversion_factor, is_default")
+    .eq("vmi_id", row.id as string);
+
+  if (uomError) {
+    throw new Error("PROCUREMENT_ASL_LOOKUP_FAILED");
+  }
+
+  return { ...row, uoms: uomRows ?? [] };
+}
+
+// Vendor's valid delivery UOM list for this approved source — buyer picks
+// one at PO creation (defaulting to the VMI's marked default), each carrying
+// its own vendor-specific conversion factor to the material's base UOM.
+function resolvePoLineUom(
+  aslRow: Record<string, unknown>,
+  requestedUomCode: string,
+): { uomCode: string; conversionFactor: number } {
+  const uoms = (aslRow.uoms as { uom_code: string; conversion_factor: number; is_default: boolean }[]) ?? [];
+  if (uoms.length === 0) {
+    throw new Error("PROCUREMENT_ASL_UOM_NOT_CONFIGURED");
+  }
+
+  const match = requestedUomCode
+    ? uoms.find((row) => row.uom_code === requestedUomCode)
+    : uoms.find((row) => row.is_default) ?? uoms[0];
+
+  if (!match) {
+    throw new Error("PROCUREMENT_INVALID_ASL_UOM");
+  }
+
+  return { uomCode: match.uom_code, conversionFactor: Number(match.conversion_factor) };
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
@@ -448,9 +485,10 @@ async function buildPoLinesForInsert(
       throw new Error("PROCUREMENT_INVALID_LINE_VALUES");
     }
 
-    const conversionFactor = parseNullableNumber(aslRow.conversion_factor) ?? 1;
-    const variableConversion = aslRow.variable_conversion === true;
-    const poUomCode = toTrimmedString(aslRow.po_uom_code);
+    const { uomCode: poUomCode, conversionFactor } = resolvePoLineUom(
+      aslRow,
+      toTrimmedString(rawLine.po_uom_code).toUpperCase(),
+    );
 
     prepared.push({
       line_number: index + 1,
@@ -460,7 +498,7 @@ async function buildPoLinesForInsert(
       vendor_material_info_id: aslRow.id,
       ordered_qty: orderedQty,
       po_uom_code: poUomCode,
-      ordered_qty_base_uom: variableConversion ? null : Number((orderedQty * conversionFactor).toFixed(6)),
+      ordered_qty_base_uom: Number((orderedQty * conversionFactor).toFixed(6)),
       unit_rate: Number(unitRate.toFixed(4)),
       total_value: Number((orderedQty * unitRate).toFixed(4)),
       open_qty: Number(orderedQty.toFixed(6)),

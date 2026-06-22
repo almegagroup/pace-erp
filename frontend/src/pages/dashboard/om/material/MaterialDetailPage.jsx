@@ -379,9 +379,8 @@ export default function MaterialDetailPage() {
                     columns={[
                       { key: "vendor_code", label: "Vendor Code", render: (row) => vendorMap.get(row.vendor_id)?.vendor_code || row.vendor_id },
                       { key: "vendor_name", label: "Vendor Name", render: (row) => vendorMap.get(row.vendor_id)?.vendor_name || "Unknown vendor" },
-                      { key: "po_uom_code", label: "PO UOM" },
-                      { key: "conversion_factor", label: "Factor" },
-                      { key: "lead_time_days", label: "Lead Time" },
+                      { key: "default_uom_code", label: "Default UOM" },
+                      { key: "default_currency_code", label: "Default Currency" },
                       { key: "status", label: "Status", render: (row) => <span className="inline-flex rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700">{row.status || "-"}</span> },
                     ]}
                     rows={approvedVendors}

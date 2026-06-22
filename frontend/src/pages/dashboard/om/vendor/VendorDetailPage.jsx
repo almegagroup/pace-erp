@@ -367,9 +367,8 @@ export default function VendorDetailPage() {
                     columns={[
                       { key: "material_code", label: "Material Code", render: (row) => materialMap.get(row.material_id)?.pace_code || row.material_id },
                       { key: "material_name", label: "Material Name", render: (row) => materialMap.get(row.material_id)?.material_name || "Unknown material" },
-                      { key: "po_uom_code", label: "PO UOM" },
-                      { key: "conversion_factor", label: "Factor" },
-                      { key: "lead_time_days", label: "Lead Time" },
+                      { key: "default_uom_code", label: "Default UOM" },
+                      { key: "default_currency_code", label: "Default Currency" },
                       { key: "status", label: "Status", render: (row) => <span className="inline-flex rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700">{row.status || "-"}</span> },
                     ]}
                     rows={aslRows}

@@ -142,7 +142,8 @@ export default function AslListPage() {
                 { key: "vendor_name", label: "Vendor Name" },
                 { key: "pace_code", label: "PACE Code" },
                 { key: "material_name", label: "Material Name" },
-                { key: "po_uom_code", label: "PO UOM" },
+                { key: "default_uom_code", label: "Default UOM" },
+                { key: "default_currency_code", label: "Default Currency" },
                 { key: "status", label: "Status" },
               ]}
               rows={rows}
