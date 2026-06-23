@@ -406,8 +406,8 @@ export async function listVendorMaterialInfos({
   );
 }
 
-export async function getVendorMaterialInfo(id) {
-  const params = buildParams({ id });
+export async function getVendorMaterialInfo({ id, vendor_id, material_id } = {}) {
+  const params = buildParams({ id, vendor_id, material_id });
   return fetchJson(
     `/api/om/vendor-material-info?${params.toString()}`,
     {},

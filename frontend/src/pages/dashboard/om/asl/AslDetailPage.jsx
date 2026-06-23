@@ -99,7 +99,7 @@ export default function AslDetailPage() {
       setError("");
       try {
         const [recordResult, uomResult, paymentTermResult] = await Promise.all([
-          getVendorMaterialInfo(id),
+          getVendorMaterialInfo({ id }),
           listUoms({ is_active: true }),
           listPaymentTerms(),
         ]);

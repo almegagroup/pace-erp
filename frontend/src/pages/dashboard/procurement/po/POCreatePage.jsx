@@ -5,7 +5,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { listCostCenters, listMaterials, listVendorMaterialInfos, listVendors } from "../../om/omApi.js";
+import { getVendorMaterialInfo, listCostCenters, listMaterials, listVendors } from "../../om/omApi.js";
 import {
   createPurchaseOrder,
   listPaymentTerms,
@@ -19,6 +19,7 @@ function createEmptyLine() {
     material_id: "",
     quantity: "",
     uom_code: "",
+    uomOptions: [],
     rate: "",
     cost_center_id: "",
     delivery_date: "",
@@ -146,29 +147,58 @@ export default function POCreatePage() {
     setLines((current) => (current.length === 1 ? current : current.filter((_line, lineIndex) => lineIndex !== index)));
   }
 
+  // Vendor can change after lines already have a material selected — re-run
+  // the ASL/VMI check for every line so the hard-block + UOM/Rate auto-fill
+  // stay correct for the newly selected vendor.
+  useEffect(() => {
+    lines.forEach((line, index) => {
+      if (line.material_id) {
+        void checkApprovedAsl(index);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.vendor_id]);
+
   async function checkApprovedAsl(index) {
     const line = lines[index];
     if (!form.vendor_id || !line?.material_id) {
       return;
     }
     try {
-      const result = await listVendorMaterialInfos({
-        vendor_id: form.vendor_id,
-        material_id: line.material_id,
-        status: "ACTIVE",
-        limit: 10,
-        offset: 0,
-      });
-      const hasApproved = Array.isArray(result?.data) && result.data.length > 0;
+      // Exact vendor+material pair lookup (per 85.2.4 hard-block rule) —
+      // NOT the search-only list endpoint, which ignores vendor_id/material_id.
+      const vmi = await getVendorMaterialInfo({ vendor_id: form.vendor_id, material_id: line.material_id });
+      const isActive = String(vmi?.status || "").toUpperCase() === "ACTIVE";
+      if (!isActive) {
+        updateLine(index, {
+          aslChecked: true,
+          aslWarning: "Vendor-material info record exists but is not ACTIVE — this is a hard block, line cannot be saved.",
+        });
+        return;
+      }
+      const uomOptions = Array.isArray(vmi?.uoms) ? vmi.uoms.map((entry) => entry.uom_code) : [];
+      const defaultUom = vmi?.default_uom_code || uomOptions[0] || vmi?.base_uom_code || "";
       updateLine(index, {
         aslChecked: true,
-        aslWarning: hasApproved ? "" : "No approved VMI record exists for this vendor-material pair — this is a hard block, line cannot be saved.",
+        aslWarning: "",
+        uomOptions,
+        uom_code: line.uom_code || defaultUom,
+        rate: line.rate || (vmi?.last_purchase_price != null ? String(vmi.last_purchase_price) : ""),
       });
-    } catch {
-      updateLine(index, {
-        aslChecked: false,
-        aslWarning: "Unable to verify approved VMI right now.",
-      });
+    } catch (lookupError) {
+      const code = lookupError instanceof Error ? lookupError.message : "";
+      if (code === "OM_VMI_NOT_FOUND") {
+        updateLine(index, {
+          aslChecked: true,
+          aslWarning: "No approved VMI record exists for this vendor-material pair — this is a hard block, line cannot be saved.",
+          uomOptions: [],
+        });
+      } else {
+        updateLine(index, {
+          aslChecked: false,
+          aslWarning: "Unable to verify approved VMI right now.",
+        });
+      }
     }
   }
 
@@ -264,14 +294,31 @@ export default function POCreatePage() {
     {
       key: "uom_code",
       label: "UOM",
-      width: "90px",
-      render: (_row, index) => (
-        <input
-          value={lines[index].uom_code}
-          onChange={(event) => updateLine(index, { uom_code: event.target.value.toUpperCase() })}
-          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
-        />
-      ),
+      width: "100px",
+      render: (_row, index) => {
+        const options = lines[index].uomOptions || [];
+        if (options.length === 0) {
+          return (
+            <input
+              value={lines[index].uom_code}
+              readOnly
+              placeholder="Select material first"
+              className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none"
+            />
+          );
+        }
+        return (
+          <select
+            value={lines[index].uom_code}
+            onChange={(event) => updateLine(index, { uom_code: event.target.value })}
+            className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+          >
+            {options.map((code) => (
+              <option key={code} value={code}>{code}</option>
+            ))}
+          </select>
+        );
+      },
     },
     {
       key: "rate",
