@@ -490,7 +490,7 @@ export async function listMaterialsHandler(
     let query = serviceRoleClient
       .schema("erp_master")
       .from("material_master")
-      .select("id,pace_code,external_code,material_name,document_name,short_name,material_type,material_category,base_uom_code,hsn_code,status,created_at", { count: "exact" })
+      .select("id,pace_code,external_code,material_name,document_name,short_name,material_type,material_category,base_uom_code,purchase_uom_code,issue_uom_code,hsn_code,status,created_at", { count: "exact" })
       .order("material_type", { ascending: true })
       .order("material_name", { ascending: true })
       .range(offset, offset + limit - 1);
