@@ -1428,16 +1428,24 @@ The Vendor-Material Info Record serves dual purpose in PACE-ERP:
 
 A Vendor-Material Info Record must exist and be Active for a vendor + material combination before a PO line can be saved. If no record exists → **hard block at PO line entry**.
 
-### 15.2 Record Fields
+### 15.2 Record Fields **[REVISED 2026-06-22 — multi-UOM/currency/payment-term]**
+
+The single-row "Pack Size / PO UOM / Conversion" fields below were replaced by three child tables — a vendor-material link can have **multiple UOMs, multiple currencies, and multiple payment terms simultaneously**, each with exactly one marked default (`ensureExactlyOneDefault` enforced server-side):
+
+- `vendor_material_uom` — one row per (pack size, PO UOM, conversion-to-base) option for this vendor+material; one row flagged default.
+- `vendor_material_currency` — one row per currency this vendor can be paid in for this material; one row flagged default.
+- `vendor_material_payment_term` — one row per applicable payment term; one row flagged default.
+
+PO line creation (`resolvePoLineUom()` in `po.handlers.ts`) resolves the default UOM unless the user explicitly picks an alternate from the vendor-material's UOM list. Unmapping a vendor-material link is blocked while any `purchase_order_line` referencing it has `line_status IN ('OPEN','PARTIALLY_RECEIVED')`.
 
 | Field | Description | Mandatory |
 |---|---|---|
 | Vendor | Link to vendor master | Yes |
 | Material | Link to material master (PACE code) | Yes |
 | Vendor's Material Code | Vendor's own code/name for this material | Optional |
-| Pack Size | Vendor-specific pack size (e.g., 25 KG Bag) | Yes |
-| PO UOM | Vendor's unit of measure (e.g., Bag, Drum, Carton) | Yes |
-| Conversion | PO UOM → Base UOM (e.g., 1 Bag = 25 KG) | Yes |
+| UOM options | One or more pack-size/UOM/conversion rows, one default | Yes (≥1) |
+| Currency options | One or more currency rows, one default | Yes (≥1) |
+| Payment term options | One or more payment-term rows, one default | Yes (≥1) |
 | Lead Time | Vendor's lead time in days for this material | Optional |
 | Last Price | Reference price — auto-updated on every GRN confirmation | Auto |
 | Status | ACTIVE / INACTIVE | Yes |
@@ -1543,11 +1551,41 @@ Example:
 
 ## Section 18 — Customer Master
 
-### 18.1 What is Customer Master?
+### 18.1 What is Customer Master? **[REVISED 2026-06-22]**
 
-Customer Master is the identity record for every customer who receives dispatched finished goods. It is the SD equivalent of Supplier Master.
+Customer Master in PACE ERP is **not** the FG-dispatch customer master implied in the original Phase-1 draft below — that concept (finished-goods dispatch customer) is undesigned and deferred to Gate-27. The Customer Master that actually exists serves **RM/PM surplus trading**: a Sales Order in this system is restricted to `material_type IN ('RM','PM')` (enforced by `assertSalesMaterial` in `sales_order.handlers.ts`), i.e. PACE selling off surplus raw/packing material to outside parties, not dispatching finished goods.
 
-### 18.2 Customer Master — Core Fields
+A **Parent Customer** concept groups multiple Customer rows under one umbrella (e.g. one corporate group with several billing entities) — `parent_customer_master` + `parent_customer_code_sequence`, with `erp_master.generate_parent_customer_code()`.
+
+A Customer can optionally be **vendor-linked**: if the same business entity is already a Vendor, the Customer row stores `vendor_id` and the Name + GST resolve live from `vendor_master` at read time (no stored copy, no drift). Delivery/billing address, contact, phone, email, and currency are one-time auto-filled from the vendor when first linked, then editable independently afterward (no ongoing sync). A non-vendor-linked customer requires its own `customer_name` directly (CHECK: `customer_name IS NOT NULL OR vendor_id IS NOT NULL`).
+
+### 18.2 Customer Master — Core Fields **[REVISED 2026-06-22]**
+
+| Field | Description | Mandatory |
+|---|---|---|
+| Customer code | System-generated | Yes |
+| Source | Direct entry, or linked to an existing Vendor | Yes (choose one) |
+| Vendor (if linked) | Reference → vendor_master; Name + GST always resolve live from vendor | If vendor-linked |
+| Parent Customer | Reference → parent_customer_master (optional grouping) | Optional |
+| Customer name | Required only if not vendor-linked | Conditional |
+| GSTIN | **Not mandatory** — RM/PM trading customers are not required to be GST-registered | Optional |
+| Delivery / billing address | One-time auto-fill from vendor if linked, else manual; editable after | Optional |
+| Contact person / phone / email | One-time auto-fill from vendor if linked, else manual; editable after | Optional |
+| Currency | One-time auto-fill from vendor if linked, else manual | Optional |
+| Status | ACTIVE / INACTIVE | Yes |
+| Created by / Approved by | Set automatically on create | — |
+
+Company Mapping (which business companies may transact with this customer) uses the same `*_company_map` pattern as Vendor — a dedicated mapping table + tab, not a single field.
+
+### 18.3 Customer Status Lifecycle **[REVISED 2026-06-22]**
+
+```
+ACTIVE  ⇄  INACTIVE
+```
+
+New customers are created **directly ACTIVE** — there is no DRAFT/PENDING_APPROVAL gate. (Session decision, 2026-06-22: do not default new masters to an approval-gated workflow unless explicitly requested for that entity.) Existing rows that were already in DRAFT can be transitioned directly to ACTIVE/INACTIVE from the list — no separate approval step. BLOCKED status and credit-limit/Phase-2 fields below remain undesigned for this RM/PM-trading Customer Master; the original DRAFT→PENDING_APPROVAL→ACTIVE→INACTIVE/BLOCKED lifecycle and the field list in the table below describe the *original, not-yet-built* FG-dispatch concept and are kept for Gate-27 reference only.
+
+#### Original Phase-1 draft (superseded — FG-dispatch concept, not built; see 18.1)
 
 | Field | Description | Mandatory |
 |---|---|---|
@@ -1567,8 +1605,6 @@ Customer Master is the identity record for every customer who receives dispatche
 | Status | ACTIVE / INACTIVE / BLOCKED | Yes |
 | Created by | Sales / dispatch user | Yes |
 | Approved by | Sales manager | Yes |
-
-### 18.3 Customer Status Lifecycle
 
 ```
 DRAFT → PENDING_APPROVAL → ACTIVE → INACTIVE / BLOCKED
@@ -8797,7 +8833,7 @@ On every GRN confirmation:
 | GRN | ✅ Locked | References Gate Entry. FIFO + expiry optional per material. 3-level location hierarchy. |
 | Receiving Location | ✅ Locked | Material Master default → PO line override → GRN time override. |
 | Invoice Verification | 🔶 Framework Locked | In-system (SAP-style). Domestic + Import differ. Detail at build time with actual invoices. |
-| Vendor Master | ✅ Locked | Domestic + Import. API integration. Dynamic payment terms. Bank optional. Approval required. |
+| Vendor Master | ✅ Locked | Domestic + Import. API integration. Dynamic payment terms. Bank optional. **No approval step** — created directly ACTIVE (corrected 2026-06-23; was inconsistent with 14.8). |
 | Approved Source List | ✅ Locked | Vendor-Material Info Record = Approved Source List. Hard block on PO. No priority. Procurement team manages directly. |
 
 ---
@@ -9824,14 +9860,15 @@ Each Material is mapped to one Material Category.
 
 ---
 
-### 89.7 — Lead Time Master — Import
+### 89.7 — Lead Time Master — Import **[REVISED 2026-06-23 — Manager-managed, no Material Category]**
 
-**SA-managed. Drives Sail Time and Clearance Days for import ETA cascade.**
+**Manager-managed (L2_MANAGER+ via Gate-26), not SA-only. Drives Sail Time and Clearance Days for import ETA cascade.**
+
+Material Category was **dropped** from this master (2026-06-23) — there was no real use for it at this granularity, and the table was empty in dev so the column was removed outright rather than deprecated. If atomic, material-specific lead times are ever needed, this will be reconsidered then.
 
 | Field | Type | Rules |
 |---|---|---|
-| Vendor | Reference → Vendor Master | Supplying vendor |
-| Material Category | Reference → Material Category Master | Category of material |
+| Vendor | Reference → Vendor Master, dropdown **filtered to `vendor_type = IMPORT`** | Supplying vendor |
 | Port of Loading | Text / Reference | Vendor's dispatch port |
 | Port of Discharge | Reference → Port Master | Destination port in India |
 | Sail Time (Days) | Number | BV — vessel transit days |
@@ -9840,24 +9877,28 @@ Each Material is mapped to one Material Category.
 | Effective To | Date | Version control end; blank = current |
 | Active | Flag | |
 
+Full Edit support exists (PATCH `/api/procurement/lead-times/import/:id`) in addition to Create — earlier builds only had Create.
+
 **Usage in ETA cascade:**
 - Sail Time → used to auto-calculate ETD from Scheduled ETA to Port, and ETA at Port from BL Date
 - Clearance Days → used to calculate ETA to Plant from AH or AI
 
 ---
 
-### 89.8 — Lead Time Master — Domestic
+### 89.8 — Lead Time Master — Domestic **[REVISED 2026-06-23 — Manager-managed]**
 
-**SA-managed. Drives Transit Days for domestic ETA cascade.**
+**Manager-managed (L2_MANAGER+ via Gate-26), not SA-only. Drives Transit Days for domestic ETA cascade.**
 
 | Field | Type | Rules |
 |---|---|---|
-| Vendor | Reference → Vendor Master | Supplying vendor |
+| Vendor | Reference → Vendor Master, dropdown **filtered to `vendor_type = DOMESTIC`** | Supplying vendor |
 | Destination Company | Reference → Company | Receiving plant |
 | Transit Days | Number | Days from LR Date to plant arrival |
 | Effective From | Date | Version control start |
 | Effective To | Date | Version control end; blank = current |
 | Active | Flag | |
+
+Full Edit support exists (PATCH `/api/procurement/lead-times/domestic/:id`) in addition to Create.
 
 **Usage:** When LR Date entered → ETA to Plant = LR Date + Transit Days. When only PO exists → ETA to Plant = PO Date + Transit Days.
 
@@ -10626,38 +10667,48 @@ On GRN posting, system automatically:
 ## Section 94 — Transporter Master (11 May 2026)
 
 **Session Date:** 11 May 2026
-**Status:** ✅ FROZEN
+**Status:** 🔶 FROZEN design superseded for master fields/governance (see 2026-06-23 revision below); usage-point wiring (94.2/94.4) not yet built, kept as original design intent.
 **Scope:** Transporter Master fields, usage direction, context-filtered dropdowns, governance.
 
 ---
 
-### 94.1 — Transporter Master Fields
+### 94.1 — Transporter Master Fields **[REVISED 2026-06-23]**
+
+Manager-managed (L2_MANAGER+ via Gate-26), not SA-only. The Usage Direction values were changed from INBOUND/OUTBOUND to **IMPORT/DOMESTIC** to match the terminology used everywhere else in this codebase (Vendor `vendor_type`, Lead Time Master tabs). Flat `contact_person`/`phone`/`email` columns were replaced with multi-row Contacts and Emails (same pattern as Vendor), and Company Mapping was added (same `*_company_map` pattern as Vendor).
+
+There are two kinds of Transporter — **With GST** and **Without GST**:
+- **With GST:** entering the GST number and clicking "Check GST" auto-resolves legal name + address (cache-first, Applyflow on miss — same resolver used by Company/Vendor) and **overwrites** the name/address fields.
+- **Without GST:** every field is entered manually; no lookup.
+
+The GST lookup endpoint (`GET /api/procurement/gst-profile`) is deliberately **not** role-gated to Manager/SA — any authenticated ACL user can call it, since lower-tier roles (e.g. L1_USER) are expected to need it for future screens too.
 
 | Field | Type | Rules |
 |---|---|---|
 | Transporter Code | Auto | System-generated. Global |
-| Transporter Name | Text | Mandatory |
-| Usage Direction | Dropdown | INBOUND / OUTBOUND / BOTH. Mandatory |
+| Transporter Name | Text | Mandatory; auto-filled (overwritten) from GST if With-GST |
+| Usage Direction | Dropdown | **IMPORT / DOMESTIC / BOTH.** Mandatory |
 | Mode | Dropdown | ROAD / RAIL / COURIER / MULTI-MODAL |
-| Contact Person | Text | Optional |
-| Phone | Text | Optional |
-| Email | Text | Optional |
+| GST Number | Text + lookup button | Optional (toggle: With GST / Without GST) |
 | PAN Number | Text | Optional — for TDS applicability |
-| GST Number | Text | Optional |
-| Address | Text | Optional |
-| Active | Flag | Inactive transporters hidden from all dropdowns |
+| Address | Text | Auto-filled from GST if With-GST, else manual |
+| Contacts | Multi-row (`transporter_contacts`) | Name, phone, designation, one marked primary |
+| Emails | Multi-row (`transporter_emails`) | Email, label, one marked primary |
+| Company Mapping | Multi-row (`transporter_company_map`) | Which business companies use this transporter |
+| Active | Flag | Inactive transporters hidden from all dropdowns; list page supports `is_active=all/true/false` (previously the list endpoint ignored this and always showed only active rows, so a deactivated transporter could never be reactivated — fixed) |
 
 ---
 
-### 94.2 — Usage Direction Rules
+### 94.2 — Usage Direction Rules **[original design — usage-point wiring not yet built]**
 
-| Usage Direction | Meaning |
+> ⚠️ **Open question, not yet decided:** this subsection's INBOUND/OUTBOUND semantic was written before the master's Usage Direction values were changed to IMPORT/DOMESTIC (94.1). IMPORT and DOMESTIC don't map cleanly onto INBOUND/OUTBOUND — a DOMESTIC purchase is also "inbound" to the plant, just not from overseas. None of the usage points below (CSN, Gate Entry, Gate Exit, Sales/Dispatch) have been built with transporter-dropdown filtering yet, so this needs a fresh decision when that work starts, not a guess made here.
+
+| Usage Direction (original draft) | Meaning |
 |---|---|
 | INBOUND | Handles incoming deliveries (vendor → plant). Procurement side |
 | OUTBOUND | Handles outgoing dispatches (plant → customer / plant). Dispatch/Sales side |
 | BOTH | Works both ways — appears in both inbound and outbound dropdowns |
 
-**Context-filtered dropdown:** Dropdown list shown to user depends on the document context:
+**Context-filtered dropdown (original draft):**
 
 | Document Context | Dropdown Shows |
 |---|---|
@@ -10668,20 +10719,16 @@ This keeps each team's list short and relevant. No duplicate records needed for 
 
 ---
 
-### 94.3 — Governance
+### 94.3 — Governance **[REVISED 2026-06-23]**
 
 | Action | Authority |
 |---|---|
-| Create INBOUND transporter | Procurement team |
-| Create OUTBOUND transporter | Dispatch / Sales team |
-| Create BOTH transporter | Either team |
-| Edit | Creating team (or SA) |
-| Deactivate | Creating team (or SA) |
+| Create / Edit / Deactivate | L2_MANAGER+ (`assertManagerOrSARole`: SA, GA, DIRECTOR, L4_MANAGER, L3_MANAGER, L2_MANAGER) |
 | SA involvement | Not required for routine operations |
 
 ---
 
-### 94.4 — Usage Points in PACE
+### 94.4 — Usage Points in PACE **[original design — not yet built; see 94.2 caveat]**
 
 | Document | Direction | Field | Rule |
 |---|---|---|---|
@@ -10701,37 +10748,37 @@ Free text entry allowed at all usage points — if transporter is not in master,
 
 ## Section 95 — CHA Master (Clearing and Handling Agent) (11 May 2026)
 
-**Session Date:** 11 May 2026
-**Status:** ✅ FROZEN
+**Session Date:** 11 May 2026 — fields/governance **revised 2026-06-23**
+**Status:** 🔶 Usage points (95.3) unchanged design intent; master fields/governance superseded below.
 **Scope:** CHA Master fields, governance, usage points.
 
 ---
 
-### 95.1 — CHA Master Fields
+### 95.1 — CHA Master Fields **[REVISED 2026-06-23]**
+
+Manager-managed (L2_MANAGER+ via Gate-26), not SA-only. Same upgrade as Transporter Master (94.1) — GST autofill, multi-row Contacts/Emails, Company Mapping — **except every CHA is GST-registered**: there is no "Without GST" path. `gst_number` is `NOT NULL` at the DB level and required at create; entering it and clicking "Check GST" resolves legal name + address (same cache-first resolver as Transporter/Company) and overwrites the name/address fields.
 
 | Field | Type | Rules |
 |---|---|---|
 | CHA Code | Auto | System-generated. Global |
-| CHA Name | Text | Mandatory |
-| CHA License Number | Text | Mandatory — customs broker license number |
-| GST Number | Text | Optional |
+| CHA Name | Text | Mandatory; auto-filled (overwritten) from GST |
+| CHA License Number | Text | Optional (not mandatory as originally drafted) |
+| GST Number | Text + lookup button | **Mandatory — every CHA is GST-registered** |
 | PAN Number | Text | Optional — for TDS |
-| Contact Person | Text | Optional |
-| Phone | Text | Optional |
-| Email | Text | Optional |
-| Address | Text | Optional |
-| Ports | Multi-select → Port Master | Ports where this CHA operates. Optional — for reference/filter |
+| Address | Text | Auto-filled from GST, editable after |
+| Contacts | Multi-row (`cha_contacts`) | Name, phone, designation, one marked primary |
+| Emails | Multi-row (`cha_emails`) | Email, label, one marked primary |
+| Company Mapping | Multi-row (`cha_company_map`) | Which business companies use this CHA |
+| Ports | Multi-select → Port Master (`cha_port_map`) | Ports where this CHA operates. Optional — for reference/filter. **Unchanged from original design.** |
 | Active | Flag | Inactive CHA hidden from dropdowns |
 
 ---
 
-### 95.2 — Governance
+### 95.2 — Governance **[REVISED 2026-06-23]**
 
 | Action | Authority |
 |---|---|
-| Create | Procurement team |
-| Edit | Procurement team |
-| Deactivate | Procurement team |
+| Create / Edit / Deactivate | L2_MANAGER+ (`assertManagerOrSARole`: SA, GA, DIRECTOR, L4_MANAGER, L3_MANAGER, L2_MANAGER) |
 | SA involvement | Not required |
 
 ---

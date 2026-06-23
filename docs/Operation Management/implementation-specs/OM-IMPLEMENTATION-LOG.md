@@ -766,8 +766,11 @@ pages. SA screens remain intact and untouched.
 - assertManagerOrSARole allows: SA, GA, DIRECTOR, L4_MANAGER, L3_MANAGER, L2_MANAGER
 - Read/list handlers remain unguarded (any authenticated user)
 - MaterialCategoryMasterPage is create-only — no update handler exists in backend
-- Lead time and port transit ID fields are plain text inputs — no dropdown loading
-- Routes nested under /dashboard/procurement/masters/
+- ~~Lead time and port transit ID fields are plain text inputs — no dropdown loading~~ —
+  **superseded 2026-06-22/23**: Lead Time Masters now have proper Vendor dropdowns (filtered by
+  `vendor_type`) and full Edit support; see "Gate-26 Follow-up" below. Port Transit still plain text.
+- Routes nested under /dashboard/procurement/masters/ — **was unwired in AppRouter.jsx for all
+  7 pages until 2026-06-19**; see "Gate-26 Follow-up" below.
 
 ### Gate-26 Verification — VERIFIED by Claude on 2026-06-01
 
@@ -781,6 +784,110 @@ pages. SA screens remain intact and untouched.
 | Minor bug (non-blocking): PaymentTermsMasterPage REFERENCE_DATE_OPTIONS includes "DELIVERY_DATE" but backend REFERENCE_DATES set does not — will cause 400 if selected | ⚠️ |
 
 Gate-26 VERIFIED. All governance changes correct. Minor enum mismatch in payment terms reference_date (DELIVERY_DATE) to be fixed in a future correction. Gate-27 can begin.
+
+---
+
+## Gate-26 Follow-up — Page-by-Page Review & Fixes (2026-06-19 to 2026-06-23)
+
+**Status:** DONE (Operation Masters + Procurement Masters reviewed)
+**Domain:** OPERATION_MASTERS, PROCUREMENT
+
+Per-page review pass over Operation Masters (Vendor, Vendor-Material Link/ASL, Customer) and
+all 7 Procurement Masters opened in Gate-26, fixing bugs found and redesigning pages where the
+existing design no longer matched real usage. See Section 14/15/18/89/94/95 of the feasibility
+doc for the corresponding design updates.
+
+### Vendor Master redesign (2026-06-19)
+- Dropped flat `primary_contact_person`/`phone`/`primary_email`/`cc_email_list` columns;
+  added `vendor_contacts` + `vendor_emails` (multi-row, one marked primary each).
+- Address split into 8 columns: `reg_address_line1/city/state/pin` + `corr_address_*`.
+- Added `country_code` for import vendors; added `vendor_banks` table (optional).
+- GST lookup always overwrites name + registered address (cache-first Applyflow resolver).
+- `vendor_company_map` for multi-company assignment.
+- Fixed `public.generate_vendor_code()` RPC (missing `WHERE` clause tripped Supabase's
+  safe-update guard via PostgREST; worked fine via direct SQL, masking the bug for a while).
+
+### Vendor-Material Info / ASL redesign (2026-06-22)
+- Replaced single pack-size/UOM/conversion fields with three child tables —
+  `vendor_material_uom`, `vendor_material_currency`, `vendor_material_payment_term` — each
+  supporting multiple rows with exactly one default (`ensureExactlyOneDefault`).
+  `resolvePoLineUom()` added to `po.handlers.ts` for PO-line UOM resolution.
+- `unmapVendorMaterialInfoHandler` now blocks unmap while any `purchase_order_line` referencing
+  it has `line_status IN ('OPEN','PARTIALLY_RECEIVED')`.
+
+### Customer Master redesign (2026-06-22)
+- Renamed/reframed as the RM/PM surplus-trading customer (not FG dispatch — confirmed via
+  `assertSalesMaterial` restricting Sales Order materials to `material_type IN ('RM','PM')`).
+  FG dispatch is a separate, undesigned Gate-27 concept.
+- Added `parent_customer_master` (+ code sequence) for grouping multiple Customer rows.
+- Added vendor-linked customers: `vendor_id` + `parent_customer_id` columns; Name/GST resolve
+  live from `vendor_master` when linked (no stored copy); address/contact/phone/email/currency
+  one-time auto-filled on first link, editable after.
+- `customer_name` made nullable with `CHECK (customer_name IS NOT NULL OR vendor_id IS NOT NULL)`.
+- Removed the DRAFT/PENDING_APPROVAL gate — new customers are created directly ACTIVE
+  (session policy: don't default new masters to an approval workflow unless asked).
+- Fixed stale `OM_ADMIN_REQUIRED` status-mapping bug in every catch block of
+  `customer.handlers.ts` (role-check failures were returning 500 instead of 403, because
+  `assertManagerOrSARole` actually throws `MANAGER_OR_SA_REQUIRED`).
+- Fixed missing `public.generate_customer_code()` wrapper (root cause of persistent 500s on
+  Customer create, masked behind a generic error code until Render logs were inspected).
+- Fixed `/api/admin/companies` being SA/GA-only despite serving as the generic Company Mapping
+  dropdown on Vendor/Material/Customer pages — extended to allow `MANAGER_OR_SA_ROLES`.
+
+### Sidebar reorder
+- Procurement Masters group moved after Operation Masters in the sidebar (masters-first ordering).
+
+### Procurement Masters router bug (2026-06-19)
+- All 7 Procurement Masters pages (Payment Terms, Port, Port Transit, Material Category,
+  Import/Domestic Lead Time, Transporter, CHA) had **zero `<Route>` registration** in
+  `AppRouter.jsx` despite full backend/ACL readiness from Gate-26 — every page redirected to the
+  landing page. Fixed by adding all 7 routes.
+
+### PM05 — Lead Time Masters fixes (2026-06-22/23)
+- `PROC_DOMESTIC_LEAD_TIME_MASTER` was completely missing from `acl.menu_master` — caused a 403
+  on the Domestic tab that (via `Promise.all`, not `allSettled`) also broke the Import tab's
+  display even though Import itself had full access.
+- Added missing Edit (`PATCH /api/procurement/lead-times/import/:id` and `.../domestic/:id`) —
+  `upsert*` handlers had only ever inserted, never updated, despite the name.
+- Found and fixed a path-segment bug while adding Edit: `getIdFromPath()` hardcoded
+  `segments[3]`, correct only for 4-segment paths (`/api/x/y/:id`) — wrong for the 5-segment
+  `/api/procurement/lead-times/import/:id`, where it silently returned `"import"` instead of the
+  id. This meant **Delete had been silently broken** on these two endpoints the whole time.
+  Added `getLastPathSegment()` and applied it to Delete + the new Update handlers.
+- Fixed empty Vendor dropdown: `listVendors()` returns `{data, total}`, but the page assumed a
+  bare array; added the same defensive `v?.data ?? []` unwrap already used for Companies, and
+  fixed the query param name (`is_active` → `status`).
+- Fixed Vendor dropdown showing both Import and Domestic vendors on both tabs — now two separate
+  filtered `listVendors({vendor_type: "IMPORT" | "DOMESTIC"})` calls.
+- Removed Material Category entirely from Import Lead Time Master (column, validation, UI) — no
+  real use at this granularity; table was empty so the column was dropped outright. See feasibility
+  doc 89.6/89.7.
+
+### PM06 — Transporter Master fixes + redesign (2026-06-23)
+- Fixed `usage_direction` validation mismatch: backend accepted `{INBOUND,OUTBOUND,BOTH}` but
+  the only frontend caller sent `{IMPORT,DOMESTIC,BOTH}` — every create/update with
+  Direction=IMPORT or DOMESTIC was 400ing (and, after the app-layer fix, still 500ing because the
+  table's own `transporter_master_usage_direction_check` CHECK constraint wasn't updated in the
+  same pass — caught from Render/Postgres logs after the first "fix" shipped).
+- Fixed `listTransportersHandler` ignoring `is_active` and always filtering `active=true` — a
+  deactivated transporter could never be listed again to reactivate it.
+- Full redesign (see feasibility doc 94.1): GST autofill (With GST / Without GST toggle),
+  multi-row `transporter_contacts`/`transporter_emails`, `transporter_company_map`. New
+  broad-access (`skipAcl: true`) `GET /api/procurement/gst-profile` endpoint, reused by CHA below.
+
+### PM07 — CHA Master redesign (2026-06-23)
+- Same upgrade as Transporter, except GST is mandatory (no Without-GST path) —
+  `cha_master.gst_number` is now `NOT NULL`. Added `cha_contacts`/`cha_emails`/`cha_company_map`.
+  Existing Port Assignments tab (`cha_port_map`) unchanged. See feasibility doc 95.1.
+
+### Process note
+- Confirmed (again) that `mcp__supabase__apply_migration` records its own server timestamp,
+  distinct from the local migration filename — every migration this pass was renamed post-apply
+  via `mcp__supabase__list_migrations` before committing.
+- Confirmed a recurring root-cause class: **app-level enum/Set changes must be paired with a
+  check of the matching DB `CHECK` constraint, queried on its own** (not bundled with another
+  query whose output can bury it) — missed once this session (Transporter direction), causing a
+  500 in production after the "fix" was believed complete.
 
 ---
 
