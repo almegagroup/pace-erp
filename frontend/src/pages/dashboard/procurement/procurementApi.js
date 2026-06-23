@@ -136,6 +136,14 @@ export function deleteDomesticLeadTime(id) {
   return fetchProcurement("DELETE", `/api/procurement/lead-times/domestic/${encodeURIComponent(id)}`);
 }
 
+export function updateImportLeadTime(id, payload) {
+  return fetchProcurement("PATCH", `/api/procurement/lead-times/import/${encodeURIComponent(id)}`, payload);
+}
+
+export function updateDomesticLeadTime(id, payload) {
+  return fetchProcurement("PATCH", `/api/procurement/lead-times/domestic/${encodeURIComponent(id)}`, payload);
+}
+
 export function listTransporters(params) {
   return fetchProcurement("GET", "/api/procurement/transporters", undefined, params);
 }

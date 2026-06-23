@@ -17,6 +17,8 @@ import {
   listDomesticLeadTimes,
   listMaterialCategories,
   listPorts,
+  updateImportLeadTime,
+  updateDomesticLeadTime,
   upsertImportLeadTime,
   upsertDomesticLeadTime,
 } from "../procurementApi.js";
@@ -36,9 +38,11 @@ export default function ImportLeadTimeMasterPage() {
 
   const [importRows, setImportRows] = useState([]);
   const [importForm, setImportForm] = useState(EMPTY_IMPORT);
+  const [editingImportId, setEditingImportId] = useState(null);
 
   const [domesticRows, setDomesticRows] = useState([]);
   const [domesticForm, setDomesticForm] = useState(EMPTY_DOMESTIC);
+  const [editingDomesticId, setEditingDomesticId] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -97,7 +101,7 @@ export default function ImportLeadTimeMasterPage() {
     }
     setSaving(true);
     try {
-      await upsertImportLeadTime({
+      const payload = {
         vendor_id: importForm.vendor_id,
         material_category_id: importForm.material_category_id,
         port_of_discharge_id: importForm.port_of_discharge_id,
@@ -105,13 +109,38 @@ export default function ImportLeadTimeMasterPage() {
         clearance_days: Number(importForm.clearance_days),
         effective_from: importForm.effective_from,
         effective_to: importForm.effective_to || null,
-      });
-      flash("Import lead time saved.");
+      };
+      if (editingImportId) {
+        await updateImportLeadTime(editingImportId, payload);
+        flash("Import lead time updated.");
+      } else {
+        await upsertImportLeadTime(payload);
+        flash("Import lead time saved.");
+      }
       setImportForm(EMPTY_IMPORT);
+      setEditingImportId(null);
       await loadRows();
     } catch (err) {
       flash(err instanceof Error ? err.message : "PROCUREMENT_IMPORT_LEAD_TIME_UPSERT_FAILED", true);
     } finally { setSaving(false); }
+  }
+
+  function handleImportEdit(row) {
+    setEditingImportId(row.id);
+    setImportForm({
+      vendor_id: row.vendor_id ?? "",
+      material_category_id: row.material_category_id ?? "",
+      port_of_discharge_id: row.port_of_discharge_id ?? "",
+      sail_time_days: String(row.sail_time_days ?? ""),
+      clearance_days: String(row.clearance_days ?? ""),
+      effective_from: row.effective_from ?? "",
+      effective_to: row.effective_to ?? "",
+    });
+  }
+
+  function handleImportCancelEdit() {
+    setEditingImportId(null);
+    setImportForm(EMPTY_IMPORT);
   }
 
   async function handleImportDelete(id) {
@@ -119,6 +148,7 @@ export default function ImportLeadTimeMasterPage() {
     try {
       await deleteImportLeadTime(id);
       flash("Import lead time deleted.");
+      if (editingImportId === id) handleImportCancelEdit();
       await loadRows();
     } catch (err) {
       flash(err instanceof Error ? err.message : "PROCUREMENT_IMPORT_LEAD_TIME_DELETE_FAILED", true);
@@ -131,19 +161,42 @@ export default function ImportLeadTimeMasterPage() {
     }
     setSaving(true);
     try {
-      await upsertDomesticLeadTime({
+      const payload = {
         vendor_id: domesticForm.vendor_id,
         company_id: domesticForm.company_id,
         transit_days: Number(domesticForm.transit_days),
         effective_from: domesticForm.effective_from,
         effective_to: domesticForm.effective_to || null,
-      });
-      flash("Domestic lead time saved.");
+      };
+      if (editingDomesticId) {
+        await updateDomesticLeadTime(editingDomesticId, payload);
+        flash("Domestic lead time updated.");
+      } else {
+        await upsertDomesticLeadTime(payload);
+        flash("Domestic lead time saved.");
+      }
       setDomesticForm(EMPTY_DOMESTIC);
+      setEditingDomesticId(null);
       await loadRows();
     } catch (err) {
       flash(err instanceof Error ? err.message : "PROCUREMENT_DOMESTIC_LEAD_TIME_UPSERT_FAILED", true);
     } finally { setSaving(false); }
+  }
+
+  function handleDomesticEdit(row) {
+    setEditingDomesticId(row.id);
+    setDomesticForm({
+      vendor_id: row.vendor_id ?? "",
+      company_id: row.company_id ?? "",
+      transit_days: String(row.transit_days ?? ""),
+      effective_from: row.effective_from ?? "",
+      effective_to: row.effective_to ?? "",
+    });
+  }
+
+  function handleDomesticCancelEdit() {
+    setEditingDomesticId(null);
+    setDomesticForm(EMPTY_DOMESTIC);
   }
 
   async function handleDomesticDelete(id) {
@@ -151,6 +204,7 @@ export default function ImportLeadTimeMasterPage() {
     try {
       await deleteDomesticLeadTime(id);
       flash("Domestic lead time deleted.");
+      if (editingDomesticId === id) handleDomesticCancelEdit();
       await loadRows();
     } catch (err) {
       flash(err instanceof Error ? err.message : "PROCUREMENT_DOMESTIC_LEAD_TIME_DELETE_FAILED", true);
@@ -220,7 +274,8 @@ export default function ImportLeadTimeMasterPage() {
                           {row.active ? "ACTIVE" : "INACTIVE"}
                         </span>
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2 flex gap-1">
+                        <button type="button" disabled={saving} onClick={() => handleImportEdit(row)} className="border border-sky-400 bg-white px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-50">Edit</button>
                         <button type="button" disabled={saving} onClick={() => void handleImportDelete(row.id)} className="border border-rose-400 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">Delete</button>
                       </td>
                     </tr>
@@ -230,7 +285,7 @@ export default function ImportLeadTimeMasterPage() {
             </div>
           </ErpSectionCard>
 
-          <ErpSectionCard eyebrow="Add" title="New import lead time">
+          <ErpSectionCard eyebrow={editingImportId ? "Edit" : "Add"} title={editingImportId ? "Edit import lead time" : "New import lead time"}>
             <div className="grid gap-3">
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
                 Vendor <span className="text-rose-500">*</span>
@@ -273,9 +328,16 @@ export default function ImportLeadTimeMasterPage() {
                   <input type="date" value={importForm.effective_to} onChange={(e) => setImportForm((f) => ({ ...f, effective_to: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
                 </label>
               </div>
-              <button type="button" disabled={saving} onClick={() => void handleImportSave()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
-                {saving ? "Saving..." : "Save Import Lead Time"}
-              </button>
+              <div className="flex gap-2">
+                <button type="button" disabled={saving} onClick={() => void handleImportSave()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
+                  {saving ? "Saving..." : editingImportId ? "Update Import Lead Time" : "Save Import Lead Time"}
+                </button>
+                {editingImportId ? (
+                  <button type="button" disabled={saving} onClick={handleImportCancelEdit} className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">
+                    Cancel
+                  </button>
+                ) : null}
+              </div>
             </div>
           </ErpSectionCard>
         </div>
@@ -316,7 +378,8 @@ export default function ImportLeadTimeMasterPage() {
                           {row.active ? "ACTIVE" : "INACTIVE"}
                         </span>
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2 flex gap-1">
+                        <button type="button" disabled={saving} onClick={() => handleDomesticEdit(row)} className="border border-sky-400 bg-white px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-50">Edit</button>
                         <button type="button" disabled={saving} onClick={() => void handleDomesticDelete(row.id)} className="border border-rose-400 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">Delete</button>
                       </td>
                     </tr>
@@ -326,7 +389,7 @@ export default function ImportLeadTimeMasterPage() {
             </div>
           </ErpSectionCard>
 
-          <ErpSectionCard eyebrow="Add" title="New domestic lead time">
+          <ErpSectionCard eyebrow={editingDomesticId ? "Edit" : "Add"} title={editingDomesticId ? "Edit domestic lead time" : "New domestic lead time"}>
             <div className="grid gap-3">
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
                 Vendor <span className="text-rose-500">*</span>
@@ -356,9 +419,16 @@ export default function ImportLeadTimeMasterPage() {
                   <input type="date" value={domesticForm.effective_to} onChange={(e) => setDomesticForm((f) => ({ ...f, effective_to: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
                 </label>
               </div>
-              <button type="button" disabled={saving} onClick={() => void handleDomesticSave()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
-                {saving ? "Saving..." : "Save Domestic Lead Time"}
-              </button>
+              <div className="flex gap-2">
+                <button type="button" disabled={saving} onClick={() => void handleDomesticSave()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
+                  {saving ? "Saving..." : editingDomesticId ? "Update Domestic Lead Time" : "Save Domestic Lead Time"}
+                </button>
+                {editingDomesticId ? (
+                  <button type="button" disabled={saving} onClick={handleDomesticCancelEdit} className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">
+                    Cancel
+                  </button>
+                ) : null}
+              </div>
             </div>
           </ErpSectionCard>
         </div>

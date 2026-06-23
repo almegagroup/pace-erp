@@ -95,6 +95,14 @@ function getIdFromPath(req: Request): string {
   return getPathSegments(req)[3] ?? "";
 }
 
+// getIdFromPath assumes a 4-segment path (.../resource/:id). Routes one
+// level deeper — /api/procurement/lead-times/import/:id and .../domestic/:id
+// — need the last segment instead, or it silently grabs "import"/"domestic".
+function getLastPathSegment(req: Request): string {
+  const segments = getPathSegments(req);
+  return segments[segments.length - 1] ?? "";
+}
+
 async function generateCodeFromSequence(
   tableName: string,
   prefix: string,
@@ -871,7 +879,7 @@ export async function listImportLeadTimesHandler(req: Request, ctx: ProcurementH
 export async function deleteImportLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     assertManagerOrSARole(ctx);
-    const id = getIdFromPath(req);
+    const id = getLastPathSegment(req);
     const { error } = await serviceRoleClient
       .schema("erp_master")
       .from("lead_time_master_import")
@@ -883,6 +891,60 @@ export async function deleteImportLeadTimeHandler(req: Request, ctx: Procurement
     const code = (err as Error).message || "PROCUREMENT_IMPORT_LEAD_TIME_DELETE_FAILED";
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Import lead time delete failed");
+  }
+}
+
+export async function updateImportLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const id = getLastPathSegment(req);
+    const body = await parseBody(req);
+
+    const updates: Record<string, unknown> = {};
+    if (body.vendor_id !== undefined) {
+      const vendorId = toTrimmedString(body.vendor_id);
+      if (!(await ensureVendorExists(vendorId))) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_VENDOR_NOT_FOUND", 404, "Vendor not found");
+      }
+      updates.vendor_id = vendorId;
+    }
+    if (body.material_category_id !== undefined) {
+      const categoryId = toTrimmedString(body.material_category_id);
+      if (!(await ensureCategoryExists(categoryId))) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_CATEGORY_NOT_FOUND", 404, "Material category not found");
+      }
+      updates.material_category_id = categoryId;
+    }
+    if (body.port_of_discharge_id !== undefined || body.port_id !== undefined) {
+      const portId = toTrimmedString(body.port_of_discharge_id || body.port_id);
+      if (!(await ensurePortExists(portId))) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_PORT_NOT_FOUND", 404, "Port not found");
+      }
+      updates.port_of_discharge_id = portId;
+    }
+    if (body.sail_time_days !== undefined) updates.sail_time_days = parseNullableInt(body.sail_time_days) ?? 0;
+    if (body.clearance_days !== undefined) updates.clearance_days = parseNullableInt(body.clearance_days) ?? 0;
+    if (body.effective_from !== undefined) updates.effective_from = toTrimmedString(body.effective_from);
+    if (body.effective_to !== undefined) updates.effective_to = toTrimmedString(body.effective_to) || null;
+    if (body.active !== undefined) updates.active = body.active !== false;
+
+    if (Object.keys(updates).length === 0) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_IMPORT_LEAD_TIME_NO_CHANGES", 400, "No changes provided");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("lead_time_master_import")
+      .update(updates)
+      .eq("id", id)
+      .select("*")
+      .single();
+    if (error || !data) throw new Error("PROCUREMENT_IMPORT_LEAD_TIME_UPDATE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_IMPORT_LEAD_TIME_UPDATE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("NO_CHANGES") ? 400 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Import lead time update failed");
   }
 }
 
@@ -955,7 +1017,7 @@ export async function listDomesticLeadTimesHandler(req: Request, ctx: Procuremen
 export async function deleteDomesticLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     assertManagerOrSARole(ctx);
-    const id = getIdFromPath(req);
+    const id = getLastPathSegment(req);
     const { error } = await serviceRoleClient
       .schema("erp_master")
       .from("lead_time_master_domestic")
@@ -967,6 +1029,52 @@ export async function deleteDomesticLeadTimeHandler(req: Request, ctx: Procureme
     const code = (err as Error).message || "PROCUREMENT_DOMESTIC_LEAD_TIME_DELETE_FAILED";
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Domestic lead time delete failed");
+  }
+}
+
+export async function updateDomesticLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const id = getLastPathSegment(req);
+    const body = await parseBody(req);
+
+    const updates: Record<string, unknown> = {};
+    if (body.vendor_id !== undefined) {
+      const vendorId = toTrimmedString(body.vendor_id);
+      if (!(await ensureVendorExists(vendorId))) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_VENDOR_NOT_FOUND", 404, "Vendor not found");
+      }
+      updates.vendor_id = vendorId;
+    }
+    if (body.company_id !== undefined) {
+      const companyId = toTrimmedString(body.company_id);
+      if (!(await ensureCompanyExists(companyId))) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_NOT_FOUND", 404, "Company not found");
+      }
+      updates.company_id = companyId;
+    }
+    if (body.transit_days !== undefined) updates.transit_days = parseNullableInt(body.transit_days) ?? 0;
+    if (body.effective_from !== undefined) updates.effective_from = toTrimmedString(body.effective_from);
+    if (body.effective_to !== undefined) updates.effective_to = toTrimmedString(body.effective_to) || null;
+    if (body.active !== undefined) updates.active = body.active !== false;
+
+    if (Object.keys(updates).length === 0) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_DOMESTIC_LEAD_TIME_NO_CHANGES", 400, "No changes provided");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("lead_time_master_domestic")
+      .update(updates)
+      .eq("id", id)
+      .select("*")
+      .single();
+    if (error || !data) throw new Error("PROCUREMENT_DOMESTIC_LEAD_TIME_UPDATE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_DOMESTIC_LEAD_TIME_UPDATE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("NO_CHANGES") ? 400 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Domestic lead time update failed");
   }
 }
 

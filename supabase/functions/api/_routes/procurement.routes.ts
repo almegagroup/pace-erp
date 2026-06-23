@@ -125,6 +125,8 @@ import {
   createCHAHandler,
   deleteImportLeadTimeHandler,
   deleteDomesticLeadTimeHandler,
+  updateImportLeadTimeHandler,
+  updateDomesticLeadTimeHandler,
   deleteTransitTimeHandler,
   listProcurementCompaniesHandler,
   createMaterialCategoryHandler,
@@ -534,8 +536,16 @@ export async function dispatchProcurementRoutes(
     return await deleteImportLeadTimeHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/lead-times\/import\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateImportLeadTimeHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/lead-times\/domestic\/[^/]+$/.test(pathname) && req.method === "DELETE") {
     return await deleteDomesticLeadTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/lead-times\/domestic\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateDomesticLeadTimeHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/chas\/[^/]+\/ports\/[^/]+$/.test(pathname)) {

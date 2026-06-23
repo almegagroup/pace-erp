@@ -689,11 +689,17 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/procurement\/lead-times\/import\/[^/]+$/,
-    methods: { DELETE: { skipAcl: false, resourceCode: "PROC_IMPORT_LEAD_TIME_MASTER", action: "DELETE" } },
+    methods: {
+      DELETE: { skipAcl: false, resourceCode: "PROC_IMPORT_LEAD_TIME_MASTER", action: "DELETE" },
+      PATCH:  { skipAcl: false, resourceCode: "PROC_IMPORT_LEAD_TIME_MASTER", action: "EDIT"   },
+    },
   },
   {
     pattern: /^\/api\/procurement\/lead-times\/domestic\/[^/]+$/,
-    methods: { DELETE: { skipAcl: false, resourceCode: "PROC_DOMESTIC_LEAD_TIME_MASTER", action: "DELETE" } },
+    methods: {
+      DELETE: { skipAcl: false, resourceCode: "PROC_DOMESTIC_LEAD_TIME_MASTER", action: "DELETE" },
+      PATCH:  { skipAcl: false, resourceCode: "PROC_DOMESTIC_LEAD_TIME_MASTER", action: "EDIT"   },
+    },
   },
   {
     pattern: /^\/api\/procurement\/chas\/[^/]+$/,
