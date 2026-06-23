@@ -113,17 +113,12 @@ export default function POCreatePage() {
       setLoading(true);
       setError("");
       try {
-        const [paymentData, costCenterData] = await Promise.all([
-          listPaymentTerms({ is_active: true }),
-          listCostCenters(),
-        ]);
+        const paymentData = await listPaymentTerms({ is_active: true });
         if (!active) {
           return;
         }
         const termRows = Array.isArray(paymentData) ? paymentData : (paymentData?.data ?? []);
-        const costCenterRows = Array.isArray(costCenterData?.data) ? costCenterData.data : [];
         setPaymentTerms(termRows);
-        setCostCenters(costCenterRows);
         setForm((current) => ({
           ...current,
           payment_term_id: current.payment_term_id || termRows[0]?.id || "",
@@ -143,6 +138,34 @@ export default function POCreatePage() {
       active = false;
     };
   }, []);
+
+  // Cost centers are company-scoped — the same code (e.g. "ADMIN") exists
+  // once per company, so this must be filtered by the selected Company or
+  // the dropdown shows the same label repeated once per company.
+  useEffect(() => {
+    let active = true;
+    async function loadCostCenters() {
+      if (!form.company_id) {
+        setCostCenters([]);
+        return;
+      }
+      try {
+        const costCenterData = await listCostCenters({ company_id: form.company_id, active: true });
+        if (!active) {
+          return;
+        }
+        setCostCenters(Array.isArray(costCenterData?.data) ? costCenterData.data : []);
+      } catch (loadError) {
+        if (active) {
+          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_SETUP_FAILED");
+        }
+      }
+    }
+    void loadCostCenters();
+    return () => {
+      active = false;
+    };
+  }, [form.company_id]);
 
   useEffect(() => {
     let active = true;
