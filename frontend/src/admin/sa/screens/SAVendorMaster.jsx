@@ -104,6 +104,8 @@ const BLANK = {
   country_code: "", currency_code: "BDT",
   reg_address_line1: "", reg_address_city: "", reg_address_state: "", reg_address_pin: "",
   corr_address_line1: "", corr_address_city: "", corr_address_state: "", corr_address_pin: "",
+  // Optional — not mandatory, can be filled in any time.
+  msme_registered: null, msme_certificate_number: "",
 };
 
 function uid() { return Date.now() + Math.random(); }
@@ -330,6 +332,34 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
               <div>
                 <div className={lbl}>PIN / ZIP</div>
                 <input value={fields.corr_address_pin} onChange={(e) => patch("corr_address_pin", e.target.value)} className={inp} />
+              </div>
+            </div>
+          </Section>
+
+          {/* MSME — optional, not mandatory, can be filled in any time */}
+          <Section title="MSME Registration">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className={lbl}>MSME Registered</div>
+                <select
+                  value={fields.msme_registered === null || fields.msme_registered === undefined ? "" : (fields.msme_registered ? "YES" : "NO")}
+                  onChange={(e) => patch("msme_registered", e.target.value === "" ? null : e.target.value === "YES")}
+                  className={inp}
+                >
+                  <option value="">— Not specified —</option>
+                  <option value="YES">Yes</option>
+                  <option value="NO">No</option>
+                </select>
+              </div>
+              <div>
+                <div className={lbl}>Certificate Number</div>
+                <input
+                  value={fields.msme_certificate_number}
+                  onChange={(e) => patch("msme_certificate_number", e.target.value)}
+                  className={inp}
+                  disabled={fields.msme_registered !== true}
+                  placeholder={fields.msme_registered === true ? "" : "Set MSME Registered = Yes first"}
+                />
               </div>
             </div>
           </Section>

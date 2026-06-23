@@ -128,6 +128,8 @@ export async function createVendorHandler(
         corr_address_city:  toTrimmedString(body.corr_address_city)  || null,
         corr_address_state: toTrimmedString(body.corr_address_state) || null,
         corr_address_pin:   toTrimmedString(body.corr_address_pin)   || null,
+        msme_registered: typeof body.msme_registered === "boolean" ? body.msme_registered : null,
+        msme_certificate_number: toTrimmedString(body.msme_certificate_number) || null,
         status: "ACTIVE",
         approved_by: ctx.auth_user_id,
         approved_at: new Date().toISOString(),
@@ -257,12 +259,18 @@ export async function updateVendorHandler(
       "country_code", "currency_code",
       "reg_address_line1", "reg_address_city", "reg_address_state", "reg_address_pin",
       "corr_address_line1", "corr_address_city", "corr_address_state", "corr_address_pin",
+      "msme_certificate_number",
     ];
 
     for (const field of mutableFields) {
       if (body[field] !== undefined) {
         updates[field] = toTrimmedString(body[field]) || null;
       }
+    }
+
+    // Optional, non-mandatory — can be filled in any time after creation.
+    if (typeof body.msme_registered === "boolean") {
+      updates.msme_registered = body.msme_registered;
     }
 
     if (Object.keys(updates).length === 2) {
