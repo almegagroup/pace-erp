@@ -102,7 +102,7 @@ export default function POCreatePage() {
           return;
         }
         const vendorRows = Array.isArray(vendorData?.data) ? vendorData.data : [];
-        const termRows = Array.isArray(paymentData) ? paymentData : [];
+        const termRows = Array.isArray(paymentData) ? paymentData : (paymentData?.data ?? []);
         const materialRows = Array.isArray(materialData?.data) ? materialData.data : [];
         const costCenterRows = Array.isArray(costCenterData?.data) ? costCenterData.data : [];
         setVendors(vendorRows);
@@ -167,7 +167,7 @@ export default function POCreatePage() {
     try {
       // Exact vendor+material pair lookup (per 85.2.4 hard-block rule) —
       // NOT the search-only list endpoint, which ignores vendor_id/material_id.
-      const vmi = await getVendorMaterialInfo({ vendor_id: form.vendor_id, material_id: line.material_id });
+      const vmi = (await getVendorMaterialInfo({ vendor_id: form.vendor_id, material_id: line.material_id }))?.data;
       const isActive = String(vmi?.status || "").toUpperCase() === "ACTIVE";
       if (!isActive) {
         updateLine(index, {
