@@ -17,19 +17,12 @@ import ErpMasterListTemplate from "../../../../components/templates/ErpMasterLis
 import { listVendors } from "../omApi.js";
 
 const LIMIT = 50;
-// Vendor Master is SA-managed (feasibility doc 14.8) — ACL users (Director/
-// Managers) can view vendors (needed for the Vendor-Material/ASL link) but
-// cannot create new ones. This page is mounted at both /sa/om/vendors and
-// /dashboard/om/vendors, reusing the same component — detect which one we're
-// in to decide whether "Create Vendor" shows and where rows navigate to.
-function isSaContext() {
-  return typeof window !== "undefined" && window.location.pathname.startsWith("/sa/");
-}
-
+// Vendor Master is SA-managed (feasibility doc 14.8 — "SA creates via OM07,
+// no approval step"). This ACL page is view-only: ACL users (Director/
+// Managers) need to see vendors for the Vendor-Material/ASL link, but
+// creation happens exclusively on SAVendorMaster (/sa/om/vendors).
 export default function VendorListPage() {
   const navigate = useNavigate();
-  const isSa = isSaContext();
-  const prefix = isSa ? "/sa" : "/dashboard";
   const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -95,7 +88,6 @@ export default function VendorListPage() {
       title="Vendor Master"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
-        ...(isSa ? [{ key: "create", label: "Create Vendor", tone: "primary", onClick: () => navigate(`${prefix}/om/vendor/create`) }] : []),
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
       filterSection={{
@@ -177,9 +169,9 @@ export default function VendorListPage() {
               ]}
               rows={rows}
               rowKey={(row) => row.id}
-              onRowActivate={(row) => navigate(`${prefix}/om/vendor/detail?id=${encodeURIComponent(row.id)}`)}
+              onRowActivate={(row) => navigate(`/dashboard/om/vendor/detail?id=${encodeURIComponent(row.id)}`)}
               getRowProps={(row) => ({
-                onDoubleClick: () => navigate(`${prefix}/om/vendor/detail?id=${encodeURIComponent(row.id)}`),
+                onDoubleClick: () => navigate(`/dashboard/om/vendor/detail?id=${encodeURIComponent(row.id)}`),
                 className: "cursor-pointer hover:bg-sky-50",
               })}
               emptyMessage={loading ? "Loading vendors..." : "No vendor matched the current filter."}

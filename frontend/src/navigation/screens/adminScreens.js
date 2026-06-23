@@ -308,22 +308,6 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  SA_VENDOR_CREATE: {
-    screen_code: "SA_VENDOR_CREATE",
-    route: "/sa/om/vendor/create",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  SA_VENDOR_DETAIL: {
-    screen_code: "SA_VENDOR_DETAIL",
-    route: "/sa/om/vendor/detail",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
   GA_HOME: {
     screen_code: "GA_HOME",
     route: "/ga/home",

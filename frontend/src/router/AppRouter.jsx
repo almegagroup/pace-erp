@@ -66,6 +66,7 @@ import SAOmNumberSeries from "../admin/sa/screens/SAOmNumberSeries.jsx";
 import SACostCenterMaster from "../admin/sa/screens/SACostCenterMaster.jsx";
 import SAMachineMaster from "../admin/sa/screens/SAMachineMaster.jsx";
 import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
+import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
 import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
@@ -98,7 +99,6 @@ import HrLeaveUsageReportPage from "../pages/dashboard/hr/attendance/HrLeaveUsag
 import MaterialListPage from "../pages/dashboard/om/material/MaterialListPage.jsx";
 import MaterialDetailPage from "../pages/dashboard/om/material/MaterialDetailPage.jsx";
 import VendorListPage from "../pages/dashboard/om/vendor/VendorListPage.jsx";
-import VendorCreatePage from "../pages/dashboard/om/vendor/VendorCreatePage.jsx";
 import VendorDetailPage from "../pages/dashboard/om/vendor/VendorDetailPage.jsx";
 import AslListPage from "../pages/dashboard/om/asl/AslListPage.jsx";
 import AslCreatePage from "../pages/dashboard/om/asl/AslCreatePage.jsx";
@@ -299,15 +299,7 @@ export default function AppRouter() {
                       path="om/materials"
                       element={<SAMaterialMaster />}
                     />
-                    <Route path="om/vendors" element={<VendorListPage />} />
-                    <Route
-                      path="om/vendor/create"
-                      element={<VendorCreatePage />}
-                    />
-                    <Route
-                      path="om/vendor/detail"
-                      element={<VendorDetailPage />}
-                    />
+                    <Route path="om/vendors" element={<SAVendorMaster />} />
 
                   </Route>
                 </Route>
@@ -444,10 +436,6 @@ export default function AppRouter() {
                     element={<MaterialDetailPage />}
                   />
                   <Route path="om/vendors" element={<VendorListPage />} />
-                  <Route
-                    path="om/vendor/create"
-                    element={<VendorCreatePage />}
-                  />
                   <Route
                     path="om/vendor/detail"
                     element={<VendorDetailPage />}
