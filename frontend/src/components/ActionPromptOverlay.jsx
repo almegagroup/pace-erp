@@ -3,7 +3,7 @@ import ModalBase from "./layer/ModalBase.jsx";
 import { resolveActionPrompt, subscribeActionPrompt, unsubscribeActionPrompt } from "../store/actionPrompt.js";
 
 export default function ActionPromptOverlay() {
-  const [snapshot, setSnapshot] = useState({ visible: false, eyebrow: "", title: "", label: "", placeholder: "", defaultValue: "", required: false });
+  const [snapshot, setSnapshot] = useState({ visible: false, eyebrow: "", title: "", message: "", label: "", placeholder: "", defaultValue: "", required: false, confirmOnly: false, confirmLabel: "Confirm" });
   const [value, setValue] = useState("");
   const inputRef = useRef(null);
 
@@ -17,18 +17,22 @@ export default function ActionPromptOverlay() {
   }, []);
 
   useEffect(() => {
-    if (snapshot.visible) setTimeout(() => inputRef.current?.focus(), 50);
-  }, [snapshot.visible]);
+    if (snapshot.visible && !snapshot.confirmOnly) setTimeout(() => inputRef.current?.focus(), 50);
+  }, [snapshot.visible, snapshot.confirmOnly]);
 
   if (!snapshot.visible) return null;
 
   function handleConfirm() {
+    if (snapshot.confirmOnly) {
+      resolveActionPrompt(true);
+      return;
+    }
     if (snapshot.required && !value.trim()) return;
     resolveActionPrompt(value.trim() || null);
   }
 
   function handleCancel() {
-    resolveActionPrompt(null);
+    resolveActionPrompt(snapshot.confirmOnly ? false : null);
   }
 
   return (
@@ -38,28 +42,33 @@ export default function ActionPromptOverlay() {
       eyebrow={snapshot.eyebrow}
       title={snapshot.title}
       message={
-        <div className="grid gap-2 mt-1">
-          {snapshot.label && (
-            <label className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-              {snapshot.label}
-            </label>
-          )}
-          <input
-            ref={inputRef}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleConfirm(); }}
-            placeholder={snapshot.placeholder}
-            className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-          />
-        </div>
+        snapshot.confirmOnly ? (
+          snapshot.message || null
+        ) : (
+          <div className="grid gap-2 mt-1">
+            {snapshot.message && <p>{snapshot.message}</p>}
+            {snapshot.label && (
+              <label className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                {snapshot.label}
+              </label>
+            )}
+            <input
+              ref={inputRef}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleConfirm(); }}
+              placeholder={snapshot.placeholder}
+              className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+            />
+          </div>
+        )
       }
       actions={
         <>
           <button style={secondaryStyle} data-erp-nav-item="true" onClick={handleCancel}>Cancel</button>
           <button style={primaryStyle} data-erp-nav-item="true" onClick={handleConfirm}
-            disabled={snapshot.required && !value.trim()}
-          >Confirm</button>
+            disabled={!snapshot.confirmOnly && snapshot.required && !value.trim()}
+          >{snapshot.confirmLabel || "Confirm"}</button>
         </>
       }
       width="min(460px, calc(100vw - 32px))"

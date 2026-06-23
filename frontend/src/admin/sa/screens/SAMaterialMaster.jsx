@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { openConfirmPrompt } from "../../../store/actionPrompt.js";
 import {
   listMaterials,
   bulkSaveMaterials,
@@ -281,7 +282,13 @@ function MaterialMasterTab({ uoms }) {
 
   async function handleDelete() {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`Delete ${selectedIds.size} material(s)? This cannot be undone.`)) return;
+    const confirmed = await openConfirmPrompt({
+      eyebrow: "Material Master",
+      title: "Delete selected material(s)?",
+      message: `Delete ${selectedIds.size} material(s)? This cannot be undone.`,
+      confirmLabel: "Delete",
+    });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     try {
