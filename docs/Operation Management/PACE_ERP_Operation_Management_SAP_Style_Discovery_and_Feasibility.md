@@ -8494,7 +8494,12 @@ One-step (confirmed):
 | Currency | Auto-populated based on vendor type (BDT for Domestic, Foreign for Import) |
 | Remarks | Free text optional |
 
-#### 85.2.3 PO Line Items
+#### 85.2.3 PO Line Items **[SUPERSEDED 2026-06-23 — see 87.12A]**
+
+> **One PO = one material now, not multi-line.** The table below describes what one PO's single
+> line carries. Raising several materials together still feels like "one order" to the user — see
+> 87.12A for the internal Order ID / batch-approval mechanism that ties multiple single-material
+> POs together without changing what the vendor sees.
 
 | Field | Rule |
 |---|---|
@@ -9246,6 +9251,32 @@ Gate-13: Full L2 Procurement Cycle (9 sub-gates — see Section 103 for complete
 
 ---
 
+### 87.12A — Gap #12A: Order ID — One PO Per Material, Batch Approval **[NEW — 2026-06-23]**
+
+**Decision: A PO has exactly one material (line item). Multiple materials raised together are
+grouped under an internal "Order ID" purely for batch approval — never exposed to the vendor.**
+
+**Why this supersedes 85.2.3's multi-line PO assumption:** With a multi-line PO, a vendor
+delivering several materials together can only reference the PO number on their invoice/delivery
+paperwork (not PACE's internal line-item number), and the same material appearing on two
+different open POs to the same vendor is disambiguated by PO number + material — but the **same
+material twice on the same multi-line PO** (e.g. two different delivery dates) cannot be
+disambiguated this way at all. One-PO-per-material removes the ambiguity at the root: every PO
+number is now unique to exactly one material, so CSN/GE/Invoice matching is never ambiguous
+regardless of how many times a material recurs across orders.
+
+| Rule | Detail |
+|---|---|
+| PO scope | One PO = one material = one line item. No multi-line POs. |
+| Order ID | Internal grouping key only — created automatically when a user raises multiple materials in one go. **Never shown to the vendor**, never printed on any vendor-facing document. |
+| Vendor-facing documents | Show only the individual PO number (e.g. `ASCPO2627-0201`) — exactly as before. The vendor never sees or needs the Order ID. |
+| PO numbering | Unaffected — each PO still gets its own number from the normal company+FY series (no suffix, no change to 99.2 format). |
+| Approval scope | **Batch, at the Order level** — Procurement Head sees pending Order IDs in a list (not individual POs). Opening one shows every PO under it with full detail; the Head can still view/edit any individual PO's fields before approving. Saving approves all child POs under that Order ID together. |
+| Why batch approval | Reduces approver workload — one click approves an entire multi-material order instead of clicking through each PO separately. Per-PO rejection within an Order is not separately modeled; if one line needs rejecting, the Head edits/removes it from that PO before approving the batch. |
+| CSN impact | Unaffected — each (now single-line) PO still auto-creates exactly one CSN on confirmation (88.2 unchanged, just simpler: PO → CSN is now always 1:1 instead of 1 PO → N CSNs). |
+
+---
+
 ### 87.15 — Global Document Number Series (11 May 2026)
 
 **Decision: Movement documents share a global number series across all same-group companies.**
@@ -9421,6 +9452,13 @@ GE Lines (multiple):
   Line 3: PO-001 → Line Item 5 → Invoice INV-001 → 100 KG
 ```
 
+> **Note (2026-06-23, per 87.12A):** "PO-001 → Line Item 3" above predates the one-PO-per-material
+> change. Since each PO now carries exactly one material, the matching key at GE/GRN time is
+> simply **PO number + material identity** (the vendor's invoice line states the material name,
+> not PACE's internal line-item id) — there is no longer a "which line item" ambiguity to resolve,
+> even when the same material appears across multiple POs to the same vendor, since each PO
+> number is now unique per material per order.
+
 | Rule | Detail |
 |---|---|
 | One GE | One truck arrival |
@@ -9499,6 +9537,20 @@ CSN-067 [LOCAL, CMP004, 5MT, STO-001]
 | Detachment | Sub CSN becomes independent after STO mapping |
 | Origin reference | Preserved — Mother CSN reference kept for traceability |
 | Document Flow | PO → CSN-055 (Mother) → [Sub: CSN-067] → STO-001 → GE → GRN |
+
+**Timing clarification (2026-06-23):** Sub CSN creation, Mother CSN's own GRN, and STO↔Sub-CSN
+mapping are **three independent events with no enforced sequence between them**:
+
+- A Sub CSN can be created the moment the Mother CSN exists (i.e. right after PO confirmation) —
+  this is the normal case, since Sub CSN's primary purpose is **distribution planning**, done well
+  before the shipment even sails (see 88.3).
+- Mapping an STO to a Sub CSN does **not** require the Mother CSN's GRN to have posted first. An
+  STO is just a stock movement and can be fulfilled from the destination/source company's
+  *existing* stock of that material (from an earlier, unrelated GRN) — it doesn't have to wait for
+  *this* shipment's GRN. The Mother CSN's full-quantity GRN (Scenario C below) still happens
+  regardless, on its own timeline.
+- The STO↔Sub-CSN link exists purely for **traceability** — so that later, anyone can trace which
+  consignment's planned allocation a given STO fulfilled. It is not a workflow gate.
 
 ---
 
