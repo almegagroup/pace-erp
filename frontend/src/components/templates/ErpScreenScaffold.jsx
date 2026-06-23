@@ -250,6 +250,7 @@ export function ErpSectionCard({
   eyebrow,
   title,
   aside,
+  actions = [],
   children,
   className = "",
   tone = "default",
@@ -258,7 +259,7 @@ export function ErpSectionCard({
     <section
       className={`overflow-hidden border shadow-[0_4px_12px_rgba(15,23,42,0.04)] ${SECTION_TONE_CLASS[tone] ?? SECTION_TONE_CLASS.default} ${className}`.trim()}
     >
-      {(eyebrow || title || aside) ? (
+      {(eyebrow || title || aside || actions.length > 0) ? (
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-4 py-3">
           <div className="min-w-0">
             {eyebrow ? (
@@ -273,6 +274,7 @@ export function ErpSectionCard({
             ) : null}
           </div>
           {aside ? <Fragment>{aside}</Fragment> : null}
+          {actions.length > 0 ? <ErpActionStrip actions={actions} /> : null}
         </div>
       ) : null}
       <div className="px-4 py-4">

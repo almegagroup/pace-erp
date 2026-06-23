@@ -504,9 +504,12 @@ export default function POCreatePage() {
 
           <ErpSectionCard
             eyebrow="Materials"
-            title="Order details — one Purchase Order is created per material"
+            title="Order details — one PO per material"
             actions={[{ key: "add-line", label: "+ Add Material", tone: "primary", onClick: addLine }]}
           >
+            <p className="mb-2 text-[11px] text-slate-500">
+              RM/PM only — an Approved (active) Vendor-Material Info record is required per line (hard block).
+            </p>
             <ErpDenseGrid
               columns={lineColumns}
               rows={lineRowsWithWarnings}
@@ -532,10 +535,6 @@ export default function POCreatePage() {
               </div>
             )}
           </ErpSectionCard>
-
-          <div className="border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            RM/PM materials only. An Approved (active) Vendor-Material Info record must exist for every vendor-material pair — this is a hard block, both here and at the backend.
-          </div>
         </div>
       )}
     </ErpScreenScaffold>
