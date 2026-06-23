@@ -9,17 +9,27 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
-import { openScreen } from "../../../../navigation/screenStackEngine.js";
-import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listVendors } from "../omApi.js";
 
 const LIMIT = 50;
+// Vendor Master is SA-managed (feasibility doc 14.8) — ACL users (Director/
+// Managers) can view vendors (needed for the Vendor-Material/ASL link) but
+// cannot create new ones. This page is mounted at both /sa/om/vendors and
+// /dashboard/om/vendors, reusing the same component — detect which one we're
+// in to decide whether "Create Vendor" shows and where rows navigate to.
+function isSaContext() {
+  return typeof window !== "undefined" && window.location.pathname.startsWith("/sa/");
+}
 
 export default function VendorListPage() {
+  const navigate = useNavigate();
+  const isSa = isSaContext();
+  const prefix = isSa ? "/sa" : "/dashboard";
   const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -85,7 +95,7 @@ export default function VendorListPage() {
       title="Vendor Master"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
-        { key: "create", label: "Create Vendor", tone: "primary", onClick: () => openScreen(OPERATION_SCREENS.OM_VENDOR_CREATE.screen_code) },
+        ...(isSa ? [{ key: "create", label: "Create Vendor", tone: "primary", onClick: () => navigate(`${prefix}/om/vendor/create`) }] : []),
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
       filterSection={{
@@ -167,15 +177,9 @@ export default function VendorListPage() {
               ]}
               rows={rows}
               rowKey={(row) => row.id}
-              onRowActivate={(row) =>
-                openScreen(OPERATION_SCREENS.OM_VENDOR_DETAIL.screen_code, {
-                  context: { id: row.id },
-                })}
+              onRowActivate={(row) => navigate(`${prefix}/om/vendor/detail?id=${encodeURIComponent(row.id)}`)}
               getRowProps={(row) => ({
-                onDoubleClick: () =>
-                  openScreen(OPERATION_SCREENS.OM_VENDOR_DETAIL.screen_code, {
-                    context: { id: row.id },
-                  }),
+                onDoubleClick: () => navigate(`${prefix}/om/vendor/detail?id=${encodeURIComponent(row.id)}`),
                 className: "cursor-pointer hover:bg-sky-50",
               })}
               emptyMessage={loading ? "Loading vendors..." : "No vendor matched the current filter."}

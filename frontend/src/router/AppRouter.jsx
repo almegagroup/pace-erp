@@ -299,6 +299,15 @@ export default function AppRouter() {
                       path="om/materials"
                       element={<SAMaterialMaster />}
                     />
+                    <Route path="om/vendors" element={<VendorListPage />} />
+                    <Route
+                      path="om/vendor/create"
+                      element={<VendorCreatePage />}
+                    />
+                    <Route
+                      path="om/vendor/detail"
+                      element={<VendorDetailPage />}
+                    />
 
                   </Route>
                 </Route>

@@ -225,6 +225,17 @@ export async function createVendor(payload) {
   );
 }
 
+// Reuses the broad-access (non-role-gated) GST lookup built for Transporter/CHA —
+// it's a generic utility, not procurement-specific, so OM/Vendor calls the same endpoint.
+export async function lookupVendorGstProfile(gstNumber) {
+  const result = await fetchJson(
+    `/api/procurement/gst-profile?gst_number=${encodeURIComponent(gstNumber)}`,
+    {},
+    "PROCUREMENT_GST_LOOKUP_FAILED"
+  );
+  return result?.data ?? result;
+}
+
 export async function listVendors({
   vendor_type,
   status,

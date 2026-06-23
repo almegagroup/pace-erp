@@ -19,12 +19,16 @@ import {
   addVendorPaymentTerms,
   changeVendorStatus,
   getVendor,
+  getVendorContacts,
+  getVendorEmails,
   getVendorPaymentTerms,
   listMaterials,
   listVendorMaterialInfos,
   listVendorCompanyMaps,
   mapVendorToCompany,
   updateVendor,
+  upsertVendorContacts,
+  upsertVendorEmails,
   listCompaniesForOm,
 } from "../omApi.js";
 
@@ -85,10 +89,22 @@ export default function VendorDetailPage() {
         setVendor(vendorRow);
         setForm({
           vendor_name: vendorRow?.vendor_name ?? "",
-          registered_address: vendorRow?.registered_address ?? "",
-          primary_contact_person: vendorRow?.primary_contact_person ?? "",
-          phone: vendorRow?.phone ?? "",
-          primary_email: vendorRow?.primary_email ?? "",
+          gst_number: vendorRow?.gst_number ?? "",
+          gst_category: vendorRow?.gst_category ?? "",
+          bin_number: vendorRow?.bin_number ?? "",
+          tin_number: vendorRow?.tin_number ?? "",
+          trade_license: vendorRow?.trade_license ?? "",
+          iec_code: vendorRow?.iec_code ?? "",
+          import_license: vendorRow?.import_license ?? "",
+          country_code: vendorRow?.country_code ?? "",
+          reg_address_line1: vendorRow?.reg_address_line1 ?? "",
+          reg_address_city: vendorRow?.reg_address_city ?? "",
+          reg_address_state: vendorRow?.reg_address_state ?? "",
+          reg_address_pin: vendorRow?.reg_address_pin ?? "",
+          corr_address_line1: vendorRow?.corr_address_line1 ?? "",
+          corr_address_city: vendorRow?.corr_address_city ?? "",
+          corr_address_state: vendorRow?.corr_address_state ?? "",
+          corr_address_pin: vendorRow?.corr_address_pin ?? "",
           currency_code: vendorRow?.currency_code ?? "BDT",
         });
         setCompanies(Array.isArray(companyList) ? companyList : []);
@@ -126,7 +142,27 @@ export default function VendorDetailPage() {
     if (!vendor?.id || !form) return;
     setSaving(true); setError(""); setNotice("");
     try {
-      const result = await updateVendor({ id: vendor.id, vendor_name: form.vendor_name, registered_address: form.registered_address, primary_contact_person: form.primary_contact_person, phone: form.phone, primary_email: form.primary_email, currency_code: form.currency_code });
+      const result = await updateVendor({
+        id: vendor.id,
+        vendor_name: form.vendor_name,
+        gst_number: form.gst_number,
+        gst_category: form.gst_category,
+        bin_number: form.bin_number,
+        tin_number: form.tin_number,
+        trade_license: form.trade_license,
+        iec_code: form.iec_code,
+        import_license: form.import_license,
+        country_code: form.country_code,
+        reg_address_line1: form.reg_address_line1,
+        reg_address_city: form.reg_address_city,
+        reg_address_state: form.reg_address_state,
+        reg_address_pin: form.reg_address_pin,
+        corr_address_line1: form.corr_address_line1,
+        corr_address_city: form.corr_address_city,
+        corr_address_state: form.corr_address_state,
+        corr_address_pin: form.corr_address_pin,
+        currency_code: form.currency_code,
+      });
       setVendor(result?.data ?? vendor);
       setEditMode(false); setNotice("Vendor updated.");
     } catch (err) { setError(err instanceof Error ? err.message : "OM_VENDOR_UPDATE_FAILED"); }
@@ -225,21 +261,61 @@ export default function VendorDetailPage() {
           {/* ── Edit fields ── */}
           <ErpSectionCard eyebrow="View Or Edit" title="Vendor fields">
             {editMode ? (
-              <div className="grid gap-3">
+              <div className="grid gap-3 md:grid-cols-2">
                 <ErpDenseFormRow label="Vendor Name" required>
                   <input value={form.vendor_name} onChange={(e) => setField("vendor_name", e.target.value)} className={INPUT_CLS} />
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="Registered Address">
-                  <textarea rows={3} value={form.registered_address} onChange={(e) => setField("registered_address", e.target.value)} className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                <ErpDenseFormRow label="GST Number">
+                  <input value={form.gst_number} onChange={(e) => setField("gst_number", e.target.value.toUpperCase())} className={INPUT_CLS} />
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="Primary Contact">
-                  <input value={form.primary_contact_person} onChange={(e) => setField("primary_contact_person", e.target.value)} className={INPUT_CLS} />
+                <ErpDenseFormRow label="GST Category">
+                  <input value={form.gst_category} onChange={(e) => setField("gst_category", e.target.value)} className={INPUT_CLS} />
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="Phone">
-                  <input value={form.phone} onChange={(e) => setField("phone", e.target.value)} className={INPUT_CLS} />
+                <ErpDenseFormRow label="BIN Number">
+                  <input value={form.bin_number} onChange={(e) => setField("bin_number", e.target.value)} className={INPUT_CLS} />
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="Primary Email">
-                  <input value={form.primary_email} onChange={(e) => setField("primary_email", e.target.value)} className={INPUT_CLS} />
+                <ErpDenseFormRow label="TIN Number">
+                  <input value={form.tin_number} onChange={(e) => setField("tin_number", e.target.value)} className={INPUT_CLS} />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Trade License">
+                  <input value={form.trade_license} onChange={(e) => setField("trade_license", e.target.value)} className={INPUT_CLS} />
+                </ErpDenseFormRow>
+                {vendor.vendor_type === "IMPORT" && (
+                  <>
+                    <ErpDenseFormRow label="Country Code">
+                      <input value={form.country_code} onChange={(e) => setField("country_code", e.target.value.toUpperCase())} className={INPUT_CLS} />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="IEC Code">
+                      <input value={form.iec_code} onChange={(e) => setField("iec_code", e.target.value)} className={INPUT_CLS} />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="Import License">
+                      <input value={form.import_license} onChange={(e) => setField("import_license", e.target.value)} className={INPUT_CLS} />
+                    </ErpDenseFormRow>
+                  </>
+                )}
+                <ErpDenseFormRow label="Registered Address — Line 1">
+                  <input value={form.reg_address_line1} onChange={(e) => setField("reg_address_line1", e.target.value)} className={INPUT_CLS} />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Registered Address — City">
+                  <input value={form.reg_address_city} onChange={(e) => setField("reg_address_city", e.target.value)} className={INPUT_CLS} />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Registered Address — State">
+                  <input value={form.reg_address_state} onChange={(e) => setField("reg_address_state", e.target.value)} className={INPUT_CLS} />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Registered Address — PIN">
+                  <input value={form.reg_address_pin} onChange={(e) => setField("reg_address_pin", e.target.value)} className={INPUT_CLS} />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Correspondence Address — Line 1">
+                  <input value={form.corr_address_line1} onChange={(e) => setField("corr_address_line1", e.target.value)} className={INPUT_CLS} />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Correspondence Address — City">
+                  <input value={form.corr_address_city} onChange={(e) => setField("corr_address_city", e.target.value)} className={INPUT_CLS} />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Correspondence Address — State">
+                  <input value={form.corr_address_state} onChange={(e) => setField("corr_address_state", e.target.value)} className={INPUT_CLS} />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Correspondence Address — PIN">
+                  <input value={form.corr_address_pin} onChange={(e) => setField("corr_address_pin", e.target.value)} className={INPUT_CLS} />
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Currency">
                   <select value={form.currency_code} onChange={(e) => setField("currency_code", e.target.value)} className={INPUT_CLS}>
@@ -254,14 +330,33 @@ export default function VendorDetailPage() {
             ) : (
               <div className="grid gap-3 md:grid-cols-2">
                 <ErpFieldPreview label="Vendor Name" value={vendor.vendor_name} />
-                <ErpFieldPreview label="Primary Contact" value={vendor.primary_contact_person} />
-                <ErpFieldPreview label="Phone" value={vendor.phone} />
-                <ErpFieldPreview label="Primary Email" value={vendor.primary_email} />
-                <ErpFieldPreview label="Registered Address" value={vendor.registered_address} multiline />
-                <ErpFieldPreview label="Correspondence Address" value={vendor.correspondence_address} multiline />
+                <ErpFieldPreview label="GST Category" value={vendor.gst_category} />
+                <ErpFieldPreview label="BIN Number" value={vendor.bin_number} />
+                <ErpFieldPreview label="TIN Number" value={vendor.tin_number} />
+                <ErpFieldPreview label="Trade License" value={vendor.trade_license} />
+                {vendor.vendor_type === "IMPORT" && (
+                  <>
+                    <ErpFieldPreview label="Country Code" value={vendor.country_code} />
+                    <ErpFieldPreview label="IEC Code" value={vendor.iec_code} />
+                    <ErpFieldPreview label="Import License" value={vendor.import_license} />
+                  </>
+                )}
+                <ErpFieldPreview
+                  label="Registered Address"
+                  value={[vendor.reg_address_line1, vendor.reg_address_city, vendor.reg_address_state, vendor.reg_address_pin].filter(Boolean).join(", ")}
+                  multiline
+                />
+                <ErpFieldPreview
+                  label="Correspondence Address"
+                  value={[vendor.corr_address_line1, vendor.corr_address_city, vendor.corr_address_state, vendor.corr_address_pin].filter(Boolean).join(", ")}
+                  multiline
+                />
               </div>
             )}
           </ErpSectionCard>
+
+          {/* ── Contacts & Emails ── */}
+          <VendorContactsEmailsCard vendorId={vendor.id} />
 
           {/* ── Lifecycle ── */}
           <ErpSectionCard eyebrow="Lifecycle" title="Status actions">
@@ -390,5 +485,130 @@ export default function VendorDetailPage() {
         </div>
       )}
     </ErpScreenScaffold>
+  );
+}
+
+function VendorContactsEmailsCard({ vendorId }) {
+  const [contacts, setContacts] = useState([]);
+  const [emails, setEmails] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [contactsResult, emailsResult] = await Promise.allSettled([
+        getVendorContacts(vendorId),
+        getVendorEmails(vendorId),
+      ]);
+      setContacts(contactsResult.status === "fulfilled" ? (Array.isArray(contactsResult.value) ? contactsResult.value : contactsResult.value?.data ?? []) : []);
+      setEmails(emailsResult.status === "fulfilled" ? (Array.isArray(emailsResult.value) ? emailsResult.value : emailsResult.value?.data ?? []) : []);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { void load(); }, [vendorId]);
+
+  function updateContact(idx, patch) {
+    setContacts((list) => list.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
+  }
+  function addContact() {
+    setContacts((list) => [...list, { contact_name: "", phone: "", designation: "", is_primary: list.length === 0 }]);
+  }
+  function removeContact(idx) {
+    setContacts((list) => list.filter((_, i) => i !== idx));
+  }
+  async function saveContacts() {
+    setSaving(true); setError(""); setNotice("");
+    try {
+      const saved = await upsertVendorContacts({ vendor_id: vendorId, contacts });
+      setContacts(Array.isArray(saved) ? saved : saved?.data ?? []);
+      setNotice("Contacts saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OM_VENDOR_CONTACTS_FAILED");
+    } finally { setSaving(false); }
+  }
+
+  function updateEmail(idx, patch) {
+    setEmails((list) => list.map((e, i) => (i === idx ? { ...e, ...patch } : e)));
+  }
+  function addEmail() {
+    setEmails((list) => [...list, { email: "", label: "", is_primary: list.length === 0 }]);
+  }
+  function removeEmail(idx) {
+    setEmails((list) => list.filter((_, i) => i !== idx));
+  }
+  async function saveEmails() {
+    setSaving(true); setError(""); setNotice("");
+    try {
+      const saved = await upsertVendorEmails({ vendor_id: vendorId, emails });
+      setEmails(Array.isArray(saved) ? saved : saved?.data ?? []);
+      setNotice("Emails saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OM_VENDOR_EMAILS_FAILED");
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <ErpSectionCard eyebrow="Contacts & Emails" title="Vendor contacts and email recipients">
+      {loading ? (
+        <div className="text-sm text-slate-400">Loading...</div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <h4 className="text-xs font-semibold uppercase tracking-[0.07em] text-slate-600">Contacts</h4>
+              <button type="button" onClick={addContact} className="border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">+ Add</button>
+            </div>
+            <div className="grid gap-2">
+              {contacts.map((c, idx) => (
+                <div key={idx} className="grid gap-1 border border-slate-100 p-2">
+                  <input value={c.contact_name ?? ""} onChange={(e) => updateContact(idx, { contact_name: e.target.value })} placeholder="Name" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500" />
+                  <input value={c.phone ?? ""} onChange={(e) => updateContact(idx, { phone: e.target.value })} placeholder="Phone" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500" />
+                  <input value={c.designation ?? ""} onChange={(e) => updateContact(idx, { designation: e.target.value })} placeholder="Designation" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500" />
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-1 text-[11px] text-slate-600">
+                      <input type="checkbox" checked={Boolean(c.is_primary)} onChange={(e) => updateContact(idx, { is_primary: e.target.checked })} /> Primary
+                    </label>
+                    <button type="button" onClick={() => removeContact(idx)} className="text-[11px] font-semibold text-rose-600">Remove</button>
+                  </div>
+                </div>
+              ))}
+              {contacts.length === 0 && <p className="text-xs text-slate-400">No contacts yet.</p>}
+            </div>
+            <button type="button" disabled={saving} onClick={() => void saveContacts()} className="mt-2 w-full border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:opacity-50">Save Contacts</button>
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <h4 className="text-xs font-semibold uppercase tracking-[0.07em] text-slate-600">Emails</h4>
+              <button type="button" onClick={addEmail} className="border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">+ Add</button>
+            </div>
+            <div className="grid gap-2">
+              {emails.map((e, idx) => (
+                <div key={idx} className="grid gap-1 border border-slate-100 p-2">
+                  <input value={e.email ?? ""} onChange={(ev) => updateEmail(idx, { email: ev.target.value })} placeholder="Email" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500" />
+                  <input value={e.label ?? ""} onChange={(ev) => updateEmail(idx, { label: ev.target.value })} placeholder="Label (e.g. Billing)" className="h-7 border border-slate-300 px-2 text-xs outline-none focus:border-sky-500" />
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-1 text-[11px] text-slate-600">
+                      <input type="checkbox" checked={Boolean(e.is_primary)} onChange={(ev) => updateEmail(idx, { is_primary: ev.target.checked })} /> Primary
+                    </label>
+                    <button type="button" onClick={() => removeEmail(idx)} className="text-[11px] font-semibold text-rose-600">Remove</button>
+                  </div>
+                </div>
+              ))}
+              {emails.length === 0 && <p className="text-xs text-slate-400">No emails yet.</p>}
+            </div>
+            <button type="button" disabled={saving} onClick={() => void saveEmails()} className="mt-2 w-full border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:opacity-50">Save Emails</button>
+          </div>
+        </div>
+      )}
+      {(error || notice) && (
+        <p className={`mt-2 text-xs font-semibold ${error ? "text-rose-700" : "text-emerald-700"}`}>{error || notice}</p>
+      )}
+    </ErpSectionCard>
   );
 }
