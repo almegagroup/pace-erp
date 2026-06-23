@@ -188,6 +188,7 @@ import {
   deletePOHandler,
   getPOHandler,
   getPOOrderGroupHandler,
+  getPoFilterOptionsHandler,
   knockOffPOLineHandler,
   knockOffPOHandler,
   listPOsHandler,
@@ -425,6 +426,8 @@ export async function dispatchProcurementRoutes(
       return await listPOsHandler(req, ctx);
     case "GET:/api/procurement/po-order-groups":
       return await listPOOrderGroupsHandler(req, ctx);
+    case "GET:/api/procurement/po-filter-options":
+      return await getPoFilterOptionsHandler(req, ctx);
     default:
       break;
   }

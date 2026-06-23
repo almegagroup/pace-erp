@@ -719,6 +719,113 @@ export async function createPOHandler(
   }
 }
 
+// `null` means "no constraint supplied" (show everything); an array (possibly
+// empty) is the actual intersection of every constraint that WAS supplied.
+function intersectIdSets(sets: string[][]): string[] | null {
+  if (sets.length === 0) return null;
+  let result = new Set(sets[0]);
+  for (let i = 1; i < sets.length; i++) {
+    const next = new Set(sets[i]);
+    result = new Set([...result].filter((id) => next.has(id)));
+  }
+  return [...result];
+}
+
+// PO Create needs Company/Vendor/Material to cross-filter each other no
+// matter which one is picked first (per user request 2026-06-24): picking
+// Material alone should narrow Company + Vendor to ones with an approved
+// link to that material, picking Company+Vendor should narrow Material, etc.
+export async function getPoFilterOptionsHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
+    const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
+    const materialId = toTrimmedString(url.searchParams.get("material_id"));
+
+    const companyIdSets: string[][] = [];
+    const vendorIdSets: string[][] = [];
+    const materialIdSets: string[][] = [];
+
+    if (vendorId) {
+      const { data } = await serviceRoleClient.schema("erp_master").from("vendor_company_map")
+        .select("company_id").eq("vendor_id", vendorId).eq("active", true);
+      companyIdSets.push((data ?? []).map((row) => row.company_id as string));
+    }
+    if (materialId) {
+      const { data } = await serviceRoleClient.schema("erp_master").from("material_company_ext")
+        .select("company_id").eq("material_id", materialId).eq("status", "ACTIVE").eq("procurement_allowed", true);
+      companyIdSets.push((data ?? []).map((row) => row.company_id as string));
+    }
+    if (companyId) {
+      const { data } = await serviceRoleClient.schema("erp_master").from("vendor_company_map")
+        .select("vendor_id").eq("company_id", companyId).eq("active", true);
+      vendorIdSets.push((data ?? []).map((row) => row.vendor_id as string));
+    }
+    if (materialId) {
+      const { data } = await serviceRoleClient.schema("erp_master").from("vendor_material_info")
+        .select("vendor_id").eq("material_id", materialId).eq("status", "ACTIVE");
+      vendorIdSets.push((data ?? []).map((row) => row.vendor_id as string));
+    }
+    if (companyId) {
+      const { data } = await serviceRoleClient.schema("erp_master").from("material_company_ext")
+        .select("material_id").eq("company_id", companyId).eq("status", "ACTIVE").eq("procurement_allowed", true);
+      materialIdSets.push((data ?? []).map((row) => row.material_id as string));
+    }
+    if (vendorId) {
+      const { data } = await serviceRoleClient.schema("erp_master").from("vendor_material_info")
+        .select("material_id").eq("vendor_id", vendorId).eq("status", "ACTIVE");
+      materialIdSets.push((data ?? []).map((row) => row.material_id as string));
+    }
+
+    const companyIds = intersectIdSets(companyIdSets);
+    const vendorIds = intersectIdSets(vendorIdSets);
+    const materialIds = intersectIdSets(materialIdSets);
+
+    let companyQuery = serviceRoleClient.schema("erp_master").from("companies")
+      .select("id, company_code, company_name")
+      .eq("company_kind", "BUSINESS")
+      .eq("status", "ACTIVE")
+      .order("company_name", { ascending: true });
+    if (companyIds !== null) companyQuery = companyQuery.in("id", companyIds.length ? companyIds : ["__none__"]);
+
+    let vendorQuery = serviceRoleClient.schema("erp_master").from("vendor_master")
+      .select("id, vendor_code, vendor_name, vendor_type, indent_number_required")
+      .eq("status", "ACTIVE")
+      .order("vendor_name", { ascending: true });
+    if (vendorIds !== null) vendorQuery = vendorQuery.in("id", vendorIds.length ? vendorIds : ["__none__"]);
+
+    let materialQuery = serviceRoleClient.schema("erp_master").from("material_master")
+      .select("id, pace_code, material_name, material_type")
+      .in("material_type", ["RM", "PM"])
+      .order("material_name", { ascending: true });
+    if (materialIds !== null) materialQuery = materialQuery.in("id", materialIds.length ? materialIds : ["__none__"]);
+
+    const [companiesResult, vendorsResult, materialsResult] = await Promise.all([
+      companyQuery,
+      vendorQuery,
+      materialQuery,
+    ]);
+
+    if (companiesResult.error || vendorsResult.error || materialsResult.error) {
+      throw new Error("PROCUREMENT_PO_FILTER_OPTIONS_FAILED");
+    }
+
+    return okResponse({
+      companies: companiesResult.data ?? [],
+      vendors: vendorsResult.data ?? [],
+      materials: materialsResult.data ?? [],
+    }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_PO_FILTER_OPTIONS_FAILED";
+    return procurementErrorResponse(req, ctx, code, 500, "Failed to load PO filter options");
+  }
+}
+
 export async function listPOsHandler(
   req: Request,
   ctx: ProcurementHandlerContext,

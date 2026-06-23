@@ -64,6 +64,10 @@ export function togglePaymentTerm(payload) {
   return fetchProcurement("POST", "/api/procurement/payment-terms/toggle", payload);
 }
 
+export function getPoFilterOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/po-filter-options", undefined, params);
+}
+
 export function listReferenceDateTypes(params) {
   return fetchProcurement("GET", "/api/procurement/reference-date-types", undefined, params);
 }

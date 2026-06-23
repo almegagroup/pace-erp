@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { getVendorMaterialInfo, listCostCenters, listMaterials, listVendors } from "../../om/omApi.js";
+import { getVendorMaterialInfo, listCostCenters } from "../../om/omApi.js";
 import {
   createPurchaseOrder,
+  getPoFilterOptions,
   listPaymentTerms,
 } from "../procurementApi.js";
 
@@ -32,10 +33,18 @@ function createEmptyLine() {
 export default function POCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [vendors, setVendors] = useState([]);
   const [paymentTerms, setPaymentTerms] = useState([]);
-  const [materials, setMaterials] = useState([]);
   const [costCenters, setCostCenters] = useState([]);
+  // Company/Vendor/Material cross-filter each other no matter which one is
+  // picked first — picking just a Material narrows Company+Vendor to ones
+  // with an approved link to it, picking Company+Vendor narrows Material, etc.
+  const [filterOptions, setFilterOptions] = useState({ companies: [], vendors: [], materials: [] });
+  const [filterLoading, setFilterLoading] = useState(true);
+  const [initialFilterLoaded, setInitialFilterLoaded] = useState(false);
+  // Once a vendor is picked, a later Material change can narrow the vendor
+  // LIST without invalidating the already-selected vendor — keep every row
+  // we've ever seen so selectedVendor lookups stay correct.
+  const vendorDetailCacheRef = useRef(new Map());
   const [form, setForm] = useState({
     company_id: "",
     vendor_id: "",
@@ -51,25 +60,32 @@ export default function POCreatePage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const companyOptions = useMemo(
-    () => (runtimeContext?.availableCompanies ?? []).map((entry) => ({ value: entry.id, label: entry.company_name || entry.company_code || entry.id })),
+  const availableCompanyIds = useMemo(
+    () => new Set((runtimeContext?.availableCompanies ?? []).map((entry) => entry.id)),
     [runtimeContext?.availableCompanies]
+  );
+  const companyOptions = useMemo(
+    () =>
+      filterOptions.companies
+        .filter((entry) => availableCompanyIds.size === 0 || availableCompanyIds.has(entry.id))
+        .map((entry) => ({ value: entry.id, label: entry.company_name || entry.company_code || entry.id })),
+    [filterOptions.companies, availableCompanyIds]
   );
   const vendorOptions = useMemo(
     () =>
-      vendors.map((entry) => ({
+      filterOptions.vendors.map((entry) => ({
         value: entry.id,
         label: `${entry.vendor_code || ""} ${entry.vendor_name || ""}`.trim(),
       })),
-    [vendors]
+    [filterOptions.vendors]
   );
   const materialOptions = useMemo(
     () =>
-      materials.map((entry) => ({
+      filterOptions.materials.map((entry) => ({
         value: entry.id,
         label: `${entry.pace_code || ""} ${entry.material_name || ""}`.trim(),
       })),
-    [materials]
+    [filterOptions.materials]
   );
   const costCenterOptions = useMemo(
     () => costCenters.map((entry) => ({ value: entry.id, label: `${entry.cost_center_code || entry.id} | ${entry.cost_center_name || entry.name || ""}` })),
@@ -77,8 +93,8 @@ export default function POCreatePage() {
   );
 
   const selectedVendor = useMemo(
-    () => vendors.find((entry) => entry.id === form.vendor_id) ?? null,
-    [form.vendor_id, vendors]
+    () => vendorDetailCacheRef.current.get(form.vendor_id) ?? null,
+    [form.vendor_id, filterOptions.vendors]
   );
   const showIncoterm = useMemo(
     () => String(selectedVendor?.vendor_type || "").toUpperCase() === "IMPORT",
@@ -86,33 +102,30 @@ export default function POCreatePage() {
   );
   const indentRequired = selectedVendor?.indent_number_required === true;
 
+  // The header Company/Vendor apply to the whole order; use the first
+  // line's material as the cross-filter signal (the common case is one
+  // material chosen before the buyer has decided on vendor/company at all).
+  const primaryMaterialId = lines[0]?.material_id || "";
+
   useEffect(() => {
     let active = true;
     async function load() {
       setLoading(true);
       setError("");
       try {
-        const [vendorData, paymentData, materialData, costCenterData] = await Promise.all([
-          listVendors({ limit: 200, offset: 0, status: "ACTIVE" }),
+        const [paymentData, costCenterData] = await Promise.all([
           listPaymentTerms({ is_active: true }),
-          listMaterials({ limit: 400, offset: 0 }),
           listCostCenters(),
         ]);
         if (!active) {
           return;
         }
-        const vendorRows = Array.isArray(vendorData?.data) ? vendorData.data : [];
         const termRows = Array.isArray(paymentData) ? paymentData : (paymentData?.data ?? []);
-        const materialRows = Array.isArray(materialData?.data) ? materialData.data : [];
         const costCenterRows = Array.isArray(costCenterData?.data) ? costCenterData.data : [];
-        setVendors(vendorRows);
         setPaymentTerms(termRows);
-        // RM/PM materials only — Sales Order/PO restricts to these two types.
-        setMaterials(materialRows.filter((entry) => ["RM", "PM"].includes(String(entry.material_type || "").toUpperCase())));
         setCostCenters(costCenterRows);
         setForm((current) => ({
           ...current,
-          company_id: current.company_id || runtimeContext?.selectedCompanyId || companyOptions[0]?.value || "",
           payment_term_id: current.payment_term_id || termRows[0]?.id || "",
         }));
       } catch (loadError) {
@@ -129,7 +142,57 @@ export default function POCreatePage() {
     return () => {
       active = false;
     };
-  }, [companyOptions, runtimeContext?.selectedCompanyId]);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    async function loadFilterOptions() {
+      setFilterLoading(true);
+      try {
+        const result = await getPoFilterOptions({
+          company_id: form.company_id || undefined,
+          vendor_id: form.vendor_id || undefined,
+          material_id: primaryMaterialId || undefined,
+        });
+        if (!active) {
+          return;
+        }
+        const companies = Array.isArray(result?.companies) ? result.companies : [];
+        const vendorRows = Array.isArray(result?.vendors) ? result.vendors : [];
+        const materialRows = Array.isArray(result?.materials) ? result.materials : [];
+        vendorRows.forEach((row) => vendorDetailCacheRef.current.set(row.id, row));
+        setFilterOptions({ companies, vendors: vendorRows, materials: materialRows });
+      } catch (loadError) {
+        if (active) {
+          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_FILTER_OPTIONS_FAILED");
+        }
+      } finally {
+        if (active) {
+          setFilterLoading(false);
+          setInitialFilterLoaded(true);
+        }
+      }
+    }
+    void loadFilterOptions();
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.company_id, form.vendor_id, primaryMaterialId]);
+
+  // Default the Company field once the (filtered) option list resolves —
+  // separate from the fetch effect above so it always sees the latest,
+  // already-intersected companyOptions instead of the raw fetch result.
+  useEffect(() => {
+    if (form.company_id || companyOptions.length === 0) {
+      return;
+    }
+    const defaultCompanyId = runtimeContext?.selectedCompanyId && companyOptions.some((entry) => entry.value === runtimeContext.selectedCompanyId)
+      ? runtimeContext.selectedCompanyId
+      : companyOptions[0].value;
+    setForm((current) => (current.company_id ? current : { ...current, company_id: defaultCompanyId }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyOptions, form.company_id]);
 
   function updateHeaderField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -412,7 +475,7 @@ export default function POCreatePage() {
         ...(notice ? [{ key: "po-create-notice", tone: "success", message: notice }] : []),
       ]}
     >
-      {loading ? (
+      {loading || !initialFilterLoaded ? (
         <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
           Loading procurement master data...
         </div>
