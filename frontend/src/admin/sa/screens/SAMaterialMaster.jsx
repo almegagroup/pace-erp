@@ -296,7 +296,12 @@ function MaterialMasterTab({ uoms }) {
       const failedRows = result?.errors ?? [];
       setSelectedIds(new Set());
       if (failedRows.length > 0) {
-        setError(`${failedRows.length} material(s) could not be deleted — they may have active transactions or mappings.`);
+        const lines = failedRows.map((row) => {
+          const mat = materials.find((m) => m.id === row.id);
+          const label = mat ? `${mat.pace_code} (${mat.material_name})` : row.id;
+          return `${label}: ${row.detail || friendly(row.error)}`;
+        });
+        setError(lines.join(" | "));
       } else {
         setNotice(`${result?.deleted?.length ?? 0} material(s) deleted.`);
       }

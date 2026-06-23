@@ -649,6 +649,54 @@ export async function changeMaterialStatusHandler(
 
 // ── Bulk Delete ───────────────────────────────────────────────────────────────
 
+// On a 23503 (FK) failure, tell the user exactly which dependency is blocking
+// the delete instead of a generic "may have active transactions" guess.
+async function describeMaterialDependencies(materialId: string): Promise<string> {
+  const [companyExt, plantExt, vmi, uomConv, catAssign, catGroupMember] = await Promise.all([
+    serviceRoleClient.schema("erp_master").from("material_company_ext")
+      .select("company_id, companies:company_id(company_code)", { count: "exact" })
+      .eq("material_id", materialId),
+    serviceRoleClient.schema("erp_master").from("material_plant_ext")
+      .select("id", { count: "exact", head: true }).eq("material_id", materialId),
+    serviceRoleClient.schema("erp_master").from("vendor_material_info")
+      .select("id", { count: "exact", head: true }).eq("material_id", materialId),
+    serviceRoleClient.schema("erp_master").from("material_uom_conversion")
+      .select("id", { count: "exact", head: true }).eq("material_id", materialId),
+    serviceRoleClient.schema("erp_master").from("material_category_assignment")
+      .select("id", { count: "exact", head: true }).eq("material_id", materialId),
+    serviceRoleClient.schema("erp_master").from("material_category_group_member")
+      .select("id", { count: "exact", head: true }).eq("material_id", materialId),
+  ]);
+
+  const parts: string[] = [];
+
+  const companyCodes = (companyExt.data ?? [])
+    .map((row: Record<string, unknown>) => (row.companies as Record<string, unknown> | null)?.company_code)
+    .filter(Boolean);
+  if (companyCodes.length > 0) {
+    parts.push(`mapped to company ${companyCodes.join(", ")}`);
+  }
+  if ((plantExt.count ?? 0) > 0) {
+    parts.push(`extended to ${plantExt.count} plant(s)`);
+  }
+  if ((vmi.count ?? 0) > 0) {
+    parts.push(`has ${vmi.count} vendor pricing/ASL record(s)`);
+  }
+  if ((uomConv.count ?? 0) > 0) {
+    parts.push(`has ${uomConv.count} UOM conversion record(s)`);
+  }
+  if ((catAssign.count ?? 0) > 0) {
+    parts.push(`assigned to ${catAssign.count} material category record(s)`);
+  }
+  if ((catGroupMember.count ?? 0) > 0) {
+    parts.push(`member of ${catGroupMember.count} material category group(s)`);
+  }
+
+  return parts.length > 0
+    ? `Cannot delete — ${parts.join("; ")}. Remove these first.`
+    : "Cannot delete — referenced elsewhere in the system.";
+}
+
 export async function deleteMaterialsHandler(
   req: Request,
   ctx: OmHandlerContext,
@@ -665,7 +713,7 @@ export async function deleteMaterialsHandler(
     }
 
     const deleted: string[] = [];
-    const errors: { id: string; error: string }[] = [];
+    const errors: { id: string; error: string; detail?: string }[] = [];
 
     for (const id of ids) {
       // .select() after delete so we can tell "deleted a row" apart from
@@ -679,11 +727,11 @@ export async function deleteMaterialsHandler(
         .select("id");
 
       if (error) {
-        // FK violation = has transactions/extensions
-        const userFriendly = error.code === "23503"
-          ? "OM_MATERIAL_HAS_DEPENDENCIES"
-          : "OM_MATERIAL_DELETE_FAILED";
-        errors.push({ id, error: userFriendly });
+        if (error.code === "23503") {
+          errors.push({ id, error: "OM_MATERIAL_HAS_DEPENDENCIES", detail: await describeMaterialDependencies(id) });
+        } else {
+          errors.push({ id, error: "OM_MATERIAL_DELETE_FAILED", detail: error.message });
+        }
       } else if (!data || data.length === 0) {
         errors.push({ id, error: "OM_MATERIAL_NOT_FOUND" });
       } else {
