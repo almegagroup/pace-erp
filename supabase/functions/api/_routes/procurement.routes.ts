@@ -138,7 +138,10 @@ import {
   deletePaymentTermsHandler,
   deletePortHandler,
   deleteTransporterHandler,
+  getGstProfileLookupHandler,
   getPaymentTermsHandler,
+  getTransporterContactsHandler,
+  getTransporterEmailsHandler,
   listCHAPortsHandler,
   listCHAsHandler,
   listDomesticLeadTimesHandler,
@@ -149,7 +152,9 @@ import {
   listReferenceDateTypesHandler,
   listTransitTimesHandler,
   listTransportersHandler,
+  listTransporterCompanyMapsHandler,
   mapCHAToPortHandler,
+  mapTransporterToCompanyHandler,
   toggleCHAHandler,
   togglePaymentTermsHandler,
   togglePortHandler,
@@ -162,6 +167,8 @@ import {
   upsertDomesticLeadTimeHandler,
   upsertImportLeadTimeHandler,
   upsertTransitTimeHandler,
+  upsertTransporterContactsHandler,
+  upsertTransporterEmailsHandler,
 } from "../_core/procurement/l2_masters.handlers.ts";
 import {
   amendPOHandler,
@@ -289,6 +296,20 @@ export async function dispatchProcurementRoutes(
       return await listTransportersHandler(req, ctx);
     case "POST:/api/procurement/transporters":
       return await createTransporterHandler(req, ctx);
+    case "GET:/api/procurement/gst-profile":
+      return await getGstProfileLookupHandler(req, ctx);
+    case "GET:/api/procurement/transporters/contacts":
+      return await getTransporterContactsHandler(req, ctx);
+    case "POST:/api/procurement/transporters/contacts":
+      return await upsertTransporterContactsHandler(req, ctx);
+    case "GET:/api/procurement/transporters/emails":
+      return await getTransporterEmailsHandler(req, ctx);
+    case "POST:/api/procurement/transporters/emails":
+      return await upsertTransporterEmailsHandler(req, ctx);
+    case "GET:/api/procurement/transporters/company-map":
+      return await listTransporterCompanyMapsHandler(req, ctx);
+    case "POST:/api/procurement/transporters/company-map":
+      return await mapTransporterToCompanyHandler(req, ctx);
     case "GET:/api/procurement/chas":
       return await listCHAsHandler(req, ctx);
     case "POST:/api/procurement/chas":

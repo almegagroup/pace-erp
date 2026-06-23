@@ -160,6 +160,34 @@ export function deleteTransporter(id) {
   return fetchProcurement("DELETE", `/api/procurement/transporters/${encodeURIComponent(id)}`);
 }
 
+export function lookupGstProfile(gstNumber) {
+  return fetchProcurement("GET", "/api/procurement/gst-profile", undefined, { gst_number: gstNumber });
+}
+
+export function listTransporterContacts(transporterId) {
+  return fetchProcurement("GET", "/api/procurement/transporters/contacts", undefined, { transporter_id: transporterId });
+}
+
+export function saveTransporterContacts(transporterId, contacts) {
+  return fetchProcurement("POST", "/api/procurement/transporters/contacts", { transporter_id: transporterId, contacts });
+}
+
+export function listTransporterEmails(transporterId) {
+  return fetchProcurement("GET", "/api/procurement/transporters/emails", undefined, { transporter_id: transporterId });
+}
+
+export function saveTransporterEmails(transporterId, emails) {
+  return fetchProcurement("POST", "/api/procurement/transporters/emails", { transporter_id: transporterId, emails });
+}
+
+export function listTransporterCompanyMaps(transporterId) {
+  return fetchProcurement("GET", "/api/procurement/transporters/company-map", undefined, { transporter_id: transporterId });
+}
+
+export function mapTransporterToCompany(payload) {
+  return fetchProcurement("POST", "/api/procurement/transporters/company-map", payload);
+}
+
 export function listCHAs(params) {
   return fetchProcurement("GET", "/api/procurement/chas", undefined, params);
 }

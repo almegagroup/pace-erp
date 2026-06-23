@@ -11,6 +11,8 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { deriveCompanyFieldsFromGstProfile } from "../../_shared/gst_company_fields.ts";
+import { resolveGstProfileWithSource } from "../../_shared/gst_resolver.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -1141,9 +1143,6 @@ export async function createTransporterHandler(req: Request, ctx: ProcurementHan
         transporter_name: transporterName,
         usage_direction: usageDirection,
         mode,
-        contact_person: toTrimmedString(body.contact_person) || null,
-        phone: toTrimmedString(body.phone) || null,
-        email: toTrimmedString(body.email) || null,
         pan_number: toTrimmedString(body.pan_number) || null,
         gst_number: toTrimmedString(body.gst_number) || null,
         address: toTrimmedString(body.address) || null,
@@ -1187,7 +1186,7 @@ export async function updateTransporterHandler(req: Request, ctx: ProcurementHan
       }
       updates.mode = value;
     }
-    for (const field of ["contact_person", "phone", "email", "pan_number", "gst_number", "address"] as const) {
+    for (const field of ["pan_number", "gst_number", "address"] as const) {
       if (body[field] !== undefined) updates[field] = toTrimmedString(body[field]) || null;
     }
     if (body.active !== undefined) updates.active = body.active === true;
@@ -1225,6 +1224,217 @@ export async function deleteTransporterHandler(req: Request, ctx: ProcurementHan
     const code = (err as Error).message || "PROCUREMENT_TRANSPORTER_DELETE_FAILED";
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("IN_USE") ? 409 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Transporter delete failed");
+  }
+}
+
+// Intentionally NOT gated to Manager/SA — this is a generic GST lookup
+// utility meant to be reusable across masters (Transporter today, more
+// later including L1_USER-level screens), so any authenticated ACL user
+// can call it.
+export async function getGstProfileLookupHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const gstNumber = toUpperTrimmedString(new URL(req.url).searchParams.get("gst_number"));
+    if (!gstNumber) return procurementErrorResponse(req, ctx, "PROCUREMENT_GST_NUMBER_REQUIRED", 400, "gst_number required");
+    const resolved = await resolveGstProfileWithSource(gstNumber);
+    const fields = deriveCompanyFieldsFromGstProfile(resolved.profile);
+    return okResponse({
+      data: {
+        gst_number: resolved.profile.gst_number,
+        legal_name: resolved.profile.legal_name,
+        trade_name: resolved.profile.trade_name ?? null,
+        status: resolved.profile.status,
+        source: resolved.source,
+        fetched_at: resolved.profile.fetched_at,
+        state_name: fields.state_name,
+        full_address: fields.full_address,
+        pin_code: fields.pin_code,
+      },
+    }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_GST_LOOKUP_FAILED";
+    const status = code === "PROCUREMENT_GST_NUMBER_REQUIRED" ? 400 : code.startsWith("APPLYFLOW_") ? 502 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "GST profile lookup failed");
+  }
+}
+
+async function getTransporterById(id: string): Promise<Record<string, unknown> | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("transporter_master")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error("PROCUREMENT_TRANSPORTER_LOOKUP_FAILED");
+  return (data as Record<string, unknown> | null) ?? null;
+}
+
+export async function getTransporterContactsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const transporterId = toTrimmedString(new URL(req.url).searchParams.get("transporter_id"));
+    if (!transporterId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "transporter_id required");
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("transporter_contacts")
+      .select("*")
+      .eq("transporter_id", transporterId)
+      .order("created_at", { ascending: true });
+    if (error) throw new Error("PROCUREMENT_TRANSPORTER_CONTACTS_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_TRANSPORTER_CONTACTS_FAILED";
+    return procurementErrorResponse(req, ctx, code, code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500, "Transporter contacts fetch failed");
+  }
+}
+
+export async function upsertTransporterContactsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const transporterId = toTrimmedString(body.transporter_id);
+    const contacts = Array.isArray(body.contacts) ? body.contacts : [];
+    if (!transporterId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "transporter_id required");
+    if (!(await getTransporterById(transporterId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_TRANSPORTER_NOT_FOUND", 404, "Transporter not found");
+    }
+    await serviceRoleClient.schema("erp_master").from("transporter_contacts").delete().eq("transporter_id", transporterId);
+    if (contacts.length > 0) {
+      const rows = contacts
+        .filter((c: JsonRecord) => toTrimmedString(c.contact_name))
+        .map((c: JsonRecord) => ({
+          transporter_id: transporterId,
+          contact_name: toTrimmedString(c.contact_name),
+          phone: toTrimmedString(c.phone) || null,
+          designation: toTrimmedString(c.designation) || null,
+          is_primary: Boolean(c.is_primary),
+          created_by: ctx.auth_user_id,
+        }));
+      if (rows.length > 0) {
+        const { error } = await serviceRoleClient.schema("erp_master").from("transporter_contacts").insert(rows);
+        if (error) throw new Error("PROCUREMENT_TRANSPORTER_CONTACTS_SAVE_FAILED");
+      }
+    }
+    const { data } = await serviceRoleClient
+      .schema("erp_master")
+      .from("transporter_contacts")
+      .select("*")
+      .eq("transporter_id", transporterId)
+      .order("created_at", { ascending: true });
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_TRANSPORTER_CONTACTS_SAVE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Transporter contacts save failed");
+  }
+}
+
+export async function getTransporterEmailsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const transporterId = toTrimmedString(new URL(req.url).searchParams.get("transporter_id"));
+    if (!transporterId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "transporter_id required");
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("transporter_emails")
+      .select("*")
+      .eq("transporter_id", transporterId)
+      .order("created_at", { ascending: true });
+    if (error) throw new Error("PROCUREMENT_TRANSPORTER_EMAILS_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_TRANSPORTER_EMAILS_FAILED";
+    return procurementErrorResponse(req, ctx, code, code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500, "Transporter emails fetch failed");
+  }
+}
+
+export async function upsertTransporterEmailsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const transporterId = toTrimmedString(body.transporter_id);
+    const emails = Array.isArray(body.emails) ? body.emails : [];
+    if (!transporterId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "transporter_id required");
+    if (!(await getTransporterById(transporterId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_TRANSPORTER_NOT_FOUND", 404, "Transporter not found");
+    }
+    await serviceRoleClient.schema("erp_master").from("transporter_emails").delete().eq("transporter_id", transporterId);
+    if (emails.length > 0) {
+      const rows = emails
+        .filter((e: JsonRecord) => toTrimmedString(e.email))
+        .map((e: JsonRecord) => ({
+          transporter_id: transporterId,
+          email: toTrimmedString(e.email),
+          label: toTrimmedString(e.label) || null,
+          is_primary: Boolean(e.is_primary),
+          created_by: ctx.auth_user_id,
+        }));
+      if (rows.length > 0) {
+        const { error } = await serviceRoleClient.schema("erp_master").from("transporter_emails").insert(rows);
+        if (error) throw new Error("PROCUREMENT_TRANSPORTER_EMAILS_SAVE_FAILED");
+      }
+    }
+    const { data } = await serviceRoleClient
+      .schema("erp_master")
+      .from("transporter_emails")
+      .select("*")
+      .eq("transporter_id", transporterId)
+      .order("created_at", { ascending: true });
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_TRANSPORTER_EMAILS_SAVE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Transporter emails save failed");
+  }
+}
+
+export async function listTransporterCompanyMapsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const transporterId = toTrimmedString(new URL(req.url).searchParams.get("transporter_id"));
+    if (!transporterId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "transporter_id required");
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("transporter_company_map")
+      .select("*")
+      .eq("transporter_id", transporterId)
+      .order("created_at", { ascending: true });
+    if (error) throw new Error("PROCUREMENT_TRANSPORTER_COMPANY_MAP_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_TRANSPORTER_COMPANY_MAP_FAILED";
+    return procurementErrorResponse(req, ctx, code, code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500, "Transporter company map fetch failed");
+  }
+}
+
+export async function mapTransporterToCompanyHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const transporterId = toTrimmedString(body.transporter_id);
+    const companyId = toTrimmedString(body.company_id);
+    if (!(await getTransporterById(transporterId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_TRANSPORTER_NOT_FOUND", 404, "Transporter not found");
+    }
+    if (!(await ensureCompanyExists(companyId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_NOT_FOUND", 404, "Company not found");
+    }
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("transporter_company_map")
+      .upsert({
+        transporter_id: transporterId,
+        company_id: companyId,
+        active: body.active !== false,
+        created_by: ctx.auth_user_id,
+      }, { onConflict: "transporter_id,company_id" })
+      .select("*")
+      .single();
+    if (error || !data) throw new Error("PROCUREMENT_TRANSPORTER_COMPANY_MAP_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_TRANSPORTER_COMPANY_MAP_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Transporter company map failed");
   }
 }
 
