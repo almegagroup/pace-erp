@@ -101,21 +101,58 @@ function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
 
 // "PROC_HEAD" was never a real configured role in erp_acl.user_roles (the
 // actual roles are SA/GA/DIRECTOR/L1-L4 USER/MANAGER/AUDITOR) — this check
-// silently meant only SA could ever approve a PO, even though the ACL
-// already granted APPROVE on PROC_PO_CREATE to DIRECTOR/L2_MANAGER+.
-// Aligned with assertManagerOrSARole used everywhere else in this codebase.
-const PO_APPROVER_ROLES = new Set([
-  "SA",
-  "GA",
-  "DIRECTOR",
-  "L4_MANAGER",
-  "L3_MANAGER",
-  "L2_MANAGER",
-]);
+// silently meant only SA could ever approve a PO. PACE already has a real
+// generic approver registry (acl.approver_map + acl.resource_approval_policy,
+// approval_type=ANYONE) seeded for PROC_PO_CREATE — this now reads from that
+// instead of a hardcoded role Set, matching how PACE's approval hierarchy
+// actually works (same matching semantics as hr/shared.ts's isApproverMatch).
+// Self-approval is blocked unless the approver is DIRECTOR — DIRECTOR may
+// create and approve their own PO; everyone else needs a different approver.
+type ApproverMapRow = { approver_user_id: string | null; approver_role_code: string | null };
 
-function assertProcurementHeadRole(ctx: ProcurementHandlerContext): void {
-  if (!PO_APPROVER_ROLES.has(ctx.roleCode)) {
+async function loadPoApproverRules(companyId: string): Promise<ApproverMapRow[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("acl")
+    .from("approver_map")
+    .select("approver_user_id, approver_role_code")
+    .eq("resource_code", "PROC_PO_CREATE")
+    .eq("action_code", "WRITE")
+    .eq("company_id", companyId);
+
+  if (error) {
+    throw new Error("PROCUREMENT_APPROVER_LOOKUP_FAILED");
+  }
+  return (data as ApproverMapRow[] | null) ?? [];
+}
+
+function matchesApprover(rows: ApproverMapRow[], ctx: ProcurementHandlerContext): boolean {
+  return rows.some((row) => {
+    if (row.approver_user_id) return row.approver_user_id === ctx.auth_user_id;
+    if (row.approver_role_code) return row.approver_role_code === ctx.roleCode;
+    return false;
+  });
+}
+
+async function assertProcurementHeadRole(
+  ctx: ProcurementHandlerContext,
+  companyId: string,
+  createdBy?: string | null,
+): Promise<void> {
+  if (ctx.roleCode === "SA" || ctx.roleCode === "GA") {
+    return; // SA/GA always retain override authority, regardless of approver_map config.
+  }
+
+  const rules = await loadPoApproverRules(companyId);
+  const isConfiguredApprover = rules.length > 0
+    ? matchesApprover(rules, ctx)
+    : ctx.roleCode === "DIRECTOR"; // no approver_map row configured yet — fall back to DIRECTOR.
+
+  if (!isConfiguredApprover) {
     throw new Error("PROCUREMENT_HEAD_REQUIRED");
+  }
+
+  if (createdBy && createdBy === ctx.auth_user_id && ctx.roleCode !== "DIRECTOR") {
+    throw new Error("PROCUREMENT_SELF_APPROVAL_FORBIDDEN");
   }
 }
 
@@ -1005,8 +1042,6 @@ export async function approvePOHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertProcurementHeadRole(ctx);
-
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
@@ -1014,6 +1049,7 @@ export async function approvePOHandler(
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
     }
+    await assertProcurementHeadRole(ctx, toTrimmedString(po.company_id), toTrimmedString(po.created_by));
     if (toUpperTrimmedString(po.status) !== "PENDING_APPROVAL") {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_APPROVAL_STATE_INVALID", 422, "PO is not pending approval");
     }
@@ -1051,7 +1087,7 @@ export async function approvePOHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_APPROVE_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
         : code.includes("INVALID") ? 422
         : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order approval failed");
@@ -1063,8 +1099,6 @@ export async function rejectPOHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertProcurementHeadRole(ctx);
-
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
     const remarks = toTrimmedString(body.remarks);
@@ -1077,6 +1111,7 @@ export async function rejectPOHandler(
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
     }
+    await assertProcurementHeadRole(ctx, toTrimmedString(po.company_id), toTrimmedString(po.created_by));
     if (toUpperTrimmedString(po.status) !== "PENDING_APPROVAL") {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_APPROVAL_STATE_INVALID", 422, "PO is not pending approval");
     }
@@ -1111,7 +1146,7 @@ export async function rejectPOHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_REJECT_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
         : code.includes("REQUIRED") ? 400
         : code.includes("INVALID") ? 422
         : 500;
@@ -1319,8 +1354,6 @@ export async function approveAmendmentHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertProcurementHeadRole(ctx);
-
     const poId = getPoIdFromPath(req);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
@@ -1328,6 +1361,7 @@ export async function approveAmendmentHandler(
     if (!po) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
     }
+    await assertProcurementHeadRole(ctx, toTrimmedString(po.company_id), toTrimmedString(po.created_by));
 
     const { data: pendingLogs, error: logError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -1392,7 +1426,7 @@ export async function approveAmendmentHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_AMEND_APPROVE_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
         : code.includes("NO_PENDING") ? 422
         : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order amendment approval failed");
@@ -1852,8 +1886,6 @@ export async function approvePOOrderGroupHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertProcurementHeadRole(ctx);
-
     const groupId = getOrderGroupIdFromPath(req);
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
@@ -1861,6 +1893,7 @@ export async function approvePOOrderGroupHandler(
     if (!group) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND", 404, "Order group not found");
     }
+    await assertProcurementHeadRole(ctx, toTrimmedString(group.company_id), toTrimmedString(group.created_by));
     if (toUpperTrimmedString(group.status) !== "PENDING_APPROVAL") {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_APPROVAL_STATE_INVALID", 422, "Order group is not pending approval");
     }
@@ -1926,7 +1959,7 @@ export async function approvePOOrderGroupHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_APPROVE_FAILED";
     const status =
       code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
         : code.includes("INVALID") ? 422
         : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order group approval failed");
@@ -1938,8 +1971,6 @@ export async function rejectPOOrderGroupHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
-    assertProcurementHeadRole(ctx);
-
     const groupId = getOrderGroupIdFromPath(req);
     const body = await parseBody(req);
     const remarks = toTrimmedString(body.remarks);
@@ -1952,6 +1983,7 @@ export async function rejectPOOrderGroupHandler(
     if (!group) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND", 404, "Order group not found");
     }
+    await assertProcurementHeadRole(ctx, toTrimmedString(group.company_id), toTrimmedString(group.created_by));
     if (toUpperTrimmedString(group.status) !== "PENDING_APPROVAL") {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_APPROVAL_STATE_INVALID", 422, "Order group is not pending approval");
     }
@@ -2007,7 +2039,7 @@ export async function rejectPOOrderGroupHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_REJECT_FAILED";
     const status =
       code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404
-        : code === "PROCUREMENT_HEAD_REQUIRED" ? 403
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
         : code.includes("REQUIRED") ? 400
         : code.includes("INVALID") ? 422
         : 500;
