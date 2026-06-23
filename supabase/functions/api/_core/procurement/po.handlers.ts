@@ -812,6 +812,11 @@ export async function getPoFilterOptionsHandler(
     ]);
 
     if (companiesResult.error || vendorsResult.error || materialsResult.error) {
+      console.error("PO_FILTER_OPTIONS query errors", {
+        companyError: companiesResult.error,
+        vendorError: vendorsResult.error,
+        materialError: materialsResult.error,
+      });
       throw new Error("PROCUREMENT_PO_FILTER_OPTIONS_FAILED");
     }
 
@@ -821,6 +826,7 @@ export async function getPoFilterOptionsHandler(
       materials: materialsResult.data ?? [],
     }, ctx.request_id, req);
   } catch (err) {
+    console.error("PO_FILTER_OPTIONS_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_FILTER_OPTIONS_FAILED";
     return procurementErrorResponse(req, ctx, code, 500, "Failed to load PO filter options");
   }
