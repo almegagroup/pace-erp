@@ -31,7 +31,8 @@ export default function ImportLeadTimeMasterPage() {
   const [activeTab, setActiveTab] = useState("Import");
   const noticeTimer = useRef(null);
 
-  const [vendors, setVendors] = useState([]);
+  const [importVendors, setImportVendors] = useState([]);
+  const [domesticVendors, setDomesticVendors] = useState([]);
   const [categories, setCategories] = useState([]);
   const [dischargePorts, setDischargePorts] = useState([]);
   const [companies, setCompanies] = useState([]);
@@ -59,15 +60,20 @@ export default function ImportLeadTimeMasterPage() {
   }
 
   async function loadMasterData() {
-    const [vRes, cRes, pRes, coRes] = await Promise.allSettled([
-      listVendors({ status: "ACTIVE" }),
+    const [ivRes, dvRes, cRes, pRes, coRes] = await Promise.allSettled([
+      listVendors({ status: "ACTIVE", vendor_type: "IMPORT" }),
+      listVendors({ status: "ACTIVE", vendor_type: "DOMESTIC" }),
       listMaterialCategories({ is_active: "true" }),
       listPorts({ is_active: "true", port_role: "DISCHARGE" }),
       listCompanies(),
     ]);
-    if (vRes.status === "fulfilled") {
-      const v = vRes.value;
-      setVendors(Array.isArray(v) ? v : (v?.data ?? []));
+    if (ivRes.status === "fulfilled") {
+      const v = ivRes.value;
+      setImportVendors(Array.isArray(v) ? v : (v?.data ?? []));
+    }
+    if (dvRes.status === "fulfilled") {
+      const v = dvRes.value;
+      setDomesticVendors(Array.isArray(v) ? v : (v?.data ?? []));
     }
     if (cRes.status === "fulfilled") setCategories(Array.isArray(cRes.value) ? cRes.value : []);
     if (pRes.status === "fulfilled") setDischargePorts(Array.isArray(pRes.value) ? pRes.value : []);
@@ -294,7 +300,7 @@ export default function ImportLeadTimeMasterPage() {
                 Vendor <span className="text-rose-500">*</span>
                 <select value={importForm.vendor_id} onChange={(e) => setImportForm((f) => ({ ...f, vendor_id: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
                   <option value="">— Select Vendor —</option>
-                  {vendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_code} — {v.vendor_name}</option>)}
+                  {importVendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_code} — {v.vendor_name}</option>)}
                 </select>
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
@@ -398,7 +404,7 @@ export default function ImportLeadTimeMasterPage() {
                 Vendor <span className="text-rose-500">*</span>
                 <select value={domesticForm.vendor_id} onChange={(e) => setDomesticForm((f) => ({ ...f, vendor_id: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
                   <option value="">— Select Vendor —</option>
-                  {vendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_code} — {v.vendor_name}</option>)}
+                  {domesticVendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_code} — {v.vendor_name}</option>)}
                 </select>
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
