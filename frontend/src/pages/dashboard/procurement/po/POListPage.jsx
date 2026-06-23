@@ -135,12 +135,18 @@ export default function POListPage() {
     navigate(`/dashboard/procurement/purchase-orders/${encodeURIComponent(row.id)}`);
   }
 
+  function openApprovals() {
+    openScreen(OPERATION_SCREENS.PROC_PO_ORDER_APPROVALS.screen_code);
+    navigate("/dashboard/procurement/po-order-groups");
+  }
+
   return (
     <ErpMasterListTemplate
       eyebrow="Procurement"
       title="Purchase Orders"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
+        { key: "approvals", label: "Pending Approvals", tone: "neutral", onClick: openApprovals },
         { key: "create", label: "Create PO", tone: "primary", onClick: openCreate },
       ]}
       notices={error ? [{ key: "po-list-error", tone: "error", message: error }] : []}

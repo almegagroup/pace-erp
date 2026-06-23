@@ -203,10 +203,12 @@ export default function POCreatePage() {
         payment_term_id: form.payment_term_id,
         freight_term: form.freight_term,
         remarks: form.remarks.trim() || null,
-        lines: lines.map((line) => ({
+        // Per feasibility doc 87.12A: each material becomes its own PO, all
+        // grouped under one internal Order ID — never one multi-line PO.
+        materials: lines.map((line) => ({
           material_id: line.material_id,
           ordered_qty: Number(line.quantity),
-          uom_code: line.uom_code || null,
+          po_uom_code: line.uom_code || null,
           unit_rate: Number(line.rate),
           cost_center_id: line.cost_center_id,
           delivery_date: line.delivery_date || null,
@@ -214,8 +216,14 @@ export default function POCreatePage() {
         })),
       };
       const created = await createPurchaseOrder(payload);
-      setNotice("Purchase order created.");
-      navigate(`/dashboard/procurement/purchase-orders/${encodeURIComponent(created?.id)}`);
+      const groupId = created?.order_group?.id;
+      const poCount = Array.isArray(created?.purchase_orders) ? created.purchase_orders.length : 1;
+      setNotice(`${poCount} purchase order${poCount === 1 ? "" : "s"} created.`);
+      if (groupId) {
+        navigate(`/dashboard/procurement/po-order-groups/${encodeURIComponent(groupId)}`);
+      } else {
+        navigate(`/dashboard/procurement/purchase-orders/${encodeURIComponent(created?.id)}`);
+      }
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PO_CREATE_FAILED");
     } finally {
@@ -350,7 +358,7 @@ export default function POCreatePage() {
       title="Create Purchase Order"
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
-        { key: "save", label: saving ? "Saving..." : "Create PO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || loading },
+        { key: "save", label: saving ? "Saving..." : lines.length > 1 ? `Create ${lines.length} POs` : "Create PO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || loading },
       ]}
       notices={[
         ...(error ? [{ key: "po-create-error", tone: "error", message: error }] : []),
@@ -448,18 +456,25 @@ export default function POCreatePage() {
           </ErpSectionCard>
 
           <ErpSectionCard
-            eyebrow="PO Lines"
-            title="Order details"
-            actions={[{ key: "add-line", label: "+ Add Line", tone: "primary", onClick: addLine }]}
+            eyebrow="Materials"
+            title="Order details — one Purchase Order is created per material"
+            actions={[{ key: "add-line", label: "+ Add Material", tone: "primary", onClick: addLine }]}
           >
             <ErpDenseGrid
               columns={lineColumns}
               rows={lineRowsWithWarnings}
               rowKey={(row) => row.__index}
               maxHeight="none"
-              emptyMessage="No lines yet — click Add Line."
+              emptyMessage="No materials yet — click Add Material."
               summaryRow={{ label: "Total", values: { net_value: netTotal.toFixed(2) } }}
             />
+            {lines.length > 1 && (
+              <p className="mt-2 text-xs text-slate-500">
+                These {lines.length} materials will be raised as {lines.length} separate Purchase
+                Orders, grouped under one internal Order for approval — the vendor only ever sees
+                individual PO numbers.
+              </p>
+            )}
             {lines.some((line) => line.aslWarning) && (
               <div className="mt-2 grid gap-1">
                 {lines.map((line, index) =>

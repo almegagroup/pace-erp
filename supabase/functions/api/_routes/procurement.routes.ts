@@ -180,15 +180,20 @@ import {
   amendPOHandler,
   approveAmendmentHandler,
   approvePOHandler,
+  approvePOOrderGroupHandler,
   cancelPOHandler,
   confirmPOHandler,
+  confirmPOOrderGroupHandler,
   createPOHandler,
   deletePOHandler,
   getPOHandler,
+  getPOOrderGroupHandler,
   knockOffPOLineHandler,
   knockOffPOHandler,
   listPOsHandler,
+  listPOOrderGroupsHandler,
   rejectPOHandler,
+  rejectPOOrderGroupHandler,
   updatePOHandler,
 } from "../_core/procurement/po.handlers.ts";
 import {
@@ -418,6 +423,8 @@ export async function dispatchProcurementRoutes(
       return await createPOHandler(req, ctx);
     case "GET:/api/procurement/purchase-orders":
       return await listPOsHandler(req, ctx);
+    case "GET:/api/procurement/po-order-groups":
+      return await listPOOrderGroupsHandler(req, ctx);
     default:
       break;
   }
@@ -432,6 +439,22 @@ export async function dispatchProcurementRoutes(
     if (req.method === "DELETE") {
       return await deletePOHandler(req, ctx);
     }
+  }
+
+  if (/^\/api\/procurement\/po-order-groups\/[^/]+\/confirm$/.test(pathname) && req.method === "POST") {
+    return await confirmPOOrderGroupHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/po-order-groups\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+    return await approvePOOrderGroupHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/po-order-groups\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
+    return await rejectPOOrderGroupHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/po-order-groups\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getPOOrderGroupHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/csns\/[^/]+$/.test(pathname)) {

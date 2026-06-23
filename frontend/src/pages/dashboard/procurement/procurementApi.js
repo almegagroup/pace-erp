@@ -268,6 +268,26 @@ export function updatePurchaseOrder(id, data) {
   return fetchProcurement("PUT", `/api/procurement/purchase-orders/${encodeURIComponent(id)}`, data);
 }
 
+export function listPOOrderGroups(params) {
+  return fetchProcurement("GET", "/api/procurement/po-order-groups", undefined, params);
+}
+
+export function getPOOrderGroup(id) {
+  return fetchProcurement("GET", `/api/procurement/po-order-groups/${encodeURIComponent(id)}`);
+}
+
+export function confirmPOOrderGroup(id, payload) {
+  return fetchProcurement("POST", `/api/procurement/po-order-groups/${encodeURIComponent(id)}/confirm`, payload);
+}
+
+export function approvePOOrderGroup(id, payload) {
+  return fetchProcurement("POST", `/api/procurement/po-order-groups/${encodeURIComponent(id)}/approve`, payload);
+}
+
+export function rejectPOOrderGroup(id, payload) {
+  return fetchProcurement("POST", `/api/procurement/po-order-groups/${encodeURIComponent(id)}/reject`, payload);
+}
+
 export function confirmPurchaseOrder(id, data) {
   return fetchProcurement("POST", `/api/procurement/purchase-orders/${encodeURIComponent(id)}/confirm`, data);
 }

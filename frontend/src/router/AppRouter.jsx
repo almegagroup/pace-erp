@@ -109,6 +109,8 @@ import CustomerDetailPage from "../pages/dashboard/om/customer/CustomerDetailPag
 import POListPage from "../pages/dashboard/procurement/po/POListPage.jsx";
 import POCreatePage from "../pages/dashboard/procurement/po/POCreatePage.jsx";
 import PODetailPage from "../pages/dashboard/procurement/po/PODetailPage.jsx";
+import POOrderGroupListPage from "../pages/dashboard/procurement/po/POOrderGroupListPage.jsx";
+import POOrderGroupDetailPage from "../pages/dashboard/procurement/po/POOrderGroupDetailPage.jsx";
 import CSNTrackerPage from "../pages/dashboard/procurement/csn/CSNTrackerPage.jsx";
 import CSNDetailPage from "../pages/dashboard/procurement/csn/CSNDetailPage.jsx";
 import CSNAlertsPage from "../pages/dashboard/procurement/csn/CSNAlertsPage.jsx";
@@ -473,6 +475,14 @@ export default function AppRouter() {
                   <Route
                     path="procurement/purchase-orders/:id"
                     element={<PODetailPage />}
+                  />
+                  <Route
+                    path="procurement/po-order-groups"
+                    element={<POOrderGroupListPage />}
+                  />
+                  <Route
+                    path="procurement/po-order-groups/:id"
+                    element={<POOrderGroupDetailPage />}
                   />
                   <Route
                     path="procurement/csn-tracker"

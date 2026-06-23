@@ -40,6 +40,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // ── Procurement: Purchase Orders ─────────────────────────────────────────
   "GET:/api/procurement/purchase-orders":             { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"  },
   "POST:/api/procurement/purchase-orders":            { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "WRITE" },
+  "GET:/api/procurement/po-order-groups":             { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"  },
 
   // ── Procurement: Gate Entry ───────────────────────────────────────────────
   "GET:/api/procurement/gate-entries":                { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_LIST",   action: "VIEW"  },
@@ -358,6 +359,24 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/lines\/[^/]+\/knock-off$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
+  },
+
+  // ── PO Order Group (internal batch-approval wrapper, 87.12A) ──────────────
+  {
+    pattern: /^\/api\/procurement\/po-order-groups\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_PO_LIST", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/po-order-groups\/[^/]+\/confirm$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/po-order-groups\/[^/]+\/approve$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/po-order-groups\/[^/]+\/reject$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "APPROVE" } },
   },
 
   // ── CSN ──────────────────────────────────────────────────────────────────

@@ -102,7 +102,8 @@ export default function PODetailPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const canApprove = shellProfile?.roleCode === "PROC_HEAD" || shellProfile?.roleCode === "SA";
+  const PO_APPROVER_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
+  const canApprove = PO_APPROVER_ROLES.has(shellProfile?.roleCode);
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]

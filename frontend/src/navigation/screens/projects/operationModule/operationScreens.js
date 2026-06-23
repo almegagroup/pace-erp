@@ -113,6 +113,22 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_PO_ORDER_APPROVALS: {
+    screen_code: "PROC_PO_ORDER_APPROVALS",
+    route: "/dashboard/procurement/po-order-groups",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_PO_ORDER_DETAIL: {
+    screen_code: "PROC_PO_ORDER_DETAIL",
+    route: "/dashboard/procurement/po-order-groups/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_CSN_DETAIL: {
     screen_code: "PROC_CSN_DETAIL",
     route: "/dashboard/procurement/csns/:id",
