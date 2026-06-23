@@ -708,6 +708,7 @@ export async function createPOHandler(
       },
     }, ctx.request_id, req);
   } catch (err) {
+    console.error("PO_CREATE_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_CREATE_FAILED";
     const status =
       code === "PROCUREMENT_VENDOR_NOT_FOUND" || code === "PROCUREMENT_PAYMENT_TERM_NOT_FOUND"
