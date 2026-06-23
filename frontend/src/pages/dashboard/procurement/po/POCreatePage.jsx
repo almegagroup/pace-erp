@@ -514,7 +514,7 @@ export default function POCreatePage() {
               columns={lineColumns}
               rows={lineRowsWithWarnings}
               rowKey={(row) => row.__index}
-              maxHeight="none"
+              maxHeight="420px"
               emptyMessage="No materials yet — click Add Material."
               summaryRow={{ label: "Total", values: { net_value: netTotal.toFixed(2) } }}
             />
