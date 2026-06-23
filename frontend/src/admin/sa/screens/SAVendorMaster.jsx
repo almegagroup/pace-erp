@@ -336,33 +336,36 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
             </div>
           </Section>
 
-          {/* MSME — optional, not mandatory, can be filled in any time */}
-          <Section title="MSME Registration">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <div className={lbl}>MSME Registered</div>
-                <select
-                  value={fields.msme_registered === null || fields.msme_registered === undefined ? "" : (fields.msme_registered ? "YES" : "NO")}
-                  onChange={(e) => patch("msme_registered", e.target.value === "" ? null : e.target.value === "YES")}
-                  className={inp}
-                >
-                  <option value="">— Not specified —</option>
-                  <option value="YES">Yes</option>
-                  <option value="NO">No</option>
-                </select>
+          {/* MSME — Domestic only (MSME is an India/Bangladesh domestic scheme,
+              not applicable to Import vendors). Optional, not mandatory. */}
+          {vendorType === "DOMESTIC" && (
+            <Section title="MSME Registration">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className={lbl}>MSME Registered</div>
+                  <select
+                    value={fields.msme_registered === null || fields.msme_registered === undefined ? "" : (fields.msme_registered ? "YES" : "NO")}
+                    onChange={(e) => patch("msme_registered", e.target.value === "" ? null : e.target.value === "YES")}
+                    className={inp}
+                  >
+                    <option value="">— Not specified —</option>
+                    <option value="YES">Yes</option>
+                    <option value="NO">No</option>
+                  </select>
+                </div>
+                <div>
+                  <div className={lbl}>Certificate Number</div>
+                  <input
+                    value={fields.msme_certificate_number}
+                    onChange={(e) => patch("msme_certificate_number", e.target.value)}
+                    className={inp}
+                    disabled={fields.msme_registered !== true}
+                    placeholder={fields.msme_registered === true ? "" : "Set MSME Registered = Yes first"}
+                  />
+                </div>
               </div>
-              <div>
-                <div className={lbl}>Certificate Number</div>
-                <input
-                  value={fields.msme_certificate_number}
-                  onChange={(e) => patch("msme_certificate_number", e.target.value)}
-                  className={inp}
-                  disabled={fields.msme_registered !== true}
-                  placeholder={fields.msme_registered === true ? "" : "Set MSME Registered = Yes first"}
-                />
-              </div>
-            </div>
-          </Section>
+            </Section>
+          )}
 
           {/* Banking */}
           <Section title="Banking" action={<button onClick={() => setBanks((p) => [...p, blankBank()])} className="text-xs text-sky-600 hover:text-sky-800">+ Add Bank</button>}>

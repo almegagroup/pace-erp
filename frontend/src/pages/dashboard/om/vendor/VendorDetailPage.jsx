@@ -330,26 +330,30 @@ export default function VendorDetailPage() {
                     ))}
                   </select>
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="MSME Registered">
-                  <select
-                    value={form.msme_registered === null || form.msme_registered === undefined ? "" : (form.msme_registered ? "YES" : "NO")}
-                    onChange={(e) => setField("msme_registered", e.target.value === "" ? null : e.target.value === "YES")}
-                    className={INPUT_CLS}
-                  >
-                    <option value="">— Not specified —</option>
-                    <option value="YES">Yes</option>
-                    <option value="NO">No</option>
-                  </select>
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="MSME Certificate Number">
-                  <input
-                    value={form.msme_certificate_number}
-                    onChange={(e) => setField("msme_certificate_number", e.target.value)}
-                    disabled={form.msme_registered !== true}
-                    placeholder={form.msme_registered === true ? "" : "Set MSME Registered = Yes first"}
-                    className={INPUT_CLS}
-                  />
-                </ErpDenseFormRow>
+                {vendor.vendor_type === "DOMESTIC" && (
+                  <>
+                    <ErpDenseFormRow label="MSME Registered">
+                      <select
+                        value={form.msme_registered === null || form.msme_registered === undefined ? "" : (form.msme_registered ? "YES" : "NO")}
+                        onChange={(e) => setField("msme_registered", e.target.value === "" ? null : e.target.value === "YES")}
+                        className={INPUT_CLS}
+                      >
+                        <option value="">— Not specified —</option>
+                        <option value="YES">Yes</option>
+                        <option value="NO">No</option>
+                      </select>
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="MSME Certificate Number">
+                      <input
+                        value={form.msme_certificate_number}
+                        onChange={(e) => setField("msme_certificate_number", e.target.value)}
+                        disabled={form.msme_registered !== true}
+                        placeholder={form.msme_registered === true ? "" : "Set MSME Registered = Yes first"}
+                        className={INPUT_CLS}
+                      />
+                    </ErpDenseFormRow>
+                  </>
+                )}
               </div>
             ) : (
               <div className="grid gap-3 md:grid-cols-2">
@@ -375,12 +379,16 @@ export default function VendorDetailPage() {
                   value={[vendor.corr_address_line1, vendor.corr_address_city, vendor.corr_address_state, vendor.corr_address_pin].filter(Boolean).join(", ")}
                   multiline
                 />
-                <ErpFieldPreview
-                  label="MSME Registered"
-                  value={vendor.msme_registered === null || vendor.msme_registered === undefined ? "Not specified" : (vendor.msme_registered ? "Yes" : "No")}
-                />
-                {vendor.msme_registered === true && (
-                  <ErpFieldPreview label="MSME Certificate Number" value={vendor.msme_certificate_number} />
+                {vendor.vendor_type === "DOMESTIC" && (
+                  <>
+                    <ErpFieldPreview
+                      label="MSME Registered"
+                      value={vendor.msme_registered === null || vendor.msme_registered === undefined ? "Not specified" : (vendor.msme_registered ? "Yes" : "No")}
+                    />
+                    {vendor.msme_registered === true && (
+                      <ErpFieldPreview label="MSME Certificate Number" value={vendor.msme_certificate_number} />
+                    )}
+                  </>
                 )}
               </div>
             )}
