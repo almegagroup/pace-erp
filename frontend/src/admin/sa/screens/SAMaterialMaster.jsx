@@ -1010,8 +1010,15 @@ function UomConversionsTab({ uoms }) {
             ) : materials.length === 0 ? (
               <tr><td colSpan={10} className="px-3 py-6 text-center text-slate-400">No materials matched the filter.</td></tr>
             ) : materials.map((mat) => {
-              const alt1 = mat.purchase_uom_code;
-              const alt2 = mat.issue_uom_code;
+              // purchase_uom_code/issue_uom_code default to base_uom_code when no
+              // real alternate is set — only treat them as an "alt" UOM (needing a
+              // conversion factor) when they actually differ from what they convert to.
+              const alt1 = mat.purchase_uom_code && mat.purchase_uom_code !== mat.base_uom_code
+                ? mat.purchase_uom_code
+                : null;
+              const alt2 = mat.issue_uom_code && mat.issue_uom_code !== mat.purchase_uom_code
+                ? mat.issue_uom_code
+                : null;
               const conv1 = alt1 ? getConvRow(mat.id, alt1) : null;
               const conv2 = alt2 ? getConvRow(mat.id, alt2) : null;
               const isSaving1 = saving[`${mat.id}_alt1`] ?? false;
