@@ -668,11 +668,15 @@ export async function deleteMaterialsHandler(
     const errors: { id: string; error: string }[] = [];
 
     for (const id of ids) {
-      const { error } = await serviceRoleClient
+      // .select() after delete so we can tell "deleted a row" apart from
+      // "matched zero rows" — without it, deleting a non-matching id returns
+      // no error at all and was being reported as a successful delete.
+      const { data, error } = await serviceRoleClient
         .schema("erp_master")
         .from("material_master")
         .delete()
-        .eq("id", id);
+        .eq("id", id)
+        .select("id");
 
       if (error) {
         // FK violation = has transactions/extensions
@@ -680,6 +684,8 @@ export async function deleteMaterialsHandler(
           ? "OM_MATERIAL_HAS_DEPENDENCIES"
           : "OM_MATERIAL_DELETE_FAILED";
         errors.push({ id, error: userFriendly });
+      } else if (!data || data.length === 0) {
+        errors.push({ id, error: "OM_MATERIAL_NOT_FOUND" });
       } else {
         deleted.push(id);
       }
