@@ -60,12 +60,15 @@ export default function ImportLeadTimeMasterPage() {
 
   async function loadMasterData() {
     const [vRes, cRes, pRes, coRes] = await Promise.allSettled([
-      listVendors({ is_active: "true" }),
+      listVendors({ status: "ACTIVE" }),
       listMaterialCategories({ is_active: "true" }),
       listPorts({ is_active: "true", port_role: "DISCHARGE" }),
       listCompanies(),
     ]);
-    if (vRes.status === "fulfilled") setVendors(Array.isArray(vRes.value) ? vRes.value : []);
+    if (vRes.status === "fulfilled") {
+      const v = vRes.value;
+      setVendors(Array.isArray(v) ? v : (v?.data ?? []));
+    }
     if (cRes.status === "fulfilled") setCategories(Array.isArray(cRes.value) ? cRes.value : []);
     if (pRes.status === "fulfilled") setDischargePorts(Array.isArray(pRes.value) ? pRes.value : []);
     if (coRes.status === "fulfilled") {
