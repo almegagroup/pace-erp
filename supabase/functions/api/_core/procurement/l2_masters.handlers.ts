@@ -1460,8 +1460,12 @@ export async function createCHAHandler(req: Request, ctx: ProcurementHandlerCont
     assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const chaName = toTrimmedString(body.cha_name);
+    const gstNumber = toUpperTrimmedString(body.gst_number);
     if (!chaName) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_CHA", 400, "CHA name is required");
+    }
+    if (!gstNumber) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CHA_GST_REQUIRED", 400, "GST number is required for a CHA");
     }
     const licenseNumber = toTrimmedString(body.cha_license_number) || "";
     const chaCode = await generateCodeFromSequence("cha_code_sequence", "CHA-", 4);
@@ -1472,11 +1476,8 @@ export async function createCHAHandler(req: Request, ctx: ProcurementHandlerCont
         cha_code: chaCode,
         cha_name: chaName,
         cha_license_number: licenseNumber,
-        gst_number: toTrimmedString(body.gst_number) || null,
+        gst_number: gstNumber,
         pan_number: toTrimmedString(body.pan_number) || null,
-        contact_person: toTrimmedString(body.contact_person) || null,
-        phone: toTrimmedString(body.phone) || null,
-        email: toTrimmedString(body.email) || null,
         address: toTrimmedString(body.address) || null,
         active: body.active !== false,
         created_by: ctx.auth_user_id,
@@ -1492,7 +1493,7 @@ export async function createCHAHandler(req: Request, ctx: ProcurementHandlerCont
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_CHA_CREATE_FAILED";
-    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("DUPLICATE") ? 409 : code.includes("INVALID") || code.includes("REQUIRED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "CHA create failed");
   }
 }
@@ -1551,12 +1552,14 @@ export async function updateCHAHandler(req: Request, ctx: ProcurementHandlerCont
       updates.cha_name = v;
     }
     if (body.cha_license_number !== undefined) updates.cha_license_number = toTrimmedString(body.cha_license_number) || "";
-    if (body.contact_person !== undefined) updates.contact_person = toTrimmedString(body.contact_person) || null;
-    if (body.phone !== undefined) updates.phone = toTrimmedString(body.phone) || null;
-    if (body.email !== undefined) updates.email = toTrimmedString(body.email) || null;
-    if (body.gst_number !== undefined) updates.gst_number = toTrimmedString(body.gst_number) || null;
+    if (body.gst_number !== undefined) {
+      const v = toUpperTrimmedString(body.gst_number);
+      if (!v) return procurementErrorResponse(req, ctx, "PROCUREMENT_CHA_GST_REQUIRED", 400, "GST number cannot be empty");
+      updates.gst_number = v;
+    }
     if (body.pan_number !== undefined) updates.pan_number = toTrimmedString(body.pan_number) || null;
     if (body.address !== undefined) updates.address = toTrimmedString(body.address) || null;
+    if (body.active !== undefined) updates.active = body.active === true;
     if (Object.keys(updates).length === 0) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_CHA", 400, "No fields to update");
     const { data, error } = await serviceRoleClient
       .schema("erp_master").from("cha_master").update(updates).eq("id", chaId).select("*").single();
@@ -1564,7 +1567,7 @@ export async function updateCHAHandler(req: Request, ctx: ProcurementHandlerCont
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_CHA_UPDATE_FAILED";
-    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code === "PROCUREMENT_CHA_NOT_FOUND" ? 404 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code === "PROCUREMENT_CHA_NOT_FOUND" ? 404 : code.includes("INVALID") || code.includes("REQUIRED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "CHA update failed");
   }
 }
@@ -1606,6 +1609,176 @@ export async function deleteCHAHandler(req: Request, ctx: ProcurementHandlerCont
     const code = (err as Error).message || "PROCUREMENT_CHA_DELETE_FAILED";
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code === "PROCUREMENT_CHA_NOT_FOUND" ? 404 : 500;
     return procurementErrorResponse(req, ctx, code, status, "CHA delete failed");
+  }
+}
+
+export async function getChaContactsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const chaId = toTrimmedString(new URL(req.url).searchParams.get("cha_id"));
+    if (!chaId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "cha_id required");
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("cha_contacts")
+      .select("*")
+      .eq("cha_id", chaId)
+      .order("created_at", { ascending: true });
+    if (error) throw new Error("PROCUREMENT_CHA_CONTACTS_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CHA_CONTACTS_FAILED";
+    return procurementErrorResponse(req, ctx, code, code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500, "CHA contacts fetch failed");
+  }
+}
+
+export async function upsertChaContactsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const chaId = toTrimmedString(body.cha_id);
+    const contacts = Array.isArray(body.contacts) ? body.contacts : [];
+    if (!chaId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "cha_id required");
+    if (!(await ensureChaExists(chaId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CHA_NOT_FOUND", 404, "CHA not found");
+    }
+    await serviceRoleClient.schema("erp_master").from("cha_contacts").delete().eq("cha_id", chaId);
+    if (contacts.length > 0) {
+      const rows = contacts
+        .filter((c: JsonRecord) => toTrimmedString(c.contact_name))
+        .map((c: JsonRecord) => ({
+          cha_id: chaId,
+          contact_name: toTrimmedString(c.contact_name),
+          phone: toTrimmedString(c.phone) || null,
+          designation: toTrimmedString(c.designation) || null,
+          is_primary: Boolean(c.is_primary),
+          created_by: ctx.auth_user_id,
+        }));
+      if (rows.length > 0) {
+        const { error } = await serviceRoleClient.schema("erp_master").from("cha_contacts").insert(rows);
+        if (error) throw new Error("PROCUREMENT_CHA_CONTACTS_SAVE_FAILED");
+      }
+    }
+    const { data } = await serviceRoleClient
+      .schema("erp_master")
+      .from("cha_contacts")
+      .select("*")
+      .eq("cha_id", chaId)
+      .order("created_at", { ascending: true });
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CHA_CONTACTS_SAVE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CHA contacts save failed");
+  }
+}
+
+export async function getChaEmailsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const chaId = toTrimmedString(new URL(req.url).searchParams.get("cha_id"));
+    if (!chaId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "cha_id required");
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("cha_emails")
+      .select("*")
+      .eq("cha_id", chaId)
+      .order("created_at", { ascending: true });
+    if (error) throw new Error("PROCUREMENT_CHA_EMAILS_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CHA_EMAILS_FAILED";
+    return procurementErrorResponse(req, ctx, code, code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500, "CHA emails fetch failed");
+  }
+}
+
+export async function upsertChaEmailsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const chaId = toTrimmedString(body.cha_id);
+    const emails = Array.isArray(body.emails) ? body.emails : [];
+    if (!chaId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "cha_id required");
+    if (!(await ensureChaExists(chaId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CHA_NOT_FOUND", 404, "CHA not found");
+    }
+    await serviceRoleClient.schema("erp_master").from("cha_emails").delete().eq("cha_id", chaId);
+    if (emails.length > 0) {
+      const rows = emails
+        .filter((e: JsonRecord) => toTrimmedString(e.email))
+        .map((e: JsonRecord) => ({
+          cha_id: chaId,
+          email: toTrimmedString(e.email),
+          label: toTrimmedString(e.label) || null,
+          is_primary: Boolean(e.is_primary),
+          created_by: ctx.auth_user_id,
+        }));
+      if (rows.length > 0) {
+        const { error } = await serviceRoleClient.schema("erp_master").from("cha_emails").insert(rows);
+        if (error) throw new Error("PROCUREMENT_CHA_EMAILS_SAVE_FAILED");
+      }
+    }
+    const { data } = await serviceRoleClient
+      .schema("erp_master")
+      .from("cha_emails")
+      .select("*")
+      .eq("cha_id", chaId)
+      .order("created_at", { ascending: true });
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CHA_EMAILS_SAVE_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CHA emails save failed");
+  }
+}
+
+export async function listChaCompanyMapsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const chaId = toTrimmedString(new URL(req.url).searchParams.get("cha_id"));
+    if (!chaId) return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REQUEST", 400, "cha_id required");
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("cha_company_map")
+      .select("*")
+      .eq("cha_id", chaId)
+      .order("created_at", { ascending: true });
+    if (error) throw new Error("PROCUREMENT_CHA_COMPANY_MAP_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CHA_COMPANY_MAP_FAILED";
+    return procurementErrorResponse(req, ctx, code, code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500, "CHA company map fetch failed");
+  }
+}
+
+export async function mapChaToCompanyHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const body = await parseBody(req);
+    const chaId = toTrimmedString(body.cha_id);
+    const companyId = toTrimmedString(body.company_id);
+    if (!(await ensureChaExists(chaId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CHA_NOT_FOUND", 404, "CHA not found");
+    }
+    if (!(await ensureCompanyExists(companyId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_NOT_FOUND", 404, "Company not found");
+    }
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("cha_company_map")
+      .upsert({
+        cha_id: chaId,
+        company_id: companyId,
+        active: body.active !== false,
+        created_by: ctx.auth_user_id,
+      }, { onConflict: "cha_id,company_id" })
+      .select("*")
+      .single();
+    if (error || !data) throw new Error("PROCUREMENT_CHA_COMPANY_MAP_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CHA_COMPANY_MAP_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CHA company map failed");
   }
 }
 

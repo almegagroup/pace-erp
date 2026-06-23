@@ -220,6 +220,30 @@ export function unmapCHAPort(chaId, portId) {
   return fetchProcurement("DELETE", `/api/procurement/chas/${encodeURIComponent(chaId)}/ports/${encodeURIComponent(portId)}`);
 }
 
+export function listChaContacts(chaId) {
+  return fetchProcurement("GET", "/api/procurement/chas/contacts", undefined, { cha_id: chaId });
+}
+
+export function saveChaContacts(chaId, contacts) {
+  return fetchProcurement("POST", "/api/procurement/chas/contacts", { cha_id: chaId, contacts });
+}
+
+export function listChaEmails(chaId) {
+  return fetchProcurement("GET", "/api/procurement/chas/emails", undefined, { cha_id: chaId });
+}
+
+export function saveChaEmails(chaId, emails) {
+  return fetchProcurement("POST", "/api/procurement/chas/emails", { cha_id: chaId, emails });
+}
+
+export function listChaCompanyMaps(chaId) {
+  return fetchProcurement("GET", "/api/procurement/chas/company-map", undefined, { cha_id: chaId });
+}
+
+export function mapChaToCompany(payload) {
+  return fetchProcurement("POST", "/api/procurement/chas/company-map", payload);
+}
+
 export function listMaterialCategories(params) {
   return fetchProcurement("GET", "/api/procurement/material-categories", undefined, params);
 }

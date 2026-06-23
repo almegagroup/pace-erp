@@ -138,12 +138,15 @@ import {
   deletePaymentTermsHandler,
   deletePortHandler,
   deleteTransporterHandler,
+  getChaContactsHandler,
+  getChaEmailsHandler,
   getGstProfileLookupHandler,
   getPaymentTermsHandler,
   getTransporterContactsHandler,
   getTransporterEmailsHandler,
   listCHAPortsHandler,
   listCHAsHandler,
+  listChaCompanyMapsHandler,
   listDomesticLeadTimesHandler,
   listImportLeadTimesHandler,
   listMaterialCategoriesHandler,
@@ -154,6 +157,7 @@ import {
   listTransportersHandler,
   listTransporterCompanyMapsHandler,
   mapCHAToPortHandler,
+  mapChaToCompanyHandler,
   mapTransporterToCompanyHandler,
   toggleCHAHandler,
   togglePaymentTermsHandler,
@@ -166,6 +170,8 @@ import {
   updateTransporterHandler,
   upsertDomesticLeadTimeHandler,
   upsertImportLeadTimeHandler,
+  upsertChaContactsHandler,
+  upsertChaEmailsHandler,
   upsertTransitTimeHandler,
   upsertTransporterContactsHandler,
   upsertTransporterEmailsHandler,
@@ -314,6 +320,18 @@ export async function dispatchProcurementRoutes(
       return await listCHAsHandler(req, ctx);
     case "POST:/api/procurement/chas":
       return await createCHAHandler(req, ctx);
+    case "GET:/api/procurement/chas/contacts":
+      return await getChaContactsHandler(req, ctx);
+    case "POST:/api/procurement/chas/contacts":
+      return await upsertChaContactsHandler(req, ctx);
+    case "GET:/api/procurement/chas/emails":
+      return await getChaEmailsHandler(req, ctx);
+    case "POST:/api/procurement/chas/emails":
+      return await upsertChaEmailsHandler(req, ctx);
+    case "GET:/api/procurement/chas/company-map":
+      return await listChaCompanyMapsHandler(req, ctx);
+    case "POST:/api/procurement/chas/company-map":
+      return await mapChaToCompanyHandler(req, ctx);
     case "GET:/api/procurement/companies":
       return await listProcurementCompaniesHandler(req, ctx);
     case "POST:/api/procurement/chas/toggle":

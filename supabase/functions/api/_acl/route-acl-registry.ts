@@ -132,6 +132,12 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/chas":                        { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "VIEW"  },
   "POST:/api/procurement/chas":                       { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "WRITE" },
   "POST:/api/procurement/chas/toggle":                { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "EDIT"  },
+  "GET:/api/procurement/chas/contacts":               { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "VIEW"  },
+  "POST:/api/procurement/chas/contacts":              { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "EDIT"  },
+  "GET:/api/procurement/chas/emails":                 { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "VIEW"  },
+  "POST:/api/procurement/chas/emails":                { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "EDIT"  },
+  "GET:/api/procurement/chas/company-map":            { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "VIEW"  },
+  "POST:/api/procurement/chas/company-map":           { skipAcl: false, resourceCode: "PROC_CHA_MASTER",                action: "EDIT"  },
 
   // ── Procurement: Number Series (SA-level) ────────────────────────────────
   "GET:/api/procurement/number-series/global":        { skipAcl: true },
