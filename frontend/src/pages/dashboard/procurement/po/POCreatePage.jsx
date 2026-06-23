@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
-import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
-import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
+import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listCostCenters, listMaterials, listVendorMaterialInfos, listVendors } from "../../om/omApi.js";
@@ -24,6 +24,7 @@ function createEmptyLine() {
     delivery_date: "",
     indent_reference: "",
     aslWarning: "",
+    aslChecked: false,
   };
 }
 
@@ -69,6 +70,10 @@ export default function POCreatePage() {
       })),
     [materials]
   );
+  const costCenterOptions = useMemo(
+    () => costCenters.map((entry) => ({ value: entry.id, label: `${entry.cost_center_code || entry.id} | ${entry.cost_center_name || entry.name || ""}` })),
+    [costCenters]
+  );
 
   const selectedVendor = useMemo(
     () => vendors.find((entry) => entry.id === form.vendor_id) ?? null,
@@ -89,7 +94,7 @@ export default function POCreatePage() {
         const [vendorData, paymentData, materialData, costCenterData] = await Promise.all([
           listVendors({ limit: 200, offset: 0, status: "ACTIVE" }),
           listPaymentTerms({ is_active: true }),
-          listMaterials({ limit: 200, offset: 0, material_type: "RM" }),
+          listMaterials({ limit: 400, offset: 0 }),
           listCostCenters(),
         ]);
         if (!active) {
@@ -101,6 +106,7 @@ export default function POCreatePage() {
         const costCenterRows = Array.isArray(costCenterData?.data) ? costCenterData.data : [];
         setVendors(vendorRows);
         setPaymentTerms(termRows);
+        // RM/PM materials only — Sales Order/PO restricts to these two types.
         setMaterials(materialRows.filter((entry) => ["RM", "PM"].includes(String(entry.material_type || "").toUpperCase())));
         setCostCenters(costCenterRows);
         setForm((current) => ({
@@ -155,10 +161,12 @@ export default function POCreatePage() {
       });
       const hasApproved = Array.isArray(result?.data) && result.data.length > 0;
       updateLine(index, {
-        aslWarning: hasApproved ? "" : "No approved VMI record exists for this vendor-material pair.",
+        aslChecked: true,
+        aslWarning: hasApproved ? "" : "No approved VMI record exists for this vendor-material pair — this is a hard block, line cannot be saved.",
       });
     } catch {
       updateLine(index, {
+        aslChecked: false,
         aslWarning: "Unable to verify approved VMI right now.",
       });
     }
@@ -175,6 +183,10 @@ export default function POCreatePage() {
     }
     if (lines.some((line) => !line.material_id || !line.quantity || !line.rate || !line.cost_center_id)) {
       setError("Each PO line requires material, quantity, rate, and cost center.");
+      return;
+    }
+    if (lines.some((line) => line.aslWarning)) {
+      setError("One or more lines have no approved VMI record for this vendor — this is a hard block per design. Fix or remove those lines before saving.");
       return;
     }
 
@@ -211,8 +223,129 @@ export default function POCreatePage() {
     }
   }
 
+  const netTotal = lines.reduce((sum, line) => sum + (Number(line.quantity || 0) || 0) * (Number(line.rate || 0) || 0), 0);
+
+  const lineColumns = [
+    {
+      key: "material_id",
+      label: "Material",
+      width: "260px",
+      render: (_row, index) => (
+        <ErpComboboxField
+          value={lines[index].material_id}
+          onChange={(value) => updateLine(index, { material_id: value, aslWarning: "", aslChecked: false })}
+          options={materialOptions}
+          blankLabel="Select material"
+          inputProps={{ onBlur: () => void checkApprovedAsl(index) }}
+        />
+      ),
+    },
+    {
+      key: "quantity",
+      label: "Qty",
+      width: "100px",
+      render: (_row, index) => (
+        <input
+          type="number" min="0" step="0.0001"
+          value={lines[index].quantity}
+          onChange={(event) => updateLine(index, { quantity: event.target.value })}
+          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+        />
+      ),
+    },
+    {
+      key: "uom_code",
+      label: "UOM",
+      width: "90px",
+      render: (_row, index) => (
+        <input
+          value={lines[index].uom_code}
+          onChange={(event) => updateLine(index, { uom_code: event.target.value.toUpperCase() })}
+          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+        />
+      ),
+    },
+    {
+      key: "rate",
+      label: "Rate",
+      width: "100px",
+      render: (_row, index) => (
+        <input
+          type="number" min="0" step="0.0001"
+          value={lines[index].rate}
+          onChange={(event) => updateLine(index, { rate: event.target.value })}
+          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+        />
+      ),
+    },
+    {
+      key: "cost_center_id",
+      label: "Cost Center",
+      width: "200px",
+      render: (_row, index) => (
+        <ErpComboboxField
+          value={lines[index].cost_center_id}
+          onChange={(value) => updateLine(index, { cost_center_id: value })}
+          options={costCenterOptions}
+          blankLabel="Select cost center"
+        />
+      ),
+    },
+    {
+      key: "delivery_date",
+      label: "Delivery Date",
+      width: "140px",
+      render: (_row, index) => (
+        <input
+          type="date"
+          value={lines[index].delivery_date}
+          onChange={(event) => updateLine(index, { delivery_date: event.target.value })}
+          className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+        />
+      ),
+    },
+    ...(indentRequired
+      ? [{
+          key: "indent_reference",
+          label: "Indent Ref.",
+          width: "140px",
+          render: (_row, index) => (
+            <input
+              value={lines[index].indent_reference}
+              onChange={(event) => updateLine(index, { indent_reference: event.target.value })}
+              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+            />
+          ),
+        }]
+      : []),
+    {
+      key: "net_value",
+      label: "Net Value",
+      width: "110px",
+      align: "right",
+      render: (_row, index) => ((Number(lines[index].quantity || 0) || 0) * (Number(lines[index].rate || 0) || 0)).toFixed(2),
+    },
+    {
+      key: "actions",
+      label: "",
+      width: "80px",
+      render: (_row, index) => (
+        <button
+          type="button"
+          onClick={() => removeLine(index)}
+          disabled={lines.length === 1}
+          className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Remove
+        </button>
+      ),
+    },
+  ];
+
+  const lineRowsWithWarnings = lines.map((line, index) => ({ ...line, __index: index }));
+
   return (
-    <ErpEntryFormTemplate
+    <ErpScreenScaffold
       eyebrow="Procurement"
       title="Create Purchase Order"
       actions={[
@@ -223,17 +356,17 @@ export default function POCreatePage() {
         ...(error ? [{ key: "po-create-error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "po-create-notice", tone: "success", message: notice }] : []),
       ]}
-      formEyebrow="PO Header"
-      formTitle="Create a new purchase order"
-      formContent={
-        loading ? (
-          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            Loading procurement master data...
-          </div>
-        ) : (
-          <div className="grid gap-3">
-            <div className="grid gap-3 lg:grid-cols-2">
-              <ErpDenseFormRow label="Company" required>
+    >
+      {loading ? (
+        <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+          Loading procurement master data...
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          <ErpSectionCard eyebrow="PO Header" title="Vendor, terms and basic details">
+            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Company <span className="text-rose-500">*</span>
                 <select
                   value={form.company_id}
                   onChange={(event) => updateHeaderField("company_id", event.target.value)}
@@ -241,43 +374,44 @@ export default function POCreatePage() {
                 >
                   <option value="">Select company</option>
                   {companyOptions.map((entry) => (
-                    <option key={entry.value} value={entry.value}>
-                      {entry.label}
-                    </option>
+                    <option key={entry.value} value={entry.value}>{entry.label}</option>
                   ))}
                 </select>
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Vendor" required>
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Vendor <span className="text-rose-500">*</span>
                 <ErpComboboxField
                   value={form.vendor_id}
                   onChange={(value) => updateHeaderField("vendor_id", value)}
                   options={vendorOptions}
                   blankLabel="Select vendor"
                 />
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Delivery Type" required>
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Delivery Type <span className="text-rose-500">*</span>
                 <select
                   value={form.delivery_type}
                   onChange={(event) => updateHeaderField("delivery_type", event.target.value)}
                   className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                 >
                   {DELIVERY_TYPE_OPTIONS.map((entry) => (
-                    <option key={entry} value={entry}>
-                      {entry}
-                    </option>
+                    <option key={entry} value={entry}>{entry}</option>
                   ))}
                 </select>
-              </ErpDenseFormRow>
+              </label>
               {showIncoterm ? (
-                <ErpDenseFormRow label="Incoterm" required>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Incoterm <span className="text-rose-500">*</span>
                   <input
                     value={form.incoterm}
                     onChange={(event) => updateHeaderField("incoterm", event.target.value.toUpperCase())}
+                    placeholder="FOB / CIF / CFR / EXW / DAP / DDP"
                     className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                   />
-                </ErpDenseFormRow>
+                </label>
               ) : null}
-              <ErpDenseFormRow label="Payment Term" required>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Payment Term <span className="text-rose-500">*</span>
                 <select
                   value={form.payment_term_id}
                   onChange={(event) => updateHeaderField("payment_term_id", event.target.value)}
@@ -285,146 +419,63 @@ export default function POCreatePage() {
                 >
                   <option value="">Select payment term</option>
                   {paymentTerms.map((entry) => (
-                    <option key={entry.id} value={entry.id}>
-                      {entry.code || entry.name} | {entry.name}
-                    </option>
+                    <option key={entry.id} value={entry.id}>{entry.code || entry.name} | {entry.name}</option>
                   ))}
                 </select>
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Freight Term" required>
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Freight Term <span className="text-rose-500">*</span>
                 <select
                   value={form.freight_term}
                   onChange={(event) => updateHeaderField("freight_term", event.target.value)}
                   className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                 >
                   {FREIGHT_TERM_OPTIONS.map((entry) => (
-                    <option key={entry} value={entry}>
-                      {entry}
-                    </option>
+                    <option key={entry} value={entry}>{entry}</option>
                   ))}
                 </select>
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Remarks">
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-2 xl:col-span-2">
+                Remarks
                 <textarea
-                  rows={3}
+                  rows={1}
                   value={form.remarks}
                   onChange={(event) => updateHeaderField("remarks", event.target.value)}
                   className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                 />
-              </ErpDenseFormRow>
+              </label>
             </div>
+          </ErpSectionCard>
 
-            <div className="grid gap-3 border-t border-slate-300 pt-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold text-slate-900">PO Lines</div>
-                <button
-                  type="button"
-                  onClick={addLine}
-                  className="border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900"
-                >
-                  Add Line
-                </button>
+          <ErpSectionCard
+            eyebrow="PO Lines"
+            title="Order details"
+            actions={[{ key: "add-line", label: "+ Add Line", tone: "primary", onClick: addLine }]}
+          >
+            <ErpDenseGrid
+              columns={lineColumns}
+              rows={lineRowsWithWarnings}
+              rowKey={(row) => row.__index}
+              maxHeight="none"
+              emptyMessage="No lines yet — click Add Line."
+              summaryRow={{ label: "Total", values: { net_value: netTotal.toFixed(2) } }}
+            />
+            {lines.some((line) => line.aslWarning) && (
+              <div className="mt-2 grid gap-1">
+                {lines.map((line, index) =>
+                  line.aslWarning ? (
+                    <p key={index} className="text-xs font-semibold text-rose-700">Line {index + 1}: {line.aslWarning}</p>
+                  ) : null
+                )}
               </div>
+            )}
+          </ErpSectionCard>
 
-              {lines.map((line, index) => (
-                <div key={`po-line-${index}`} className="grid gap-3 border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Line {index + 1}</div>
-                    <button
-                      type="button"
-                      onClick={() => removeLine(index)}
-                      disabled={lines.length === 1}
-                      className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                  <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-                    <ErpDenseFormRow label="Material" required>
-                      <ErpComboboxField
-                        value={line.material_id}
-                        onChange={(value) => updateLine(index, { material_id: value })}
-                        options={materialOptions}
-                        blankLabel="Select material"
-                        inputProps={{ onBlur: () => void checkApprovedAsl(index) }}
-                      />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Quantity" required>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.0001"
-                        value={line.quantity}
-                        onChange={(event) => updateLine(index, { quantity: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="UOM Code">
-                      <input
-                        value={line.uom_code}
-                        onChange={(event) => updateLine(index, { uom_code: event.target.value.toUpperCase() })}
-                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Rate" required>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.0001"
-                        value={line.rate}
-                        onChange={(event) => updateLine(index, { rate: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Cost Center" required>
-                      <select
-                        value={line.cost_center_id}
-                        onChange={(event) => updateLine(index, { cost_center_id: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      >
-                        <option value="">Select cost center</option>
-                        {costCenters.map((entry) => (
-                          <option key={entry.id} value={entry.id}>
-                            {entry.cost_center_code || entry.id} | {entry.cost_center_name || entry.name || ""}
-                          </option>
-                        ))}
-                      </select>
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Delivery Date">
-                      <input
-                        type="date"
-                        value={line.delivery_date}
-                        onChange={(event) => updateLine(index, { delivery_date: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      />
-                    </ErpDenseFormRow>
-                    {indentRequired ? (
-                      <ErpDenseFormRow label="Indent Reference">
-                        <input
-                          value={line.indent_reference}
-                          onChange={(event) => updateLine(index, { indent_reference: event.target.value })}
-                          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        />
-                      </ErpDenseFormRow>
-                    ) : null}
-                  </div>
-                  <div className="grid gap-1 text-xs text-slate-600">
-                    <div>
-                      Net Value: <span className="font-semibold text-slate-900">{((Number(line.quantity || 0) || 0) * (Number(line.rate || 0) || 0)).toFixed(2)}</span>
-                    </div>
-                    {line.aslWarning ? <div className="font-semibold text-amber-700">{line.aslWarning}</div> : null}
-                  </div>
-                </div>
-              ))}
-            </div>
+          <div className="border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            RM/PM materials only. An Approved (active) Vendor-Material Info record must exist for every vendor-material pair — this is a hard block, both here and at the backend.
           </div>
-        )
-      }
-      bottomContent={
-        <div className="rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          RM/PM materials only. Approved VMI should exist for every vendor-material pair before submission.
         </div>
-      }
-    />
+      )}
+    </ErpScreenScaffold>
   );
 }
