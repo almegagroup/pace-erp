@@ -149,16 +149,6 @@ async function ensurePortExists(portId: string): Promise<boolean> {
   return !error && Boolean(data?.id);
 }
 
-async function ensureCategoryExists(categoryId: string): Promise<boolean> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_master")
-    .from("material_category_master")
-    .select("id")
-    .eq("id", categoryId)
-    .maybeSingle();
-  return !error && Boolean(data?.id);
-}
-
 async function ensureVendorExists(vendorId: string): Promise<boolean> {
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
@@ -853,12 +843,11 @@ export async function listImportLeadTimesHandler(req: Request, ctx: ProcurementH
   try {
     const url = new URL(req.url);
     const portId = toTrimmedString(url.searchParams.get("port_id"));
-    const categoryId = toTrimmedString(url.searchParams.get("material_category_id"));
     const activeParam = url.searchParams.get("is_active");
     let query = serviceRoleClient
       .schema("erp_master")
       .from("lead_time_master_import")
-      .select(`*, vendor:vendor_id(vendor_code, vendor_name), category:material_category_id(category_code, category_name), port:port_of_discharge_id(port_code, port_name)`)
+      .select(`*, vendor:vendor_id(vendor_code, vendor_name), port:port_of_discharge_id(port_code, port_name)`)
       .order("effective_from", { ascending: false });
     if (activeParam === "all") {
       // no filter
@@ -866,7 +855,6 @@ export async function listImportLeadTimesHandler(req: Request, ctx: ProcurementH
       query = query.eq("active", true);
     }
     if (portId) query = query.eq("port_of_discharge_id", portId);
-    if (categoryId) query = query.eq("material_category_id", categoryId);
     const { data, error } = await query;
     if (error) throw new Error("PROCUREMENT_IMPORT_LEAD_TIME_LIST_FAILED");
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
@@ -908,13 +896,6 @@ export async function updateImportLeadTimeHandler(req: Request, ctx: Procurement
       }
       updates.vendor_id = vendorId;
     }
-    if (body.material_category_id !== undefined) {
-      const categoryId = toTrimmedString(body.material_category_id);
-      if (!(await ensureCategoryExists(categoryId))) {
-        return procurementErrorResponse(req, ctx, "PROCUREMENT_CATEGORY_NOT_FOUND", 404, "Material category not found");
-      }
-      updates.material_category_id = categoryId;
-    }
     if (body.port_of_discharge_id !== undefined || body.port_id !== undefined) {
       const portId = toTrimmedString(body.port_of_discharge_id || body.port_id);
       if (!(await ensurePortExists(portId))) {
@@ -953,13 +934,9 @@ export async function upsertImportLeadTimeHandler(req: Request, ctx: Procurement
     assertManagerOrSARole(ctx);
     const body = await parseBody(req);
     const vendorId = toTrimmedString(body.vendor_id);
-    const categoryId = toTrimmedString(body.material_category_id);
     const portId = toTrimmedString(body.port_of_discharge_id || body.port_id);
     if (!(await ensureVendorExists(vendorId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_VENDOR_NOT_FOUND", 404, "Vendor not found");
-    }
-    if (!(await ensureCategoryExists(categoryId))) {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_CATEGORY_NOT_FOUND", 404, "Material category not found");
     }
     if (!(await ensurePortExists(portId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PORT_NOT_FOUND", 404, "Port not found");
@@ -969,7 +946,6 @@ export async function upsertImportLeadTimeHandler(req: Request, ctx: Procurement
       .from("lead_time_master_import")
       .insert({
         vendor_id: vendorId,
-        material_category_id: categoryId,
         port_of_discharge_id: portId,
         sail_time_days: parseNullableInt(body.sail_time_days) ?? 0,
         clearance_days: parseNullableInt(body.clearance_days) ?? 0,

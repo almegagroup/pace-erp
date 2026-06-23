@@ -15,7 +15,6 @@ import {
   listCompanies,
   listImportLeadTimes,
   listDomesticLeadTimes,
-  listMaterialCategories,
   listPorts,
   updateImportLeadTime,
   updateDomesticLeadTime,
@@ -24,7 +23,7 @@ import {
 } from "../procurementApi.js";
 import { listVendors } from "../../om/omApi.js";
 
-const EMPTY_IMPORT = { vendor_id: "", material_category_id: "", port_of_discharge_id: "", sail_time_days: "", clearance_days: "", effective_from: "", effective_to: "" };
+const EMPTY_IMPORT = { vendor_id: "", port_of_discharge_id: "", sail_time_days: "", clearance_days: "", effective_from: "", effective_to: "" };
 const EMPTY_DOMESTIC = { vendor_id: "", company_id: "", transit_days: "", effective_from: "", effective_to: "" };
 
 export default function ImportLeadTimeMasterPage() {
@@ -33,7 +32,6 @@ export default function ImportLeadTimeMasterPage() {
 
   const [importVendors, setImportVendors] = useState([]);
   const [domesticVendors, setDomesticVendors] = useState([]);
-  const [categories, setCategories] = useState([]);
   const [dischargePorts, setDischargePorts] = useState([]);
   const [companies, setCompanies] = useState([]);
 
@@ -60,10 +58,9 @@ export default function ImportLeadTimeMasterPage() {
   }
 
   async function loadMasterData() {
-    const [ivRes, dvRes, cRes, pRes, coRes] = await Promise.allSettled([
+    const [ivRes, dvRes, pRes, coRes] = await Promise.allSettled([
       listVendors({ status: "ACTIVE", vendor_type: "IMPORT" }),
       listVendors({ status: "ACTIVE", vendor_type: "DOMESTIC" }),
-      listMaterialCategories({ is_active: "true" }),
       listPorts({ is_active: "true", port_role: "DISCHARGE" }),
       listCompanies(),
     ]);
@@ -75,7 +72,6 @@ export default function ImportLeadTimeMasterPage() {
       const v = dvRes.value;
       setDomesticVendors(Array.isArray(v) ? v : (v?.data ?? []));
     }
-    if (cRes.status === "fulfilled") setCategories(Array.isArray(cRes.value) ? cRes.value : []);
     if (pRes.status === "fulfilled") setDischargePorts(Array.isArray(pRes.value) ? pRes.value : []);
     if (coRes.status === "fulfilled") {
       const v = coRes.value;
@@ -105,14 +101,13 @@ export default function ImportLeadTimeMasterPage() {
   }, []);
 
   async function handleImportSave() {
-    if (!importForm.vendor_id || !importForm.material_category_id || !importForm.port_of_discharge_id || importForm.sail_time_days === "" || importForm.clearance_days === "" || !importForm.effective_from) {
+    if (!importForm.vendor_id || !importForm.port_of_discharge_id || importForm.sail_time_days === "" || importForm.clearance_days === "" || !importForm.effective_from) {
       flash("All fields except Effective To are required.", true); return;
     }
     setSaving(true);
     try {
       const payload = {
         vendor_id: importForm.vendor_id,
-        material_category_id: importForm.material_category_id,
         port_of_discharge_id: importForm.port_of_discharge_id,
         sail_time_days: Number(importForm.sail_time_days),
         clearance_days: Number(importForm.clearance_days),
@@ -138,7 +133,6 @@ export default function ImportLeadTimeMasterPage() {
     setEditingImportId(row.id);
     setImportForm({
       vendor_id: row.vendor_id ?? "",
-      material_category_id: row.material_category_id ?? "",
       port_of_discharge_id: row.port_of_discharge_id ?? "",
       sail_time_days: String(row.sail_time_days ?? ""),
       clearance_days: String(row.clearance_days ?? ""),
@@ -247,7 +241,6 @@ export default function ImportLeadTimeMasterPage() {
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50">
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Vendor</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Material Category</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Discharge Port</th>
                     <th className="px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Sail Days</th>
                     <th className="px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Clearance Days</th>
@@ -258,17 +251,13 @@ export default function ImportLeadTimeMasterPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {loading && <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>}
-                  {!loading && importRows.length === 0 && <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">No import lead times found.</td></tr>}
+                  {loading && <tr><td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>}
+                  {!loading && importRows.length === 0 && <tr><td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">No import lead times found.</td></tr>}
                   {importRows.map((row) => (
                     <tr key={row.id} className="border-b border-slate-100 hover:bg-slate-50">
                       <td className="px-3 py-2 text-xs">
                         <span className="font-mono font-semibold text-slate-800">{row.vendor?.vendor_code ?? "—"}</span>
                         <span className="ml-1 text-slate-500">{row.vendor?.vendor_name}</span>
-                      </td>
-                      <td className="px-3 py-2 text-xs">
-                        <span className="font-mono font-semibold text-slate-800">{row.category?.category_code ?? "—"}</span>
-                        <span className="ml-1 text-slate-500">{row.category?.category_name}</span>
                       </td>
                       <td className="px-3 py-2 text-xs">
                         <span className="font-mono font-semibold text-slate-800">{row.port?.port_code ?? "—"}</span>
@@ -301,13 +290,6 @@ export default function ImportLeadTimeMasterPage() {
                 <select value={importForm.vendor_id} onChange={(e) => setImportForm((f) => ({ ...f, vendor_id: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
                   <option value="">— Select Vendor —</option>
                   {importVendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_code} — {v.vendor_name}</option>)}
-                </select>
-              </label>
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Material Category <span className="text-rose-500">*</span>
-                <select value={importForm.material_category_id} onChange={(e) => setImportForm((f) => ({ ...f, material_category_id: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
-                  <option value="">— Select Category —</option>
-                  {categories.map((c) => <option key={c.id} value={c.id}>{c.category_code} — {c.category_name}</option>)}
                 </select>
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
