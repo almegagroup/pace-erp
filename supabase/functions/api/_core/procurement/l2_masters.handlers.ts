@@ -26,7 +26,7 @@ const LC_TYPES = new Set(["AT_SIGHT", "USANCE", "N_A"]);
 const PORT_TYPES = new Set(["SEA", "AIR", "LAND"]);
 const PORT_ROLES = new Set(["DISCHARGE", "LOADING", "BOTH"]);
 const TRANSIT_MODES = new Set(["ROAD", "RAIL", "MULTI-MODAL"]);
-const TRANSPORTER_DIRECTIONS = new Set(["INBOUND", "OUTBOUND", "BOTH"]);
+const TRANSPORTER_DIRECTIONS = new Set(["IMPORT", "DOMESTIC", "BOTH"]);
 const TRANSPORTER_MODES = new Set(["ROAD", "RAIL", "COURIER", "MULTI-MODAL"]);
 const MANAGER_OR_SA_ROLES = new Set([
   "SA",
@@ -1091,17 +1091,25 @@ export async function upsertDomesticLeadTimeHandler(req: Request, ctx: Procureme
 
 export async function listTransportersHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    const direction = toUpperTrimmedString(new URL(req.url).searchParams.get("direction"));
+    const url = new URL(req.url);
+    const direction = toUpperTrimmedString(url.searchParams.get("direction"));
+    const activeParam = url.searchParams.get("is_active");
     let query = serviceRoleClient
       .schema("erp_master")
       .from("transporter_master")
       .select("*")
-      .eq("active", true)
       .order("transporter_name", { ascending: true });
-    if (direction === "INBOUND") {
-      query = query.in("usage_direction", ["INBOUND", "BOTH"]);
-    } else if (direction === "OUTBOUND") {
-      query = query.in("usage_direction", ["OUTBOUND", "BOTH"]);
+    if (activeParam === "all") {
+      // no filter
+    } else if (activeParam === "false") {
+      query = query.eq("active", false);
+    } else {
+      query = query.eq("active", true);
+    }
+    if (direction === "IMPORT") {
+      query = query.in("usage_direction", ["IMPORT", "BOTH"]);
+    } else if (direction === "DOMESTIC") {
+      query = query.in("usage_direction", ["DOMESTIC", "BOTH"]);
     } else if (direction === "BOTH") {
       query = query.in("usage_direction", ["BOTH"]);
     }
