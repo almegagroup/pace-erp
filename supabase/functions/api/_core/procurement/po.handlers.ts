@@ -624,6 +624,7 @@ export async function createPOHandler(
       .single();
 
     if (groupError || !groupData) {
+      console.error("PO_ORDER_GROUP_INSERT_ERROR", JSON.stringify(groupError));
       throw new Error("PROCUREMENT_PO_ORDER_GROUP_CREATE_FAILED");
     }
 
