@@ -1432,6 +1432,7 @@ export async function amendPOHandler(
       .single();
 
     if (poUpdateError || !updatedPo) {
+      console.error("PO_AMEND_HEADER_UPDATE_ERROR", JSON.stringify(poUpdateError));
       throw new Error("PROCUREMENT_PO_AMEND_FAILED");
     }
 
@@ -1445,6 +1446,7 @@ export async function amendPOHandler(
         .single();
 
       if (lineUpdateResult.error) {
+        console.error("PO_AMEND_LINE_UPDATE_ERROR", JSON.stringify(lineUpdateResult.error));
         throw new Error("PROCUREMENT_PO_LINE_AMEND_FAILED");
       }
     }
@@ -1455,6 +1457,7 @@ export async function amendPOHandler(
       .insert(amendmentEntries);
 
     if (amendmentInsert.error) {
+      console.error("PO_AMEND_LOG_INSERT_ERROR", JSON.stringify(amendmentInsert.error));
       throw new Error("PROCUREMENT_PO_AMEND_LOG_FAILED");
     }
 
@@ -1466,6 +1469,7 @@ export async function amendPOHandler(
       },
     }, ctx.request_id, req);
   } catch (err) {
+    console.error("PO_AMEND_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_AMEND_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" || code === "PROCUREMENT_PO_LINE_NOT_FOUND" || code === "PROCUREMENT_COST_CENTER_NOT_FOUND"
@@ -1605,6 +1609,7 @@ export async function cancelPOHandler(
       .single();
 
     if (error || !updatedPo) {
+      console.error("PO_CANCEL_HEADER_UPDATE_ERROR", JSON.stringify(error));
       throw new Error("PROCUREMENT_PO_CANCEL_FAILED");
     }
 
@@ -1620,6 +1625,7 @@ export async function cancelPOHandler(
       .in("line_status", ["OPEN", "PARTIALLY_RECEIVED"]);
 
     if (lineCancelResult.error) {
+      console.error("PO_CANCEL_LINE_UPDATE_ERROR", JSON.stringify(lineCancelResult.error));
       throw new Error("PROCUREMENT_PO_CANCEL_FAILED");
     }
 
@@ -1636,11 +1642,13 @@ export async function cancelPOHandler(
       .eq("status", "ORDERED");
 
     if (csnCancelResult.error) {
+      console.error("PO_CANCEL_CSN_UPDATE_ERROR", JSON.stringify(csnCancelResult.error));
       throw new Error("PROCUREMENT_PO_CANCEL_FAILED");
     }
 
     return okResponse({ data: updatedPo }, ctx.request_id, req);
   } catch (err) {
+    console.error("PO_CANCEL_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_CANCEL_FAILED";
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" ? 404
@@ -1695,6 +1703,7 @@ export async function knockOffPOLineHandler(
       .single();
 
     if (error || !updatedLine) {
+      console.error("PO_LINE_KNOCK_OFF_ERROR", JSON.stringify(error));
       throw new Error("PROCUREMENT_PO_LINE_KNOCK_OFF_FAILED");
     }
 
@@ -1719,6 +1728,7 @@ export async function knockOffPOLineHandler(
 
     return okResponse({ data: updatedLine }, ctx.request_id, req);
   } catch (err) {
+    console.error("PO_LINE_KNOCK_OFF_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_LINE_KNOCK_OFF_FAILED";
     const status = code === "PROCUREMENT_PO_NOT_FOUND" || code === "PROCUREMENT_PO_LINE_NOT_FOUND" ? 404 : code.includes("REQUIRED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order line knock-off failed");
@@ -1761,6 +1771,7 @@ export async function knockOffPOHandler(
       .in("line_status", ["OPEN", "PARTIALLY_RECEIVED"]);
 
     if (lineUpdateResult.error) {
+      console.error("PO_KNOCK_OFF_LINES_UPDATE_ERROR", JSON.stringify(lineUpdateResult.error));
       throw new Error("PROCUREMENT_PO_KNOCK_OFF_FAILED");
     }
 
@@ -1778,11 +1789,13 @@ export async function knockOffPOHandler(
       .single();
 
     if (error || !updatedPo) {
+      console.error("PO_KNOCK_OFF_HEADER_UPDATE_ERROR", JSON.stringify(error));
       throw new Error("PROCUREMENT_PO_KNOCK_OFF_FAILED");
     }
 
     return okResponse({ data: updatedPo }, ctx.request_id, req);
   } catch (err) {
+    console.error("PO_KNOCK_OFF_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_KNOCK_OFF_FAILED";
     const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code.includes("REQUIRED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order knock-off failed");
