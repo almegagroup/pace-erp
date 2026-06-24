@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -22,11 +23,13 @@ import {
   listMaterialCompanyExtensions,
   listMaterialPlantExtensions,
   listVendorMaterialInfos,
-  listVendors,
-  listUoms,
   updateMaterial,
-  listCompaniesForOm,
 } from "../omApi.js";
+import {
+  useCompaniesForOmQuery,
+  useUomsQuery,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function getAllowedStatusTargets(status) {
   const transitions = {
@@ -45,28 +48,60 @@ export default function MaterialDetailPage() {
   const searchId = searchParams.get("id");
   const id = searchId || context.id || "";
 
-  const [material, setMaterial] = useState(null);
   const [form, setForm] = useState(null);
-  const [uoms, setUoms] = useState([]);
-  const [companies, setCompanies] = useState([]);
-  const [companyExtensions, setCompanyExtensions] = useState([]);
-  const [plantExtensions, setPlantExtensions] = useState([]);
-
   const [companyExtForm, setCompanyExtForm] = useState({ company_id: "", procurement_allowed: true, hsn_override: "" });
   const [plantExtForm, setPlantExtForm] = useState({
     company_id: "", safety_stock: "", reorder_point: "", min_order_qty: "", lead_time_days: "",
   });
 
-  const [approvedVendors, setApprovedVendors] = useState([]);
-  const [vendorDirectory, setVendorDirectory] = useState([]);
-  const [approvedVendorsLoading, setApprovedVendorsLoading] = useState(false);
   const [showApprovedVendors, setShowApprovedVendors] = useState(false);
 
   const [editMode, setEditMode] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const uomQuery = useUomsQuery({ is_active: true });
+  const companiesQuery = useCompaniesForOmQuery();
+  const detailQuery = useQuery({
+    queryKey: ["om", "material-detail", id],
+    queryFn: async () => {
+      const [materialResult, companyExtResult, plantExtResult] = await Promise.all([
+        getMaterial(id),
+        listMaterialCompanyExtensions(id),
+        listMaterialPlantExtensions(id),
+      ]);
+      return {
+        material: materialResult?.data ?? null,
+        companyExtensions: Array.isArray(companyExtResult?.data) ? companyExtResult.data : [],
+        plantExtensions: Array.isArray(plantExtResult?.data) ? plantExtResult.data : [],
+      };
+    },
+    enabled: Boolean(id),
+  });
+  const approvedVendorsQuery = useQuery({
+    queryKey: ["om", "material-approved-vendors", id],
+    queryFn: async () => {
+      const vmiResult = await listVendorMaterialInfos({ material_id: id, limit: 200, offset: 0 });
+      return Array.isArray(vmiResult?.data) ? vmiResult.data : [];
+    },
+    enabled: Boolean(id && showApprovedVendors),
+  });
+  const vendorOptionsQuery = useVendorOptionsQuery(
+    { limit: 200, offset: 0 },
+    { enabled: Boolean(showApprovedVendors) }
+  );
+  const material = detailQuery.data?.material ?? null;
+  const uoms = Array.isArray(uomQuery.data?.data) ? uomQuery.data.data : [];
+  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const companyExtensions = detailQuery.data?.companyExtensions ?? [];
+  const plantExtensions = detailQuery.data?.plantExtensions ?? [];
+  const approvedVendors = approvedVendorsQuery.data ?? [];
+  const vendorDirectory = vendorOptionsQuery.vendors;
+  const approvedVendorsLoading = approvedVendorsQuery.isLoading || vendorOptionsQuery.isLoading;
+  const loading =
+    detailQuery.isLoading ||
+    uomQuery.isLoading ||
+    companiesQuery.isLoading;
 
   useEffect(() => {
     if (!searchId && context.id) {
@@ -75,41 +110,27 @@ export default function MaterialDetailPage() {
   }, [context.id, searchId]);
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!id) { setError("OM_MATERIAL_NOT_FOUND"); setLoading(false); return; }
-      setLoading(true);
-      setError("");
-      try {
-        const [materialResult, uomResult, companyList, companyExtResult, plantExtResult] = await Promise.all([
-          getMaterial(id),
-          listUoms({ is_active: true }),
-          listCompaniesForOm(),
-          listMaterialCompanyExtensions(id),
-          listMaterialPlantExtensions(id),
-        ]);
-        if (!active) return;
-        const materialRow = materialResult?.data ?? null;
-        setMaterial(materialRow);
-        setForm({
-          material_name: materialRow?.material_name ?? "",
-          description: materialRow?.description ?? "",
-          hsn_code: materialRow?.hsn_code ?? "",
-          base_uom_code: materialRow?.base_uom_code ?? "",
-        });
-        setUoms(Array.isArray(uomResult?.data) ? uomResult.data : []);
-        setCompanies(Array.isArray(companyList) ? companyList : []);
-        setCompanyExtensions(Array.isArray(companyExtResult?.data) ? companyExtResult.data : []);
-        setPlantExtensions(Array.isArray(plantExtResult?.data) ? plantExtResult.data : []);
-      } catch (loadError) {
-        if (active) setError(loadError instanceof Error ? loadError.message : "OM_MATERIAL_LOOKUP_FAILED");
-      } finally {
-        if (active) setLoading(false);
-      }
+    if (!material) {
+      return;
     }
-    void load();
-    return () => { active = false; };
-  }, [id]);
+    setForm({
+      material_name: material.material_name ?? "",
+      description: material.description ?? "",
+      hsn_code: material.hsn_code ?? "",
+      base_uom_code: material.base_uom_code ?? "",
+    });
+  }, [material]);
+
+  useEffect(() => {
+    setError(
+      detailQuery.error?.message ||
+      uomQuery.error?.message ||
+      companiesQuery.error?.message ||
+      approvedVendorsQuery.error?.message ||
+      vendorOptionsQuery.error?.message ||
+      ""
+    );
+  }, [approvedVendorsQuery.error, companiesQuery.error, detailQuery.error, uomQuery.error, vendorOptionsQuery.error]);
 
   function setField(key, value) { setForm((prev) => ({ ...prev, [key]: value })); }
 
@@ -118,9 +139,9 @@ export default function MaterialDetailPage() {
     setSaving(true); setError(""); setNotice("");
     try {
       const result = await updateMaterial({ id: material.id, material_name: form.material_name, description: form.description, hsn_code: form.hsn_code, base_uom_code: form.base_uom_code });
-      const next = result?.data ?? material;
-      setMaterial(next);
-      setForm({ material_name: next.material_name ?? "", description: next.description ?? "", hsn_code: next.hsn_code ?? "", base_uom_code: next.base_uom_code ?? "" });
+      if (result?.data) {
+        await detailQuery.refetch();
+      }
       setEditMode(false); setNotice("Material updated.");
     } catch (err) { setError(err instanceof Error ? err.message : "OM_MATERIAL_UPDATE_FAILED"); }
     finally { setSaving(false); }
@@ -130,8 +151,8 @@ export default function MaterialDetailPage() {
     if (!material?.id) return;
     setSaving(true); setError(""); setNotice("");
     try {
-      const result = await changeMaterialStatus({ id: material.id, new_status: newStatus });
-      setMaterial(result?.data ?? material);
+      await changeMaterialStatus({ id: material.id, new_status: newStatus });
+      await detailQuery.refetch();
       setNotice(`Material moved to ${newStatus}.`);
     } catch (err) { setError(err instanceof Error ? err.message : "OM_MATERIAL_STATUS_UPDATE_FAILED"); }
     finally { setSaving(false); }
@@ -142,8 +163,7 @@ export default function MaterialDetailPage() {
     setSaving(true); setError(""); setNotice("");
     try {
       await extendMaterialToCompany({ material_id: material.id, company_id: companyExtForm.company_id, procurement_allowed: companyExtForm.procurement_allowed, hsn_override: companyExtForm.hsn_override.trim() || null });
-      const updated = await listMaterialCompanyExtensions(id);
-      setCompanyExtensions(Array.isArray(updated?.data) ? updated.data : []);
+      await detailQuery.refetch();
       setCompanyExtForm({ company_id: "", procurement_allowed: true, hsn_override: "" });
       setNotice("Company extension saved.");
     } catch (err) { setError(err instanceof Error ? err.message : "OM_MATERIAL_EXTEND_COMPANY_FAILED"); }
@@ -162,8 +182,7 @@ export default function MaterialDetailPage() {
         min_order_qty: plantExtForm.min_order_qty === "" ? null : Number(plantExtForm.min_order_qty),
         lead_time_days: plantExtForm.lead_time_days === "" ? null : Number(plantExtForm.lead_time_days),
       });
-      const updated = await listMaterialPlantExtensions(id);
-      setPlantExtensions(Array.isArray(updated?.data) ? updated.data : []);
+      await detailQuery.refetch();
       setPlantExtForm({ company_id: "", safety_stock: "", reorder_point: "", min_order_qty: "", lead_time_days: "" });
       setNotice("Company extension saved.");
     } catch (err) { setError(err instanceof Error ? err.message : "OM_MATERIAL_EXTEND_PLANT_FAILED"); }
@@ -172,18 +191,7 @@ export default function MaterialDetailPage() {
 
   async function loadApprovedVendors() {
     if (!material?.id) return;
-    setApprovedVendorsLoading(true); setError("");
-    try {
-      const [vmiResult, vendorResult] = await Promise.all([
-        listVendorMaterialInfos({ material_id: material.id, limit: 200, offset: 0 }),
-        listVendors({ limit: 200, offset: 0 }),
-      ]);
-      setApprovedVendors(Array.isArray(vmiResult?.data) ? vmiResult.data : []);
-      setVendorDirectory(Array.isArray(vendorResult?.data) ? vendorResult.data : []);
-    } catch (err) {
-      setApprovedVendors([]); setVendorDirectory([]);
-      setError(err instanceof Error ? err.message : "OM_VMI_LIST_FAILED");
-    } finally { setApprovedVendorsLoading(false); }
+    await Promise.all([approvedVendorsQuery.refetch(), vendorOptionsQuery.refetch()]);
   }
 
   const vendorMap = useMemo(() => new Map(vendorDirectory.map((v) => [v.id, v])), [vendorDirectory]);

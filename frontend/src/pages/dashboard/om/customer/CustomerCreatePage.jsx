@@ -15,7 +15,11 @@ import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormT
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { createCustomer, createParentCustomer, getVendor, listParentCustomers, listVendors } from "../omApi.js";
+import { createCustomer, createParentCustomer, getVendor } from "../omApi.js";
+import {
+  useParentCustomersQuery,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function formatVendorAddress(vendor) {
   if (!vendor) return "";
@@ -30,9 +34,6 @@ function formatVendorAddress(vendor) {
 
 export default function CustomerCreatePage() {
   const [source, setSource] = useState("INDEPENDENT");
-  const [vendors, setVendors] = useState([]);
-  const [parentCustomers, setParentCustomers] = useState([]);
-  const [loadingDeps, setLoadingDeps] = useState(true);
   const [loadingVendorProfile, setLoadingVendorProfile] = useState(false);
   const [showNewParent, setShowNewParent] = useState(false);
   const [newParent, setNewParent] = useState({ parent_customer_name: "", gst_number: "", address: "" });
@@ -54,6 +55,15 @@ export default function CustomerCreatePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const vendorQuery = useVendorOptionsQuery({ status: "ACTIVE", limit: 500, offset: 0 });
+  const parentCustomerQuery = useParentCustomersQuery();
+  const vendors = vendorQuery.vendors;
+  const parentCustomers = Array.isArray(parentCustomerQuery.data?.data)
+    ? parentCustomerQuery.data.data
+    : Array.isArray(parentCustomerQuery.data)
+    ? parentCustomerQuery.data
+    : [];
+  const loadingDeps = vendorQuery.isLoading || parentCustomerQuery.isLoading;
 
   async function handleVendorSelect(vendorId) {
     updateField("vendor_id", vendorId);
@@ -82,31 +92,13 @@ export default function CustomerCreatePage() {
   }
 
   useEffect(() => {
-    let active = true;
-    async function loadDependencies() {
-      setLoadingDeps(true);
-      try {
-        const [vendorResult, parentResult] = await Promise.all([
-          listVendors({ status: "ACTIVE", limit: 500, offset: 0 }),
-          listParentCustomers(),
-        ]);
-        if (!active) return;
-        setVendors(Array.isArray(vendorResult?.data) ? vendorResult.data : []);
-        setParentCustomers(Array.isArray(parentResult?.data) ? parentResult.data : []);
-      } catch {
-        if (active) {
-          setVendors([]);
-          setParentCustomers([]);
-        }
-      } finally {
-        if (active) setLoadingDeps(false);
-      }
-    }
-    void loadDependencies();
-    return () => {
-      active = false;
-    };
-  }, []);
+    setError(
+      error ||
+      vendorQuery.error?.message ||
+      parentCustomerQuery.error?.message ||
+      ""
+    );
+  }, [error, parentCustomerQuery.error, vendorQuery.error]);
 
   function updateField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -127,7 +119,7 @@ export default function CustomerCreatePage() {
       });
       const created = result?.data;
       if (created) {
-        setParentCustomers((current) => [...current, created]);
+        await parentCustomerQuery.refetch();
         updateField("parent_customer_id", created.id);
       }
       setNewParent({ parent_customer_name: "", gst_number: "", address: "" });

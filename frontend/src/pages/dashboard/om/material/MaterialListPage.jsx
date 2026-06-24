@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -24,14 +25,11 @@ const LIMIT = 50;
 export default function MaterialListPage() {
   const { shellProfile } = useMenu();
   const isSA = shellProfile?.roleCode === "SA" || shellProfile?.roleCode === "GA";
-  const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [materialType, setMaterialType] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -42,42 +40,27 @@ export default function MaterialListPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
+  const materialParams = useMemo(
+    () => ({
+      material_type: materialType || undefined,
+      status: status || undefined,
+      search: debouncedSearch || undefined,
+      limit: LIMIT,
+      offset: (page - 1) * LIMIT,
+    }),
+    [debouncedSearch, materialType, page, status]
+  );
+  const materialQuery = useQuery({
+    queryKey: ["om", "material-list", materialParams],
+    queryFn: () => listMaterials(materialParams),
+  });
+  const rows = Array.isArray(materialQuery.data?.data) ? materialQuery.data.data : [];
+  const total = Number(materialQuery.data?.total ?? 0);
+  const loading = materialQuery.isLoading;
+
   useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const result = await listMaterials({
-          material_type: materialType || undefined,
-          status: status || undefined,
-          search: debouncedSearch || undefined,
-          limit: LIMIT,
-          offset: (page - 1) * LIMIT,
-        });
-        if (!active) {
-          return;
-        }
-        setRows(Array.isArray(result?.data) ? result.data : []);
-        setTotal(Number(result?.total ?? 0));
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setTotal(0);
-        setError(loadError instanceof Error ? loadError.message : "OM_MATERIAL_LIST_FAILED");
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [debouncedSearch, materialType, page, status]);
+    setError(materialQuery.error?.message || "");
+  }, [materialQuery.error]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / LIMIT)), [total]);
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
@@ -88,7 +71,12 @@ export default function MaterialListPage() {
       eyebrow="Operation Management"
       title="Material Master"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
+        {
+          key: "refresh",
+          label: loading ? "Refreshing..." : "Refresh",
+          tone: "neutral",
+          onClick: () => void materialQuery.refetch(),
+        },
         ...(isSA ? [{ key: "create", label: "Create Material", tone: "primary", onClick: () => openScreen(ADMIN_SCREENS.SA_MATERIAL_CREATE.screen_code) }] : []),
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}

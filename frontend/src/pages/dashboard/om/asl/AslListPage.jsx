@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -20,51 +21,33 @@ import { listVendorMaterialInfos } from "../omApi.js";
 const LIMIT = 50;
 
 export default function AslListPage() {
-  const [rows, setRows] = useState([]);
   const [vendorSearch, setVendorSearch] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const aslParams = useMemo(
+    () => ({
+      vendor_search: vendorSearch || undefined,
+      material_search: materialSearch || undefined,
+      status: status || undefined,
+      limit: LIMIT,
+      offset: (page - 1) * LIMIT,
+    }),
+    [materialSearch, page, status, vendorSearch]
+  );
+  const aslQuery = useQuery({
+    queryKey: ["om", "asl-list", aslParams],
+    queryFn: () => listVendorMaterialInfos(aslParams),
+  });
+  const rows = Array.isArray(aslQuery.data?.data) ? aslQuery.data.data : [];
+  const total = Number(aslQuery.data?.total ?? 0);
+  const loading = aslQuery.isLoading;
+
   useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const result = await listVendorMaterialInfos({
-          vendor_search: vendorSearch || undefined,
-          material_search: materialSearch || undefined,
-          status: status || undefined,
-          limit: LIMIT,
-          offset: (page - 1) * LIMIT,
-        });
-        if (!active) {
-          return;
-        }
-        setRows(Array.isArray(result?.data) ? result.data : []);
-        setTotal(Number(result?.total ?? 0));
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setTotal(0);
-        setError(loadError instanceof Error ? loadError.message : "OM_VMI_LIST_FAILED");
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [materialSearch, page, status, vendorSearch]);
+    setError(aslQuery.error?.message || "");
+  }, [aslQuery.error]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / LIMIT)), [total]);
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
@@ -75,7 +58,12 @@ export default function AslListPage() {
       eyebrow="Operation Management"
       title="Approved Source List"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
+        {
+          key: "refresh",
+          label: loading ? "Refreshing..." : "Refresh",
+          tone: "neutral",
+          onClick: () => void aslQuery.refetch(),
+        },
         { key: "create", label: "Create ASL Row", tone: "primary", onClick: () => openScreen(OPERATION_SCREENS.OM_ASL_CREATE.screen_code) },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}

@@ -15,12 +15,12 @@ import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { ADMIN_SCREENS } from "../../../../navigation/screens/adminScreens.js";
 import { useMenu } from "../../../../context/useMenu.js";
-import { createMaterial, listUoms } from "../omApi.js";
+import { createMaterial } from "../omApi.js";
+import { useUomsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 export default function MaterialCreatePage() {
   const { shellProfile } = useMenu();
   const isSA = shellProfile?.roleCode === "SA" || shellProfile?.roleCode === "GA";
-  const [uoms, setUoms] = useState([]);
   const [form, setForm] = useState({
     material_type: "RM",
     material_name: "",
@@ -29,36 +29,16 @@ export default function MaterialCreatePage() {
     description: "",
     is_batch_managed: false,
   });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const uomQuery = useUomsQuery({ is_active: true });
+  const uoms = Array.isArray(uomQuery.data?.data) ? uomQuery.data.data : [];
+  const loading = uomQuery.isLoading;
 
   useEffect(() => {
-    let active = true;
-    async function loadUoms() {
-      setLoading(true);
-      setError("");
-      try {
-        const result = await listUoms({ is_active: true });
-        if (active) {
-          setUoms(Array.isArray(result?.data) ? result.data : []);
-        }
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "OM_UOM_LIST_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void loadUoms();
-    return () => {
-      active = false;
-    };
-  }, []);
+    setError(uomQuery.error?.message || "");
+  }, [uomQuery.error]);
 
   function updateField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));

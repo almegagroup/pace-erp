@@ -10,17 +10,18 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
-import { listPaymentTerms } from "../../procurement/procurementApi.js";
+import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import { useUomsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import {
   changeVendorMaterialInfoStatus,
   getVendorMaterialInfo,
-  listUoms,
   unmapVendorMaterialInfo,
   updateVendorMaterialInfo,
 } from "../omApi.js";
@@ -67,19 +68,29 @@ export default function AslDetailPage() {
   const context = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchId = searchParams.get("id");
   const id = searchId || context.id || "";
-  const [record, setRecord] = useState(null);
-  const [uoms, setUoms] = useState([]);
-  const [paymentTerms, setPaymentTerms] = useState([]);
   const [form, setForm] = useState(null);
   const [uomRows, setUomRows] = useState([]);
   const [currencyRows, setCurrencyRows] = useState([]);
   const [paymentTermRows, setPaymentTermRows] = useState([]);
   const [editMode, setEditMode] = useState(false);
   const [confirmUnmap, setConfirmUnmap] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const detailQuery = useQuery({
+    queryKey: ["om", "asl-detail", id],
+    queryFn: async () => {
+      const result = await getVendorMaterialInfo({ id });
+      return result?.data ?? null;
+    },
+    enabled: Boolean(id),
+  });
+  const uomQuery = useUomsQuery({ is_active: true });
+  const paymentTermQuery = usePaymentTermOptionsQuery();
+  const record = detailQuery.data ?? null;
+  const uoms = Array.isArray(uomQuery.data?.data) ? uomQuery.data.data : [];
+  const paymentTerms = paymentTermQuery.paymentTerms;
+  const loading = detailQuery.isLoading || uomQuery.isLoading || paymentTermQuery.isLoading;
 
   useEffect(() => {
     if (!searchId && context.id) {
@@ -88,50 +99,27 @@ export default function AslDetailPage() {
   }, [context.id, searchId]);
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!id) {
-        setError("OM_VMI_NOT_FOUND");
-        setLoading(false);
-        return;
-      }
-      setLoading(true);
-      setError("");
-      try {
-        const [recordResult, uomResult, paymentTermResult] = await Promise.all([
-          getVendorMaterialInfo({ id }),
-          listUoms({ is_active: true }),
-          listPaymentTerms(),
-        ]);
-        if (!active) {
-          return;
-        }
-        const row = recordResult?.data ?? null;
-        setRecord(row);
-        setUoms(Array.isArray(uomResult?.data) ? uomResult.data : []);
-        setPaymentTerms(Array.isArray(paymentTermResult?.data) ? paymentTermResult.data : []);
-        setForm({
-          vendor_material_code: row?.vendor_material_code ?? "",
-          pack_size_description: row?.pack_size_description ?? "",
-        });
-        setUomRows((row?.uoms ?? []).map((entry) => makeUomRow(entry)));
-        setCurrencyRows((row?.currencies ?? []).map((entry) => makeCurrencyRow(entry)));
-        setPaymentTermRows((row?.payment_terms ?? []).map((entry) => makePaymentTermRow(entry)));
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "OM_VMI_LOOKUP_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
+    if (!record) {
+      return;
     }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [id]);
+    setForm({
+      vendor_material_code: record.vendor_material_code ?? "",
+      pack_size_description: record.pack_size_description ?? "",
+    });
+    setUomRows((record.uoms ?? []).map((entry) => makeUomRow(entry)));
+    setCurrencyRows((record.currencies ?? []).map((entry) => makeCurrencyRow(entry)));
+    setPaymentTermRows((record.payment_terms ?? []).map((entry) => makePaymentTermRow(entry)));
+  }, [record]);
+
+  useEffect(() => {
+    setError(
+      (!id ? "OM_VMI_NOT_FOUND" : "") ||
+      detailQuery.error?.message ||
+      uomQuery.error?.message ||
+      paymentTermQuery.error?.message ||
+      ""
+    );
+  }, [detailQuery.error, id, paymentTermQuery.error, uomQuery.error]);
 
   function setField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -187,7 +175,9 @@ export default function AslDetailPage() {
           is_default: row.is_default,
         })),
       });
-      setRecord(result?.data ?? record);
+      if (result?.data) {
+        await detailQuery.refetch();
+      }
       setEditMode(false);
       setNotice("ASL row updated.");
     } catch (saveError) {
@@ -233,7 +223,9 @@ export default function AslDetailPage() {
         id: record.id,
         new_status: newStatus,
       });
-      setRecord(result?.data ?? record);
+      if (result?.data) {
+        await detailQuery.refetch();
+      }
       setNotice(`ASL row moved to ${newStatus}.`);
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : "OM_VMI_STATUS_UPDATE_FAILED");

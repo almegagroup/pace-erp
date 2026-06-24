@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
@@ -23,14 +24,11 @@ const LIMIT = 50;
 // creation happens exclusively on SAVendorMaster (/sa/om/vendors).
 export default function VendorListPage() {
   const navigate = useNavigate();
-  const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [vendorType, setVendorType] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -41,42 +39,27 @@ export default function VendorListPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
+  const vendorParams = useMemo(
+    () => ({
+      vendor_type: vendorType || undefined,
+      status: status || undefined,
+      search: debouncedSearch || undefined,
+      limit: LIMIT,
+      offset: (page - 1) * LIMIT,
+    }),
+    [debouncedSearch, page, status, vendorType]
+  );
+  const vendorQuery = useQuery({
+    queryKey: ["om", "vendor-list", vendorParams],
+    queryFn: () => listVendors(vendorParams),
+  });
+  const rows = Array.isArray(vendorQuery.data?.data) ? vendorQuery.data.data : [];
+  const total = Number(vendorQuery.data?.total ?? 0);
+  const loading = vendorQuery.isLoading;
+
   useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const result = await listVendors({
-          vendor_type: vendorType || undefined,
-          status: status || undefined,
-          search: debouncedSearch || undefined,
-          limit: LIMIT,
-          offset: (page - 1) * LIMIT,
-        });
-        if (!active) {
-          return;
-        }
-        setRows(Array.isArray(result?.data) ? result.data : []);
-        setTotal(Number(result?.total ?? 0));
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setTotal(0);
-        setError(loadError instanceof Error ? loadError.message : "OM_VENDOR_LIST_FAILED");
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [debouncedSearch, page, status, vendorType]);
+    setError(vendorQuery.error?.message || "");
+  }, [vendorQuery.error]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / LIMIT)), [total]);
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
@@ -87,7 +70,12 @@ export default function VendorListPage() {
       eyebrow="Operation Management"
       title="Vendor Master"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
+        {
+          key: "refresh",
+          label: loading ? "Refreshing..." : "Refresh",
+          tone: "neutral",
+          onClick: () => void vendorQuery.refetch(),
+        },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
       filterSection={{

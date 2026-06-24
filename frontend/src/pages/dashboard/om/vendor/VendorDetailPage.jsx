@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -22,15 +23,17 @@ import {
   getVendorContacts,
   getVendorEmails,
   getVendorPaymentTerms,
-  listMaterials,
   listVendorMaterialInfos,
   listVendorCompanyMaps,
   mapVendorToCompany,
   updateVendor,
   upsertVendorContacts,
   upsertVendorEmails,
-  listCompaniesForOm,
 } from "../omApi.js";
+import {
+  useCompaniesForOmQuery,
+  useMaterialOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function getAllowedStatusTargets(status) {
   const transitions = {
@@ -49,23 +52,58 @@ export default function VendorDetailPage() {
   const searchId = searchParams.get("id");
   const id = searchId || context.id || "";
 
-  const [vendor, setVendor] = useState(null);
   const [form, setForm] = useState(null);
-  const [companies, setCompanies] = useState([]);
-  const [companyMaps, setCompanyMaps] = useState([]);
-  const [paymentTerms, setPaymentTerms] = useState([]);
   const [termsCompanyId, setTermsCompanyId] = useState("");
   const [termsForm, setTermsForm] = useState({ payment_days: "30", payment_method: "", notes: "" });
   const [mapCompanyId, setMapCompanyId] = useState("");
-  const [aslRows, setAslRows] = useState([]);
-  const [materialDirectory, setMaterialDirectory] = useState([]);
   const [showApprovedMaterials, setShowApprovedMaterials] = useState(false);
-  const [aslLoading, setAslLoading] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const companiesQuery = useCompaniesForOmQuery();
+  const detailQuery = useQuery({
+    queryKey: ["om", "vendor-detail", id],
+    queryFn: async () => {
+      const [vendorResult, companyMapResult] = await Promise.all([
+        getVendor(id),
+        listVendorCompanyMaps(id),
+      ]);
+      return {
+        vendor: vendorResult?.data ?? null,
+        companyMaps: Array.isArray(companyMapResult?.data) ? companyMapResult.data : [],
+      };
+    },
+    enabled: Boolean(id),
+  });
+  const paymentTermsQuery = useQuery({
+    queryKey: ["om", "vendor-payment-terms", id, termsCompanyId || null],
+    queryFn: async () => {
+      const result = await getVendorPaymentTerms(id, termsCompanyId);
+      return Array.isArray(result?.data) ? result.data : [];
+    },
+    enabled: Boolean(id && termsCompanyId),
+  });
+  const approvedMaterialsQuery = useQuery({
+    queryKey: ["om", "vendor-approved-materials", id],
+    queryFn: async () => {
+      const aslResult = await listVendorMaterialInfos({ vendor_id: id, limit: 200, offset: 0 });
+      return Array.isArray(aslResult?.data) ? aslResult.data : [];
+    },
+    enabled: Boolean(id && showApprovedMaterials),
+  });
+  const materialOptionsQuery = useMaterialOptionsQuery(
+    { limit: 200, offset: 0 },
+    { enabled: Boolean(showApprovedMaterials) }
+  );
+  const vendor = detailQuery.data?.vendor ?? null;
+  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const companyMaps = detailQuery.data?.companyMaps ?? [];
+  const paymentTerms = paymentTermsQuery.data ?? [];
+  const aslRows = approvedMaterialsQuery.data ?? [];
+  const materialDirectory = materialOptionsQuery.materials;
+  const aslLoading = approvedMaterialsQuery.isLoading || materialOptionsQuery.isLoading;
+  const loading = detailQuery.isLoading || companiesQuery.isLoading;
 
   useEffect(() => {
     if (!searchId && context.id) {
@@ -74,68 +112,48 @@ export default function VendorDetailPage() {
   }, [context.id, searchId]);
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!id) { setError("OM_VENDOR_NOT_FOUND"); setLoading(false); return; }
-      setLoading(true); setError("");
-      try {
-        const [vendorResult, companyList, companyMapResult] = await Promise.all([
-          getVendor(id),
-          listCompaniesForOm(),
-          listVendorCompanyMaps(id),
-        ]);
-        if (!active) return;
-        const vendorRow = vendorResult?.data ?? null;
-        setVendor(vendorRow);
-        setForm({
-          vendor_name: vendorRow?.vendor_name ?? "",
-          gst_number: vendorRow?.gst_number ?? "",
-          gst_category: vendorRow?.gst_category ?? "",
-          bin_number: vendorRow?.bin_number ?? "",
-          tin_number: vendorRow?.tin_number ?? "",
-          trade_license: vendorRow?.trade_license ?? "",
-          iec_code: vendorRow?.iec_code ?? "",
-          import_license: vendorRow?.import_license ?? "",
-          country_code: vendorRow?.country_code ?? "",
-          reg_address_line1: vendorRow?.reg_address_line1 ?? "",
-          reg_address_city: vendorRow?.reg_address_city ?? "",
-          reg_address_state: vendorRow?.reg_address_state ?? "",
-          reg_address_pin: vendorRow?.reg_address_pin ?? "",
-          corr_address_line1: vendorRow?.corr_address_line1 ?? "",
-          corr_address_city: vendorRow?.corr_address_city ?? "",
-          corr_address_state: vendorRow?.corr_address_state ?? "",
-          corr_address_pin: vendorRow?.corr_address_pin ?? "",
-          currency_code: vendorRow?.currency_code ?? "BDT",
-          msme_registered: vendorRow?.msme_registered ?? null,
-          msme_certificate_number: vendorRow?.msme_certificate_number ?? "",
-        });
-        setCompanies(Array.isArray(companyList) ? companyList : []);
-        setCompanyMaps(Array.isArray(companyMapResult?.data) ? companyMapResult.data : []);
-
-        const firstCompanyId = vendorRow?.latest_payment_terms?.company_id ?? "";
-        if (firstCompanyId) {
-          const termsResult = await getVendorPaymentTerms(id, firstCompanyId);
-          if (active) {
-            setPaymentTerms(Array.isArray(termsResult?.data) ? termsResult.data : []);
-            setTermsCompanyId(firstCompanyId);
-          }
-        }
-      } catch (err) {
-        if (active) setError(err instanceof Error ? err.message : "OM_VENDOR_LOOKUP_FAILED");
-      } finally {
-        if (active) setLoading(false);
-      }
+    if (!vendor) {
+      return;
     }
-    void load();
-    return () => { active = false; };
-  }, [id]);
+    setForm({
+      vendor_name: vendor.vendor_name ?? "",
+      gst_number: vendor.gst_number ?? "",
+      gst_category: vendor.gst_category ?? "",
+      bin_number: vendor.bin_number ?? "",
+      tin_number: vendor.tin_number ?? "",
+      trade_license: vendor.trade_license ?? "",
+      iec_code: vendor.iec_code ?? "",
+      import_license: vendor.import_license ?? "",
+      country_code: vendor.country_code ?? "",
+      reg_address_line1: vendor.reg_address_line1 ?? "",
+      reg_address_city: vendor.reg_address_city ?? "",
+      reg_address_state: vendor.reg_address_state ?? "",
+      reg_address_pin: vendor.reg_address_pin ?? "",
+      corr_address_line1: vendor.corr_address_line1 ?? "",
+      corr_address_city: vendor.corr_address_city ?? "",
+      corr_address_state: vendor.corr_address_state ?? "",
+      corr_address_pin: vendor.corr_address_pin ?? "",
+      currency_code: vendor.currency_code ?? "BDT",
+      msme_registered: vendor.msme_registered ?? null,
+      msme_certificate_number: vendor.msme_certificate_number ?? "",
+    });
+    setTermsCompanyId((current) => current || vendor.latest_payment_terms?.company_id || "");
+  }, [vendor]);
+
+  useEffect(() => {
+    setError(
+      detailQuery.error?.message ||
+      companiesQuery.error?.message ||
+      paymentTermsQuery.error?.message ||
+      approvedMaterialsQuery.error?.message ||
+      materialOptionsQuery.error?.message ||
+      ""
+    );
+  }, [approvedMaterialsQuery.error, companiesQuery.error, detailQuery.error, materialOptionsQuery.error, paymentTermsQuery.error]);
 
   async function handleLoadPaymentTerms(companyId) {
     if (!vendor?.id || !companyId) return;
-    try {
-      const result = await getVendorPaymentTerms(id, companyId);
-      setPaymentTerms(Array.isArray(result?.data) ? result.data : []);
-    } catch { setPaymentTerms([]); }
+    setTermsCompanyId(companyId);
   }
 
   function setField(key, value) { setForm((p) => ({ ...p, [key]: value })); }
@@ -167,7 +185,9 @@ export default function VendorDetailPage() {
         msme_registered: form.msme_registered,
         msme_certificate_number: form.msme_certificate_number,
       });
-      setVendor(result?.data ?? vendor);
+      if (result?.data) {
+        await detailQuery.refetch();
+      }
       setEditMode(false); setNotice("Vendor updated.");
     } catch (err) { setError(err instanceof Error ? err.message : "OM_VENDOR_UPDATE_FAILED"); }
     finally { setSaving(false); }
@@ -177,8 +197,8 @@ export default function VendorDetailPage() {
     if (!vendor?.id) return;
     setSaving(true); setError(""); setNotice("");
     try {
-      const result = await changeVendorStatus({ id: vendor.id, new_status: newStatus });
-      setVendor(result?.data ?? vendor);
+      await changeVendorStatus({ id: vendor.id, new_status: newStatus });
+      await detailQuery.refetch();
       setNotice(`Vendor moved to ${newStatus}.`);
     } catch (err) { setError(err instanceof Error ? err.message : "OM_VENDOR_STATUS_UPDATE_FAILED"); }
     finally { setSaving(false); }
@@ -189,8 +209,7 @@ export default function VendorDetailPage() {
     setSaving(true); setError(""); setNotice("");
     try {
       await mapVendorToCompany({ vendor_id: vendor.id, company_id: mapCompanyId });
-      const updated = await listVendorCompanyMaps(id);
-      setCompanyMaps(Array.isArray(updated?.data) ? updated.data : []);
+      await detailQuery.refetch();
       setMapCompanyId(""); setNotice("Vendor mapped to company.");
     } catch (err) { setError(err instanceof Error ? err.message : "OM_VENDOR_COMPANY_MAP_FAILED"); }
     finally { setSaving(false); }
@@ -201,7 +220,7 @@ export default function VendorDetailPage() {
     setSaving(true); setError(""); setNotice("");
     try {
       const result = await addVendorPaymentTerms({ vendor_id: vendor.id, company_id: termsCompanyId, payment_days: Number(termsForm.payment_days), payment_method: termsForm.payment_method || undefined, notes: termsForm.notes || undefined });
-      setPaymentTerms((p) => [result?.data, ...p].filter(Boolean).slice(0, 20));
+      await paymentTermsQuery.refetch();
       setTermsForm({ payment_days: "30", payment_method: "", notes: "" });
       setNotice("Payment terms appended.");
     } catch (err) { setError(err instanceof Error ? err.message : "OM_PAYMENT_TERMS_CREATE_FAILED"); }
@@ -210,18 +229,7 @@ export default function VendorDetailPage() {
 
   async function loadApprovedMaterials() {
     if (!vendor?.id) return;
-    setAslLoading(true); setError("");
-    try {
-      const [aslResult, materialResult] = await Promise.all([
-        listVendorMaterialInfos({ vendor_id: vendor.id, limit: 200, offset: 0 }),
-        listMaterials({ limit: 200, offset: 0 }),
-      ]);
-      setAslRows(Array.isArray(aslResult?.data) ? aslResult.data : []);
-      setMaterialDirectory(Array.isArray(materialResult?.data) ? materialResult.data : []);
-    } catch (err) {
-      setAslRows([]); setMaterialDirectory([]);
-      setError(err instanceof Error ? err.message : "OM_VMI_LIST_FAILED");
-    } finally { setAslLoading(false); }
+    await Promise.all([approvedMaterialsQuery.refetch(), materialOptionsQuery.refetch()]);
   }
 
   const allowedTargets = getAllowedStatusTargets(vendor?.status);
@@ -530,26 +538,35 @@ export default function VendorDetailPage() {
 function VendorContactsEmailsCard({ vendorId }) {
   const [contacts, setContacts] = useState([]);
   const [emails, setEmails] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-
-  async function load() {
-    setLoading(true);
-    try {
+  const contactEmailQuery = useQuery({
+    queryKey: ["om", "vendor-contacts-emails", vendorId],
+    queryFn: async () => {
       const [contactsResult, emailsResult] = await Promise.allSettled([
         getVendorContacts(vendorId),
         getVendorEmails(vendorId),
       ]);
-      setContacts(contactsResult.status === "fulfilled" ? (Array.isArray(contactsResult.value) ? contactsResult.value : contactsResult.value?.data ?? []) : []);
-      setEmails(emailsResult.status === "fulfilled" ? (Array.isArray(emailsResult.value) ? emailsResult.value : emailsResult.value?.data ?? []) : []);
-    } finally {
-      setLoading(false);
-    }
-  }
+      return {
+        contacts:
+          contactsResult.status === "fulfilled"
+            ? (Array.isArray(contactsResult.value) ? contactsResult.value : contactsResult.value?.data ?? [])
+            : [],
+        emails:
+          emailsResult.status === "fulfilled"
+            ? (Array.isArray(emailsResult.value) ? emailsResult.value : emailsResult.value?.data ?? [])
+            : [],
+      };
+    },
+    enabled: Boolean(vendorId),
+  });
+  const loading = contactEmailQuery.isLoading;
 
-  useEffect(() => { void load(); }, [vendorId]);
+  useEffect(() => {
+    setContacts(contactEmailQuery.data?.contacts ?? []);
+    setEmails(contactEmailQuery.data?.emails ?? []);
+  }, [contactEmailQuery.data]);
 
   function updateContact(idx, patch) {
     setContacts((list) => list.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
@@ -565,6 +582,7 @@ function VendorContactsEmailsCard({ vendorId }) {
     try {
       const saved = await upsertVendorContacts({ vendor_id: vendorId, contacts });
       setContacts(Array.isArray(saved) ? saved : saved?.data ?? []);
+      await contactEmailQuery.refetch();
       setNotice("Contacts saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "OM_VENDOR_CONTACTS_FAILED");
@@ -585,6 +603,7 @@ function VendorContactsEmailsCard({ vendorId }) {
     try {
       const saved = await upsertVendorEmails({ vendor_id: vendorId, emails });
       setEmails(Array.isArray(saved) ? saved : saved?.data ?? []);
+      await contactEmailQuery.refetch();
       setNotice("Emails saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "OM_VENDOR_EMAILS_FAILED");
@@ -645,7 +664,7 @@ function VendorContactsEmailsCard({ vendorId }) {
           </div>
         </div>
       )}
-      {(error || notice) && (
+      {(error || notice || contactEmailQuery.error?.message) && (
         <p className={`mt-2 text-xs font-semibold ${error ? "text-rose-700" : "text-emerald-700"}`}>{error || notice}</p>
       )}
     </ErpSectionCard>

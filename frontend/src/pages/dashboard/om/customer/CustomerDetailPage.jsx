@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -19,12 +20,14 @@ import { getActiveScreenContext, popScreen } from "../../../../navigation/screen
 import {
   changeCustomerStatus,
   getCustomer,
-  listCompaniesForOm,
   listCustomerCompanyMaps,
-  listParentCustomers,
   mapCustomerToCompany,
   updateCustomer,
 } from "../omApi.js";
+import {
+  useCompaniesForOmQuery,
+  useParentCustomersQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function getAllowedStatusTargets(status) {
   const transitions = {
@@ -42,17 +45,40 @@ export default function CustomerDetailPage() {
   const context = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchId = searchParams.get("id");
   const id = searchId || context.id || "";
-  const [customer, setCustomer] = useState(null);
-  const [parentCustomers, setParentCustomers] = useState([]);
   const [form, setForm] = useState(null);
-  const [companies, setCompanies] = useState([]);
-  const [companyMaps, setCompanyMaps] = useState([]);
   const [mapCompanyId, setMapCompanyId] = useState("");
   const [editMode, setEditMode] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const parentCustomerQuery = useParentCustomersQuery();
+  const companiesQuery = useCompaniesForOmQuery();
+  const detailQuery = useQuery({
+    queryKey: ["om", "customer-detail", id],
+    queryFn: async () => {
+      const [result, companyMapResult] = await Promise.all([
+        getCustomer(id),
+        listCustomerCompanyMaps(id),
+      ]);
+      return {
+        customer: result?.data ?? null,
+        companyMaps: Array.isArray(companyMapResult?.data) ? companyMapResult.data : [],
+      };
+    },
+    enabled: Boolean(id),
+  });
+  const customer = detailQuery.data?.customer ?? null;
+  const parentCustomers = Array.isArray(parentCustomerQuery.data?.data)
+    ? parentCustomerQuery.data.data
+    : Array.isArray(parentCustomerQuery.data)
+    ? parentCustomerQuery.data
+    : [];
+  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const companyMaps = detailQuery.data?.companyMaps ?? [];
+  const loading =
+    detailQuery.isLoading ||
+    parentCustomerQuery.isLoading ||
+    companiesQuery.isLoading;
 
   const isVendorLinked = Boolean(customer?.vendor_id);
 
@@ -63,56 +89,31 @@ export default function CustomerDetailPage() {
   }, [context.id, searchId]);
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!id) {
-        setError("OM_CUSTOMER_NOT_FOUND");
-        setLoading(false);
-        return;
-      }
-      setLoading(true);
-      setError("");
-      try {
-        const [result, parentResult, companyList, companyMapResult] = await Promise.all([
-          getCustomer(id),
-          listParentCustomers(),
-          listCompaniesForOm(),
-          listCustomerCompanyMaps(id),
-        ]);
-        if (!active) {
-          return;
-        }
-        const row = result?.data ?? null;
-        setCustomer(row);
-        setParentCustomers(Array.isArray(parentResult?.data) ? parentResult.data : []);
-        setCompanies(Array.isArray(companyList) ? companyList : []);
-        setCompanyMaps(Array.isArray(companyMapResult?.data) ? companyMapResult.data : []);
-        setForm({
-          customer_name: row?.customer_name ?? "",
-          gst_number: row?.gst_number ?? "",
-          currency_code: row?.currency_code ?? "BDT",
-          parent_customer_id: row?.parent_customer_id ?? "",
-          delivery_address: row?.delivery_address ?? "",
-          billing_address: row?.billing_address ?? "",
-          primary_contact_person: row?.primary_contact_person ?? "",
-          phone: row?.phone ?? "",
-          primary_email: row?.primary_email ?? "",
-        });
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "OM_CUSTOMER_LOOKUP_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
+    if (!customer) {
+      return;
     }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [id]);
+    setForm({
+      customer_name: customer.customer_name ?? "",
+      gst_number: customer.gst_number ?? "",
+      currency_code: customer.currency_code ?? "BDT",
+      parent_customer_id: customer.parent_customer_id ?? "",
+      delivery_address: customer.delivery_address ?? "",
+      billing_address: customer.billing_address ?? "",
+      primary_contact_person: customer.primary_contact_person ?? "",
+      phone: customer.phone ?? "",
+      primary_email: customer.primary_email ?? "",
+    });
+  }, [customer]);
+
+  useEffect(() => {
+    setError(
+      (!id ? "OM_CUSTOMER_NOT_FOUND" : "") ||
+      detailQuery.error?.message ||
+      parentCustomerQuery.error?.message ||
+      companiesQuery.error?.message ||
+      ""
+    );
+  }, [companiesQuery.error, detailQuery.error, id, parentCustomerQuery.error]);
 
   function setField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -141,7 +142,9 @@ export default function CustomerDetailPage() {
         phone: form.phone,
         primary_email: form.primary_email,
       });
-      setCustomer(result?.data ?? customer);
+      if (result?.data) {
+        await detailQuery.refetch();
+      }
       setEditMode(false);
       setNotice("Customer updated.");
     } catch (saveError) {
@@ -164,8 +167,7 @@ export default function CustomerDetailPage() {
         customer_id: customer.id,
         company_id: mapCompanyId,
       });
-      const updated = await listCustomerCompanyMaps(customer.id);
-      setCompanyMaps(Array.isArray(updated?.data) ? updated.data : []);
+      await detailQuery.refetch();
       setMapCompanyId("");
       setNotice("Customer mapped to company");
     } catch (saveError) {
@@ -184,7 +186,9 @@ export default function CustomerDetailPage() {
     setNotice("");
     try {
       const result = await changeCustomerStatus({ id: customer.id, new_status: newStatus });
-      setCustomer(result?.data ?? customer);
+      if (result?.data) {
+        await detailQuery.refetch();
+      }
       setNotice(`Customer moved to ${newStatus}.`);
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : "OM_CUSTOMER_STATUS_UPDATE_FAILED");

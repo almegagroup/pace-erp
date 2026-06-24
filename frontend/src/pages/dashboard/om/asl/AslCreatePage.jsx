@@ -15,8 +15,13 @@ import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormT
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
-import { listPaymentTerms } from "../../procurement/procurementApi.js";
-import { createVendorMaterialInfo, listMaterials, listUoms, listVendors } from "../omApi.js";
+import { createVendorMaterialInfo } from "../omApi.js";
+import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import {
+  useMaterialOptionsQuery,
+  useUomsQuery,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function makeUomRow() {
   return { key: crypto.randomUUID(), uom_code: "", conversion_factor: "1", is_default: false };
@@ -35,10 +40,6 @@ function withSingleDefault(rows, key) {
 }
 
 export default function AslCreatePage() {
-  const [vendors, setVendors] = useState([]);
-  const [materials, setMaterials] = useState([]);
-  const [uoms, setUoms] = useState([]);
-  const [paymentTerms, setPaymentTerms] = useState([]);
   const [form, setForm] = useState({
     vendor_id: "",
     material_id: "",
@@ -47,45 +48,33 @@ export default function AslCreatePage() {
   const [uomRows, setUomRows] = useState([makeUomRow()]);
   const [currencyRows, setCurrencyRows] = useState([makeCurrencyRow()]);
   const [paymentTermRows, setPaymentTermRows] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const vendorQuery = useVendorOptionsQuery({ status: "ACTIVE", limit: 500, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ status: "ACTIVE", limit: 500, offset: 0 });
+  const uomQuery = useUomsQuery({ is_active: true });
+  const paymentTermQuery = usePaymentTermOptionsQuery();
+  const vendors = vendorQuery.vendors;
+  const materials = materialQuery.materials;
+  const uoms = Array.isArray(uomQuery.data?.data) ? uomQuery.data.data : [];
+  const paymentTerms = paymentTermQuery.paymentTerms;
+  const loading =
+    vendorQuery.isLoading ||
+    materialQuery.isLoading ||
+    uomQuery.isLoading ||
+    paymentTermQuery.isLoading;
 
   useEffect(() => {
-    let active = true;
-    async function loadDependencies() {
-      setLoading(true);
-      setError("");
-      try {
-        const [vendorResult, materialResult, uomResult, paymentTermResult] = await Promise.all([
-          listVendors({ status: "ACTIVE", limit: 500, offset: 0 }),
-          listMaterials({ status: "ACTIVE", limit: 500, offset: 0 }),
-          listUoms({ is_active: true }),
-          listPaymentTerms(),
-        ]);
-        if (!active) {
-          return;
-        }
-        setVendors(Array.isArray(vendorResult?.data) ? vendorResult.data : []);
-        setMaterials(Array.isArray(materialResult?.data) ? materialResult.data : []);
-        setUoms(Array.isArray(uomResult?.data) ? uomResult.data : []);
-        setPaymentTerms(Array.isArray(paymentTermResult?.data) ? paymentTermResult.data : []);
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "OM_VMI_CREATE_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void loadDependencies();
-    return () => {
-      active = false;
-    };
-  }, []);
+    setError(
+      error ||
+      vendorQuery.error?.message ||
+      materialQuery.error?.message ||
+      uomQuery.error?.message ||
+      paymentTermQuery.error?.message ||
+      ""
+    );
+  }, [error, materialQuery.error, paymentTermQuery.error, uomQuery.error, vendorQuery.error]);
 
   function updateField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
