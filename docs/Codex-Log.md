@@ -40,3 +40,8 @@ This file is Codex's own work log for the Claude+Codex workflow, used to record 
 - Task: Replaced raw PO master UUIDs with readable company and line-item display values in procurement PO detail/list responses and the PO detail UI.
 - Changes: Added batched PO reference lookups in `supabase/functions/api/_core/procurement/po.handlers.ts` so PO detail responses now include `company_name`, `material_display`, `cost_center_display`, and `payment_term_display`, extended the PO list response with `company_name`, updated `frontend/src/pages/dashboard/procurement/po/PODetailPage.jsx` to render the company name in the header, replaced the line material UUID cell with the formatted material display, and inserted Cost Center and Payment Term columns after Rate.
 - Notes: Kept the lookup strategy to one query per master table across the returned lines to avoid N+1 queries and left existing fallbacks to raw IDs in place when a display value is missing.
+
+### 2026-06-24 15:42 IST
+- Task: Surfaced additional purchase-order header, rebate, and audit fields already present in the PO detail API response.
+- Changes: Updated `frontend/src/pages/dashboard/procurement/po/PODetailPage.jsx` to add GST Terms, ETD/ETA, and Remarks to the Header card, inserted a conditional Rebate card for `has_rebate`, and added an Audit card showing resolved creator/updater/cancel/knock-off display names using `ErpFieldPreview`.
+- Notes: Matched the ETD vs `ETA to Port` label to the existing PO create-page import logic by checking vendor type first and falling back to `po.delivery_type`.

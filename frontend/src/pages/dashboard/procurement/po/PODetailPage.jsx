@@ -89,6 +89,17 @@ function buildAmendmentState(lines, po) {
   };
 }
 
+function getRebateBasisLabel(value) {
+  switch (String(value || "").toUpperCase()) {
+    case "BASE_UOM":
+      return "Base UOM";
+    case "PO_UOM":
+      return "PO UOM";
+    default:
+      return "—";
+  }
+}
+
 export default function PODetailPage() {
   // NavigationStackBridge replays the screen-stack entry's literal route
   // ("/.../purchase-orders/:id") whenever it's pushed without a `context.id`
@@ -115,6 +126,17 @@ export default function PODetailPage() {
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]
   );
+  const selectedVendor = useMemo(
+    () => vendorMap.get(po?.vendor_id) ?? null,
+    [po?.vendor_id, vendorMap]
+  );
+  const isImportPo = useMemo(
+    () =>
+      String(selectedVendor?.vendor_type || "").toUpperCase() === "IMPORT" ||
+      String(po?.delivery_type || "").toUpperCase() === "IMPORT",
+    [po?.delivery_type, selectedVendor]
+  );
+  const deliveryDateLabel = isImportPo ? "ETA to Port" : "ETD";
 
   async function loadDetail() {
     if (!id) {
@@ -315,12 +337,25 @@ export default function PODetailPage() {
               <ErpFieldPreview label="PO Date" value={po.po_date} />
               <ErpFieldPreview label="Company" value={po.company_name || po.company_id} />
               <ErpFieldPreview label="Delivery Type" value={po.delivery_type} />
+              <ErpFieldPreview label="GST Terms" value={po.gst_terms || "Not specified"} />
+              <ErpFieldPreview label={deliveryDateLabel} value={po.expected_delivery_date || "—"} />
               {po.delivery_type === "IMPORT" ? (
                 <ErpFieldPreview label="Incoterm" value={po.incoterm || "—"} />
               ) : null}
               <ErpFieldPreview label="Freight Term" value={po.freight_term || "—"} />
+              <ErpFieldPreview label="Remarks" value={po.remarks || "—"} />
             </div>
           </ErpSectionCard>
+
+          {po.has_rebate ? (
+            <ErpSectionCard eyebrow="Commercials" title="Rebate">
+              <div className="grid gap-3 md:grid-cols-3">
+                <ErpFieldPreview label="Rebate Rate" value={po.rebate_rate ?? "—"} />
+                <ErpFieldPreview label="Basis" value={getRebateBasisLabel(po.rebate_rate_uom_basis)} />
+                <ErpFieldPreview label="Rebate Remarks" value={po.rebate_remarks || "—"} />
+              </div>
+            </ErpSectionCard>
+          ) : null}
 
           <ErpSectionCard eyebrow="Lines" title="PO lines">
             <ErpDenseGrid
@@ -437,6 +472,19 @@ export default function PODetailPage() {
               rowKey={(row) => row.id}
               emptyMessage="No GRN summary rows available."
             />
+          </ErpSectionCard>
+
+          <ErpSectionCard eyebrow="Audit" title="Audit">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <ErpFieldPreview label="Created By" value={po.created_by_display || po.created_by || "—"} />
+              <ErpFieldPreview label="Last Updated By" value={po.last_updated_by_display || "—"} />
+              {po.cancelled_by_display ? (
+                <ErpFieldPreview label="Cancelled By" value={po.cancelled_by_display} />
+              ) : null}
+              {po.knocked_off_by_display ? (
+                <ErpFieldPreview label="Knocked Off By" value={po.knocked_off_by_display} />
+              ) : null}
+            </div>
           </ErpSectionCard>
 
           <DocumentFlowSection docType="PO" docId={po.id} />
