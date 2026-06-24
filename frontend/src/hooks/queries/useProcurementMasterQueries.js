@@ -25,6 +25,6 @@ export function usePaymentTermOptionsQuery(params = {}, options = {}) {
   const query = usePaymentTermsQuery(params, options);
   return {
     ...query,
-    paymentTerms: maybeArray(query.data),
+    paymentTerms: maybeArray(query.data?.data),
   };
 }
