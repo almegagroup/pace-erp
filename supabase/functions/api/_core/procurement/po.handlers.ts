@@ -572,7 +572,6 @@ export async function createPOHandler(
     const deliveryType = toUpperTrimmedString(body.delivery_type || "STANDARD");
     const poDate = toTrimmedString(body.po_date) || new Date().toISOString().slice(0, 10);
     const costCenterId = toTrimmedString(body.cost_center_id);
-    const gstTerms = toUpperTrimmedString(body.gst_terms);
     const extraFields = parseStringArray(body.extra_fields);
 
     if (!companyId) {
@@ -593,9 +592,6 @@ export async function createPOHandler(
     const incoterm = toTrimmedString(body.incoterm) || await getLastUsedIncoterm(vendorId) || null;
     if (vendorType === "IMPORT" && !incoterm) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INCOTERM_REQUIRED", 400, "Incoterm required for import PO");
-    }
-    if (gstTerms && !GST_TERMS.has(gstTerms)) {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_GST_TERMS", 400, "Invalid GST terms");
     }
 
     const rawMaterials: unknown[] = Array.isArray(body.materials)
@@ -621,7 +617,6 @@ export async function createPOHandler(
         vendor_id: vendorId,
         status: "DRAFT",
         remarks: toTrimmedString(body.remarks) || null,
-        gst_terms: gstTerms || null,
         extra_fields: extraFields,
         created_by: ctx.auth_user_id,
       })
@@ -644,6 +639,7 @@ export async function createPOHandler(
       const poNumber = await generateCompanyDocNumber(companyId, "PO");
       const paymentTermId = toTrimmedString(materialRecord.payment_term_id);
       const freightTerm = toUpperTrimmedString(materialRecord.freight_term);
+      const gstTerms = toUpperTrimmedString(materialRecord.gst_terms);
       const rebateRateUomBasis = toUpperTrimmedString(materialRecord.rebate_rate_uom_basis);
       const paymentTerm = await getPaymentTermRow(paymentTermId);
 
@@ -658,6 +654,9 @@ export async function createPOHandler(
       }
       if (!FREIGHT_TERMS.has(freightTerm)) {
         throw new Error("PROCUREMENT_INVALID_FREIGHT_TERM");
+      }
+      if (gstTerms && !GST_TERMS.has(gstTerms)) {
+        throw new Error("PROCUREMENT_INVALID_GST_TERMS");
       }
       if (rebateRateUomBasis && !REBATE_RATE_UOM_BASIS.has(rebateRateUomBasis)) {
         throw new Error("PROCUREMENT_INVALID_REBATE_RATE_UOM_BASIS");
@@ -679,6 +678,7 @@ export async function createPOHandler(
           payment_term_id: paymentTerm.id,
           lc_required: lcRequired,
           delivery_type: deliveryType,
+          gst_terms: gstTerms || null,
           has_rebate: materialRecord.has_rebate === true,
           rebate_remarks: toTrimmedString(materialRecord.rebate_remarks) || null,
           rebate_rate: parseNullableNumber(materialRecord.rebate_rate),
