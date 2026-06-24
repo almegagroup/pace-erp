@@ -39,7 +39,9 @@ const PO_LINE_STATUSES = new Set([
 ]);
 const DELIVERY_TYPES = new Set(["STANDARD", "BULK", "TANKER"]);
 const PO_VENDOR_TYPES = new Set(["DOMESTIC", "IMPORT"]);
-const FREIGHT_TERMS = new Set(["FOR", "FREIGHT_SEPARATE"]);
+const FREIGHT_TERMS = new Set(["FOR", "FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS"]);
+const GST_TERMS = new Set(["INCLUSIVE", "EXCLUSIVE"]);
+const REBATE_RATE_UOM_BASIS = new Set(["BASE_UOM", "PO_UOM"]);
 const MUTABLE_AMENDMENT_FIELDS = new Set([
   "ordered_qty",
   "unit_rate",
@@ -83,6 +85,15 @@ function parseNullableNumber(value: unknown): number | null {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => toTrimmedString(entry))
+    .filter(Boolean);
 }
 
 function procurementErrorResponse(
@@ -577,11 +588,11 @@ export async function createPOHandler(
     const body = await parseBody(req);
     const companyId = getCompanyScope(ctx, toTrimmedString(body.company_id));
     const vendorId = toTrimmedString(body.vendor_id);
-    const paymentTermId = toTrimmedString(body.payment_term_id);
     const vendorType = toUpperTrimmedString(body.vendor_type);
     const deliveryType = toUpperTrimmedString(body.delivery_type || "STANDARD");
-    const freightTerm = toUpperTrimmedString(body.freight_term);
     const poDate = toTrimmedString(body.po_date) || new Date().toISOString().slice(0, 10);
+    const gstTerms = toUpperTrimmedString(body.gst_terms);
+    const extraFields = parseStringArray(body.extra_fields);
 
     if (!companyId) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_REQUIRED", 400, "Company is required");
@@ -598,20 +609,12 @@ export async function createPOHandler(
     if (!DELIVERY_TYPES.has(deliveryType)) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_DELIVERY_TYPE", 400, "Invalid delivery type");
     }
-    if (!FREIGHT_TERMS.has(freightTerm)) {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_FREIGHT_TERM", 400, "Invalid freight term");
-    }
-
     const incoterm = toTrimmedString(body.incoterm) || await getLastUsedIncoterm(vendorId) || null;
     if (vendorType === "IMPORT" && !incoterm) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INCOTERM_REQUIRED", 400, "Incoterm required for import PO");
     }
-
-    const paymentTerm = await getPaymentTermRow(
-      paymentTermId || await getLastUsedPaymentTerm(vendorId) || "",
-    );
-    if (!paymentTerm?.id) {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_PAYMENT_TERM_NOT_FOUND", 404, "Payment term not found");
+    if (gstTerms && !GST_TERMS.has(gstTerms)) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_GST_TERMS", 400, "Invalid GST terms");
     }
 
     const rawMaterials: unknown[] = Array.isArray(body.materials)
@@ -623,9 +626,6 @@ export async function createPOHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_MATERIALS_REQUIRED", 400, "At least one material is required");
     }
 
-    const lcRequired = toUpperTrimmedString(paymentTerm.payment_method) === "LC";
-    const indentRequired = body.indent_required === true || vendor.indent_number_required === true;
-
     const { data: groupData, error: groupError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("po_order_group")
@@ -634,6 +634,8 @@ export async function createPOHandler(
         vendor_id: vendorId,
         status: "DRAFT",
         remarks: toTrimmedString(body.remarks) || null,
+        gst_terms: gstTerms || null,
+        extra_fields: extraFields,
         created_by: ctx.auth_user_id,
       })
       .select("*")
@@ -650,6 +652,28 @@ export async function createPOHandler(
       const [preparedLine] = await buildPoLinesForInsert(ctx, vendorId, [rawMaterial]);
       const poNumber = await generateCompanyDocNumber(companyId, "PO");
       const materialRecord = (rawMaterial ?? {}) as JsonRecord;
+      const paymentTermId = toTrimmedString(materialRecord.payment_term_id);
+      const freightTerm = toUpperTrimmedString(materialRecord.freight_term);
+      const rebateRateUomBasis = toUpperTrimmedString(materialRecord.rebate_rate_uom_basis);
+      const paymentTerm = await getPaymentTermRow(paymentTermId);
+
+      if (!paymentTermId) {
+        throw new Error("PROCUREMENT_PAYMENT_TERM_REQUIRED");
+      }
+      if (!paymentTerm?.id) {
+        throw new Error("PROCUREMENT_PAYMENT_TERM_NOT_FOUND");
+      }
+      if (!freightTerm) {
+        throw new Error("PROCUREMENT_FREIGHT_TERM_REQUIRED");
+      }
+      if (!FREIGHT_TERMS.has(freightTerm)) {
+        throw new Error("PROCUREMENT_INVALID_FREIGHT_TERM");
+      }
+      if (rebateRateUomBasis && !REBATE_RATE_UOM_BASIS.has(rebateRateUomBasis)) {
+        throw new Error("PROCUREMENT_INVALID_REBATE_RATE_UOM_BASIS");
+      }
+
+      const lcRequired = toUpperTrimmedString(paymentTerm.payment_method) === "LC";
 
       const { data: poData, error: poError } = await serviceRoleClient
         .schema("erp_procurement")
@@ -665,12 +689,13 @@ export async function createPOHandler(
           payment_term_id: paymentTerm.id,
           lc_required: lcRequired,
           delivery_type: deliveryType,
-          has_rebate: body.has_rebate === true,
-          rebate_remarks: toTrimmedString(body.rebate_remarks) || null,
-          indent_required: indentRequired,
+          has_rebate: materialRecord.has_rebate === true,
+          rebate_remarks: toTrimmedString(materialRecord.rebate_remarks) || null,
+          rebate_rate: parseNullableNumber(materialRecord.rebate_rate),
+          rebate_rate_uom_basis: rebateRateUomBasis || null,
+          indent_required: false,
           expected_delivery_date:
             toTrimmedString(materialRecord.delivery_date || materialRecord.expected_delivery_date) ||
-            toTrimmedString(body.expected_delivery_date) ||
             null,
           status: "DRAFT",
           remarks: toTrimmedString(materialRecord.remarks) || null,

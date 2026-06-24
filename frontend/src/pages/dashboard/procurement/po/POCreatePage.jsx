@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
@@ -13,9 +14,21 @@ import {
 } from "../procurementApi.js";
 
 const DELIVERY_TYPE_OPTIONS = ["STANDARD", "BULK", "TANKER"];
-const FREIGHT_TERM_OPTIONS = ["FOR", "FREIGHT_SEPARATE"];
+const FREIGHT_TERM_OPTIONS = [
+  { value: "FOR", label: "FOR" },
+  { value: "FREIGHT_SEPARATE", label: "Freight Separate" },
+  { value: "FREIGHT_AT_ACTUALS", label: "Freight at Actuals" },
+];
+const GST_TERM_OPTIONS = [
+  { value: "INCLUSIVE", label: "GST Inclusive" },
+  { value: "EXCLUSIVE", label: "GST Exclusive" },
+];
+const REBATE_BASIS_OPTIONS = [
+  { value: "BASE_UOM", label: "Base UOM" },
+  { value: "PO_UOM", label: "PO UOM" },
+];
 
-function createEmptyLine() {
+function createEmptyLine(defaultPaymentTermId = "") {
   return {
     material_id: "",
     quantity: "",
@@ -24,10 +37,206 @@ function createEmptyLine() {
     rate: "",
     cost_center_id: "",
     delivery_date: "",
-    indent_reference: "",
+    payment_term_id: defaultPaymentTermId,
+    freight_term: "FOR",
+    remarks: "",
+    has_rebate: false,
+    rebate_rate: "",
+    rebate_rate_uom_basis: "BASE_UOM",
+    rebate_remarks: "",
     aslWarning: "",
     aslChecked: false,
   };
+}
+
+function LineMoreDrawer({ line, visible, onClose, onChange }) {
+  if (!line) {
+    return null;
+  }
+
+  return (
+    <DrawerBase
+      visible={visible}
+      title="Material Line Details"
+      onEscape={onClose}
+      onClose={onClose}
+      width="min(480px, calc(100vw - 24px))"
+      actions={
+        <button
+          type="button"
+          onClick={onClose}
+          className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-sky-950"
+        >
+          Done
+        </button>
+      }
+    >
+      <div className="grid gap-4">
+        <label className="grid gap-1 text-xs font-semibold text-slate-700">
+          Remarks
+          <textarea
+            rows={4}
+            value={line.remarks}
+            onChange={(event) => onChange({ remarks: event.target.value })}
+            className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+          />
+        </label>
+
+        <div className="grid gap-1 text-xs font-semibold text-slate-700">
+          <span>Has Rebate</span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                onChange({
+                  has_rebate: true,
+                  rebate_rate_uom_basis: line.rebate_rate_uom_basis || "BASE_UOM",
+                })
+              }
+              className={`px-3 py-2 text-xs font-semibold ${
+                line.has_rebate
+                  ? "border border-emerald-700 bg-emerald-100 text-emerald-900"
+                  : "border border-slate-300 bg-white text-slate-700"
+              }`}
+            >
+              Yes
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                onChange({
+                  has_rebate: false,
+                  rebate_rate: "",
+                  rebate_rate_uom_basis: "BASE_UOM",
+                  rebate_remarks: "",
+                })
+              }
+              className={`px-3 py-2 text-xs font-semibold ${
+                !line.has_rebate
+                  ? "border border-slate-700 bg-slate-200 text-slate-950"
+                  : "border border-slate-300 bg-white text-slate-700"
+              }`}
+            >
+              No
+            </button>
+          </div>
+        </div>
+
+        {line.has_rebate ? (
+          <div className="grid gap-3">
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              Rebate Rate
+              <input
+                type="number"
+                min="0"
+                step="0.0001"
+                value={line.rebate_rate}
+                onChange={(event) => onChange({ rebate_rate: event.target.value })}
+                className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+              />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              Basis
+              <select
+                value={line.rebate_rate_uom_basis}
+                onChange={(event) => onChange({ rebate_rate_uom_basis: event.target.value })}
+                className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+              >
+                {REBATE_BASIS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              Rebate Remarks
+              <textarea
+                rows={4}
+                value={line.rebate_remarks}
+                onChange={(event) => onChange({ rebate_remarks: event.target.value })}
+                className="w-full border border-slate-300 bg-[#fffef7] px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+              />
+            </label>
+          </div>
+        ) : null}
+      </div>
+    </DrawerBase>
+  );
+}
+
+function HeaderMoreDrawer({ form, visible, onClose, onFieldChange, onAddExtraField, onRemoveExtraField, onExtraFieldChange }) {
+  return (
+    <DrawerBase
+      visible={visible}
+      title="PO More Details"
+      onEscape={onClose}
+      onClose={onClose}
+      width="min(520px, calc(100vw - 24px))"
+      actions={
+        <button
+          type="button"
+          onClick={onClose}
+          className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-sky-950"
+        >
+          Done
+        </button>
+      }
+    >
+      <div className="grid gap-5">
+        <label className="grid gap-1 text-xs font-semibold text-slate-700">
+          GST Terms
+          <select
+            value={form.gst_terms}
+            onChange={(event) => onFieldChange("gst_terms", event.target.value)}
+            className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+          >
+            <option value="">Select GST terms</option>
+            {GST_TERM_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+
+        <div className="grid gap-2">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold text-slate-700">Extra Fields</p>
+              <p className="text-[11px] text-slate-500">Add optional order-level text rows.</p>
+            </div>
+            <button
+              type="button"
+              onClick={onAddExtraField}
+              className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+            >
+              Add
+            </button>
+          </div>
+
+          {form.extra_fields.length === 0 ? (
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+              No extra fields added.
+            </div>
+          ) : (
+            form.extra_fields.map((value, index) => (
+              <div key={index} className="flex items-start gap-2">
+                <input
+                  value={value}
+                  onChange={(event) => onExtraFieldChange(index, event.target.value)}
+                  className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => onRemoveExtraField(index)}
+                  className="border border-rose-300 bg-white px-3 py-2 text-xs font-semibold text-rose-700"
+                >
+                  Remove
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </DrawerBase>
+  );
 }
 
 export default function POCreatePage() {
@@ -42,19 +251,19 @@ export default function POCreatePage() {
   const [filterLoading, setFilterLoading] = useState(true);
   const [initialFilterLoaded, setInitialFilterLoaded] = useState(false);
   // Once a vendor is picked, a later Material change can narrow the vendor
-  // LIST without invalidating the already-selected vendor — keep every row
-  // we've ever seen so selectedVendor lookups stay correct.
+  // list without invalidating the already-selected vendor.
   const vendorDetailCacheRef = useRef(new Map());
   const [form, setForm] = useState({
     company_id: "",
     vendor_id: "",
     delivery_type: "STANDARD",
     incoterm: "",
-    payment_term_id: "",
-    freight_term: "FOR",
-    remarks: "",
+    gst_terms: "",
+    extra_fields: [],
   });
   const [lines, setLines] = useState([createEmptyLine()]);
+  const [lineMoreIndex, setLineMoreIndex] = useState(null);
+  const [headerMoreOpen, setHeaderMoreOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -88,9 +297,22 @@ export default function POCreatePage() {
     [filterOptions.materials]
   );
   const costCenterOptions = useMemo(
-    () => costCenters.map((entry) => ({ value: entry.id, label: `${entry.cost_center_code || entry.id} | ${entry.cost_center_name || entry.name || ""}` })),
+    () =>
+      costCenters.map((entry) => ({
+        value: entry.id,
+        label: `${entry.cost_center_code || entry.id} | ${entry.cost_center_name || entry.name || ""}`,
+      })),
     [costCenters]
   );
+  const paymentTermOptions = useMemo(
+    () =>
+      paymentTerms.map((entry) => ({
+        value: entry.id,
+        label: `${entry.code || entry.name} | ${entry.name}`,
+      })),
+    [paymentTerms]
+  );
+  const defaultPaymentTermId = paymentTerms[0]?.id || "";
 
   const selectedVendor = useMemo(
     () => vendorDetailCacheRef.current.get(form.vendor_id) ?? null,
@@ -100,11 +322,10 @@ export default function POCreatePage() {
     () => String(selectedVendor?.vendor_type || "").toUpperCase() === "IMPORT",
     [selectedVendor]
   );
-  const indentRequired = selectedVendor?.indent_number_required === true;
+  const deliveryDateLabel = showIncoterm ? "ETA to Port" : "ETD";
 
   // The header Company/Vendor apply to the whole order; use the first
-  // line's material as the cross-filter signal (the common case is one
-  // material chosen before the buyer has decided on vendor/company at all).
+  // line's material as the cross-filter signal.
   const primaryMaterialId = lines[0]?.material_id || "";
 
   useEffect(() => {
@@ -119,10 +340,6 @@ export default function POCreatePage() {
         }
         const termRows = Array.isArray(paymentData) ? paymentData : (paymentData?.data ?? []);
         setPaymentTerms(termRows);
-        setForm((current) => ({
-          ...current,
-          payment_term_id: current.payment_term_id || termRows[0]?.id || "",
-        }));
       } catch (loadError) {
         if (active) {
           setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_SETUP_FAILED");
@@ -139,9 +356,19 @@ export default function POCreatePage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!defaultPaymentTermId) {
+      return;
+    }
+    setLines((current) =>
+      current.map((line) => (
+        line.payment_term_id ? line : { ...line, payment_term_id: defaultPaymentTermId }
+      ))
+    );
+  }, [defaultPaymentTermId]);
+
   // Cost centers are company-scoped — the same code (e.g. "ADMIN") exists
-  // once per company, so this must be filtered by the selected Company or
-  // the dropdown shows the same label repeated once per company.
+  // once per company, so this must be filtered by the selected Company.
   useEffect(() => {
     let active = true;
     async function loadCostCenters() {
@@ -203,9 +430,6 @@ export default function POCreatePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.company_id, form.vendor_id, primaryMaterialId]);
 
-  // Default the Company field once the (filtered) option list resolves —
-  // separate from the fetch effect above so it always sees the latest,
-  // already-intersected companyOptions instead of the raw fetch result.
   useEffect(() => {
     if (form.company_id || companyOptions.length === 0) {
       return;
@@ -226,11 +450,30 @@ export default function POCreatePage() {
   }
 
   function addLine() {
-    setLines((current) => [...current, createEmptyLine()]);
+    setLines((current) => [...current, createEmptyLine(defaultPaymentTermId)]);
   }
 
   function removeLine(index) {
     setLines((current) => (current.length === 1 ? current : current.filter((_line, lineIndex) => lineIndex !== index)));
+    setLineMoreIndex((current) => (current === index ? null : current != null && current > index ? current - 1 : current));
+  }
+
+  function addExtraField() {
+    setForm((current) => ({ ...current, extra_fields: [...current.extra_fields, ""] }));
+  }
+
+  function removeExtraField(index) {
+    setForm((current) => ({
+      ...current,
+      extra_fields: current.extra_fields.filter((_entry, entryIndex) => entryIndex !== index),
+    }));
+  }
+
+  function updateExtraField(index, value) {
+    setForm((current) => ({
+      ...current,
+      extra_fields: current.extra_fields.map((entry, entryIndex) => (entryIndex === index ? value : entry)),
+    }));
   }
 
   // Vendor can change after lines already have a material selected — re-run
@@ -252,7 +495,7 @@ export default function POCreatePage() {
     }
     try {
       // Exact vendor+material pair lookup (per 85.2.4 hard-block rule) —
-      // NOT the search-only list endpoint, which ignores vendor_id/material_id.
+      // not the search-only list endpoint, which ignores vendor_id/material_id.
       const vmi = (await getVendorMaterialInfo({ vendor_id: form.vendor_id, material_id: line.material_id }))?.data;
       const isActive = String(vmi?.status || "").toUpperCase() === "ACTIVE";
       if (!isActive) {
@@ -289,20 +532,24 @@ export default function POCreatePage() {
   }
 
   async function handleSubmit() {
-    if (!form.company_id || !form.vendor_id || !form.payment_term_id || !form.freight_term) {
-      setError("Company, vendor, payment term, and freight term are required.");
+    if (!form.company_id || !form.vendor_id) {
+      setError("Company and vendor are required.");
       return;
     }
     if (showIncoterm && !form.incoterm.trim()) {
       setError("Incoterm is required for import purchase orders.");
       return;
     }
-    if (lines.some((line) => !line.material_id || !line.quantity || !line.rate || !line.cost_center_id)) {
-      setError("Each PO line requires material, quantity, rate, and cost center.");
+    if (lines.some((line) => !line.material_id || !line.quantity || !line.rate || !line.cost_center_id || !line.payment_term_id || !line.freight_term)) {
+      setError("Each PO line requires material, quantity, rate, cost center, payment term, and freight term.");
       return;
     }
     if (lines.some((line) => line.aslWarning)) {
       setError("One or more lines have no approved VMI record for this vendor — this is a hard block per design. Fix or remove those lines before saving.");
+      return;
+    }
+    if (lines.some((line) => line.has_rebate && (!line.rebate_rate || !line.rebate_rate_uom_basis))) {
+      setError("Each rebate-enabled line requires a rebate rate and basis.");
       return;
     }
 
@@ -316,9 +563,8 @@ export default function POCreatePage() {
         vendor_type: String(selectedVendor?.vendor_type || "DOMESTIC").toUpperCase(),
         delivery_type: form.delivery_type,
         incoterm: showIncoterm ? form.incoterm.trim() : null,
-        payment_term_id: form.payment_term_id,
-        freight_term: form.freight_term,
-        remarks: form.remarks.trim() || null,
+        gst_terms: form.gst_terms || null,
+        extra_fields: form.extra_fields.map((entry) => entry.trim()).filter(Boolean),
         // Per feasibility doc 87.12A: each material becomes its own PO, all
         // grouped under one internal Order ID — never one multi-line PO.
         materials: lines.map((line) => ({
@@ -327,8 +573,14 @@ export default function POCreatePage() {
           po_uom_code: line.uom_code || null,
           unit_rate: Number(line.rate),
           cost_center_id: line.cost_center_id,
+          payment_term_id: line.payment_term_id,
+          freight_term: line.freight_term,
           delivery_date: line.delivery_date || null,
-          indent_reference: indentRequired ? line.indent_reference || null : null,
+          remarks: line.remarks.trim() || null,
+          has_rebate: line.has_rebate,
+          rebate_remarks: line.has_rebate ? line.rebate_remarks.trim() || null : null,
+          rebate_rate: line.has_rebate && line.rebate_rate !== "" ? Number(line.rebate_rate) : null,
+          rebate_rate_uom_basis: line.has_rebate ? line.rebate_rate_uom_basis || null : null,
         })),
       };
       const created = await createPurchaseOrder(payload);
@@ -348,6 +600,7 @@ export default function POCreatePage() {
   }
 
   const netTotal = lines.reduce((sum, line) => sum + (Number(line.quantity || 0) || 0) * (Number(line.rate || 0) || 0), 0);
+  const activeLineForDrawer = lineMoreIndex != null ? lines[lineMoreIndex] : null;
 
   const lineColumns = [
     {
@@ -370,7 +623,9 @@ export default function POCreatePage() {
       width: "100px",
       render: (_row, index) => (
         <input
-          type="number" min="0" step="0.0001"
+          type="number"
+          min="0"
+          step="0.0001"
           value={lines[index].quantity}
           onChange={(event) => updateLine(index, { quantity: event.target.value })}
           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
@@ -412,7 +667,9 @@ export default function POCreatePage() {
       width: "100px",
       render: (_row, index) => (
         <input
-          type="number" min="0" step="0.0001"
+          type="number"
+          min="0"
+          step="0.0001"
           value={lines[index].rate}
           onChange={(event) => updateLine(index, { rate: event.target.value })}
           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
@@ -433,8 +690,41 @@ export default function POCreatePage() {
       ),
     },
     {
+      key: "payment_term_id",
+      label: "Payment Term",
+      width: "180px",
+      render: (_row, index) => (
+        <select
+          value={lines[index].payment_term_id}
+          onChange={(event) => updateLine(index, { payment_term_id: event.target.value })}
+          className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+        >
+          <option value="">Select payment term</option>
+          {paymentTermOptions.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      ),
+    },
+    {
+      key: "freight_term",
+      label: "Freight Term",
+      width: "160px",
+      render: (_row, index) => (
+        <select
+          value={lines[index].freight_term}
+          onChange={(event) => updateLine(index, { freight_term: event.target.value })}
+          className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+        >
+          {FREIGHT_TERM_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      ),
+    },
+    {
       key: "delivery_date",
-      label: "Delivery Date",
+      label: deliveryDateLabel,
       width: "140px",
       render: (_row, index) => (
         <input
@@ -445,20 +735,6 @@ export default function POCreatePage() {
         />
       ),
     },
-    ...(indentRequired
-      ? [{
-          key: "indent_reference",
-          label: "Indent Ref.",
-          width: "140px",
-          render: (_row, index) => (
-            <input
-              value={lines[index].indent_reference}
-              onChange={(event) => updateLine(index, { indent_reference: event.target.value })}
-              className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
-            />
-          ),
-        }]
-      : []),
     {
       key: "net_value",
       label: "Net Value",
@@ -469,16 +745,25 @@ export default function POCreatePage() {
     {
       key: "actions",
       label: "",
-      width: "80px",
+      width: "150px",
       render: (_row, index) => (
-        <button
-          type="button"
-          onClick={() => removeLine(index)}
-          disabled={lines.length === 1}
-          className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Remove
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setLineMoreIndex(index)}
+            className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700"
+          >
+            More
+          </button>
+          <button
+            type="button"
+            onClick={() => removeLine(index)}
+            disabled={lines.length === 1}
+            className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Remove
+          </button>
+        </div>
       ),
     },
   ];
@@ -486,143 +771,133 @@ export default function POCreatePage() {
   const lineRowsWithWarnings = lines.map((line, index) => ({ ...line, __index: index }));
 
   return (
-    <ErpScreenScaffold
-      eyebrow="Procurement"
-      title="Create Purchase Order"
-      actions={[
-        { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
-        { key: "save", label: saving ? "Saving..." : lines.length > 1 ? `Create ${lines.length} POs` : "Create PO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || loading },
-      ]}
-      notices={[
-        ...(error ? [{ key: "po-create-error", tone: "error", message: error }] : []),
-        ...(notice ? [{ key: "po-create-notice", tone: "success", message: notice }] : []),
-      ]}
-    >
-      {loading || !initialFilterLoaded ? (
-        <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-          Loading procurement master data...
-        </div>
-      ) : (
-        <div className="grid gap-4">
-          <ErpSectionCard eyebrow="PO Header" title="Vendor, terms and basic details">
-            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Company <span className="text-rose-500">*</span>
-                <select
-                  value={form.company_id}
-                  onChange={(event) => updateHeaderField("company_id", event.target.value)}
-                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                >
-                  <option value="">Select company</option>
-                  {companyOptions.map((entry) => (
-                    <option key={entry.value} value={entry.value}>{entry.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Vendor <span className="text-rose-500">*</span>
-                <ErpComboboxField
-                  value={form.vendor_id}
-                  onChange={(value) => updateHeaderField("vendor_id", value)}
-                  options={vendorOptions}
-                  blankLabel="Select vendor"
-                />
-              </label>
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Delivery Type <span className="text-rose-500">*</span>
-                <select
-                  value={form.delivery_type}
-                  onChange={(event) => updateHeaderField("delivery_type", event.target.value)}
-                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                >
-                  {DELIVERY_TYPE_OPTIONS.map((entry) => (
-                    <option key={entry} value={entry}>{entry}</option>
-                  ))}
-                </select>
-              </label>
-              {showIncoterm ? (
+    <>
+      <ErpScreenScaffold
+        eyebrow="Procurement"
+        title="Create Purchase Order"
+        actions={[
+          { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
+          { key: "more-details", label: "More Details", tone: "neutral", onClick: () => setHeaderMoreOpen(true), disabled: saving || loading },
+          { key: "save", label: saving ? "Saving..." : lines.length > 1 ? `Create ${lines.length} POs` : "Create PO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || loading },
+        ]}
+        notices={[
+          ...(error ? [{ key: "po-create-error", tone: "error", message: error }] : []),
+          ...(notice ? [{ key: "po-create-notice", tone: "success", message: notice }] : []),
+        ]}
+      >
+        {loading || !initialFilterLoaded ? (
+          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+            Loading procurement master data...
+          </div>
+        ) : (
+          <div className="grid gap-4">
+            <ErpSectionCard eyebrow="PO Header" title="Vendor and dispatch basics">
+              <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                  Incoterm <span className="text-rose-500">*</span>
-                  <input
-                    value={form.incoterm}
-                    onChange={(event) => updateHeaderField("incoterm", event.target.value.toUpperCase())}
-                    placeholder="FOB / CIF / CFR / EXW / DAP / DDP"
-                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  Company <span className="text-rose-500">*</span>
+                  <select
+                    value={form.company_id}
+                    onChange={(event) => updateHeaderField("company_id", event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select company</option>
+                    {companyOptions.map((entry) => (
+                      <option key={entry.value} value={entry.value}>{entry.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Vendor <span className="text-rose-500">*</span>
+                  <ErpComboboxField
+                    value={form.vendor_id}
+                    onChange={(value) => updateHeaderField("vendor_id", value)}
+                    options={vendorOptions}
+                    blankLabel="Select vendor"
                   />
                 </label>
-              ) : null}
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Payment Term <span className="text-rose-500">*</span>
-                <select
-                  value={form.payment_term_id}
-                  onChange={(event) => updateHeaderField("payment_term_id", event.target.value)}
-                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                >
-                  <option value="">Select payment term</option>
-                  {paymentTerms.map((entry) => (
-                    <option key={entry.id} value={entry.id}>{entry.code || entry.name} | {entry.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">
-                Freight Term <span className="text-rose-500">*</span>
-                <select
-                  value={form.freight_term}
-                  onChange={(event) => updateHeaderField("freight_term", event.target.value)}
-                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                >
-                  {FREIGHT_TERM_OPTIONS.map((entry) => (
-                    <option key={entry} value={entry}>{entry}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-2 xl:col-span-2">
-                Remarks
-                <textarea
-                  rows={1}
-                  value={form.remarks}
-                  onChange={(event) => updateHeaderField("remarks", event.target.value)}
-                  className="w-full border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                />
-              </label>
-            </div>
-          </ErpSectionCard>
-
-          <ErpSectionCard
-            eyebrow="Materials"
-            title="Order details — one PO per material"
-            actions={[{ key: "add-line", label: "+ Add Material", tone: "primary", onClick: addLine }]}
-          >
-            <p className="mb-2 text-[11px] text-slate-500">
-              RM/PM only — an Approved (active) Vendor-Material Info record is required per line (hard block).
-            </p>
-            <ErpDenseGrid
-              columns={lineColumns}
-              rows={lineRowsWithWarnings}
-              rowKey={(row) => row.__index}
-              maxHeight="420px"
-              emptyMessage="No materials yet — click Add Material."
-              summaryRow={{ label: "Total", values: { net_value: netTotal.toFixed(2) } }}
-            />
-            {lines.length > 1 && (
-              <p className="mt-2 text-xs text-slate-500">
-                These {lines.length} materials will be raised as {lines.length} separate Purchase
-                Orders, grouped under one internal Order for approval — the vendor only ever sees
-                individual PO numbers.
-              </p>
-            )}
-            {lines.some((line) => line.aslWarning) && (
-              <div className="mt-2 grid gap-1">
-                {lines.map((line, index) =>
-                  line.aslWarning ? (
-                    <p key={index} className="text-xs font-semibold text-rose-700">Line {index + 1}: {line.aslWarning}</p>
-                  ) : null
-                )}
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Delivery Type <span className="text-rose-500">*</span>
+                  <select
+                    value={form.delivery_type}
+                    onChange={(event) => updateHeaderField("delivery_type", event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    {DELIVERY_TYPE_OPTIONS.map((entry) => (
+                      <option key={entry} value={entry}>{entry}</option>
+                    ))}
+                  </select>
+                </label>
+                {showIncoterm ? (
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Incoterm <span className="text-rose-500">*</span>
+                    <input
+                      value={form.incoterm}
+                      onChange={(event) => updateHeaderField("incoterm", event.target.value.toUpperCase())}
+                      placeholder="FOB / CIF / CFR / EXW / DAP / DDP"
+                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    />
+                  </label>
+                ) : null}
               </div>
-            )}
-          </ErpSectionCard>
-        </div>
-      )}
-    </ErpScreenScaffold>
+            </ErpSectionCard>
+
+            <ErpSectionCard
+              eyebrow="Materials"
+              title="Order details — one PO per material"
+              actions={[{ key: "add-line", label: "+ Add Material", tone: "primary", onClick: addLine }]}
+            >
+              <p className="mb-2 text-[11px] text-slate-500">
+                RM/PM only — an Approved (active) Vendor-Material Info record is required per line (hard block).
+              </p>
+              <ErpDenseGrid
+                columns={lineColumns}
+                rows={lineRowsWithWarnings}
+                rowKey={(row) => row.__index}
+                maxHeight="420px"
+                emptyMessage="No materials yet — click Add Material."
+                summaryRow={{ label: "Total", values: { net_value: netTotal.toFixed(2) } }}
+              />
+              {lines.length > 1 && (
+                <p className="mt-2 text-xs text-slate-500">
+                  These {lines.length} materials will be raised as {lines.length} separate Purchase
+                  Orders, grouped under one internal Order for approval — the vendor only ever sees
+                  individual PO numbers.
+                </p>
+              )}
+              {lines.some((line) => line.aslWarning) && (
+                <div className="mt-2 grid gap-1">
+                  {lines.map((line, index) =>
+                    line.aslWarning ? (
+                      <p key={index} className="text-xs font-semibold text-rose-700">Line {index + 1}: {line.aslWarning}</p>
+                    ) : null
+                  )}
+                </div>
+              )}
+            </ErpSectionCard>
+          </div>
+        )}
+      </ErpScreenScaffold>
+
+      <LineMoreDrawer
+        line={activeLineForDrawer}
+        visible={lineMoreIndex != null}
+        onClose={() => setLineMoreIndex(null)}
+        onChange={(patch) => {
+          if (lineMoreIndex != null) {
+            updateLine(lineMoreIndex, patch);
+          }
+        }}
+      />
+
+      <HeaderMoreDrawer
+        form={form}
+        visible={headerMoreOpen}
+        onClose={() => setHeaderMoreOpen(false)}
+        onFieldChange={updateHeaderField}
+        onAddExtraField={addExtraField}
+        onRemoveExtraField={removeExtraField}
+        onExtraFieldChange={updateExtraField}
+      />
+    </>
   );
 }
