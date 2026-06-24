@@ -52,6 +52,10 @@ export default function MaterialCategoryMasterPage() {
   const groups = groupQuery.data ?? [];
   const materials = materialQuery.materials;
   const loading = groupQuery.isLoading || materialQuery.isLoading;
+  const queryError =
+    groupQuery.error?.message ||
+    materialQuery.error?.message ||
+    "";
 
   const [expandedId, setExpandedId]   = useState(null);
   const [matSearch, setMatSearch]     = useState("");
@@ -435,7 +439,3 @@ export default function MaterialCategoryMasterPage() {
     </ErpScreenScaffold>
   );
 }
-  const queryError =
-    groupQuery.error?.message ||
-    materialQuery.error?.message ||
-    "";
