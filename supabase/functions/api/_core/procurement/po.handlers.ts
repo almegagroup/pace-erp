@@ -571,6 +571,7 @@ export async function createPOHandler(
     const vendorType = toUpperTrimmedString(body.vendor_type);
     const deliveryType = toUpperTrimmedString(body.delivery_type || "STANDARD");
     const poDate = toTrimmedString(body.po_date) || new Date().toISOString().slice(0, 10);
+    const costCenterId = toTrimmedString(body.cost_center_id);
     const gstTerms = toUpperTrimmedString(body.gst_terms);
     const extraFields = parseStringArray(body.extra_fields);
 
@@ -605,6 +606,12 @@ export async function createPOHandler(
     if (rawMaterials.length === 0) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_MATERIALS_REQUIRED", 400, "At least one material is required");
     }
+    if (!costCenterId) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_COST_CENTER_REQUIRED", 400, "Cost center is required");
+    }
+    if (!(await getCostCenterRow(costCenterId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_COST_CENTER_NOT_FOUND", 404, "Cost center not found");
+    }
 
     const { data: groupData, error: groupError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -629,9 +636,12 @@ export async function createPOHandler(
     const purchaseOrders: JsonRecord[] = [];
 
     for (const rawMaterial of rawMaterials) {
-      const [preparedLine] = await buildPoLinesForInsert(ctx, vendorId, [rawMaterial]);
+      const materialRecord = {
+        ...((rawMaterial ?? {}) as JsonRecord),
+        cost_center_id: costCenterId,
+      } as JsonRecord;
+      const [preparedLine] = await buildPoLinesForInsert(ctx, vendorId, [materialRecord]);
       const poNumber = await generateCompanyDocNumber(companyId, "PO");
-      const materialRecord = (rawMaterial ?? {}) as JsonRecord;
       const paymentTermId = toTrimmedString(materialRecord.payment_term_id);
       const freightTerm = toUpperTrimmedString(materialRecord.freight_term);
       const rebateRateUomBasis = toUpperTrimmedString(materialRecord.rebate_rate_uom_basis);

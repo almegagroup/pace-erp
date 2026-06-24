@@ -35,7 +35,6 @@ function createEmptyLine(defaultPaymentTermId = "") {
     uom_code: "",
     uomOptions: [],
     rate: "",
-    cost_center_id: "",
     delivery_date: "",
     payment_term_id: defaultPaymentTermId,
     freight_term: "FOR",
@@ -258,6 +257,7 @@ export default function POCreatePage() {
     vendor_id: "",
     delivery_type: "STANDARD",
     incoterm: "",
+    cost_center_id: "",
     gst_terms: "",
     extra_fields: [],
   });
@@ -393,6 +393,16 @@ export default function POCreatePage() {
       active = false;
     };
   }, [form.company_id]);
+
+  useEffect(() => {
+    if (!form.cost_center_id) {
+      return;
+    }
+    if (costCenterOptions.some((entry) => entry.value === form.cost_center_id)) {
+      return;
+    }
+    setForm((current) => ({ ...current, cost_center_id: "" }));
+  }, [costCenterOptions, form.cost_center_id]);
 
   useEffect(() => {
     let active = true;
@@ -536,12 +546,16 @@ export default function POCreatePage() {
       setError("Company and vendor are required.");
       return;
     }
+    if (!form.cost_center_id) {
+      setError("Cost center is required.");
+      return;
+    }
     if (showIncoterm && !form.incoterm.trim()) {
       setError("Incoterm is required for import purchase orders.");
       return;
     }
-    if (lines.some((line) => !line.material_id || !line.quantity || !line.rate || !line.cost_center_id || !line.payment_term_id || !line.freight_term)) {
-      setError("Each PO line requires material, quantity, rate, cost center, payment term, and freight term.");
+    if (lines.some((line) => !line.material_id || !line.quantity || !line.rate || !line.payment_term_id || !line.freight_term)) {
+      setError("Each PO line requires material, quantity, rate, payment term, and freight term.");
       return;
     }
     if (lines.some((line) => line.aslWarning)) {
@@ -563,6 +577,7 @@ export default function POCreatePage() {
         vendor_type: String(selectedVendor?.vendor_type || "DOMESTIC").toUpperCase(),
         delivery_type: form.delivery_type,
         incoterm: showIncoterm ? form.incoterm.trim() : null,
+        cost_center_id: form.cost_center_id,
         gst_terms: form.gst_terms || null,
         extra_fields: form.extra_fields.map((entry) => entry.trim()).filter(Boolean),
         // Per feasibility doc 87.12A: each material becomes its own PO, all
@@ -572,7 +587,6 @@ export default function POCreatePage() {
           ordered_qty: Number(line.quantity),
           po_uom_code: line.uom_code || null,
           unit_rate: Number(line.rate),
-          cost_center_id: line.cost_center_id,
           payment_term_id: line.payment_term_id,
           freight_term: line.freight_term,
           delivery_date: line.delivery_date || null,
@@ -673,19 +687,6 @@ export default function POCreatePage() {
           value={lines[index].rate}
           onChange={(event) => updateLine(index, { rate: event.target.value })}
           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
-        />
-      ),
-    },
-    {
-      key: "cost_center_id",
-      label: "Cost Center",
-      width: "200px",
-      render: (_row, index) => (
-        <ErpComboboxField
-          value={lines[index].cost_center_id}
-          onChange={(value) => updateLine(index, { cost_center_id: value })}
-          options={costCenterOptions}
-          blankLabel="Select cost center"
         />
       ),
     },
@@ -826,6 +827,15 @@ export default function POCreatePage() {
                       <option key={entry} value={entry}>{entry}</option>
                     ))}
                   </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Cost Center <span className="text-rose-500">*</span>
+                  <ErpComboboxField
+                    value={form.cost_center_id}
+                    onChange={(value) => updateHeaderField("cost_center_id", value)}
+                    options={costCenterOptions}
+                    blankLabel="Select cost center"
+                  />
                 </label>
                 {showIncoterm ? (
                   <label className="grid gap-1 text-xs font-semibold text-slate-700">
