@@ -9,6 +9,7 @@
  */
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
+import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
@@ -94,6 +95,71 @@ function parseStringArray(value: unknown): string[] {
   return value
     .map((entry) => toTrimmedString(entry))
     .filter(Boolean);
+}
+
+function collectAuthUserIds(value: unknown, ids: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectAuthUserIds(entry, ids);
+    }
+    return;
+  }
+
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  for (const [key, entryValue] of Object.entries(value as Record<string, unknown>)) {
+    if (key.endsWith("_by")) {
+      const authUserId = toTrimmedString(entryValue);
+      if (authUserId) {
+        ids.add(authUserId);
+      }
+      continue;
+    }
+
+    collectAuthUserIds(entryValue, ids);
+  }
+}
+
+function attachUserDisplayFields<T>(
+  value: T,
+  displayNameMap: Map<string, string>,
+): T {
+  if (Array.isArray(value)) {
+    return value.map((entry) => attachUserDisplayFields(entry, displayNameMap)) as T;
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  const enriched: Record<string, unknown> = {};
+
+  for (const [key, entryValue] of Object.entries(record)) {
+    if (Array.isArray(entryValue) || (entryValue && typeof entryValue === "object")) {
+      enriched[key] = attachUserDisplayFields(entryValue, displayNameMap);
+    } else {
+      enriched[key] = entryValue;
+    }
+
+    if (key.endsWith("_by")) {
+      const authUserId = toTrimmedString(entryValue);
+      if (authUserId) {
+        enriched[`${key}_display`] = displayNameMap.get(authUserId) ?? authUserId;
+      }
+    }
+  }
+
+  return enriched as T;
+}
+
+async function enrichProcurementUserDisplays<T>(payload: T): Promise<T> {
+  const authUserIds = new Set<string>();
+  collectAuthUserIds(payload, authUserIds);
+  const displayNameMap = await resolveUserDisplayNames([...authUserIds]);
+  return attachUserDisplayFields(payload, displayNameMap);
 }
 
 function procurementErrorResponse(
@@ -715,14 +781,14 @@ export async function createPOHandler(
       purchaseOrders.push({ ...poData, lines: [lineData] });
     }
 
-    return okResponse({
-      data: {
-        order_group: groupData,
-        purchase_orders: purchaseOrders,
-        // Backward-compatible single-PO shape for callers that only raised one material.
-        ...(purchaseOrders.length === 1 ? purchaseOrders[0] : {}),
-      },
-    }, ctx.request_id, req);
+    const enrichedData = await enrichProcurementUserDisplays({
+      order_group: groupData,
+      purchase_orders: purchaseOrders,
+      // Backward-compatible single-PO shape for callers that only raised one material.
+      ...(purchaseOrders.length === 1 ? purchaseOrders[0] : {}),
+    });
+
+    return okResponse({ data: enrichedData }, ctx.request_id, req);
   } catch (err) {
     console.error("PO_CREATE_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_CREATE_FAILED";
@@ -893,7 +959,10 @@ export async function listPOsHandler(
       throw new Error("PROCUREMENT_PO_LIST_FAILED");
     }
 
-    return okResponse({ data: data ?? [], total: count ?? 0 }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays(data ?? []),
+      total: count ?? 0,
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_LIST_FAILED";
     return procurementErrorResponse(req, ctx, code, 500, "Purchase order list failed");
@@ -936,12 +1005,12 @@ export async function getPOHandler(
     }
 
     return okResponse({
-      data: {
+      data: await enrichProcurementUserDisplays({
         ...po,
         lines,
         approval_log: approvalLogResult.data ?? [],
         amendment_log: amendmentLogResult.data ?? [],
-      },
+      }),
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_DETAIL_FAILED";
@@ -1038,10 +1107,10 @@ export async function updatePOHandler(
     }
 
     return okResponse({
-      data: {
+      data: await enrichProcurementUserDisplays({
         ...updatedPo,
         lines: lineData ?? [],
-      },
+      }),
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_UPDATE_FAILED";
@@ -1159,7 +1228,9 @@ export async function confirmPOHandler(
       await createCsnsForPo(updatedPo as PurchaseOrderRow, await getPOLines(poId), ctx.auth_user_id);
     }
 
-    return okResponse({ data: updatedPo }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays(updatedPo),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_CONFIRM_FAILED";
     const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code.includes("BLOCKED") ? 422 : 500;
@@ -1212,7 +1283,9 @@ export async function approvePOHandler(
     });
     await createCsnsForPo(updatedPo as PurchaseOrderRow, await getPOLines(poId), ctx.auth_user_id);
 
-    return okResponse({ data: updatedPo }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays(updatedPo),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_APPROVE_FAILED";
     const status =
@@ -1271,7 +1344,9 @@ export async function rejectPOHandler(
       actionedBy: ctx.auth_user_id,
     });
 
-    return okResponse({ data: updatedPo }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays(updatedPo),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_REJECT_FAILED";
     const status =
@@ -1462,11 +1537,11 @@ export async function amendPOHandler(
     }
 
     return okResponse({
-      data: {
+      data: await enrichProcurementUserDisplays({
         ...updatedPo,
         requires_approval: requiresApproval,
         workflow_status: requiresApproval ? "PENDING_AMENDMENT" : updatedPo.status,
-      },
+      }),
     }, ctx.request_id, req);
   } catch (err) {
     console.error("PO_AMEND_HANDLER_ERROR", err);
@@ -1555,7 +1630,9 @@ export async function approveAmendmentHandler(
       actionedBy: ctx.auth_user_id,
     });
 
-    return okResponse({ data: updatedPo }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays(updatedPo),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_AMEND_APPROVE_FAILED";
     const status =
@@ -1646,7 +1723,9 @@ export async function cancelPOHandler(
       throw new Error("PROCUREMENT_PO_CANCEL_FAILED");
     }
 
-    return okResponse({ data: updatedPo }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays(updatedPo),
+    }, ctx.request_id, req);
   } catch (err) {
     console.error("PO_CANCEL_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_CANCEL_FAILED";
@@ -1726,7 +1805,9 @@ export async function knockOffPOLineHandler(
         .eq("id", poId);
     }
 
-    return okResponse({ data: updatedLine }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays(updatedLine),
+    }, ctx.request_id, req);
   } catch (err) {
     console.error("PO_LINE_KNOCK_OFF_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_LINE_KNOCK_OFF_FAILED";
@@ -1793,7 +1874,9 @@ export async function knockOffPOHandler(
       throw new Error("PROCUREMENT_PO_KNOCK_OFF_FAILED");
     }
 
-    return okResponse({ data: updatedPo }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays(updatedPo),
+    }, ctx.request_id, req);
   } catch (err) {
     console.error("PO_KNOCK_OFF_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_PO_KNOCK_OFF_FAILED";
@@ -1904,7 +1987,10 @@ export async function listPOOrderGroupsHandler(
       purchase_orders: poByGroup.get(toTrimmedString(group.id)) ?? [],
     }));
 
-    return okResponse({ data: enriched, total: count ?? 0 }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays(enriched),
+      total: count ?? 0,
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_LIST_FAILED";
     return procurementErrorResponse(req, ctx, code, 500, "Purchase order group list failed");
@@ -1930,7 +2016,9 @@ export async function getPOOrderGroupHandler(
       pos.map(async (po) => ({ ...po, lines: await getPOLines(toTrimmedString(po.id)) })),
     );
 
-    return okResponse({ data: { ...group, purchase_orders: posWithLines } }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays({ ...group, purchase_orders: posWithLines }),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_DETAIL_FAILED";
     const status = code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404 : 500;
@@ -2016,7 +2104,12 @@ export async function confirmPOOrderGroupHandler(
       throw new Error("PROCUREMENT_PO_ORDER_GROUP_CONFIRM_FAILED");
     }
 
-    return okResponse({ data: { ...updatedGroup, purchase_orders: await getOrderGroupPOs(groupId) } }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays({
+        ...updatedGroup,
+        purchase_orders: await getOrderGroupPOs(groupId),
+      }),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_CONFIRM_FAILED";
     const status = code === "PROCUREMENT_PO_ORDER_GROUP_NOT_FOUND" ? 404 : code.includes("BLOCKED") ? 422 : 500;
@@ -2097,7 +2190,12 @@ export async function approvePOOrderGroupHandler(
       throw new Error("PROCUREMENT_PO_ORDER_GROUP_APPROVE_FAILED");
     }
 
-    return okResponse({ data: { ...updatedGroup, purchase_orders: await getOrderGroupPOs(groupId) } }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays({
+        ...updatedGroup,
+        purchase_orders: await getOrderGroupPOs(groupId),
+      }),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_APPROVE_FAILED";
     const status =
@@ -2177,7 +2275,12 @@ export async function rejectPOOrderGroupHandler(
       throw new Error("PROCUREMENT_PO_ORDER_GROUP_REJECT_FAILED");
     }
 
-    return okResponse({ data: { ...updatedGroup, purchase_orders: await getOrderGroupPOs(groupId) } }, ctx.request_id, req);
+    return okResponse({
+      data: await enrichProcurementUserDisplays({
+        ...updatedGroup,
+        purchase_orders: await getOrderGroupPOs(groupId),
+      }),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_REJECT_FAILED";
     const status =

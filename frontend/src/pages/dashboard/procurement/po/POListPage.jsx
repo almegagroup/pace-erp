@@ -248,7 +248,12 @@ export default function POListPage() {
                   ),
                 },
                 { key: "total_value", label: "Total Value", width: "120px" },
-                { key: "created_by", label: "Created By", width: "160px" },
+                {
+                  key: "created_by_display",
+                  label: "Created By",
+                  width: "160px",
+                  render: (row) => row.created_by_display || row.created_by || "-",
+                },
               ]}
               rows={filteredRows}
               rowKey={(row) => row.id}

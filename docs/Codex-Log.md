@@ -30,3 +30,8 @@ This file is Codex's own work log for the Claude+Codex workflow, used to record 
 - Task: Updated PO create backend GST term handling to validate per material instead of at the header/group level.
 - Changes: Removed top-level `gst_terms` parsing and validation from `createPOHandler`, stopped writing `gst_terms` onto `erp_procurement.po_order_group`, and added optional per-material validation from `materialRecord.gst_terms` inside the materials loop while leaving the `purchase_order` insert unchanged.
 - Notes: A migration adding a `gst_terms` column to `erp_procurement.purchase_order` is still required before the per-line value can be persisted; right now the handler validates `materialRecord.gst_terms` and then silently drops it.
+
+### 2026-06-24 12:45 IST
+- Task: Added reusable Procurement user display-name resolution and applied it to PO and PO-order-group responses/UI.
+- Changes: Created `supabase/functions/api/_shared/resolveUserDisplayNames.ts`, updated `supabase/functions/api/_core/procurement/po.handlers.ts` to append `*_by_display` siblings across returned PO, PO line, PO order-group, approval-log, and amendment-log payloads via one batched resolver pass per response, and updated `frontend/src/pages/dashboard/procurement/po/POListPage.jsx` to render `created_by_display` with fallback to the raw UUID.
+- Notes: Files touched were `supabase/functions/api/_shared/resolveUserDisplayNames.ts`, `supabase/functions/api/_core/procurement/po.handlers.ts`, `frontend/src/pages/dashboard/procurement/po/POListPage.jsx`, and `docs/Codex-Log.md`.
