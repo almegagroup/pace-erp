@@ -8,15 +8,12 @@ import { listCostCenters, listVendors } from "../../om/omApi.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
   amendPurchaseOrder,
-  approveAmendment,
-  approvePurchaseOrder,
   cancelPurchaseOrder,
   confirmPurchaseOrder,
   getPurchaseOrder,
   knockOffPOLine,
   knockOffPO,
   listPaymentTerms,
-  rejectPurchaseOrder,
   updatePurchaseOrder,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
@@ -137,7 +134,7 @@ export default function PODetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
-  const { shellProfile, runtimeContext } = useMenu();
+  const { runtimeContext } = useMenu();
   const [po, setPo] = useState(null);
   const [vendors, setVendors] = useState([]);
   const [paymentTerms, setPaymentTerms] = useState([]);
@@ -152,8 +149,6 @@ export default function PODetailPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const PO_APPROVER_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
-  const canApprove = PO_APPROVER_ROLES.has(shellProfile?.roleCode);
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]
@@ -195,6 +190,10 @@ export default function PODetailPage() {
   const deliveryDateLabel = isImportPo ? "ETA to Port" : "ETD";
   const editDeliveryDateLabel = isImportEditPo ? "ETA to Port" : "ETD";
 
+  // Detail/vendors/payment-terms don't depend on each other — fetch them in
+  // parallel instead of three sequential round trips. CSNs and cost centers
+  // need the PO's company_id (known only once detail resolves), so they
+  // form a second parallel batch right after.
   async function loadDetail() {
     if (!id) {
       setError("PROCUREMENT_PO_NOT_FOUND");
@@ -203,13 +202,22 @@ export default function PODetailPage() {
     setLoading(true);
     setError("");
     try {
-      const detail = await getPurchaseOrder(id);
-      const vendorData = await listVendors({ limit: 200, offset: 0 });
+      const [detail, vendorData, paymentData] = await Promise.all([
+        getPurchaseOrder(id),
+        listVendors({ limit: 200, offset: 0 }),
+        listPaymentTerms({ is_active: true }),
+      ]);
       const poRow = detail?.data ?? detail;
-      const csnRows = await listPoCsns(poRow?.company_id || runtimeContext?.selectedCompanyId || "", id);
+      const companyId = poRow?.company_id || runtimeContext?.selectedCompanyId || "";
+      const [csnRows, costCenterData] = await Promise.all([
+        listPoCsns(companyId, id),
+        companyId ? listCostCenters({ company_id: companyId, active: true }) : Promise.resolve([]),
+      ]);
       setPo(poRow);
       setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
       setCsns(Array.isArray(csnRows) ? csnRows : []);
+      setPaymentTerms(Array.isArray(paymentData) ? paymentData : (paymentData?.data ?? []));
+      setCostCenters(Array.isArray(costCenterData?.data) ? costCenterData.data : []);
       setAmendmentForm(buildAmendmentState(poRow?.lines, poRow));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_DETAIL_FAILED");
@@ -223,31 +231,6 @@ export default function PODetailPage() {
   useEffect(() => {
     void loadDetail();
   }, [id, runtimeContext?.selectedCompanyId]);
-
-  useEffect(() => {
-    let active = true;
-    async function loadReferenceData() {
-      try {
-        const [paymentData, costCenterData] = await Promise.all([
-          listPaymentTerms({ is_active: true }),
-          po?.company_id ? listCostCenters({ company_id: po.company_id, active: true }) : Promise.resolve([]),
-        ]);
-        if (!active) {
-          return;
-        }
-        setPaymentTerms(Array.isArray(paymentData) ? paymentData : (paymentData?.data ?? []));
-        setCostCenters(Array.isArray(costCenterData?.data) ? costCenterData.data : []);
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_SETUP_FAILED");
-        }
-      }
-    }
-    void loadReferenceData();
-    return () => {
-      active = false;
-    };
-  }, [po?.company_id]);
 
   async function runAction(action, successMessage) {
     setSaving(true);
@@ -268,23 +251,6 @@ export default function PODetailPage() {
     await runAction(
       () => confirmPurchaseOrder(id, { approval_required: true }),
       "Purchase order moved for approval."
-    );
-  }
-
-  async function handleApprove() {
-    const remarks = (await openActionPrompt({ eyebrow: "Purchase Order", title: "Approve this PO?", label: "Remarks (optional)", placeholder: "Optional approval remarks" })) ?? "";
-    await runAction(
-      () => approvePurchaseOrder(id, { remarks }),
-      "Purchase order approved."
-    );
-  }
-
-  async function handleReject() {
-    const remarks = await openActionPrompt({ eyebrow: "Purchase Order", title: "Reject this PO?", label: "Reject reason", required: true });
-    if (!remarks) return;
-    await runAction(
-      () => rejectPurchaseOrder(id, { remarks }),
-      "Purchase order rejected."
     );
   }
 
@@ -312,13 +278,6 @@ export default function PODetailPage() {
     await runAction(
       () => knockOffPOLine(id, lineId, { reason }),
       "PO line knocked off."
-    );
-  }
-
-  async function handleApproveAmendment() {
-    await runAction(
-      () => approveAmendment(id),
-      "Amendment approved."
     );
   }
 
@@ -474,21 +433,18 @@ export default function PODetailPage() {
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         ...(po?.status === "DRAFT" ? [{ key: "edit", label: "Edit", tone: "neutral", onClick: openEditModal, disabled: saving }] : []),
         ...(po?.status === "DRAFT" ? [{ key: "confirm", label: saving ? "Confirming..." : "Confirm", tone: "primary", onClick: () => void handleConfirm(), disabled: saving }] : []),
-        ...(po?.status === "PENDING_APPROVAL" && canApprove
-          ? [
-              { key: "approve", label: saving ? "Approving..." : "Approve", tone: "primary", onClick: () => void handleApprove(), disabled: saving },
-              { key: "reject", label: "Reject", tone: "danger", onClick: () => void handleReject(), disabled: saving },
-            ]
-          : []),
+        // Approve/Reject/Approve-Amendment are deliberately NOT exposed here —
+        // approval authority lives only on the dedicated "Pending PO
+        // Approvals" page (PROC_PO_ORDER_APPROVALS, gated to the Procurement
+        // Head/Buyer capability), per 87.12A batch-approval design. Anyone
+        // who can open a PO's detail page should not also be able to
+        // approve it from here, even if they happen to hold an approver role.
         ...(po?.status === "CONFIRMED"
           ? [
               { key: "amend", label: "Amend", tone: "neutral", onClick: () => setAmendmentOpen(true), disabled: saving },
               { key: "cancel", label: "Cancel PO", tone: "danger", onClick: () => void handleCancelPo(), disabled: saving },
               { key: "knockoff", label: "Knock-Off PO", tone: "neutral", onClick: () => void handleKnockOffPo(), disabled: saving },
             ]
-          : []),
-        ...(po?.status === "PENDING_AMENDMENT" && canApprove
-          ? [{ key: "approve-amendment", label: "Approve Amendment", tone: "primary", onClick: () => void handleApproveAmendment(), disabled: saving }]
           : []),
       ]}
     >
