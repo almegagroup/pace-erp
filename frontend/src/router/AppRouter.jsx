@@ -108,6 +108,7 @@ import CustomerCreatePage from "../pages/dashboard/om/customer/CustomerCreatePag
 import CustomerDetailPage from "../pages/dashboard/om/customer/CustomerDetailPage.jsx";
 import POListPage from "../pages/dashboard/procurement/po/POListPage.jsx";
 import POCreatePage from "../pages/dashboard/procurement/po/POCreatePage.jsx";
+import POCreateOpeningPage from "../pages/dashboard/procurement/po/POCreateOpeningPage.jsx";
 import PODetailPage from "../pages/dashboard/procurement/po/PODetailPage.jsx";
 import POOrderGroupListPage from "../pages/dashboard/procurement/po/POOrderGroupListPage.jsx";
 import POOrderGroupDetailPage from "../pages/dashboard/procurement/po/POOrderGroupDetailPage.jsx";
@@ -468,6 +469,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/purchase-orders/create"
                     element={<POCreatePage />}
+                  />
+                  <Route
+                    path="procurement/purchase-orders/create-opening"
+                    element={<POCreateOpeningPage />}
                   />
                   <Route
                     path="procurement/purchase-orders/:id"

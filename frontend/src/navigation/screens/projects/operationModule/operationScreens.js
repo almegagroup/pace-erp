@@ -97,6 +97,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_PO_CREATE_OPENING: {
+    screen_code: "PROC_PO_CREATE_OPENING",
+    route: "/dashboard/procurement/purchase-orders/create-opening",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_PO_DETAIL: {
     screen_code: "PROC_PO_DETAIL",
     route: "/dashboard/procurement/purchase-orders/:id",

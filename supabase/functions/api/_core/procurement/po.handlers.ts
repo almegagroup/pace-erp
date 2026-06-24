@@ -770,6 +770,8 @@ export async function createPOHandler(
     const vendorType = toUpperTrimmedString(body.vendor_type);
     const deliveryType = toUpperTrimmedString(body.delivery_type || "STANDARD");
     const poDate = toTrimmedString(body.po_date) || new Date().toISOString().slice(0, 10);
+    const isOpeningPo = body.is_opening_po === true;
+    const openingPoNumber = toTrimmedString(body.po_number);
     const costCenterId = toTrimmedString(body.cost_center_id);
     const extraFields = parseStringArray(body.extra_fields);
 
@@ -804,6 +806,9 @@ export async function createPOHandler(
     if (!costCenterId) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_COST_CENTER_REQUIRED", 400, "Cost center is required");
     }
+    if (isOpeningPo && !openingPoNumber) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_OPENING_PO_NUMBER_REQUIRED", 400, "Opening PO number is required");
+    }
     if (!(await getCostCenterRow(costCenterId))) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_COST_CENTER_NOT_FOUND", 404, "Cost center not found");
     }
@@ -836,7 +841,9 @@ export async function createPOHandler(
         cost_center_id: costCenterId,
       } as JsonRecord;
       const [preparedLine] = await buildPoLinesForInsert(ctx, vendorId, [materialRecord]);
-      const poNumber = await generateCompanyDocNumber(companyId, "PO");
+      const poNumber = isOpeningPo
+        ? openingPoNumber as string
+        : await generateCompanyDocNumber(companyId, "PO");
       const paymentTermId = toTrimmedString(materialRecord.payment_term_id);
       const freightTerm = toUpperTrimmedString(materialRecord.freight_term);
       const gstTerms = toUpperTrimmedString(materialRecord.gst_terms);
@@ -869,6 +876,7 @@ export async function createPOHandler(
         .from("purchase_order")
         .insert({
           po_number: poNumber,
+          is_opening_po: isOpeningPo,
           po_date: poDate,
           company_id: companyId,
           vendor_id: vendorId,

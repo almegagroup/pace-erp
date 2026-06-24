@@ -87,6 +87,7 @@ export function buildRouteIndex(menuSnapshot) {
     // ── Procurement — :id detail routes ───────────────────────────────────────
     ["/dashboard/procurement/purchase-orders",         "/dashboard/procurement/purchase-orders/:id"],
     ["/dashboard/procurement/purchase-orders/create",  "/dashboard/procurement/purchase-orders/:id"],
+    ["/dashboard/procurement/purchase-orders/create-opening",  "/dashboard/procurement/purchase-orders/:id"],
     ["/dashboard/procurement/csn-tracker",             "/dashboard/procurement/csns/:id"],
     ["/dashboard/procurement/csn-alerts",              "/dashboard/procurement/csns/:id"],
     ["/dashboard/procurement/gate-entries",            "/dashboard/procurement/gate-entries/:id"],
