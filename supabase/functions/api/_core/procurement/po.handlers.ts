@@ -162,6 +162,139 @@ async function enrichProcurementUserDisplays<T>(payload: T): Promise<T> {
   return attachUserDisplayFields(payload, displayNameMap);
 }
 
+function uniqueTrimmedStrings(values: unknown[]): string[] {
+  return [...new Set(values.map((value) => toTrimmedString(value)).filter(Boolean))];
+}
+
+function formatCodeNameDisplay(code: unknown, name: unknown): string {
+  const normalizedCode = toTrimmedString(code);
+  const normalizedName = toTrimmedString(name);
+  if (normalizedCode && normalizedName) {
+    return `${normalizedCode} | ${normalizedName}`;
+  }
+  return normalizedCode || normalizedName;
+}
+
+async function enrichPoReferenceDisplays(input: {
+  po?: PurchaseOrderRow | null;
+  pos?: PurchaseOrderRow[];
+  lines?: PurchaseOrderLineRow[];
+}): Promise<{
+  po?: PurchaseOrderRow | null;
+  pos?: PurchaseOrderRow[];
+  lines?: PurchaseOrderLineRow[];
+}> {
+  const poRows = input.pos ?? (input.po ? [input.po] : []);
+  const lineRows = input.lines ?? [];
+  const defaultPaymentTermId = input.po ? toTrimmedString(input.po.payment_term_id) : "";
+
+  const companyIds = uniqueTrimmedStrings(poRows.map((row) => row.company_id));
+  const materialIds = uniqueTrimmedStrings(lineRows.map((row) => row.material_id));
+  const costCenterIds = uniqueTrimmedStrings(lineRows.map((row) => row.cost_center_id));
+  const paymentTermIds = uniqueTrimmedStrings([
+    defaultPaymentTermId,
+    ...lineRows.map((row) => row.payment_term_id),
+  ]);
+
+  const [
+    { data: companyRows, error: companyError },
+    { data: materialRows, error: materialError },
+    { data: costCenterRows, error: costCenterError },
+    { data: paymentTermRows, error: paymentTermError },
+  ] = await Promise.all([
+    companyIds.length > 0
+      ? serviceRoleClient
+        .schema("erp_master")
+        .from("companies")
+        .select("id, company_code, company_name")
+        .in("id", companyIds)
+      : Promise.resolve({ data: [], error: null }),
+    materialIds.length > 0
+      ? serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id, pace_code, material_name")
+        .in("id", materialIds)
+      : Promise.resolve({ data: [], error: null }),
+    costCenterIds.length > 0
+      ? serviceRoleClient
+        .schema("erp_master")
+        .from("cost_center_master")
+        .select("id, cost_center_code, cost_center_name")
+        .in("id", costCenterIds)
+      : Promise.resolve({ data: [], error: null }),
+    paymentTermIds.length > 0
+      ? serviceRoleClient
+        .schema("erp_master")
+        .from("payment_terms_master")
+        .select("id, code, name")
+        .in("id", paymentTermIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (companyError || materialError || costCenterError || paymentTermError) {
+    throw new Error("PROCUREMENT_PO_REFERENCE_LOOKUP_FAILED");
+  }
+
+  const companyNameById = new Map<string, string>(
+    ((companyRows ?? []) as Array<{ id: string; company_code: string | null; company_name: string | null }>)
+      .map((row) => {
+        const id = toTrimmedString(row.id);
+        const companyName = toTrimmedString(row.company_name) || toTrimmedString(row.company_code);
+        return [id, companyName];
+      }),
+  );
+  const materialDisplayById = new Map<string, string>(
+    ((materialRows ?? []) as Array<{ id: string; pace_code: string | null; material_name: string | null }>)
+      .map((row) => [toTrimmedString(row.id), formatCodeNameDisplay(row.pace_code, row.material_name)]),
+  );
+  const costCenterDisplayById = new Map<string, string>(
+    ((costCenterRows ?? []) as Array<{ id: string; cost_center_code: string | null; cost_center_name: string | null }>)
+      .map((row) => [toTrimmedString(row.id), formatCodeNameDisplay(row.cost_center_code, row.cost_center_name)]),
+  );
+  const paymentTermDisplayById = new Map<string, string>(
+    ((paymentTermRows ?? []) as Array<{ id: string; code: string | null; name: string | null }>)
+      .map((row) => [toTrimmedString(row.id), formatCodeNameDisplay(row.code, row.name)]),
+  );
+
+  const enrichedPos = input.pos
+    ? input.pos.map((row) => {
+      const companyId = toTrimmedString(row.company_id);
+      return {
+        ...row,
+        company_name: companyNameById.get(companyId) ?? companyId ?? null,
+      };
+    })
+    : undefined;
+  const enrichedPo = input.po
+    ? {
+      ...input.po,
+      company_name: companyNameById.get(toTrimmedString(input.po.company_id))
+        ?? toTrimmedString(input.po.company_id)
+        ?? null,
+    }
+    : undefined;
+  const enrichedLines = input.lines
+    ? input.lines.map((row) => {
+      const materialId = toTrimmedString(row.material_id);
+      const costCenterId = toTrimmedString(row.cost_center_id);
+      const paymentTermId = toTrimmedString(row.payment_term_id) || defaultPaymentTermId;
+      return {
+        ...row,
+        material_display: materialDisplayById.get(materialId) ?? materialId ?? null,
+        cost_center_display: costCenterDisplayById.get(costCenterId) ?? costCenterId ?? null,
+        payment_term_display: paymentTermDisplayById.get(paymentTermId) ?? paymentTermId ?? null,
+      };
+    })
+    : undefined;
+
+  return {
+    po: enrichedPo,
+    pos: enrichedPos,
+    lines: enrichedLines,
+  };
+}
+
 function procurementErrorResponse(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -959,8 +1092,10 @@ export async function listPOsHandler(
       throw new Error("PROCUREMENT_PO_LIST_FAILED");
     }
 
+    const enrichedList = await enrichPoReferenceDisplays({ pos: (data as PurchaseOrderRow[] | null) ?? [] });
+
     return okResponse({
-      data: await enrichProcurementUserDisplays(data ?? []),
+      data: await enrichProcurementUserDisplays(enrichedList.pos ?? []),
       total: count ?? 0,
     }, ctx.request_id, req);
   } catch (err) {
@@ -1004,10 +1139,12 @@ export async function getPOHandler(
       throw new Error("PROCUREMENT_PO_DETAIL_FAILED");
     }
 
+    const enrichedDetail = await enrichPoReferenceDisplays({ po, lines });
+
     return okResponse({
       data: await enrichProcurementUserDisplays({
-        ...po,
-        lines,
+        ...(enrichedDetail.po ?? po),
+        lines: enrichedDetail.lines ?? lines,
         approval_log: approvalLogResult.data ?? [],
         amendment_log: amendmentLogResult.data ?? [],
       }),

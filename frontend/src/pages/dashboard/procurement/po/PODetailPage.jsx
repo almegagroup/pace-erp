@@ -313,7 +313,7 @@ export default function PODetailPage() {
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
               <ErpFieldPreview label="Status" value={po.status} tone={getHeaderStatusTone(po.status)} />
               <ErpFieldPreview label="PO Date" value={po.po_date} />
-              <ErpFieldPreview label="Company" value={po.company_id} />
+              <ErpFieldPreview label="Company" value={po.company_name || po.company_id} />
               <ErpFieldPreview label="Delivery Type" value={po.delivery_type} />
               {po.delivery_type === "IMPORT" ? (
                 <ErpFieldPreview label="Incoterm" value={po.incoterm || "—"} />
@@ -326,10 +326,24 @@ export default function PODetailPage() {
             <ErpDenseGrid
               columns={[
                 { key: "line_number", label: "Line", width: "70px" },
-                { key: "material_id", label: "Material" },
+                {
+                  key: "material_id",
+                  label: "Material",
+                  render: (row) => row.material_display || row.material_id || "—",
+                },
                 { key: "ordered_qty", label: "Qty", width: "90px" },
                 { key: "po_uom_code", label: "UOM", width: "90px" },
                 { key: "unit_rate", label: "Rate", width: "90px" },
+                {
+                  key: "cost_center_id",
+                  label: "Cost Center",
+                  render: (row) => row.cost_center_display || row.cost_center_id || "—",
+                },
+                {
+                  key: "payment_term_id",
+                  label: "Payment Term",
+                  render: (row) => row.payment_term_display || row.payment_term_id || "—",
+                },
                 {
                   key: "line_status",
                   label: "Status",
