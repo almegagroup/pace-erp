@@ -192,7 +192,10 @@ export default function POCreatePage() {
   // list without invalidating the already-selected vendor.
   const vendorDetailCacheRef = useRef(new Map());
   const [form, setForm] = useState({
-    company_id: "",
+    // Seed from the already-known runtime company instead of waiting on the
+    // filter-options round trip to resolve a default — lets Cost Center
+    // start loading in parallel with everything else on first mount.
+    company_id: runtimeContext?.selectedCompanyId || "",
     vendor_id: "",
     delivery_type: "STANDARD",
     incoterm: "",

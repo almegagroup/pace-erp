@@ -52,7 +52,11 @@ const SECTION_TONE_CLASS = Object.freeze({
   success: "border-emerald-200 bg-[#f5fffa]",
 });
 
-const RESERVED_MNEMONICS = new Set(["A", "C", "H", "K", "L", "M"]);
+// R and W are globally reserved by keyboardIntentEngine.js for plain
+// Alt+R (refresh) and Alt+W (focus work context) — a per-page action
+// must never be auto-assigned either letter, or the global handler wins
+// the race and the page-level click (e.g. Save) silently never fires.
+const RESERVED_MNEMONICS = new Set(["A", "C", "H", "K", "L", "M", "R", "W"]);
 
 function extractHintMnemonic(hint) {
   const match = /^Alt\+([A-Z])$/i.exec(hint ?? "");
