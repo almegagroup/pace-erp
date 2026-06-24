@@ -7,9 +7,11 @@
  * Authority: Frontend
  */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import { createUom, listUoms, toggleUom, updateUom } from "../../../pages/dashboard/om/omApi.js";
+import { createUom, toggleUom, updateUom } from "../../../pages/dashboard/om/omApi.js";
+import { useUomsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 
 const ERROR_MESSAGES = {
   OM_INVALID_UOM_CODE:  "UOM code is required (1–10 alphanumeric characters).",
@@ -33,12 +35,18 @@ function friendlyError(code) {
 }
 
 export default function SAOmUomMaster() {
-  const [rows, setRows]         = useState([]);
-  const [loading, setLoading]   = useState(true);
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState("");
   const [notice, setNotice]     = useState("");
   const noticeTimer             = useRef(null);
+  const queryClient = useQueryClient();
+  const {
+    data: rows = [],
+    isLoading: loading,
+    refetch,
+  } = useUomsQuery({}, {
+    select: (result) => (Array.isArray(result?.data) ? result.data : Array.isArray(result) ? result : []),
+  });
 
   // Inline edit state
   const [editId, setEditId]     = useState(null);
@@ -56,24 +64,13 @@ export default function SAOmUomMaster() {
     }
   }
 
-  async function loadRows() {
-    setLoading(true);
+  async function refreshRows() {
     setError("");
-    try {
-      const result = await listUoms({});
-      setRows(Array.isArray(result?.data) ? result.data : []);
-    } catch (err) {
-      setRows([]);
-      flash(friendlyError(err instanceof Error ? err.message : "OM_UOM_LIST_FAILED"), true);
-    } finally {
-      setLoading(false);
+    const result = await refetch();
+    if (result.error) {
+      flash(friendlyError(result.error instanceof Error ? result.error.message : "OM_UOM_LIST_FAILED"), true);
     }
   }
-
-  useEffect(() => {
-    void loadRows();
-    return () => clearTimeout(noticeTimer.current);
-  }, []);
 
   // ── Inline edit ──────────────────────────────────────────────
   function startEdit(row) {
@@ -91,7 +88,8 @@ export default function SAOmUomMaster() {
       await updateUom({ code: row.code, name: editDraft.uom_name.trim(), uom_type: editDraft.uom_type });
       cancelEdit();
       flash(`UOM "${row.code}" updated.`);
-      await loadRows();
+      await queryClient.invalidateQueries({ queryKey: ["om", "uoms"] });
+      await refreshRows();
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "OM_UOM_UPDATE_FAILED"), true);
     } finally { setSaving(false); }
@@ -103,7 +101,8 @@ export default function SAOmUomMaster() {
       await toggleUom({ code: row.code, active: !row.active });
       if (editId === (row.id ?? row.code)) cancelEdit();
       flash(`UOM "${row.code}" ${!row.active ? "activated" : "deactivated"}.`);
-      await loadRows();
+      await queryClient.invalidateQueries({ queryKey: ["om", "uoms"] });
+      await refreshRows();
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "OM_UOM_TOGGLE_FAILED"), true);
     } finally { setSaving(false); }
@@ -123,7 +122,8 @@ export default function SAOmUomMaster() {
       });
       setCreateForm(EMPTY_CREATE);
       flash("UOM created successfully.");
-      await loadRows();
+      await queryClient.invalidateQueries({ queryKey: ["om", "uoms"] });
+      await refreshRows();
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "OM_UOM_CREATE_FAILED"), true);
     } finally { setSaving(false); }
@@ -135,7 +135,7 @@ export default function SAOmUomMaster() {
       title="UOM Master"
       actions={[{
         key: "refresh", label: loading ? "Refreshing..." : "Refresh",
-        tone: "neutral", onClick: () => void loadRows(), disabled: loading,
+        tone: "neutral", onClick: () => void refreshRows(), disabled: loading,
       }]}
       notices={[
         ...(error  ? [{ key: "err", tone: "error",   message: error  }] : []),

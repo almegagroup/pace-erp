@@ -8,16 +8,16 @@
  * Authority: Frontend
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-
-const BASE = import.meta.env.VITE_API_BASE ?? "";
 import {
   createCostCenter,
-  listCostCenters,
   toggleCostCenter,
   updateCostCenter,
 } from "../../../pages/dashboard/om/omApi.js";
+import { useAdminCompaniesQuery } from "../../../hooks/queries/useAdminMasterQueries.js";
+import { useCostCentersQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 
 const ERROR_LABELS = {
   OM_CC_LIST_FAILED:    "Failed to load cost centers.",
@@ -32,25 +32,25 @@ function label(code) {
   return ERROR_LABELS[code] || code;
 }
 
-async function fetchAdminList(path, dataKey, fallback) {
-  try {
-    const res = await fetch(`${BASE}${path}`, { credentials: "include" });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(json?.code ?? fallback);
-    return json?.data?.[dataKey] ?? json?.[dataKey] ?? [];
-  } catch {
-    return [];
-  }
-}
-
 export default function SACostCenterMaster() {
-  const [rows, setRows]             = useState([]);
-  const [companies, setCompanies]   = useState([]);
   const [filterCompany, setFilterCompany] = useState("");
-  const [loading, setLoading]       = useState(true);
   const [saving, setSaving]         = useState(false);
   const [error, setError]           = useState("");
   const [notice, setNotice]         = useState("");
+  const queryClient = useQueryClient();
+  const {
+    data: rows = [],
+    isLoading: costCentersLoading,
+    refetch: refetchCostCenters,
+  } = useCostCentersQuery({}, {
+    select: (result) => (Array.isArray(result?.data) ? result.data : Array.isArray(result) ? result : []),
+  });
+  const {
+    data: companies = [],
+    isLoading: companiesLoading,
+    refetch: refetchCompanies,
+  } = useAdminCompaniesQuery();
+  const loading = costCentersLoading || companiesLoading;
 
   // inline edit
   const [editId, setEditId]         = useState(null);
@@ -64,24 +64,14 @@ export default function SACostCenterMaster() {
     description: "",
   });
 
-  async function loadData() {
-    setLoading(true);
+  async function refreshData() {
     setError("");
-    try {
-      const [ccResult, companyList] = await Promise.all([
-        listCostCenters(),
-        fetchAdminList("/api/admin/companies", "companies", "COMPANY_LIST_FAILED"),
-      ]);
-      setRows(Array.isArray(ccResult?.data) ? ccResult.data : Array.isArray(ccResult) ? ccResult : []);
-      setCompanies(Array.isArray(companyList) ? companyList : []);
-    } catch (e) {
-      setError(label(e instanceof Error ? e.message : "OM_CC_LIST_FAILED"));
-    } finally {
-      setLoading(false);
+    const [costCentersResult, companiesResult] = await Promise.all([refetchCostCenters(), refetchCompanies()]);
+    const nextError = costCentersResult.error ?? companiesResult.error;
+    if (nextError) {
+      setError(label(nextError instanceof Error ? nextError.message : "OM_CC_LIST_FAILED"));
     }
   }
-
-  useEffect(() => { void loadData(); }, []);
 
   // ── inline edit ──────────────────────────────────────────────
   function startEdit(row) {
@@ -113,7 +103,8 @@ export default function SACostCenterMaster() {
       setNotice("Cost center updated.");
       setEditId(null);
       setEditDraft({});
-      await loadData();
+      await queryClient.invalidateQueries({ queryKey: ["om", "cost-centers"] });
+      await refreshData();
     } catch (e) {
       setError(label(e instanceof Error ? e.message : "OM_CC_UPDATE_FAILED"));
     } finally {
@@ -129,7 +120,8 @@ export default function SACostCenterMaster() {
     try {
       await toggleCostCenter({ id: row.id, active: !row.active });
       setNotice(`Cost center ${!row.active ? "activated" : "deactivated"}.`);
-      await loadData();
+      await queryClient.invalidateQueries({ queryKey: ["om", "cost-centers"] });
+      await refreshData();
     } catch (e) {
       setError(label(e instanceof Error ? e.message : "OM_CC_TOGGLE_FAILED"));
     } finally {
@@ -155,7 +147,8 @@ export default function SACostCenterMaster() {
       });
       setForm({ company_id: form.company_id, cost_center_code: "", cost_center_name: "", description: "" });
       setNotice("Cost center created.");
-      await loadData();
+      await queryClient.invalidateQueries({ queryKey: ["om", "cost-centers"] });
+      await refreshData();
     } catch (e) {
       setError(label(e instanceof Error ? e.message : "OM_CC_CREATE_FAILED"));
     } finally {
@@ -173,7 +166,7 @@ export default function SACostCenterMaster() {
       eyebrow="Super Admin — Operation Management"
       title="Cost Center Master"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadData(), disabled: loading },
+        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void refreshData(), disabled: loading },
       ]}
       notices={[
         ...(error  ? [{ key: "error",  tone: "error",   message: label(error)  }] : []),

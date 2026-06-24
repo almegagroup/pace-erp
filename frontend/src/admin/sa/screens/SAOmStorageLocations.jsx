@@ -8,21 +8,22 @@
  * Authority: Frontend
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import {
   createStorageLocation,
-  listStorageLocations,
   mapStorageLocationToPlant,
   listPlantAssignments,
   unmapStorageLocationsFromPlant,
   updateStorageLocation,
   toggleStorageLocation,
 } from "../../../pages/dashboard/om/omApi.js";
-
-const BASE = import.meta.env.VITE_API_BASE;
+import { useAdminCompaniesQuery } from "../../../hooks/queries/useAdminMasterQueries.js";
+import { useStorageLocationsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { queryKeys } from "../../../hooks/queries/queryKeys.js";
 
 /* ─── friendly errors ───────────────────────────────────────────────── */
 const ERROR_MESSAGES = {
@@ -42,19 +43,6 @@ function friendlyError(code) {
   return ERROR_MESSAGES[code] ?? code;
 }
 
-/* ─── shared fetch helpers ──────────────────────────────────────────── */
-async function readJsonSafe(res) {
-  try { return await res.clone().json(); } catch { return null; }
-}
-async function fetchAdminList(path, dataKey, fallback) {
-  const res = await fetch(`${BASE}${path}`, { credentials: "include" });
-  const json = await readJsonSafe(res);
-  if (!res.ok || !json?.ok || !Array.isArray(json?.data?.[dataKey])) {
-    throw new Error(json?.code ?? fallback);
-  }
-  return json.data[dataKey];
-}
-
 /* ─── tabs ──────────────────────────────────────────────────────────── */
 const TABS = [
   { key: "locations",    label: "Locations" },
@@ -65,18 +53,21 @@ const LOCATION_TYPES = ["WAREHOUSE", "SHOP_FLOOR", "TRANSIT", "SCRAP", "EXTERNAL
 const EMPTY_CREATE = { location_code: "", location_name: "", location_type: "WAREHOUSE" };
 
 export default function SAOmStorageLocations() {
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("locations");
 
   /* ── Tab 1 state ── */
-  const [rows, setRows]         = useState([]);
+  const storageLocationsQuery = useStorageLocationsQuery({});
+  const rows = Array.isArray(storageLocationsQuery.data?.data) ? storageLocationsQuery.data.data : [];
+  const loading = storageLocationsQuery.isLoading;
   const [form, setForm]         = useState(EMPTY_CREATE);
   const [editRow, setEditRow]   = useState(null);
-  const [loading, setLoading]   = useState(true);
   const [saving, setSaving]     = useState(false);
   const [toggling, setToggling] = useState(null);
 
   /* ── Tab 2 state ── */
-  const [companies, setCompanies]           = useState([]);
+  const companiesQuery = useAdminCompaniesQuery();
+  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
   const [selCompany, setSelCompany]         = useState("");
   const [assignedRows, setAssignedRows]     = useState([]);
   const [selectedUnmap, setSelectedUnmap]   = useState(new Set());
@@ -95,36 +86,15 @@ export default function SAOmStorageLocations() {
     noticeTimer.current = setTimeout(() => setNotice(""), 4000);
   }
 
-  /* ── load storage locations ── */
-  async function loadRows() {
-    setLoading(true);
-    setError("");
-    try {
-      const result = await listStorageLocations({});
-      setRows(Array.isArray(result?.data) ? result.data : []);
-    } catch (err) {
-      setRows([]);
-      setError(friendlyError(err instanceof Error ? err.message : "OM_LOCATION_LIST_FAILED"));
-    } finally {
-      setLoading(false);
-    }
+  /* ── reload storage locations (after mutations / manual refresh) ── */
+  function loadRows() {
+    return queryClient.invalidateQueries({ queryKey: queryKeys.om.storageLocations({}) });
   }
 
-  /* ── load companies (Tab 2) ── */
-  async function loadMeta() {
-    try {
-      const cList = await fetchAdminList("/api/admin/companies", "companies", "COMPANY_LIST_FAILED");
-      setCompanies(cList);
-    } catch (err) {
-      setError(friendlyError(err instanceof Error ? err.message : "COMPANY_LIST_FAILED"));
-    }
+  /* ── reload companies (Tab 2, after manual refresh) ── */
+  function loadMeta() {
+    return queryClient.invalidateQueries({ queryKey: queryKeys.admin.companies() });
   }
-
-  useEffect(() => {
-    void loadRows();
-    void loadMeta();
-    return () => clearTimeout(noticeTimer.current);
-  }, []);
 
   /* ── Tab 1: row click ── */
   function handleRowClick(row) {
@@ -324,7 +294,13 @@ export default function SAOmStorageLocations() {
         { key: "refresh", label: "Refresh", tone: "neutral", onClick: () => { void loadRows(); void loadMeta(); } },
       ]}
       notices={[
-        ...(error  ? [{ key: "error",  tone: "error",   message: error  }] : []),
+        ...(error
+          ? [{ key: "error", tone: "error", message: error }]
+          : storageLocationsQuery.error
+          ? [{ key: "error", tone: "error", message: friendlyError("OM_LOCATION_LIST_FAILED") }]
+          : companiesQuery.error
+          ? [{ key: "error", tone: "error", message: friendlyError("COMPANY_LIST_FAILED") }]
+          : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
     >

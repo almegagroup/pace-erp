@@ -8,17 +8,17 @@
  * Authority: Frontend
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import {
   createMachine,
   listMachines,
   updateMachine,
   toggleMachine,
-  listUoms,
 } from "../../../pages/dashboard/om/omApi.js";
-
-const BASE = import.meta.env.VITE_API_BASE ?? "";
+import { useAdminCompaniesQuery } from "../../../hooks/queries/useAdminMasterQueries.js";
+import { useCostCentersQuery, useUomsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 const MACHINE_TYPES = ["MIXER", "FILLING", "PACKAGING", "REACTOR", "OTHER"];
 
 const ERROR_LABELS = {
@@ -35,27 +35,41 @@ function label(code) {
   return ERROR_LABELS[code] || code;
 }
 
-async function fetchAdminList(path, dataKey) {
-  try {
-    const res = await fetch(`${BASE}${path}`, { credentials: "include" });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) return [];
-    return json?.data?.[dataKey] ?? json?.[dataKey] ?? [];
-  } catch {
-    return [];
-  }
-}
-
 export default function SAMachineMaster() {
-  const [rows, setRows]           = useState([]);
-  const [companies, setCompanies] = useState([]);
-  const [costCenters, setCostCenters] = useState([]);
-  const [uoms, setUoms]           = useState([]);
   const [filterCompany, setFilterCompany] = useState("");
-  const [loading, setLoading]     = useState(true);
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState("");
   const [notice, setNotice]       = useState("");
+  const queryClient = useQueryClient();
+  const {
+    data: rows = [],
+    isLoading: machinesLoading,
+    refetch: refetchMachines,
+  } = useQuery({
+    queryKey: ["admin", "machines"],
+    queryFn: () => listMachines(),
+    select: (result) => (Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : []),
+  });
+  const {
+    data: companies = [],
+    isLoading: companiesLoading,
+    refetch: refetchCompanies,
+  } = useAdminCompaniesQuery();
+  const {
+    data: costCenters = [],
+    isLoading: costCentersLoading,
+    refetch: refetchCostCenters,
+  } = useCostCentersQuery({}, {
+    select: (result) => (Array.isArray(result?.data) ? result.data : Array.isArray(result) ? result : []),
+  });
+  const {
+    data: uoms = [],
+    isLoading: uomsLoading,
+    refetch: refetchUoms,
+  } = useUomsQuery({ is_active: "true" }, {
+    select: (result) => (Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : []),
+  });
+  const loading = machinesLoading || companiesLoading || costCentersLoading || uomsLoading;
 
   // inline edit
   const [editId, setEditId]       = useState(null);
@@ -73,28 +87,19 @@ export default function SAMachineMaster() {
     description: "",
   });
 
-  async function loadData() {
-    setLoading(true);
+  async function refreshData() {
     setError("");
-    try {
-      const [machineResult, companyList, ccResult, uomResult] = await Promise.all([
-        listMachines(),
-        fetchAdminList("/api/admin/companies", "companies"),
-        fetchAdminList("/api/om/cost-centers", "data"),
-        listUoms({ is_active: "true" }),
-      ]);
-      setRows(Array.isArray(machineResult) ? machineResult : (machineResult?.data ?? []));
-      setCompanies(Array.isArray(companyList) ? companyList : []);
-      setCostCenters(Array.isArray(ccResult) ? ccResult : []);
-      setUoms(Array.isArray(uomResult) ? uomResult : (uomResult?.data ?? []));
-    } catch (e) {
-      setError(label(e instanceof Error ? e.message : "OM_MACHINE_LIST_FAILED"));
-    } finally {
-      setLoading(false);
+    const results = await Promise.all([
+      refetchMachines(),
+      refetchCompanies(),
+      refetchCostCenters(),
+      refetchUoms(),
+    ]);
+    const nextError = results.find((result) => result.error)?.error;
+    if (nextError) {
+      setError(label(nextError instanceof Error ? nextError.message : "OM_MACHINE_LIST_FAILED"));
     }
   }
-
-  useEffect(() => { void loadData(); }, []);
 
   // ── inline edit ────────────────────────────────────────────────
   function startEdit(row) {
@@ -137,7 +142,8 @@ export default function SAMachineMaster() {
       setNotice("Machine updated.");
       setEditId(null);
       setEditDraft({});
-      await loadData();
+      await queryClient.invalidateQueries({ queryKey: ["admin", "machines"] });
+      await refreshData();
     } catch (e) {
       setError(label(e instanceof Error ? e.message : "OM_MACHINE_UPDATE_FAILED"));
     } finally {
@@ -153,7 +159,8 @@ export default function SAMachineMaster() {
     try {
       await toggleMachine({ id: row.id, active: !row.active });
       setNotice(`Machine ${!row.active ? "activated" : "deactivated"}.`);
-      await loadData();
+      await queryClient.invalidateQueries({ queryKey: ["admin", "machines"] });
+      await refreshData();
     } catch (e) {
       setError(label(e instanceof Error ? e.message : "OM_MACHINE_TOGGLE_FAILED"));
     } finally {
@@ -183,7 +190,8 @@ export default function SAMachineMaster() {
       });
       setForm((f) => ({ ...f, machine_code: "", machine_name: "", capacity_per_batch: "", capacity_uom_code: "", cost_center_id: "", description: "" }));
       setNotice("Machine created.");
-      await loadData();
+      await queryClient.invalidateQueries({ queryKey: ["admin", "machines"] });
+      await refreshData();
     } catch (e) {
       setError(label(e instanceof Error ? e.message : "OM_MACHINE_CREATE_FAILED"));
     } finally {
@@ -205,7 +213,7 @@ export default function SAMachineMaster() {
       eyebrow="Super Admin — Operation Management"
       title="Machine Master"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadData(), disabled: loading },
+        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void refreshData(), disabled: loading },
       ]}
       notices={[
         ...(error  ? [{ key: "error",  tone: "error",   message: label(error)  }] : []),

@@ -1,6 +1,10 @@
 import { cleanQueryParams } from "./queryUtils.js";
 
 export const queryKeys = {
+  admin: {
+    companies: () => ["admin", "companies"],
+    projects: (params = {}) => ["admin", "projects", cleanQueryParams(params)],
+  },
   om: {
     vendors: (params = {}) => ["om", "vendors", cleanQueryParams(params)],
     materials: (params = {}) => ["om", "materials", cleanQueryParams(params)],

@@ -83,10 +83,11 @@ export function useStorageLocationOptionsQuery(params = {}, options = {}) {
 
 export function useCostCentersQuery(params = {}, options = {}) {
   const normalizedParams = useMemo(() => cleanQueryParams(params), [params]);
+  const isEnabled = options.enabled ?? true;
   return useQuery({
     queryKey: queryKeys.om.costCenters(normalizedParams),
     queryFn: () => listCostCenters(normalizedParams),
-    enabled: Boolean(normalizedParams.company_id) && (options.enabled ?? true),
+    enabled: isEnabled && (!("company_id" in normalizedParams) || Boolean(normalizedParams.company_id)),
     ...options,
   });
 }

@@ -6,6 +6,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
 import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
@@ -17,18 +18,10 @@ import {
   listGlobalNumberSeries,
   updateGlobalStartingNumber,
 } from "../../../pages/dashboard/procurement/procurementApi.js";
+import { useAdminCompaniesQuery } from "../../../hooks/queries/useAdminMasterQueries.js";
 
 async function readJsonSafe(response) {
   try { return await response.clone().json(); } catch { return null; }
-}
-
-async function listCompanies() {
-  const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/companies`, { credentials: "include" });
-  const json = await readJsonSafe(response);
-  if (!response.ok || !json?.ok || !Array.isArray(json?.data?.companies)) {
-    throw new Error(json?.code ?? "COMPANY_LIST_FAILED");
-  }
-  return json.data.companies;
 }
 
 async function deleteCompanyCounter(counterId) {
@@ -74,15 +67,13 @@ const TABS = [
 
 export default function SAOmNumberSeries() {
   const [activeTab, setActiveTab] = useState("global");
+  const queryClient = useQueryClient();
 
   // Global
-  const [globalRows, setGlobalRows] = useState([]);
   const [editingGlobal, setEditingGlobal] = useState({ doc_type: "", starting_number: "" });
 
   // Company
-  const [companyRows, setCompanyRows] = useState([]);
   const [selectedSeries, setSelectedSeries] = useState(null);
-  const [companyCounters, setCompanyCounters] = useState([]);
   const [companyFilter, setCompanyFilter] = useState("");
   const [editingSeriesId, setEditingSeriesId] = useState(null);
   const [editSeriesForm, setEditSeriesForm] = useState({ prefix: "", number_padding: "" });
@@ -90,63 +81,76 @@ export default function SAOmNumberSeries() {
   const [counterForm, setCounterForm] = useState({ financial_year: "", starting_number: "1" });
 
   // Shared
-  const [companies, setCompanies] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const {
+    data: companies = [],
+    isLoading: companiesLoading,
+    refetch: refetchCompanies,
+  } = useAdminCompaniesQuery();
+  const {
+    data: globalRows = [],
+    isLoading: globalLoading,
+    refetch: refetchGlobalRows,
+  } = useQuery({
+    queryKey: ["admin", "number-series", "global"],
+    queryFn: () => listGlobalNumberSeries(),
+    select: (rows) => (Array.isArray(rows) ? rows : []),
+  });
+  const {
+    data: companyRows = [],
+    isLoading: companyRowsLoading,
+    refetch: refetchCompanyRows,
+  } = useQuery({
+    queryKey: ["admin", "number-series", "company", companyFilter || ""],
+    queryFn: () => listCompanyNumberSeries({ company_id: companyFilter || undefined }),
+    select: (rows) => (Array.isArray(rows) ? rows : []),
+  });
+  const {
+    data: companyCounters = [],
+    isLoading: countersLoading,
+    refetch: refetchCounters,
+  } = useQuery({
+    queryKey: ["admin", "number-series", "counters", selectedSeries?.company_id || "", selectedSeries?.document_type || ""],
+    queryFn: () => listCompanyCounters(selectedSeries.company_id, selectedSeries.document_type),
+    enabled: Boolean(selectedSeries?.company_id && selectedSeries?.document_type),
+    select: (rows) => (Array.isArray(rows) ? rows : []),
+  });
+  const loading = globalLoading || companyRowsLoading || companiesLoading || countersLoading;
 
   const companyMap = useMemo(
     () => new Map(companies.map((c) => [c.id, `${c.company_code} | ${c.company_name}`])),
     [companies]
   );
 
-  async function loadGlobalRows() {
-    const rows = await listGlobalNumberSeries();
-    setGlobalRows(Array.isArray(rows) ? rows : []);
-  }
-
-  async function loadCompanyRows() {
-    const rows = await listCompanyNumberSeries({ company_id: companyFilter || undefined });
-    setCompanyRows(Array.isArray(rows) ? rows : []);
-  }
-
-  async function loadCounters(series) {
-    if (!series?.company_id || !series?.document_type) { setCompanyCounters([]); return; }
-    const rows = await listCompanyCounters(series.company_id, series.document_type);
-    setCompanyCounters(Array.isArray(rows) ? rows : []);
-  }
-
   async function loadAll() {
-    setLoading(true);
     setError("");
-    try {
-      const [globalData, companyData, companyList] = await Promise.all([
-        listGlobalNumberSeries(),
-        listCompanyNumberSeries({ company_id: companyFilter || undefined }),
-        listCompanies(),
-      ]);
-      setGlobalRows(Array.isArray(globalData) ? globalData : []);
-      setCompanyRows(Array.isArray(companyData) ? companyData : []);
-      setCompanies(companyList);
-      if (selectedSeries) {
-        const refreshed = (Array.isArray(companyData) ? companyData : []).find((e) => e.id === selectedSeries.id);
-        setSelectedSeries(refreshed || null);
-        if (refreshed) {
-          const counterData = await listCompanyCounters(refreshed.company_id, refreshed.document_type);
-          setCompanyCounters(Array.isArray(counterData) ? counterData : []);
-        } else {
-          setCompanyCounters([]);
-        }
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "NUMBER_SERIES_LOAD_FAILED");
-    } finally {
-      setLoading(false);
+    const results = await Promise.all([
+      refetchGlobalRows(),
+      refetchCompanyRows(),
+      refetchCompanies(),
+      ...(selectedSeries ? [refetchCounters()] : []),
+    ]);
+    const nextError = results.find((result) => result.error)?.error;
+    if (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "NUMBER_SERIES_LOAD_FAILED");
     }
   }
 
-  useEffect(() => { void loadAll(); }, [companyFilter]);
+  useEffect(() => {
+    if (!selectedSeries) {
+      return;
+    }
+    const refreshed = companyRows.find((entry) => entry.id === selectedSeries.id);
+    if (!refreshed) {
+      setSelectedSeries(null);
+      return;
+    }
+    if (refreshed !== selectedSeries) {
+      setSelectedSeries(refreshed);
+    }
+  }, [companyRows, selectedSeries]);
 
   async function handleGlobalSave(docType) {
     const startingNumber = Number(editingGlobal.starting_number);
@@ -158,7 +162,8 @@ export default function SAOmNumberSeries() {
       await updateGlobalStartingNumber(docType, { starting_number: startingNumber });
       setEditingGlobal({ doc_type: "", starting_number: "" });
       setNotice(`Starting number updated for ${docType}.`);
-      await loadGlobalRows();
+      await queryClient.invalidateQueries({ queryKey: ["admin", "number-series", "global"] });
+      await refetchGlobalRows();
     } catch (e) {
       setError(e instanceof Error ? e.message : "GLOBAL_STARTING_NUMBER_UPDATE_FAILED");
     } finally { setSaving(false); }
@@ -178,8 +183,11 @@ export default function SAOmNumberSeries() {
       });
       setSeriesForm({ company_id: "", document_type: "PO", prefix: "", number_padding: "5" });
       setNotice("Series created.");
-      await loadCompanyRows();
-      if (created?.id) { setSelectedSeries(created); await loadCounters(created); }
+      await queryClient.invalidateQueries({ queryKey: ["admin", "number-series", "company"] });
+      await refetchCompanyRows();
+      if (created?.id) {
+        setSelectedSeries(created);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "COMPANY_NUMBER_SERIES_CREATE_FAILED");
     } finally { setSaving(false); }
@@ -195,7 +203,8 @@ export default function SAOmNumberSeries() {
       });
       setEditingSeriesId(null);
       setNotice("Series updated.");
-      await loadCompanyRows();
+      await queryClient.invalidateQueries({ queryKey: ["admin", "number-series", "company"] });
+      await refetchCompanyRows();
     } catch (e) {
       setError(e instanceof Error ? e.message : "SERIES_UPDATE_FAILED");
     } finally { setSaving(false); }
@@ -214,9 +223,10 @@ export default function SAOmNumberSeries() {
     setSaving(true); setError(""); setNotice("");
     try {
       await deleteCompanySeries(series.id);
-      if (selectedSeries?.id === series.id) { setSelectedSeries(null); setCompanyCounters([]); }
+      if (selectedSeries?.id === series.id) { setSelectedSeries(null); }
       setNotice("Series deleted.");
-      await loadCompanyRows();
+      await queryClient.invalidateQueries({ queryKey: ["admin", "number-series", "company"] });
+      await refetchCompanyRows();
     } catch (e) {
       setError(e instanceof Error ? e.message : "SERIES_DELETE_FAILED");
     } finally { setSaving(false); }
@@ -235,7 +245,8 @@ export default function SAOmNumberSeries() {
     try {
       await deleteCompanyCounter(counter.id);
       setNotice("FY counter deleted.");
-      await loadCounters(selectedSeries);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "number-series", "counters"] });
+      await refetchCounters();
     } catch (e) {
       setError(e instanceof Error ? e.message : "COUNTER_DELETE_FAILED");
     } finally { setSaving(false); }
@@ -253,7 +264,8 @@ export default function SAOmNumberSeries() {
       });
       setCounterForm({ financial_year: "", starting_number: "1" });
       setNotice("FY counter created.");
-      await loadCounters(selectedSeries);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "number-series", "counters"] });
+      await refetchCounters();
     } catch (e) {
       setError(e instanceof Error ? e.message : "COMPANY_COUNTER_CREATE_FAILED");
     } finally { setSaving(false); }
@@ -411,8 +423,6 @@ export default function SAOmNumberSeries() {
                               onClick={() => {
                                 if (editingSeriesId === row.id) return;
                                 setSelectedSeries(isSelected ? null : row);
-                                if (!isSelected) void loadCounters(row);
-                                else setCompanyCounters([]);
                               }}
                               className={`cursor-pointer border-b border-slate-100 transition-colors ${isSelected ? "bg-sky-50" : "hover:bg-slate-50"}`}
                             >

@@ -15,3 +15,4 @@ PACE ERP frontend data fetching must use TanStack Query through this `frontend/s
 - `useOmMasterQueries.js`: vendors, materials, customers, storage locations, cost centers, UOMs, parent customers, OM companies
 - `useProcurementMasterQueries.js`: procurement companies, payment terms
 - `useHrMasterQueries.js`: leave types, all leave types, holidays, week-off config, out-work destinations
+- `useAdminMasterQueries.js`: admin companies and admin project lists

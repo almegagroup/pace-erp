@@ -9,7 +9,8 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import {
@@ -25,8 +26,8 @@ import {
   listVendorCompanyMapping,
   bulkMapVendors,
   bulkUnmapVendors,
-  listCompaniesForOm,
 } from "../../../pages/dashboard/om/omApi.js";
+import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 
 /* ─── Currency options ───────────────────────────────────────────────────── */
 const CURRENCY_OPTIONS = [
@@ -76,11 +77,10 @@ function friendly(code) {
 }
 
 function useCompanies() {
-  const [companies, setCompanies] = useState([]);
-  useEffect(() => {
-    listCompaniesForOm().then((r) => { if (Array.isArray(r)) setCompanies(r); }).catch(() => {});
-  }, []);
-  return companies;
+  const { data = [] } = useCompaniesForOmQuery({
+    select: (result) => (Array.isArray(result) ? result : []),
+  });
+  return data;
 }
 
 /* ─── GST Lookup ─────────────────────────────────────────────────────────── */
@@ -458,37 +458,43 @@ function Section({ title, children, action }) {
 ══════════════════════════════════════════════════════════════════════════ */
 
 function VendorGridTab({ vendorType }) {
-  const [rows, setRows]         = useState([]);
-  const [total, setTotal]       = useState(0);
   const [page, setPage]         = useState(0);
   const [search, setSearch]     = useState("");
-  const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState("");
   const [notice, setNotice]     = useState("");
   const [saving, setSaving]     = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [panel, setPanel]       = useState(null);
+  const queryClient = useQueryClient();
+  const vendorQueryParams = useMemo(
+    () => ({ vendor_type: vendorType, search: search || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+    [page, search, vendorType]
+  );
+  const { data: vendorList, isLoading: loading, refetch } = useQuery({
+    queryKey: ["admin", "vendors", vendorQueryParams],
+    queryFn: () => listVendors(vendorQueryParams),
+  });
+  const rows = Array.isArray(vendorList?.data) ? vendorList.data : [];
+  const total = vendorList?.total ?? 0;
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  const load = useCallback(async (pg = 0, q = search) => {
-    setLoading(true); setError("");
-    try {
-      const result = await listVendors({ vendor_type: vendorType, search: q || undefined, limit: PAGE_SIZE, offset: pg * PAGE_SIZE });
-      setRows(Array.isArray(result?.data) ? result.data : []);
-      setTotal(result?.total ?? 0);
-      setPage(pg);
-    } catch (e) { setError(friendly(e.message)); }
-    finally { setLoading(false); }
-  }, [vendorType, search]);
-
-  useEffect(() => { load(0); }, [vendorType]); // eslint-disable-line react-hooks/exhaustive-deps
-
   async function openEdit(vendor) {
     try {
-      const result = await getVendor(vendor.id);
+      const result = await queryClient.fetchQuery({
+        queryKey: ["admin", "vendor-detail", vendor.id],
+        queryFn: () => getVendor(vendor.id),
+      });
       setPanel({ vendor: result?.data ?? vendor });
     } catch { setPanel({ vendor }); }
+  }
+
+  async function refreshRows() {
+    setError("");
+    const result = await refetch();
+    if (result.error) {
+      setError(friendly(result.error instanceof Error ? result.error.message : "OM_VENDOR_LIST_FAILED"));
+    }
   }
 
   async function handleActivate() {
@@ -498,7 +504,8 @@ function VendorGridTab({ vendorType }) {
     for (const id of selectedIds) { try { await changeVendorStatus({ id, new_status: "ACTIVE" }); } catch { failed++; } }
     setSaving(false); setSelectedIds(new Set());
     failed > 0 ? setError(`${failed} vendor(s) could not be activated.`) : setNotice("Selected vendors activated.");
-    load(page);
+    await queryClient.invalidateQueries({ queryKey: ["admin", "vendors"] });
+    await refreshRows();
   }
 
   async function handleDeactivate() {
@@ -508,7 +515,8 @@ function VendorGridTab({ vendorType }) {
     for (const id of selectedIds) { try { await changeVendorStatus({ id, new_status: "INACTIVE" }); } catch { failed++; } }
     setSaving(false); setSelectedIds(new Set());
     failed > 0 ? setError(`${failed} vendor(s) could not be deactivated.`) : setNotice("Selected vendors deactivated.");
-    load(page);
+    await queryClient.invalidateQueries({ queryKey: ["admin", "vendors"] });
+    await refreshRows();
   }
 
   async function handleDelete() {
@@ -522,7 +530,8 @@ function VendorGridTab({ vendorType }) {
       failedRows.length > 0
         ? setError(`${failedRows.length} vendor(s) could not be deleted — they may have active transactions.`)
         : setNotice(`${result?.deleted?.length ?? 0} vendor(s) deleted.`);
-      load(page);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "vendors"] });
+      await refreshRows();
     } catch (e) { setError(friendly(e.message)); }
     finally { setSaving(false); }
   }
@@ -533,8 +542,8 @@ function VendorGridTab({ vendorType }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") load(0, search); }} placeholder="Search vendor name / code…" className="h-8 w-64 border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-sky-500" />
-        <button onClick={() => load(0, search)} className="h-8 border border-slate-300 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50">Search</button>
+        <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(0); }} onKeyDown={(e) => { if (e.key === "Enter") { setPage(0); void refreshRows(); } }} placeholder="Search vendor name / code…" className="h-8 w-64 border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-sky-500" />
+        <button onClick={() => { setPage(0); void refreshRows(); }} className="h-8 border border-slate-300 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50">Search</button>
         <div className="flex-1" />
         <button onClick={() => setPanel({ vendor: null })} className="h-8 border border-sky-500 bg-sky-500 px-3 text-sm text-white hover:bg-sky-600">+ New Vendor</button>
         {selectedIds.size > 0 && (
@@ -602,9 +611,9 @@ function VendorGridTab({ vendorType }) {
 
       {totalPages > 1 && (
         <div className="flex items-center gap-2 text-sm text-slate-600">
-          <button onClick={() => load(page - 1)} disabled={page === 0 || loading} className="h-7 border border-slate-300 px-2 text-xs disabled:opacity-40">← Prev</button>
+          <button onClick={() => setPage((prev) => prev - 1)} disabled={page === 0 || loading} className="h-7 border border-slate-300 px-2 text-xs disabled:opacity-40">← Prev</button>
           <span>Page {page + 1} of {totalPages} ({total} total)</span>
-          <button onClick={() => load(page + 1)} disabled={page >= totalPages - 1 || loading} className="h-7 border border-slate-300 px-2 text-xs disabled:opacity-40">Next →</button>
+          <button onClick={() => setPage((prev) => prev + 1)} disabled={page >= totalPages - 1 || loading} className="h-7 border border-slate-300 px-2 text-xs disabled:opacity-40">Next →</button>
         </div>
       )}
 
@@ -613,7 +622,7 @@ function VendorGridTab({ vendorType }) {
           vendorType={vendorType}
           initialVendor={panel.vendor}
           onClose={() => setPanel(null)}
-          onSaved={() => { load(page); setNotice("Vendor saved."); }}
+          onSaved={() => { void queryClient.invalidateQueries({ queryKey: ["admin", "vendors"] }); void refreshRows(); setNotice("Vendor saved."); }}
         />
       )}
     </div>
