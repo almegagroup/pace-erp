@@ -490,26 +490,6 @@ async function getLastUsedIncoterm(vendorId: string): Promise<string | null> {
   return incoterm || null;
 }
 
-async function getLastUsedPaymentTerm(vendorId: string): Promise<string | null> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("purchase_order")
-    .select("payment_term_id")
-    .eq("vendor_id", vendorId)
-    .in("status", ["CONFIRMED", "CLOSED"])
-    .order("approved_at", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error("PROCUREMENT_LAST_USED_PAYMENT_TERM_FAILED");
-  }
-
-  const paymentTermId = toTrimmedString(data?.payment_term_id);
-  return paymentTermId || null;
-}
-
 async function buildPoLinesForInsert(
   ctx: ProcurementHandlerContext,
   vendorId: string,
