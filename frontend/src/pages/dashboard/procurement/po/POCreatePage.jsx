@@ -38,6 +38,7 @@ function createEmptyLine(defaultPaymentTermId = "") {
     delivery_date: "",
     payment_term_id: defaultPaymentTermId,
     freight_term: "FOR",
+    gst_terms: "",
     remarks: "",
     has_rebate: false,
     rebate_rate: "",
@@ -71,6 +72,20 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
       }
     >
       <div className="grid gap-4">
+        <label className="grid gap-1 text-xs font-semibold text-slate-700">
+          GST Terms
+          <select
+            value={line.gst_terms}
+            onChange={(event) => onChange({ gst_terms: event.target.value })}
+            className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+          >
+            <option value="">Select GST terms</option>
+            {GST_TERM_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+
         <label className="grid gap-1 text-xs font-semibold text-slate-700">
           Remarks
           <textarea
@@ -162,82 +177,6 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
   );
 }
 
-function HeaderMoreDrawer({ form, visible, onClose, onFieldChange, onAddExtraField, onRemoveExtraField, onExtraFieldChange }) {
-  return (
-    <DrawerBase
-      visible={visible}
-      title="PO More Details"
-      onEscape={onClose}
-      onClose={onClose}
-      width="min(520px, calc(100vw - 24px))"
-      actions={
-        <button
-          type="button"
-          onClick={onClose}
-          className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-sky-950"
-        >
-          Done
-        </button>
-      }
-    >
-      <div className="grid gap-5">
-        <label className="grid gap-1 text-xs font-semibold text-slate-700">
-          GST Terms
-          <select
-            value={form.gst_terms}
-            onChange={(event) => onFieldChange("gst_terms", event.target.value)}
-            className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-          >
-            <option value="">Select GST terms</option>
-            {GST_TERM_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-
-        <div className="grid gap-2">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold text-slate-700">Extra Fields</p>
-              <p className="text-[11px] text-slate-500">Add optional order-level text rows.</p>
-            </div>
-            <button
-              type="button"
-              onClick={onAddExtraField}
-              className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
-            >
-              Add
-            </button>
-          </div>
-
-          {form.extra_fields.length === 0 ? (
-            <div className="border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-xs text-slate-500">
-              No extra fields added.
-            </div>
-          ) : (
-            form.extra_fields.map((value, index) => (
-              <div key={index} className="flex items-start gap-2">
-                <input
-                  value={value}
-                  onChange={(event) => onExtraFieldChange(index, event.target.value)}
-                  className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => onRemoveExtraField(index)}
-                  className="border border-rose-300 bg-white px-3 py-2 text-xs font-semibold text-rose-700"
-                >
-                  Remove
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-    </DrawerBase>
-  );
-}
-
 export default function POCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
@@ -258,12 +197,10 @@ export default function POCreatePage() {
     delivery_type: "STANDARD",
     incoterm: "",
     cost_center_id: "",
-    gst_terms: "",
     extra_fields: [],
   });
   const [lines, setLines] = useState([createEmptyLine()]);
   const [lineMoreIndex, setLineMoreIndex] = useState(null);
-  const [headerMoreOpen, setHeaderMoreOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -578,7 +515,6 @@ export default function POCreatePage() {
         delivery_type: form.delivery_type,
         incoterm: showIncoterm ? form.incoterm.trim() : null,
         cost_center_id: form.cost_center_id,
-        gst_terms: form.gst_terms || null,
         extra_fields: form.extra_fields.map((entry) => entry.trim()).filter(Boolean),
         // Per feasibility doc 87.12A: each material becomes its own PO, all
         // grouped under one internal Order ID — never one multi-line PO.
@@ -589,6 +525,7 @@ export default function POCreatePage() {
           unit_rate: Number(line.rate),
           payment_term_id: line.payment_term_id,
           freight_term: line.freight_term,
+          gst_terms: line.gst_terms || null,
           delivery_date: line.delivery_date || null,
           remarks: line.remarks.trim() || null,
           has_rebate: line.has_rebate,
@@ -778,7 +715,6 @@ export default function POCreatePage() {
         title="Create Purchase Order"
         actions={[
           { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
-          { key: "more-details", label: "More Details", tone: "neutral", onClick: () => setHeaderMoreOpen(true), disabled: saving || loading },
           { key: "save", label: saving ? "Saving..." : lines.length > 1 ? `Create ${lines.length} POs` : "Create PO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || loading },
         ]}
         notices={[
@@ -854,7 +790,10 @@ export default function POCreatePage() {
             <ErpSectionCard
               eyebrow="Materials"
               title="Order details — one PO per material"
-              actions={[{ key: "add-line", label: "+ Add Material", tone: "primary", onClick: addLine }]}
+              actions={[
+                { key: "add-line", label: "+ Add Material", tone: "primary", onClick: addLine },
+                { key: "add-field", label: "+ Add Field", tone: "neutral", onClick: addExtraField },
+              ]}
             >
               <p className="mb-2 text-[11px] text-slate-500">
                 RM/PM only — an Approved (active) Vendor-Material Info record is required per line (hard block).
@@ -867,6 +806,34 @@ export default function POCreatePage() {
                 emptyMessage="No materials yet — click Add Material."
                 summaryRow={{ label: "Total", values: { net_value: netTotal.toFixed(2) } }}
               />
+              <div className="mt-4 grid gap-2">
+                <div>
+                  <p className="text-xs font-semibold text-slate-700">Extra Fields</p>
+                  <p className="text-[11px] text-slate-500">Add optional order-level text rows.</p>
+                </div>
+                {form.extra_fields.length === 0 ? (
+                  <div className="border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                    No extra fields added.
+                  </div>
+                ) : (
+                  form.extra_fields.map((value, index) => (
+                    <div key={index} className="flex items-start gap-2">
+                      <input
+                        value={value}
+                        onChange={(event) => updateExtraField(index, event.target.value)}
+                        className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeExtraField(index)}
+                        className="border border-rose-300 bg-white px-3 py-2 text-xs font-semibold text-rose-700"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
               {lines.length > 1 && (
                 <p className="mt-2 text-xs text-slate-500">
                   These {lines.length} materials will be raised as {lines.length} separate Purchase
@@ -899,15 +866,6 @@ export default function POCreatePage() {
         }}
       />
 
-      <HeaderMoreDrawer
-        form={form}
-        visible={headerMoreOpen}
-        onClose={() => setHeaderMoreOpen(false)}
-        onFieldChange={updateHeaderField}
-        onAddExtraField={addExtraField}
-        onRemoveExtraField={removeExtraField}
-        onExtraFieldChange={updateExtraField}
-      />
     </>
   );
 }

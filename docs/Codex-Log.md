@@ -20,3 +20,13 @@ This file is Codex's own work log for the Claude+Codex workflow, used to record 
 - Task: Redesigned PO Create across the frontend page and procurement PO API handlers.
 - Changes: Moved Payment Term and Freight Term from header-level inputs to each material line, added a per-line drawer for Remarks and Rebate details (rate, basis, remarks), added a header-level drawer for GST Terms and repeatable Extra Fields, and relabeled the per-line delivery date field to `ETD` for Domestic POs or `ETA to Port` for Import POs.
 - Notes: Files touched were `frontend/src/pages/dashboard/procurement/po/POCreatePage.jsx` and `supabase/functions/api/_core/procurement/po.handlers.ts`.
+
+### 2026-06-24 12:27 IST
+- Task: Reworked PO create line details and materials extras UI in the frontend page.
+- Changes: Moved GST Terms from the header-level drawer into each line's `LineMoreDrawer`, added per-line `gst_terms` state and payload mapping, removed the header `More Details` flow entirely, added a `+ Add Field` Materials action, and rendered `extra_fields` inline under the materials grid with per-row remove controls.
+- Notes: Edited only `frontend/src/pages/dashboard/procurement/po/POCreatePage.jsx` and appended this log entry.
+
+### 2026-06-24 12:32 IST
+- Task: Updated PO create backend GST term handling to validate per material instead of at the header/group level.
+- Changes: Removed top-level `gst_terms` parsing and validation from `createPOHandler`, stopped writing `gst_terms` onto `erp_procurement.po_order_group`, and added optional per-material validation from `materialRecord.gst_terms` inside the materials loop while leaving the `purchase_order` insert unchanged.
+- Notes: A migration adding a `gst_terms` column to `erp_procurement.purchase_order` is still required before the per-line value can be persisted; right now the handler validates `materialRecord.gst_terms` and then silently drops it.
