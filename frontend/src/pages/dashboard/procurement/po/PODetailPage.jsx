@@ -4,7 +4,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
-import { listVendors } from "../../om/omApi.js";
+import { listCostCenters, listVendors } from "../../om/omApi.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
   amendPurchaseOrder,
@@ -15,7 +15,9 @@ import {
   getPurchaseOrder,
   knockOffPOLine,
   knockOffPO,
+  listPaymentTerms,
   rejectPurchaseOrder,
+  updatePurchaseOrder,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
@@ -89,6 +91,32 @@ function buildAmendmentState(lines, po) {
   };
 }
 
+function buildEditState(po, vendorType) {
+  const line = po?.lines?.[0] ?? {};
+  return {
+    vendor_id: po?.vendor_id ?? "",
+    vendor_type: String(vendorType || po?.vendor_type || "DOMESTIC").toUpperCase(),
+    delivery_type: po?.delivery_type ?? "STANDARD",
+    incoterm: po?.incoterm ?? "",
+    payment_term_id: line.payment_term_id ?? po?.payment_term_id ?? "",
+    freight_term: po?.freight_term ?? line.freight_term ?? "FOR",
+    gst_terms: po?.gst_terms ?? line.gst_terms ?? "",
+    cost_center_id: line.cost_center_id ?? po?.cost_center_id ?? "",
+    expected_delivery_date: po?.expected_delivery_date ?? "",
+    remarks: po?.remarks ?? "",
+    has_rebate: Boolean(po?.has_rebate),
+    rebate_rate: po?.rebate_rate ?? "",
+    rebate_rate_uom_basis: po?.rebate_rate_uom_basis ?? "BASE_UOM",
+    rebate_remarks: po?.rebate_remarks ?? "",
+    line_material_id: line.material_id ?? "",
+    line_material_display: line.material_display || line.material_id || "",
+    ordered_qty: String(line.ordered_qty ?? ""),
+    unit_rate: String(line.unit_rate ?? ""),
+    po_uom_code: line.po_uom_code ?? "",
+    line_remarks: line.remarks ?? "",
+  };
+}
+
 function getRebateBasisLabel(value) {
   switch (String(value || "").toUpperCase()) {
     case "BASE_UOM":
@@ -112,7 +140,11 @@ export default function PODetailPage() {
   const { shellProfile, runtimeContext } = useMenu();
   const [po, setPo] = useState(null);
   const [vendors, setVendors] = useState([]);
+  const [paymentTerms, setPaymentTerms] = useState([]);
+  const [costCenters, setCostCenters] = useState([]);
   const [csns, setCsns] = useState([]);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState(buildEditState(null, ""));
   const [amendmentOpen, setAmendmentOpen] = useState(false);
   const [amendmentForm, setAmendmentForm] = useState({ delivery_date: "", remarks: "", lines: [] });
   const [loading, setLoading] = useState(true);
@@ -130,13 +162,38 @@ export default function PODetailPage() {
     () => vendorMap.get(po?.vendor_id) ?? null,
     [po?.vendor_id, vendorMap]
   );
+  const editVendor = useMemo(
+    () => vendorMap.get(editForm.vendor_id) ?? null,
+    [editForm.vendor_id, vendorMap]
+  );
+  const paymentTermOptions = useMemo(
+    () =>
+      paymentTerms.map((entry) => ({
+        value: entry.id,
+        label: `${entry.code || entry.name} | ${entry.name}`,
+      })),
+    [paymentTerms]
+  );
+  const costCenterOptions = useMemo(
+    () =>
+      costCenters.map((entry) => ({
+        value: entry.id,
+        label: `${entry.cost_center_code || entry.id} | ${entry.cost_center_name || entry.name || ""}`,
+      })),
+    [costCenters]
+  );
   const isImportPo = useMemo(
     () =>
       String(selectedVendor?.vendor_type || "").toUpperCase() === "IMPORT" ||
       String(po?.delivery_type || "").toUpperCase() === "IMPORT",
     [po?.delivery_type, selectedVendor]
   );
+  const isImportEditPo = useMemo(
+    () => String(editVendor?.vendor_type || editForm.vendor_type || "").toUpperCase() === "IMPORT",
+    [editForm.vendor_type, editVendor]
+  );
   const deliveryDateLabel = isImportPo ? "ETA to Port" : "ETD";
+  const editDeliveryDateLabel = isImportEditPo ? "ETA to Port" : "ETD";
 
   async function loadDetail() {
     if (!id) {
@@ -166,6 +223,31 @@ export default function PODetailPage() {
   useEffect(() => {
     void loadDetail();
   }, [id, runtimeContext?.selectedCompanyId]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadReferenceData() {
+      try {
+        const [paymentData, costCenterData] = await Promise.all([
+          listPaymentTerms({ is_active: true }),
+          po?.company_id ? listCostCenters({ company_id: po.company_id, active: true }) : Promise.resolve([]),
+        ]);
+        if (!active) {
+          return;
+        }
+        setPaymentTerms(Array.isArray(paymentData) ? paymentData : (paymentData?.data ?? []));
+        setCostCenters(Array.isArray(costCenterData?.data) ? costCenterData.data : []);
+      } catch (loadError) {
+        if (active) {
+          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_SETUP_FAILED");
+        }
+      }
+    }
+    void loadReferenceData();
+    return () => {
+      active = false;
+    };
+  }, [po?.company_id]);
 
   async function runAction(action, successMessage) {
     setSaving(true);
@@ -282,6 +364,90 @@ export default function PODetailPage() {
     }
   }
 
+  function openEditModal() {
+    const vendorType = vendorMap.get(po?.vendor_id)?.vendor_type || po?.vendor_type || "";
+    setEditForm(buildEditState(po, vendorType));
+    setEditOpen(true);
+    setError("");
+    setNotice("");
+  }
+
+  function closeEditModal() {
+    setEditOpen(false);
+  }
+
+  function updateEditField(key, value) {
+    setEditForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function handleSubmitEdit() {
+    if (!po?.company_id || !editForm.vendor_id) {
+      setError("Company and vendor are required.");
+      return;
+    }
+    if (!editForm.payment_term_id) {
+      setError("Payment term is required.");
+      return;
+    }
+    if (!editForm.cost_center_id) {
+      setError("Cost center is required.");
+      return;
+    }
+    if (!editForm.ordered_qty || !editForm.unit_rate) {
+      setError("Qty and rate are required.");
+      return;
+    }
+    if (isImportEditPo && !editForm.incoterm.trim()) {
+      setError("Incoterm is required for import purchase orders.");
+      return;
+    }
+    if (editForm.has_rebate && (editForm.rebate_rate === "" || !editForm.rebate_rate_uom_basis)) {
+      setError("Rebate rate and basis are required when rebate is enabled.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const resolvedVendorType = String(editVendor?.vendor_type || editForm.vendor_type || "DOMESTIC").toUpperCase();
+      await updatePurchaseOrder(id, {
+        company_id: po.company_id,
+        vendor_id: editForm.vendor_id,
+        payment_term_id: editForm.payment_term_id,
+        vendor_type: resolvedVendorType,
+        delivery_type: editForm.delivery_type,
+        freight_term: editForm.freight_term,
+        incoterm: resolvedVendorType === "IMPORT" ? editForm.incoterm.trim() || null : null,
+        gst_terms: editForm.gst_terms || null,
+        has_rebate: editForm.has_rebate,
+        rebate_remarks: editForm.has_rebate ? editForm.rebate_remarks.trim() || null : null,
+        rebate_rate: editForm.has_rebate && editForm.rebate_rate !== "" ? Number(editForm.rebate_rate) : null,
+        rebate_rate_uom_basis: editForm.has_rebate ? editForm.rebate_rate_uom_basis || null : null,
+        cost_center_id: editForm.cost_center_id,
+        expected_delivery_date: editForm.expected_delivery_date || null,
+        remarks: editForm.remarks.trim() || null,
+        lines: [
+          {
+            material_id: editForm.line_material_id,
+            ordered_qty: Number(editForm.ordered_qty),
+            unit_rate: Number(editForm.unit_rate),
+            po_uom_code: editForm.po_uom_code.trim() || null,
+            remarks: editForm.line_remarks.trim() || null,
+            cost_center_id: editForm.cost_center_id,
+          },
+        ],
+      });
+      await loadDetail();
+      setEditOpen(false);
+      setNotice("Purchase order updated.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PO_UPDATE_FAILED");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const grnSummaryRows = useMemo(
     () =>
       Array.isArray(po?.lines)
@@ -306,6 +472,7 @@ export default function PODetailPage() {
       ]}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
+        ...(po?.status === "DRAFT" ? [{ key: "edit", label: "Edit", tone: "neutral", onClick: openEditModal, disabled: saving }] : []),
         ...(po?.status === "DRAFT" ? [{ key: "confirm", label: saving ? "Confirming..." : "Confirm", tone: "primary", onClick: () => void handleConfirm(), disabled: saving }] : []),
         ...(po?.status === "PENDING_APPROVAL" && canApprove
           ? [
@@ -490,6 +657,262 @@ export default function PODetailPage() {
           <DocumentFlowSection docType="PO" docId={po.id} />
         </div>
       )}
+
+      {editOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4">
+          <div className="w-full max-w-5xl border border-slate-300 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h2 className="text-sm font-semibold text-slate-900">Edit Draft Purchase Order</h2>
+              <button type="button" onClick={closeEditModal} className="border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700">
+                Close
+              </button>
+            </div>
+            <div className="grid gap-4 p-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Vendor
+                  <select
+                    value={editForm.vendor_id}
+                    onChange={(event) => {
+                      const nextVendor = vendorMap.get(event.target.value);
+                      setEditForm((current) => ({
+                        ...current,
+                        vendor_id: event.target.value,
+                        vendor_type: String(nextVendor?.vendor_type || "DOMESTIC").toUpperCase(),
+                        incoterm:
+                          String(nextVendor?.vendor_type || "DOMESTIC").toUpperCase() === "IMPORT"
+                            ? current.incoterm
+                            : "",
+                      }));
+                    }}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select vendor</option>
+                    {vendors.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {`${entry.vendor_code || ""} ${entry.vendor_name || entry.id}`.trim()}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Delivery Type
+                  <select
+                    value={editForm.delivery_type}
+                    onChange={(event) => updateEditField("delivery_type", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    {["STANDARD", "BULK", "TANKER"].map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </label>
+                {isImportEditPo ? (
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Incoterm
+                    <input
+                      value={editForm.incoterm}
+                      onChange={(event) => updateEditField("incoterm", event.target.value.toUpperCase())}
+                      className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                    />
+                  </label>
+                ) : null}
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Payment Term
+                  <select
+                    value={editForm.payment_term_id}
+                    onChange={(event) => updateEditField("payment_term_id", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select payment term</option>
+                    {paymentTermOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Freight Term
+                  <select
+                    value={editForm.freight_term}
+                    onChange={(event) => updateEditField("freight_term", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="FOR">FOR</option>
+                    <option value="FREIGHT_SEPARATE">Freight Separate</option>
+                    <option value="FREIGHT_AT_ACTUALS">Freight at Actuals</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  GST Terms
+                  <select
+                    value={editForm.gst_terms}
+                    onChange={(event) => updateEditField("gst_terms", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select GST terms</option>
+                    <option value="INCLUSIVE">GST Inclusive</option>
+                    <option value="EXCLUSIVE">GST Exclusive</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Cost Center
+                  <select
+                    value={editForm.cost_center_id}
+                    onChange={(event) => updateEditField("cost_center_id", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select cost center</option>
+                    {costCenterOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Material
+                  <input
+                    value={editForm.line_material_display}
+                    readOnly
+                    className="h-8 border border-slate-300 bg-slate-100 px-2 text-sm text-slate-500 outline-none"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Qty
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.0001"
+                    value={editForm.ordered_qty}
+                    onChange={(event) => updateEditField("ordered_qty", event.target.value)}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Rate
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.0001"
+                    value={editForm.unit_rate}
+                    onChange={(event) => updateEditField("unit_rate", event.target.value)}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  UOM
+                  <input
+                    value={editForm.po_uom_code}
+                    onChange={(event) => updateEditField("po_uom_code", event.target.value.toUpperCase())}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  {editDeliveryDateLabel}
+                  <input
+                    type="date"
+                    value={editForm.expected_delivery_date}
+                    onChange={(event) => updateEditField("expected_delivery_date", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-2 xl:col-span-3">
+                  Remarks
+                  <input
+                    value={editForm.remarks}
+                    onChange={(event) => updateEditField("remarks", event.target.value)}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-1 text-xs font-semibold text-slate-700">
+                <span>Has Rebate</span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditForm((current) => ({
+                        ...current,
+                        has_rebate: true,
+                        rebate_rate_uom_basis: current.rebate_rate_uom_basis || "BASE_UOM",
+                      }))
+                    }
+                    className={`px-3 py-2 text-xs font-semibold ${
+                      editForm.has_rebate
+                        ? "border border-emerald-700 bg-emerald-100 text-emerald-900"
+                        : "border border-slate-300 bg-white text-slate-700"
+                    }`}
+                  >
+                    Yes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditForm((current) => ({
+                        ...current,
+                        has_rebate: false,
+                        rebate_rate: "",
+                        rebate_rate_uom_basis: "BASE_UOM",
+                        rebate_remarks: "",
+                      }))
+                    }
+                    className={`px-3 py-2 text-xs font-semibold ${
+                      !editForm.has_rebate
+                        ? "border border-slate-700 bg-slate-200 text-slate-950"
+                        : "border border-slate-300 bg-white text-slate-700"
+                    }`}
+                  >
+                    No
+                  </button>
+                </div>
+              </div>
+
+              {editForm.has_rebate ? (
+                <div className="grid gap-3 md:grid-cols-3">
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Rebate Rate
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.0001"
+                      value={editForm.rebate_rate}
+                      onChange={(event) => updateEditField("rebate_rate", event.target.value)}
+                      className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Basis
+                    <select
+                      value={editForm.rebate_rate_uom_basis}
+                      onChange={(event) => updateEditField("rebate_rate_uom_basis", event.target.value)}
+                      className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                    >
+                      <option value="BASE_UOM">Base UOM</option>
+                      <option value="PO_UOM">PO UOM</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-3">
+                    Rebate Remarks
+                    <input
+                      value={editForm.rebate_remarks}
+                      onChange={(event) => updateEditField("rebate_remarks", event.target.value)}
+                      className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                    />
+                  </label>
+                </div>
+              ) : null}
+
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={closeEditModal} className="border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">
+                  Cancel
+                </button>
+                <button type="button" disabled={saving} onClick={() => void handleSubmitEdit()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
+                  {saving ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {amendmentOpen ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4">

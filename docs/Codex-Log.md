@@ -45,3 +45,8 @@ This file is Codex's own work log for the Claude+Codex workflow, used to record 
 - Task: Surfaced additional purchase-order header, rebate, and audit fields already present in the PO detail API response.
 - Changes: Updated `frontend/src/pages/dashboard/procurement/po/PODetailPage.jsx` to add GST Terms, ETD/ETA, and Remarks to the Header card, inserted a conditional Rebate card for `has_rebate`, and added an Audit card showing resolved creator/updater/cancel/knock-off display names using `ErpFieldPreview`.
 - Notes: Matched the ETD vs `ETA to Port` label to the existing PO create-page import logic by checking vendor type first and falling back to `po.delivery_type`.
+
+### 2026-06-24 16:17 IST
+- Task: Added DRAFT-only purchase-order editing on the procurement PO detail page.
+- Changes: Updated `frontend/src/pages/dashboard/procurement/po/PODetailPage.jsx` to load payment terms and company-scoped cost centers, show an `Edit` action only for DRAFT POs, initialize a draft-edit modal from the loaded PO, and submit the backend-compatible single-line payload through `updatePurchaseOrder()` before reloading the detail view.
+- Notes: Tried to run `frontend` lint on the touched file, but the local Node/npm process was blocked by a filesystem `EPERM` on `C:\Users\cpalm`, so this change was verified by code inspection only.
