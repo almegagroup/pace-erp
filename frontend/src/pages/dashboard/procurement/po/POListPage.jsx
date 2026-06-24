@@ -131,7 +131,7 @@ export default function POListPage() {
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_PO_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_PO_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/purchase-orders/${encodeURIComponent(row.id)}`);
   }
 

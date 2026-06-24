@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listVendors } from "../../om/omApi.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
@@ -90,7 +90,14 @@ function buildAmendmentState(lines, po) {
 }
 
 export default function PODetailPage() {
-  const { id = "" } = useParams();
+  // NavigationStackBridge replays the screen-stack entry's literal route
+  // ("/.../purchase-orders/:id") whenever it's pushed without a `context.id`
+  // — the param ends up as the literal string ":id" instead of the real
+  // UUID. Fall back to the screen-stack context (the same pattern Material/
+  // Customer detail pages already use) whenever the path param looks wrong.
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { shellProfile, runtimeContext } = useMenu();
   const [po, setPo] = useState(null);
   const [vendors, setVendors] = useState([]);
