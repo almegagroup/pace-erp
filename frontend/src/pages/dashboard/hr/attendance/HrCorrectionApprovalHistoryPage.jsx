@@ -9,16 +9,16 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useCorrectionApprovalHistoryQuery } from "../../../../hooks/queries/useHrMasterQueries.js";
 import {
   formatDateTime,
   formatIsoDate,
-  listCorrectionApprovalHistory,
 } from "../hrApi.js";
 
 // ---------------------------------------------------------------------------
@@ -69,29 +69,19 @@ function StatusBadge({ status }) {
 // ---------------------------------------------------------------------------
 
 export default function HrCorrectionApprovalHistoryPage() {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await listCorrectionApprovalHistory();
-      setRows(data?.requests ?? []);
-    } catch (err) {
-      setError(formatError(err, "Correction approval history could not be loaded."));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const correctionHistoryQuery = useCorrectionApprovalHistoryQuery();
+  const rows = Array.isArray(correctionHistoryQuery.data?.requests) ? correctionHistoryQuery.data.requests : [];
+  const loading = correctionHistoryQuery.isFetching;
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (correctionHistoryQuery.error) {
+      setError(formatError(correctionHistoryQuery.error, "Correction approval history could not be loaded."));
+    }
+  }, [correctionHistoryQuery.error]);
 
   useErpScreenHotkeys({
-    refresh: { disabled: loading, perform: load },
+    refresh: { disabled: loading, perform: () => void correctionHistoryQuery.refetch() },
   });
 
   function openDetail(row) {
@@ -110,7 +100,7 @@ export default function HrCorrectionApprovalHistoryPage() {
           hint: "F8",
           tone: "neutral",
           disabled: loading,
-          onClick: load,
+          onClick: () => void correctionHistoryQuery.refetch(),
         },
       ]}
       error={error}

@@ -10,7 +10,7 @@
  * Authority: Frontend
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   getActiveScreenContext,
   popScreen,
@@ -21,6 +21,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import { useCorrectionRequestDetailQuery } from "../../../../hooks/queries/useHrMasterQueries.js";
 import {
   formatDateTime,
   formatIsoDate,
@@ -109,14 +110,29 @@ function DecisionHistory({ history }) {
 
 export default function HrCorrectionRequestDetailPage() {
   const context = getActiveScreenContext() ?? {};
-  const request = context.request ?? null;
+  const contextRequest = context.request ?? null;
   const mode = context.mode ?? "myRequests"; // "myRequests" | "approvalInbox" | "approvalHistory"
+  const correctionRequestId = contextRequest?.correction_request_id ?? "";
 
   const [deciding, setDeciding] = useState(false);
   const [error, setError] = useState("");
+  const correctionDetailQuery = useCorrectionRequestDetailQuery(correctionRequestId, {
+    enabled: Boolean(correctionRequestId),
+  });
+  const request =
+    correctionDetailQuery.data?.request ??
+    correctionDetailQuery.data?.data ??
+    correctionDetailQuery.data ??
+    contextRequest;
 
   const isApprovalMode = mode === "approvalInbox";
   const canDecide = isApprovalMode && request?.current_state === "PENDING";
+
+  useEffect(() => {
+    if (correctionDetailQuery.error) {
+      setError(formatError(correctionDetailQuery.error, "Correction request detail could not be loaded."));
+    }
+  }, [correctionDetailQuery.error]);
 
   useErpScreenHotkeys({
     approve: {
@@ -153,6 +169,7 @@ export default function HrCorrectionRequestDetailPage() {
         request.parent_company_id ?? null,
       );
       window.dispatchEvent(new CustomEvent("erp:workflow-changed"));
+      await correctionDetailQuery.refetch();
       popScreen();
     } catch (err) {
       setError(formatError(err, "Decision could not be submitted."));

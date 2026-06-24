@@ -16,7 +16,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
-import { getYearlyLeaveSummary } from "../hrApi.js";
+import { useYearlyLeaveSummaryQuery } from "../../../../hooks/queries/useHrMasterQueries.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,9 +53,16 @@ function buildCsvRows(data) {
 export default function HrYearlyLeaveSummaryPage() {
   const [year,       setYear]       = useState(currentYear);
   const [employeeId, setEmployeeId] = useState("");
-  const [data,       setData]       = useState(null);
-  const [loading,    setLoading]    = useState(false);
+  const [submittedEmployeeId, setSubmittedEmployeeId] = useState("");
   const [error,      setError]      = useState("");
+  const summaryQuery = useYearlyLeaveSummaryQuery({
+    year,
+    employeeId: submittedEmployeeId,
+  }, {
+    enabled: Boolean(submittedEmployeeId),
+  });
+  const data = summaryQuery.data ?? null;
+  const loading = summaryQuery.isFetching;
 
   useErpScreenHotkeys({ onF8: () => handleLoad() });
 
@@ -66,16 +73,7 @@ export default function HrYearlyLeaveSummaryPage() {
       setError("Employee ID is required.");
       return;
     }
-    setLoading(true);
-    try {
-      const result = await getYearlyLeaveSummary({ year, employeeId: trimmedId });
-      setData(result);
-    } catch (err) {
-      setError(formatError(err, "Could not load yearly leave summary."));
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
+    setSubmittedEmployeeId(trimmedId);
   }
 
   function handleExport() {

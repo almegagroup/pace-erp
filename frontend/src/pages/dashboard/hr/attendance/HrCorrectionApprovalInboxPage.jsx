@@ -10,16 +10,16 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useCorrectionApprovalInboxQuery } from "../../../../hooks/queries/useHrMasterQueries.js";
 import {
   formatDateTime,
   formatIsoDate,
-  listCorrectionApprovalInbox,
 } from "../hrApi.js";
 
 // ---------------------------------------------------------------------------
@@ -54,33 +54,26 @@ function StatusBadge({ status }) {
 // ---------------------------------------------------------------------------
 
 export default function HrCorrectionApprovalInboxPage() {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await listCorrectionApprovalInbox();
-      setRows(data?.requests ?? []);
-    } catch (err) {
-      setError(formatError(err, "Correction approval inbox could not be loaded."));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const correctionInboxQuery = useCorrectionApprovalInboxQuery();
+  const rows = Array.isArray(correctionInboxQuery.data?.requests) ? correctionInboxQuery.data.requests : [];
+  const loading = correctionInboxQuery.isFetching;
 
   useEffect(() => {
     // Reload whenever a workflow decision is made (approval/rejection on detail page)
-    function onWorkflowChanged() { load(); }
+    function onWorkflowChanged() { void correctionInboxQuery.refetch(); }
     window.addEventListener("erp:workflow-changed", onWorkflowChanged);
-    load();
     return () => window.removeEventListener("erp:workflow-changed", onWorkflowChanged);
-  }, [load]);
+  }, [correctionInboxQuery]);
+
+  useEffect(() => {
+    if (correctionInboxQuery.error) {
+      setError(formatError(correctionInboxQuery.error, "Correction approval inbox could not be loaded."));
+    }
+  }, [correctionInboxQuery.error]);
 
   useErpScreenHotkeys({
-    refresh: { disabled: loading, perform: load },
+    refresh: { disabled: loading, perform: () => void correctionInboxQuery.refetch() },
   });
 
   function openDetail(row) {
@@ -99,7 +92,7 @@ export default function HrCorrectionApprovalInboxPage() {
           hint: "F8",
           tone: "neutral",
           disabled: loading,
-          onClick: load,
+          onClick: () => void correctionInboxQuery.refetch(),
         },
       ]}
       error={error}

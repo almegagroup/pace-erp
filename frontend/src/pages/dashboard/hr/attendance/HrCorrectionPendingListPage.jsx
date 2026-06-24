@@ -9,17 +9,16 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
-import { pushToast } from "../../../../store/uiToast.js";
 import { openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useCorrectionRequestsQuery } from "../../../../hooks/queries/useHrMasterQueries.js";
 import {
   formatDateTime,
   formatIsoDate,
-  listCorrectionRequests,
 } from "../hrApi.js";
 
 // ---------------------------------------------------------------------------
@@ -70,29 +69,19 @@ function StatusBadge({ status }) {
 // ---------------------------------------------------------------------------
 
 export default function HrCorrectionPendingListPage() {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await listCorrectionRequests();
-      setRows(data?.requests ?? []);
-    } catch (err) {
-      setError(formatError(err, "Correction request list could not be loaded."));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const correctionRequestsQuery = useCorrectionRequestsQuery();
+  const rows = Array.isArray(correctionRequestsQuery.data?.requests) ? correctionRequestsQuery.data.requests : [];
+  const loading = correctionRequestsQuery.isFetching;
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (correctionRequestsQuery.error) {
+      setError(formatError(correctionRequestsQuery.error, "Correction request list could not be loaded."));
+    }
+  }, [correctionRequestsQuery.error]);
 
   useErpScreenHotkeys({
-    refresh: { disabled: loading, perform: load },
+    refresh: { disabled: loading, perform: () => void correctionRequestsQuery.refetch() },
   });
 
   function openDetail(row) {
@@ -111,7 +100,7 @@ export default function HrCorrectionPendingListPage() {
           hint: "F8",
           tone: "neutral",
           disabled: loading,
-          onClick: load,
+          onClick: () => void correctionRequestsQuery.refetch(),
         },
       ]}
       error={error}

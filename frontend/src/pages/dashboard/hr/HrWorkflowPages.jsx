@@ -11,6 +11,21 @@ import {
 import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
+import {
+  useAllLeaveTypeOptionsQuery,
+  useHolidaysQuery,
+  useLeaveApprovalHistoryQuery,
+  useLeaveApprovalInboxQuery,
+  useLeaveRegisterQuery,
+  useLeaveTypeOptionsQuery,
+  useMyLeaveRequestsQuery,
+  useMyOutWorkRequestsQuery,
+  useOutWorkApprovalHistoryQuery,
+  useOutWorkApprovalInboxQuery,
+  useOutWorkDestinationOptionsQuery,
+  useOutWorkRegisterQuery,
+  useWeekOffConfigQuery,
+} from "../../../hooks/queries/useHrMasterQueries.js";
 import { pushToast } from "../../../store/uiToast.js";
 import { getErrorMessage } from "../../../config/errorMessages.js";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
@@ -738,16 +753,22 @@ function HrEditRequestModal({ visible, kind, request, onClose, onSaved }) {
   const [editToDate, setEditToDate] = useState(todayDefault());
   const [editReason, setEditReason] = useState("");
   const [editLeaveTypeId, setEditLeaveTypeId] = useState("");
-  const [editLeaveTypes, setEditLeaveTypes] = useState([]);
-  const [editLeaveTypesLoading, setEditLeaveTypesLoading] = useState(false);
   const [editDestinationId, setEditDestinationId] = useState("");
-  const [editDestinations, setEditDestinations] = useState([]);
-  const [editDestinationsLoading, setEditDestinationsLoading] = useState(false);
   const [editDayScope, setEditDayScope] = useState("FULL_DAY");
   const [editOfficeDepartureTime, setEditOfficeDepartureTime] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState("");
   const editTotalDays = calculateInclusiveDays(editFromDate, editToDate);
+  const editLeaveTypeQuery = useLeaveTypeOptionsQuery(request?.parent_company_id ?? null, {
+    enabled: Boolean(visible && kind === "leave" && request),
+  });
+  const editDestinationQuery = useOutWorkDestinationOptionsQuery(request?.parent_company_id ?? null, {
+    enabled: Boolean(visible && kind === "outWork" && request),
+  });
+  const editLeaveTypes = editLeaveTypeQuery.leaveTypes;
+  const editLeaveTypesLoading = editLeaveTypeQuery.isLoading || editLeaveTypeQuery.isFetching;
+  const editDestinations = editDestinationQuery.destinations;
+  const editDestinationsLoading = editDestinationQuery.isLoading || editDestinationQuery.isFetching;
 
   // Initialise form state whenever the request being edited changes
   useEffect(() => {
@@ -759,43 +780,33 @@ function HrEditRequestModal({ visible, kind, request, onClose, onSaved }) {
 
     if (kind === "leave") {
       setEditLeaveTypeId(request.leave_type_id ?? "");
-      setEditLeaveTypesLoading(true);
-      listLeaveTypes(request.parent_company_id ?? null)
-        .then((data) => {
-          const rows = data?.leave_types ?? [];
-          setEditLeaveTypes(rows);
-          setEditLeaveTypeId((current) => {
-            if (current && rows.some((r) => r.leave_type_id === current)) return current;
-            return request.leave_type_id ?? rows[0]?.leave_type_id ?? "";
-          });
-        })
-        .catch(() => { setEditLeaveTypes([]); })
-        .finally(() => setEditLeaveTypesLoading(false));
     }
 
     if (kind === "outWork") {
       setEditDayScope(request.day_scope ?? "FULL_DAY");
       setEditOfficeDepartureTime(request.office_departure_time ?? "");
-      setEditDestinationsLoading(true);
-      listOutWorkDestinations()
-        .then((data) => {
-          const rows = data?.destinations ?? [];
-          setEditDestinations(rows);
-          setEditDestinationId(
-            rows.find((r) => r.destination_id === request.destination_id)
-              ?.destination_id ??
-              rows[0]?.destination_id ??
-              "",
-          );
-        })
-        .catch((err) => {
-          setEditDestinations([]);
-          setEditDestinationId("");
-          setEditError(formatError(err, "Destination list could not be loaded."));
-        })
-        .finally(() => setEditDestinationsLoading(false));
     }
   }, [request, kind]);
+
+  useEffect(() => {
+    if (kind === "leave" && request) {
+      setEditLeaveTypeId((current) => {
+        if (current && editLeaveTypes.some((r) => r.leave_type_id === current)) return current;
+        return request.leave_type_id ?? editLeaveTypes[0]?.leave_type_id ?? "";
+      });
+    }
+  }, [editLeaveTypes, kind, request]);
+
+  useEffect(() => {
+    if (kind === "outWork" && request) {
+      setEditDestinationId(
+        editDestinations.find((r) => r.destination_id === request.destination_id)?.destination_id ??
+        request.destination_id ??
+        editDestinations[0]?.destination_id ??
+        ""
+      );
+    }
+  }, [editDestinations, kind, request]);
 
   async function handleSave() {
     if (!request) return;
@@ -1283,29 +1294,24 @@ function HrApprovalDecisionDrawer({
   onClose,
   onRequestUpdated,
 }) {
-  const [overrideLeaveTypes, setOverrideLeaveTypes] = useState([]);
   const [overrideLeaveTypeId, setOverrideLeaveTypeId] = useState("");
-  const [overrideTypesLoading, setOverrideTypesLoading] = useState(false);
   const [overrideSaving, setOverrideSaving] = useState(false);
   const [overrideError, setOverrideError] = useState("");
   const canOverrideType = kind === "leave" && request?.current_state === "PENDING";
+  const overrideLeaveTypeQuery = useLeaveTypeOptionsQuery(request?.parent_company_id ?? null, {
+    enabled: Boolean(visible && canOverrideType && request),
+  });
+  const overrideLeaveTypes = overrideLeaveTypeQuery.leaveTypes;
+  const overrideTypesLoading = overrideLeaveTypeQuery.isLoading || overrideLeaveTypeQuery.isFetching;
 
   useEffect(() => {
     if (!visible || !canOverrideType || !request) {
-      setOverrideLeaveTypes([]);
       setOverrideLeaveTypeId("");
       setOverrideError("");
       return;
     }
     setOverrideLeaveTypeId(request.leave_type_id ?? "");
     setOverrideError("");
-    setOverrideTypesLoading(true);
-    listLeaveTypes(request.parent_company_id ?? null)
-      .then((data) => {
-        setOverrideLeaveTypes(data?.leave_types ?? []);
-      })
-      .catch(() => setOverrideLeaveTypes([]))
-      .finally(() => setOverrideTypesLoading(false));
   }, [visible, canOverrideType, request?.leave_request_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleSaveTypeOverride() {
@@ -1535,8 +1541,6 @@ export function LeaveApplyWorkspace() {
   const [toDate, setToDate] = useState(todayDefault());
   const [reason, setReason] = useState("");
   const [leaveTypeId, setLeaveTypeId] = useState("");
-  const [leaveTypes, setLeaveTypes] = useState([]);
-  const [leaveTypesLoading, setLeaveTypesLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -1546,6 +1550,11 @@ export function LeaveApplyWorkspace() {
   const [sandwichPreview, setSandwichPreview] = useState(null); // null | SandwichResult
   const [sandwichLoading, setSandwichLoading] = useState(false);
   const sandwichTimerRef = useRef(null);
+  const leaveTypeQuery = useLeaveTypeOptionsQuery(transactionCompanyId, {
+    enabled: Boolean(transactionCompanyId),
+  });
+  const leaveTypes = leaveTypeQuery.leaveTypes;
+  const leaveTypesLoading = leaveTypeQuery.isLoading || leaveTypeQuery.isFetching;
 
   const totalDays = calculateInclusiveDays(fromDate, toDate);
   const earliestBackdate = getHrEarliestBackdate();
@@ -1566,23 +1575,14 @@ export function LeaveApplyWorkspace() {
 
   useEffect(() => {
     if (!transactionCompanyId) {
-      setLeaveTypes([]);
       setLeaveTypeId("");
       return;
     }
-    setLeaveTypesLoading(true);
-    listLeaveTypes(transactionCompanyId)
-      .then((data) => {
-        const rows = data?.leave_types ?? [];
-        setLeaveTypes(rows);
-        setLeaveTypeId((current) => {
-          if (current && rows.some((r) => r.leave_type_id === current)) return current;
-          return rows[0]?.leave_type_id ?? "";
-        });
-      })
-      .catch(() => { setLeaveTypes([]); setLeaveTypeId(""); })
-      .finally(() => setLeaveTypesLoading(false));
-  }, [transactionCompanyId]);
+    setLeaveTypeId((current) => {
+      if (current && leaveTypes.some((r) => r.leave_type_id === current)) return current;
+      return leaveTypes[0]?.leave_type_id ?? "";
+    });
+  }, [leaveTypes, transactionCompanyId]);
 
   // Debounced sandwich preview: fires 400 ms after fromDate/toDate settle
   useEffect(() => {
@@ -1793,20 +1793,23 @@ export function OutWorkApplyWorkspace() {
   const [toDate, setToDate] = useState(todayDefault());
   const [reason, setReason] = useState("");
   const [destinationId, setDestinationId] = useState("");
-  const [destinations, setDestinations] = useState([]);
   const [showDestinationModal, setShowDestinationModal] = useState(false);
   const [destinationName, setDestinationName] = useState("");
   const [destinationAddress, setDestinationAddress] = useState("");
   const [dayScope, setDayScope] = useState("FULL_DAY");
   const [officeDepartureTime, setOfficeDepartureTime] = useState("");
   const [saving, setSaving] = useState(false);
-  const [loadingDestinations, setLoadingDestinations] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const destinationNameRef = useRef(null);
   const [transactionCompanyId, setTransactionCompanyId] = useState(() =>
     resolveDefaultTransactionCompanyId(runtimeContext),
   );
+  const destinationQuery = useOutWorkDestinationOptionsQuery(transactionCompanyId, {
+    enabled: Boolean(transactionCompanyId),
+  });
+  const destinations = destinationQuery.destinations;
+  const loadingDestinations = destinationQuery.isLoading || destinationQuery.isFetching;
 
   const totalDays = calculateInclusiveDays(fromDate, toDate);
   const earliestBackdate = getHrEarliestBackdate();
@@ -1876,35 +1879,22 @@ export function OutWorkApplyWorkspace() {
   ];
 
   const refreshDestinations = useCallback(async (preferredDestinationId = "") => {
-    setLoadingDestinations(true);
-    try {
-      const data = await listOutWorkDestinations(transactionCompanyId);
-      const rows = data.destinations ?? [];
-      setDestinations(rows);
-      const nextDestinationId =
-        rows.find((row) => row.destination_id === preferredDestinationId)?.destination_id ??
-        rows[0]?.destination_id ??
-        "";
-      setDestinationId(nextDestinationId);
-    } catch (err) {
-      setDestinations([]);
-      setDestinationId("");
-      setError(formatError(err, "Destination list could not be loaded."));
-    } finally {
-      setLoadingDestinations(false);
-    }
-  }, [transactionCompanyId]);
+    const result = await destinationQuery.refetch();
+    const rows = result.data?.destinations ?? destinationQuery.destinations;
+    const nextDestinationId =
+      rows.find((row) => row.destination_id === preferredDestinationId)?.destination_id ??
+      rows[0]?.destination_id ??
+      "";
+    setDestinationId(nextDestinationId);
+  }, [destinationQuery]);
 
   useEffect(() => {
     if (!transactionCompanyId) {
-      setDestinations([]);
       setDestinationId("");
-      setLoadingDestinations(false);
       return;
     }
-
     void refreshDestinations();
-  }, [transactionCompanyId, refreshDestinations]);
+  }, [refreshDestinations, transactionCompanyId]);
 
   async function handleCreateDestination() {
     if (!transactionCompanyId) {
@@ -2197,7 +2187,6 @@ function useHrQueryLoader(loader, args = []) {
 function HrRequestListWorkspace({
   kind,
   title,
-  loader,
   openApply,
   openInbox,
 }) {
@@ -2211,9 +2200,15 @@ function HrRequestListWorkspace({
   const [actionDrawerRequest, setActionDrawerRequest] = useState(null);
   const [cancelling, setCancelling] = useState(false);
   const [editingRequest, setEditingRequest] = useState(null);
+  const [error, setError] = useState("");
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.myRequests`);
-  const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
+  const leaveRequestsQuery = useMyLeaveRequestsQuery({ enabled: kind === "leave" });
+  const outWorkRequestsQuery = useMyOutWorkRequestsQuery({ enabled: kind === "outWork" });
+  const requestListQuery = kind === "leave" ? leaveRequestsQuery : outWorkRequestsQuery;
+  const rows = Array.isArray(requestListQuery.data?.requests) ? requestListQuery.data.requests : [];
+  const loading = requestListQuery.isFetching;
+  const refresh = requestListQuery.refetch;
   const approvalInboxRoute =
     kind === "leave"
       ? "/dashboard/hr/leave/approval-inbox"
@@ -2222,6 +2217,12 @@ function HrRequestListWorkspace({
     () => canOpenHrResource(menu, openInbox, approvalInboxRoute),
     [approvalInboxRoute, menu, openInbox],
   );
+
+  useEffect(() => {
+    if (requestListQuery.error) {
+      setError(formatError(requestListQuery.error, "Workspace could not be loaded."));
+    }
+  }, [requestListQuery.error]);
 
   const filteredRows = useMemo(
     () =>
@@ -2442,7 +2443,6 @@ function HrRequestListWorkspace({
 function HrApprovalInboxWorkspace({
   kind,
   title,
-  loader,
   openHistory,
 }) {
   const navigate = useNavigate();
@@ -2460,9 +2460,21 @@ function HrApprovalInboxWorkspace({
   const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
   const [decisionDrawerRequest, setDecisionDrawerRequest] = useState(null);
   const [deciding, setDeciding] = useState(false);
+  const [error, setError] = useState("");
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.approvalInbox`);
-  const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader);
+  const leaveInboxQuery = useLeaveApprovalInboxQuery({ enabled: kind === "leave" });
+  const outWorkInboxQuery = useOutWorkApprovalInboxQuery({ enabled: kind === "outWork" });
+  const approvalInboxQuery = kind === "leave" ? leaveInboxQuery : outWorkInboxQuery;
+  const rows = Array.isArray(approvalInboxQuery.data?.requests) ? approvalInboxQuery.data.requests : [];
+  const loading = approvalInboxQuery.isFetching;
+  const refresh = approvalInboxQuery.refetch;
+
+  useEffect(() => {
+    if (approvalInboxQuery.error) {
+      setError(formatError(approvalInboxQuery.error, "Workspace could not be loaded."));
+    }
+  }, [approvalInboxQuery.error]);
 
   const filteredRows = useMemo(() => {
     let result = applyQuickFilter(rows, searchQuery, [
@@ -2720,7 +2732,6 @@ function HrApprovalInboxWorkspace({
 function HrApprovalHistoryWorkspace({
   kind,
   title,
-  loader,
 }) {
   const navigate = useNavigate();
   const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
@@ -2730,11 +2741,25 @@ function HrApprovalHistoryWorkspace({
   const [requesterAuthUserId, setRequesterAuthUserId] = useState(initialContext.parentState?.requesterAuthUserId ?? "");
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
+  const [error, setError] = useState("");
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.approvalHistory`);
-  const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader, [
-    requesterAuthUserId,
-  ]);
+  const leaveHistoryQuery = useLeaveApprovalHistoryQuery(requesterAuthUserId, {
+    enabled: kind === "leave",
+  });
+  const outWorkHistoryQuery = useOutWorkApprovalHistoryQuery(requesterAuthUserId, {
+    enabled: kind === "outWork",
+  });
+  const approvalHistoryQuery = kind === "leave" ? leaveHistoryQuery : outWorkHistoryQuery;
+  const rows = Array.isArray(approvalHistoryQuery.data?.requests) ? approvalHistoryQuery.data.requests : [];
+  const loading = approvalHistoryQuery.isFetching;
+  const refresh = approvalHistoryQuery.refetch;
+
+  useEffect(() => {
+    if (approvalHistoryQuery.error) {
+      setError(formatError(approvalHistoryQuery.error, "Workspace could not be loaded."));
+    }
+  }, [approvalHistoryQuery.error]);
 
   const filteredRows = useMemo(
     () =>
@@ -2903,7 +2928,6 @@ function HrApprovalHistoryWorkspace({
 function HrRegisterWorkspace({
   kind,
   title,
-  loader,
 }) {
   const navigate = useNavigate();
   const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
@@ -2912,21 +2936,33 @@ function HrRegisterWorkspace({
   const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
   const [requesterAuthUserId, setRequesterAuthUserId] = useState(initialContext.parentState?.requesterAuthUserId ?? "");
   const [leaveTypeCode, setLeaveTypeCode] = useState(initialContext.parentState?.leaveTypeCode ?? "*");
-  const [registerLeaveTypes, setRegisterLeaveTypes] = useState([]);
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
+  const [error, setError] = useState("");
   const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.register`);
-  const { rows, loading, error, setError, refresh } = useHrQueryLoader(loader, [
-    requesterAuthUserId,
-  ]);
+  const leaveRegisterQuery = useLeaveRegisterQuery(
+    { requesterAuthUserId: requesterAuthUserId || undefined },
+    { enabled: kind === "leave" }
+  );
+  const outWorkRegisterQuery = useOutWorkRegisterQuery(
+    { requesterAuthUserId: requesterAuthUserId || undefined },
+    { enabled: kind === "outWork" }
+  );
+  const registerQuery = kind === "leave" ? leaveRegisterQuery : outWorkRegisterQuery;
+  const rows = Array.isArray(registerQuery.data?.requests) ? registerQuery.data.requests : [];
+  const loading = registerQuery.isFetching;
+  const refresh = registerQuery.refetch;
+  const registerLeaveTypeQuery = useLeaveTypeOptionsQuery(null, {
+    enabled: kind === "leave",
+  });
+  const registerLeaveTypes = registerLeaveTypeQuery.leaveTypes;
 
   useEffect(() => {
-    if (kind !== "leave") return;
-    listLeaveTypes()
-      .then((data) => setRegisterLeaveTypes(data?.leave_types ?? []))
-      .catch(() => setRegisterLeaveTypes([]));
-  }, [kind]);
+    if (registerQuery.error) {
+      setError(formatError(registerQuery.error, "Workspace could not be loaded."));
+    }
+  }, [registerQuery.error]);
 
   const filteredRows = useMemo(() => {
     let result = applyQuickFilter(rows, searchQuery, [
@@ -3119,7 +3155,6 @@ export function LeaveMyRequestsWorkspace() {
     <HrRequestListWorkspace
       kind="leave"
       title="My Leave Requests"
-      loader={() => listMyLeaveRequests()}
       openApply="HR_LEAVE_APPLY"
       openInbox="HR_LEAVE_APPROVAL_INBOX"
     />
@@ -3131,7 +3166,6 @@ export function LeaveApprovalInboxWorkspace() {
     <HrApprovalInboxWorkspace
       kind="leave"
       title="Leave Approval Inbox"
-      loader={() => listLeaveApprovalInbox()}
       openHistory="HR_LEAVE_APPROVAL_SCOPE_HISTORY"
     />
   );
@@ -3142,7 +3176,6 @@ export function LeaveApprovalScopeHistoryWorkspace() {
     <HrApprovalHistoryWorkspace
       kind="leave"
       title="Leave Approval Scope History"
-      loader={(requesterAuthUserId) => listLeaveApprovalHistory(requesterAuthUserId)}
     />
   );
 }
@@ -3152,7 +3185,6 @@ export function LeaveRegisterWorkspace() {
     <HrRegisterWorkspace
       kind="leave"
       title="HR Leave Register"
-      loader={(requesterAuthUserId) => listLeaveRegister({ requesterAuthUserId })}
     />
   );
 }
@@ -3162,7 +3194,6 @@ export function OutWorkMyRequestsWorkspace() {
     <HrRequestListWorkspace
       kind="outWork"
       title="My Out Work Requests"
-      loader={() => listMyOutWorkRequests()}
       openApply="HR_OUT_WORK_APPLY"
       openInbox="HR_OUT_WORK_APPROVAL_INBOX"
     />
@@ -3174,7 +3205,6 @@ export function OutWorkApprovalInboxWorkspace() {
     <HrApprovalInboxWorkspace
       kind="outWork"
       title="Out Work Approval Inbox"
-      loader={() => listOutWorkApprovalInbox()}
       openHistory="HR_OUT_WORK_APPROVAL_SCOPE_HISTORY"
     />
   );
@@ -3185,7 +3215,6 @@ export function OutWorkApprovalScopeHistoryWorkspace() {
     <HrApprovalHistoryWorkspace
       kind="outWork"
       title="Out Work Approval Scope History"
-      loader={(requesterAuthUserId) => listOutWorkApprovalHistory(requesterAuthUserId)}
     />
   );
 }
@@ -3195,7 +3224,6 @@ export function OutWorkRegisterWorkspace() {
     <HrRegisterWorkspace
       kind="outWork"
       title="Out Work Register"
-      loader={(requesterAuthUserId) => listOutWorkRegister({ requesterAuthUserId })}
     />
   );
 }
@@ -3393,14 +3421,17 @@ export function LeaveTypeManagementWorkspace() {
   );
   const transactionCompanyRef = useRef(null);
 
-  const [leaveTypes, setLeaveTypes] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [editTarget, setEditTarget] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [togglingId, setTogglingId] = useState(null);
   const searchRef = useRef(null);
+  const leaveTypeQuery = useAllLeaveTypeOptionsQuery(transactionCompanyId, {
+    enabled: Boolean(transactionCompanyId),
+  });
+  const leaveTypes = leaveTypeQuery.leaveTypes;
+  const loading = leaveTypeQuery.isLoading || leaveTypeQuery.isFetching;
 
   // Sync default company when runtime context loads
   useEffect(() => {
@@ -3413,20 +3444,15 @@ export function LeaveTypeManagementWorkspace() {
     [leaveTypes, searchQuery],
   );
 
-  async function loadTypes(cId = transactionCompanyId) {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await listAllLeaveTypes(cId);
-      setLeaveTypes(data?.leave_types ?? []);
-    } catch (err) {
-      setError(formatError(err, "Leave types could not be loaded."));
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    if (leaveTypeQuery.error) {
+      setError(formatError(leaveTypeQuery.error, "Leave types could not be loaded."));
     }
-  }
+  }, [leaveTypeQuery.error]);
 
-  useEffect(() => { if (transactionCompanyId) void loadTypes(transactionCompanyId); }, [transactionCompanyId]);
+  async function loadTypes() {
+    await leaveTypeQuery.refetch();
+  }
 
   useErpScreenHotkeys({
     refresh: { disabled: loading, perform: () => void loadTypes() },
@@ -3947,9 +3973,6 @@ export function HolidayCalendarWorkspace() {
   );
   const transactionCompanyRef = useRef(null);
 
-  // Holidays state
-  const [holidays, setHolidays] = useState([]);
-  const [holidaysLoading, setHolidaysLoading] = useState(false);
   const [holidayError, setHolidayError] = useState("");
   const [fyYear, setFyYear] = useState(() => {
     const now = new Date();
@@ -3961,11 +3984,30 @@ export function HolidayCalendarWorkspace() {
 
   // Week-off state
   const [weekOffDays, setWeekOffDays] = useState([6, 7]);
-  const [weekOffLoading, setWeekOffLoading] = useState(false);
   const [weekOffSaving, setWeekOffSaving] = useState(false);
   const [weekOffError, setWeekOffError] = useState("");
   const [weekOffNotice, setWeekOffNotice] = useState("");
   const reportSectionRef = useRef(null);
+  const holidayFyQuery = useHolidaysQuery({ year: String(fyYear), companyId: transactionCompanyId }, {
+    enabled: Boolean(transactionCompanyId),
+  });
+  const holidayNextFyQuery = useHolidaysQuery({ year: String(fyYear + 1), companyId: transactionCompanyId }, {
+    enabled: Boolean(transactionCompanyId),
+  });
+  const weekOffConfigQuery = useWeekOffConfigQuery(transactionCompanyId, {
+    enabled: Boolean(transactionCompanyId),
+  });
+  const holidaysLoading = holidayFyQuery.isFetching || holidayNextFyQuery.isFetching;
+  const weekOffLoading = weekOffConfigQuery.isFetching;
+  const holidays = useMemo(() => {
+    const all = [
+      ...(holidayFyQuery.data?.holidays ?? []),
+      ...(holidayNextFyQuery.data?.holidays ?? []),
+    ];
+    const fyStart = `${fyYear}-04-01`;
+    const fyEnd = `${fyYear + 1}-03-31`;
+    return all.filter((h) => h.holiday_date >= fyStart && h.holiday_date <= fyEnd);
+  }, [fyYear, holidayFyQuery.data, holidayNextFyQuery.data]);
 
   useEffect(() => {
     const nextId = resolveDefaultTransactionCompanyId(runtimeContext);
@@ -3974,40 +4016,27 @@ export function HolidayCalendarWorkspace() {
 
   // Reload helper — reusable across effects + hotkey
   function reloadHolidays(cId = transactionCompanyId, fy = fyYear) {
-    if (!cId) { setHolidays([]); return; }
-    setHolidaysLoading(true);
+    if (!cId) { return; }
     setHolidayError("");
-    Promise.all([
-      listHolidays(String(fy), cId),
-      listHolidays(String(fy + 1), cId),
-    ])
-      .then(([d1, d2]) => {
-        const all = [...(d1?.holidays ?? []), ...(d2?.holidays ?? [])];
-        const fyStart = `${fy}-04-01`;
-        const fyEnd = `${fy + 1}-03-31`;
-        setHolidays(
-          all.filter((h) => h.holiday_date >= fyStart && h.holiday_date <= fyEnd),
-        );
-      })
-      .catch((err) => setHolidayError(formatError(err, "Holidays could not be loaded.")))
-      .finally(() => setHolidaysLoading(false));
+    return Promise.all([holidayFyQuery.refetch(), holidayNextFyQuery.refetch()])
+      .catch((err) => setHolidayError(formatError(err, "Holidays could not be loaded.")));
   }
 
-  // Load holidays when company or year changes
-  useEffect(() => { reloadHolidays(transactionCompanyId, fyYear); },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [transactionCompanyId, fyYear]);
-
-  // Load week-off config when company changes
   useEffect(() => {
-    if (!transactionCompanyId) return;
-    setWeekOffLoading(true);
-    setWeekOffError("");
-    getWeekOffConfig(transactionCompanyId)
-      .then((data) => setWeekOffDays(data?.week_off_days ?? [6, 7]))
-      .catch((err) => setWeekOffError(formatError(err, "Week-off configuration could not be loaded.")))
-      .finally(() => setWeekOffLoading(false));
-  }, [transactionCompanyId]);
+    if (holidayFyQuery.error || holidayNextFyQuery.error) {
+      setHolidayError(formatError(holidayFyQuery.error ?? holidayNextFyQuery.error, "Holidays could not be loaded."));
+    }
+  }, [holidayFyQuery.error, holidayNextFyQuery.error]);
+
+  useEffect(() => {
+    if (weekOffConfigQuery.error) {
+      setWeekOffError(formatError(weekOffConfigQuery.error, "Week-off configuration could not be loaded."));
+      return;
+    }
+    if (Array.isArray(weekOffConfigQuery.data?.week_off_days)) {
+      setWeekOffDays(weekOffConfigQuery.data.week_off_days);
+    }
+  }, [weekOffConfigQuery.data, weekOffConfigQuery.error]);
 
   useErpScreenHotkeys({
     refresh: {
@@ -4041,7 +4070,7 @@ export function HolidayCalendarWorkspace() {
 
     try {
       await deleteHoliday(holiday.holiday_id, transactionCompanyId);
-      setHolidays((prev) => prev.filter((h) => h.holiday_id !== holiday.holiday_id));
+      await reloadHolidays();
     } catch (err) {
       setHolidayError(formatError(err, "Holiday could not be deleted."));
     }
