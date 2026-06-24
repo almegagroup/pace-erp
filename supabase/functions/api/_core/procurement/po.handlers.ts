@@ -1179,7 +1179,16 @@ export async function updatePOHandler(
     const vendorType = toUpperTrimmedString(body.vendor_type || po.vendor_type);
     const deliveryType = toUpperTrimmedString(body.delivery_type || po.delivery_type);
     const freightTerm = toUpperTrimmedString(body.freight_term || po.freight_term);
+    const gstTerms = toUpperTrimmedString(body.gst_terms ?? po.gst_terms);
+    const rebateRateUomBasis = toUpperTrimmedString(
+      body.rebate_rate_uom_basis ?? po.rebate_rate_uom_basis,
+    );
     const incoterm = toTrimmedString(body.incoterm ?? po.incoterm);
+    const hasRebate = body.has_rebate === true;
+    const rebateRate = hasRebate
+      ? parseNullableNumber(body.rebate_rate ?? po.rebate_rate)
+      : null;
+    const costCenterId = toTrimmedString(body.cost_center_id);
 
     if (!DELIVERY_TYPES.has(deliveryType) || !PO_VENDOR_TYPES.has(vendorType) || !FREIGHT_TERMS.has(freightTerm)) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PO_VALUES", 400, "Invalid PO header values");
@@ -1187,13 +1196,25 @@ export async function updatePOHandler(
     if (vendorType === "IMPORT" && !incoterm) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INCOTERM_REQUIRED", 400, "Incoterm required for import PO");
     }
+    if (gstTerms && !GST_TERMS.has(gstTerms)) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_GST_TERMS", 400, "Invalid GST terms");
+    }
+    if (rebateRateUomBasis && !REBATE_RATE_UOM_BASIS.has(rebateRateUomBasis)) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_REBATE_RATE_UOM_BASIS", 400, "Invalid rebate rate basis");
+    }
 
     const paymentTerm = await getPaymentTermRow(paymentTermId);
     if (!paymentTerm) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PAYMENT_TERM_NOT_FOUND", 404, "Payment term not found");
     }
 
-    const preparedLines = await buildPoLinesForInsert(ctx, vendorId, body.lines);
+    const rawLines = Array.isArray(body.lines)
+      ? body.lines.map((line) => ({
+        ...((line ?? {}) as JsonRecord),
+        cost_center_id: costCenterId || toTrimmedString((line as JsonRecord | undefined)?.cost_center_id),
+      }))
+      : body.lines;
+    const preparedLines = await buildPoLinesForInsert(ctx, vendorId, rawLines);
 
     const { data: updatedPo, error: poError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -1207,8 +1228,11 @@ export async function updatePOHandler(
         payment_term_id: paymentTerm.id,
         lc_required: toUpperTrimmedString(paymentTerm.payment_method) === "LC",
         delivery_type: deliveryType,
-        has_rebate: body.has_rebate === true,
+        gst_terms: gstTerms || null,
+        has_rebate: hasRebate,
         rebate_remarks: toTrimmedString(body.rebate_remarks) || null,
+        rebate_rate: rebateRate,
+        rebate_rate_uom_basis: hasRebate ? rebateRateUomBasis || null : null,
         indent_required: body.indent_required === true || po.indent_required === true,
         expected_delivery_date: toTrimmedString(body.expected_delivery_date) || null,
         remarks: toTrimmedString(body.remarks) || null,
