@@ -9,7 +9,8 @@
  * Authority: Frontend
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * Normalise a string for loose matching: lowercase, collapse whitespace.
@@ -59,6 +60,10 @@ export default function ErpComboboxField({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlightIndex, setHighlightIndex] = useState(0);
+  // Dropdown panel is portaled to document.body and positioned via fixed
+  // coordinates — otherwise any ancestor with `overflow-hidden` (e.g.
+  // ErpSectionCard) silently clips it, hiding all but the first row or two.
+  const [panelRect, setPanelRect] = useState(null);
 
   const wrapperRef = useRef(null);
   const listRef = useRef(null);
@@ -96,17 +101,43 @@ export default function ErpComboboxField({
     items[highlightIndex]?.scrollIntoView({ block: "nearest" });
   }, [highlightIndex, open]);
 
-  // Close on outside click
+  // Close on outside click — the list is portaled to document.body, so a
+  // click "inside" it is no longer a descendant of wrapperRef; check both.
   useEffect(() => {
     if (!open) return;
     function handlePointerDown(event) {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
+      const insideWrapper = wrapperRef.current && wrapperRef.current.contains(event.target);
+      const insideList = listRef.current && listRef.current.contains(event.target);
+      if (!insideWrapper && !insideList) {
         setOpen(false);
         setQuery("");
       }
     }
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [open]);
+
+  // Track the input's viewport position while open so the portaled panel
+  // can follow it — recompute on open, and on scroll/resize anywhere
+  // (capture phase catches scrolling inside any ancestor container too).
+  useLayoutEffect(() => {
+    if (!open) {
+      setPanelRect(null);
+      return undefined;
+    }
+    function updateRect() {
+      const el = wrapperRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setPanelRect({ top: rect.bottom, left: rect.left, width: rect.width });
+    }
+    updateRect();
+    window.addEventListener("scroll", updateRect, true);
+    window.addEventListener("resize", updateRect);
+    return () => {
+      window.removeEventListener("scroll", updateRect, true);
+      window.removeEventListener("resize", updateRect);
+    };
   }, [open]);
 
   function openDropdown() {
@@ -209,40 +240,48 @@ export default function ErpComboboxField({
         onKeyDown={handleKeyDown}
         className={`${resolvedInputClass} ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
       />
-      {open && filtered.length > 0 && (
-        <ul
-          ref={listRef}
-          role="listbox"
-          className="absolute left-0 top-full z-50 max-h-48 w-full overflow-y-auto border border-slate-400 bg-white shadow-md"
-        >
-          {filtered.map((opt, idx) => (
-            <li
-              key={opt.value === "" ? "__blank__" : opt.value}
-              data-combo-item
-              role="option"
-              aria-selected={opt.value === value}
-              onPointerDown={(event) => {
-                event.preventDefault(); // keep focus on input
-                selectOption(opt.value);
-              }}
-              className={`cursor-pointer px-2 py-1 text-sm ${
-                idx === highlightIndex
-                  ? "bg-sky-600 text-white"
-                  : opt.value === value
-                    ? "bg-sky-50 text-slate-900"
-                    : "text-slate-700 hover:bg-slate-100"
-              }`}
-            >
-              {opt.label}
-            </li>
-          ))}
-        </ul>
-      )}
-      {open && filtered.length === 0 && (
-        <div className="absolute left-0 top-full z-50 w-full border border-slate-400 bg-white px-2 py-2 text-xs text-slate-400 shadow-md">
-          No matches
-        </div>
-      )}
+      {open && panelRect && filtered.length > 0 &&
+        createPortal(
+          <ul
+            ref={listRef}
+            role="listbox"
+            style={{ position: "fixed", top: panelRect.top, left: panelRect.left, width: panelRect.width, zIndex: 1000050 }}
+            className="max-h-48 overflow-y-auto border border-slate-400 bg-white shadow-md"
+          >
+            {filtered.map((opt, idx) => (
+              <li
+                key={opt.value === "" ? "__blank__" : opt.value}
+                data-combo-item
+                role="option"
+                aria-selected={opt.value === value}
+                onPointerDown={(event) => {
+                  event.preventDefault(); // keep focus on input
+                  selectOption(opt.value);
+                }}
+                className={`cursor-pointer px-2 py-1 text-sm ${
+                  idx === highlightIndex
+                    ? "bg-sky-600 text-white"
+                    : opt.value === value
+                      ? "bg-sky-50 text-slate-900"
+                      : "text-slate-700 hover:bg-slate-100"
+                }`}
+              >
+                {opt.label}
+              </li>
+            ))}
+          </ul>,
+          document.body,
+        )}
+      {open && panelRect && filtered.length === 0 &&
+        createPortal(
+          <div
+            style={{ position: "fixed", top: panelRect.top, left: panelRect.left, width: panelRect.width, zIndex: 1000050 }}
+            className="border border-slate-400 bg-white px-2 py-2 text-xs text-slate-400 shadow-md"
+          >
+            No matches
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
