@@ -139,7 +139,7 @@ export default function GRNListPage() {
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_GRN_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_GRN_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/grns/${encodeURIComponent(row.id)}`);
   }
 

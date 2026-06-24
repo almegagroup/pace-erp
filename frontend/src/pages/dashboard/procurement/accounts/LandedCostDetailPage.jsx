@@ -7,7 +7,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listCHAs } from "../procurementApi.js";
 import {
   addLCLine,
@@ -54,7 +54,9 @@ function statusTone(status) {
 }
 
 export default function LandedCostDetailPage() {
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || routeId);
   const { runtimeContext } = useMenu();
   const [detail, setDetail] = useState(null);
   const [chaRows, setChaRows] = useState([]);

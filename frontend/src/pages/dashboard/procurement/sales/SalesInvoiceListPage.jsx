@@ -130,7 +130,7 @@ export default function SalesInvoiceListPage() {
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_INV_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_INV_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/sales-invoices/${encodeURIComponent(row.id)}`);
   }
 

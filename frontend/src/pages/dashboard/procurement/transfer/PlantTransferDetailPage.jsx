@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpScreenScaffold, {
   ErpFieldPreview,
@@ -17,7 +17,7 @@ import ErpScreenScaffold, {
 import { useMenu } from "../../../../context/useMenu.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
-import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   approvePTO,
@@ -59,7 +59,9 @@ function formatNullableNumber(value) {
 }
 
 export default function PlantTransferDetailPage() {
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const navigate = useNavigate();
   useMenu();
   const [detail, setDetail] = useState(null);

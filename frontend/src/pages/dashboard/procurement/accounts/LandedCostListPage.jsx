@@ -113,7 +113,7 @@ export default function LandedCostListPage() {
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_LC_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_LC_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/accounts/landed-costs/${encodeURIComponent(row.id)}`);
   }
 

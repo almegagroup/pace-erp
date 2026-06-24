@@ -6,7 +6,7 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listMaterials, listVendors } from "../../om/omApi.js";
 import {
   acknowledgeDebitNote,
@@ -63,7 +63,9 @@ function dnTone(status) {
 }
 
 export default function RTVDetailPage() {
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const [detail, setDetail] = useState(null);
   const [grn, setGrn] = useState(null);
   const [vendors, setVendors] = useState([]);

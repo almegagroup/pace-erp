@@ -139,7 +139,7 @@ export default function IVListPage() {
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_IV_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_IV_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/accounts/invoice-verifications/${encodeURIComponent(row.id)}`);
   }
 

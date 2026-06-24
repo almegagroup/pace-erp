@@ -194,7 +194,7 @@ export default function PIDocumentListPage() {
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_PI_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_PI_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/physical-inventory/${encodeURIComponent(row.id)}`);
   }
 

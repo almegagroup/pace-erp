@@ -136,7 +136,7 @@ export default function GateEntryListPage() {
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_GATE_ENTRY_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_GATE_ENTRY_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/gate-entries/${encodeURIComponent(row.id)}`);
   }
 

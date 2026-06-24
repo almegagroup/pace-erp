@@ -165,7 +165,7 @@ export default function PlantTransferListPage() {
   const pageRows = filteredRows.slice((safePage - 1) * LIMIT, safePage * LIMIT);
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_PLANT_TRANSFER_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_PLANT_TRANSFER_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/transfer/${encodeURIComponent(row.id)}`);
   }
 

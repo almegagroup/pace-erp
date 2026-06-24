@@ -6,7 +6,7 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listMaterials, listVendors } from "../../om/omApi.js";
 import { addIVLine, getGRN, getIV, postIV, removeIVLine, runIVMatch } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
@@ -49,7 +49,9 @@ function createEmptyLineForm() {
 }
 
 export default function IVDetailPage() {
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const [detail, setDetail] = useState(null);
   const [vendors, setVendors] = useState([]);
   const [materials, setMaterials] = useState([]);

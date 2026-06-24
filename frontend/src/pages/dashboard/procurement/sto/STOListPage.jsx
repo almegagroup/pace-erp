@@ -141,7 +141,7 @@ export default function STOListPage() {
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_STO_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_STO_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/stos/${encodeURIComponent(row.id)}`);
   }
 

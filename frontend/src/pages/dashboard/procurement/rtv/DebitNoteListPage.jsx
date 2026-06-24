@@ -150,7 +150,7 @@ export default function DebitNoteListPage() {
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_DEBIT_NOTE_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_DEBIT_NOTE_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/debit-notes/${encodeURIComponent(row.id)}`);
   }
 

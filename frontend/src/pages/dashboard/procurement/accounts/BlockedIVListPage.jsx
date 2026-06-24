@@ -134,7 +134,7 @@ export default function BlockedIVListPage() {
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_IV_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_IV_DETAIL.screen_code, { context: { id: row.id } });
     navigate(
       `/dashboard/procurement/accounts/invoice-verifications/${encodeURIComponent(
         row.id

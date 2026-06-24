@@ -155,7 +155,7 @@ export default function RTVListPage() {
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_RTV_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_RTV_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/rtvs/${encodeURIComponent(row.id)}`);
   }
 
