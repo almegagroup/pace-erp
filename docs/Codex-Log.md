@@ -50,3 +50,8 @@ This file is Codex's own work log for the Claude+Codex workflow, used to record 
 - Task: Added DRAFT-only purchase-order editing on the procurement PO detail page.
 - Changes: Updated `frontend/src/pages/dashboard/procurement/po/PODetailPage.jsx` to load payment terms and company-scoped cost centers, show an `Edit` action only for DRAFT POs, initialize a draft-edit modal from the loaded PO, and submit the backend-compatible single-line payload through `updatePurchaseOrder()` before reloading the detail view.
 - Notes: Tried to run `frontend` lint on the touched file, but the local Node/npm process was blocked by a filesystem `EPERM` on `C:\Users\cpalm`, so this change was verified by code inspection only.
+
+### 2026-06-24 17:49 IST
+- Task: Completed TanStack Query migration section 1 for Procurement PO detail.
+- Changes: Updated `frontend/src/pages/dashboard/procurement/po/PODetailPage.jsx` to replace local vendors, payment terms, cost centers, PO detail, and CSN fetch state/effects with shared query hooks plus page-specific `useQuery` calls keyed by PO id/company context so remount and back-navigation reuse cache while preserving existing edit, amendment, and audit behavior.
+- Notes: Verified with `npm.cmd run build` in `frontend/` after the refactor.

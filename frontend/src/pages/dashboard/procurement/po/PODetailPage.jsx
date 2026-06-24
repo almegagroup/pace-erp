@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import {
+  useCostCentersQuery,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
+import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
-import { listCostCenters, listVendors } from "../../om/omApi.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
   amendPurchaseOrder,
@@ -13,7 +18,6 @@ import {
   getPurchaseOrder,
   knockOffPOLine,
   knockOffPO,
-  listPaymentTerms,
   updatePurchaseOrder,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
@@ -135,19 +139,41 @@ export default function PODetailPage() {
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
-  const [po, setPo] = useState(null);
-  const [vendors, setVendors] = useState([]);
-  const [paymentTerms, setPaymentTerms] = useState([]);
-  const [costCenters, setCostCenters] = useState([]);
-  const [csns, setCsns] = useState([]);
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState(buildEditState(null, ""));
   const [amendmentOpen, setAmendmentOpen] = useState(false);
   const [amendmentForm, setAmendmentForm] = useState({ delivery_date: "", remarks: "", lines: [] });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
+  const poDetailQuery = useQuery({
+    queryKey: ["procurement", "purchase-order-detail", id],
+    enabled: Boolean(id),
+    queryFn: () => getPurchaseOrder(id),
+  });
+  const po = poDetailQuery.data?.data ?? poDetailQuery.data ?? null;
+  const companyId = po?.company_id || runtimeContext?.selectedCompanyId || "";
+  const csnQuery = useQuery({
+    queryKey: ["procurement", "po-csns", { companyId, id }],
+    enabled: Boolean(id && companyId),
+    queryFn: () => listPoCsns(companyId, id),
+  });
+  const costCenterQuery = useCostCentersQuery(
+    { company_id: companyId, active: true },
+    { enabled: Boolean(companyId) }
+  );
+  const vendors = vendorQuery.vendors;
+  const paymentTerms = paymentTermQuery.paymentTerms;
+  const costCenters = Array.isArray(costCenterQuery.data?.data) ? costCenterQuery.data.data : [];
+  const csns = Array.isArray(csnQuery.data) ? csnQuery.data : [];
+  const loading =
+    poDetailQuery.isLoading ||
+    vendorQuery.isLoading ||
+    paymentTermQuery.isLoading ||
+    csnQuery.isLoading ||
+    costCenterQuery.isLoading;
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
@@ -194,43 +220,44 @@ export default function PODetailPage() {
   // parallel instead of three sequential round trips. CSNs and cost centers
   // need the PO's company_id (known only once detail resolves), so they
   // form a second parallel batch right after.
-  async function loadDetail() {
+  useEffect(() => {
     if (!id) {
       setError("PROCUREMENT_PO_NOT_FOUND");
       return;
     }
-    setLoading(true);
-    setError("");
-    try {
-      const [detail, vendorData, paymentData] = await Promise.all([
-        getPurchaseOrder(id),
-        listVendors({ limit: 200, offset: 0 }),
-        listPaymentTerms({ is_active: true }),
-      ]);
-      const poRow = detail?.data ?? detail;
-      const companyId = poRow?.company_id || runtimeContext?.selectedCompanyId || "";
-      const [csnRows, costCenterData] = await Promise.all([
-        listPoCsns(companyId, id),
-        companyId ? listCostCenters({ company_id: companyId, active: true }) : Promise.resolve([]),
-      ]);
-      setPo(poRow);
-      setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-      setCsns(Array.isArray(csnRows) ? csnRows : []);
-      setPaymentTerms(Array.isArray(paymentData) ? paymentData : (paymentData?.data ?? []));
-      setCostCenters(Array.isArray(costCenterData?.data) ? costCenterData.data : []);
-      setAmendmentForm(buildAmendmentState(poRow?.lines, poRow));
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_DETAIL_FAILED");
-      setPo(null);
-      setCsns([]);
-    } finally {
-      setLoading(false);
-    }
-  }
+    const nextError =
+      poDetailQuery.error?.message ||
+      vendorQuery.error?.message ||
+      paymentTermQuery.error?.message ||
+      csnQuery.error?.message ||
+      costCenterQuery.error?.message ||
+      "";
+    setError(nextError);
+  }, [
+    costCenterQuery.error?.message,
+    csnQuery.error?.message,
+    id,
+    paymentTermQuery.error?.message,
+    poDetailQuery.error?.message,
+    vendorQuery.error?.message,
+  ]);
 
   useEffect(() => {
-    void loadDetail();
-  }, [id, runtimeContext?.selectedCompanyId]);
+    if (!po) {
+      return;
+    }
+    setAmendmentForm(buildAmendmentState(po?.lines, po));
+  }, [po]);
+
+  async function refreshDetailQueries() {
+    await Promise.all([
+      poDetailQuery.refetch(),
+      vendorQuery.refetch(),
+      paymentTermQuery.refetch(),
+      csnQuery.refetch(),
+      costCenterQuery.refetch(),
+    ]);
+  }
 
   async function runAction(action, successMessage) {
     setSaving(true);
@@ -239,7 +266,7 @@ export default function PODetailPage() {
     try {
       await action();
       setNotice(successMessage);
-      await loadDetail();
+      await refreshDetailQueries();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_PO_ACTION_FAILED");
     } finally {
@@ -315,7 +342,7 @@ export default function PODetailPage() {
       }
       setAmendmentOpen(false);
       setNotice("Purchase order amendment submitted.");
-      await loadDetail();
+      await refreshDetailQueries();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PO_AMEND_FAILED");
     } finally {
@@ -397,7 +424,7 @@ export default function PODetailPage() {
           },
         ],
       });
-      await loadDetail();
+      await refreshDetailQueries();
       setEditOpen(false);
       setNotice("Purchase order updated.");
     } catch (saveError) {
