@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useCostCentersQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { getVendorMaterialInfo, listCostCenters } from "../../om/omApi.js";
+import { getVendorMaterialInfo } from "../../om/omApi.js";
 import {
   createPurchaseOrder,
   getPoFilterOptions,
-  listPaymentTerms,
 } from "../procurementApi.js";
 
 const DELIVERY_TYPE_OPTIONS = ["STANDARD", "BULK", "TANKER"];
@@ -180,14 +182,9 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
 export default function POCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [paymentTerms, setPaymentTerms] = useState([]);
-  const [costCenters, setCostCenters] = useState([]);
   // Company/Vendor/Material cross-filter each other no matter which one is
   // picked first — picking just a Material narrows Company+Vendor to ones
   // with an approved link to it, picking Company+Vendor narrows Material, etc.
-  const [filterOptions, setFilterOptions] = useState({ companies: [], vendors: [], materials: [] });
-  const [filterLoading, setFilterLoading] = useState(true);
-  const [initialFilterLoaded, setInitialFilterLoaded] = useState(false);
   // Once a vendor is picked, a later Material change can narrow the vendor
   // list without invalidating the already-selected vendor.
   const vendorDetailCacheRef = useRef(new Map());
@@ -204,7 +201,6 @@ export default function POCreatePage() {
   });
   const [lines, setLines] = useState([createEmptyLine()]);
   const [lineMoreIndex, setLineMoreIndex] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -212,6 +208,35 @@ export default function POCreatePage() {
   const availableCompanyIds = useMemo(
     () => new Set((runtimeContext?.availableCompanies ?? []).map((entry) => entry.id)),
     [runtimeContext?.availableCompanies]
+  );
+  const primaryMaterialId = lines[0]?.material_id || "";
+  const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
+  const filterOptionsQuery = useQuery({
+    queryKey: ["procurement", "po-filter-options", {
+      company_id: form.company_id || undefined,
+      vendor_id: form.vendor_id || undefined,
+      material_id: primaryMaterialId || undefined,
+    }],
+    queryFn: () =>
+      getPoFilterOptions({
+        company_id: form.company_id || undefined,
+        vendor_id: form.vendor_id || undefined,
+        material_id: primaryMaterialId || undefined,
+      }),
+  });
+  const costCenterQuery = useCostCentersQuery(
+    { company_id: form.company_id, active: true },
+    { enabled: Boolean(form.company_id) }
+  );
+  const paymentTerms = paymentTermQuery.paymentTerms;
+  const costCenters = Array.isArray(costCenterQuery.data?.data) ? costCenterQuery.data.data : [];
+  const filterOptions = useMemo(
+    () => ({
+      companies: Array.isArray(filterOptionsQuery.data?.companies) ? filterOptionsQuery.data.companies : [],
+      vendors: Array.isArray(filterOptionsQuery.data?.vendors) ? filterOptionsQuery.data.vendors : [],
+      materials: Array.isArray(filterOptionsQuery.data?.materials) ? filterOptionsQuery.data.materials : [],
+    }),
+    [filterOptionsQuery.data]
   );
   const companyOptions = useMemo(
     () =>
@@ -264,38 +289,6 @@ export default function POCreatePage() {
   );
   const deliveryDateLabel = showIncoterm ? "ETA to Port" : "ETD";
 
-  // The header Company/Vendor apply to the whole order; use the first
-  // line's material as the cross-filter signal.
-  const primaryMaterialId = lines[0]?.material_id || "";
-
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const paymentData = await listPaymentTerms({ is_active: true });
-        if (!active) {
-          return;
-        }
-        const termRows = Array.isArray(paymentData) ? paymentData : (paymentData?.data ?? []);
-        setPaymentTerms(termRows);
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_SETUP_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, []);
-
   useEffect(() => {
     if (!defaultPaymentTermId) {
       return;
@@ -310,31 +303,6 @@ export default function POCreatePage() {
   // Cost centers are company-scoped — the same code (e.g. "ADMIN") exists
   // once per company, so this must be filtered by the selected Company.
   useEffect(() => {
-    let active = true;
-    async function loadCostCenters() {
-      if (!form.company_id) {
-        setCostCenters([]);
-        return;
-      }
-      try {
-        const costCenterData = await listCostCenters({ company_id: form.company_id, active: true });
-        if (!active) {
-          return;
-        }
-        setCostCenters(Array.isArray(costCenterData?.data) ? costCenterData.data : []);
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_SETUP_FAILED");
-        }
-      }
-    }
-    void loadCostCenters();
-    return () => {
-      active = false;
-    };
-  }, [form.company_id]);
-
-  useEffect(() => {
     if (!form.cost_center_id) {
       return;
     }
@@ -345,40 +313,19 @@ export default function POCreatePage() {
   }, [costCenterOptions, form.cost_center_id]);
 
   useEffect(() => {
-    let active = true;
-    async function loadFilterOptions() {
-      setFilterLoading(true);
-      try {
-        const result = await getPoFilterOptions({
-          company_id: form.company_id || undefined,
-          vendor_id: form.vendor_id || undefined,
-          material_id: primaryMaterialId || undefined,
-        });
-        if (!active) {
-          return;
-        }
-        const companies = Array.isArray(result?.companies) ? result.companies : [];
-        const vendorRows = Array.isArray(result?.vendors) ? result.vendors : [];
-        const materialRows = Array.isArray(result?.materials) ? result.materials : [];
-        vendorRows.forEach((row) => vendorDetailCacheRef.current.set(row.id, row));
-        setFilterOptions({ companies, vendors: vendorRows, materials: materialRows });
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_FILTER_OPTIONS_FAILED");
-        }
-      } finally {
-        if (active) {
-          setFilterLoading(false);
-          setInitialFilterLoaded(true);
-        }
-      }
+    filterOptions.vendors.forEach((row) => vendorDetailCacheRef.current.set(row.id, row));
+  }, [filterOptions.vendors]);
+
+  useEffect(() => {
+    const nextError =
+      paymentTermQuery.error?.message ||
+      costCenterQuery.error?.message ||
+      filterOptionsQuery.error?.message ||
+      "";
+    if (nextError) {
+      setError(nextError);
     }
-    void loadFilterOptions();
-    return () => {
-      active = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.company_id, form.vendor_id, primaryMaterialId]);
+  }, [costCenterQuery.error?.message, filterOptionsQuery.error?.message, paymentTermQuery.error?.message]);
 
   useEffect(() => {
     if (form.company_id || companyOptions.length === 0) {
@@ -555,6 +502,11 @@ export default function POCreatePage() {
 
   const netTotal = lines.reduce((sum, line) => sum + (Number(line.quantity || 0) || 0) * (Number(line.rate || 0) || 0), 0);
   const activeLineForDrawer = lineMoreIndex != null ? lines[lineMoreIndex] : null;
+  const loading =
+    paymentTermQuery.isLoading ||
+    filterOptionsQuery.isLoading ||
+    (Boolean(form.company_id) && costCenterQuery.isLoading);
+  const initialFilterLoaded = filterOptionsQuery.isFetched;
 
   const lineColumns = [
     {

@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listVendors } from "../../om/omApi.js";
 import { listPurchaseOrders } from "../procurementApi.js";
 
 const LIMIT = 50;
@@ -31,17 +32,12 @@ function getStatusTone(status) {
 export default function POListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
-  const [vendors, setVendors] = useState([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -51,47 +47,30 @@ export default function POListPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const [poData, vendorData] = await Promise.all([
-          listPurchaseOrders({
-            status: status || undefined,
-            date_from: dateFrom || undefined,
-            date_to: dateTo || undefined,
-            limit: LIMIT,
-            offset: (page - 1) * LIMIT,
-          }),
-          listVendors({ limit: 200, offset: 0 }),
-        ]);
-        if (!active) {
-          return;
-        }
-        setRows(Array.isArray(poData?.data) ? poData.data : []);
-        setTotal(Number(poData?.total ?? 0));
-        setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setTotal(0);
-        setVendors([]);
-        setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_LIST_FAILED");
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [dateFrom, dateTo, page, status]);
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const purchaseOrderParams = useMemo(
+    () => ({
+      status: status || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      limit: LIMIT,
+      offset: (page - 1) * LIMIT,
+    }),
+    [dateFrom, dateTo, page, status]
+  );
+  const purchaseOrderQuery = useQuery({
+    queryKey: ["procurement", "purchase-orders", purchaseOrderParams],
+    queryFn: () => listPurchaseOrders(purchaseOrderParams),
+  });
+
+  const rows = Array.isArray(purchaseOrderQuery.data?.data) ? purchaseOrderQuery.data.data : [];
+  const vendors = vendorQuery.vendors;
+  const total = Number(purchaseOrderQuery.data?.total ?? 0);
+  const loading = purchaseOrderQuery.isLoading || vendorQuery.isLoading;
+  const error =
+    purchaseOrderQuery.error?.message ||
+    vendorQuery.error?.message ||
+    "";
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
@@ -145,7 +124,15 @@ export default function POListPage() {
       eyebrow="Procurement"
       title="Purchase Orders"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
+        {
+          key: "refresh",
+          label: loading ? "Refreshing..." : "Refresh",
+          tone: "neutral",
+          onClick: () => {
+            void purchaseOrderQuery.refetch();
+            void vendorQuery.refetch();
+          },
+        },
         { key: "approvals", label: "Pending Approvals", tone: "neutral", onClick: openApprovals },
         { key: "create", label: "Create PO", tone: "primary", onClick: openCreate },
       ]}

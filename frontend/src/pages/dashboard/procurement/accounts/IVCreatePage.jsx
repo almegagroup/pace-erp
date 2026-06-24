@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
+import {
+  useMaterialOptionsQuery,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listMaterials, listVendors } from "../../om/omApi.js";
 import { addIVLine, createIVDraft, getGRN, listGRNs } from "../procurementApi.js";
 
 function createLineEntry(grnId, grnLine) {
@@ -27,9 +31,6 @@ function createLineEntry(grnId, grnLine) {
 export default function IVCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [vendors, setVendors] = useState([]);
-  const [materials, setMaterials] = useState([]);
-  const [grns, setGrns] = useState([]);
   const [lineEntries, setLineEntries] = useState([]);
   const [form, setForm] = useState({
     company_id: "",
@@ -38,107 +39,91 @@ export default function IVCreatePage() {
     vendor_invoice_date: "",
     remarks: "",
   });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const companyId = runtimeContext?.selectedCompanyId || "";
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const [vendorData, materialData] = await Promise.all([
-          listVendors({ limit: 200, offset: 0 }),
-          listMaterials({ limit: 200, offset: 0 }),
-        ]);
-        if (!active) {
-          return;
-        }
-        setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-        setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-        setForm((current) => ({
-          ...current,
-          company_id: current.company_id || companyId || "",
-        }));
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_IV_SETUP_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
+    setForm((current) => ({
+      ...current,
+      company_id: current.company_id || companyId || "",
+    }));
   }, [companyId]);
 
-  useEffect(() => {
-    let active = true;
-    async function loadVendorGrns() {
-      if (!form.vendor_id) {
-        setGrns([]);
-        setLineEntries([]);
-        return;
-      }
-      setLoading(true);
-      setError("");
-      try {
-        const list = await listGRNs({
-          company_id: form.company_id || undefined,
-          vendor_id: form.vendor_id,
-          status: "POSTED",
-          limit: 200,
-        });
-        const items = Array.isArray(list?.items) ? list.items : [];
-        const details = await Promise.all(
-          items.map(async (row) => {
-            try {
-              return await getGRN(row.id);
-            } catch {
-              return null;
-            }
-          })
-        );
-        if (!active) {
-          return;
-        }
-        const valid = details.filter(Boolean);
-        setGrns(valid);
-        setLineEntries(
-          valid.flatMap((grn) =>
-            Array.isArray(grn.lines)
-              ? grn.lines.map((line) => createLineEntry(grn.id, line))
-              : []
-          )
-        );
-      } catch (loadError) {
-        if (active) {
-          setGrns([]);
-          setLineEntries([]);
-          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_IV_GRN_LOAD_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void loadVendorGrns();
-    return () => {
-      active = false;
-    };
-  }, [form.company_id, form.vendor_id]);
+  const grnQuery = useQuery({
+    queryKey: ["procurement", "iv-create-grns", { company_id: form.company_id || undefined, vendor_id: form.vendor_id || undefined }],
+    enabled: Boolean(form.vendor_id),
+    queryFn: async () => {
+      const list = await listGRNs({
+        company_id: form.company_id || undefined,
+        vendor_id: form.vendor_id,
+        status: "POSTED",
+        limit: 200,
+      });
+      const items = Array.isArray(list?.items) ? list.items : [];
+      const details = await Promise.all(
+        items.map(async (row) => {
+          try {
+            return await getGRN(row.id);
+          } catch {
+            return null;
+          }
+        })
+      );
+      return details.filter(Boolean);
+    },
+  });
 
-  const vendorMap = useMemo(
-    () => new Map(vendors.map((entry) => [entry.id, entry])),
-    [vendors]
-  );
+  useEffect(() => {
+    const grns = Array.isArray(grnQuery.data) ? grnQuery.data : [];
+    if (!form.vendor_id) {
+      setLineEntries([]);
+      return;
+    }
+    setLineEntries(
+      grns.flatMap((grn) =>
+        Array.isArray(grn.lines)
+          ? grn.lines.map((line) => createLineEntry(grn.id, line))
+          : []
+      )
+    );
+  }, [form.vendor_id, grnQuery.data]);
+
+  useEffect(() => {
+    const nextError =
+      vendorQuery.error?.message ||
+      materialQuery.error?.message ||
+      grnQuery.error?.message ||
+      "";
+    if (nextError) {
+      setError(nextError);
+    } else if (!saving) {
+      setError("");
+    }
+  }, [grnQuery.error?.message, materialQuery.error?.message, saving, vendorQuery.error?.message]);
+
+  const vendors = vendorQuery.vendors;
+  const materials = materialQuery.materials;
+  const grns = Array.isArray(grnQuery.data) ? grnQuery.data : [];
+  const loading =
+    vendorQuery.isLoading ||
+    materialQuery.isLoading ||
+    grnQuery.isLoading;
+
+  useEffect(() => {
+    if (!form.vendor_id) {
+      return;
+    }
+    if (grnQuery.isSuccess) {
+      return;
+    }
+    if (!grnQuery.isFetching) {
+      setLineEntries([]);
+    }
+  }, [form.vendor_id, grnQuery.isFetching, grnQuery.isSuccess]);
+
   const materialMap = useMemo(
     () => new Map(materials.map((entry) => [entry.id, entry])),
     [materials]

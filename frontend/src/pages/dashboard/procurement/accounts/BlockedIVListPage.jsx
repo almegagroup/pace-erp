@@ -9,15 +9,16 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listVendors } from "../../om/omApi.js";
 import { listBlockedIVs } from "../procurementApi.js";
 
 const LIMIT = 50;
@@ -40,62 +41,31 @@ function formatNumber(value) {
 export default function BlockedIVListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [refreshToken, setRefreshToken] = useState(0);
   const companyId = runtimeContext?.selectedCompanyId || "";
 
-  useEffect(() => {
-    let active = true;
-
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const [data, vendorData] = await Promise.all([
-          listBlockedIVs({
-            company_id: companyId || undefined,
-            limit: 200,
-          }),
-          listVendors({ limit: 200, offset: 0 }),
-        ]);
-        if (!active) {
-          return;
-        }
-        setRows(Array.isArray(data?.items) ? data.items : []);
-        setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setVendors([]);
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "PROCUREMENT_BLOCKED_IV_LIST_FAILED"
-        );
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companyId, refreshToken]);
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const blockedIvQuery = useQuery({
+    queryKey: ["procurement", "blocked-ivs", { company_id: companyId || undefined, limit: 200 }],
+    queryFn: () =>
+      listBlockedIVs({
+        company_id: companyId || undefined,
+        limit: 200,
+      }),
+  });
 
   useEffect(() => {
     setPage(1);
   }, [search]);
 
+  const rows = Array.isArray(blockedIvQuery.data?.items) ? blockedIvQuery.data.items : [];
+  const vendors = vendorQuery.vendors;
+  const loading = blockedIvQuery.isLoading || vendorQuery.isLoading;
+  const error =
+    blockedIvQuery.error?.message ||
+    vendorQuery.error?.message ||
+    "";
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]
@@ -151,7 +121,10 @@ export default function BlockedIVListPage() {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => setRefreshToken((value) => value + 1),
+          onClick: () => {
+            void blockedIvQuery.refetch();
+            void vendorQuery.refetch();
+          },
         },
       ]}
       notices={[

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
-import { listVendors } from "../../om/omApi.js";
 import { listPOOrderGroups } from "../procurementApi.js";
 
 function getStatusTone(status) {
@@ -23,36 +24,23 @@ function getStatusTone(status) {
 export default function POOrderGroupListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
-  const [vendors, setVendors] = useState([]);
   const [status, setStatus] = useState("PENDING_APPROVAL");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const [groupData, vendorData] = await Promise.all([
-          listPOOrderGroups({ status: status || undefined, limit: 100, offset: 0 }),
-          listVendors({ limit: 200, offset: 0 }),
-        ]);
-        if (!active) return;
-        setRows(Array.isArray(groupData?.data) ? groupData.data : []);
-        setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-      } catch (loadError) {
-        if (!active) return;
-        setRows([]);
-        setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_ORDER_GROUP_LIST_FAILED");
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-    void load();
-    return () => { active = false; };
-  }, [status]);
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const groupParams = useMemo(
+    () => ({ status: status || undefined, limit: 100, offset: 0 }),
+    [status]
+  );
+  const groupQuery = useQuery({
+    queryKey: ["procurement", "po-order-groups", groupParams],
+    queryFn: () => listPOOrderGroups(groupParams),
+  });
+  const rows = Array.isArray(groupQuery.data?.data) ? groupQuery.data.data : [];
+  const vendors = vendorQuery.vendors;
+  const loading = groupQuery.isLoading || vendorQuery.isLoading;
+  const error =
+    groupQuery.error?.message ||
+    vendorQuery.error?.message ||
+    "";
 
   const vendorMap = useMemo(() => new Map(vendors.map((entry) => [entry.id, entry])), [vendors]);
   const companyMap = useMemo(
@@ -69,7 +57,15 @@ export default function POOrderGroupListPage() {
       eyebrow="Procurement"
       title="Purchase Order Approvals"
       notices={error ? [{ key: "err", tone: "error", message: error }] : []}
-      actions={[{ key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setStatus((s) => s) }]}
+      actions={[{
+        key: "refresh",
+        label: loading ? "Refreshing..." : "Refresh",
+        tone: "neutral",
+        onClick: () => {
+          void groupQuery.refetch();
+          void vendorQuery.refetch();
+        },
+      }]}
     >
       <ErpSectionCard eyebrow="Filter" title="Order status">
         <div className="flex gap-2">
