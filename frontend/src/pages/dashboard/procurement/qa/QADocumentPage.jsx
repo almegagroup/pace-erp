@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -75,6 +75,7 @@ function buildDecisionRow() {
 
 export default function QADocumentPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { id = "" } = useParams();
   const { runtimeContext, shellProfile } = useMenu();
   const [testForm, setTestForm] = useState(buildBlankTestForm());
@@ -85,6 +86,33 @@ export default function QADocumentPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "qa-document-detail", id],
+    queryFn: async () => {
+      const qaData = await getQADocument(id);
+      const grnData = qaData?.grn_id ? await getGRN(qaData.grn_id).catch(() => null) : null;
+      return { detail: qaData, grn: grnData };
+    },
+    enabled: Boolean(id),
+  });
+  const detail = detailQuery.data?.detail ?? null;
+  const grn = detailQuery.data?.grn ?? null;
+  const companyId = detail?.company_id || runtimeContext?.selectedCompanyId || undefined;
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const storageLocationQuery = useStorageLocationOptionsQuery(
+    { company_id: companyId },
+    { enabled: Boolean(companyId) }
+  );
+  const materials = materialQuery.materials;
+  const vendors = vendorQuery.vendors;
+  const storageLocations = storageLocationQuery.storageLocations;
+  const loading =
+    detailQuery.isLoading ||
+    materialQuery.isLoading ||
+    vendorQuery.isLoading ||
+    storageLocationQuery.isLoading;
 
   const roleCode = shellProfile?.roleCode || "";
   const myAssignee = shellProfile?.userCode || "";
@@ -280,14 +308,17 @@ export default function QADocumentPage() {
           remarks: row.remarks || undefined,
         })),
       });
-      setDetail((current) =>
+      queryClient.setQueryData(["procurement", "qa-document-detail", id], (current) =>
         current
           ? {
               ...current,
-              ...(response?.qa_document ?? {}),
-              decision_lines: response?.decision_lines ?? [],
-              public_status:
-                response?.qa_document?.public_status || "DECISION_MADE",
+              detail: {
+                ...current.detail,
+                ...(response?.qa_document ?? {}),
+                decision_lines: response?.decision_lines ?? [],
+                public_status:
+                  response?.qa_document?.public_status || "DECISION_MADE",
+              },
             }
           : current
       );
@@ -780,29 +811,3 @@ export default function QADocumentPage() {
     </ErpScreenScaffold>
   );
 }
-  const detailQuery = useQuery({
-    queryKey: ["procurement", "qa-document-detail", id],
-    queryFn: async () => {
-      const qaData = await getQADocument(id);
-      const grnData = qaData?.grn_id ? await getGRN(qaData.grn_id).catch(() => null) : null;
-      return { detail: qaData, grn: grnData };
-    },
-    enabled: Boolean(id),
-  });
-  const detail = detailQuery.data?.detail ?? null;
-  const grn = detailQuery.data?.grn ?? null;
-  const companyId = detail?.company_id || runtimeContext?.selectedCompanyId || undefined;
-  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
-  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
-  const storageLocationQuery = useStorageLocationOptionsQuery(
-    { company_id: companyId },
-    { enabled: Boolean(companyId) }
-  );
-  const materials = materialQuery.materials;
-  const vendors = vendorQuery.vendors;
-  const storageLocations = storageLocationQuery.storageLocations;
-  const loading =
-    detailQuery.isLoading ||
-    materialQuery.isLoading ||
-    vendorQuery.isLoading ||
-    storageLocationQuery.isLoading;
