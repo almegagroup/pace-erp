@@ -7,7 +7,8 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -26,8 +27,12 @@ import {
   submitOpeningStockDocument,
   updateOpeningStockLine,
 } from "../procurementApi.js";
-import { listMaterials, listStorageLocations } from "../../om/omApi.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import {
+  useMaterialOptionsQuery,
+  useStorageLocationsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 
@@ -87,34 +92,47 @@ function getStatusTone(status) {
   }
 }
 
-async function fetchCompanyName(companyId) {
-  if (!companyId) return null;
-  try {
-    const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/companies`, { credentials: "include" });
-    const json = await response.json().catch(() => null);
-    const companies = Array.isArray(json?.data?.companies) ? json.data.companies : [];
-    const match = companies.find((c) => c.id === companyId);
-    return match ? `${match.company_code} | ${match.company_name}` : null;
-  } catch { return null; }
-}
-
 export default function OpeningStockDetailPage({ documentId: documentIdProp = "" }) {
   const navigate = useNavigate();
   const params = useParams();
   const documentId = documentIdProp || params.id || "";
-  const [detail, setDetail] = useState(null);
-  const [companyLabel, setCompanyLabel] = useState("");
-  const [materials, setMaterials] = useState([]);
-  const [locations, setLocations] = useState([]);
   const [entryMode, setEntryMode] = useState(ENTRY_MODES.SINGLE);
   const [singleForm, setSingleForm] = useState(createEmptySingleForm());
   const [bulkRows, setBulkRows] = useState([createBulkRow(1), createBulkRow(2), createBulkRow(3)]);
   const [editingLineId, setEditingLineId] = useState("");
   const [editForm, setEditForm] = useState(createEmptySingleForm());
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "opening-stock-detail", documentId],
+    queryFn: () => getOpeningStockDocument(documentId),
+    enabled: Boolean(documentId),
+  });
+  const detail = detailQuery.data ?? null;
+  const companyId = detail?.company_id || "";
+  const materialQuery = useMaterialOptionsQuery({ limit: 500, status: "ACTIVE" });
+  const locationQuery = useStorageLocationsQuery(
+    { company_id: companyId || undefined },
+    { enabled: Boolean(companyId) }
+  );
+  const companiesQuery = useCompaniesQuery();
+  const materials = materialQuery.materials;
+  const locations = Array.isArray(locationQuery.data?.data)
+    ? locationQuery.data.data
+    : Array.isArray(locationQuery.data)
+    ? locationQuery.data
+    : [];
+  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const companyLabel =
+    companies.find((entry) => entry.id === companyId)
+      ? `${companies.find((entry) => entry.id === companyId)?.company_code ?? "COMP"} | ${companies.find((entry) => entry.id === companyId)?.company_name ?? "Company"}`
+      : companyId;
+  const loading =
+    detailQuery.isLoading ||
+    materialQuery.isLoading ||
+    locationQuery.isLoading ||
+    companiesQuery.isLoading;
 
   const materialOptions = useMemo(
     () =>
@@ -155,36 +173,13 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     [singleForm],
   );
 
-  async function loadDetail() {
-    if (!documentId) {
-      setLoading(false);
-      setError("Opening stock document id is required.");
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const document = await getOpeningStockDocument(documentId);
-      setDetail(document);
-      const [materialRows, locationRows, cLabel] = await Promise.all([
-        listMaterials({ limit: 500, status: "ACTIVE" }),
-        listStorageLocations({ company_id: document.company_id }),
-        fetchCompanyName(document.company_id),
-      ]);
-      setCompanyLabel(cLabel ?? document.company_id ?? "");
-      setMaterials(Array.isArray(materialRows?.data) ? materialRows.data : Array.isArray(materialRows) ? materialRows : []);
-      setLocations(Array.isArray(locationRows?.data) ? locationRows.data : Array.isArray(locationRows) ? locationRows : []);
-    } catch (loadError) {
-      setDetail(null);
-      setError(loadError instanceof Error ? loadError.message : "OPENING_STOCK_DOCUMENT_FETCH_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadDetail();
-  }, [documentId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const queryError =
+    (!documentId ? "Opening stock document id is required." : "") ||
+    detailQuery.error?.message ||
+    materialQuery.error?.message ||
+    locationQuery.error?.message ||
+    companiesQuery.error?.message ||
+    "";
 
   function resetSingleForm() {
     setSingleForm(createEmptySingleForm());
@@ -221,7 +216,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       });
       setNotice("Opening stock line added.");
       resetSingleForm();
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OPENING_STOCK_LINE_CREATE_FAILED");
     } finally {
@@ -255,7 +250,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       );
       setNotice(`${validRows.length} opening stock lines added.`);
       setBulkRows([createBulkRow(1), createBulkRow(2), createBulkRow(3)]);
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OPENING_STOCK_LINE_CREATE_FAILED");
     } finally {
@@ -288,7 +283,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       });
       setEditingLineId("");
       setNotice("Opening stock line updated.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OPENING_STOCK_LINE_UPDATE_FAILED");
     } finally {
@@ -304,7 +299,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     try {
       await removeOpeningStockLine(detail.id, lineId);
       setNotice("Opening stock line removed.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OPENING_STOCK_LINE_DELETE_FAILED");
     } finally {
@@ -320,7 +315,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     try {
       await submitOpeningStockDocument(detail.id);
       setNotice("Opening stock document submitted for approval.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OPENING_STOCK_DOCUMENT_SUBMIT_FAILED");
     } finally {
@@ -336,7 +331,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     try {
       await approveOpeningStockDocument(detail.id);
       setNotice("Opening stock document approved.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OPENING_STOCK_DOCUMENT_APPROVE_FAILED");
     } finally {
@@ -359,7 +354,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     try {
       await postOpeningStockDocument(detail.id);
       setNotice("Opening stock document posted to inventory ledger.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OPENING_STOCK_DOCUMENT_POST_FAILED");
     } finally {
@@ -375,7 +370,9 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
       eyebrow="Inventory"
       title={detail?.document_number ? `Opening Stock | ${detail.document_number}` : "Opening Stock Detail"}
       notices={[
-        ...(error ? [{ key: "opening-stock-detail-error", tone: "error", message: error }] : []),
+        ...((error || queryError)
+          ? [{ key: "opening-stock-detail-error", tone: "error", message: error || queryError }]
+          : []),
         ...(notice ? [{ key: "opening-stock-detail-notice", tone: "success", message: notice }] : []),
       ]}
       actions={[
@@ -392,7 +389,13 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => void loadDetail(),
+          onClick: () =>
+            void Promise.all([
+              detailQuery.refetch(),
+              materialQuery.refetch(),
+              locationQuery.refetch(),
+              companiesQuery.refetch(),
+            ]),
         },
         ...(detail?.status === "DRAFT"
           ? [{ key: "submit", label: saving ? "Submitting..." : "Submit For Approval", tone: "primary", onClick: () => void handleSubmit(), disabled: saving }]

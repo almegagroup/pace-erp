@@ -8,11 +8,11 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import {
   deleteImportLeadTime,
   deleteDomesticLeadTime,
-  listCompanies,
   listImportLeadTimes,
   listDomesticLeadTimes,
   listPorts,
@@ -21,7 +21,8 @@ import {
   upsertImportLeadTime,
   upsertDomesticLeadTime,
 } from "../procurementApi.js";
-import { listVendors } from "../../om/omApi.js";
+import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import { useVendorsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const EMPTY_IMPORT = { vendor_id: "", port_of_discharge_id: "", sail_time_days: "", clearance_days: "", effective_from: "", effective_to: "" };
 const EMPTY_DOMESTIC = { vendor_id: "", company_id: "", transit_days: "", effective_from: "", effective_to: "" };
@@ -30,23 +31,43 @@ export default function ImportLeadTimeMasterPage() {
   const [activeTab, setActiveTab] = useState("Import");
   const noticeTimer = useRef(null);
 
-  const [importVendors, setImportVendors] = useState([]);
-  const [domesticVendors, setDomesticVendors] = useState([]);
-  const [dischargePorts, setDischargePorts] = useState([]);
-  const [companies, setCompanies] = useState([]);
-
-  const [importRows, setImportRows] = useState([]);
+  const companiesQuery = useCompaniesQuery();
+  const importVendorQuery = useVendorsQuery({ status: "ACTIVE", vendor_type: "IMPORT" });
+  const domesticVendorQuery = useVendorsQuery({ status: "ACTIVE", vendor_type: "DOMESTIC" });
+  const leadTimeQuery = useQuery({
+    queryKey: ["procurement", "lead-time-masters"],
+    queryFn: async () => {
+      const [imports, domestics, ports] = await Promise.all([
+        listImportLeadTimes({ is_active: "all" }),
+        listDomesticLeadTimes({ is_active: "all" }),
+        listPorts({ is_active: "true", port_role: "DISCHARGE" }),
+      ]);
+      return {
+        importRows: Array.isArray(imports) ? imports : [],
+        domesticRows: Array.isArray(domestics) ? domestics : [],
+        dischargePorts: Array.isArray(ports) ? ports : [],
+      };
+    },
+  });
+  const importVendors = Array.isArray(importVendorQuery.data?.data) ? importVendorQuery.data.data : [];
+  const domesticVendors = Array.isArray(domesticVendorQuery.data?.data) ? domesticVendorQuery.data.data : [];
+  const dischargePorts = leadTimeQuery.data?.dischargePorts ?? [];
+  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const importRows = leadTimeQuery.data?.importRows ?? [];
   const [importForm, setImportForm] = useState(EMPTY_IMPORT);
   const [editingImportId, setEditingImportId] = useState(null);
-
-  const [domesticRows, setDomesticRows] = useState([]);
+  const domesticRows = leadTimeQuery.data?.domesticRows ?? [];
   const [domesticForm, setDomesticForm] = useState(EMPTY_DOMESTIC);
   const [editingDomesticId, setEditingDomesticId] = useState(null);
 
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const loading =
+    leadTimeQuery.isLoading ||
+    companiesQuery.isLoading ||
+    importVendorQuery.isLoading ||
+    domesticVendorQuery.isLoading;
 
   function flash(msg, isError = false) {
     clearTimeout(noticeTimer.current);
@@ -57,48 +78,18 @@ export default function ImportLeadTimeMasterPage() {
     }
   }
 
-  async function loadMasterData() {
-    const [ivRes, dvRes, pRes, coRes] = await Promise.allSettled([
-      listVendors({ status: "ACTIVE", vendor_type: "IMPORT" }),
-      listVendors({ status: "ACTIVE", vendor_type: "DOMESTIC" }),
-      listPorts({ is_active: "true", port_role: "DISCHARGE" }),
-      listCompanies(),
-    ]);
-    if (ivRes.status === "fulfilled") {
-      const v = ivRes.value;
-      setImportVendors(Array.isArray(v) ? v : (v?.data ?? []));
-    }
-    if (dvRes.status === "fulfilled") {
-      const v = dvRes.value;
-      setDomesticVendors(Array.isArray(v) ? v : (v?.data ?? []));
-    }
-    if (pRes.status === "fulfilled") setDischargePorts(Array.isArray(pRes.value) ? pRes.value : []);
-    if (coRes.status === "fulfilled") {
-      const v = coRes.value;
-      setCompanies(Array.isArray(v) ? v : (v?.data ?? []));
-    }
-  }
-
-  async function loadRows() {
-    setLoading(true);
-    try {
-      const [imports, domestics] = await Promise.all([
-        listImportLeadTimes({ is_active: "all" }),
-        listDomesticLeadTimes({ is_active: "all" }),
-      ]);
-      setImportRows(Array.isArray(imports) ? imports : []);
-      setDomesticRows(Array.isArray(domestics) ? domestics : []);
-    } catch (err) {
-      flash(err instanceof Error ? err.message : "PROCUREMENT_LEAD_TIME_LIST_FAILED", true);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
-    void Promise.all([loadMasterData(), loadRows()]);
+    const nextError =
+      leadTimeQuery.error?.message ||
+      companiesQuery.error?.message ||
+      importVendorQuery.error?.message ||
+      domesticVendorQuery.error?.message ||
+      "";
+    if (nextError) {
+      flash(nextError, true);
+    }
     return () => clearTimeout(noticeTimer.current);
-  }, []);
+  }, [companiesQuery.error, domesticVendorQuery.error, importVendorQuery.error, leadTimeQuery.error]);
 
   async function handleImportSave() {
     if (!importForm.vendor_id || !importForm.port_of_discharge_id || importForm.sail_time_days === "" || importForm.clearance_days === "" || !importForm.effective_from) {
@@ -123,7 +114,7 @@ export default function ImportLeadTimeMasterPage() {
       }
       setImportForm(EMPTY_IMPORT);
       setEditingImportId(null);
-      await loadRows();
+      await Promise.all([leadTimeQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(err instanceof Error ? err.message : "PROCUREMENT_IMPORT_LEAD_TIME_UPSERT_FAILED", true);
     } finally { setSaving(false); }
@@ -152,7 +143,7 @@ export default function ImportLeadTimeMasterPage() {
       await deleteImportLeadTime(id);
       flash("Import lead time deleted.");
       if (editingImportId === id) handleImportCancelEdit();
-      await loadRows();
+      await Promise.all([leadTimeQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(err instanceof Error ? err.message : "PROCUREMENT_IMPORT_LEAD_TIME_DELETE_FAILED", true);
     } finally { setSaving(false); }
@@ -180,7 +171,7 @@ export default function ImportLeadTimeMasterPage() {
       }
       setDomesticForm(EMPTY_DOMESTIC);
       setEditingDomesticId(null);
-      await loadRows();
+      await Promise.all([leadTimeQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(err instanceof Error ? err.message : "PROCUREMENT_DOMESTIC_LEAD_TIME_UPSERT_FAILED", true);
     } finally { setSaving(false); }
@@ -208,7 +199,7 @@ export default function ImportLeadTimeMasterPage() {
       await deleteDomesticLeadTime(id);
       flash("Domestic lead time deleted.");
       if (editingDomesticId === id) handleDomesticCancelEdit();
-      await loadRows();
+      await Promise.all([leadTimeQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(err instanceof Error ? err.message : "PROCUREMENT_DOMESTIC_LEAD_TIME_DELETE_FAILED", true);
     } finally { setSaving(false); }
@@ -222,7 +213,18 @@ export default function ImportLeadTimeMasterPage() {
         ...(error ? [{ key: "err", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "ok", tone: "success", message: notice }] : []),
       ]}
-      actions={[{ key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadRows(), disabled: loading }]}
+      actions={[{
+        key: "refresh",
+        label: loading ? "Refreshing..." : "Refresh",
+        tone: "neutral",
+        onClick: () => void Promise.all([
+          leadTimeQuery.refetch(),
+          companiesQuery.refetch(),
+          importVendorQuery.refetch(),
+          domesticVendorQuery.refetch(),
+        ]),
+        disabled: loading,
+      }]}
     >
       <div className="flex gap-2 mb-4">
         {["Import", "Domestic"].map((tab) => (

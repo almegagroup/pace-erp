@@ -8,18 +8,19 @@
  */
 
 import React, { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import {
   createPaymentTerm,
   createReferenceDateType,
   deletePaymentTerm,
-  listPaymentTerms,
   listReferenceDateTypes,
   togglePaymentTerm,
   toggleReferenceDateType,
   updatePaymentTerm,
 } from "../procurementApi.js";
+import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 
 const PAYMENT_METHODS = ["CREDIT", "ADVANCE"];
 const PAYMENT_TYPES   = ["LC", "TT", "DA", "DP", "MIXED", "N_A"];
@@ -38,12 +39,20 @@ const EMPTY_REF = { code: "", label: "", source_document: "CSN", source_field: "
 
 export default function PaymentTermsMasterPage() {
   const [tab, setTab]               = useState("terms");
-  const [terms, setTerms]           = useState([]);
-  const [refTypes, setRefTypes]     = useState([]);
-  const [loading, setLoading]       = useState(true);
   const [saving, setSaving]         = useState(false);
   const [error, setError]           = useState("");
   const [notice, setNotice]         = useState("");
+  const termQuery = usePaymentTermOptionsQuery({ is_active: "all" });
+  const refTypeQuery = useQuery({
+    queryKey: ["procurement", "reference-date-types", "all"],
+    queryFn: async () => {
+      const refResult = await listReferenceDateTypes({ active: "false" });
+      return Array.isArray(refResult) ? refResult : (refResult?.data ?? []);
+    },
+  });
+  const terms = termQuery.paymentTerms;
+  const refTypes = refTypeQuery.data ?? [];
+  const loading = termQuery.isLoading || refTypeQuery.isLoading;
 
   // Payment Terms
   const [editId, setEditId]         = useState(null);
@@ -53,24 +62,9 @@ export default function PaymentTermsMasterPage() {
   // Reference Date Types
   const [refForm, setRefForm]       = useState(EMPTY_REF);
 
-  async function loadAll() {
-    setLoading(true);
-    setError("");
-    try {
-      const [termsResult, refResult] = await Promise.all([
-        listPaymentTerms({ is_active: "all" }),
-        listReferenceDateTypes({ active: "false" }),
-      ]);
-      setTerms(Array.isArray(termsResult) ? termsResult : (termsResult?.data ?? []));
-      setRefTypes(Array.isArray(refResult) ? refResult : (refResult?.data ?? []));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "LOAD_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { void loadAll(); }, []);
+  useEffect(() => {
+    setError(termQuery.error?.message || refTypeQuery.error?.message || "");
+  }, [refTypeQuery.error, termQuery.error]);
 
   function flash(msg, isError = false) {
     if (isError) setError(msg); else { setError(""); setNotice(msg); }
@@ -113,7 +107,7 @@ export default function PaymentTermsMasterPage() {
       });
       setEditId(null); setEditDraft({});
       flash("Payment term updated.");
-      await loadAll();
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
     } catch (e) { flash(e instanceof Error ? e.message : "UPDATE_FAILED", true); }
     finally { setSaving(false); }
   }
@@ -123,7 +117,7 @@ export default function PaymentTermsMasterPage() {
     try {
       await togglePaymentTerm({ id: row.id, active: !row.active });
       flash(`Payment term ${!row.active ? "activated" : "deactivated"}.`);
-      await loadAll();
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
     } catch (e) { flash(e instanceof Error ? e.message : "TOGGLE_FAILED", true); }
     finally { setSaving(false); }
   }
@@ -140,7 +134,7 @@ export default function PaymentTermsMasterPage() {
     try {
       await deletePaymentTerm(row.id);
       flash("Payment term deleted.");
-      await loadAll();
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
     } catch (e) { flash(e instanceof Error ? e.message : "DELETE_FAILED", true); }
     finally { setSaving(false); }
   }
@@ -164,7 +158,7 @@ export default function PaymentTermsMasterPage() {
       });
       setTermForm(EMPTY_TERM);
       flash("Payment term created.");
-      await loadAll();
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
     } catch (e) { flash(e instanceof Error ? e.message : "CREATE_FAILED", true); }
     finally { setSaving(false); }
   }
@@ -174,7 +168,7 @@ export default function PaymentTermsMasterPage() {
     try {
       await toggleReferenceDateType({ id: row.id, is_active: !row.is_active });
       flash(`Reference date type ${!row.is_active ? "activated" : "deactivated"}.`);
-      await loadAll();
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
     } catch (e) { flash(e instanceof Error ? e.message : "TOGGLE_FAILED", true); }
     finally { setSaving(false); }
   }
@@ -194,7 +188,7 @@ export default function PaymentTermsMasterPage() {
       });
       setRefForm(EMPTY_REF);
       flash("Reference date type created.");
-      await loadAll();
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
     } catch (e) { flash(e instanceof Error ? e.message : "CREATE_FAILED", true); }
     finally { setSaving(false); }
   }
@@ -207,7 +201,9 @@ export default function PaymentTermsMasterPage() {
       title="Payment Terms"
       actions={[{
         key: "refresh", label: loading ? "Refreshing..." : "Refresh",
-        tone: "neutral", onClick: () => void loadAll(), disabled: loading,
+        tone: "neutral",
+        onClick: () => void Promise.all([termQuery.refetch(), refTypeQuery.refetch()]),
+        disabled: loading,
       }]}
       notices={[
         ...(error  ? [{ key: "err", tone: "error",   message: error  }] : []),

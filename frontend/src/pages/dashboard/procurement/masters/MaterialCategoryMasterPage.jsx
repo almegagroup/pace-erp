@@ -7,7 +7,8 @@
  * Authority: Frontend
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import {
@@ -15,10 +16,10 @@ import {
   createMaterialCategoryGroup,
   deleteMaterialCategoryGroup,
   listMaterialCategoryGroups,
-  listMaterials,
   removeMaterialCategoryMember,
   updateMaterialCategoryGroup,
 } from "../../om/omApi.js";
+import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const ERROR_LABELS = {
   OM_MCG_LIST_FAILED:        "Failed to load category groups.",
@@ -37,12 +38,20 @@ function label(code) {
 }
 
 export default function MaterialCategoryMasterPage() {
-  const [groups, setGroups]           = useState([]);
-  const [materials, setMaterials]     = useState([]);
-  const [loading, setLoading]         = useState(true);
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState("");
   const [notice, setNotice]           = useState("");
+  const materialQuery = useMaterialOptionsQuery({ limit: 500, offset: 0 });
+  const groupQuery = useQuery({
+    queryKey: ["procurement", "material-category-groups"],
+    queryFn: async () => {
+      const gResult = await listMaterialCategoryGroups();
+      return Array.isArray(gResult?.data) ? gResult.data : [];
+    },
+  });
+  const groups = groupQuery.data ?? [];
+  const materials = materialQuery.materials;
+  const loading = groupQuery.isLoading || materialQuery.isLoading;
 
   const [expandedId, setExpandedId]   = useState(null);
   const [matSearch, setMatSearch]     = useState("");
@@ -52,25 +61,6 @@ export default function MaterialCategoryMasterPage() {
   const [editDraft, setEditDraft]     = useState({});
 
   const [form, setForm]               = useState({ group_name: "", description: "" });
-
-  async function loadData() {
-    setLoading(true);
-    setError("");
-    try {
-      const [gResult, mResult] = await Promise.all([
-        listMaterialCategoryGroups(),
-        listMaterials({ limit: 500, offset: 0 }),
-      ]);
-      setGroups(Array.isArray(gResult?.data) ? gResult.data : []);
-      setMaterials(Array.isArray(mResult?.data) ? mResult.data : []);
-    } catch (e) {
-      setError(label(e instanceof Error ? e.message : "OM_MCG_LIST_FAILED"));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { void loadData(); }, []);
 
   const materialMap = useMemo(() => new Map(materials.map((m) => [m.id, m])), [materials]);
 
@@ -107,7 +97,7 @@ export default function MaterialCategoryMasterPage() {
       await updateMaterialCategoryGroup({ id: group.id, group_name: editDraft.group_name.trim(), description: editDraft.description.trim() || null });
       setNotice("Group updated.");
       setEditId(null); setEditDraft({});
-      await loadData();
+      await Promise.all([groupQuery.refetch(), materialQuery.refetch()]);
     } catch (e) { setError(label(e instanceof Error ? e.message : "OM_MCG_UPDATE_FAILED")); }
     finally { setSaving(false); }
   }
@@ -126,7 +116,7 @@ export default function MaterialCategoryMasterPage() {
       await deleteMaterialCategoryGroup(group.id);
       setNotice("Group deleted.");
       if (expandedId === group.id) setExpandedId(null);
-      await loadData();
+      await Promise.all([groupQuery.refetch(), materialQuery.refetch()]);
     } catch (e) { setError(label(e instanceof Error ? e.message : "OM_MCG_DELETE_FAILED")); }
     finally { setSaving(false); }
   }
@@ -160,7 +150,7 @@ export default function MaterialCategoryMasterPage() {
       setMemberForm({ material_id: "", is_primary: false });
       setMatSearch("");
       setNotice("Member added.");
-      await loadData();
+      await Promise.all([groupQuery.refetch(), materialQuery.refetch()]);
     } catch (e) {
       setError(label(e instanceof Error ? e.message : "OM_MCG_MEMBER_ADD_FAILED"));
     } finally {
@@ -184,7 +174,7 @@ export default function MaterialCategoryMasterPage() {
     try {
       await removeMaterialCategoryMember(member.id);
       setNotice("Member removed.");
-      await loadData();
+      await Promise.all([groupQuery.refetch(), materialQuery.refetch()]);
     } catch (e) {
       setError(label(e instanceof Error ? e.message : "OM_MCG_MEMBER_REMOVE_FAILED"));
     } finally {
@@ -207,7 +197,7 @@ export default function MaterialCategoryMasterPage() {
       });
       setForm({ group_name: "", description: "" });
       setNotice("Category group created.");
-      await loadData();
+      await Promise.all([groupQuery.refetch(), materialQuery.refetch()]);
     } catch (e) {
       setError(label(e instanceof Error ? e.message : "OM_MCG_CREATE_FAILED"));
     } finally {
@@ -220,10 +210,18 @@ export default function MaterialCategoryMasterPage() {
       eyebrow="Procurement Masters"
       title="Material Category Groups"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadData(), disabled: loading },
+        {
+          key: "refresh",
+          label: loading ? "Refreshing..." : "Refresh",
+          tone: "neutral",
+          onClick: () => void Promise.all([groupQuery.refetch(), materialQuery.refetch()]),
+          disabled: loading,
+        },
       ]}
       notices={[
-        ...(error  ? [{ key: "error",  tone: "error",   message: label(error)  }] : []),
+        ...((error || queryError)
+          ? [{ key: "error", tone: "error", message: label(error || queryError) }]
+          : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
     >
@@ -437,3 +435,7 @@ export default function MaterialCategoryMasterPage() {
     </ErpScreenScaffold>
   );
 }
+  const queryError =
+    groupQuery.error?.message ||
+    materialQuery.error?.message ||
+    "";

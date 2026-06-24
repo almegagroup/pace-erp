@@ -10,6 +10,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import {
   createCHA,
@@ -19,7 +20,6 @@ import {
   listChaCompanyMaps,
   listChaContacts,
   listChaEmails,
-  listCompanies,
   listPorts,
   lookupGstProfile,
   mapCHAToPort,
@@ -30,6 +30,7 @@ import {
   unmapCHAPort,
   updateCHA,
 } from "../procurementApi.js";
+import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 
 const ERROR_MESSAGES = {
   PROCUREMENT_INVALID_CHA:          "CHA name is required.",
@@ -57,9 +58,6 @@ const TABS = ["CHA Register", "Port Assignments"];
 
 export default function CHAMasterPage() {
   const [activeTab, setActiveTab] = useState(0);
-  const [rows, setRows] = useState([]);
-  const [companies, setCompanies] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -73,10 +71,35 @@ export default function CHAMasterPage() {
   const [lookingUp, setLookingUp] = useState(false);
 
   const [selectedChaId, setSelectedChaId] = useState("");
-  const [assignedPorts, setAssignedPorts] = useState([]);
-  const [allPorts, setAllPorts] = useState([]);
-  const [portsLoading, setPortsLoading] = useState(false);
   const [addPortId, setAddPortId] = useState("");
+  const companiesQuery = useCompaniesQuery();
+  const chaQuery = useQuery({
+    queryKey: ["procurement", "cha-master", "all"],
+    queryFn: async () => {
+      const result = await listCHAs({ is_active: "all" });
+      return Array.isArray(result) ? result : result?.data ?? [];
+    },
+  });
+  const portQuery = useQuery({
+    queryKey: ["procurement", "cha-master-ports", selectedChaId || null],
+    queryFn: async () => {
+      const [mapped, ports] = await Promise.all([
+        listCHAPorts(selectedChaId),
+        listPorts({ is_active: "true", port_role: "DISCHARGE" }),
+      ]);
+      return {
+        assignedPorts: Array.isArray(mapped) ? mapped : [],
+        allPorts: Array.isArray(ports) ? ports : [],
+      };
+    },
+    enabled: activeTab === 1 && Boolean(selectedChaId),
+  });
+  const rows = chaQuery.data ?? [];
+  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const assignedPorts = portQuery.data?.assignedPorts ?? [];
+  const allPorts = portQuery.data?.allPorts ?? [];
+  const loading = chaQuery.isLoading || companiesQuery.isLoading;
+  const portsLoading = portQuery.isLoading;
 
   function flash(msg, isError = false) {
     clearTimeout(noticeTimer.current);
@@ -87,49 +110,23 @@ export default function CHAMasterPage() {
     }
   }
 
-  async function loadRows() {
-    setLoading(true);
-    setError("");
-    try {
-      const [chaRes, cRes] = await Promise.allSettled([
-        listCHAs({ is_active: "all" }),
-        listCompanies(),
-      ]);
-      const next = chaRes.status === "fulfilled" ? (Array.isArray(chaRes.value) ? chaRes.value : chaRes.value?.data ?? []) : [];
-      setRows(next);
-      setCompanies(cRes.status === "fulfilled" ? (Array.isArray(cRes.value) ? cRes.value : cRes.value?.data ?? []) : []);
-      if (!selectedChaId && next.length > 0) setSelectedChaId(next[0].id);
-      if (chaRes.status === "rejected") {
-        flash(friendlyError(chaRes.reason instanceof Error ? chaRes.reason.message : "PROCUREMENT_CHA_LIST_FAILED"), true);
-      }
-    } finally { setLoading(false); }
-  }
-
-  async function loadPortData(chaId) {
-    if (!chaId) return;
-    setPortsLoading(true);
-    try {
-      const [mapped, ports] = await Promise.all([
-        listCHAPorts(chaId),
-        listPorts({ is_active: "true", port_role: "DISCHARGE" }),
-      ]);
-      setAssignedPorts(Array.isArray(mapped) ? mapped : []);
-      setAllPorts(Array.isArray(ports) ? ports : []);
-    } catch {
-      setAssignedPorts([]);
-    } finally { setPortsLoading(false); }
-  }
-
   useEffect(() => {
-    void loadRows();
-    return () => clearTimeout(noticeTimer.current);
-  }, []);
-
-  useEffect(() => {
-    if (activeTab === 1 && selectedChaId) {
-      void loadPortData(selectedChaId);
+    if (!selectedChaId && rows.length > 0) {
+      setSelectedChaId(rows[0].id);
     }
-  }, [activeTab, selectedChaId]);
+  }, [rows, selectedChaId]);
+
+  useEffect(() => {
+    const nextError =
+      chaQuery.error?.message ||
+      companiesQuery.error?.message ||
+      portQuery.error?.message ||
+      "";
+    if (nextError) {
+      flash(friendlyError(nextError), true);
+    }
+    return () => clearTimeout(noticeTimer.current);
+  }, [chaQuery.error, companiesQuery.error, portQuery.error]);
 
   function startEdit(row) {
     setEditId(row.id);
@@ -159,7 +156,7 @@ export default function CHAMasterPage() {
       });
       cancelEdit();
       flash(`CHA "${row.cha_code}" updated.`);
-      await loadRows();
+      await Promise.all([chaQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_CHA_UPDATE_FAILED"), true);
     } finally { setSaving(false); }
@@ -171,7 +168,7 @@ export default function CHAMasterPage() {
       await toggleCHA({ id: row.id, active: !row.active });
       if (editId === row.id) cancelEdit();
       flash(`CHA "${row.cha_code}" ${!row.active ? "activated" : "deactivated"}.`);
-      await loadRows();
+      await Promise.all([chaQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_CHA_TOGGLE_FAILED"), true);
     } finally { setSaving(false); }
@@ -183,7 +180,7 @@ export default function CHAMasterPage() {
       await deleteCHA(row.id);
       flash(`CHA "${row.cha_code}" deleted.`);
       if (selectedChaId === row.id) setSelectedChaId("");
-      await loadRows();
+      await Promise.all([chaQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_CHA_DELETE_FAILED"), true);
     } finally { setSaving(false); }
@@ -222,7 +219,7 @@ export default function CHAMasterPage() {
       });
       setCreateForm({ ...EMPTY_CREATE });
       flash(`CHA created: ${saved?.cha_code ?? "CHA-generated"}`);
-      await loadRows();
+      await Promise.all([chaQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_CHA_CREATE_FAILED"), true);
     } finally { setSaving(false); }
@@ -238,7 +235,7 @@ export default function CHAMasterPage() {
       await mapCHAToPort(selectedChaId, { port_id: addPortId });
       setAddPortId("");
       flash("Port assigned.");
-      await loadPortData(selectedChaId);
+      await portQuery.refetch();
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_CHA_PORT_MAP_FAILED"), true);
     } finally { setSaving(false); }
@@ -249,7 +246,7 @@ export default function CHAMasterPage() {
     try {
       await unmapCHAPort(selectedChaId, portId);
       flash("Port removed.");
-      await loadPortData(selectedChaId);
+      await portQuery.refetch();
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_CHA_PORT_UNMAP_FAILED"), true);
     } finally { setSaving(false); }
@@ -263,7 +260,9 @@ export default function CHAMasterPage() {
       title="CHA Master"
       actions={[{
         key: "refresh", label: loading ? "Refreshing..." : "Refresh",
-        tone: "neutral", onClick: () => void loadRows(), disabled: loading,
+        tone: "neutral",
+        onClick: () => void Promise.all([chaQuery.refetch(), companiesQuery.refetch(), portQuery.refetch()]),
+        disabled: loading,
       }]}
       notices={[
         ...(error  ? [{ key: "err", tone: "error",   message: error  }] : []),

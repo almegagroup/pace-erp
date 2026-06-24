@@ -6,9 +6,9 @@ import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormT
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listMaterials } from "../../om/omApi.js";
 import { createSTO } from "../procurementApi.js";
 import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
+import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const STO_TYPE_OPTIONS = ["CONSIGNMENT_DISTRIBUTION", "INTER_PLANT"];
 
@@ -27,7 +27,6 @@ function createEmptyLine() {
 export default function STOCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [materials, setMaterials] = useState([]);
   const [form, setForm] = useState({
     sto_type: "CONSIGNMENT_DISTRIBUTION",
     sending_company_id: "",
@@ -35,10 +34,12 @@ export default function STOCreatePage() {
     remarks: "",
   });
   const [lines, setLines] = useState([createEmptyLine()]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const materials = materialQuery.materials;
+  const loading = materialQuery.isLoading;
 
   const companies = runtimeContext?.availableCompanies ?? [];
   const companyOptions = useMemo(
@@ -59,43 +60,26 @@ export default function STOCreatePage() {
   );
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const materialData = await listMaterials({ limit: 200, offset: 0 });
-        if (!active) {
-          return;
-        }
-        setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-        setForm((current) => ({
-          ...current,
-          sending_company_id:
-            current.sending_company_id ||
-            runtimeContext?.selectedCompanyId ||
-            companies[0]?.id ||
-            "",
-          receiving_company_id:
-            current.receiving_company_id ||
-            companies.find((entry) => entry.id !== (runtimeContext?.selectedCompanyId || ""))?.id ||
-            "",
-        }));
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_STO_SETUP_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
+    setError(materialQuery.error?.message || "");
+  }, [materialQuery.error]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
     }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companies, runtimeContext?.selectedCompanyId]);
+    setForm((current) => ({
+      ...current,
+      sending_company_id:
+        current.sending_company_id ||
+        runtimeContext?.selectedCompanyId ||
+        companies[0]?.id ||
+        "",
+      receiving_company_id:
+        current.receiving_company_id ||
+        companies.find((entry) => entry.id !== (runtimeContext?.selectedCompanyId || ""))?.id ||
+        "",
+    }));
+  }, [companies, loading, runtimeContext?.selectedCompanyId]);
 
   function updateHeaderField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));

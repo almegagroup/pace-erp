@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -10,7 +11,6 @@ import ErpScreenScaffold, {
 import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listMaterials, listStorageLocations } from "../../om/omApi.js";
 import {
   addPIItem,
   enterPICount,
@@ -20,6 +20,10 @@ import {
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import {
+  useMaterialOptionsQuery,
+  useStorageLocationsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const STOCK_TYPES = ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"];
 const PI_MATERIAL_TYPES = new Set(["RM", "PM", "INT"]);
@@ -71,19 +75,39 @@ export default function PIDocumentDetailPage() {
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
   const selectedCompanyId = runtimeContext?.selectedCompanyId || "";
-  const [detail, setDetail] = useState(null);
-  const [materials, setMaterials] = useState([]);
-  const [storageLocations, setStorageLocations] = useState([]);
   const [countDrafts, setCountDrafts] = useState({});
   const [activeCountItemId, setActiveCountItemId] = useState("");
   const [itemForm, setItemForm] = useState({
     material_id: "",
     stock_type: "UNRESTRICTED",
   });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "pi-document-detail", id],
+    queryFn: () => getPIDocument(id),
+    enabled: Boolean(id),
+  });
+  const detail = detailQuery.data ?? null;
+  const materialQuery = useMaterialOptionsQuery({
+    limit: 500,
+    offset: 0,
+    status: "ACTIVE",
+  });
+  const locationQuery = useStorageLocationsQuery(
+    {
+      company_id: selectedCompanyId || undefined,
+      is_active: true,
+    },
+    { enabled: Boolean(selectedCompanyId) }
+  );
+  const materials = materialQuery.materials;
+  const storageLocations = normalizeLocationRows(locationQuery.data);
+  const loading =
+    detailQuery.isLoading ||
+    materialQuery.isLoading ||
+    locationQuery.isLoading;
 
   const items = Array.isArray(detail?.items) ? detail.items : [];
   const materialOptions = useMemo(
@@ -110,38 +134,11 @@ export default function PIDocumentDetailPage() {
   const canEditCounts = ["OPEN", "COUNTED"].includes(String(detail?.status || "").toUpperCase());
   const canAddItems = String(detail?.status || "").toUpperCase() === "OPEN";
 
-  async function loadDetail() {
-    if (!id) return;
-    setLoading(true);
-    setError("");
-    try {
-      const document = await getPIDocument(id);
-      const [materialRows, locationRows] = await Promise.all([
-        listMaterials({ limit: 500, offset: 0, status: "ACTIVE" }),
-        listStorageLocations({
-          company_id: selectedCompanyId || undefined,
-          is_active: true,
-        }).catch(() => []),
-      ]);
-
-      setDetail(document);
-      setMaterials(normalizeMaterialRows(materialRows));
-      setStorageLocations(normalizeLocationRows(locationRows));
-      setCountDrafts({});
-      setActiveCountItemId("");
-    } catch (loadError) {
-      setDetail(null);
-      setMaterials([]);
-      setStorageLocations([]);
-      setError(loadError instanceof Error ? loadError.message : "PI_DOCUMENT_FETCH_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadDetail();
-  }, [id, selectedCompanyId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const queryError =
+    detailQuery.error?.message ||
+    materialQuery.error?.message ||
+    locationQuery.error?.message ||
+    "";
 
   function getDraftValue(item) {
     const draft = countDrafts[item.id];
@@ -178,7 +175,7 @@ export default function PIDocumentDetailPage() {
     try {
       await enterPICount(detail.id, itemId, { physical_qty: numericValue });
       setNotice("Physical count saved.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PI_COUNT_SAVE_FAILED");
     } finally {
@@ -194,7 +191,7 @@ export default function PIDocumentDetailPage() {
     try {
       await requestPIRecount(detail.id, itemId);
       setNotice("Recount requested.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PI_RECOUNT_FAILED");
     } finally {
@@ -214,7 +211,7 @@ export default function PIDocumentDetailPage() {
       await addPIItem(detail.id, itemForm);
       setNotice("PI item added.");
       setItemForm({ material_id: "", stock_type: "UNRESTRICTED" });
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PI_ITEM_ADD_FAILED");
     } finally {
@@ -232,7 +229,7 @@ export default function PIDocumentDetailPage() {
     try {
       await postPIDifferences(detail.id);
       setNotice("PI differences posted.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PI_POST_FAILED");
     } finally {
@@ -245,7 +242,9 @@ export default function PIDocumentDetailPage() {
       eyebrow="Procurement Inventory"
       title={detail?.document_number ? `Physical Inventory | ${detail.document_number}` : "Physical Inventory Detail"}
       notices={[
-        ...(error ? [{ key: "pi-detail-error", tone: "error", message: error }] : []),
+        ...((error || queryError)
+          ? [{ key: "pi-detail-error", tone: "error", message: error || queryError }]
+          : []),
         ...(notice ? [{ key: "pi-detail-notice", tone: "success", message: notice }] : []),
       ]}
       actions={[
@@ -262,7 +261,12 @@ export default function PIDocumentDetailPage() {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => void loadDetail(),
+          onClick: () =>
+            void Promise.all([
+              detailQuery.refetch(),
+              materialQuery.refetch(),
+              locationQuery.refetch(),
+            ]),
         },
         ...(["OPEN", "COUNTED"].includes(String(detail?.status || "").toUpperCase())
           ? [{

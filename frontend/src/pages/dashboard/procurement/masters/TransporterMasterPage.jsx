@@ -9,11 +9,11 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import {
   createTransporter,
   deleteTransporter,
-  listCompanies,
   listTransporterCompanyMaps,
   listTransporterContacts,
   listTransporterEmails,
@@ -24,6 +24,7 @@ import {
   saveTransporterEmails,
   updateTransporter,
 } from "../procurementApi.js";
+import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 
 const DIRECTION_OPTIONS = ["IMPORT", "DOMESTIC", "BOTH"];
 
@@ -51,9 +52,6 @@ function friendlyError(code) {
 }
 
 export default function TransporterMasterPage() {
-  const [rows, setRows] = useState([]);
-  const [companies, setCompanies] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -63,6 +61,17 @@ export default function TransporterMasterPage() {
   const [lookingUp, setLookingUp] = useState(false);
   const [manageId, setManageId] = useState(null);
   const noticeTimer = useRef(null);
+  const companiesQuery = useCompaniesQuery();
+  const transporterQuery = useQuery({
+    queryKey: ["procurement", "transporters", "all"],
+    queryFn: async () => {
+      const result = await listTransporters({ is_active: "all" });
+      return Array.isArray(result?.data) ? result.data : Array.isArray(result) ? result : [];
+    },
+  });
+  const rows = transporterQuery.data ?? [];
+  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const loading = transporterQuery.isLoading || companiesQuery.isLoading;
 
   function flash(msg, isError = false) {
     clearTimeout(noticeTimer.current);
@@ -73,26 +82,19 @@ export default function TransporterMasterPage() {
     }
   }
 
-  async function loadData() {
-    setLoading(true);
-    setError("");
-    try {
-      const [tRes, cRes] = await Promise.allSettled([
-        listTransporters({ is_active: "all" }),
-        listCompanies(),
-      ]);
-      setRows(tRes.status === "fulfilled" ? (Array.isArray(tRes.value?.data) ? tRes.value.data : Array.isArray(tRes.value) ? tRes.value : []) : []);
-      setCompanies(cRes.status === "fulfilled" ? (Array.isArray(cRes.value?.data) ? cRes.value.data : Array.isArray(cRes.value) ? cRes.value : []) : []);
-      if (tRes.status === "rejected") {
-        flash(friendlyError(tRes.reason instanceof Error ? tRes.reason.message : "PROCUREMENT_TRANSPORTER_LIST_FAILED"), true);
-      }
-    } finally { setLoading(false); }
-  }
-
   useEffect(() => {
-    void loadData();
+    if (transporterQuery.error || companiesQuery.error) {
+      flash(
+        friendlyError(
+          transporterQuery.error?.message ||
+          companiesQuery.error?.message ||
+          "PROCUREMENT_TRANSPORTER_LIST_FAILED"
+        ),
+        true
+      );
+    }
     return () => clearTimeout(noticeTimer.current);
-  }, []);
+  }, [companiesQuery.error, transporterQuery.error]);
 
   function startEdit(row) {
     setEditId(row.id);
@@ -117,7 +119,7 @@ export default function TransporterMasterPage() {
       });
       cancelEdit();
       flash(`Transporter "${row.transporter_code}" updated.`);
-      await loadData();
+      await Promise.all([transporterQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_TRANSPORTER_UPDATE_FAILED"), true);
     } finally { setSaving(false); }
@@ -128,7 +130,7 @@ export default function TransporterMasterPage() {
     try {
       await updateTransporter(row.id, { active: !row.active });
       flash(`Transporter "${row.transporter_code}" ${!row.active ? "activated" : "deactivated"}.`);
-      await loadData();
+      await Promise.all([transporterQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_TRANSPORTER_UPDATE_FAILED"), true);
     } finally { setSaving(false); }
@@ -139,7 +141,7 @@ export default function TransporterMasterPage() {
     try {
       await deleteTransporter(row.id);
       flash(`Transporter "${row.transporter_code}" deleted.`);
-      await loadData();
+      await Promise.all([transporterQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_TRANSPORTER_DELETE_FAILED"), true);
     } finally { setSaving(false); }
@@ -178,7 +180,7 @@ export default function TransporterMasterPage() {
       });
       setForm({ ...EMPTY_CREATE });
       flash(`Transporter created: ${saved?.transporter_code ?? "TRN-generated"}`);
-      await loadData();
+      await Promise.all([transporterQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_TRANSPORTER_SAVE_FAILED"), true);
     } finally { setSaving(false); }
@@ -190,7 +192,9 @@ export default function TransporterMasterPage() {
       title="Transporter Master"
       actions={[{
         key: "refresh", label: loading ? "Refreshing..." : "Refresh",
-        tone: "neutral", onClick: () => void loadData(), disabled: loading,
+        tone: "neutral",
+        onClick: () => void Promise.all([transporterQuery.refetch(), companiesQuery.refetch()]),
+        disabled: loading,
       }]}
       notices={[
         ...(error  ? [{ key: "err", tone: "error",   message: error  }] : []),

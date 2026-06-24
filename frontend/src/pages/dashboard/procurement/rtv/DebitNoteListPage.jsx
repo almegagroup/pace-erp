@@ -9,15 +9,16 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listVendors } from "../../om/omApi.js";
 import { listDebitNotes } from "../procurementApi.js";
 
 const LIMIT = 50;
@@ -54,66 +55,37 @@ function formatNumber(value) {
 export default function DebitNoteListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [vendorId, setVendorId] = useState("");
   const [page, setPage] = useState(1);
-  const [refreshToken, setRefreshToken] = useState(0);
   const companyId = runtimeContext?.selectedCompanyId || "";
-
-  useEffect(() => {
-    let active = true;
-
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const [data, vendorData] = await Promise.all([
-          listDebitNotes({
-            company_id: companyId || undefined,
-            vendor_id: vendorId || undefined,
-            status: status || undefined,
-            limit: 200,
-          }),
-          listVendors({ limit: 200, offset: 0 }),
-        ]);
-        if (!active) {
-          return;
-        }
-        setRows(Array.isArray(data?.items) ? data.items : []);
-        setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setVendors([]);
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "PROCUREMENT_DEBIT_NOTE_LIST_FAILED"
-        );
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companyId, refreshToken, status, vendorId]);
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const debitNoteParams = useMemo(
+    () => ({
+      company_id: companyId || undefined,
+      vendor_id: vendorId || undefined,
+      status: status || undefined,
+      limit: 200,
+    }),
+    [companyId, status, vendorId]
+  );
+  const debitNoteQuery = useQuery({
+    queryKey: ["procurement", "debit-notes", debitNoteParams],
+    queryFn: () => listDebitNotes(debitNoteParams),
+  });
 
   useEffect(() => {
     setPage(1);
   }, [search, status, vendorId]);
 
+  const rows = Array.isArray(debitNoteQuery.data?.items) ? debitNoteQuery.data.items : [];
+  const vendors = vendorQuery.vendors;
+  const loading = debitNoteQuery.isLoading || vendorQuery.isLoading;
+  const error =
+    debitNoteQuery.error?.message ||
+    vendorQuery.error?.message ||
+    "";
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]
@@ -163,7 +135,10 @@ export default function DebitNoteListPage() {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => setRefreshToken((value) => value + 1),
+          onClick: () => {
+            void debitNoteQuery.refetch();
+            void vendorQuery.refetch();
+          },
         },
       ]}
       notices={

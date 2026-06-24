@@ -7,7 +7,8 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -20,27 +21,9 @@ import {
   createOpeningStockDocument,
   listOpeningStockDocuments,
 } from "../procurementApi.js";
+import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 
 const STATUS_OPTIONS = ["", "DRAFT", "SUBMITTED", "APPROVED", "POSTED"];
-
-async function readJsonSafe(response) {
-  try {
-    return await response.clone().json();
-  } catch {
-    return null;
-  }
-}
-
-async function listCompanies() {
-  const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/admin/companies`, {
-    credentials: "include",
-  });
-  const json = await readJsonSafe(response);
-  if (!response.ok || !json?.ok || !Array.isArray(json?.data?.companies)) {
-    throw new Error(json?.code ?? "COMPANY_LIST_FAILED");
-  }
-  return json.data.companies;
-}
 
 function formatDate(value) {
   if (!value) return "-";
@@ -50,18 +33,29 @@ function formatDate(value) {
 
 export default function OpeningStockListPage() {
   const navigate = useNavigate();
-  const [rows, setRows] = useState([]);
-  const [companies, setCompanies] = useState([]);
   const [filters, setFilters] = useState({ company_id: "", status: "" });
   const [form, setForm] = useState({
     company_id: "",
     cut_off_date: "",
     notes: "",
   });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const companiesQuery = useCompaniesQuery();
+  const documentQuery = useQuery({
+    queryKey: ["procurement", "opening-stock-documents", filters],
+    queryFn: () => listOpeningStockDocuments(filters),
+  });
+  const companies = Array.isArray(companiesQuery.data)
+    ? companiesQuery.data
+    : [];
+  const rows = Array.isArray(documentQuery.data?.items)
+    ? documentQuery.data.items
+    : Array.isArray(documentQuery.data)
+    ? documentQuery.data
+    : [];
+  const loading = documentQuery.isLoading || companiesQuery.isLoading;
 
   const companyOptions = useMemo(
     () =>
@@ -83,33 +77,10 @@ export default function OpeningStockListPage() {
     [companies],
   );
 
-  async function loadScreenData(nextFilters = filters) {
-    setLoading(true);
-    setError("");
-    try {
-      const [documentsResult, companyList] = await Promise.all([
-        listOpeningStockDocuments(nextFilters),
-        listCompanies(),
-      ]);
-      const documentRows = Array.isArray(documentsResult?.items)
-        ? documentsResult.items
-        : Array.isArray(documentsResult)
-        ? documentsResult
-        : [];
-      setRows(documentRows);
-      setCompanies(companyList);
-    } catch (loadError) {
-      setRows([]);
-      setCompanies([]);
-      setError(loadError instanceof Error ? loadError.message : "OPENING_STOCK_DOCUMENT_LIST_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadScreenData(filters);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const queryError =
+    documentQuery.error?.message ||
+    companiesQuery.error?.message ||
+    "";
 
   async function handleCreateDocument() {
     if (!form.company_id || !form.cut_off_date) {
@@ -128,7 +99,7 @@ export default function OpeningStockListPage() {
       });
       setNotice(`Opening stock document ${created.document_number ?? "created"} is ready in DRAFT.`);
       setForm((current) => ({ ...current, notes: "" }));
-      await loadScreenData(filters);
+      await Promise.all([documentQuery.refetch(), companiesQuery.refetch()]);
       if (created?.id) {
         openScreen("PROC_OPENING_STOCK_DETAIL");
         navigate(`/dashboard/procurement/opening-stock/${created.id}`);
@@ -140,10 +111,9 @@ export default function OpeningStockListPage() {
     }
   }
 
-  async function applyFilters(nextPatch) {
+  function applyFilters(nextPatch) {
     const nextFilters = { ...filters, ...nextPatch };
     setFilters(nextFilters);
-    await loadScreenData(nextFilters);
   }
 
   const metrics = [
@@ -166,7 +136,9 @@ export default function OpeningStockListPage() {
       eyebrow="Inventory"
       title="Opening Stock Migration"
       notices={[
-        ...(error ? [{ key: "opening-stock-list-error", tone: "error", message: error }] : []),
+        ...((error || queryError)
+          ? [{ key: "opening-stock-list-error", tone: "error", message: error || queryError }]
+          : []),
         ...(notice ? [{ key: "opening-stock-list-notice", tone: "success", message: notice }] : []),
       ]}
       actions={[
@@ -174,7 +146,7 @@ export default function OpeningStockListPage() {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => void loadScreenData(filters),
+          onClick: () => void Promise.all([documentQuery.refetch(), companiesQuery.refetch()]),
         },
         {
           key: "create-document",

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -7,13 +8,13 @@ import ErpMasterListTemplate from "../../../../components/templates/ErpMasterLis
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listMaterials } from "../../om/omApi.js";
 import {
   assignQAOfficer,
   getQADocument,
   listQADocuments,
   listGRNs,
 } from "../procurementApi.js";
+import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const LIMIT = 50;
 
@@ -36,102 +37,82 @@ function normalizeSearch(text) {
 export default function QAQueuePage() {
   const navigate = useNavigate();
   const { runtimeContext, shellProfile } = useMenu();
-  const [rows, setRows] = useState([]);
-  const [materials, setMaterials] = useState([]);
-  const [grns, setGrns] = useState([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("OPEN");
   const [assignmentFilter, setAssignmentFilter] = useState("ALL");
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [refreshToken, setRefreshToken] = useState(0);
   const companyId = runtimeContext?.selectedCompanyId || "";
   const myAssignee = shellProfile?.userCode || "";
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const qaStatuses = useMemo(
+    () =>
+      statusFilter === "OPEN"
+        ? ["PENDING", "IN_PROGRESS"]
+        : [statusFilter],
+    [statusFilter]
+  );
+  const queueQuery = useQuery({
+    queryKey: ["procurement", "qa-queue", companyId || null, qaStatuses],
+    queryFn: async () => {
+      const qaLists = await Promise.all(
+        qaStatuses.map((status) =>
+          listQADocuments({
+            company_id: companyId || undefined,
+            status,
+            limit: 200,
+          })
+        )
+      );
+      const mergedRows = qaLists.flatMap((item) => (Array.isArray(item) ? item : []));
+      const uniqueRows = Array.from(
+        new Map(mergedRows.map((row) => [row.id, row])).values()
+      );
+      const [details, grnData] = await Promise.all([
+        Promise.all(
+          uniqueRows.map(async (row) => {
+            try {
+              const detail = await getQADocument(row.id);
+              return {
+                ...row,
+                assigned_to: detail?.assigned_to ?? "",
+                total_qty: detail?.total_qty ?? row.total_qty ?? 0,
+                uom: detail?.uom_code || detail?.uom || "",
+              };
+            } catch {
+              return row;
+            }
+          })
+        ),
+        listGRNs({
+          company_id: companyId || undefined,
+          limit: 200,
+          offset: 0,
+        }),
+      ]);
+      return {
+        rows: details,
+        grns: Array.isArray(grnData?.data) ? grnData.data : [],
+      };
+    },
+  });
+  const rows = queueQuery.data?.rows ?? [];
+  const grns = queueQuery.data?.grns ?? [];
+  const materials = materialQuery.materials;
+  const loading = queueQuery.isLoading || materialQuery.isLoading;
 
   useEffect(() => {
     setPage(1);
   }, [assignmentFilter, search, statusFilter]);
 
   useEffect(() => {
-    let active = true;
-
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const statuses =
-          statusFilter === "OPEN"
-            ? ["PENDING", "IN_PROGRESS"]
-            : [statusFilter];
-        const qaLists = await Promise.all(
-          statuses.map((status) =>
-            listQADocuments({
-              company_id: companyId || undefined,
-              status,
-              limit: 200,
-            })
-          )
-        );
-        const mergedRows = qaLists.flatMap((item) => (Array.isArray(item) ? item : []));
-        const uniqueRows = Array.from(
-          new Map(mergedRows.map((row) => [row.id, row])).values()
-        );
-
-        const [details, grnData, materialData] = await Promise.all([
-          Promise.all(
-            uniqueRows.map(async (row) => {
-              try {
-                const detail = await getQADocument(row.id);
-                return {
-                  ...row,
-                  assigned_to: detail?.assigned_to ?? "",
-                  total_qty: detail?.total_qty ?? row.total_qty ?? 0,
-                  uom: detail?.uom_code || detail?.uom || "",
-                };
-              } catch {
-                return row;
-              }
-            })
-          ),
-          listGRNs({
-            company_id: companyId || undefined,
-            limit: 200,
-            offset: 0,
-          }),
-          listMaterials({ limit: 200, offset: 0 }),
-        ]);
-
-        if (!active) {
-          return;
-        }
-
-        setRows(details);
-        setGrns(Array.isArray(grnData?.data) ? grnData.data : []);
-        setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setGrns([]);
-        setMaterials([]);
-        setError(
-          loadError instanceof Error ? loadError.message : "PROCUREMENT_QA_QUEUE_FAILED"
-        );
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companyId, refreshToken, statusFilter]);
+    const nextError =
+      queueQuery.error?.message ||
+      materialQuery.error?.message ||
+      "";
+    setError(nextError);
+  }, [materialQuery.error, queueQuery.error]);
 
   const grnMap = useMemo(
     () => new Map(grns.map((row) => [row.id, row])),
@@ -192,7 +173,7 @@ export default function QAQueuePage() {
     try {
       await assignQAOfficer(row.id, { assigned_to: myAssignee });
       setNotice(`${row.qa_doc_number || "QA document"} assigned to you.`);
-      setRefreshToken((value) => value + 1);
+      await queueQuery.refetch();
     } catch (assignError) {
       setError(
         assignError instanceof Error ? assignError.message : "PROCUREMENT_QA_ASSIGN_FAILED"
@@ -214,7 +195,8 @@ export default function QAQueuePage() {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => setRefreshToken((value) => value + 1),
+          onClick: () =>
+            void Promise.all([queueQuery.refetch(), materialQuery.refetch()]),
         },
       ]}
       notices={[

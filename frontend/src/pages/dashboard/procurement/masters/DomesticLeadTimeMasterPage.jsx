@@ -9,16 +9,17 @@
  */
 
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpSelectionSection from "../../../../components/forms/ErpSelectionSection.jsx";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import {
-  listCompanies,
   listDomesticLeadTimes,
   upsertDomesticLeadTime,
 } from "../procurementApi.js";
+import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 
 function normalizeRows(result) {
   if (Array.isArray(result)) return result;
@@ -27,40 +28,26 @@ function normalizeRows(result) {
 }
 
 export default function DomesticLeadTimeMasterPage() {
-  const [rows, setRows] = useState([]);
-  const [companies, setCompanies] = useState([]);
   const [form, setForm] = useState({
     company_id: "",
     material_category_id: "",
     transit_days: "",
   });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-
-  async function loadRows() {
-    setLoading(true);
-    setError("");
-    try {
-      const [result, companyResult] = await Promise.all([
-        listDomesticLeadTimes(),
-        listCompanies(),
-      ]);
-      setRows(normalizeRows(result));
-      const nextCompanies = Array.isArray(companyResult?.data?.companies) ? companyResult.data.companies : Array.isArray(companyResult) ? companyResult : [];
-      setCompanies(nextCompanies);
-    } catch (loadError) {
-      setRows([]);
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_DOMESTIC_LEAD_TIME_LIST_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const companiesQuery = useCompaniesQuery();
+  const rowQuery = useQuery({
+    queryKey: ["procurement", "domestic-lead-times"],
+    queryFn: async () => normalizeRows(await listDomesticLeadTimes()),
+  });
+  const rows = rowQuery.data ?? [];
+  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const loading = rowQuery.isLoading || companiesQuery.isLoading;
 
   useEffect(() => {
-    void loadRows();
-  }, []);
+    setError(rowQuery.error?.message || companiesQuery.error?.message || "");
+  }, [companiesQuery.error, rowQuery.error]);
 
   async function handleSave() {
     if (!form.company_id || !form.material_category_id.trim() || form.transit_days === "") {
@@ -83,7 +70,7 @@ export default function DomesticLeadTimeMasterPage() {
         material_category_id: "",
         transit_days: "",
       });
-      await loadRows();
+      await Promise.all([rowQuery.refetch(), companiesQuery.refetch()]);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_DOMESTIC_LEAD_TIME_UPSERT_FAILED");
     } finally {
@@ -100,7 +87,12 @@ export default function DomesticLeadTimeMasterPage() {
         ...(notice ? [{ key: "domestic-lead-time-notice", tone: "success", message: notice }] : []),
       ]}
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadRows() },
+        {
+          key: "refresh",
+          label: loading ? "Refreshing..." : "Refresh",
+          tone: "neutral",
+          onClick: () => void Promise.all([rowQuery.refetch(), companiesQuery.refetch()]),
+        },
         { key: "save", label: saving ? "Saving..." : "Save", tone: "primary", onClick: () => void handleSave(), disabled: saving },
       ]}
     >

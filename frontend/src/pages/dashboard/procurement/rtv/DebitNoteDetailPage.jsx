@@ -8,7 +8,8 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpScreenScaffold, {
   ErpFieldPreview,
@@ -17,7 +18,6 @@ import ErpScreenScaffold, {
 import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listVendors } from "../../om/omApi.js";
 import {
   acknowledgeDebitNote,
   getDebitNote,
@@ -25,6 +25,7 @@ import {
   settleDebitNote,
 } from "../procurementApi.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -62,47 +63,35 @@ export default function DebitNoteDetailPage() {
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const menu = useMenu();
   void menu;
-  const [detail, setDetail] = useState(null);
-  const [vendors, setVendors] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "debit-note-detail", id],
+    queryFn: () => getDebitNote(id),
+    enabled: Boolean(id),
+  });
+  const detail = detailQuery.data ?? null;
+  const vendors = vendorQuery.vendors;
+  const loading = detailQuery.isLoading || vendorQuery.isLoading;
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]
   );
 
-  const loadDetail = useCallback(async () => {
+  useEffect(() => {
     if (!id) {
+      setError("PROCUREMENT_DEBIT_NOTE_FETCH_FAILED");
       return;
     }
-    setLoading(true);
-    setError("");
-    try {
-      const [data, vendorData] = await Promise.all([
-        getDebitNote(id),
-        listVendors({ limit: 200, offset: 0 }),
-      ]);
-      setDetail(data);
-      setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-    } catch (loadError) {
-      setDetail(null);
-      setVendors([]);
-      setError(
-        loadError instanceof Error
-          ? loadError.message
-          : "PROCUREMENT_DEBIT_NOTE_FETCH_FAILED"
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [id]);
-
-  useEffect(() => {
-    void loadDetail();
-  }, [loadDetail]);
+    const nextError =
+      detailQuery.error?.message ||
+      vendorQuery.error?.message ||
+      "";
+    setError(nextError);
+  }, [detailQuery.error, id, vendorQuery.error]);
 
   async function runAction(action, successMessage) {
     setSaving(true);
@@ -111,7 +100,7 @@ export default function DebitNoteDetailPage() {
     try {
       await action();
       setNotice(successMessage);
-      await loadDetail();
+      await Promise.all([detailQuery.refetch(), vendorQuery.refetch()]);
     } catch (actionError) {
       setError(
         actionError instanceof Error

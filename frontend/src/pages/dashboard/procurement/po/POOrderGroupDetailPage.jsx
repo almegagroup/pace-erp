@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
-import { listVendors } from "../../om/omApi.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
   approvePOOrderGroup,
@@ -31,37 +32,23 @@ export default function POOrderGroupDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const { shellProfile } = useMenu();
-  const [group, setGroup] = useState(null);
-  const [vendors, setVendors] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const groupQuery = useQuery({
+    queryKey: ["procurement", "po-order-group-detail", id],
+    enabled: Boolean(id),
+    queryFn: () => getPOOrderGroup(id),
+  });
+  const group = groupQuery.data ?? null;
+  const vendors = vendorQuery.vendors;
+  const loading = groupQuery.isLoading || vendorQuery.isLoading;
 
   const canApprove = PO_APPROVER_ROLES.has(shellProfile?.roleCode);
-
-  async function loadDetail() {
-    if (!id) return;
-    setLoading(true);
-    setError("");
-    try {
-      const [groupData, vendorData] = await Promise.all([
-        getPOOrderGroup(id),
-        listVendors({ limit: 200, offset: 0 }),
-      ]);
-      setGroup(groupData);
-      setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_ORDER_GROUP_DETAIL_FAILED");
-      setGroup(null);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
-    void loadDetail();
-  }, [id]);
+    setError(groupQuery.error?.message || vendorQuery.error?.message || "");
+  }, [groupQuery.error?.message, vendorQuery.error?.message]);
 
   const vendorMap = useMemo(() => new Map(vendors.map((entry) => [entry.id, entry])), [vendors]);
 
@@ -72,7 +59,7 @@ export default function POOrderGroupDetailPage() {
     try {
       await action();
       setNotice(successMessage);
-      await loadDetail();
+      await Promise.all([groupQuery.refetch(), vendorQuery.refetch()]);
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_PO_ORDER_GROUP_ACTION_FAILED");
     } finally {

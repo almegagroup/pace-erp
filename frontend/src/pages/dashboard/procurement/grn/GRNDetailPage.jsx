@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
-import { listMaterials } from "../../om/omApi.js";
+import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { getGRN, postGRN, reverseGRN, updateGRNDraft } from "../procurementApi.js";
@@ -27,13 +28,20 @@ export default function GRNDetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
-  const [detail, setDetail] = useState(null);
-  const [materials, setMaterials] = useState([]);
+  const queryClient = useQueryClient();
   const [lines, setLines] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "grn-detail", id],
+    enabled: Boolean(id),
+    queryFn: () => getGRN(id),
+  });
+  const detail = detailQuery.data ?? null;
+  const materials = materialQuery.materials;
+  const loading = detailQuery.isLoading || materialQuery.isLoading;
 
   const materialMap = useMemo(() => new Map(materials.map((entry) => [entry.id, entry])), [materials]);
   const weightedMode = useMemo(
@@ -53,31 +61,13 @@ export default function GRNDetailPage() {
     [lines]
   );
 
-  async function loadDetail() {
-    if (!id) return;
-    setLoading(true);
-    setError("");
-    try {
-      const [grnData, materialData] = await Promise.all([
-        getGRN(id),
-        listMaterials({ limit: 200, offset: 0 }),
-      ]);
-      setDetail(grnData);
-      setLines(Array.isArray(grnData?.lines) ? grnData.lines : []);
-      setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-    } catch (loadError) {
-      setDetail(null);
-      setLines([]);
-      setMaterials([]);
-      setError(loadError instanceof Error ? loadError.message : "GRN_FETCH_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
+  useEffect(() => {
+    setError(detailQuery.error?.message || materialQuery.error?.message || "");
+  }, [detailQuery.error?.message, materialQuery.error?.message]);
 
   useEffect(() => {
-    void loadDetail();
-  }, [id]);
+    setLines(Array.isArray(detail?.lines) ? detail.lines : []);
+  }, [detail]);
 
   function updateLine(lineId, patch) {
     setLines((current) =>
@@ -113,7 +103,7 @@ export default function GRNDetailPage() {
         })),
       };
       const updated = await updateGRNDraft(detail.id, payload);
-      setDetail(updated);
+      queryClient.setQueryData(["procurement", "grn-detail", id], updated);
       setLines(Array.isArray(updated?.lines) ? updated.lines : []);
       setNotice("GRN draft saved.");
     } catch (saveError) {
@@ -132,7 +122,7 @@ export default function GRNDetailPage() {
     setNotice("");
     try {
       const posted = await postGRN(detail.id);
-      setDetail(posted);
+      queryClient.setQueryData(["procurement", "grn-detail", id], posted);
       setLines(Array.isArray(posted?.lines) ? posted.lines : []);
       setNotice(`GRN posted. ${stockSummary.qaLines} QA line(s), total qty ${stockSummary.totalQty.toFixed(3)}.`);
     } catch (saveError) {
@@ -151,7 +141,7 @@ export default function GRNDetailPage() {
     setNotice("");
     try {
       const reversed = await reverseGRN(detail.id, { reversal_reason: reason });
-      setDetail(reversed);
+      queryClient.setQueryData(["procurement", "grn-detail", id], reversed);
       setLines(Array.isArray(reversed?.lines) ? reversed.lines : []);
       setNotice("GRN reversed.");
     } catch (saveError) {

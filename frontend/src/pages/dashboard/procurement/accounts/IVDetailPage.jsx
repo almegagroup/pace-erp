@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -6,8 +7,11 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import {
+  useMaterialOptionsQuery,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
-import { listMaterials, listVendors } from "../../om/omApi.js";
 import { addIVLine, getGRN, getIV, postIV, removeIVLine, runIVMatch } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
@@ -52,15 +56,22 @@ export default function IVDetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
-  const [detail, setDetail] = useState(null);
-  const [vendors, setVendors] = useState([]);
-  const [materials, setMaterials] = useState([]);
   const [availableGrns, setAvailableGrns] = useState([]);
   const [lineForm, setLineForm] = useState(createEmptyLineForm());
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "iv-detail", id],
+    enabled: Boolean(id),
+    queryFn: () => getIV(id),
+  });
+  const detail = detailQuery.data ?? null;
+  const vendors = vendorQuery.vendors;
+  const materials = materialQuery.materials;
+  const loading = detailQuery.isLoading || vendorQuery.isLoading || materialQuery.isLoading;
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
@@ -73,41 +84,19 @@ export default function IVDetailPage() {
   const currentStatus = String(detail?.status || "").toUpperCase();
   const isDraft = currentStatus === "DRAFT";
 
-  async function loadDetail() {
-    if (!id) {
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const [ivData, vendorData, materialData] = await Promise.all([
-        getIV(id),
-        listVendors({ limit: 200, offset: 0 }),
-        listMaterials({ limit: 200, offset: 0 }),
-      ]);
-      const grnMapRows =
-        ivData?.vendor_id
-          ? await listVendors({ limit: 1, offset: 0 }).then(() => [])
-          : [];
-      setDetail(ivData);
-      setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-      setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-      setAvailableGrns(grnMapRows);
-      setLineForm(createEmptyLineForm());
-    } catch (loadError) {
-      setDetail(null);
-      setVendors([]);
-      setMaterials([]);
-      setAvailableGrns([]);
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_IV_FETCH_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
+  useEffect(() => {
+    setError(
+      detailQuery.error?.message ||
+      vendorQuery.error?.message ||
+      materialQuery.error?.message ||
+      ""
+    );
+  }, [detailQuery.error?.message, materialQuery.error?.message, vendorQuery.error?.message]);
 
   useEffect(() => {
-    void loadDetail();
-  }, [id]);
+    setAvailableGrns([]);
+    setLineForm(createEmptyLineForm());
+  }, [detail?.id]);
 
   async function handleRunMatch() {
     setSaving(true);
@@ -116,7 +105,7 @@ export default function IVDetailPage() {
     try {
       await runIVMatch(id);
       setNotice("Invoice verification match completed.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_IV_MATCH_FAILED");
     } finally {
@@ -133,7 +122,7 @@ export default function IVDetailPage() {
     try {
       await postIV(id);
       setNotice("Invoice verification posted.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_IV_POST_FAILED");
     } finally {
@@ -150,7 +139,7 @@ export default function IVDetailPage() {
     try {
       await removeIVLine(id, lineId);
       setNotice("IV line removed.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_IV_LINE_REMOVE_FAILED");
     } finally {
@@ -176,7 +165,7 @@ export default function IVDetailPage() {
       });
       setLineForm(createEmptyLineForm());
       setNotice("IV line added.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_IV_LINE_ADD_FAILED");
     } finally {

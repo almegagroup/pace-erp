@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listCustomers, listMaterials } from "../../om/omApi.js";
 import {
   createSalesInvoice,
   getSalesInvoice,
@@ -14,6 +14,10 @@ import {
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import {
+  useCustomerOptionsQuery,
+  useMaterialOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function formatMoney(value) {
   const numeric = Number(value);
@@ -31,18 +35,44 @@ export default function SalesInvoiceDetailPage() {
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || routeId);
   const [searchParams] = useSearchParams();
   const { runtimeContext } = useMenu();
-  const [detail, setDetail] = useState(null);
-  const [salesOrder, setSalesOrder] = useState(null);
-  const [customers, setCustomers] = useState([]);
-  const [materials, setMaterials] = useState([]);
   const [selectedDcId, setSelectedDcId] = useState("");
   const [draftLines, setDraftLines] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
   const soId = searchParams.get("so_id") || "";
+  const customerQuery = useCustomerOptionsQuery({ limit: 200, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: 300, offset: 0 });
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "sales-invoice-detail", isCreateMode ? `new:${soId}` : id],
+    queryFn: async () => {
+      if (isCreateMode) {
+        if (!soId) {
+          throw new Error("PROCUREMENT_SO_ID_REQUIRED");
+        }
+        const soData = await getSalesOrder(soId);
+        return {
+          detail: null,
+          salesOrder: soData?.data ?? soData,
+        };
+      }
+      const invoiceData = await getSalesInvoice(id);
+      return {
+        detail: invoiceData?.data ?? invoiceData,
+        salesOrder: null,
+      };
+    },
+    enabled: Boolean(isCreateMode ? soId : id),
+  });
+  const detail = detailQuery.data?.detail ?? null;
+  const salesOrder = detailQuery.data?.salesOrder ?? null;
+  const customers = customerQuery.customers;
+  const materials = materialQuery.materials;
+  const loading =
+    detailQuery.isLoading ||
+    customerQuery.isLoading ||
+    materialQuery.isLoading;
   const customerMap = useMemo(
     () => new Map(customers.map((entry) => [entry.id, entry])),
     [customers]
@@ -52,45 +82,20 @@ export default function SalesInvoiceDetailPage() {
     [materials]
   );
   const isCreateMode = id === "new";
-
-  async function loadDetail() {
-    setLoading(true);
-    setError("");
-    try {
-      const [customerData, materialData] = await Promise.all([
-        listCustomers({ limit: 200, offset: 0 }),
-        listMaterials({ limit: 300, offset: 0 }),
-      ]);
-      setCustomers(Array.isArray(customerData?.data) ? customerData.data : []);
-      setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-
-      if (isCreateMode) {
-        if (!soId) {
-          throw new Error("PROCUREMENT_SO_ID_REQUIRED");
-        }
-        const soData = await getSalesOrder(soId);
-        const soDetail = soData?.data ?? soData;
-        setSalesOrder(soDetail);
-        setSelectedDcId(soDetail?.delivery_challans?.[0]?.id || "");
-        setDetail(null);
-      } else {
-        const invoiceData = await getSalesInvoice(id);
-        const invoiceDetail = invoiceData?.data ?? invoiceData;
-        setDetail(invoiceDetail);
-        setSalesOrder(null);
-      }
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_SALES_INVOICE_DETAIL_FAILED");
-      setDetail(null);
-      setSalesOrder(null);
-    } finally {
-      setLoading(false);
-    }
-  }
+  useEffect(() => {
+    const nextError =
+      detailQuery.error?.message ||
+      customerQuery.error?.message ||
+      materialQuery.error?.message ||
+      "";
+    setError(nextError);
+  }, [customerQuery.error, detailQuery.error, materialQuery.error]);
 
   useEffect(() => {
-    void loadDetail();
-  }, [id, soId, runtimeContext?.selectedCompanyId]);
+    if (isCreateMode && salesOrder) {
+      setSelectedDcId((current) => current || salesOrder?.delivery_challans?.[0]?.id || "");
+    }
+  }, [isCreateMode, salesOrder]);
 
   useEffect(() => {
     if (!isCreateMode || !salesOrder) {
@@ -166,7 +171,7 @@ export default function SalesInvoiceDetailPage() {
     try {
       await postSalesInvoice(id);
       setNotice("Sales invoice posted.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_SALES_INVOICE_POST_FAILED");
     } finally {

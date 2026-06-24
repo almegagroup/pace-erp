@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -8,7 +9,6 @@ import ErpScreenScaffold, {
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
-import { listMaterials } from "../../om/omApi.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
@@ -20,6 +20,7 @@ import {
   updateGateExitWeight,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -47,13 +48,19 @@ export default function STODetailPage() {
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
-  const [detail, setDetail] = useState(null);
-  const [materials, setMaterials] = useState([]);
   const [tareWeight, setTareWeight] = useState("");
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "sto-detail", id],
+    queryFn: () => getSTO(id),
+    enabled: Boolean(id),
+  });
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const detail = detailQuery.data ?? null;
+  const materials = materialQuery.materials;
+  const loading = detailQuery.isLoading || materialQuery.isLoading;
 
   const selectedCompanyId = runtimeContext?.selectedCompanyId || "";
   const materialMap = useMemo(
@@ -73,44 +80,22 @@ export default function STODetailPage() {
     isBulkLike(detail?.sto_type) &&
     latestGateExit;
 
-  async function loadDetail() {
-    if (!id) {
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const [stoData, materialData] = await Promise.all([
-        getSTO(id),
-        listMaterials({ limit: 200, offset: 0 }),
-      ]);
-      setDetail(stoData);
-      setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-      setTareWeight(String(stoData?.gate_exit_outbound?.[0]?.tare_weight ?? ""));
-    } catch (loadError) {
-      setDetail(null);
-      setMaterials([]);
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_STO_FETCH_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
+  useEffect(() => {
+    setError(detailQuery.error?.message || materialQuery.error?.message || "");
+  }, [detailQuery.error, materialQuery.error]);
 
   useEffect(() => {
-    void loadDetail();
-  }, [id]);
+    setTareWeight(String(detail?.gate_exit_outbound?.[0]?.tare_weight ?? ""));
+  }, [detail?.gate_exit_outbound]);
 
   async function runAction(action, successMessage) {
     setSaving(true);
     setError("");
     setNotice("");
     try {
-      const updated = await action();
-      if (updated) {
-        setDetail(updated);
-      }
+      await action();
       setNotice(successMessage);
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_STO_ACTION_FAILED");
     } finally {
