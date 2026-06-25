@@ -16,6 +16,7 @@ import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
 import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const STO_TYPE_OPTIONS = ["CONSIGNMENT_DISTRIBUTION", "INTER_PLANT"];
+const MATERIAL_TYPES = ["RM", "PM", "INT", "FG", "TRA", "CONS"];
 
 function createEmptyLine() {
   return {
@@ -39,12 +40,17 @@ export default function STOCreatePage() {
     receiving_company_id: "",
     remarks: "",
   });
+  const [materialType, setMaterialType] = useState("");
   const [lines, setLines] = useState([createEmptyLine()]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [pickerIndex, setPickerIndex] = useState(null);
-  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({
+    material_type: materialType || undefined,
+    limit: 200,
+    offset: 0,
+  });
   const materials = materialQuery.materials;
   const loading = materialQuery.isLoading;
   const isConsignmentSto = form.sto_type === "CONSIGNMENT_DISTRIBUTION";
@@ -259,6 +265,23 @@ export default function STOCreatePage() {
                   className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                 >
                   {STO_TYPE_OPTIONS.map((entry) => (
+                    <option key={entry} value={entry}>
+                      {entry}
+                    </option>
+                  ))}
+                </select>
+              </ErpDenseFormRow>
+              <ErpDenseFormRow label="Material Type">
+                <select
+                  value={materialType}
+                  onChange={(event) => {
+                    setMaterialType(event.target.value);
+                    setLines((current) => current.map((line) => ({ ...line, material_id: "" })));
+                  }}
+                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                >
+                  <option value="">All types</option>
+                  {MATERIAL_TYPES.map((entry) => (
                     <option key={entry} value={entry}>
                       {entry}
                     </option>
