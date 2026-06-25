@@ -31,7 +31,10 @@ function normalise(str) {
  * -----
  * value          string | ""          – currently selected option value
  * onChange       (value: string) => void
- * options        { value: string, label: string }[]
+ * options        { value: string, label: string, disabled?: boolean }[]
+ *                                       – an option with disabled: true cannot be
+ *                                         selected (skipped by keyboard nav and
+ *                                         pointer clicks) and renders visually muted
  * placeholder    string               – shown when no value selected (default "-- Select --")
  * blankLabel     string               – label shown for blank option (default "-- Select --")
  * inputRef       React ref            – forwarded to the internal <input>
@@ -198,7 +201,7 @@ export default function ErpComboboxField({
         break;
       case "Enter":
         event.preventDefault();
-        if (filtered[highlightIndex] != null) {
+        if (filtered[highlightIndex] != null && !filtered[highlightIndex].disabled) {
           selectOption(filtered[highlightIndex].value);
         }
         break;
@@ -254,16 +257,20 @@ export default function ErpComboboxField({
                 data-combo-item
                 role="option"
                 aria-selected={opt.value === value}
+                aria-disabled={opt.disabled || undefined}
                 onPointerDown={(event) => {
                   event.preventDefault(); // keep focus on input
+                  if (opt.disabled) return;
                   selectOption(opt.value);
                 }}
-                className={`cursor-pointer px-2 py-1 text-sm ${
-                  idx === highlightIndex
-                    ? "bg-sky-600 text-white"
-                    : opt.value === value
-                      ? "bg-sky-50 text-slate-900"
-                      : "text-slate-700 hover:bg-slate-100"
+                className={`px-2 py-1 text-sm ${
+                  opt.disabled
+                    ? "cursor-not-allowed text-slate-400"
+                    : idx === highlightIndex
+                      ? "cursor-pointer bg-sky-600 text-white"
+                      : opt.value === value
+                        ? "cursor-pointer bg-sky-50 text-slate-900"
+                        : "cursor-pointer text-slate-700 hover:bg-slate-100"
                 }`}
               >
                 {opt.label}

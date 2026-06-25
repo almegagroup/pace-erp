@@ -725,3 +725,35 @@ export async function changeVendorMaterialInfoStatusHandler(
     return vmiErrorResponse(req, ctx, code, status, "Vendor material info status update failed");
   }
 }
+
+export async function listMappedMaterialIdsForVendorHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+
+    const url = new URL(req.url);
+    const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
+    if (!vendorId) {
+      return vmiErrorResponse(req, ctx, "OM_VENDOR_ID_REQUIRED", 400, "vendor_id is required");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("vendor_material_info")
+      .select("material_id")
+      .eq("vendor_id", vendorId);
+
+    if (error) {
+      throw new Error("OM_VMI_MAPPED_MATERIALS_LOOKUP_FAILED");
+    }
+
+    const materialIds = [...new Set((data ?? []).map((row: Record<string, unknown>) => row.material_id as string).filter(Boolean))];
+    return okResponse({ data: materialIds }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_VMI_MAPPED_MATERIALS_LOOKUP_FAILED";
+    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("REQUIRED") ? 400 : 500;
+    return vmiErrorResponse(req, ctx, code, status, "Mapped materials lookup failed");
+  }
+}

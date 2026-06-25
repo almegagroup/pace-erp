@@ -469,6 +469,15 @@ export async function unmapVendorMaterialInfo(id) {
   );
 }
 
+export async function listMappedMaterialIdsForVendor(vendorId) {
+  const params = buildParams({ vendor_id: vendorId });
+  return fetchJson(
+    `/api/om/vendor-material-info/mapped-materials?${params.toString()}`,
+    {},
+    "OM_VMI_MAPPED_MATERIALS_LOOKUP_FAILED"
+  );
+}
+
 export async function createCustomer(payload) {
   return fetchJson(
     "/api/om/customer",

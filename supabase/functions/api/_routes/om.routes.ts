@@ -62,6 +62,7 @@ import {
   changeVendorMaterialInfoStatusHandler,
   createVendorMaterialInfoHandler,
   getVendorMaterialInfoHandler,
+  listMappedMaterialIdsForVendorHandler,
   listVendorMaterialInfosHandler,
   unmapVendorMaterialInfoHandler,
   updateVendorMaterialInfoHandler,
@@ -225,6 +226,8 @@ export async function dispatchOmRoutes(
       return await createVendorMaterialInfoHandler(req, ctx);
     case "GET:/api/om/vendor-material-infos":
       return await listVendorMaterialInfosHandler(req, ctx);
+    case "GET:/api/om/vendor-material-info/mapped-materials":
+      return await listMappedMaterialIdsForVendorHandler(req, ctx);
     case "GET:/api/om/vendor-material-info":
       return await getVendorMaterialInfoHandler(req, ctx);
     case "PATCH:/api/om/vendor-material-info":

@@ -16,7 +16,8 @@ import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listVendorMaterialInfos } from "../omApi.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { listVendorMaterialInfos, unmapVendorMaterialInfo } from "../omApi.js";
 
 const LIMIT = 50;
 
@@ -26,6 +27,8 @@ export default function AslListPage() {
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [unmappingId, setUnmappingId] = useState(null);
 
   const aslParams = useMemo(
     () => ({
@@ -53,6 +56,29 @@ export default function AslListPage() {
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
 
+  async function handleUnmap(row) {
+    const confirmed = await openActionConfirm({
+      eyebrow: "Approved Source List",
+      title: "Unmap this vendor-material pair?",
+      message: `${row.vendor_code} | ${row.vendor_name} — ${row.pace_code} | ${row.material_name} will no longer be an approved source. This cannot be undone.`,
+      confirmLabel: "Unmap",
+    });
+    if (!confirmed) return;
+
+    setUnmappingId(row.id);
+    setError("");
+    setNotice("");
+    try {
+      await unmapVendorMaterialInfo(row.id);
+      setNotice(`Unmapped ${row.vendor_code} | ${row.pace_code}.`);
+      await aslQuery.refetch();
+    } catch (unmapError) {
+      setError(unmapError instanceof Error ? unmapError.message : "OM_VMI_UNMAP_FAILED");
+    } finally {
+      setUnmappingId(null);
+    }
+  }
+
   return (
     <ErpMasterListTemplate
       eyebrow="Operation Management"
@@ -66,7 +92,10 @@ export default function AslListPage() {
         },
         { key: "create", label: "Create ASL Row", tone: "primary", onClick: () => openScreen(OPERATION_SCREENS.OM_ASL_CREATE.screen_code) },
       ]}
-      notices={error ? [{ key: "error", tone: "error", message: error }] : []}
+      notices={[
+        ...(error ? [{ key: "error", tone: "error", message: error }] : []),
+        ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
+      ]}
       filterSection={{
         eyebrow: "Lookup Filters",
         title: "Vendor-material pair filter",
@@ -133,6 +162,24 @@ export default function AslListPage() {
                 { key: "default_uom_code", label: "Default UOM" },
                 { key: "default_currency_code", label: "Default Currency" },
                 { key: "status", label: "Status" },
+                {
+                  key: "actions",
+                  label: "",
+                  width: "100px",
+                  render: (row) => (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleUnmap(row);
+                      }}
+                      disabled={unmappingId === row.id}
+                      className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {unmappingId === row.id ? "..." : "Unmap"}
+                    </button>
+                  ),
+                },
               ]}
               rows={rows}
               rowKey={(row) => row.id}

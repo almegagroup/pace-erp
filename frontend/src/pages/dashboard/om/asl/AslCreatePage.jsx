@@ -9,13 +9,15 @@
  * Authority: Frontend
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
-import { createVendorMaterialInfo } from "../omApi.js";
+import { createVendorMaterialInfo, listMappedMaterialIdsForVendor } from "../omApi.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import {
   useMaterialOptionsQuery,
@@ -59,6 +61,15 @@ export default function AslCreatePage() {
   const materials = materialQuery.materials;
   const uoms = Array.isArray(uomQuery.data?.data) ? uomQuery.data.data : [];
   const paymentTerms = paymentTermQuery.paymentTerms;
+  const mappedMaterialsQuery = useQuery({
+    queryKey: ["om", "asl-mapped-materials", form.vendor_id],
+    queryFn: () => listMappedMaterialIdsForVendor(form.vendor_id),
+    enabled: Boolean(form.vendor_id),
+  });
+  const mappedMaterialIds = useMemo(
+    () => new Set(Array.isArray(mappedMaterialsQuery.data?.data) ? mappedMaterialsQuery.data.data : []),
+    [mappedMaterialsQuery.data]
+  );
   const loading =
     vendorQuery.isLoading ||
     materialQuery.isLoading ||
@@ -142,6 +153,34 @@ export default function AslCreatePage() {
 
   const selectedMaterial = materials.find((entry) => entry.id === form.material_id);
 
+  const vendorOptions = useMemo(
+    () =>
+      vendors.map((entry) => {
+        const location = [entry.reg_address_city, entry.reg_address_state].filter(Boolean).join(", ");
+        return {
+          value: entry.id,
+          label: location
+            ? `${entry.vendor_code} | ${entry.vendor_name} — ${location}`
+            : `${entry.vendor_code} | ${entry.vendor_name}`,
+        };
+      }),
+    [vendors]
+  );
+  const materialOptions = useMemo(
+    () =>
+      materials.map((entry) => {
+        const isMapped = mappedMaterialIds.has(entry.id);
+        return {
+          value: entry.id,
+          label: isMapped
+            ? `${entry.pace_code} | ${entry.material_name} (Already Mapped)`
+            : `${entry.pace_code} | ${entry.material_name}`,
+          disabled: isMapped,
+        };
+      }),
+    [materials, mappedMaterialIds]
+  );
+
   return (
     <ErpEntryFormTemplate
       eyebrow="Operation Management"
@@ -165,32 +204,28 @@ export default function AslCreatePage() {
           <div className="grid gap-5">
             <div className="grid gap-3">
               <ErpDenseFormRow label="Vendor" required>
-                <select
+                <ErpComboboxField
                   value={form.vendor_id}
-                  onChange={(event) => updateField("vendor_id", event.target.value)}
-                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                >
-                  <option value="">Select vendor</option>
-                  {vendors.map((entry) => (
-                    <option key={entry.id} value={entry.id}>
-                      {entry.vendor_code} | {entry.vendor_name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => {
+                    setForm((current) => ({ ...current, vendor_id: value, material_id: "" }));
+                  }}
+                  options={vendorOptions}
+                  blankLabel="Select vendor"
+                />
               </ErpDenseFormRow>
               <ErpDenseFormRow label="Material" required>
-                <select
+                <ErpComboboxField
                   value={form.material_id}
-                  onChange={(event) => updateField("material_id", event.target.value)}
-                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                >
-                  <option value="">Select material</option>
-                  {materials.map((entry) => (
-                    <option key={entry.id} value={entry.id}>
-                      {entry.pace_code} | {entry.material_name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => updateField("material_id", value)}
+                  options={materialOptions}
+                  blankLabel="Select material"
+                  disabled={!form.vendor_id}
+                />
+                {!form.vendor_id ? (
+                  <p className="mt-1 text-[11px] text-slate-400">Select a vendor first to see which materials are already mapped.</p>
+                ) : mappedMaterialsQuery.isLoading ? (
+                  <p className="mt-1 text-[11px] text-slate-400">Checking already-mapped materials for this vendor...</p>
+                ) : null}
               </ErpDenseFormRow>
               {selectedMaterial ? (
                 <p className="text-xs text-slate-500">
