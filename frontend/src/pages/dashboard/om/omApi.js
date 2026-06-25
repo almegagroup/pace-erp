@@ -180,6 +180,27 @@ export async function importCompanyMapping(csvText) {
   );
 }
 
+export async function listMaterialTypeCategories(params = {}) {
+  const query = buildParams(params);
+  return fetchJson(
+    `/api/om/material-type-categories?${query.toString()}`,
+    {},
+    "OM_MATERIAL_TYPE_CATEGORY_LIST_FAILED"
+  );
+}
+
+export async function createMaterialTypeCategory(payload) {
+  return fetchJson(
+    "/api/om/material-type-category",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    "OM_MATERIAL_TYPE_CATEGORY_CREATE_FAILED"
+  );
+}
+
 export async function createMaterialUomConversion(payload) {
   return fetchJson(
     "/api/om/material/uom-conversion",

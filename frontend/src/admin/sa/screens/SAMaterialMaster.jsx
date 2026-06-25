@@ -9,7 +9,9 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { openConfirmPrompt } from "../../../store/actionPrompt.js";
 import {
@@ -24,10 +26,12 @@ import {
   deleteMaterials,
   listCompaniesForOm,
   listUoms,
+  createMaterialTypeCategory,
   listMaterialUomConversions,
   createMaterialUomConversion,
   updateMaterialUomConversion,
 } from "../../../pages/dashboard/om/omApi.js";
+import { useMaterialTypeCategoriesQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 
 /* ─── constants ─────────────────────────────────────────────────────────── */
 const MATERIAL_TYPES = ["RM", "PM", "INT", "FG", "TRA", "CONS"];
@@ -60,6 +64,10 @@ const ERROR_MESSAGES = {
   OM_MATERIAL_MAP_FAILED: "Mapping failed.",
   OM_MATERIAL_UNMAP_FAILED: "Unmap failed.",
   OM_MAPPING_IMPORT_FAILED: "Mapping CSV import failed.",
+  OM_MATERIAL_TYPE_CATEGORY_CREATE_FAILED: "Failed to create material category.",
+  OM_MATERIAL_TYPE_CATEGORY_LIST_FAILED: "Failed to load material categories.",
+  OM_INVALID_MATERIAL_TYPE_CATEGORY: "Category name is required.",
+  OM_INVALID_MATERIAL_TYPE: "Invalid material type.",
 };
 
 function friendly(code) {
@@ -96,6 +104,7 @@ function useCompanies() {
 ══════════════════════════════════════════════════════════════════════════ */
 
 function MaterialMasterTab({ uoms }) {
+  const queryClient = useQueryClient();
   /* grid data & pagination */
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
@@ -123,8 +132,36 @@ function MaterialMasterTab({ uoms }) {
   const [csvText, setCsvText] = useState("");
   const [importResults, setImportResults] = useState(null);
   const [importing, setImporting] = useState(false);
+  const {
+    data: materialTypeCategories = [],
+  } = useMaterialTypeCategoriesQuery(
+    {},
+    {
+      select: (result) => (Array.isArray(result?.data) ? result.data : []),
+    }
+  );
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const categoryOptionsByType = useMemo(() => {
+    const grouped = new Map();
+    for (const type of MATERIAL_TYPES) {
+      grouped.set(type, []);
+    }
+    materialTypeCategories.forEach((row) => {
+      const materialType = String(row?.material_type ?? "").toUpperCase();
+      const categoryName = String(row?.category_name ?? "").trim();
+      if (!materialType || !categoryName) return;
+      const list = grouped.get(materialType) ?? [];
+      list.push({ value: categoryName, label: categoryName });
+      grouped.set(materialType, list);
+    });
+    for (const type of MATERIAL_TYPES) {
+      const next = grouped.get(type) ?? [];
+      next.sort((left, right) => left.label.localeCompare(right.label));
+      grouped.set(type, next);
+    }
+    return grouped;
+  }, [materialTypeCategories]);
 
   const load = useCallback(async (pg = page) => {
     setLoading(true);
@@ -192,6 +229,12 @@ function MaterialMasterTab({ uoms }) {
   function removeNewRow(key) {
     setNewRows((prev) => prev.filter((r) => r._key !== key));
   }
+
+  const handleCreateCategory = useCallback(async ({ material_type, category_name }) => {
+    const result = await createMaterialTypeCategory({ material_type, category_name });
+    await queryClient.invalidateQueries({ queryKey: ["om", "material-type-categories"] });
+    return result?.data ?? result;
+  }, [queryClient]);
 
   /* Save all */
   async function handleSave() {
@@ -538,6 +581,8 @@ function MaterialMasterTab({ uoms }) {
                 onPatch={(f, v) => patchNewRow(nr._key, f, v)}
                 onRemove={() => removeNewRow(nr._key)}
                 uoms={uoms}
+                categoryOptionsByType={categoryOptionsByType}
+                onCreateCategory={handleCreateCategory}
               />
             ))}
 
@@ -562,6 +607,8 @@ function MaterialMasterTab({ uoms }) {
                   onPatch={(f, v) => patchBuffer(row.id, f, v)}
                   onDoneEdit={() => setEditingId(null)}
                   uoms={uoms}
+                  categoryOptionsByType={categoryOptionsByType}
+                  onCreateCategory={handleCreateCategory}
                 />
               ))
             )}
@@ -595,7 +642,7 @@ function MaterialMasterTab({ uoms }) {
 
 /* ── New Row (unsaved) ───────────────────────────────────────────────────── */
 
-function NewRow({ row, onPatch, onRemove, uoms }) {
+function NewRow({ row, onPatch, onRemove, uoms, categoryOptionsByType, onCreateCategory }) {
   const cellCls = "border-b border-slate-200 bg-[#fffef0] px-1 py-0.5";
   const inputCls = "h-7 w-full border border-sky-300 bg-white px-1.5 text-xs text-slate-900 outline-none focus:border-sky-500";
   const selectCls = "h-7 w-full border border-sky-300 bg-white px-1 text-xs text-slate-900 outline-none";
@@ -607,7 +654,10 @@ function NewRow({ row, onPatch, onRemove, uoms }) {
       <td className={cellCls}>
         <select
           value={row.material_type}
-          onChange={(e) => onPatch("material_type", e.target.value)}
+          onChange={(e) => {
+            onPatch("material_type", e.target.value);
+            onPatch("material_category", "");
+          }}
           className={selectCls}
         >
           {MATERIAL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -629,10 +679,13 @@ function NewRow({ row, onPatch, onRemove, uoms }) {
         />
       </td>
       <td className={cellCls}>
-        <input
+        <MaterialCategoryField
+          materialType={row.material_type}
           value={row.material_category}
-          onChange={(e) => onPatch("material_category", e.target.value)}
-          className={inputCls}
+          onChange={(nextValue) => onPatch("material_category", nextValue)}
+          options={categoryOptionsByType.get(row.material_type) ?? []}
+          onCreateCategory={onCreateCategory}
+          inputClassName="h-7 px-1.5 text-xs"
         />
       </td>
       <td className={cellCls}>
@@ -701,7 +754,18 @@ function NewRow({ row, onPatch, onRemove, uoms }) {
 
 /* ── Existing Row ────────────────────────────────────────────────────────── */
 
-function ExistingRow({ row, isEditing, isSelected, onToggleSelect, onActivateEdit, onPatch, onDoneEdit, uoms }) {
+function ExistingRow({
+  row,
+  isEditing,
+  isSelected,
+  onToggleSelect,
+  onActivateEdit,
+  onPatch,
+  onDoneEdit,
+  uoms,
+  categoryOptionsByType,
+  onCreateCategory,
+}) {
   const cellCls = "border-b border-slate-200 px-2 py-1";
   const inputCls = "h-7 w-full border border-sky-300 bg-[#fffef7] px-1.5 text-xs text-slate-900 outline-none focus:border-sky-500";
   const readCls = "text-xs text-slate-800";
@@ -736,7 +800,10 @@ function ExistingRow({ row, isEditing, isSelected, onToggleSelect, onActivateEdi
         {isEditing ? (
           <select
             defaultValue={row.material_type}
-            onChange={(e) => onPatch("material_type", e.target.value)}
+            onChange={(e) => {
+              onPatch("material_type", e.target.value);
+              onPatch("material_category", "");
+            }}
             className="h-7 w-full border border-sky-300 bg-white px-1 text-xs text-slate-900 outline-none"
             onClick={(e) => e.stopPropagation()}
           >
@@ -762,7 +829,14 @@ function ExistingRow({ row, isEditing, isSelected, onToggleSelect, onActivateEdi
       </td>
       <td className={cellCls}>
         {isEditing ? (
-          <CellInput field="material_category" value={row.material_category} />
+          <MaterialCategoryField
+            materialType={row.material_type}
+            value={row.material_category}
+            onChange={(nextValue) => onPatch("material_category", nextValue)}
+            options={categoryOptionsByType.get(row.material_type) ?? []}
+            onCreateCategory={onCreateCategory}
+            inputClassName="h-7 px-1.5 text-xs"
+          />
         ) : (
           <span className={readCls}>{row.material_category ?? "—"}</span>
         )}
@@ -849,6 +923,137 @@ function ExistingRow({ row, isEditing, isSelected, onToggleSelect, onActivateEdi
         )}
       </td>
     </tr>
+  );
+}
+
+function MaterialCategoryField({
+  materialType,
+  value,
+  onChange,
+  options,
+  onCreateCategory,
+  inputClassName = "",
+}) {
+  const [isCreating, setIsCreating] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const resolvedOptions = useMemo(() => {
+    const currentValue = String(value ?? "").trim();
+    if (!currentValue) {
+      return options ?? [];
+    }
+    if ((options ?? []).some((option) => option.value === currentValue)) {
+      return options ?? [];
+    }
+    return [{ value: currentValue, label: currentValue }, ...(options ?? [])];
+  }, [options, value]);
+
+  useEffect(() => {
+    setIsCreating(false);
+    setDraftName("");
+    setError("");
+  }, [materialType]);
+
+  async function handleCreate() {
+    const normalizedType = String(materialType ?? "").trim().toUpperCase();
+    const normalizedName = draftName.trim();
+    if (!normalizedType) {
+      setError("Select material type first.");
+      return;
+    }
+    if (!normalizedName) {
+      setError("Category name is required.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    try {
+      const created = await onCreateCategory({
+        material_type: normalizedType,
+        category_name: normalizedName,
+      });
+      const nextValue = String(created?.category_name ?? normalizedName).trim();
+      onChange(nextValue);
+      setDraftName("");
+      setIsCreating(false);
+    } catch (err) {
+      setError(friendly(err instanceof Error ? err.message : "OM_MATERIAL_TYPE_CATEGORY_CREATE_FAILED"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-1" onClick={(event) => event.stopPropagation()}>
+      <ErpComboboxField
+        value={isCreating ? "" : value ?? ""}
+        onChange={(nextValue) => {
+          if (nextValue === "__add_new__") {
+            setIsCreating(true);
+            setError("");
+            return;
+          }
+          setIsCreating(false);
+          setError("");
+          onChange(nextValue);
+        }}
+        options={[
+          ...resolvedOptions,
+          { value: "__add_new__", label: "+ Add new category…" },
+        ]}
+        blankLabel={materialType ? `Select ${materialType} category` : "Select material type first"}
+        inputClassName={inputClassName}
+        inputProps={{
+          onKeyDown: (event) => event.stopPropagation(),
+        }}
+        disabled={!materialType}
+      />
+      {isCreating ? (
+        <div className="flex items-center gap-1">
+          <input
+            value={draftName}
+            onChange={(event) => setDraftName(event.target.value)}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void handleCreate();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setIsCreating(false);
+                setDraftName("");
+                setError("");
+              }
+            }}
+            placeholder={`New ${materialType || "type"} category`}
+            className="h-7 min-w-0 flex-1 border border-emerald-300 bg-white px-1.5 text-xs text-slate-900 outline-none focus:border-emerald-500"
+          />
+          <button
+            type="button"
+            onClick={() => void handleCreate()}
+            disabled={saving}
+            className="h-7 shrink-0 border border-emerald-500 bg-emerald-500 px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-white disabled:opacity-50"
+          >
+            {saving ? "..." : "Add"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setIsCreating(false);
+              setDraftName("");
+              setError("");
+            }}
+            disabled={saving}
+            className="h-7 shrink-0 border border-slate-300 bg-white px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-600 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : null}
+      {error ? <div className="text-[10px] text-red-600">{error}</div> : null}
+    </div>
   );
 }
 

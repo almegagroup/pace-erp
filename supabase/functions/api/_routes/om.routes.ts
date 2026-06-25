@@ -106,6 +106,10 @@ import {
   updateCostCenterHandler,
 } from "../_core/om/cost_center.handlers.ts";
 import {
+  createMaterialTypeCategoryHandler,
+  listMaterialTypeCategoriesHandler,
+} from "../_core/om/material_type_category.handlers.ts";
+import {
   createMachineHandler,
   listMachinesHandler,
   updateMachineHandler,
@@ -288,6 +292,10 @@ export async function dispatchOmRoutes(
       return await listCostCentersHandler(req, ctx);
     case "POST:/api/om/cost-center/toggle":
       return await toggleCostCenterHandler(req, ctx);
+    case "GET:/api/om/material-type-categories":
+      return await listMaterialTypeCategoriesHandler(req, ctx);
+    case "POST:/api/om/material-type-category":
+      return await createMaterialTypeCategoryHandler(req, ctx);
 
     case "POST:/api/om/machine":
       return await createMachineHandler(req, ctx);

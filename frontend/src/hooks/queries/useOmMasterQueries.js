@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  listMaterialTypeCategories,
   listCompaniesForOm,
   listCostCenters,
   listCustomers,
@@ -39,11 +40,29 @@ export function useMaterialsQuery(params = {}, options = {}) {
   });
 }
 
+export function useMaterialTypeCategoriesQuery(params = {}, options = {}) {
+  const normalizedParams = useMemo(() => cleanQueryParams(params), [params]);
+  return useQuery({
+    queryKey: queryKeys.om.materialTypeCategories(normalizedParams),
+    queryFn: () => listMaterialTypeCategories(normalizedParams),
+    enabled: options.enabled ?? true,
+    ...options,
+  });
+}
+
 export function useMaterialOptionsQuery(params = {}, options = {}) {
   const query = useMaterialsQuery(params, options);
   return {
     ...query,
     materials: maybeArray(query.data?.data),
+  };
+}
+
+export function useMaterialTypeCategoryOptionsQuery(params = {}, options = {}) {
+  const query = useMaterialTypeCategoriesQuery(params, options);
+  return {
+    ...query,
+    categories: maybeArray(query.data?.data),
   };
 }
 

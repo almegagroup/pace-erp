@@ -8,6 +8,7 @@ export const queryKeys = {
   om: {
     vendors: (params = {}) => ["om", "vendors", cleanQueryParams(params)],
     materials: (params = {}) => ["om", "materials", cleanQueryParams(params)],
+    materialTypeCategories: (params = {}) => ["om", "material-type-categories", cleanQueryParams(params)],
     customers: (params = {}) => ["om", "customers", cleanQueryParams(params)],
     storageLocations: (params = {}) => ["om", "storage-locations", cleanQueryParams(params)],
     costCenters: (params = {}) => ["om", "cost-centers", cleanQueryParams(params)],
