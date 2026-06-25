@@ -228,6 +228,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/om/cost-center":                         { skipAcl: true },
   "PATCH:/api/om/cost-center":                        { skipAcl: true },
   "POST:/api/om/cost-center/toggle":                  { skipAcl: true },
+  "GET:/api/om/material-type-categories":             { skipAcl: true },
+  "POST:/api/om/material-type-category":              { skipAcl: true },
   "GET:/api/om/machines":                             { skipAcl: true },
   "POST:/api/om/machine":                             { skipAcl: true },
   "PATCH:/api/om/machine":                            { skipAcl: true },
