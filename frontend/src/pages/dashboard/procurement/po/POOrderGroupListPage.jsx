@@ -59,7 +59,7 @@ export default function POOrderGroupListPage() {
   return (
     <ErpScreenScaffold
       eyebrow="Procurement"
-      title="Purchase Order Approvals"
+      title="Order Approvals (PO / STO)"
       notices={error ? [{ key: "err", tone: "error", message: error }] : []}
       actions={[{
         key: "refresh",
