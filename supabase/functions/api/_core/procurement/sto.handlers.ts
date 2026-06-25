@@ -493,6 +493,7 @@ export async function createSTOHandler(
   try {
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
+    const isOpeningSto = body.is_opening_sto === true;
     const stoType = toUpperTrimmedString(body.sto_type);
     const sendingCompanyId = getCompanyScope(ctx, toTrimmedString(body.sending_company_id));
     const receivingCompanyId = toTrimmedString(body.receiving_company_id);
@@ -502,6 +503,10 @@ export async function createSTOHandler(
 
     if (!STO_TYPES.has(stoType) || !sendingCompanyId || !receivingCompanyId || lines.length === 0) {
       return stoErrorResponse(req, ctx, "STO_CREATE_INVALID", 400, "sto_type, sending_company_id, receiving_company_id, and lines are required.");
+    }
+
+    if (isOpeningSto && stoType !== "INTER_PLANT") {
+      return stoErrorResponse(req, ctx, "STO_OPENING_REQUIRES_INTER_PLANT", 400, "Opening STOs must use INTER_PLANT sto_type.");
     }
 
     if (stoType === "CONSIGNMENT_DISTRIBUTION") {
@@ -528,7 +533,14 @@ export async function createSTOHandler(
       return okResponse(await hydrateSto(String(sto.id), ctx), ctx.request_id, req);
     }
 
-    const stoNumber = await generateCompanyDocNumber(sendingCompanyId, "STO");
+    const openingStoNumber = toTrimmedString(body.sto_number);
+    if (isOpeningSto && !openingStoNumber) {
+      return stoErrorResponse(req, ctx, "PROCUREMENT_OPENING_STO_NUMBER_REQUIRED", 400, "Opening STO number is required.");
+    }
+
+    const stoNumber = isOpeningSto
+      ? openingStoNumber
+      : await generateCompanyDocNumber(sendingCompanyId, "STO");
     const { data: sto, error: stoError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("stock_transfer_order")
@@ -540,6 +552,7 @@ export async function createSTOHandler(
         receiving_company_id: receivingCompanyId,
         related_csn_id: relatedCsnId,
         status: "DRAFT",
+        is_opening_sto: isOpeningSto,
         remarks: toTrimmedString(body.remarks) || null,
         created_by: ctx.auth_user_id,
         last_updated_by: ctx.auth_user_id,

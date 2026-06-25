@@ -97,6 +97,7 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/qa-queue",                "/dashboard/procurement/qa-documents/:id"],
     ["/dashboard/procurement/stos",                    "/dashboard/procurement/stos/:id"],
     ["/dashboard/procurement/stos/create",             "/dashboard/procurement/stos/:id"],
+    ["/dashboard/procurement/stos/create-opening",     "/dashboard/procurement/stos/:id"],
     ["/dashboard/procurement/rtvs",                    "/dashboard/procurement/rtvs/:id"],
     ["/dashboard/procurement/rtvs/create",             "/dashboard/procurement/rtvs/:id"],
     ["/dashboard/procurement/debit-notes",             "/dashboard/procurement/debit-notes/:id"],

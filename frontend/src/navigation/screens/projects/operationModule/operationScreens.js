@@ -233,6 +233,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_STO_CREATE_OPENING: {
+    screen_code: "PROC_STO_CREATE_OPENING",
+    route: "/dashboard/procurement/stos/create-opening",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_STO_DETAIL: {
     screen_code: "PROC_STO_DETAIL",
     route: "/dashboard/procurement/stos/:id",

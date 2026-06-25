@@ -125,6 +125,7 @@ import QAQueuePage from "../pages/dashboard/procurement/qa/QAQueuePage.jsx";
 import QADocumentPage from "../pages/dashboard/procurement/qa/QADocumentPage.jsx";
 import STOListPage from "../pages/dashboard/procurement/sto/STOListPage.jsx";
 import STOCreatePage from "../pages/dashboard/procurement/sto/STOCreatePage.jsx";
+import STOCreateOpeningPage from "../pages/dashboard/procurement/sto/STOCreateOpeningPage.jsx";
 import STODetailPage from "../pages/dashboard/procurement/sto/STODetailPage.jsx";
 import RTVListPage from "../pages/dashboard/procurement/rtv/RTVListPage.jsx";
 import RTVCreatePage from "../pages/dashboard/procurement/rtv/RTVCreatePage.jsx";
@@ -537,6 +538,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/stos/create"
                     element={<STOCreatePage />}
+                  />
+                  <Route
+                    path="procurement/stos/create-opening"
+                    element={<STOCreateOpeningPage />}
                   />
                   <Route
                     path="procurement/stos/:id"
