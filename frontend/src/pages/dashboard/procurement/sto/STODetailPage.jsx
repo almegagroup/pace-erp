@@ -113,17 +113,6 @@ function buildAmendmentState(detail) {
   };
 }
 
-function getRebateBasisLabel(value) {
-  switch (String(value || "").toUpperCase()) {
-    case "BASE_UOM":
-      return "Base UOM";
-    case "PO_UOM":
-      return "PO UOM";
-    default:
-      return "—";
-  }
-}
-
 export default function STODetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
