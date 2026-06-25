@@ -9,6 +9,7 @@
  */
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
+import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
@@ -45,6 +46,17 @@ type PreparedStoLine = {
 const STO_TYPES = new Set(["CONSIGNMENT_DISTRIBUTION", "INTER_PLANT"]);
 const STO_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL", "CREATED", "DISPATCHED", "RECEIVED", "CLOSED", "CANCELLED"]);
 const STO_LINE_STATUSES = new Set(["OPEN", "RECEIVED", "KNOCKED_OFF"]);
+const MUTABLE_STO_AMENDMENT_FIELDS = new Set([
+  "quantity",
+  "transfer_price",
+  "expected_delivery_date",
+  "payment_term_id",
+  "freight_term",
+  "gst_terms",
+  "remarks",
+  "sending_cost_center_id",
+  "receiving_cost_center_id",
+]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -78,6 +90,71 @@ function parseNullableNumber(value: unknown): number | null {
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function collectAuthUserIds(value: unknown, ids: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectAuthUserIds(entry, ids);
+    }
+    return;
+  }
+
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  for (const [key, entryValue] of Object.entries(value as Record<string, unknown>)) {
+    if (key.endsWith("_by")) {
+      const authUserId = toTrimmedString(entryValue);
+      if (authUserId) {
+        ids.add(authUserId);
+      }
+      continue;
+    }
+
+    collectAuthUserIds(entryValue, ids);
+  }
+}
+
+function attachUserDisplayFields<T>(
+  value: T,
+  displayNameMap: Map<string, string>,
+): T {
+  if (Array.isArray(value)) {
+    return value.map((entry) => attachUserDisplayFields(entry, displayNameMap)) as T;
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  const enriched: Record<string, unknown> = {};
+
+  for (const [key, entryValue] of Object.entries(record)) {
+    if (Array.isArray(entryValue) || (entryValue && typeof entryValue === "object")) {
+      enriched[key] = attachUserDisplayFields(entryValue, displayNameMap);
+    } else {
+      enriched[key] = entryValue;
+    }
+
+    if (key.endsWith("_by")) {
+      const authUserId = toTrimmedString(entryValue);
+      if (authUserId) {
+        enriched[`${key}_display`] = displayNameMap.get(authUserId) ?? authUserId;
+      }
+    }
+  }
+
+  return enriched as T;
+}
+
+async function enrichProcurementUserDisplays<T>(payload: T): Promise<T> {
+  const authUserIds = new Set<string>();
+  collectAuthUserIds(payload, authUserIds);
+  const displayNameMap = await resolveUserDisplayNames([...authUserIds]);
+  return attachUserDisplayFields(payload, displayNameMap);
 }
 
 function getPathSegments(req: Request): string[] {
@@ -223,12 +300,42 @@ async function fetchStoLines(stoId: string): Promise<StoLineRow[]> {
   return (data ?? []) as StoLineRow[];
 }
 
+async function getStoApprovalLog(stoId: string): Promise<JsonRecord[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("sto_approval_log")
+    .select("*")
+    .eq("sto_id", stoId)
+    .order("actioned_at", { ascending: false });
+
+  if (error) {
+    throw new Error("STO_APPROVAL_LOG_FETCH_FAILED");
+  }
+
+  return (data as JsonRecord[] | null) ?? [];
+}
+
+async function getStoAmendmentLog(stoId: string): Promise<JsonRecord[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("sto_amendment_log")
+    .select("*")
+    .eq("sto_id", stoId)
+    .order("amended_at", { ascending: false });
+
+  if (error) {
+    throw new Error("STO_AMENDMENT_LOG_FETCH_FAILED");
+  }
+
+  return (data as JsonRecord[] | null) ?? [];
+}
+
 async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promise<JsonRecord> {
   const sto = await fetchSto(stoId);
   if (ctx) {
     assertStoVisibleToContext(ctx, sto);
   }
-  const [lines, dcResp, gateExitResp] = await Promise.all([
+  const [lines, dcResp, gateExitResp, approvalLog, amendmentLog] = await Promise.all([
     fetchStoLines(stoId),
     serviceRoleClient
       .schema("erp_procurement")
@@ -242,17 +349,21 @@ async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promi
       .select("*")
       .eq("sto_id", stoId)
       .order("created_at", { ascending: false }),
+    getStoApprovalLog(stoId),
+    getStoAmendmentLog(stoId),
   ]);
 
   if (dcResp.error) throw new Error("STO_DC_FETCH_FAILED");
   if (gateExitResp.error) throw new Error("STO_GXO_FETCH_FAILED");
 
-  return {
+  return await enrichProcurementUserDisplays({
     ...sto,
     lines,
     delivery_challans: dcResp.data ?? [],
     gate_exit_outbound: gateExitResp.data ?? [],
-  };
+    approval_log: approvalLog,
+    amendment_log: amendmentLog,
+  });
 }
 
 async function hasPhysicalInventoryBlock(
@@ -445,6 +556,50 @@ async function getLastUsedPaymentTermForStoPair(
   const rows = Array.isArray(data?.lines) ? data.lines : [];
   const paymentTermId = toTrimmedString(rows[0]?.payment_term_id);
   return paymentTermId || null;
+}
+
+async function getNextStoAmendmentNumber(stoId: string): Promise<number> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("sto_amendment_log")
+    .select("amendment_number")
+    .eq("sto_id", stoId)
+    .order("amendment_number", { ascending: false })
+    .limit(1);
+
+  if (error) {
+    throw new Error("STO_AMENDMENT_SEQUENCE_FAILED");
+  }
+
+  const latest = Array.isArray(data) && data.length > 0
+    ? Number(data[0]?.amendment_number ?? 0)
+    : 0;
+  return latest + 1;
+}
+
+async function insertStoApprovalLog(input: {
+  stoId: string;
+  action: "APPROVED" | "REJECTED" | "ESCALATED";
+  fromStatus: string;
+  toStatus: string;
+  remarks?: string | null;
+  actionedBy: string;
+}): Promise<void> {
+  const { error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("sto_approval_log")
+    .insert({
+      sto_id: input.stoId,
+      action: input.action,
+      from_status: input.fromStatus,
+      to_status: input.toStatus,
+      remarks: input.remarks ?? null,
+      actioned_by: input.actionedBy,
+    });
+
+  if (error) {
+    throw new Error("STO_APPROVAL_LOG_INSERT_FAILED");
+  }
 }
 
 async function createCsnForSto(
@@ -1075,7 +1230,16 @@ export async function confirmSTOHandler(
       throw new Error("STO_CONFIRM_FAILED");
     }
 
-    if (nextStatus === "CREATED") {
+    if (nextStatus === "PENDING_APPROVAL") {
+      await insertStoApprovalLog({
+        stoId,
+        action: "ESCALATED",
+        fromStatus: "DRAFT",
+        toStatus: "PENDING_APPROVAL",
+        remarks: toTrimmedString(body.remarks) || null,
+        actionedBy: ctx.auth_user_id,
+      });
+    } else {
       await createCsnForSto(updatedSto as StoRow, await fetchStoLines(stoId), ctx.auth_user_id);
     }
 
@@ -1093,6 +1257,7 @@ export async function approveSTOHandler(
 ): Promise<Response> {
   try {
     const stoId = getIdFromPath(req);
+    const body = await parseBody(req);
     const sto = await fetchSto(stoId);
     assertStoVisibleToContext(ctx, sto);
     await assertStoApproverRole(ctx, toTrimmedString(sto.sending_company_id), toTrimmedString(sto.created_by));
@@ -1120,6 +1285,14 @@ export async function approveSTOHandler(
       throw new Error("STO_APPROVE_FAILED");
     }
 
+    await insertStoApprovalLog({
+      stoId,
+      action: "APPROVED",
+      fromStatus: "PENDING_APPROVAL",
+      toStatus: "CREATED",
+      remarks: toTrimmedString(body.remarks) || null,
+      actionedBy: ctx.auth_user_id,
+    });
     await createCsnForSto(updatedSto as StoRow, await fetchStoLines(stoId), ctx.auth_user_id);
     return okResponse(await hydrateSto(stoId, ctx), ctx.request_id, req);
   } catch (error) {
@@ -1155,7 +1328,7 @@ export async function rejectSTOHandler(
       return stoErrorResponse(req, ctx, "STO_APPROVAL_STATE_INVALID", 422, "STO is not pending approval.");
     }
 
-    const { error } = await serviceRoleClient
+    const { data: updatedSto, error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("stock_transfer_order")
       .update({
@@ -1164,11 +1337,22 @@ export async function rejectSTOHandler(
         last_updated_at: new Date().toISOString(),
         last_updated_by: ctx.auth_user_id,
       })
-      .eq("id", stoId);
+      .eq("id", stoId)
+      .select("*")
+      .single();
 
-    if (error) {
+    if (error || !updatedSto) {
       throw new Error("STO_REJECT_FAILED");
     }
+
+    await insertStoApprovalLog({
+      stoId,
+      action: "REJECTED",
+      fromStatus: "PENDING_APPROVAL",
+      toStatus: "DRAFT",
+      remarks,
+      actionedBy: ctx.auth_user_id,
+    });
 
     return okResponse(await hydrateSto(stoId, ctx), ctx.request_id, req);
   } catch (error) {
@@ -1182,6 +1366,282 @@ export async function rejectSTOHandler(
       : code.includes("INVALID")
       ? 422
       : 500;
+    return stoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function amendSTOHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const stoId = getIdFromPath(req);
+    const body = await parseBody(req);
+    const sto = await fetchSto(stoId);
+    assertStoVisibleToContext(ctx, sto);
+
+    const currentStatus = toUpperTrimmedString(sto.status);
+    if (currentStatus !== "CREATED" && currentStatus !== "PENDING_APPROVAL") {
+      return stoErrorResponse(req, ctx, "STO_AMEND_BLOCKED", 422, "STO cannot be amended in current state.");
+    }
+
+    const stoLineId = toTrimmedString(body.sto_line_id);
+    const existingLines = await fetchStoLines(stoId);
+    const targetLine = stoLineId
+      ? existingLines.find((line) => toTrimmedString(line.id) === stoLineId) ?? null
+      : null;
+
+    if (stoLineId && !targetLine) {
+      return stoErrorResponse(req, ctx, "STO_LINE_NOT_FOUND", 404, "STO line not found.");
+    }
+
+    const amendmentNumber = await getNextStoAmendmentNumber(stoId);
+    const amendmentEntries: JsonRecord[] = [];
+    let requiresApproval = false;
+    const headerUpdates: JsonRecord = {
+      last_updated_at: new Date().toISOString(),
+      last_updated_by: ctx.auth_user_id,
+    };
+    const lineUpdates: JsonRecord = {
+      last_updated_at: new Date().toISOString(),
+    };
+
+    const pushAmendment = (
+      fieldName: string,
+      oldValue: unknown,
+      newValue: unknown,
+      targetLineId?: string | null,
+    ) => {
+      const approvalRequired = fieldName === "quantity" || fieldName === "transfer_price";
+      amendmentEntries.push({
+        sto_id: stoId,
+        sto_line_id: targetLineId || null,
+        amendment_number: amendmentNumber,
+        field_changed: fieldName,
+        old_value: oldValue == null ? null : String(oldValue),
+        new_value: newValue == null ? null : String(newValue),
+        requires_approval: approvalRequired,
+        approval_status: approvalRequired ? "PENDING" : "APPROVED",
+        approved_by: approvalRequired ? null : ctx.auth_user_id,
+        approved_at: approvalRequired ? null : new Date().toISOString(),
+        amended_by: ctx.auth_user_id,
+      });
+    };
+
+    const candidateFields: Record<string, unknown> = {
+      quantity: body.quantity,
+      transfer_price: body.transfer_price,
+      expected_delivery_date: body.expected_delivery_date,
+      payment_term_id: body.payment_term_id,
+      freight_term: body.freight_term,
+      gst_terms: body.gst_terms,
+      remarks: body.remarks,
+      sending_cost_center_id: body.sending_cost_center_id,
+      receiving_cost_center_id: body.receiving_cost_center_id,
+    };
+
+    for (const [fieldName, rawValue] of Object.entries(candidateFields)) {
+      if (rawValue === undefined || !MUTABLE_STO_AMENDMENT_FIELDS.has(fieldName)) {
+        continue;
+      }
+      const lineScoped = ["quantity", "transfer_price", "expected_delivery_date", "payment_term_id", "freight_term", "gst_terms"].includes(fieldName);
+      if (lineScoped && !targetLine) {
+        return stoErrorResponse(req, ctx, "STO_LINE_REQUIRED", 400, "STO line id is required for line amendment.");
+      }
+
+      const normalizedValue = typeof rawValue === "string" ? rawValue.trim() : rawValue;
+      const oldValue = lineScoped ? targetLine?.[fieldName] : sto[fieldName];
+      if (String(oldValue ?? "") === String(normalizedValue ?? "")) {
+        continue;
+      }
+
+      if (fieldName === "quantity" || fieldName === "transfer_price") {
+        requiresApproval = true;
+      }
+
+      pushAmendment(fieldName, oldValue, normalizedValue, targetLine ? toTrimmedString(targetLine.id) : null);
+
+      if (fieldName === "quantity") {
+        const quantity = parsePositiveNumber(normalizedValue);
+        if (!quantity) {
+          return stoErrorResponse(req, ctx, "STO_INVALID_LINE_VALUES", 400, "Invalid quantity.");
+        }
+        const receivedQty = Number(targetLine?.received_qty ?? 0);
+        lineUpdates.quantity = quantity;
+        lineUpdates.balance_qty = Number(Math.max(quantity - receivedQty, 0).toFixed(6));
+      } else if (fieldName === "transfer_price") {
+        const transferPrice = parsePositiveNumber(normalizedValue);
+        if (!transferPrice) {
+          return stoErrorResponse(req, ctx, "STO_INVALID_LINE_VALUES", 400, "Invalid transfer price.");
+        }
+        lineUpdates.transfer_price = Number(transferPrice.toFixed(4));
+      } else if (fieldName === "payment_term_id") {
+        const paymentTermId = toTrimmedString(normalizedValue);
+        if (!(await getPaymentTermRow(paymentTermId))) {
+          return stoErrorResponse(req, ctx, "PROCUREMENT_PAYMENT_TERM_NOT_FOUND", 404, "Payment term not found.");
+        }
+        lineUpdates.payment_term_id = paymentTermId;
+      } else if (fieldName === "freight_term") {
+        lineUpdates.freight_term = toTrimmedString(normalizedValue) || null;
+      } else if (fieldName === "gst_terms") {
+        lineUpdates.gst_terms = toTrimmedString(normalizedValue) || null;
+      } else if (fieldName === "expected_delivery_date") {
+        lineUpdates.expected_delivery_date = toTrimmedString(normalizedValue) || null;
+      } else if (fieldName === "sending_cost_center_id" || fieldName === "receiving_cost_center_id") {
+        const costCenterId = toTrimmedString(normalizedValue);
+        if (!(await getCostCenterRow(costCenterId))) {
+          return stoErrorResponse(req, ctx, "PROCUREMENT_COST_CENTER_NOT_FOUND", 404, "Cost center not found.");
+        }
+        headerUpdates[fieldName] = costCenterId;
+      } else {
+        headerUpdates[fieldName] = normalizedValue || null;
+      }
+    }
+
+    if (amendmentEntries.length === 0) {
+      return stoErrorResponse(req, ctx, "STO_NO_AMENDMENT_CHANGES", 400, "No amendment changes provided.");
+    }
+
+    const effectivePendingStatus = requiresApproval ? "PENDING_APPROVAL" : currentStatus;
+    const { data: updatedSto, error: stoUpdateError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order")
+      .update({
+        ...headerUpdates,
+        status: effectivePendingStatus,
+      })
+      .eq("id", stoId)
+      .select("*")
+      .single();
+
+    if (stoUpdateError || !updatedSto) {
+      throw new Error("STO_AMEND_FAILED");
+    }
+
+    if (targetLine && Object.keys(lineUpdates).length > 1) {
+      const lineUpdateResult = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("stock_transfer_order_line")
+        .update(lineUpdates)
+        .eq("id", targetLine.id)
+        .select("*")
+        .single();
+
+      if (lineUpdateResult.error) {
+        throw new Error("STO_LINE_AMEND_FAILED");
+      }
+    }
+
+    const amendmentInsert = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("sto_amendment_log")
+      .insert(amendmentEntries);
+
+    if (amendmentInsert.error) {
+      throw new Error("STO_AMEND_LOG_FAILED");
+    }
+
+    return okResponse(
+      await enrichProcurementUserDisplays({
+        ...updatedSto,
+        requires_approval: requiresApproval,
+        workflow_status: requiresApproval ? "PENDING_AMENDMENT" : updatedSto.status,
+      }),
+      ctx.request_id,
+      req,
+    );
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "STO_AMEND_FAILED";
+    const status =
+      code === "STO_NOT_FOUND" || code === "STO_LINE_NOT_FOUND" || code === "PROCUREMENT_COST_CENTER_NOT_FOUND" || code === "PROCUREMENT_PAYMENT_TERM_NOT_FOUND"
+        ? 404
+        : code.includes("BLOCKED") || code.includes("INVALID")
+          ? 422
+          : code.includes("REQUIRED") || code.includes("NO_AMENDMENT")
+            ? 400
+            : 500;
+    return stoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function approveSTOAmendmentHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    const stoId = getIdFromPath(req);
+    const body = await parseBody(req);
+    const sto = await fetchSto(stoId);
+    assertStoVisibleToContext(ctx, sto);
+    await assertStoApproverRole(ctx, toTrimmedString(sto.sending_company_id), toTrimmedString(sto.created_by));
+
+    const { data: pendingLogs, error: logError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("sto_amendment_log")
+      .select("*")
+      .eq("sto_id", stoId)
+      .eq("requires_approval", true)
+      .eq("approval_status", "PENDING");
+
+    if (logError) {
+      throw new Error("STO_AMEND_LOOKUP_FAILED");
+    }
+    if (!pendingLogs || pendingLogs.length === 0) {
+      return stoErrorResponse(req, ctx, "STO_NO_PENDING_AMENDMENT", 422, "No pending amendment found.");
+    }
+
+    const nowIso = new Date().toISOString();
+    const logUpdate = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("sto_amendment_log")
+      .update({
+        approval_status: "APPROVED",
+        approved_by: ctx.auth_user_id,
+        approved_at: nowIso,
+        rejection_reason: null,
+      })
+      .eq("sto_id", stoId)
+      .eq("requires_approval", true)
+      .eq("approval_status", "PENDING");
+
+    if (logUpdate.error) {
+      throw new Error("STO_AMEND_APPROVE_FAILED");
+    }
+
+    const { data: updatedSto, error: stoUpdateError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order")
+      .update({
+        status: "CREATED",
+        last_updated_at: nowIso,
+        last_updated_by: ctx.auth_user_id,
+      })
+      .eq("id", stoId)
+      .select("*")
+      .single();
+
+    if (stoUpdateError || !updatedSto) {
+      throw new Error("STO_AMEND_APPROVE_FAILED");
+    }
+
+    await insertStoApprovalLog({
+      stoId,
+      action: "APPROVED",
+      fromStatus: "PENDING_AMENDMENT",
+      toStatus: "CREATED",
+      remarks: toTrimmedString(body.remarks) || null,
+      actionedBy: ctx.auth_user_id,
+    });
+
+    return okResponse(await hydrateSto(stoId, ctx), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "STO_AMEND_APPROVE_FAILED";
+    const status =
+      code === "STO_NOT_FOUND" ? 404
+        : code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN" ? 403
+        : code.includes("NO_PENDING") ? 422
+        : 500;
     return stoErrorResponse(req, ctx, code, status, code);
   }
 }

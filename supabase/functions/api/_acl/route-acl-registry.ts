@@ -613,6 +613,14 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "EDIT" } },
   },
   {
+    pattern: /^\/api\/procurement\/stos\/[^/]+\/amend$/,
+    methods: { PUT: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/stos\/[^/]+\/approve-amendment$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "APPROVE" } },
+  },
+  {
     pattern: /^\/api\/procurement\/stos\/[^/]+\/confirm-receipt$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "APPROVE" } },
   },

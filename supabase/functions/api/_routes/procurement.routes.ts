@@ -229,7 +229,9 @@ import {
 } from "../_core/procurement/sales_order.handlers.ts";
 import {
   approveSTOHandler,
+  approveSTOAmendmentHandler,
   cancelSTOHandler,
+  amendSTOHandler,
   closeSTOHandler,
   confirmSTOHandler,
   confirmSTOReceiptHandler,
@@ -829,6 +831,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/stos\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
     return await rejectSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/amend$/.test(pathname) && req.method === "PUT") {
+    return await amendSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/approve-amendment$/.test(pathname) && req.method === "POST") {
+    return await approveSTOAmendmentHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/stos\/[^/]+\/dispatch$/.test(pathname) && req.method === "POST") {

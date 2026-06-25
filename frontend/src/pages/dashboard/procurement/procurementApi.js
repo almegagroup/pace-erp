@@ -506,6 +506,14 @@ export function rejectSTO(id, data) {
   return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/reject`, data);
 }
 
+export function amendSTO(id, data) {
+  return fetchProcurement("PUT", `/api/procurement/stos/${encodeURIComponent(id)}/amend`, data);
+}
+
+export function approveSTOAmendment(id, data) {
+  return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/approve-amendment`, data);
+}
+
 export function dispatchSTO(id, data) {
   return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/dispatch`, data);
 }
