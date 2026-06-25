@@ -236,6 +236,7 @@ import {
   createSTOHandler,
   dispatchSTOHandler,
   getSTOHandler,
+  getLastStoPaymentTermHandler,
   listSTOsHandler,
   rejectSTOHandler,
   transformSubCSNToSTOHandler,
@@ -426,6 +427,8 @@ export async function dispatchProcurementRoutes(
       return await createSTOHandler(req, ctx);
     case "GET:/api/procurement/stos":
       return await listSTOsHandler(req, ctx);
+    case "GET:/api/procurement/stos/last-payment-term":
+      return await getLastStoPaymentTermHandler(req, ctx);
     case "POST:/api/procurement/purchase-orders":
       return await createPOHandler(req, ctx);
     case "GET:/api/procurement/purchase-orders":

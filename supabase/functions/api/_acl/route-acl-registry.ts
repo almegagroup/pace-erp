@@ -81,6 +81,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
 
   // ── Procurement: STO ─────────────────────────────────────────────────────
   "GET:/api/procurement/stos":                        { skipAcl: false, resourceCode: "PROC_STO_LIST",   action: "VIEW"  },
+  "GET:/api/procurement/stos/last-payment-term":      { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "VIEW"  },
   "POST:/api/procurement/stos":                       { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "WRITE" },
 
   // ── Procurement: Sales ───────────────────────────────────────────────────

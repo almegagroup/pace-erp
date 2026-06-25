@@ -732,7 +732,7 @@ export async function listAvailableSubCsnsForStoHandler(
         ? serviceRoleClient
           .schema("erp_procurement")
           .from("purchase_order")
-          .select("id, po_number, status")
+          .select("id, po_number, status, unit_rate, payment_term_id, freight_term, gst_terms, delivery_date, has_rebate, rebate_rate, rebate_rate_uom_basis, rebate_remarks")
           .in("id", poIds)
         : Promise.resolve({ data: [], error: null }),
       poLineIds.length > 0
@@ -769,6 +769,15 @@ export async function listAvailableSubCsnsForStoHandler(
           mother_po_number: po?.po_number ?? null,
           invoice_or_boe_reference: toTrimmedString(row.bl_number) || toTrimmedString(row.boe_number) || null,
           dispatch_qty: row.dispatch_qty ?? row.po_qty ?? null,
+          transfer_price: po?.unit_rate ?? null,
+          payment_term_id: po?.payment_term_id ?? null,
+          freight_term: po?.freight_term ?? null,
+          gst_terms: po?.gst_terms ?? null,
+          expected_delivery_date: po?.delivery_date ?? null,
+          has_rebate: po?.has_rebate === true,
+          rebate_rate: po?.rebate_rate ?? null,
+          rebate_rate_uom_basis: po?.rebate_rate_uom_basis ?? null,
+          rebate_remarks: po?.rebate_remarks ?? null,
         };
       });
 

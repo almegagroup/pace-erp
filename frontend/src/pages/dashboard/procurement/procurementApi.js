@@ -478,6 +478,10 @@ export function getSTO(id) {
   return fetchProcurement("GET", `/api/procurement/stos/${encodeURIComponent(id)}`);
 }
 
+export function getLastStoPaymentTerm(params) {
+  return fetchProcurement("GET", "/api/procurement/stos/last-payment-term", undefined, params);
+}
+
 export function createSTO(data) {
   return fetchProcurement("POST", "/api/procurement/stos", data);
 }

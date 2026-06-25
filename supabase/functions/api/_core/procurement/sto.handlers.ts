@@ -22,6 +22,25 @@ type ProcurementHandlerContext = {
 type StoRow = Record<string, unknown>;
 type StoLineRow = Record<string, unknown>;
 type ApproverMapRow = { approver_user_id: string | null; approver_role_code: string | null };
+type PreparedStoLine = {
+  material_id: string;
+  quantity: number;
+  uom_code: string;
+  transfer_price: number;
+  transfer_price_currency: string;
+  payment_term_id: string;
+  freight_term: string;
+  gst_terms: string | null;
+  remarks: string | null;
+  has_rebate: boolean;
+  rebate_rate: number | null;
+  rebate_rate_uom_basis: string | null;
+  rebate_remarks: string | null;
+  expected_delivery_date: string | null;
+  sending_storage_location_id?: string | null;
+  receiving_storage_location_id?: string | null;
+  source_csn_id?: string | null;
+};
 
 const STO_TYPES = new Set(["CONSIGNMENT_DISTRIBUTION", "INTER_PLANT"]);
 const STO_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL", "CREATED", "DISPATCHED", "RECEIVED", "CLOSED", "CANCELLED"]);
@@ -327,6 +346,107 @@ async function getPurchaseOrderLineById(lineId: string): Promise<JsonRecord | nu
   return (data as JsonRecord | null) ?? null;
 }
 
+async function getPaymentTermRow(paymentTermId: string): Promise<JsonRecord | null> {
+  if (!paymentTermId) return null;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("payment_terms_master")
+    .select("*")
+    .eq("id", paymentTermId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("PROCUREMENT_PAYMENT_TERM_LOOKUP_FAILED");
+  }
+
+  return (data as JsonRecord | null) ?? null;
+}
+
+async function getCostCenterRow(costCenterId: string): Promise<JsonRecord | null> {
+  if (!costCenterId) return null;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("cost_center_master")
+    .select("id")
+    .eq("id", costCenterId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("PROCUREMENT_COST_CENTER_LOOKUP_FAILED");
+  }
+
+  return (data as JsonRecord | null) ?? null;
+}
+
+function parseStoLineInput(
+  line: JsonRecord,
+  index: number,
+  options?: { fallbackQuantity?: number | null; fallbackUomCode?: string | null },
+): PreparedStoLine {
+  const materialId = toTrimmedString(line.material_id);
+  const quantity = parsePositiveNumber(line.quantity) ?? options?.fallbackQuantity ?? null;
+  const uomCode = toTrimmedString(line.uom_code) || toTrimmedString(options?.fallbackUomCode);
+  const transferPrice = parsePositiveNumber(line.transfer_price);
+  const paymentTermId = toTrimmedString(line.payment_term_id);
+  const freightTerm = toTrimmedString(line.freight_term);
+  const hasRebate = line.has_rebate === true;
+  const rebateRate = parseNullableNumber(line.rebate_rate);
+  const rebateBasis = toTrimmedString(line.rebate_rate_uom_basis) || null;
+
+  if (!materialId || !quantity || !transferPrice || !paymentTermId || !freightTerm) {
+    throw new Error(`Each STO line requires material, quantity, rate, payment term, and freight term. (line ${index + 1})`);
+  }
+  if (!uomCode) {
+    throw new Error(`Each STO line requires a UOM code. (line ${index + 1})`);
+  }
+  if (hasRebate && (!rebateRate || !rebateBasis)) {
+    throw new Error(`Each rebate-enabled STO line requires a rebate rate and basis. (line ${index + 1})`);
+  }
+
+  return {
+    material_id: materialId,
+    quantity,
+    uom_code: uomCode,
+    transfer_price: transferPrice,
+    transfer_price_currency: toTrimmedString(line.transfer_price_currency) || "BDT",
+    payment_term_id: paymentTermId,
+    freight_term: freightTerm,
+    gst_terms: toTrimmedString(line.gst_terms) || null,
+    remarks: toTrimmedString(line.remarks) || null,
+    has_rebate: hasRebate,
+    rebate_rate: hasRebate ? rebateRate : null,
+    rebate_rate_uom_basis: hasRebate ? rebateBasis : null,
+    rebate_remarks: hasRebate ? (toTrimmedString(line.rebate_remarks) || null) : null,
+    expected_delivery_date: toTrimmedString(line.expected_delivery_date) || null,
+    sending_storage_location_id: line.sending_storage_location_id !== undefined ? (toTrimmedString(line.sending_storage_location_id) || null) : undefined,
+    receiving_storage_location_id: line.receiving_storage_location_id !== undefined ? (toTrimmedString(line.receiving_storage_location_id) || null) : undefined,
+    source_csn_id: line.source_csn_id !== undefined ? (toTrimmedString(line.source_csn_id) || null) : undefined,
+  };
+}
+
+async function getLastUsedPaymentTermForStoPair(
+  sendingCompanyId: string,
+  receivingCompanyId: string,
+): Promise<string | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("stock_transfer_order")
+    .select("id, created_at, lines:stock_transfer_order_line(payment_term_id)")
+    .eq("sending_company_id", sendingCompanyId)
+    .eq("receiving_company_id", receivingCompanyId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("STO_LAST_PAYMENT_TERM_LOOKUP_FAILED");
+  }
+
+  const rows = Array.isArray(data?.lines) ? data.lines : [];
+  const paymentTermId = toTrimmedString(rows[0]?.payment_term_id);
+  return paymentTermId || null;
+}
+
 async function createCsnForSto(
   sto: StoRow,
   stoLines: StoLineRow[],
@@ -338,6 +458,9 @@ async function createCsnForSto(
 
   for (const line of stoLines) {
     const orderedQty = Number(line.quantity ?? 0);
+    const paymentTermId = toTrimmedString(line.payment_term_id);
+    const paymentTerm = paymentTermId ? await getPaymentTermRow(paymentTermId) : null;
+    const lcRequired = toUpperTrimmedString(paymentTerm?.payment_method) === "LC";
     const csnNumber = await generateProcurementDocNumber("CSN");
     const { error } = await serviceRoleClient
       .schema("erp_procurement")
@@ -356,6 +479,10 @@ async function createCsnForSto(
         po_qty: orderedQty,
         dispatch_qty: orderedQty,
         po_uom_code: line.uom_code,
+        payment_term_id: paymentTermId || null,
+        lc_required: lcRequired,
+        has_rebate: line.has_rebate === true,
+        rebate_remarks: line.rebate_remarks ?? null,
         created_by: actionedBy,
       });
 
@@ -369,9 +496,11 @@ async function buildConsignmentStoFromSubCsns(input: {
   csnIds: string[];
   sendingCompanyId: string;
   receivingCompanyId: string;
+  sendingCostCenterId: string;
+  receivingCostCenterId: string;
   stoDate: string;
   remarks: string | null;
-  lineConfigs: Map<string, JsonRecord>;
+  lineConfigs: Map<string, PreparedStoLine>;
   actionedBy: string;
 }): Promise<StoRow> {
   let sto: StoRow | null = null;
@@ -421,6 +550,8 @@ async function buildConsignmentStoFromSubCsns(input: {
           sto_type: "CONSIGNMENT_DISTRIBUTION",
           sending_company_id: input.sendingCompanyId,
           receiving_company_id: input.receivingCompanyId,
+          sending_cost_center_id: input.sendingCostCenterId,
+          receiving_cost_center_id: input.receivingCostCenterId,
           related_csn_id: csnId,
           status: "CREATED",
           remarks: input.remarks || `Auto-created from sub CSN ${subCsn.csn_number ?? csnId}`,
@@ -448,13 +579,22 @@ async function buildConsignmentStoFromSubCsns(input: {
       .insert({
         sto_id: sto.id,
         line_number: nextLineNumber,
-        material_id: subCsn.material_id,
-        sending_storage_location_id: toTrimmedString(lineConfig.sending_storage_location_id) || null,
-        receiving_storage_location_id: toTrimmedString(lineConfig.receiving_storage_location_id) || null,
+        material_id: lineConfig.material_id,
+        sending_storage_location_id: lineConfig.sending_storage_location_id ?? null,
+        receiving_storage_location_id: lineConfig.receiving_storage_location_id ?? null,
         quantity: dispatchQty,
-        uom_code: toTrimmedString(subCsn.po_uom_code),
-        transfer_price: parseNullableNumber(lineConfig.transfer_price),
-        transfer_price_currency: toTrimmedString(lineConfig.transfer_price_currency) || "BDT",
+        uom_code: lineConfig.uom_code || toTrimmedString(subCsn.po_uom_code),
+        transfer_price: lineConfig.transfer_price,
+        transfer_price_currency: lineConfig.transfer_price_currency,
+        payment_term_id: lineConfig.payment_term_id,
+        freight_term: lineConfig.freight_term,
+        gst_terms: lineConfig.gst_terms,
+        remarks: lineConfig.remarks,
+        has_rebate: lineConfig.has_rebate,
+        rebate_rate: lineConfig.rebate_rate,
+        rebate_rate_uom_basis: lineConfig.rebate_rate_uom_basis,
+        rebate_remarks: lineConfig.rebate_remarks,
+        expected_delivery_date: lineConfig.expected_delivery_date,
         balance_qty: dispatchQty,
       });
 
@@ -497,6 +637,8 @@ export async function createSTOHandler(
     const stoType = toUpperTrimmedString(body.sto_type);
     const sendingCompanyId = getCompanyScope(ctx, toTrimmedString(body.sending_company_id));
     const receivingCompanyId = toTrimmedString(body.receiving_company_id);
+    const sendingCostCenterId = toTrimmedString(body.sending_cost_center_id);
+    const receivingCostCenterId = toTrimmedString(body.receiving_cost_center_id);
     const stoDate = toTrimmedString(body.sto_date) || todayIsoDate();
     const relatedCsnId = toTrimmedString(body.related_csn_id) || null;
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
@@ -504,19 +646,36 @@ export async function createSTOHandler(
     if (!STO_TYPES.has(stoType) || !sendingCompanyId || !receivingCompanyId || lines.length === 0) {
       return stoErrorResponse(req, ctx, "STO_CREATE_INVALID", 400, "sto_type, sending_company_id, receiving_company_id, and lines are required.");
     }
+    if (!sendingCostCenterId || !receivingCostCenterId) {
+      return stoErrorResponse(req, ctx, "STO_COST_CENTER_REQUIRED", 400, "Sending and receiving cost centers are required.");
+    }
+    if (!(await getCostCenterRow(sendingCostCenterId)) || !(await getCostCenterRow(receivingCostCenterId))) {
+      return stoErrorResponse(req, ctx, "STO_COST_CENTER_INVALID", 400, "A selected STO cost center was not found.");
+    }
 
     if (isOpeningSto && stoType !== "INTER_PLANT") {
       return stoErrorResponse(req, ctx, "STO_OPENING_REQUIRES_INTER_PLANT", 400, "Opening STOs must use INTER_PLANT sto_type.");
     }
 
+    const preparedLines: PreparedStoLine[] = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      try {
+        preparedLines.push(parseStoLineInput(line, index));
+      } catch (lineError) {
+        const code = lineError instanceof Error ? lineError.message : "STO_LINE_INVALID";
+        return stoErrorResponse(req, ctx, "STO_LINE_INVALID", 400, code);
+      }
+    }
+
     if (stoType === "CONSIGNMENT_DISTRIBUTION") {
-      const csnIds = lines.map((line) => toTrimmedString(line.source_csn_id)).filter(Boolean);
-      if (csnIds.length === 0 || csnIds.length !== lines.length) {
+      const csnIds = preparedLines.map((line) => line.source_csn_id).filter(Boolean) as string[];
+      if (csnIds.length === 0 || csnIds.length !== preparedLines.length) {
         return stoErrorResponse(req, ctx, "CSN_SELECTION_REQUIRED", 400, "Each consignment STO line requires a source sub-CSN.");
       }
 
-      const lineConfigs = new Map<string, JsonRecord>();
-      for (const line of lines) {
+      const lineConfigs = new Map<string, PreparedStoLine>();
+      for (const line of preparedLines) {
         lineConfigs.set(toTrimmedString(line.source_csn_id), line);
       }
 
@@ -524,6 +683,8 @@ export async function createSTOHandler(
         csnIds,
         sendingCompanyId,
         receivingCompanyId,
+        sendingCostCenterId,
+        receivingCostCenterId,
         stoDate,
         remarks: toTrimmedString(body.remarks) || null,
         lineConfigs,
@@ -550,6 +711,8 @@ export async function createSTOHandler(
         sto_type: stoType,
         sending_company_id: sendingCompanyId,
         receiving_company_id: receivingCompanyId,
+        sending_cost_center_id: sendingCostCenterId,
+        receiving_cost_center_id: receivingCostCenterId,
         related_csn_id: relatedCsnId,
         status: "DRAFT",
         is_opening_sto: isOpeningSto,
@@ -565,25 +728,28 @@ export async function createSTOHandler(
     }
 
     const linePayload = [];
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index];
-      const quantity = parsePositiveNumber(line.quantity);
-      const materialId = toTrimmedString(line.material_id);
-      const uomCode = toTrimmedString(line.uom_code);
-      if (!quantity || !materialId || !uomCode) {
-        return stoErrorResponse(req, ctx, "STO_LINE_INVALID", 400, `Line ${index + 1} is missing required fields.`);
-      }
+    for (let index = 0; index < preparedLines.length; index += 1) {
+      const line = preparedLines[index];
       linePayload.push({
         sto_id: sto.id,
         line_number: index + 1,
-        material_id: materialId,
-        sending_storage_location_id: toTrimmedString(line.sending_storage_location_id) || null,
-        receiving_storage_location_id: toTrimmedString(line.receiving_storage_location_id) || null,
-        quantity,
-        uom_code: uomCode,
-        transfer_price: parseNullableNumber(line.transfer_price),
-        transfer_price_currency: toTrimmedString(line.transfer_price_currency) || "BDT",
-        balance_qty: quantity,
+        material_id: line.material_id,
+        sending_storage_location_id: line.sending_storage_location_id ?? null,
+        receiving_storage_location_id: line.receiving_storage_location_id ?? null,
+        quantity: line.quantity,
+        uom_code: line.uom_code,
+        transfer_price: line.transfer_price,
+        transfer_price_currency: line.transfer_price_currency,
+        payment_term_id: line.payment_term_id,
+        freight_term: line.freight_term,
+        gst_terms: line.gst_terms,
+        remarks: line.remarks,
+        has_rebate: line.has_rebate,
+        rebate_rate: line.rebate_rate,
+        rebate_rate_uom_basis: line.rebate_rate_uom_basis,
+        rebate_remarks: line.rebate_remarks,
+        expected_delivery_date: line.expected_delivery_date,
+        balance_qty: line.quantity,
       });
     }
 
@@ -663,6 +829,28 @@ export async function getSTOHandler(
   }
 }
 
+export async function getLastStoPaymentTermHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const sendingCompanyId = getCompanyScope(ctx, url.searchParams.get("sending_company_id") ?? undefined);
+    const receivingCompanyId = toTrimmedString(url.searchParams.get("receiving_company_id"));
+
+    if (!sendingCompanyId || !receivingCompanyId) {
+      return stoErrorResponse(req, ctx, "STO_LAST_PAYMENT_TERM_FILTERS_REQUIRED", 400, "sending_company_id and receiving_company_id are required.");
+    }
+
+    const paymentTermId = await getLastUsedPaymentTermForStoPair(sendingCompanyId, receivingCompanyId);
+    return okResponse({ payment_term_id: paymentTermId }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "STO_LAST_PAYMENT_TERM_LOOKUP_FAILED";
+    return stoErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
 export async function updateSTOHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -680,6 +868,12 @@ export async function updateSTOHandler(
 
     const patch: JsonRecord = {
       sto_date: toTrimmedString(body.sto_date) || sto.sto_date,
+      sending_cost_center_id: body.sending_cost_center_id !== undefined
+        ? (toTrimmedString(body.sending_cost_center_id) || null)
+        : sto.sending_cost_center_id,
+      receiving_cost_center_id: body.receiving_cost_center_id !== undefined
+        ? (toTrimmedString(body.receiving_cost_center_id) || null)
+        : sto.receiving_cost_center_id,
       remarks: body.remarks !== undefined ? (toTrimmedString(body.remarks) || null) : sto.remarks,
       last_updated_at: new Date().toISOString(),
       last_updated_by: ctx.auth_user_id,
@@ -710,6 +904,15 @@ export async function updateSTOHandler(
           uom_code: line.uom_code !== undefined ? toTrimmedString(line.uom_code) : undefined,
           transfer_price: line.transfer_price !== undefined ? parseNullableNumber(line.transfer_price) : undefined,
           transfer_price_currency: line.transfer_price_currency !== undefined ? (toTrimmedString(line.transfer_price_currency) || "BDT") : undefined,
+          payment_term_id: line.payment_term_id !== undefined ? (toTrimmedString(line.payment_term_id) || null) : undefined,
+          freight_term: line.freight_term !== undefined ? (toTrimmedString(line.freight_term) || null) : undefined,
+          gst_terms: line.gst_terms !== undefined ? (toTrimmedString(line.gst_terms) || null) : undefined,
+          remarks: line.remarks !== undefined ? (toTrimmedString(line.remarks) || null) : undefined,
+          has_rebate: line.has_rebate !== undefined ? line.has_rebate === true : undefined,
+          rebate_rate: line.rebate_rate !== undefined ? parseNullableNumber(line.rebate_rate) : undefined,
+          rebate_rate_uom_basis: line.rebate_rate_uom_basis !== undefined ? (toTrimmedString(line.rebate_rate_uom_basis) || null) : undefined,
+          rebate_remarks: line.rebate_remarks !== undefined ? (toTrimmedString(line.rebate_remarks) || null) : undefined,
+          expected_delivery_date: line.expected_delivery_date !== undefined ? (toTrimmedString(line.expected_delivery_date) || null) : undefined,
           balance_qty: balanceQty,
           last_updated_at: new Date().toISOString(),
         };
