@@ -340,7 +340,7 @@ function MaterialMasterTab({ uoms }) {
       setSelectedIds(new Set());
       if (failedRows.length > 0) {
         const lines = failedRows.map((row) => {
-          const mat = materials.find((m) => m.id === row.id);
+          const mat = rows.find((m) => m.id === row.id);
           const label = mat ? `${mat.pace_code} (${mat.material_name})` : row.id;
           return `${label}: ${row.detail || friendly(row.error)}`;
         });
