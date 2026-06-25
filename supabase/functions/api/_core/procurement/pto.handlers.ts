@@ -170,6 +170,64 @@ async function fetchSnapshot(
   };
 }
 
+function uniqueTrimmedStrings(values: unknown[]): string[] {
+  return [...new Set(values.map((value) => toTrimmedString(value)).filter(Boolean))];
+}
+
+async function enrichPtoRows(rows: PtoRow[]): Promise<PtoRow[]> {
+  if (rows.length === 0) return rows;
+
+  const materialIds = uniqueTrimmedStrings(rows.map((row) => row.material_id));
+  const companyIds = uniqueTrimmedStrings([
+    ...rows.map((row) => row.source_company_id),
+    ...rows.map((row) => row.target_company_id),
+  ]);
+  const slocIds = uniqueTrimmedStrings([
+    ...rows.map((row) => row.source_sloc_id),
+    ...rows.map((row) => row.target_sloc_id),
+  ]);
+
+  const [materialsResult, companiesResult, slocsResult] = await Promise.all([
+    materialIds.length > 0
+      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name").in("id", materialIds)
+      : Promise.resolve({ data: [], error: null }),
+    companyIds.length > 0
+      ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds)
+      : Promise.resolve({ data: [], error: null }),
+    slocIds.length > 0
+      ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", slocIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  const materialLabelById = new Map<string, string>(
+    ((materialsResult.data as Array<Record<string, unknown>> | null) ?? []).map((row) => [
+      toTrimmedString(row.id),
+      `${toTrimmedString(row.pace_code)} - ${toTrimmedString(row.material_name)}`.trim(),
+    ]),
+  );
+  const companyLabelById = new Map<string, string>(
+    ((companiesResult.data as Array<Record<string, unknown>> | null) ?? []).map((row) => [
+      toTrimmedString(row.id),
+      toTrimmedString(row.company_name) || toTrimmedString(row.company_code),
+    ]),
+  );
+  const slocLabelById = new Map<string, string>(
+    ((slocsResult.data as Array<Record<string, unknown>> | null) ?? []).map((row) => [
+      toTrimmedString(row.id),
+      `${toTrimmedString(row.code)} - ${toTrimmedString(row.name)}`.trim(),
+    ]),
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    material_display: materialLabelById.get(toTrimmedString(row.material_id)) || toTrimmedString(row.material_id),
+    source_company_display: companyLabelById.get(toTrimmedString(row.source_company_id)) || toTrimmedString(row.source_company_id),
+    target_company_display: companyLabelById.get(toTrimmedString(row.target_company_id)) || toTrimmedString(row.target_company_id),
+    source_sloc_display: slocLabelById.get(toTrimmedString(row.source_sloc_id)) || toTrimmedString(row.source_sloc_id),
+    target_sloc_display: slocLabelById.get(toTrimmedString(row.target_sloc_id)) || toTrimmedString(row.target_sloc_id),
+  }));
+}
+
 async function fetchPto(ptoId: string): Promise<PtoRow> {
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
@@ -184,7 +242,8 @@ async function fetchPto(ptoId: string): Promise<PtoRow> {
   if (!data) {
     throw new Error("PTO_NOT_FOUND");
   }
-  return data as PtoRow;
+  const [enriched] = await enrichPtoRows([data as PtoRow]);
+  return enriched;
 }
 
 async function updatePto(ptoId: string, patch: JsonRecord): Promise<PtoRow> {
@@ -319,8 +378,9 @@ export async function listPTOsHandler(
       return ptoErrorResponse(req, ctx, "PTO_LIST_FAILED", 500, "Unable to list PTOs.");
     }
 
+    const enriched = await enrichPtoRows((data as PtoRow[] | null) ?? []);
     return okResponse(
-      { data: data ?? [], total: count ?? 0, items: data ?? [] },
+      { data: enriched, total: count ?? 0, items: enriched },
       ctx.request_id,
       req,
     );

@@ -205,7 +205,7 @@ export default function PlantTransferDetailPage() {
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
               <ErpFieldPreview label="Status" value={detail.status || "—"} tone={statusTone(detail.status)} />
               <ErpFieldPreview label="Transfer Type" value={detail.transfer_type || "—"} tone={transferTypeTone(detail.transfer_type)} />
-              <ErpFieldPreview label="Material ID" value={detail.material_id || "—"} />
+              <ErpFieldPreview label="Material" value={detail.material_display || detail.material_id || "—"} />
               <ErpFieldPreview label="Transfer Qty + UOM" value={`${detail.transfer_qty ?? "—"} ${detail.uom_code || ""}`.trim()} />
               <ErpFieldPreview label="Valuation Rate" value={formatNullableNumber(detail.valuation_rate)} />
               <ErpFieldPreview label="Transfer Value" value={formatNullableNumber(detail.transfer_value)} />
@@ -215,10 +215,10 @@ export default function PlantTransferDetailPage() {
 
           <ErpSectionCard eyebrow="Locations" title="Source and target details">
             <div className="grid gap-3 md:grid-cols-2">
-              <ErpFieldPreview label="Source Company ID" value={detail.source_company_id || "—"} />
-              <ErpFieldPreview label="Target Company ID" value={detail.target_company_id || "—"} />
-              <ErpFieldPreview label="Source SLOC ID" value={detail.source_sloc_id || "—"} />
-              <ErpFieldPreview label="Target SLOC ID" value={detail.target_sloc_id || "—"} />
+              <ErpFieldPreview label="Source Company" value={detail.source_company_display || detail.source_company_id || "—"} />
+              <ErpFieldPreview label="Target Company" value={detail.target_company_display || detail.target_company_id || "—"} />
+              <ErpFieldPreview label="Source SLOC" value={detail.source_sloc_display || detail.source_sloc_id || "—"} />
+              <ErpFieldPreview label="Target SLOC" value={detail.target_sloc_display || detail.target_sloc_id || "—"} />
               <ErpFieldPreview label="Source GSTIN" value={detail.source_gstin || "—"} />
               <ErpFieldPreview label="Target GSTIN" value={detail.target_gstin || "—"} />
             </div>

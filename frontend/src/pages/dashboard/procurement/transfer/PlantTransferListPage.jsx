@@ -14,9 +14,11 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { createPTO, listPTOs } from "../procurementApi.js";
@@ -97,6 +99,33 @@ export default function PlantTransferListPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [formData, setFormData] = useState(() => buildInitialForm(selectedCompanyId));
 
+  const companies = runtimeContext?.availableCompanies ?? [];
+  const companyOptions = useMemo(
+    () => companies.map((entry) => ({ value: entry.id, label: entry.company_name || entry.company_code || entry.id })),
+    [companies]
+  );
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const materialOptions = useMemo(
+    () => materialQuery.materials.map((entry) => ({ value: entry.id, label: `${entry.pace_code || ""} - ${entry.material_name || ""}`.trim() })),
+    [materialQuery.materials]
+  );
+  const sourceSlocQuery = useStorageLocationOptionsQuery(
+    { company_id: formData.source_company_id },
+    { enabled: Boolean(formData.source_company_id) }
+  );
+  const sourceSlocOptions = useMemo(
+    () => sourceSlocQuery.storageLocations.map((entry) => ({ value: entry.id, label: `${entry.code || ""} - ${entry.name || ""}`.trim() })),
+    [sourceSlocQuery.storageLocations]
+  );
+  const targetSlocQuery = useStorageLocationOptionsQuery(
+    { company_id: formData.target_company_id },
+    { enabled: Boolean(formData.target_company_id) }
+  );
+  const targetSlocOptions = useMemo(
+    () => targetSlocQuery.storageLocations.map((entry) => ({ value: entry.id, label: `${entry.code || ""} - ${entry.name || ""}`.trim() })),
+    [targetSlocQuery.storageLocations]
+  );
+
   useEffect(() => {
     setFormData((current) => (
       current.source_company_id ? current : buildInitialForm(selectedCompanyId)
@@ -170,10 +199,18 @@ export default function PlantTransferListPage() {
   }
 
   function handleFormChange(field, value) {
-    setFormData((current) => ({
-      ...current,
-      [field]: value,
-    }));
+    setFormData((current) => {
+      const next = { ...current, [field]: value };
+      if (field === "material_id") {
+        const material = materialQuery.materials.find((entry) => entry.id === value);
+        next.uom_code = material?.base_uom_code || "";
+      } else if (field === "source_company_id") {
+        next.source_sloc_id = "";
+      } else if (field === "target_company_id") {
+        next.target_sloc_id = "";
+      }
+      return next;
+    });
   }
 
   async function handleCreate(event) {
@@ -284,49 +321,46 @@ export default function PlantTransferListPage() {
                         <option value="TWO_STEP">TWO_STEP</option>
                       </select>
                     </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Source Company ID">
-                      <input
-                        type="text"
+                    <ErpDenseFormRow label="Source Company">
+                      <ErpComboboxField
                         value={formData.source_company_id}
-                        onChange={(event) => handleFormChange("source_company_id", event.target.value)}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        required
+                        onChange={(value) => handleFormChange("source_company_id", value)}
+                        options={companyOptions}
+                        blankLabel="Select source company"
                       />
                     </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Source SLOC ID">
-                      <input
-                        type="text"
+                    <ErpDenseFormRow label="Source SLOC">
+                      <ErpComboboxField
                         value={formData.source_sloc_id}
-                        onChange={(event) => handleFormChange("source_sloc_id", event.target.value)}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        required
+                        onChange={(value) => handleFormChange("source_sloc_id", value)}
+                        options={sourceSlocOptions}
+                        blankLabel="Select source SLOC"
+                        disabled={!formData.source_company_id}
                       />
                     </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Target Company ID">
-                      <input
-                        type="text"
+                    <ErpDenseFormRow label="Target Company">
+                      <ErpComboboxField
                         value={formData.target_company_id}
-                        onChange={(event) => handleFormChange("target_company_id", event.target.value)}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        required
+                        onChange={(value) => handleFormChange("target_company_id", value)}
+                        options={companyOptions}
+                        blankLabel="Select target company"
                       />
                     </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Target SLOC ID">
-                      <input
-                        type="text"
+                    <ErpDenseFormRow label="Target SLOC">
+                      <ErpComboboxField
                         value={formData.target_sloc_id}
-                        onChange={(event) => handleFormChange("target_sloc_id", event.target.value)}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        required
+                        onChange={(value) => handleFormChange("target_sloc_id", value)}
+                        options={targetSlocOptions}
+                        blankLabel="Select target SLOC"
+                        disabled={!formData.target_company_id}
                       />
                     </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Material ID">
-                      <input
-                        type="text"
+                    <ErpDenseFormRow label="Material">
+                      <ErpComboboxField
                         value={formData.material_id}
-                        onChange={(event) => handleFormChange("material_id", event.target.value)}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        required
+                        onChange={(value) => handleFormChange("material_id", value)}
+                        options={materialOptions}
+                        blankLabel="Select material"
                       />
                     </ErpDenseFormRow>
                     <ErpDenseFormRow label="Transfer Qty">
@@ -344,9 +378,8 @@ export default function PlantTransferListPage() {
                       <input
                         type="text"
                         value={formData.uom_code}
-                        onChange={(event) => handleFormChange("uom_code", event.target.value)}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                        required
+                        readOnly
+                        className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-sm text-slate-700 outline-none"
                       />
                     </ErpDenseFormRow>
                     <ErpDenseFormRow label="Expected Dispatch Date">
@@ -469,7 +502,7 @@ export default function PlantTransferListPage() {
                     </span>
                   ),
                 },
-                { key: "material_id", label: "Material" },
+                { key: "material_display", label: "Material", render: (row) => row.material_display || row.material_id || "—" },
                 {
                   key: "transfer_qty",
                   label: "Transfer Qty",
