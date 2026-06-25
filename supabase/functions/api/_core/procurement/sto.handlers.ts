@@ -500,7 +500,7 @@ async function buildConsignmentStoFromSubCsns(input: {
   receivingCostCenterId: string;
   stoDate: string;
   remarks: string | null;
-  lineConfigs: Map<string, PreparedStoLine>;
+  lineConfigs: Map<string, JsonRecord>;
   actionedBy: string;
 }): Promise<StoRow> {
   let sto: StoRow | null = null;
@@ -1014,10 +1014,17 @@ export async function transformSubCSNToSTOHandler(
 
     const sendingCompanyId = toTrimmedString(body.sending_company_id) || companyId;
     const receivingCompanyId = toTrimmedString(body.receiving_company_id) || toTrimmedString(subCsn.consignee_company_id) || companyId;
+    const sendingCostCenterId = toTrimmedString(body.sending_cost_center_id);
+    const receivingCostCenterId = toTrimmedString(body.receiving_cost_center_id);
+    if (!sendingCostCenterId || !receivingCostCenterId) {
+      return stoErrorResponse(req, ctx, "STO_COST_CENTERS_REQUIRED", 400, "sending_cost_center_id and receiving_cost_center_id are required.");
+    }
     const sto = await buildConsignmentStoFromSubCsns({
       csnIds: [csnId],
       sendingCompanyId,
       receivingCompanyId,
+      sendingCostCenterId,
+      receivingCostCenterId,
       stoDate: todayIsoDate(),
       remarks: `Auto-created from sub CSN ${subCsn.csn_number ?? csnId}`,
       lineConfigs: new Map([[csnId, body]]),
