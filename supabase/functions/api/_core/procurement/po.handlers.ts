@@ -1397,6 +1397,11 @@ export async function confirmPOHandler(
       await createCsnsForPo(updatedPo as PurchaseOrderRow, await getPOLines(poId), ctx.auth_user_id);
     }
 
+    const orderGroupId = toTrimmedString((updatedPo as PurchaseOrderRow).order_group_id);
+    if (orderGroupId) {
+      await syncOrderGroupStatus(orderGroupId, ctx.auth_user_id);
+    }
+
     return okResponse({
       data: await enrichProcurementUserDisplays(updatedPo),
     }, ctx.request_id, req);
@@ -1451,6 +1456,11 @@ export async function approvePOHandler(
       actionedBy: ctx.auth_user_id,
     });
     await createCsnsForPo(updatedPo as PurchaseOrderRow, await getPOLines(poId), ctx.auth_user_id);
+
+    const orderGroupId = toTrimmedString((updatedPo as PurchaseOrderRow).order_group_id);
+    if (orderGroupId) {
+      await syncOrderGroupStatus(orderGroupId, ctx.auth_user_id);
+    }
 
     return okResponse({
       data: await enrichProcurementUserDisplays(updatedPo),
@@ -1512,6 +1522,11 @@ export async function rejectPOHandler(
       remarks,
       actionedBy: ctx.auth_user_id,
     });
+
+    const orderGroupId = toTrimmedString((updatedPo as PurchaseOrderRow).order_group_id);
+    if (orderGroupId) {
+      await syncOrderGroupStatus(orderGroupId, ctx.auth_user_id);
+    }
 
     return okResponse({
       data: await enrichProcurementUserDisplays(updatedPo),
@@ -1705,6 +1720,11 @@ export async function amendPOHandler(
       throw new Error("PROCUREMENT_PO_AMEND_LOG_FAILED");
     }
 
+    const orderGroupId = toTrimmedString((updatedPo as PurchaseOrderRow).order_group_id);
+    if (orderGroupId) {
+      await syncOrderGroupStatus(orderGroupId, ctx.auth_user_id);
+    }
+
     return okResponse({
       data: await enrichProcurementUserDisplays({
         ...updatedPo,
@@ -1799,6 +1819,11 @@ export async function approveAmendmentHandler(
       actionedBy: ctx.auth_user_id,
     });
 
+    const orderGroupId = toTrimmedString((updatedPo as PurchaseOrderRow).order_group_id);
+    if (orderGroupId) {
+      await syncOrderGroupStatus(orderGroupId, ctx.auth_user_id);
+    }
+
     return okResponse({
       data: await enrichProcurementUserDisplays(updatedPo),
     }, ctx.request_id, req);
@@ -1892,6 +1917,11 @@ export async function cancelPOHandler(
       throw new Error("PROCUREMENT_PO_CANCEL_FAILED");
     }
 
+    const orderGroupId = toTrimmedString((updatedPo as PurchaseOrderRow).order_group_id);
+    if (orderGroupId) {
+      await syncOrderGroupStatus(orderGroupId, ctx.auth_user_id);
+    }
+
     return okResponse({
       data: await enrichProcurementUserDisplays(updatedPo),
     }, ctx.request_id, req);
@@ -1974,6 +2004,11 @@ export async function knockOffPOLineHandler(
         .eq("id", poId);
     }
 
+    const orderGroupId = toTrimmedString(po.order_group_id);
+    if (orderGroupId) {
+      await syncOrderGroupStatus(orderGroupId, ctx.auth_user_id);
+    }
+
     return okResponse({
       data: await enrichProcurementUserDisplays(updatedLine),
     }, ctx.request_id, req);
@@ -2043,6 +2078,11 @@ export async function knockOffPOHandler(
       throw new Error("PROCUREMENT_PO_KNOCK_OFF_FAILED");
     }
 
+    const orderGroupId = toTrimmedString((updatedPo as PurchaseOrderRow).order_group_id);
+    if (orderGroupId) {
+      await syncOrderGroupStatus(orderGroupId, ctx.auth_user_id);
+    }
+
     return okResponse({
       data: await enrichProcurementUserDisplays(updatedPo),
     }, ctx.request_id, req);
@@ -2095,6 +2135,54 @@ async function getOrderGroupPOs(groupId: string): Promise<PurchaseOrderRow[]> {
     throw new Error("PROCUREMENT_PO_ORDER_GROUP_POS_LOOKUP_FAILED");
   }
   return (data as PurchaseOrderRow[] | null) ?? [];
+}
+
+async function syncOrderGroupStatus(groupId: string, actionedBy: string): Promise<void> {
+  if (!groupId) {
+    return;
+  }
+
+  const group = await getOrderGroupById(groupId);
+  if (!group) {
+    return;
+  }
+
+  const pos = await getOrderGroupPOs(groupId);
+  if (pos.length === 0) {
+    return;
+  }
+
+  const statuses = pos.map((po) => toUpperTrimmedString(po.status));
+  const allCancelled = statuses.every((status) => status === "CANCELLED");
+  const allTerminal = statuses.every((status) => status === "CONFIRMED" || status === "CANCELLED" || status === "CLOSED");
+  const hasConfirmedLike = statuses.some((status) => status === "CONFIRMED" || status === "CLOSED");
+  const hasPendingApproval = statuses.some((status) => status === "PENDING_APPROVAL");
+
+  const nextStatus = allCancelled
+    ? "CANCELLED"
+    : allTerminal && hasConfirmedLike
+      ? "CONFIRMED"
+      : hasPendingApproval
+        ? "PENDING_APPROVAL"
+        : "DRAFT";
+
+  if (toUpperTrimmedString(group.status) === nextStatus) {
+    return;
+  }
+
+  const { error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("po_order_group")
+    .update({
+      status: nextStatus,
+      last_updated_at: new Date().toISOString(),
+      last_updated_by: actionedBy,
+    })
+    .eq("id", groupId);
+
+  if (error) {
+    throw new Error("PROCUREMENT_PO_ORDER_GROUP_SYNC_FAILED");
+  }
 }
 
 export async function listPOOrderGroupsHandler(
