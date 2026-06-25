@@ -2201,9 +2201,9 @@ export async function listPOOrderGroupsHandler(
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("po_order_group")
-      .select("*", { count: "exact" })
+      .select("*")
       .order("created_at", { ascending: false })
-      .range(offset, offset + limit - 1);
+      .limit(1000);
 
     if (companyId) {
       query = query.eq("company_id", companyId);
@@ -2212,7 +2212,7 @@ export async function listPOOrderGroupsHandler(
       query = query.eq("status", statusFilter);
     }
 
-    const { data, error, count } = await query;
+    const { data, error } = await query;
     if (error) {
       throw new Error("PROCUREMENT_PO_ORDER_GROUP_LIST_FAILED");
     }
@@ -2239,14 +2239,76 @@ export async function listPOOrderGroupsHandler(
       poByGroup.set(key, list);
     }
 
-    const enriched = groups.map((group) => ({
+    const enrichedGroups = groups.map((group) => ({
       ...group,
+      doc_type: "PO",
       purchase_orders: poByGroup.get(toTrimmedString(group.id)) ?? [],
     }));
 
+    let stoQuery = serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order")
+      .select("id, sto_number, status, sending_company_id, receiving_company_id, created_at, created_by")
+      .order("created_at", { ascending: false })
+      .limit(1000);
+
+    if (companyId) {
+      stoQuery = stoQuery.or(`sending_company_id.eq.${companyId},receiving_company_id.eq.${companyId}`);
+    }
+    if (statusFilter) {
+      stoQuery = stoQuery.eq("status", statusFilter);
+    }
+
+    const { data: stoRows, error: stoError } = await stoQuery;
+    if (stoError) {
+      throw new Error("PROCUREMENT_PO_ORDER_GROUP_LIST_FAILED");
+    }
+
+    const stos = (stoRows as Array<Record<string, unknown>> | null) ?? [];
+    const companyIds = uniqueTrimmedStrings([
+      ...stos.map((row) => row.sending_company_id),
+      ...stos.map((row) => row.receiving_company_id),
+    ]);
+    const { data: companyRows, error: companyError } = companyIds.length > 0
+      ? await serviceRoleClient
+        .schema("erp_master")
+        .from("companies")
+        .select("id, company_code, company_name")
+        .in("id", companyIds)
+      : { data: [], error: null };
+
+    if (companyError) {
+      throw new Error("PROCUREMENT_PO_ORDER_GROUP_LIST_FAILED");
+    }
+
+    const companyLabelById = new Map<string, string>(
+      (((companyRows as Array<Record<string, unknown>> | null) ?? []).map((row) => [
+        toTrimmedString(row.id),
+        toTrimmedString(row.company_name) || toTrimmedString(row.company_code) || toTrimmedString(row.id),
+      ])),
+    );
+
+    const enrichedStos = stos.map((sto) => {
+      const sendingCompanyId = toTrimmedString(sto.sending_company_id);
+      const receivingCompanyId = toTrimmedString(sto.receiving_company_id);
+      const sendingLabel = companyLabelById.get(sendingCompanyId) ?? sendingCompanyId;
+      const receivingLabel = companyLabelById.get(receivingCompanyId) ?? receivingCompanyId;
+      return {
+        ...sto,
+        doc_type: "STO",
+        company_id: sendingCompanyId,
+        vendor_id: `${sendingLabel} -> ${receivingLabel}`,
+        purchase_orders: [{ id: sto.id, po_number: sto.sto_number, status: sto.status }],
+      };
+    });
+
+    const merged = [...enrichedGroups, ...enrichedStos]
+      .sort((left, right) => String(right.created_at ?? "").localeCompare(String(left.created_at ?? "")));
+    const paged = merged.slice(offset, offset + limit);
+
     return okResponse({
-      data: await enrichProcurementUserDisplays(enriched),
-      total: count ?? 0,
+      data: await enrichProcurementUserDisplays(paged),
+      total: merged.length,
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_LIST_FAILED";

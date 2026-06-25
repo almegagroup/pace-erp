@@ -637,6 +637,7 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
       csn_number: csnNumber,
       mother_csn_id: id,
       is_mother_csn: false,
+      consignee_company_id: toTrimmedString(body.consignee_company_id) || null,
       status: "ORDERED",
       dispatch_qty: dispatchQty,
       total_received_qty: 0,
@@ -678,6 +679,104 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
     const code = (err as Error).message || "PROCUREMENT_SUB_CSN_CREATE_FAILED";
     const status = code === "PROCUREMENT_CSN_NOT_FOUND" ? 404 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Sub CSN create failed");
+  }
+}
+
+export async function listAvailableSubCsnsForStoHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const sendingCompanyId = toTrimmedString(url.searchParams.get("sending_company_id"));
+    const receivingCompanyId = toTrimmedString(url.searchParams.get("receiving_company_id"));
+    const materialId = toTrimmedString(url.searchParams.get("material_id"));
+
+    if (!sendingCompanyId || !receivingCompanyId || !materialId) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_STO_SUB_CSN_FILTERS_REQUIRED", 400, "sending_company_id, receiving_company_id, and material_id are required");
+    }
+
+    const { data: subCsns, error: subCsnError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("consignment_note")
+      .select("id, csn_number, status, mother_csn_id, company_id, consignee_company_id, material_id, po_id, po_line_id, dispatch_qty, po_qty, po_uom_code, bl_number, boe_number, sto_id")
+      .in("status", ["ORDERED", "IN_TRANSIT"])
+      .eq("material_id", materialId)
+      .eq("consignee_company_id", receivingCompanyId)
+      .is("sto_id", null)
+      .not("mother_csn_id", "is", null)
+      .order("created_at", { ascending: false });
+
+    if (subCsnError) {
+      throw new Error("PROCUREMENT_SUB_CSN_LIST_FAILED");
+    }
+
+    const rows = (subCsns as JsonRecord[] | null) ?? [];
+    const motherIds = [...new Set(rows.map((row) => toTrimmedString(row.mother_csn_id)).filter(Boolean))];
+    const poIds = [...new Set(rows.map((row) => toTrimmedString(row.po_id)).filter(Boolean))];
+    const poLineIds = [...new Set(rows.map((row) => toTrimmedString(row.po_line_id)).filter(Boolean))];
+
+    const [
+      { data: motherRows, error: motherError },
+      { data: poRows, error: poError },
+      { data: poLineRows, error: poLineError },
+    ] = await Promise.all([
+      motherIds.length > 0
+        ? serviceRoleClient
+          .schema("erp_procurement")
+          .from("consignment_note")
+          .select("id, company_id")
+          .in("id", motherIds)
+        : Promise.resolve({ data: [], error: null }),
+      poIds.length > 0
+        ? serviceRoleClient
+          .schema("erp_procurement")
+          .from("purchase_order")
+          .select("id, po_number, status")
+          .in("id", poIds)
+        : Promise.resolve({ data: [], error: null }),
+      poLineIds.length > 0
+        ? serviceRoleClient
+          .schema("erp_procurement")
+          .from("purchase_order_line")
+          .select("id, line_status")
+          .in("id", poLineIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    if (motherError || poError || poLineError) {
+      throw new Error("PROCUREMENT_SUB_CSN_LIST_FAILED");
+    }
+
+    const motherCompanyById = new Map(
+      ((motherRows as JsonRecord[] | null) ?? []).map((row) => [toTrimmedString(row.id), toTrimmedString(row.company_id)]),
+    );
+    const poById = new Map(
+      ((poRows as JsonRecord[] | null) ?? []).map((row) => [toTrimmedString(row.id), row]),
+    );
+    const poLineById = new Map(
+      ((poLineRows as JsonRecord[] | null) ?? []).map((row) => [toTrimmedString(row.id), row]),
+    );
+
+    const filtered = rows
+      .filter((row) => motherCompanyById.get(toTrimmedString(row.mother_csn_id)) === sendingCompanyId)
+      .filter((row) => toUpperTrimmedString(poById.get(toTrimmedString(row.po_id))?.status) !== "CANCELLED")
+      .filter((row) => toUpperTrimmedString(poLineById.get(toTrimmedString(row.po_line_id))?.line_status) !== "KNOCKED_OFF")
+      .map((row) => {
+        const po = poById.get(toTrimmedString(row.po_id));
+        return {
+          ...row,
+          mother_po_number: po?.po_number ?? null,
+          invoice_or_boe_reference: toTrimmedString(row.bl_number) || toTrimmedString(row.boe_number) || null,
+          dispatch_qty: row.dispatch_qty ?? row.po_qty ?? null,
+        };
+      });
+
+    return okResponse({ data: filtered }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_SUB_CSN_LIST_FAILED";
+    const status = code.includes("REQUIRED") ? 400 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Available sub CSN lookup failed");
   }
 }
 

@@ -49,6 +49,10 @@ export default function POOrderGroupListPage() {
   );
 
   function openDetail(row) {
+    if (String(row?.doc_type || "").toUpperCase() === "STO") {
+      navigate(`/dashboard/procurement/stos/${encodeURIComponent(row.id)}`);
+      return;
+    }
     navigate(`/dashboard/procurement/po-order-groups/${encodeURIComponent(row.id)}`);
   }
 

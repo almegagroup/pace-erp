@@ -21,6 +21,7 @@ import {
   getVesselBookingAlertCountHandler,
   getVesselBookingAlertListHandler,
   inlineUpdateCSNHandler,
+  listAvailableSubCsnsForStoHandler,
   listCSNsHandler,
   markCSNArrivedHandler,
   markCSNInTransitHandler,
@@ -227,13 +228,16 @@ import {
   updateSOHandler,
 } from "../_core/procurement/sales_order.handlers.ts";
 import {
+  approveSTOHandler,
   cancelSTOHandler,
   closeSTOHandler,
+  confirmSTOHandler,
   confirmSTOReceiptHandler,
   createSTOHandler,
   dispatchSTOHandler,
   getSTOHandler,
   listSTOsHandler,
+  rejectSTOHandler,
   transformSubCSNToSTOHandler,
   updateGateExitOutboundWeightHandler,
   updateSTOHandler,
@@ -257,6 +261,8 @@ export async function dispatchProcurementRoutes(
   switch (routeKey) {
     case "GET:/api/procurement/csns":
       return await listCSNsHandler(req, ctx);
+    case "GET:/api/procurement/csns/available-for-sto":
+      return await listAvailableSubCsnsForStoHandler(req, ctx);
     case "GET:/api/procurement/alerts/lc-count":
       return await getLCAlertCountHandler(req, ctx);
     case "GET:/api/procurement/alerts/lc":
@@ -808,6 +814,18 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/stos\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
     return await cancelSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/confirm$/.test(pathname) && req.method === "POST") {
+    return await confirmSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+    return await approveSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
+    return await rejectSTOHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/stos\/[^/]+\/dispatch$/.test(pathname) && req.method === "POST") {

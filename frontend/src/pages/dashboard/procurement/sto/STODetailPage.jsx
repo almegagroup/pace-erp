@@ -12,18 +12,27 @@ import { getActiveScreenContext, popScreen } from "../../../../navigation/screen
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
+  approveSTO,
   cancelSTO,
   closeSTO,
+  confirmSTO,
   confirmSTOReceipt,
   dispatchSTO,
   getSTO,
+  rejectSTO,
   updateGateExitWeight,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
+const STO_APPROVER_ROLES = new Set(["SA", "GA", "DIRECTOR", "L4_MANAGER", "L3_MANAGER", "L2_MANAGER"]);
+
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
+    case "DRAFT":
+      return "slate";
+    case "PENDING_APPROVAL":
+      return "amber";
     case "DISPATCHED":
       return "sky";
     case "RECEIVED":
@@ -47,7 +56,7 @@ export default function STODetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
-  const { runtimeContext } = useMenu();
+  const { runtimeContext, shellProfile } = useMenu();
   const [tareWeight, setTareWeight] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -63,18 +72,26 @@ export default function STODetailPage() {
   const loading = detailQuery.isLoading || materialQuery.isLoading;
 
   const selectedCompanyId = runtimeContext?.selectedCompanyId || "";
+  const canApprove = STO_APPROVER_ROLES.has(shellProfile?.roleCode);
   const materialMap = useMemo(
     () => new Map(materials.map((entry) => [entry.id, entry])),
     [materials]
   );
+  const companyMap = useMemo(
+    () => new Map((runtimeContext?.availableCompanies ?? []).map((entry) => [entry.id, entry])),
+    [runtimeContext?.availableCompanies]
+  );
   const latestDc = Array.isArray(detail?.delivery_challans) ? detail.delivery_challans[0] : null;
   const latestGateExit = Array.isArray(detail?.gate_exit_outbound) ? detail.gate_exit_outbound[0] : null;
+  const canConfirmForApproval = String(detail?.status || "").toUpperCase() === "DRAFT";
   const canConfirmReceipt =
     String(detail?.status || "").toUpperCase() === "DISPATCHED" &&
     String(selectedCompanyId || "") === String(detail?.receiving_company_id || "");
   const canClose = String(detail?.status || "").toUpperCase() === "RECEIVED";
-  const canCancel = String(detail?.status || "").toUpperCase() === "CREATED";
+  const canCancel = ["DRAFT", "PENDING_APPROVAL", "CREATED"].includes(String(detail?.status || "").toUpperCase());
   const canDispatch = String(detail?.status || "").toUpperCase() === "CREATED";
+  const canReject = String(detail?.status || "").toUpperCase() === "PENDING_APPROVAL" && canApprove;
+  const canApproveSto = canReject;
   const showTareForm =
     String(detail?.status || "").toUpperCase() === "DISPATCHED" &&
     isBulkLike(detail?.sto_type) &&
@@ -143,6 +160,43 @@ export default function STODetailPage() {
     );
   }
 
+  async function handleConfirmForApproval() {
+    if (!detail) return;
+    await runAction(
+      () => confirmSTO(detail.id, { approval_required: true }),
+      "STO moved for approval."
+    );
+  }
+
+  async function handleApprove() {
+    if (!detail) return;
+    const remarks = (await openActionPrompt({
+      eyebrow: "STO",
+      title: "Approve this STO?",
+      label: "Remarks (optional)",
+      placeholder: "Optional approval remarks",
+    })) ?? "";
+    await runAction(
+      () => approveSTO(detail.id, { remarks }),
+      "STO approved."
+    );
+  }
+
+  async function handleReject() {
+    if (!detail) return;
+    const remarks = await openActionPrompt({
+      eyebrow: "STO",
+      title: "Reject this STO?",
+      label: "Reject reason",
+      required: true,
+    });
+    if (!remarks) return;
+    await runAction(
+      () => rejectSTO(detail.id, { remarks }),
+      "STO rejected and sent back to draft."
+    );
+  }
+
   async function handleConfirmReceipt() {
     if (!detail) return;
     const confirmed = await openActionConfirm({ eyebrow: "STO", title: "Confirm receipt?", message: "Confirm receipt for this dispatched STO.", confirmLabel: "Confirm Receipt" });
@@ -198,6 +252,15 @@ export default function STODetailPage() {
       ]}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
+        ...(canConfirmForApproval
+          ? [{ key: "confirm", label: saving ? "Sending..." : "Confirm STO", tone: "primary", onClick: () => void handleConfirmForApproval(), disabled: saving }]
+          : []),
+        ...(canApproveSto
+          ? [{ key: "approve", label: saving ? "Approving..." : "Approve STO", tone: "primary", onClick: () => void handleApprove(), disabled: saving }]
+          : []),
+        ...(canReject
+          ? [{ key: "reject", label: "Reject STO", tone: "danger", onClick: () => void handleReject(), disabled: saving }]
+          : []),
         ...(canDispatch
           ? [{ key: "dispatch", label: saving ? "Dispatching..." : "Dispatch", tone: "primary", onClick: () => void handleDispatch(), disabled: saving }]
           : []),
@@ -223,8 +286,8 @@ export default function STODetailPage() {
               <ErpFieldPreview label="Status" value={detail.status || "—"} tone={statusTone(detail.status)} />
               <ErpFieldPreview label="STO Type" value={detail.sto_type || "—"} />
               <ErpFieldPreview label="STO Date" value={detail.sto_date || "—"} />
-              <ErpFieldPreview label="Sending Company" value={detail.sending_company_id || "—"} />
-              <ErpFieldPreview label="Receiving Company" value={detail.receiving_company_id || "—"} />
+              <ErpFieldPreview label="Sending Company" value={companyMap.get(detail.sending_company_id)?.company_name || detail.sending_company_id || "—"} />
+              <ErpFieldPreview label="Receiving Company" value={companyMap.get(detail.receiving_company_id)?.company_name || detail.receiving_company_id || "—"} />
               <ErpFieldPreview label="Related CSN" value={detail.related_csn_id || "—"} />
             </div>
           </ErpSectionCard>

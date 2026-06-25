@@ -344,6 +344,10 @@ export function createSubCSN(id, data) {
   return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/sub-csns`, data);
 }
 
+export function listAvailableSubCsnsForSto(params) {
+  return fetchProcurement("GET", "/api/procurement/csns/available-for-sto", undefined, params);
+}
+
 export function deleteSubCSN(id, subId) {
   return fetchProcurement(
     "DELETE",
@@ -484,6 +488,18 @@ export function updateSTO(id, data) {
 
 export function cancelSTO(id, data) {
   return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/cancel`, data);
+}
+
+export function confirmSTO(id, data) {
+  return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/confirm`, data);
+}
+
+export function approveSTO(id, data) {
+  return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/approve`, data);
+}
+
+export function rejectSTO(id, data) {
+  return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/reject`, data);
 }
 
 export function dispatchSTO(id, data) {

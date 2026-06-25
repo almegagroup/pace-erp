@@ -30,6 +30,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
 
   // ── Procurement: CSN ─────────────────────────────────────────────────────
   "GET:/api/procurement/csns":                        { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
+  "GET:/api/procurement/csns/available-for-sto":      { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/tracker":                     { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/alerts/lc-count":             { skipAcl: false, resourceCode: "PROC_CSN_ALERTS",  action: "VIEW" },
   "GET:/api/procurement/alerts/lc":                   { skipAcl: false, resourceCode: "PROC_CSN_ALERTS",  action: "VIEW" },
@@ -597,6 +598,18 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/stos\/[^/]+\/dispatch$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/stos\/[^/]+\/confirm$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/stos\/[^/]+\/approve$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/stos\/[^/]+\/reject$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "EDIT" } },
   },
   {
     pattern: /^\/api\/procurement\/stos\/[^/]+\/confirm-receipt$/,
