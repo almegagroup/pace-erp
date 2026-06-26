@@ -699,7 +699,7 @@ async function buildConsignmentStoFromSubCsns(input: {
     }
 
     if (!sto) {
-      const stoNumber = await generateCompanyDocNumber(input.sendingCompanyId, "STO");
+      const stoNumber = await generateCompanyDocNumber(input.receivingCompanyId, "STO");
       const { data: createdSto, error: stoError } = await serviceRoleClient
         .schema("erp_procurement")
         .from("stock_transfer_order")
@@ -860,7 +860,7 @@ export async function createSTOHandler(
 
     const stoNumber = isOpeningSto
       ? openingStoNumber
-      : await generateCompanyDocNumber(sendingCompanyId, "STO");
+      : await generateCompanyDocNumber(receivingCompanyId, "STO");
     const { data: sto, error: stoError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("stock_transfer_order")
