@@ -8,7 +8,8 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templa
 import { useCostCentersQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { getVendorMaterialInfo } from "../../om/omApi.js";
 import {
   confirmPurchaseOrder,
@@ -533,6 +534,7 @@ export default function POCreateOpeningPage() {
         return;
       }
       setNotice(`${createdOrders.length} opening PO line${createdOrders.length === 1 ? "" : "s"} created and confirmed.`);
+      openScreen(OPERATION_SCREENS.PROC_PO_LIST.screen_code);
       navigate("/dashboard/procurement/purchase-orders");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PO_CREATE_FAILED");

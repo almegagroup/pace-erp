@@ -8,7 +8,8 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templa
 import { useCostCentersQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { getVendorMaterialInfo } from "../../om/omApi.js";
 import {
   createPurchaseOrder,
@@ -489,8 +490,16 @@ export default function POCreatePage() {
       const poCount = Array.isArray(created?.purchase_orders) ? created.purchase_orders.length : 1;
       setNotice(`${poCount} purchase order${poCount === 1 ? "" : "s"} created.`);
       if (groupId) {
+        openScreenWithContext(
+          OPERATION_SCREENS.PROC_PO_ORDER_DETAIL.screen_code,
+          { id: groupId, refreshOnReturn: true }
+        );
         navigate(`/dashboard/procurement/po-order-groups/${encodeURIComponent(groupId)}`);
       } else {
+        openScreenWithContext(
+          OPERATION_SCREENS.PROC_PO_DETAIL.screen_code,
+          { id: created?.id, refreshOnReturn: true }
+        );
         navigate(`/dashboard/procurement/purchase-orders/${encodeURIComponent(created?.id)}`);
       }
     } catch (saveError) {

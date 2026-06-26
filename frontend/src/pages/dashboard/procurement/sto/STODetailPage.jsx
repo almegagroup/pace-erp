@@ -183,6 +183,24 @@ export default function STODetailPage() {
       })),
     [receivingCostCenterQuery.data?.data]
   );
+  const sendingCostCenterMap = useMemo(
+    () =>
+      new Map(
+        sendingCostCenterOptions.map((entry) => [entry.value, entry.label])
+      ),
+    [sendingCostCenterOptions]
+  );
+  const receivingCostCenterMap = useMemo(
+    () =>
+      new Map(
+        receivingCostCenterOptions.map((entry) => [entry.value, entry.label])
+      ),
+    [receivingCostCenterOptions]
+  );
+  const paymentTermMap = useMemo(
+    () => new Map(paymentTermOptions.map((entry) => [entry.value, entry.label])),
+    [paymentTermOptions]
+  );
 
   const latestDc = Array.isArray(detail?.delivery_challans) ? detail.delivery_challans[0] : null;
   const latestGateExit = Array.isArray(detail?.gate_exit_outbound) ? detail.gate_exit_outbound[0] : null;
@@ -556,8 +574,22 @@ export default function STODetailPage() {
               <ErpFieldPreview label="Sending Company" value={companyMap.get(detail.sending_company_id)?.company_name || detail.sending_company_id || "—"} />
               <ErpFieldPreview label="Receiving Company" value={companyMap.get(detail.receiving_company_id)?.company_name || detail.receiving_company_id || "—"} />
               <ErpFieldPreview label="Related CSN" value={detail.related_csn_id || "—"} />
-              <ErpFieldPreview label="Sending Cost Center" value={detail.sending_cost_center_id || "—"} />
-              <ErpFieldPreview label="Receiving Cost Center" value={detail.receiving_cost_center_id || "—"} />
+              <ErpFieldPreview
+                label="Sending Cost Center"
+                value={
+                  sendingCostCenterMap.get(detail.sending_cost_center_id) ||
+                  detail.sending_cost_center_id ||
+                  "—"
+                }
+              />
+              <ErpFieldPreview
+                label="Receiving Cost Center"
+                value={
+                  receivingCostCenterMap.get(detail.receiving_cost_center_id) ||
+                  detail.receiving_cost_center_id ||
+                  "—"
+                }
+              />
               <ErpFieldPreview label="Remarks" value={detail.remarks || "—"} />
             </div>
           </ErpSectionCard>
@@ -586,7 +618,14 @@ export default function STODetailPage() {
                 { key: "quantity", label: "Requested Qty", width: "110px" },
                 { key: "uom_code", label: "UOM", width: "90px" },
                 { key: "transfer_price", label: "Rate", width: "90px", render: (row) => row.transfer_price ?? "—" },
-                { key: "payment_term_id", label: "Payment Term", render: (row) => row.payment_term_id || "—" },
+                {
+                  key: "payment_term_id",
+                  label: "Payment Term",
+                  render: (row) =>
+                    paymentTermMap.get(row.payment_term_id) ||
+                    row.payment_term_id ||
+                    "—",
+                },
                 { key: "freight_term", label: "Freight Term", width: "120px", render: (row) => row.freight_term || "—" },
                 { key: "expected_delivery_date", label: "Expected Delivery", width: "130px", render: (row) => row.expected_delivery_date || "—" },
                 { key: "dispatched_qty", label: "Issued Qty", width: "110px", render: (row) => row.dispatched_qty ?? "—" },

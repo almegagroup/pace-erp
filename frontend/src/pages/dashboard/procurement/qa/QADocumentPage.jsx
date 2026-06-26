@@ -8,7 +8,8 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   addQATestLine,
   assignQAOfficer,
@@ -357,6 +358,7 @@ export default function QADocumentPage() {
             try {
               popScreen();
             } catch {
+              openScreen(OPERATION_SCREENS.PROC_QA_QUEUE.screen_code);
               navigate("/dashboard/procurement/qa-queue");
             }
           },

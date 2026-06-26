@@ -5,6 +5,8 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
+import { openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listPOOrderGroups } from "../procurementApi.js";
 
 function getStatusTone(status) {
@@ -50,9 +52,17 @@ export default function POOrderGroupListPage() {
 
   function openDetail(row) {
     if (String(row?.doc_type || "").toUpperCase() === "STO") {
+      openScreenWithContext(
+        OPERATION_SCREENS.PROC_STO_DETAIL.screen_code,
+        { id: row.id, refreshOnReturn: true }
+      );
       navigate(`/dashboard/procurement/stos/${encodeURIComponent(row.id)}`);
       return;
     }
+    openScreenWithContext(
+      OPERATION_SCREENS.PROC_PO_ORDER_DETAIL.screen_code,
+      { id: row.id, refreshOnReturn: true }
+    );
     navigate(`/dashboard/procurement/po-order-groups/${encodeURIComponent(row.id)}`);
   }
 

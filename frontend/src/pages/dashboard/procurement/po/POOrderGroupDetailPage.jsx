@@ -5,6 +5,8 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
+import { openScreen, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
   approvePOOrderGroup,
@@ -92,6 +94,10 @@ export default function POOrderGroupDetailPage() {
   }
 
   function openPo(po) {
+    openScreenWithContext(
+      OPERATION_SCREENS.PROC_PO_DETAIL.screen_code,
+      { id: po.id, refreshOnReturn: true }
+    );
     navigate(`/dashboard/procurement/purchase-orders/${encodeURIComponent(po.id)}`);
   }
 
@@ -110,7 +116,19 @@ export default function POOrderGroupDetailPage() {
         ...(notice ? [{ key: "ok", tone: "success", message: notice }] : []),
       ]}
       actions={[
-        { key: "back", label: "Back", tone: "neutral", onClick: () => navigate("/dashboard/procurement/po-order-groups") },
+        {
+          key: "back",
+          label: "Back",
+          tone: "neutral",
+          onClick: () => {
+            try {
+              popScreen();
+            } catch {
+              openScreen(OPERATION_SCREENS.PROC_PO_ORDER_APPROVALS.screen_code);
+              navigate("/dashboard/procurement/po-order-groups");
+            }
+          },
+        },
         ...(group?.status === "DRAFT" ? [{ key: "confirm", label: saving ? "Sending..." : "Confirm Order", tone: "primary", onClick: () => void handleConfirm(), disabled: saving }] : []),
         ...(group?.status === "PENDING_APPROVAL" && canApprove
           ? [

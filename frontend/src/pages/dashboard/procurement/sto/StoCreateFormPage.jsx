@@ -478,6 +478,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
       if (openingMode) {
         await confirmSTO(created?.id, { approval_required: false });
         setNotice(`Opening STO ${created?.sto_number || form.sto_number.trim()} created and confirmed.`);
+        openScreen(OPERATION_SCREENS.PROC_STO_LIST.screen_code);
         navigate("/dashboard/procurement/stos");
         return;
       }
