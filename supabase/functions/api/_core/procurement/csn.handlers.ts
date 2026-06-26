@@ -1176,11 +1176,6 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
     }
 
     const csnNumber = await generateProcurementDocNumber("CSN");
-    const dispatchQty = body.dispatch_qty != null ? Number(body.dispatch_qty) : mother.dispatch_qty ?? mother.po_qty;
-    const motherDispatchQty = Number(mother.dispatch_qty ?? mother.po_qty ?? 0);
-    if (!Number.isFinite(Number(dispatchQty)) || Number(dispatchQty) <= 0 || Number(dispatchQty) > motherDispatchQty) {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_SUB_CSN_QTY_INVALID", 400, "Sub CSN dispatch quantity must be greater than zero and cannot exceed the mother's remaining dispatch quantity");
-    }
     const insertPayload: JsonRecord = {
       ...mother,
       id: undefined,
@@ -1189,7 +1184,7 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
       is_mother_csn: false,
       consignee_company_id: toTrimmedString(body.consignee_company_id) || null,
       status: CSN_STATUS.ORDERED,
-      dispatch_qty: Number(dispatchQty),
+      dispatch_qty: 0,
       total_received_qty: 0,
       gate_entry_id: null,
       gate_entry_date: null,
@@ -1214,17 +1209,11 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
       throw new Error("PROCUREMENT_SUB_CSN_CREATE_FAILED");
     }
 
-    const retainedDispatchQty = Math.max(
-      0,
-      Number(mother.dispatch_qty ?? mother.po_qty ?? 0) - Number(dispatchQty ?? 0),
-    );
-
     const motherUpdateResult = await serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
       .update({
         is_mother_csn: true,
-        dispatch_qty: retainedDispatchQty,
         last_updated_at: new Date().toISOString(),
         last_updated_by: ctx.auth_user_id,
       })
@@ -1381,8 +1370,6 @@ export async function deleteSubCSNHandler(req: Request, ctx: ProcurementHandlerC
       return procurementErrorResponse(req, ctx, "PROCUREMENT_SUB_CSN_DELETE_BLOCKED", 400, "Sub CSN linked to gate entry");
     }
 
-    const mother = await getCsnById(motherId, companyId);
-
     const { error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
@@ -1391,24 +1378,6 @@ export async function deleteSubCSNHandler(req: Request, ctx: ProcurementHandlerC
 
     if (error) {
       throw new Error("PROCUREMENT_SUB_CSN_DELETE_FAILED");
-    }
-
-    if (mother) {
-      const restoredDispatchQty = Number(mother.dispatch_qty ?? mother.po_qty ?? 0)
-        + Number(subCsn.dispatch_qty ?? subCsn.po_qty ?? 0);
-      const { error: restoreError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("consignment_note")
-        .update({
-          dispatch_qty: restoredDispatchQty,
-          last_updated_at: new Date().toISOString(),
-          last_updated_by: ctx.auth_user_id,
-        })
-        .eq("id", motherId);
-
-      if (restoreError) {
-        throw new Error("PROCUREMENT_SUB_CSN_DELETE_FAILED");
-      }
     }
 
     return okResponse({ data: { id: subId, deleted: true } }, ctx.request_id, req);

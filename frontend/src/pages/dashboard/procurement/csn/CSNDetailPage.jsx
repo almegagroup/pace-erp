@@ -117,7 +117,6 @@ export default function CSNDetailPage() {
   const [detail, setDetail] = useState(null);
   const [relatedCsns, setRelatedCsns] = useState([]);
   const [form, setForm] = useState(buildForm(null));
-  const [subDispatchQty, setSubDispatchQty] = useState("");
   const [loadingPorts, setLoadingPorts] = useState([]);
   const [dischargePorts, setDischargePorts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -213,10 +212,8 @@ export default function CSNDetailPage() {
     try {
       await createSubCSN(detail.id, {
         company_id: detail.company_id,
-        dispatch_qty: subDispatchQty ? Number(subDispatchQty) : undefined,
       });
-      setSubDispatchQty("");
-      setNotice("Sub CSN created.");
+      setNotice("Sub CSN created. Set its dispatch quantity from the Tracker.");
       await loadDetail();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_SUB_CSN_CREATE_FAILED");
@@ -452,17 +449,7 @@ export default function CSNDetailPage() {
 
           <ErpSectionCard eyebrow="Sub CSNs" title="Split dispatch management">
             <div className="grid gap-3">
-              <div className="grid gap-3 lg:grid-cols-[220px_auto]">
-                <ErpDenseFormRow label="Dispatch Qty">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.0001"
-                    value={subDispatchQty}
-                    onChange={(event) => setSubDispatchQty(event.target.value)}
-                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
-                  />
-                </ErpDenseFormRow>
+              <div className="grid gap-3 lg:grid-cols-[auto]">
                 <div className="flex items-end">
                   <button
                     type="button"
