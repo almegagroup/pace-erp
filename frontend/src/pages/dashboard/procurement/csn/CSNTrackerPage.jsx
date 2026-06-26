@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
@@ -10,7 +10,16 @@ import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/opera
 import { getAllAlertCounts, getCSNTracker, inlineUpdateCSN } from "../procurementApi.js";
 
 const LIMIT = 50;
-const EDITABLE_STATUSES = new Set(["ORDERED", "IN_TRANSIT"]);
+const EDITABLE_STATUSES = new Set(["ORD", "TRN"]);
+const STATUS_OPTIONS = ["ORD", "TRN", "GED", "GRD", "CAN", "KOF"];
+const STATUS_LABELS = {
+  ORD: "Ordered",
+  TRN: "In Transit",
+  GED: "GE Done",
+  GRD: "GRN Done",
+  CAN: "Cancelled",
+  KOF: "Knocked Off",
+};
 
 function getBadgeTone(value) {
   switch (String(value || "").toUpperCase()) {
@@ -20,16 +29,25 @@ function getBadgeTone(value) {
       return "bg-emerald-100 text-emerald-800";
     case "BULK":
       return "bg-violet-100 text-violet-800";
-    case "ARRIVED":
-      return "bg-emerald-100 text-emerald-800";
-    case "GRN_DONE":
-    case "CLOSED":
-      return "bg-slate-200 text-slate-700";
-    case "IN_TRANSIT":
-      return "bg-amber-100 text-amber-800";
+    case "GED":
+      return "bg-[#FAC775] text-[#412402]";
+    case "GRD":
+      return "bg-[#97C459] text-[#173404]";
+    case "CAN":
+      return "bg-[#E24B4A] text-[#FCEBEB]";
+    case "KOF":
+      return "bg-[#5F5E5A] text-[#F1EFE8]";
+    case "TRN":
+      return "bg-[#B5D4F4] text-[#042C53]";
+    case "ORD":
+      return "bg-[#F1EFE8] text-[#2C2C2A]";
     default:
       return "bg-slate-100 text-slate-700";
   }
+}
+
+function getStatusLabel(value) {
+  return STATUS_LABELS[String(value || "").toUpperCase()] || value || "—";
 }
 
 function inputTypeForField(field) {
@@ -79,7 +97,7 @@ export default function CSNTrackerPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
-  async function loadTracker() {
+  const loadTracker = useCallback(async () => {
     if (!companyId) {
       return;
     }
@@ -112,11 +130,11 @@ export default function CSNTrackerPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [companyId, csnType, dateFrom, dateTo, page, status]);
 
   useEffect(() => {
     void loadTracker();
-  }, [companyId, csnType, dateFrom, dateTo, page, status]);
+  }, [loadTracker]);
 
   const filteredRows = useMemo(() => {
     if (!debouncedSearch) {
@@ -299,9 +317,9 @@ export default function CSNTrackerPage() {
                   className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
                 >
                   <option value="">ALL</option>
-                  {["ORDERED", "IN_TRANSIT", "ARRIVED", "GRN_DONE", "CLOSED"].map((entry) => (
+                  {STATUS_OPTIONS.map((entry) => (
                     <option key={entry} value={entry}>
-                      {entry}
+                      {entry} — {getStatusLabel(entry)}
                     </option>
                   ))}
                 </select>
@@ -377,8 +395,18 @@ export default function CSNTrackerPage() {
             />
             <ErpDenseGrid
               columns={[
-                { key: "csn_number", label: "CSN", width: "140px" },
-                { key: "po_number", label: "PO", width: "120px" },
+                {
+                  key: "csn_number",
+                  label: "CSN",
+                  width: "140px",
+                  render: (row) => row.csn_display_number || row.csn_number || "—",
+                },
+                {
+                  key: "po_number",
+                  label: "Reference",
+                  width: "120px",
+                  render: (row) => row.display_reference_number || row.po_number || "—",
+                },
                 { key: "vendor_name", label: "Vendor", width: "160px" },
                 { key: "material_name", label: "Material", width: "160px" },
                 {
@@ -396,7 +424,10 @@ export default function CSNTrackerPage() {
                   label: "Status",
                   width: "120px",
                   render: (row) => (
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getBadgeTone(row.status)}`}>
+                    <span
+                      title={getStatusLabel(row.status)}
+                      className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getBadgeTone(row.status)}`}
+                    >
                       {row.status || "—"}
                     </span>
                   ),

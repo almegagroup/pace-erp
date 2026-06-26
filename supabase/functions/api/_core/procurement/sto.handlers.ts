@@ -627,7 +627,7 @@ async function createCsnForSto(
       .insert({
         csn_number: csnNumber,
         csn_type: "DOMESTIC",
-        status: "ORDERED",
+        status: "ORD",
         company_id: sto.sending_company_id,
         consignee_company_id: sto.receiving_company_id,
         vendor_id: null,
@@ -647,6 +647,54 @@ async function createCsnForSto(
 
     if (error) {
       throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
+    }
+  }
+}
+
+async function inactivateLinkedCsnsForSto(input: {
+  stoId: string;
+  reasonCode: "CAN" | "KOF";
+  reason: string;
+  actionedBy: string;
+  clearStoLink?: boolean;
+  eligibleStatuses?: string[];
+}): Promise<void> {
+  const { data: rows, error: fetchError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .select("id, status")
+    .eq("sto_id", input.stoId)
+    .in("status", input.eligibleStatuses ?? ["ORD", "TRN", "GED"]);
+
+  if (fetchError) {
+    throw new Error("PROCUREMENT_CSN_UPDATE_FAILED");
+  }
+
+  const nowIso = new Date().toISOString();
+  for (const row of (rows as JsonRecord[] | null) ?? []) {
+    const csnId = toTrimmedString(row.id);
+    if (!csnId) {
+      continue;
+    }
+
+    const { error: updateError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("consignment_note")
+      .update({
+        status: input.reasonCode,
+        remarks: input.reason,
+        inactive_reason_code: input.reasonCode,
+        inactive_from_status: toUpperTrimmedString(row.status) || null,
+        inactive_at: nowIso,
+        inactive_by: input.actionedBy,
+        sto_id: input.clearStoLink === true ? null : undefined,
+        last_updated_at: nowIso,
+        last_updated_by: input.actionedBy,
+      })
+      .eq("id", csnId);
+
+    if (updateError) {
+      throw new Error("PROCUREMENT_CSN_UPDATE_FAILED");
     }
   }
 }
@@ -675,7 +723,7 @@ async function buildConsignmentStoFromSubCsns(input: {
       throw new Error("CSN_ALREADY_LINKED_TO_STO");
     }
     const subStatus = toUpperTrimmedString(subCsn.status);
-    if (subStatus !== "ORDERED" && subStatus !== "IN_TRANSIT") {
+    if (subStatus !== "ORD" && subStatus !== "TRN") {
       throw new Error("CSN_STO_LINK_BLOCKED");
     }
     const consigneeCompanyId = toTrimmedString(subCsn.consignee_company_id);
@@ -738,7 +786,7 @@ async function buildConsignmentStoFromSubCsns(input: {
       .insert({
         sto_id: sto.id,
         line_number: nextLineNumber,
-        material_id: lineConfig.material_id,
+        material_id: subCsn.material_id,
         sending_storage_location_id: lineConfig.sending_storage_location_id ?? null,
         receiving_storage_location_id: lineConfig.receiving_storage_location_id ?? null,
         quantity: dispatchQty,
@@ -1111,8 +1159,8 @@ export async function cancelSTOHandler(
     if (!reason) {
       return stoErrorResponse(req, ctx, "STO_CANCEL_REASON_REQUIRED", 400, "cancellation_reason is required.");
     }
-    if (!["DRAFT", "PENDING_APPROVAL", "CREATED"].includes(toUpperTrimmedString(sto.status))) {
-      return stoErrorResponse(req, ctx, "STO_CANCEL_BLOCKED", 400, "Only DRAFT, PENDING_APPROVAL, or CREATED STO can be cancelled.");
+    if (["RECEIVED", "CLOSED", "CANCELLED"].includes(toUpperTrimmedString(sto.status))) {
+      return stoErrorResponse(req, ctx, "STO_CANCEL_BLOCKED", 400, "STO cannot be cancelled after receipt or final closure.");
     }
 
     const { error } = await serviceRoleClient
@@ -1132,18 +1180,16 @@ export async function cancelSTOHandler(
       return stoErrorResponse(req, ctx, "STO_CANCEL_FAILED", 500, "Unable to cancel STO.");
     }
 
-    const { error: unlinkError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .update({
-        sto_id: null,
-        last_updated_at: new Date().toISOString(),
-        last_updated_by: ctx.auth_user_id,
-      })
-      .eq("sto_id", stoId);
-
-    if (unlinkError) {
-      return stoErrorResponse(req, ctx, "STO_CANCEL_FAILED", 500, "Unable to unlink sub-CSNs from cancelled STO.");
+    try {
+      await inactivateLinkedCsnsForSto({
+        stoId,
+        reasonCode: "CAN",
+        reason,
+        actionedBy: ctx.auth_user_id,
+        clearStoLink: toUpperTrimmedString(sto.sto_type) === "CONSIGNMENT_DISTRIBUTION",
+      });
+    } catch (_csnError) {
+      return stoErrorResponse(req, ctx, "STO_CANCEL_FAILED", 500, "Unable to inactivate linked CSNs for cancelled STO.");
     }
 
     return okResponse(await hydrateSto(stoId, ctx), ctx.request_id, req);

@@ -27,7 +27,7 @@ type CsnRow = Record<string, unknown>;
 
 const GE_HEADER_STATUSES = new Set(["OPEN", "GRN_POSTED", "CANCELLED"]);
 const GE_TYPES = new Set(["INBOUND_PO", "INBOUND_STO"]);
-const OPEN_CSN_STATUSES = ["ORDERED", "IN_TRANSIT", "ARRIVED"];
+const OPEN_CSN_STATUSES = ["ORD", "TRN", "GED"];
 const OPEN_PO_LINE_STATUSES = new Set(["OPEN", "PARTIALLY_RECEIVED"]);
 const BULK_DELIVERY_TYPES = new Set(["BULK", "TANKER"]);
 
@@ -237,8 +237,8 @@ async function upsertCsnArrival(
   }
 
   const currentStatus = toUpperTrimmedString(csn.status);
-  const nextStatus = currentStatus === "IN_TRANSIT" || currentStatus === "ORDERED"
-    ? "ARRIVED"
+  const nextStatus = currentStatus === "TRN" || currentStatus === "ORD"
+    ? "GED"
     : currentStatus;
   const totalReceivedQty = parseNullableNumber(csn.total_received_qty) ?? 0;
 

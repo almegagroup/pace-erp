@@ -175,7 +175,7 @@ export async function getProcurementPlanningHandler(
           .schema("erp_procurement")
           .from("consignment_note")
           .select("material_id, dispatch_qty, status, purchase_order!inner(company_id)")
-          .eq("status", "IN_TRANSIT");
+          .eq("status", "TRN");
 
         if (companyId) {
           query = query.eq("purchase_order.company_id", companyId);

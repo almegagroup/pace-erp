@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -20,6 +20,15 @@ import {
   markCSNInTransit,
   updateCSN,
 } from "../procurementApi.js";
+
+const STATUS_LABELS = {
+  ORD: "Ordered",
+  TRN: "In Transit",
+  GED: "GE Done",
+  GRD: "GRN Done",
+  CAN: "Cancelled",
+  KOF: "Knocked Off",
+};
 
 function buildForm(detail) {
   return {
@@ -70,12 +79,13 @@ function toPayload(form) {
 
 function getTone(value) {
   switch (String(value || "").toUpperCase()) {
-    case "IN_TRANSIT":
+    case "TRN":
       return "amber";
-    case "ARRIVED":
+    case "GED":
       return "emerald";
-    case "GRN_DONE":
-    case "CLOSED":
+    case "GRD":
+    case "CAN":
+    case "KOF":
       return "slate";
     case "IMPORT":
       return "sky";
@@ -86,6 +96,19 @@ function getTone(value) {
     default:
       return "slate";
   }
+}
+
+function getStatusLabel(value) {
+  return STATUS_LABELS[String(value || "").toUpperCase()] || value || "—";
+}
+
+function getCsnDisplayLabel(row) {
+  if (!row) {
+    return "—";
+  }
+  const prefix = row.mother_csn_id && !row.sto_id ? "Sub-CSN" : "CSN";
+  const number = row.csn_number || row.id || "";
+  return `${prefix}-${number}`;
 }
 
 export default function CSNDetailPage() {
@@ -114,7 +137,7 @@ export default function CSNDetailPage() {
     [detail?.mother_csn_id, relatedCsns]
   );
 
-  async function loadDetail() {
+  const loadDetail = useCallback(async () => {
     if (!id) {
       return;
     }
@@ -143,7 +166,7 @@ export default function CSNDetailPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [id, runtimeContext?.selectedCompanyId]);
 
   useEffect(() => {
     void loadDetail();
@@ -153,7 +176,7 @@ export default function CSNDetailPage() {
     listPorts({ is_active: "true", port_role: "DISCHARGE" }).then((data) => {
       setDischargePorts(Array.isArray(data) ? data : []);
     }).catch(() => {});
-  }, [id, runtimeContext?.selectedCompanyId]);
+  }, [loadDetail]);
 
   function patchField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -277,10 +300,10 @@ export default function CSNDetailPage() {
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         { key: "save", label: saving ? "Saving..." : "Save CSN", tone: "primary", onClick: () => void handleSave(), disabled: saving || loading || !detail },
-        ...(detail?.status === "ORDERED"
+        ...(detail?.status === "ORD"
           ? [{ key: "mark-transit", label: "Mark In Transit", tone: "neutral", onClick: () => void handleMarkInTransit(), disabled: saving }]
           : []),
-        ...(detail?.status === "IN_TRANSIT"
+        ...(detail?.status === "TRN"
           ? [{ key: "mark-arrived", label: "Mark Arrived", tone: "neutral", onClick: () => void handleMarkArrived(), disabled: saving }]
           : []),
       ]}
@@ -293,18 +316,25 @@ export default function CSNDetailPage() {
         <div className="grid gap-4">
           {detail.mother_csn_id ? (
             <div className="border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
-              Sub CSN of {motherCsn?.csn_number || detail.mother_csn_id}
+              Sub CSN of {getCsnDisplayLabel(motherCsn) || detail.mother_csn_id}
             </div>
           ) : null}
 
-          <ErpSectionCard eyebrow="Header" title={detail.csn_number || "CSN"}>
+          <ErpSectionCard eyebrow="Header" title={getCsnDisplayLabel(detail)}>
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
               <ErpFieldPreview label="CSN Type" value={detail.csn_type} tone={getTone(detail.csn_type)} />
-              <ErpFieldPreview label="Status" value={detail.status} tone={getTone(detail.status)} />
+              <ErpFieldPreview label="Status" value={getStatusLabel(detail.status)} tone={getTone(detail.status)} />
               <ErpFieldPreview
-                label="Linked PO"
+                label={detail.sto_id ? "Linked STO" : "Linked PO"}
                 value={
-                  detail.po_id ? (
+                  detail.sto_id ? (
+                    <Link
+                      to={`/dashboard/procurement/stos/${encodeURIComponent(detail.sto_id)}`}
+                      className="text-sky-700 underline underline-offset-2"
+                    >
+                      {detail.sto_number || detail.sto_id}
+                    </Link>
+                  ) : detail.po_id ? (
                     <Link
                       to={`/dashboard/procurement/purchase-orders/${encodeURIComponent(detail.po_id)}`}
                       className="text-sky-700 underline underline-offset-2"

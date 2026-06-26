@@ -21,8 +21,16 @@ type ProcurementHandlerContext = {
 };
 type CsnRow = Record<string, unknown>;
 
-const EDITABLE_CSN_STATUSES = new Set(["ORDERED", "IN_TRANSIT"]);
-const READONLY_CSN_STATUSES = new Set(["ARRIVED", "GRN_DONE"]);
+const CSN_STATUS = {
+  ORDERED: "ORD",
+  IN_TRANSIT: "TRN",
+  GATE_ENTRY_DONE: "GED",
+  GRN_DONE: "GRD",
+  CANCELLED: "CAN",
+  KNOCKED_OFF: "KOF",
+} as const;
+const EDITABLE_CSN_STATUSES = new Set([CSN_STATUS.ORDERED, CSN_STATUS.IN_TRANSIT]);
+const READONLY_CSN_STATUSES = new Set([CSN_STATUS.GATE_ENTRY_DONE, CSN_STATUS.GRN_DONE]);
 const DATE_FIELDS = new Set([
   "scheduled_eta_to_port",
   "etd",
@@ -215,7 +223,7 @@ async function getDomesticLeadTime(csn: CsnRow): Promise<Record<string, unknown>
 
 async function getPortPlantTransit(csn: CsnRow): Promise<Record<string, unknown> | null> {
   const portId = toTrimmedString(csn.port_of_discharge_id);
-  const companyId = toTrimmedString(csn.company_id);
+  const companyId = toTrimmedString(csn.consignee_company_id) || toTrimmedString(csn.company_id);
   if (!portId || !companyId) {
     return null;
   }
@@ -382,6 +390,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   }
 
   const poIds = [...new Set(rows.map((row) => toTrimmedString(row.po_id)).filter(Boolean))];
+  const stoIds = [...new Set(rows.map((row) => toTrimmedString(row.sto_id)).filter(Boolean))];
   const vendorIds = [...new Set(rows.map((row) => toTrimmedString(row.vendor_id)).filter(Boolean))];
   const materialIds = [...new Set(rows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   const transporterIds = [...new Set([
@@ -389,9 +398,12 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     ...rows.map((row) => toTrimmedString(row.domestic_transporter_id)),
   ].filter(Boolean))];
 
-  const [poResult, vendorResult, materialResult, transporterResult] = await Promise.all([
+  const [poResult, stoResult, vendorResult, materialResult, transporterResult] = await Promise.all([
     poIds.length
       ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, po_number, po_date").in("id", poIds)
+      : Promise.resolve({ data: [], error: null }),
+    stoIds.length
+      ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, sto_date").in("id", stoIds)
       : Promise.resolve({ data: [], error: null }),
     vendorIds.length
       ? serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_name, name").in("id", vendorIds)
@@ -404,26 +416,36 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       : Promise.resolve({ data: [], error: null }),
   ]);
 
-  if (poResult.error || vendorResult.error || materialResult.error || transporterResult.error) {
+  if (poResult.error || stoResult.error || vendorResult.error || materialResult.error || transporterResult.error) {
     throw new Error("PROCUREMENT_TRACKER_ENRICH_FAILED");
   }
 
   const poMap = new Map((poResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const stoMap = new Map((stoResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const vendorMap = new Map((vendorResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const materialMap = new Map((materialResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const transporterMap = new Map((transporterResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
 
   return rows.map((row) => {
     const po = poMap.get(toTrimmedString(row.po_id));
+    const sto = stoMap.get(toTrimmedString(row.sto_id));
     const vendor = vendorMap.get(toTrimmedString(row.vendor_id));
     const material = materialMap.get(toTrimmedString(row.material_id));
     const transporter = transporterMap.get(
       toTrimmedString(row.transporter_id) || toTrimmedString(row.domestic_transporter_id),
     );
+    const isDetachedSubCsn = Boolean(row.mother_csn_id) && !toTrimmedString(row.sto_id);
+    const csnNumber = toTrimmedString(row.csn_number);
     return {
       ...row,
       po_number: po?.po_number ?? null,
       po_date: po?.po_date ?? null,
+      sto_number: sto?.sto_number ?? null,
+      sto_date: sto?.sto_date ?? null,
+      display_reference_number: sto?.sto_number ?? po?.po_number ?? null,
+      csn_display_number: csnNumber
+        ? `${isDetachedSubCsn ? "Sub-CSN" : "CSN"}-${csnNumber}`
+        : null,
       vendor_name: vendor?.vendor_name ?? vendor?.name ?? null,
       material_name: material?.material_name ?? null,
       transporter_name: transporter?.transporter_name ?? row.transporter_name_freetext ?? row.domestic_transporter_freetext ?? null,
@@ -505,9 +527,11 @@ export async function getCSNHandler(req: Request, ctx: ProcurementHandlerContext
       throw new Error("PROCUREMENT_CSN_DETAIL_FAILED");
     }
 
+    const [enriched] = await enrichTrackerRows([csn]);
+
     return okResponse({
       data: {
-        ...csn,
+        ...(enriched ?? csn),
         gate_entry_lines: gateEntryLineResult.data ?? [],
         gate_entries: gateEntryResult.data ?? [],
         grn: grnResult.data ?? null,
@@ -631,6 +655,10 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
 
     const csnNumber = await generateProcurementDocNumber("CSN");
     const dispatchQty = body.dispatch_qty != null ? Number(body.dispatch_qty) : mother.dispatch_qty ?? mother.po_qty;
+    const motherDispatchQty = Number(mother.dispatch_qty ?? mother.po_qty ?? 0);
+    if (!Number.isFinite(Number(dispatchQty)) || Number(dispatchQty) <= 0 || Number(dispatchQty) > motherDispatchQty) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_SUB_CSN_QTY_INVALID", 400, "Sub CSN dispatch quantity must be greater than zero and cannot exceed the mother's remaining dispatch quantity");
+    }
     const insertPayload: JsonRecord = {
       ...mother,
       id: undefined,
@@ -638,8 +666,8 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
       mother_csn_id: id,
       is_mother_csn: false,
       consignee_company_id: toTrimmedString(body.consignee_company_id) || null,
-      status: "ORDERED",
-      dispatch_qty: dispatchQty,
+      status: CSN_STATUS.ORDERED,
+      dispatch_qty: Number(dispatchQty),
       total_received_qty: 0,
       gate_entry_id: null,
       gate_entry_date: null,
@@ -664,15 +692,25 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
       throw new Error("PROCUREMENT_SUB_CSN_CREATE_FAILED");
     }
 
-    await serviceRoleClient
+    const retainedDispatchQty = Math.max(
+      0,
+      Number(mother.dispatch_qty ?? mother.po_qty ?? 0) - Number(dispatchQty ?? 0),
+    );
+
+    const motherUpdateResult = await serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
       .update({
         is_mother_csn: true,
+        dispatch_qty: retainedDispatchQty,
         last_updated_at: new Date().toISOString(),
         last_updated_by: ctx.auth_user_id,
       })
       .eq("id", id);
+
+    if (motherUpdateResult.error) {
+      throw new Error("PROCUREMENT_SUB_CSN_CREATE_FAILED");
+    }
 
     return okResponse({ data: subCsn }, ctx.request_id, req);
   } catch (err) {
@@ -700,7 +738,7 @@ export async function listAvailableSubCsnsForStoHandler(
       .schema("erp_procurement")
       .from("consignment_note")
       .select("id, csn_number, status, mother_csn_id, company_id, consignee_company_id, material_id, po_id, po_line_id, dispatch_qty, po_qty, po_uom_code, bl_number, boe_number, sto_id")
-      .in("status", ["ORDERED", "IN_TRANSIT"])
+      .in("status", [CSN_STATUS.ORDERED, CSN_STATUS.IN_TRANSIT])
       .eq("material_id", materialId)
       .eq("consignee_company_id", receivingCompanyId)
       .is("sto_id", null)
@@ -799,8 +837,11 @@ export async function deleteSubCSNHandler(req: Request, ctx: ProcurementHandlerC
       return procurementErrorResponse(req, ctx, "PROCUREMENT_SUB_CSN_NOT_FOUND", 404, "Sub CSN not found");
     }
 
-    if (toUpperTrimmedString(subCsn.status) !== "ORDERED") {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_SUB_CSN_DELETE_BLOCKED", 400, "Only ORDERED sub CSN can be deleted");
+    if (toUpperTrimmedString(subCsn.status) !== CSN_STATUS.ORDERED) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_SUB_CSN_DELETE_BLOCKED", 400, "Only ORD sub CSN can be deleted");
+    }
+    if (toTrimmedString(subCsn.sto_id)) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_SUB_CSN_DELETE_BLOCKED", 400, "Sub CSN already linked to an STO");
     }
 
     const gateEntryLink = await serviceRoleClient
@@ -818,6 +859,8 @@ export async function deleteSubCSNHandler(req: Request, ctx: ProcurementHandlerC
       return procurementErrorResponse(req, ctx, "PROCUREMENT_SUB_CSN_DELETE_BLOCKED", 400, "Sub CSN linked to gate entry");
     }
 
+    const mother = await getCsnById(motherId, companyId);
+
     const { error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
@@ -826,6 +869,24 @@ export async function deleteSubCSNHandler(req: Request, ctx: ProcurementHandlerC
 
     if (error) {
       throw new Error("PROCUREMENT_SUB_CSN_DELETE_FAILED");
+    }
+
+    if (mother) {
+      const restoredDispatchQty = Number(mother.dispatch_qty ?? mother.po_qty ?? 0)
+        + Number(subCsn.dispatch_qty ?? subCsn.po_qty ?? 0);
+      const { error: restoreError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("consignment_note")
+        .update({
+          dispatch_qty: restoredDispatchQty,
+          last_updated_at: new Date().toISOString(),
+          last_updated_by: ctx.auth_user_id,
+        })
+        .eq("id", motherId);
+
+      if (restoreError) {
+        throw new Error("PROCUREMENT_SUB_CSN_DELETE_FAILED");
+      }
     }
 
     return okResponse({ data: { id: subId, deleted: true } }, ctx.request_id, req);
@@ -845,13 +906,13 @@ export async function markCSNInTransitHandler(req: Request, ctx: ProcurementHand
     if (!csn) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");
     }
-    if (toUpperTrimmedString(csn.status) !== "ORDERED") {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_STATUS_INVALID", 400, "Only ORDERED CSN can be marked in transit");
+    if (toUpperTrimmedString(csn.status) !== CSN_STATUS.ORDERED) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_STATUS_INVALID", 400, "Only ORD CSN can be marked in transit");
     }
 
     const etdDate = toTrimmedString(body.actual_etd || body.etd || todayIsoDate());
     const updates: JsonRecord = {
-      status: "IN_TRANSIT",
+      status: CSN_STATUS.IN_TRANSIT,
       etd: etdDate,
       last_updated_at: new Date().toISOString(),
       last_updated_by: ctx.auth_user_id,
@@ -887,14 +948,14 @@ export async function markCSNArrivedHandler(req: Request, ctx: ProcurementHandle
     if (!csn) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");
     }
-    if (toUpperTrimmedString(csn.status) !== "IN_TRANSIT") {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_STATUS_INVALID", 400, "Only IN_TRANSIT CSN can be marked arrived");
+    if (toUpperTrimmedString(csn.status) !== CSN_STATUS.IN_TRANSIT) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_STATUS_INVALID", 400, "Only TRN CSN can be advanced");
     }
 
     const actualArrivalDate = toTrimmedString(body.actual_arrival_date || todayIsoDate());
     const csnType = toUpperTrimmedString(csn.csn_type);
     const updates: JsonRecord = {
-      status: "ARRIVED",
+      status: CSN_STATUS.GATE_ENTRY_DONE,
       last_updated_at: new Date().toISOString(),
       last_updated_by: ctx.auth_user_id,
     };
@@ -939,7 +1000,7 @@ export async function getLCAlertCountHandler(req: Request, ctx: ProcurementHandl
       .eq("lc_required", true)
       .is("lc_opened_date", null)
       .lte("eta_at_port", threshold)
-      .not("status", "in", '("GRN_DONE","CLOSED")');
+      .not("status", "in", '("GRD","CAN","KOF")');
     if (error) {
       throw new Error("PROCUREMENT_LC_ALERT_COUNT_FAILED");
     }
@@ -962,7 +1023,7 @@ export async function getLCAlertListHandler(req: Request, ctx: ProcurementHandle
       .eq("lc_required", true)
       .is("lc_opened_date", null)
       .lte("eta_at_port", threshold)
-      .not("status", "in", '("GRN_DONE","CLOSED")')
+      .not("status", "in", '("GRD","CAN","KOF")')
       .order("eta_at_port", { ascending: true });
     if (error) {
       throw new Error("PROCUREMENT_LC_ALERT_LIST_FAILED");
@@ -985,7 +1046,7 @@ export async function getVesselBookingAlertCountHandler(req: Request, ctx: Procu
       .eq("company_id", companyId)
       .eq("csn_type", "IMPORT")
       .is("vessel_booking_confirmed_date", null)
-      .not("status", "in", '("ARRIVED","GRN_DONE","CLOSED")');
+      .not("status", "in", '("GED","GRD","CAN","KOF")');
 
     if (error) {
       throw new Error("PROCUREMENT_VESSEL_ALERT_COUNT_FAILED");
@@ -1015,7 +1076,7 @@ export async function getVesselBookingAlertListHandler(req: Request, ctx: Procur
       .eq("company_id", companyId)
       .eq("csn_type", "IMPORT")
       .is("vessel_booking_confirmed_date", null)
-      .not("status", "in", '("ARRIVED","GRN_DONE","CLOSED")');
+      .not("status", "in", '("GED","GRD","CAN","KOF")');
 
     if (error) {
       throw new Error("PROCUREMENT_VESSEL_ALERT_LIST_FAILED");
@@ -1050,7 +1111,7 @@ export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHan
           .eq("lc_required", true)
           .is("lc_opened_date", null)
           .lte("eta_at_port", threshold)
-          .not("status", "in", '("GRN_DONE","CLOSED")');
+          .not("status", "in", '("GRD","CAN","KOF")');
         if (error) throw new Error("PROCUREMENT_LC_ALERT_COUNT_FAILED");
         return count ?? 0;
       })(),
@@ -1063,7 +1124,7 @@ export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHan
           .eq("company_id", companyId)
           .eq("csn_type", "IMPORT")
           .is("vessel_booking_confirmed_date", null)
-          .not("status", "in", '("ARRIVED","GRN_DONE","CLOSED")');
+          .not("status", "in", '("GED","GRD","CAN","KOF")');
         if (error) throw new Error("PROCUREMENT_VESSEL_ALERT_COUNT_FAILED");
         const enriched = await enrichTrackerRows((data as CsnRow[] | null) ?? []);
         return enriched.filter((row) => {

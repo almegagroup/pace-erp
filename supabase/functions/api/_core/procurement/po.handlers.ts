@@ -578,14 +578,30 @@ async function getNextAmendmentNumber(poId: string): Promise<number> {
 }
 
 function deriveCsnType(po: PurchaseOrderRow): string {
-  const deliveryType = toUpperTrimmedString(po.delivery_type);
   const vendorType = toUpperTrimmedString(po.vendor_type);
+  return vendorType === "IMPORT" ? "IMPORT" : "DOMESTIC";
+}
 
-  if (deliveryType === "BULK" || deliveryType === "TANKER") {
-    return "BULK";
+async function getPrimaryMaterialCategoryId(materialId: string): Promise<string | null> {
+  if (!materialId) {
+    return null;
   }
 
-  return vendorType === "IMPORT" ? "IMPORT" : "DOMESTIC";
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_category_assignment")
+    .select("group_id")
+    .eq("material_id", materialId)
+    .eq("active", true)
+    .order("is_primary", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("PROCUREMENT_MATERIAL_CATEGORY_LOOKUP_FAILED");
+  }
+
+  return toTrimmedString(data?.group_id) || null;
 }
 
 async function createCsnsForPo(
@@ -593,6 +609,10 @@ async function createCsnsForPo(
   poLines: PurchaseOrderLineRow[],
   createdBy: string,
 ): Promise<void> {
+  if (toUpperTrimmedString(po.delivery_type) === "BULK") {
+    return;
+  }
+
   for (const line of poLines) {
     const lineId = toTrimmedString(line.id);
 
@@ -609,6 +629,7 @@ async function createCsnsForPo(
 
     const csnNumber = await generateProcurementDocNumber("CSN");
     const orderedQty = Number(line.ordered_qty ?? 0);
+    const materialCategoryId = await getPrimaryMaterialCategoryId(toTrimmedString(line.material_id));
 
     const { error } = await serviceRoleClient
       .schema("erp_procurement")
@@ -616,10 +637,11 @@ async function createCsnsForPo(
       .insert({
         csn_number: csnNumber,
         csn_type: deriveCsnType(po),
-        status: "ORDERED",
+        status: "ORD",
         company_id: po.company_id,
         vendor_id: po.vendor_id,
         material_id: line.material_id,
+        material_category_id: materialCategoryId,
         po_id: po.id,
         po_line_id: line.id,
         po_qty: orderedQty,
@@ -629,11 +651,66 @@ async function createCsnsForPo(
         has_rebate: po.has_rebate === true,
         rebate_remarks: po.rebate_remarks ?? null,
         indent_required: po.indent_required === true,
+        port_of_discharge_id: po.destination_port_id ?? null,
         created_by: createdBy,
       });
 
     if (error) {
       throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
+    }
+  }
+}
+
+async function inactivateCsnsForPo(input: {
+  poId?: string;
+  poLineId?: string;
+  reasonCode: "CAN" | "KOF";
+  reason: string;
+  actionedBy: string;
+  eligibleStatuses?: string[];
+}): Promise<void> {
+  let query = serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .select("id, status")
+    .in("status", input.eligibleStatuses ?? ["ORD", "TRN", "GED"]);
+
+  if (input.poId) {
+    query = query.eq("po_id", input.poId);
+  }
+  if (input.poLineId) {
+    query = query.eq("po_line_id", input.poLineId);
+  }
+
+  const { data: rows, error: fetchError } = await query;
+  if (fetchError) {
+    throw new Error("PROCUREMENT_CSN_UPDATE_FAILED");
+  }
+
+  const nowIso = new Date().toISOString();
+  for (const row of (rows as JsonRecord[] | null) ?? []) {
+    const csnId = toTrimmedString(row.id);
+    if (!csnId) {
+      continue;
+    }
+
+    const { error: updateError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("consignment_note")
+      .update({
+        status: input.reasonCode,
+        remarks: input.reason,
+        inactive_reason_code: input.reasonCode,
+        inactive_from_status: toUpperTrimmedString(row.status) || null,
+        inactive_at: nowIso,
+        inactive_by: input.actionedBy,
+        last_updated_at: nowIso,
+        last_updated_by: input.actionedBy,
+      })
+      .eq("id", csnId);
+
+    if (updateError) {
+      throw new Error("PROCUREMENT_CSN_UPDATE_FAILED");
     }
   }
 }
@@ -1900,20 +1977,15 @@ export async function cancelPOHandler(
       throw new Error("PROCUREMENT_PO_CANCEL_FAILED");
     }
 
-    const csnCancelResult = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .update({
-        status: "CLOSED",
-        remarks: reason,
-        last_updated_at: nowIso,
-        last_updated_by: ctx.auth_user_id,
-      })
-      .eq("po_id", poId)
-      .eq("status", "ORDERED");
-
-    if (csnCancelResult.error) {
-      console.error("PO_CANCEL_CSN_UPDATE_ERROR", JSON.stringify(csnCancelResult.error));
+    try {
+      await inactivateCsnsForPo({
+        poId,
+        reasonCode: "CAN",
+        reason,
+        actionedBy: ctx.auth_user_id,
+      });
+    } catch (csnError) {
+      console.error("PO_CANCEL_CSN_UPDATE_ERROR", csnError);
       throw new Error("PROCUREMENT_PO_CANCEL_FAILED");
     }
 
@@ -1970,6 +2042,7 @@ export async function knockOffPOLineHandler(
       .from("purchase_order_line")
       .update({
         line_status: "KNOCKED_OFF",
+        knocked_off_qty: Number(targetLine.open_qty ?? targetLine.ordered_qty ?? 0),
         knock_off_reason: reason,
         knocked_off_at: nowIso,
         knocked_off_by: ctx.auth_user_id,
@@ -2002,6 +2075,19 @@ export async function knockOffPOLineHandler(
           last_updated_by: ctx.auth_user_id,
         })
         .eq("id", poId);
+    }
+
+    try {
+      await inactivateCsnsForPo({
+        poLineId: lineId,
+        reasonCode: "KOF",
+        reason,
+        actionedBy: ctx.auth_user_id,
+        eligibleStatuses: ["ORD"],
+      });
+    } catch (csnError) {
+      console.error("PO_LINE_KNOCK_OFF_CSN_UPDATE_ERROR", csnError);
+      throw new Error("PROCUREMENT_PO_LINE_KNOCK_OFF_FAILED");
     }
 
     const orderGroupId = toTrimmedString(po.order_group_id);
@@ -2040,6 +2126,7 @@ export async function knockOffPOHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
     }
 
+    const lines = await getPOLines(poId);
     const nowIso = new Date().toISOString();
     const lineUpdateResult = await serviceRoleClient
       .schema("erp_procurement")
@@ -2060,6 +2147,26 @@ export async function knockOffPOHandler(
       throw new Error("PROCUREMENT_PO_KNOCK_OFF_FAILED");
     }
 
+    for (const line of lines) {
+      const lineId = toTrimmedString(line.id);
+      if (!lineId) {
+        continue;
+      }
+      const knockedOffQty = Number(line.open_qty ?? line.ordered_qty ?? 0);
+      const { error: linePatchError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("purchase_order_line")
+        .update({
+          knocked_off_qty: knockedOffQty,
+        })
+        .eq("id", lineId);
+
+      if (linePatchError) {
+        console.error("PO_KNOCK_OFF_LINE_QTY_UPDATE_ERROR", JSON.stringify(linePatchError));
+        throw new Error("PROCUREMENT_PO_KNOCK_OFF_FAILED");
+      }
+    }
+
     const { data: updatedPo, error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("purchase_order")
@@ -2075,6 +2182,19 @@ export async function knockOffPOHandler(
 
     if (error || !updatedPo) {
       console.error("PO_KNOCK_OFF_HEADER_UPDATE_ERROR", JSON.stringify(error));
+      throw new Error("PROCUREMENT_PO_KNOCK_OFF_FAILED");
+    }
+
+    try {
+      await inactivateCsnsForPo({
+        poId,
+        reasonCode: "KOF",
+        reason,
+        actionedBy: ctx.auth_user_id,
+        eligibleStatuses: ["ORD"],
+      });
+    } catch (csnError) {
+      console.error("PO_KNOCK_OFF_CSN_UPDATE_ERROR", csnError);
       throw new Error("PROCUREMENT_PO_KNOCK_OFF_FAILED");
     }
 

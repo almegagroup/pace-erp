@@ -789,7 +789,7 @@ export async function postGRNHandler(
           .schema("erp_procurement")
           .from("consignment_note")
           .update({
-            status: "GRN_DONE",
+            status: "GRD",
             grn_id: grnId,
             grn_date: grn.grn_date,
             received_qty: receivedQty,
@@ -931,7 +931,7 @@ export async function reverseGRNHandler(
           .schema("erp_procurement")
           .from("consignment_note")
           .update({
-            status: "ARRIVED",
+            status: "GED",
             grn_id: null,
             grn_date: null,
             received_qty: null,
