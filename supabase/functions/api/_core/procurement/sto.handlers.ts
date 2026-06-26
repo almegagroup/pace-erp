@@ -238,7 +238,8 @@ async function generateProcurementDocNumber(docType: string): Promise<string> {
     .rpc("generate_doc_number", { p_doc_type: docType });
 
   if (error || !data) {
-    throw new Error("PROCUREMENT_DOC_NUMBER_FAILED");
+    console.error("STO_DOC_NUMBER_FAILED", JSON.stringify({ docType, error }));
+    throw new Error(`PROCUREMENT_DOC_NUMBER_FAILED: ${error?.message ?? "no data returned"}`);
   }
 
   return String(data);
@@ -253,7 +254,8 @@ async function generateCompanyDocNumber(companyId: string, docType: string): Pro
     });
 
   if (error || !data) {
-    throw new Error("PROCUREMENT_DOC_NUMBER_FAILED");
+    console.error("STO_COMPANY_DOC_NUMBER_FAILED", JSON.stringify({ companyId, docType, error }));
+    throw new Error(`PROCUREMENT_DOC_NUMBER_FAILED: ${error?.message ?? "no data returned"}`);
   }
 
   return String(data);
@@ -309,7 +311,8 @@ async function getStoApprovalLog(stoId: string): Promise<JsonRecord[]> {
     .order("actioned_at", { ascending: false });
 
   if (error) {
-    throw new Error("STO_APPROVAL_LOG_FETCH_FAILED");
+    console.error("STO_APPROVAL_LOG_FETCH_FAILED", JSON.stringify({ stoId, error }));
+    throw new Error(`STO_APPROVAL_LOG_FETCH_FAILED: ${error.message}`);
   }
 
   return (data as JsonRecord[] | null) ?? [];
@@ -324,7 +327,8 @@ async function getStoAmendmentLog(stoId: string): Promise<JsonRecord[]> {
     .order("amended_at", { ascending: false });
 
   if (error) {
-    throw new Error("STO_AMENDMENT_LOG_FETCH_FAILED");
+    console.error("STO_AMENDMENT_LOG_FETCH_FAILED", JSON.stringify({ stoId, error }));
+    throw new Error(`STO_AMENDMENT_LOG_FETCH_FAILED: ${error.message}`);
   }
 
   return (data as JsonRecord[] | null) ?? [];
@@ -920,6 +924,7 @@ export async function createSTOHandler(
     return okResponse(await hydrateSto(String(sto.id), ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_CREATE_FAILED";
+    console.error("STO_CREATE_HANDLER_ERROR", code, error);
     const status = code.includes("INVALID") ? 400 : 500;
     return stoErrorResponse(req, ctx, code, status, code);
   }
