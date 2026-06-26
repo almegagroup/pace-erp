@@ -444,6 +444,25 @@ async function getPortPlantTransit(csn: CsnRow): Promise<Record<string, unknown>
   return (data as Record<string, unknown> | null) ?? null;
 }
 
+async function getPoExpectedDeliveryDate(poId: string): Promise<string | null> {
+  if (!poId) {
+    return null;
+  }
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("purchase_order")
+    .select("expected_delivery_date")
+    .eq("id", poId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("PROCUREMENT_PO_LOOKUP_FAILED");
+  }
+
+  return toTrimmedString((data as Record<string, unknown> | null)?.expected_delivery_date) || null;
+}
+
 async function getPoLineSnapshot(poLineId: string): Promise<Record<string, unknown> | null> {
   if (!poLineId) {
     return null;
@@ -452,7 +471,7 @@ async function getPoLineSnapshot(poLineId: string): Promise<Record<string, unkno
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
     .from("purchase_order_line")
-    .select("id, ordered_qty, expected_delivery_date, knocked_off_qty, line_status")
+    .select("id, ordered_qty, knocked_off_qty, line_status")
     .eq("id", poLineId)
     .maybeSingle();
 
@@ -665,7 +684,7 @@ async function recalculateAndBuildUpdates(
   inputUpdates: JsonRecord,
 ): Promise<JsonRecord> {
   const merged = { ...csn, ...inputUpdates };
-  const poLine = await getPoLineSnapshot(toTrimmedString(merged.po_line_id));
+  const expectedDeliveryDate = await getPoExpectedDeliveryDate(toTrimmedString(merged.po_id));
   const importLeadTime = await getImportLeadTime(merged);
   const domesticLeadTime = await getDomesticLeadTime(merged);
   const portPlantTransit = await getPortPlantTransit(merged);
@@ -688,7 +707,7 @@ async function recalculateAndBuildUpdates(
     importLeadTime,
     domesticLeadTime,
     portPlantTransit,
-    toTrimmedString(poLine?.expected_delivery_date) || null,
+    expectedDeliveryDate,
   );
   return { ...inputUpdates, ...autoSnapshot, ...cascade };
 }
@@ -746,13 +765,13 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
 
   const [poResult, stoResult, vendorResult, materialResult, transporterResult, paymentTermResult, portResult, companyResult, poLineResult, gateEntryResult, grnResult, materialGroupOptions] = await Promise.all([
     poIds.length
-      ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, po_number, po_date").in("id", poIds)
+      ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, po_number, po_date, expected_delivery_date").in("id", poIds)
       : Promise.resolve({ data: [], error: null }),
     stoIds.length
       ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, sto_date").in("id", stoIds)
       : Promise.resolve({ data: [], error: null }),
     vendorIds.length
-      ? serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_name, name").in("id", vendorIds)
+      ? serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_name").in("id", vendorIds)
       : Promise.resolve({ data: [], error: null }),
     materialIds.length
       ? serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name").in("id", materialIds)
@@ -764,7 +783,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       ? serviceRoleClient
         .schema("erp_master")
         .from("payment_terms_master")
-        .select("id, payment_term_name, credit_days, reference_date_type:reference_date_type_id(id, code, label)")
+        .select("id, name, credit_days, reference_date_type:reference_date_type_id(id, code, label)")
         .in("id", paymentTermIds)
       : Promise.resolve({ data: [], error: null }),
     portIds.length
@@ -774,7 +793,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds)
       : Promise.resolve({ data: [], error: null }),
     poLineIds.length
-      ? serviceRoleClient.schema("erp_procurement").from("purchase_order_line").select("id, expected_delivery_date").in("id", poLineIds)
+      ? serviceRoleClient.schema("erp_procurement").from("purchase_order_line").select("id").in("id", poLineIds)
       : Promise.resolve({ data: [], error: null }),
     gateEntryIds.length
       ? serviceRoleClient.schema("erp_procurement").from("gate_entry").select("id, ge_number").in("id", gateEntryIds)
@@ -860,7 +879,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       vendor_name: vendor?.vendor_name ?? vendor?.name ?? null,
       material_name: material?.material_name ?? null,
       transporter_name: transporter?.transporter_name ?? row.transporter_name_freetext ?? row.domestic_transporter_freetext ?? null,
-      payment_term_name: paymentTerm?.payment_term_name ?? null,
+      payment_term_name: paymentTerm?.name ?? null,
       payment_term_reference_type_code: referenceType?.code ?? null,
       payment_term_credit_days: paymentTerm?.credit_days ?? null,
       actual_payment_date: actualPaymentDate,
@@ -878,7 +897,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
         : null,
       material_group_name: selectedMaterialGroup?.group_name ?? null,
       material_group_options: materialGroups,
-      expected_delivery_date: poLine?.expected_delivery_date ?? null,
+      expected_delivery_date: po?.expected_delivery_date ?? null,
       ge_number: gateEntry?.ge_number ?? null,
       grn_number: grn?.grn_number ?? null,
       actual_arrival_date: row.gate_entry_date ?? row.ata_at_port ?? null,
@@ -1281,14 +1300,14 @@ export async function listAvailableSubCsnsForStoHandler(
         ? serviceRoleClient
           .schema("erp_procurement")
           .from("purchase_order")
-          .select("id, po_number, status, unit_rate, payment_term_id, freight_term, gst_terms, delivery_date, has_rebate, rebate_rate, rebate_rate_uom_basis, rebate_remarks")
+          .select("id, po_number, status, payment_term_id, freight_term, gst_terms, expected_delivery_date, has_rebate, rebate_rate, rebate_rate_uom_basis, rebate_remarks")
           .in("id", poIds)
         : Promise.resolve({ data: [], error: null }),
       poLineIds.length > 0
         ? serviceRoleClient
           .schema("erp_procurement")
           .from("purchase_order_line")
-          .select("id, line_status")
+          .select("id, line_status, unit_rate")
           .in("id", poLineIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
@@ -1313,16 +1332,17 @@ export async function listAvailableSubCsnsForStoHandler(
       .filter((row) => toUpperTrimmedString(poLineById.get(toTrimmedString(row.po_line_id))?.line_status) !== "KNOCKED_OFF")
       .map((row) => {
         const po = poById.get(toTrimmedString(row.po_id));
+        const poLine = poLineById.get(toTrimmedString(row.po_line_id));
         return {
           ...row,
           mother_po_number: po?.po_number ?? null,
           invoice_or_boe_reference: toTrimmedString(row.bl_number) || toTrimmedString(row.boe_number) || null,
           dispatch_qty: row.dispatch_qty ?? row.po_qty ?? null,
-          transfer_price: po?.unit_rate ?? null,
+          transfer_price: poLine?.unit_rate ?? null,
           payment_term_id: po?.payment_term_id ?? null,
           freight_term: po?.freight_term ?? null,
           gst_terms: po?.gst_terms ?? null,
-          expected_delivery_date: po?.delivery_date ?? null,
+          expected_delivery_date: po?.expected_delivery_date ?? null,
           has_rebate: po?.has_rebate === true,
           rebate_rate: po?.rebate_rate ?? null,
           rebate_rate_uom_basis: po?.rebate_rate_uom_basis ?? null,
