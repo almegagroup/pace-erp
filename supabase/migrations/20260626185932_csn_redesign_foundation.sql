@@ -31,10 +31,6 @@ ALTER TABLE erp_procurement.consignment_note
 ALTER TABLE erp_procurement.consignment_note
   DROP CONSTRAINT IF EXISTS consignment_note_status_check;
 
-ALTER TABLE erp_procurement.consignment_note
-  ADD CONSTRAINT consignment_note_status_check
-  CHECK (status IN ('ORD', 'TRN', 'GED', 'GRD', 'CAN', 'KOF'));
-
 UPDATE erp_procurement.consignment_note AS cn
 SET status = CASE cn.status
   WHEN 'ORDERED' THEN 'ORD'
@@ -62,6 +58,10 @@ SET status = CASE cn.status
   ELSE cn.status
 END
 WHERE cn.status IN ('ORDERED', 'IN_TRANSIT', 'ARRIVED', 'GRN_DONE', 'OPEN', 'CLOSED');
+
+ALTER TABLE erp_procurement.consignment_note
+  ADD CONSTRAINT consignment_note_status_check
+  CHECK (status IN ('ORD', 'TRN', 'GED', 'GRD', 'CAN', 'KOF'));
 
 UPDATE erp_procurement.consignment_note
 SET inactive_reason_code = status
