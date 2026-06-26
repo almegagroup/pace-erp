@@ -368,9 +368,10 @@ export default function StoCreateFormPage({ openingMode = false }) {
         const nextLine = { ...line, ...patch };
         if (patch.material_id !== undefined && patch.material_id !== line.material_id) {
           nextLine.source_csn_id = "";
+          const material = materials.find((entry) => entry.id === patch.material_id);
+          nextLine.uom_code = material?.base_uom_code || "";
           if (isConsignmentSto) {
             nextLine.quantity = "";
-            nextLine.uom_code = "";
           }
         }
         return nextLine;
@@ -534,8 +535,8 @@ export default function StoCreateFormPage({ openingMode = false }) {
       render: (_row, index) => (
         <input
           value={lines[index].uom_code}
-          onChange={(event) => updateLine(index, { uom_code: event.target.value.toUpperCase() })}
-          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+          readOnly
+          className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-700 outline-none"
         />
       ),
     },

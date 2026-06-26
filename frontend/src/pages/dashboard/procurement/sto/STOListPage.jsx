@@ -135,11 +135,6 @@ export default function STOListPage() {
   const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
 
-  function openCreate() {
-    openScreen(OPERATION_SCREENS.PROC_STO_CREATE.screen_code);
-    navigate("/dashboard/procurement/stos/create");
-  }
-
   function openDetail(row) {
     openScreen(OPERATION_SCREENS.PROC_STO_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/stos/${encodeURIComponent(row.id)}`);
@@ -155,12 +150,6 @@ export default function STOListPage() {
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
           onClick: () => setRefreshToken((value) => value + 1),
-        },
-        {
-          key: "create",
-          label: "Create STO",
-          tone: "primary",
-          onClick: openCreate,
         },
       ]}
       notices={error ? [{ key: "sto-list-error", tone: "error", message: error }] : []}
