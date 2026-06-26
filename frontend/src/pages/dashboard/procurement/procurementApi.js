@@ -379,6 +379,30 @@ export function getCSNTracker(params) {
   return fetchProcurement("GET", "/api/procurement/tracker", undefined, params);
 }
 
+export function listCSNTrackerLayouts() {
+  return fetchProcurement("GET", "/api/procurement/tracker/layouts");
+}
+
+export function createCSNTrackerLayout(data) {
+  return fetchProcurement("POST", "/api/procurement/tracker/layouts", data);
+}
+
+export function deleteCSNTrackerLayout(id) {
+  return fetchProcurement("DELETE", `/api/procurement/tracker/layouts/${encodeURIComponent(id)}`);
+}
+
+export function getCSNFieldHistory(id, params) {
+  return fetchProcurement("GET", `/api/procurement/csns/${encodeURIComponent(id)}/history`, undefined, params);
+}
+
+export function previewCSNDispatchQty(id, data) {
+  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/dispatch-qty/preview`, data);
+}
+
+export function confirmCSNDispatchQty(id, data) {
+  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/dispatch-qty/confirm`, data);
+}
+
 export function inlineUpdateCSN(id, data) {
   return fetchProcurement("PUT", `/api/procurement/tracker/${encodeURIComponent(id)}/inline`, data);
 }

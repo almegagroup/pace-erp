@@ -11,7 +11,10 @@
 import type { ContextResolution } from "../_pipeline/context.ts";
 import type { SessionResolution } from "../_pipeline/session.ts";
 import {
+  confirmDispatchQtyAdjustmentHandler,
   createSubCSNHandler,
+  createTrackerLayoutHandler,
+  deleteTrackerLayoutHandler,
   deleteSubCSNHandler,
   getAllAlertCountsHandler,
   getCSNHandler,
@@ -22,9 +25,12 @@ import {
   getVesselBookingAlertListHandler,
   inlineUpdateCSNHandler,
   listAvailableSubCsnsForStoHandler,
+  listCsnFieldHistoryHandler,
   listCSNsHandler,
+  listTrackerLayoutsHandler,
   markCSNArrivedHandler,
   markCSNInTransitHandler,
+  previewDispatchQtyAdjustmentHandler,
   updateCSNHandler,
 } from "../_core/procurement/csn.handlers.ts";
 import {
@@ -278,6 +284,10 @@ export async function dispatchProcurementRoutes(
       return await getAllAlertCountsHandler(req, ctx);
     case "GET:/api/procurement/tracker":
       return await getTrackerHandler(req, ctx);
+    case "GET:/api/procurement/tracker/layouts":
+      return await listTrackerLayoutsHandler(req, ctx);
+    case "POST:/api/procurement/tracker/layouts":
+      return await createTrackerLayoutHandler(req, ctx);
     case "GET:/api/procurement/payment-terms":
       return await listPaymentTermsHandler(req, ctx);
     case "POST:/api/procurement/payment-terms":
@@ -488,6 +498,10 @@ export async function dispatchProcurementRoutes(
     return await deleteSubCSNHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/csns\/[^/]+\/history$/.test(pathname) && req.method === "GET") {
+    return await listCsnFieldHistoryHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/csns\/[^/]+\/mark-in-transit$/.test(pathname) && req.method === "POST") {
     return await markCSNInTransitHandler(req, ctx);
   }
@@ -500,8 +514,20 @@ export async function dispatchProcurementRoutes(
     return await transformSubCSNToSTOHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/preview$/.test(pathname) && req.method === "POST") {
+    return await previewDispatchQtyAdjustmentHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/confirm$/.test(pathname) && req.method === "POST") {
+    return await confirmDispatchQtyAdjustmentHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/tracker\/[^/]+\/inline$/.test(pathname) && req.method === "PUT") {
     return await inlineUpdateCSNHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/tracker\/layouts\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteTrackerLayoutHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/payment-terms\/[^/]+$/.test(pathname)) {

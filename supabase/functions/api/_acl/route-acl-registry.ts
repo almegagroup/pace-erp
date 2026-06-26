@@ -32,6 +32,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/csns":                        { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/csns/available-for-sto":      { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/tracker":                     { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
+  "GET:/api/procurement/tracker/layouts":             { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
+  "POST:/api/procurement/tracker/layouts":            { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "WRITE" },
   "GET:/api/procurement/alerts/lc-count":             { skipAcl: false, resourceCode: "PROC_CSN_ALERTS",  action: "VIEW" },
   "GET:/api/procurement/alerts/lc":                   { skipAcl: false, resourceCode: "PROC_CSN_ALERTS",  action: "VIEW" },
   "GET:/api/procurement/alerts/vessel-booking-count": { skipAcl: false, resourceCode: "PROC_CSN_ALERTS",  action: "VIEW" },
@@ -402,6 +404,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { DELETE: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "DELETE" } },
   },
   {
+    pattern: /^\/api\/procurement\/csns\/[^/]+\/history$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" } },
+  },
+  {
     pattern: /^\/api\/procurement\/csns\/[^/]+\/mark-in-transit$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
   },
@@ -414,8 +420,20 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "WRITE" } },
   },
   {
+    pattern: /^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/preview$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/confirm$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
+  },
+  {
     pattern: /^\/api\/procurement\/tracker\/[^/]+\/inline$/,
     methods: { PUT: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/tracker\/layouts\/[^/]+$/,
+    methods: { DELETE: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "DELETE" } },
   },
 
   // ── Gate Entry ───────────────────────────────────────────────────────────

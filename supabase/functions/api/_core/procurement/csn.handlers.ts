@@ -9,6 +9,7 @@
  */
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
+import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
@@ -35,11 +36,19 @@ const DATE_FIELDS = new Set([
   "scheduled_eta_to_port",
   "etd",
   "bl_date",
+  "invoice_date",
+  "boe_date",
   "eta_at_port",
   "ata_at_port",
   "post_clearance_lr_date",
   "lr_date",
   "gate_entry_date",
+  "grn_date",
+  "lc_opened_date",
+  "courier_dispatch_date",
+  "courier_received_date",
+  "courier_date_to_cha",
+  "courier_cha_receive_date",
 ]);
 const TRACKER_INLINE_FIELDS = new Set([
   "lr_number",
@@ -75,6 +84,68 @@ const MOTHER_PROPAGATION_FIELDS = [
   "eta_at_port_is_manual_override",
   "ata_at_port",
 ];
+const BOOLEAN_FIELDS = new Set([
+  "indent_required",
+  "soft_copy_received",
+  "hard_copy_received",
+  "etd_is_manual_override",
+  "eta_at_port_is_manual_override",
+]);
+const NUMERIC_FIELDS = new Set([
+  "dispatch_qty",
+  "received_qty",
+  "transit_days_snapshot",
+]);
+const MANUAL_EDITABLE_FIELDS = [
+  "dispatch_qty",
+  "material_category_id",
+  "indent_required",
+  "vendor_indent_number",
+  "etd",
+  "etd_is_manual_override",
+  "bl_number",
+  "bl_date",
+  "invoice_number",
+  "invoice_date",
+  "boe_number",
+  "boe_date",
+  "eta_at_port",
+  "eta_at_port_is_manual_override",
+  "ata_at_port",
+  "transporter_id",
+  "transporter_name_freetext",
+  "lr_date",
+  "lr_number",
+  "gate_entry_id",
+  "gate_entry_date",
+  "grn_id",
+  "grn_date",
+  "lc_number",
+  "lc_opened_date",
+  "port_of_discharge_id",
+  "scheduled_eta_to_port",
+  "vessel_name",
+  "voyage_number",
+  "post_clearance_lr_date",
+  "lr_number_port_to_plant",
+  "vehicle_number_port_to_plant",
+  "vehicle_number",
+  "domestic_transporter_id",
+  "domestic_transporter_freetext",
+  "remarks",
+  "received_qty",
+  "soft_copy_received",
+  "hard_copy_received",
+  "hard_copy_courier_number",
+  "courier_dispatch_date",
+  "courier_received_date",
+  "courier_date_to_cha",
+  "courier_cha_receive_date",
+  "cha_docket_number",
+  "consignee_company_id",
+  "transit_days_snapshot",
+];
+const HISTORY_TRACKED_FIELDS = new Set(MANUAL_EDITABLE_FIELDS);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -96,6 +167,31 @@ function parsePositiveInt(value: unknown, fallback: number): number {
 function parseNonNegativeInt(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function parseNullableNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseBooleanish(value: unknown): boolean | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const normalized = toUpperTrimmedString(value);
+  if (["TRUE", "YES", "Y", "1"].includes(normalized)) {
+    return true;
+  }
+  if (["FALSE", "NO", "N", "0"].includes(normalized)) {
+    return false;
+  }
+  return null;
 }
 
 function addDays(input: string, days: number): string {
@@ -122,6 +218,111 @@ function getIdFromPath(req: Request): string {
 
 function getSubIdFromPath(req: Request): string {
   return getPathSegments(req)[5] ?? "";
+}
+
+function getTrackerLayoutIdFromPath(req: Request): string {
+  return getPathSegments(req)[4] ?? "";
+}
+
+function collectAuthUserIds(value: unknown, ids: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectAuthUserIds(entry, ids);
+    }
+    return;
+  }
+
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  for (const [key, entryValue] of Object.entries(value as Record<string, unknown>)) {
+    if (key.endsWith("_by")) {
+      const authUserId = toTrimmedString(entryValue);
+      if (authUserId) {
+        ids.add(authUserId);
+      }
+      continue;
+    }
+
+    collectAuthUserIds(entryValue, ids);
+  }
+}
+
+function attachUserDisplayFields<T>(
+  value: T,
+  displayNameMap: Map<string, string>,
+): T {
+  if (Array.isArray(value)) {
+    return value.map((entry) => attachUserDisplayFields(entry, displayNameMap)) as T;
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  const enriched: Record<string, unknown> = {};
+
+  for (const [key, entryValue] of Object.entries(record)) {
+    if (Array.isArray(entryValue) || (entryValue && typeof entryValue === "object")) {
+      enriched[key] = attachUserDisplayFields(entryValue, displayNameMap);
+    } else {
+      enriched[key] = entryValue;
+    }
+
+    if (key.endsWith("_by")) {
+      const authUserId = toTrimmedString(entryValue);
+      if (authUserId) {
+        enriched[`${key}_display`] = displayNameMap.get(authUserId) ?? authUserId;
+      }
+    }
+  }
+
+  return enriched as T;
+}
+
+async function enrichCsnUserDisplays<T>(payload: T): Promise<T> {
+  const authUserIds = new Set<string>();
+  collectAuthUserIds(payload, authUserIds);
+  const displayNameMap = await resolveUserDisplayNames([...authUserIds]);
+  return attachUserDisplayFields(payload, displayNameMap);
+}
+
+function normalizeUpdateValue(field: string, value: unknown): unknown {
+  if (BOOLEAN_FIELDS.has(field)) {
+    return parseBooleanish(value);
+  }
+  if (NUMERIC_FIELDS.has(field)) {
+    return parseNullableNumber(value);
+  }
+  return value === "" ? null : value;
+}
+
+function valuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (left == null && right == null) {
+    return true;
+  }
+  if (typeof left === "number" || typeof right === "number") {
+    return parseNullableNumber(left) === parseNullableNumber(right);
+  }
+  if (typeof left === "boolean" || typeof right === "boolean") {
+    return parseBooleanish(left) === parseBooleanish(right);
+  }
+  return String(left ?? "") === String(right ?? "");
+}
+
+function historyValueToText(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  if (typeof value === "boolean") {
+    return value ? "YES" : "NO";
+  }
+  return String(value);
 }
 
 function procurementErrorResponse(
@@ -243,12 +444,139 @@ async function getPortPlantTransit(csn: CsnRow): Promise<Record<string, unknown>
   return (data as Record<string, unknown> | null) ?? null;
 }
 
+async function getPoLineSnapshot(poLineId: string): Promise<Record<string, unknown> | null> {
+  if (!poLineId) {
+    return null;
+  }
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("purchase_order_line")
+    .select("id, ordered_qty, expected_delivery_date, knocked_off_qty, line_status")
+    .eq("id", poLineId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("PROCUREMENT_PO_LINE_LOOKUP_FAILED");
+  }
+
+  return (data as Record<string, unknown> | null) ?? null;
+}
+
+async function getCsnsForPoLine(poLineId: string): Promise<CsnRow[]> {
+  if (!poLineId) {
+    return [];
+  }
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .select("*")
+    .eq("po_line_id", poLineId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    throw new Error("PROCUREMENT_CSN_SIBLING_LOOKUP_FAILED");
+  }
+
+  return (data as CsnRow[] | null) ?? [];
+}
+
+async function getMaterialGroupOptionsByMaterialIds(materialIds: string[]): Promise<Map<string, Array<Record<string, unknown>>>> {
+  const normalized = [...new Set(materialIds.map((value) => toTrimmedString(value)).filter(Boolean))];
+  if (normalized.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_category_assignment")
+    .select("material_id, group_id, is_primary, active, group:group_id(id, group_name)")
+    .in("material_id", normalized)
+    .eq("active", true);
+
+  if (error) {
+    throw new Error("PROCUREMENT_MATERIAL_GROUP_LOOKUP_FAILED");
+  }
+
+  const grouped = new Map<string, Array<Record<string, unknown>>>();
+  for (const row of (data as Record<string, unknown>[] | null) ?? []) {
+    const materialId = toTrimmedString(row.material_id);
+    if (!materialId) {
+      continue;
+    }
+    const current = grouped.get(materialId) ?? [];
+    current.push({
+      id: toTrimmedString(row.group_id) || toTrimmedString((row.group as Record<string, unknown> | null)?.id),
+      group_name: toTrimmedString((row.group as Record<string, unknown> | null)?.group_name),
+      is_primary: row.is_primary === true,
+    });
+    grouped.set(materialId, current);
+  }
+
+  for (const [materialId, options] of grouped.entries()) {
+    options.sort((left, right) => {
+      if (left.is_primary === right.is_primary) {
+        return String(left.group_name ?? "").localeCompare(String(right.group_name ?? ""));
+      }
+      return left.is_primary ? -1 : 1;
+    });
+    grouped.set(materialId, options);
+  }
+
+  return grouped;
+}
+
+async function cloneBalanceCsnFromSource(
+  sourceCsn: CsnRow,
+  quantity: number,
+  createdBy: string,
+): Promise<CsnRow> {
+  const csnNumber = await generateProcurementDocNumber("CSN");
+  const nowIso = new Date().toISOString();
+  const payload: JsonRecord = {
+    ...sourceCsn,
+    id: undefined,
+    csn_number: csnNumber,
+    po_qty: quantity,
+    dispatch_qty: quantity,
+    total_received_qty: 0,
+    gate_entry_id: null,
+    gate_entry_date: null,
+    grn_id: null,
+    grn_date: null,
+    received_qty: null,
+    inactive_reason_code: null,
+    inactive_from_status: null,
+    inactive_at: null,
+    inactive_by: null,
+    created_at: undefined,
+    created_by: createdBy,
+    last_updated_at: nowIso,
+    last_updated_by: createdBy,
+  };
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .insert(payload)
+    .select("*")
+    .single();
+
+  if (error || !data) {
+    console.error("CSN_BALANCE_CLONE_FAILED", JSON.stringify(error));
+    throw new Error("PROCUREMENT_CSN_BALANCE_CREATE_FAILED");
+  }
+
+  return data as CsnRow;
+}
+
 function calculateETACascade(
   csn: CsnRow,
   importLeadTime: Record<string, unknown> | null,
   domesticLeadTime: Record<string, unknown> | null,
   portPlantTransit: Record<string, unknown> | null,
-  poDate?: string | null,
+  poLineExpectedDeliveryDate?: string | null,
 ): Partial<CsnRow> {
   const updates: Partial<CsnRow> = {};
   const csnType = toUpperTrimmedString(csn.csn_type);
@@ -273,7 +601,8 @@ function calculateETACascade(
       updates.etd = subtractDays(scheduledEtaToPort, sailTime);
     }
 
-    const portSourceDate = blDate || etd || toTrimmedString(updates.etd);
+    const effectiveEtd = toTrimmedString(updates.etd) || etd;
+    const portSourceDate = blDate || effectiveEtd;
     if (!etaAtPortManual && portSourceDate) {
       updates.eta_at_port = addDays(portSourceDate, sailTime);
     }
@@ -297,16 +626,29 @@ function calculateETACascade(
       updates.eta_to_plant_calculated = etaToPlant;
     }
 
-    const effectiveEtd = toTrimmedString(updates.etd) || etd;
     if (effectiveEtd) {
       updates.lc_due_date = subtractDays(effectiveEtd, 10);
     }
   } else if (csnType === "DOMESTIC") {
     const transitDays = Number(domesticLeadTime?.transit_days ?? 0);
-    const lrDate = toTrimmedString(csn.lr_date);
-    const sourceDate = lrDate || toTrimmedString(poDate);
-    if (sourceDate) {
-      updates.eta_to_plant_calculated = addDays(sourceDate, transitDays);
+    const gateEntryDate = toTrimmedString(csn.gate_entry_date);
+    const atdDate = toTrimmedString(csn.lr_date);
+    const manualEtd = toTrimmedString(csn.etd);
+    const baselineEtd = toTrimmedString(poLineExpectedDeliveryDate);
+
+    if (!toTrimmedString(csn.etd) && baselineEtd) {
+      updates.etd = baselineEtd;
+    }
+
+    if (gateEntryDate) {
+      updates.eta_to_plant_calculated = gateEntryDate;
+    } else if (atdDate) {
+      updates.eta_to_plant_calculated = addDays(atdDate, transitDays);
+    } else {
+      const effectiveEtd = manualEtd || toTrimmedString(updates.etd) || baselineEtd;
+      if (effectiveEtd) {
+        updates.eta_to_plant_calculated = addDays(effectiveEtd, transitDays);
+      }
     }
   } else {
     const gateEntryDate = toTrimmedString(csn.gate_entry_date);
@@ -318,26 +660,12 @@ function calculateETACascade(
   return updates;
 }
 
-async function getPoDate(poId: string): Promise<string | null> {
-  if (!poId) return null;
-  const { data, error } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("purchase_order")
-    .select("po_date")
-    .eq("id", poId)
-    .maybeSingle();
-  if (error) {
-    throw new Error("PROCUREMENT_PO_LOOKUP_FAILED");
-  }
-  return toTrimmedString(data?.po_date) || null;
-}
-
 async function recalculateAndBuildUpdates(
   csn: CsnRow,
   inputUpdates: JsonRecord,
 ): Promise<JsonRecord> {
   const merged = { ...csn, ...inputUpdates };
-  const poDate = await getPoDate(toTrimmedString(merged.po_id));
+  const poLine = await getPoLineSnapshot(toTrimmedString(merged.po_line_id));
   const importLeadTime = await getImportLeadTime(merged);
   const domesticLeadTime = await getDomesticLeadTime(merged);
   const portPlantTransit = await getPortPlantTransit(merged);
@@ -355,7 +683,13 @@ async function recalculateAndBuildUpdates(
     merged.transit_days_snapshot = autoSnapshot.transit_days_snapshot;
   }
 
-  const cascade = calculateETACascade(merged, importLeadTime, domesticLeadTime, portPlantTransit, poDate);
+  const cascade = calculateETACascade(
+    merged,
+    importLeadTime,
+    domesticLeadTime,
+    portPlantTransit,
+    toTrimmedString(poLine?.expected_delivery_date) || null,
+  );
   return { ...inputUpdates, ...autoSnapshot, ...cascade };
 }
 
@@ -393,12 +727,24 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   const stoIds = [...new Set(rows.map((row) => toTrimmedString(row.sto_id)).filter(Boolean))];
   const vendorIds = [...new Set(rows.map((row) => toTrimmedString(row.vendor_id)).filter(Boolean))];
   const materialIds = [...new Set(rows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+  const paymentTermIds = [...new Set(rows.map((row) => toTrimmedString(row.payment_term_id)).filter(Boolean))];
+  const portIds = [...new Set([
+    ...rows.map((row) => toTrimmedString(row.port_of_discharge_id)),
+    ...rows.map((row) => toTrimmedString(row.port_of_loading_id)),
+  ].filter(Boolean))];
+  const poLineIds = [...new Set(rows.map((row) => toTrimmedString(row.po_line_id)).filter(Boolean))];
+  const gateEntryIds = [...new Set(rows.map((row) => toTrimmedString(row.gate_entry_id)).filter(Boolean))];
+  const grnIds = [...new Set(rows.map((row) => toTrimmedString(row.grn_id)).filter(Boolean))];
   const transporterIds = [...new Set([
     ...rows.map((row) => toTrimmedString(row.transporter_id)),
     ...rows.map((row) => toTrimmedString(row.domestic_transporter_id)),
   ].filter(Boolean))];
+  const companyIds = [...new Set([
+    ...rows.map((row) => toTrimmedString(row.company_id)),
+    ...rows.map((row) => toTrimmedString(row.consignee_company_id)),
+  ].filter(Boolean))];
 
-  const [poResult, stoResult, vendorResult, materialResult, transporterResult] = await Promise.all([
+  const [poResult, stoResult, vendorResult, materialResult, transporterResult, paymentTermResult, portResult, companyResult, poLineResult, gateEntryResult, grnResult, materialGroupOptions] = await Promise.all([
     poIds.length
       ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, po_number, po_date").in("id", poIds)
       : Promise.resolve({ data: [], error: null }),
@@ -414,9 +760,36 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     transporterIds.length
       ? serviceRoleClient.schema("erp_master").from("transporter_master").select("id, transporter_name").in("id", transporterIds)
       : Promise.resolve({ data: [], error: null }),
+    paymentTermIds.length
+      ? serviceRoleClient
+        .schema("erp_master")
+        .from("payment_terms_master")
+        .select("id, payment_term_name, credit_days, reference_date_type:reference_date_type_id(id, code, label)")
+        .in("id", paymentTermIds)
+      : Promise.resolve({ data: [], error: null }),
+    portIds.length
+      ? serviceRoleClient.schema("erp_master").from("port_master").select("id, port_code, port_name").in("id", portIds)
+      : Promise.resolve({ data: [], error: null }),
+    companyIds.length
+      ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds)
+      : Promise.resolve({ data: [], error: null }),
+    poLineIds.length
+      ? serviceRoleClient.schema("erp_procurement").from("purchase_order_line").select("id, expected_delivery_date").in("id", poLineIds)
+      : Promise.resolve({ data: [], error: null }),
+    gateEntryIds.length
+      ? serviceRoleClient.schema("erp_procurement").from("gate_entry").select("id, ge_number").in("id", gateEntryIds)
+      : Promise.resolve({ data: [], error: null }),
+    grnIds.length
+      ? serviceRoleClient.schema("erp_procurement").from("goods_receipt").select("id, grn_number").in("id", grnIds)
+      : Promise.resolve({ data: [], error: null }),
+    getMaterialGroupOptionsByMaterialIds(materialIds),
   ]);
 
-  if (poResult.error || stoResult.error || vendorResult.error || materialResult.error || transporterResult.error) {
+  if (
+    poResult.error || stoResult.error || vendorResult.error || materialResult.error || transporterResult.error
+    || paymentTermResult.error || portResult.error || companyResult.error
+    || poLineResult.error || gateEntryResult.error || grnResult.error
+  ) {
     throw new Error("PROCUREMENT_TRACKER_ENRICH_FAILED");
   }
 
@@ -425,8 +798,14 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   const vendorMap = new Map((vendorResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const materialMap = new Map((materialResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const transporterMap = new Map((transporterResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const paymentTermMap = new Map((paymentTermResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const portMap = new Map((portResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const companyMap = new Map((companyResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const poLineMap = new Map((poLineResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const gateEntryMap = new Map((gateEntryResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const grnMap = new Map((grnResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
 
-  return rows.map((row) => {
+  const enriched = rows.map((row) => {
     const po = poMap.get(toTrimmedString(row.po_id));
     const sto = stoMap.get(toTrimmedString(row.sto_id));
     const vendor = vendorMap.get(toTrimmedString(row.vendor_id));
@@ -434,8 +813,40 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     const transporter = transporterMap.get(
       toTrimmedString(row.transporter_id) || toTrimmedString(row.domestic_transporter_id),
     );
+    const paymentTerm = paymentTermMap.get(toTrimmedString(row.payment_term_id));
+    const referenceType = paymentTerm?.reference_date_type as Record<string, unknown> | undefined;
+    const dischargePort = portMap.get(toTrimmedString(row.port_of_discharge_id));
+    const loadingPort = portMap.get(toTrimmedString(row.port_of_loading_id));
+    const consigneeCompany = companyMap.get(toTrimmedString(row.consignee_company_id));
+    const owningCompany = companyMap.get(toTrimmedString(row.company_id));
+    const poLine = poLineMap.get(toTrimmedString(row.po_line_id));
+    const gateEntry = gateEntryMap.get(toTrimmedString(row.gate_entry_id));
+    const grn = grnMap.get(toTrimmedString(row.grn_id));
+    const materialGroups = materialGroupOptions.get(toTrimmedString(row.material_id)) ?? [];
+    const selectedMaterialGroup = materialGroups.find((entry) => toTrimmedString(entry.id) === toTrimmedString(row.material_category_id)) ?? null;
     const isDetachedSubCsn = Boolean(row.mother_csn_id) && !toTrimmedString(row.sto_id);
     const csnNumber = toTrimmedString(row.csn_number);
+    const actualPaymentDate = (() => {
+      const referenceCode = toUpperTrimmedString(referenceType?.code);
+      const creditDays = Number(paymentTerm?.credit_days ?? 0);
+      if (!referenceCode || referenceCode === "N_A") {
+        return null;
+      }
+      const anchor = (() => {
+        switch (referenceCode) {
+          case "BL_DATE":
+          case "SHIPMENT_DATE":
+            return toTrimmedString(row.bl_date) || toTrimmedString(row.lr_date);
+          case "GRN_DATE":
+            return toTrimmedString(row.grn_date);
+          case "INVOICE_DATE":
+            return toTrimmedString(row.invoice_date);
+          default:
+            return "";
+        }
+      })();
+      return anchor ? addDays(anchor, creditDays) : null;
+    })();
     return {
       ...row,
       po_number: po?.po_number ?? null,
@@ -449,10 +860,152 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       vendor_name: vendor?.vendor_name ?? vendor?.name ?? null,
       material_name: material?.material_name ?? null,
       transporter_name: transporter?.transporter_name ?? row.transporter_name_freetext ?? row.domestic_transporter_freetext ?? null,
+      payment_term_name: paymentTerm?.payment_term_name ?? null,
+      payment_term_reference_type_code: referenceType?.code ?? null,
+      payment_term_credit_days: paymentTerm?.credit_days ?? null,
+      actual_payment_date: actualPaymentDate,
+      port_of_discharge_label: dischargePort
+        ? `${toTrimmedString(dischargePort.port_code)} | ${toTrimmedString(dischargePort.port_name)}`
+        : null,
+      port_of_loading_label: loadingPort
+        ? `${toTrimmedString(loadingPort.port_code)} | ${toTrimmedString(loadingPort.port_name)}`
+        : null,
+      consignee_company_label: consigneeCompany
+        ? `${toTrimmedString(consigneeCompany.company_code)} | ${toTrimmedString(consigneeCompany.company_name)}`
+        : null,
+      company_label: owningCompany
+        ? `${toTrimmedString(owningCompany.company_code)} | ${toTrimmedString(owningCompany.company_name)}`
+        : null,
+      material_group_name: selectedMaterialGroup?.group_name ?? null,
+      material_group_options: materialGroups,
+      expected_delivery_date: poLine?.expected_delivery_date ?? null,
+      ge_number: gateEntry?.ge_number ?? null,
+      grn_number: grn?.grn_number ?? null,
       actual_arrival_date: row.gate_entry_date ?? row.ata_at_port ?? null,
       eta_plant: row.eta_to_plant_calculated ?? null,
     };
   });
+
+  const withLeadMeta = await Promise.all(enriched.map(async (row) => {
+    try {
+      const [importLeadTime, domesticLeadTime] = await Promise.all([
+        toUpperTrimmedString(row.csn_type) === "IMPORT" ? getImportLeadTime(row) : Promise.resolve(null),
+        toUpperTrimmedString(row.csn_type) === "DOMESTIC" ? getDomesticLeadTime(row) : Promise.resolve(null),
+      ]);
+      return {
+        ...row,
+        import_sail_time_days: importLeadTime?.sail_time_days ?? null,
+        import_clearance_days: importLeadTime?.clearance_days ?? null,
+        domestic_transit_days: domesticLeadTime?.transit_days ?? null,
+      };
+    } catch {
+      return row;
+    }
+  }));
+
+  return await enrichCsnUserDisplays(withLeadMeta);
+}
+
+async function writeCsnFieldHistory(
+  csnId: string,
+  before: CsnRow,
+  after: CsnRow,
+  changedBy: string,
+  candidateFields: Iterable<string>,
+): Promise<void> {
+  const entries: Array<Record<string, unknown>> = [];
+
+  for (const field of candidateFields) {
+    if (!HISTORY_TRACKED_FIELDS.has(field)) {
+      continue;
+    }
+    const oldValue = before[field];
+    const newValue = after[field];
+    if (valuesEqual(oldValue, newValue)) {
+      continue;
+    }
+    entries.push({
+      csn_id: csnId,
+      field_name: field,
+      old_value: historyValueToText(oldValue),
+      new_value: historyValueToText(newValue),
+      changed_by: changedBy,
+    });
+  }
+
+  if (entries.length === 0) {
+    return;
+  }
+
+  const { error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("csn_field_history")
+    .insert(entries);
+
+  if (error) {
+    console.error("CSN_FIELD_HISTORY_WRITE_FAILED", JSON.stringify(error));
+    throw new Error("PROCUREMENT_CSN_HISTORY_WRITE_FAILED");
+  }
+}
+
+async function computeDispatchQtyPreview(
+  csn: CsnRow,
+  newDispatchQty: number,
+): Promise<Record<string, unknown>> {
+  const poLineId = toTrimmedString(csn.po_line_id);
+  if (!poLineId) {
+    throw new Error("PROCUREMENT_CSN_PO_LINE_REQUIRED");
+  }
+
+  const [poLine, siblingCsns] = await Promise.all([
+    getPoLineSnapshot(poLineId),
+    getCsnsForPoLine(poLineId),
+  ]);
+
+  if (!poLine) {
+    throw new Error("PROCUREMENT_PO_LINE_NOT_FOUND");
+  }
+
+  const targetId = toTrimmedString(csn.id);
+  const activeCsns = siblingCsns.filter((row) => toUpperTrimmedString(row.status) !== CSN_STATUS.KNOCKED_OFF);
+  const orderedQty = Number(poLine.ordered_qty ?? 0);
+  const knockedOffQty = Number(poLine.knocked_off_qty ?? 0);
+  const accountedAfterEdit = activeCsns.reduce((sum, row) => {
+    const isTarget = toTrimmedString(row.id) === targetId;
+    return sum + Number(isTarget ? newDispatchQty : row.po_qty ?? 0);
+  }, 0);
+  const remainder = Number(Math.max(0, orderedQty - knockedOffQty - accountedAfterEdit).toFixed(6));
+  const siblingRows = activeCsns.filter((row) => toTrimmedString(row.id) !== targetId);
+
+  const suggestedAllocations = activeCsns.map((row) => ({
+    id: toTrimmedString(row.id),
+    csn_number: row.csn_number,
+    status: row.status,
+    current_qty: Number(toTrimmedString(row.id) === targetId ? newDispatchQty : row.po_qty ?? 0),
+    suggested_qty: Number(toTrimmedString(row.id) === targetId ? newDispatchQty : row.po_qty ?? 0),
+  }));
+
+  if (remainder > 0 && siblingRows.length > 0) {
+    const recipientId = toTrimmedString(siblingRows[siblingRows.length - 1]?.id);
+    for (const entry of suggestedAllocations) {
+      if (toTrimmedString(entry.id) === recipientId) {
+        entry.suggested_qty = Number(entry.current_qty ?? 0) + remainder;
+      }
+    }
+  }
+
+  return {
+    csn_id: targetId,
+    po_line_id: poLineId,
+    ordered_qty: orderedQty,
+    knocked_off_qty: knockedOffQty,
+    new_dispatch_qty: newDispatchQty,
+    remainder,
+    requires_reconciliation: remainder > 0 && siblingRows.length > 0,
+    requires_prompt: remainder > 0 && siblingRows.length === 0,
+    sibling_count: siblingRows.length,
+    csns: suggestedAllocations,
+  };
 }
 
 export async function listCSNsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
@@ -563,50 +1116,17 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
     }
 
     const updates: JsonRecord = {};
-    const mutableFields = [
-      "dispatch_qty",
-      "port_of_loading_id",
-      "port_of_discharge_id",
-      "transit_days_snapshot",
-      "vessel_name",
-      "voyage_number",
-      "bl_number",
-      "boe_number",
-      "cha_id",
-      "cha_name_freetext",
-      "scheduled_eta_to_port",
-      "etd",
-      "etd_is_manual_override",
-      "bl_date",
-      "eta_at_port",
-      "eta_at_port_is_manual_override",
-      "ata_at_port",
-      "post_clearance_lr_date",
-      "transporter_id",
-      "transporter_name_freetext",
-      "lr_number_port_to_plant",
-      "vehicle_number_port_to_plant",
-      "lc_opened_date",
-      "lc_number",
-      "vessel_booking_confirmed_date",
-      "lr_date",
-      "lr_number",
-      "vehicle_number",
-      "domestic_transporter_id",
-      "domestic_transporter_freetext",
-      "vendor_indent_number",
-      "gate_entry_date",
-      "grn_date",
-      "received_qty",
-      "invoice_number",
-      "remarks",
-    ];
-
     let shouldRecalculate = false;
-    for (const field of mutableFields) {
+    for (const field of MANUAL_EDITABLE_FIELDS) {
       if (body[field] !== undefined) {
-        updates[field] = body[field] === "" ? null : body[field];
-        if (DATE_FIELDS.has(field) || field === "transit_days_snapshot" || field === "port_of_discharge_id") {
+        updates[field] = normalizeUpdateValue(field, body[field]);
+        if (
+          DATE_FIELDS.has(field)
+          || field === "transit_days_snapshot"
+          || field === "port_of_discharge_id"
+          || field === "material_category_id"
+          || field === "dispatch_qty"
+        ) {
           shouldRecalculate = true;
         }
       }
@@ -635,7 +1155,9 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
       await syncSubCsnsFromMother(id, updates);
     }
 
-    return okResponse({ data }, ctx.request_id, req);
+    await writeCsnFieldHistory(id, csn, data as CsnRow, ctx.auth_user_id, Object.keys(updates));
+
+    return okResponse({ data: await enrichCsnUserDisplays(data) }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_CSN_UPDATE_FAILED";
     const status = code === "PROCUREMENT_CSN_NOT_FOUND" ? 404 : code.includes("READ_ONLY") || code.includes("EDIT_BLOCKED") ? 400 : 500;
@@ -1189,6 +1711,299 @@ export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerCon
   }
 }
 
+export async function listCsnFieldHistoryHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const id = getIdFromPath(req);
+    const fieldName = toTrimmedString(new URL(req.url).searchParams.get("field_name"));
+    if (!fieldName) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_HISTORY_FIELD_REQUIRED", 400, "field_name is required");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("csn_field_history")
+      .select("*")
+      .eq("csn_id", id)
+      .eq("field_name", fieldName)
+      .order("changed_at", { ascending: false });
+
+    if (error) {
+      console.error("CSN_FIELD_HISTORY_LIST_FAILED", JSON.stringify(error));
+      throw new Error("PROCUREMENT_CSN_HISTORY_LIST_FAILED");
+    }
+
+    return okResponse({ data: await enrichCsnUserDisplays((data as CsnRow[] | null) ?? []) }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CSN_HISTORY_LIST_FAILED";
+    const status = code.includes("REQUIRED") ? 400 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CSN field history lookup failed");
+  }
+}
+
+export async function listTrackerLayoutsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("csn_tracker_layout")
+      .select("*")
+      .or(`scope.eq.GLOBAL,and(scope.eq.USER,created_by.eq.${ctx.auth_user_id})`)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("CSN_LAYOUT_LIST_FAILED", JSON.stringify(error));
+      throw new Error("PROCUREMENT_CSN_LAYOUT_LIST_FAILED");
+    }
+
+    return okResponse({ data: await enrichCsnUserDisplays((data as CsnRow[] | null) ?? []) }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CSN_LAYOUT_LIST_FAILED";
+    return procurementErrorResponse(req, ctx, code, 500, "CSN tracker layout list failed");
+  }
+}
+
+export async function createTrackerLayoutHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const name = toTrimmedString(body.name);
+    const scope = toUpperTrimmedString(body.scope || "USER");
+    const visibleColumns = Array.isArray(body.visible_columns)
+      ? body.visible_columns.map((value) => toTrimmedString(value)).filter(Boolean)
+      : [];
+
+    if (!name) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_LAYOUT_NAME_REQUIRED", 400, "Layout name is required");
+    }
+    if (!["GLOBAL", "USER"].includes(scope)) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_LAYOUT_SCOPE_INVALID", 400, "Layout scope must be GLOBAL or USER");
+    }
+    if (visibleColumns.length === 0) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_LAYOUT_COLUMNS_REQUIRED", 400, "At least one visible column is required");
+    }
+    if (scope === "GLOBAL" && !["SA", "GA", "DIRECTOR"].includes(ctx.roleCode)) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_HEAD_REQUIRED", 403, "Global layouts require head-level access");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("csn_tracker_layout")
+      .insert({
+        name,
+        scope,
+        created_by: ctx.auth_user_id,
+        visible_columns: visibleColumns,
+      })
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      console.error("CSN_LAYOUT_CREATE_FAILED", JSON.stringify(error));
+      throw new Error("PROCUREMENT_CSN_LAYOUT_CREATE_FAILED");
+    }
+
+    return okResponse({ data: await enrichCsnUserDisplays(data) }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CSN_LAYOUT_CREATE_FAILED";
+    const status = code.includes("REQUIRED") || code.includes("INVALID") ? 400 : code === "PROCUREMENT_HEAD_REQUIRED" ? 403 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CSN tracker layout create failed");
+  }
+}
+
+export async function deleteTrackerLayoutHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const id = getTrackerLayoutIdFromPath(req);
+    const { data: layout, error: lookupError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("csn_tracker_layout")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (lookupError) {
+      console.error("CSN_LAYOUT_DELETE_LOOKUP_FAILED", JSON.stringify(lookupError));
+      throw new Error("PROCUREMENT_CSN_LAYOUT_DELETE_FAILED");
+    }
+    if (!layout) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_LAYOUT_NOT_FOUND", 404, "Layout not found");
+    }
+
+    const createdBy = toTrimmedString(layout.created_by);
+    const scope = toUpperTrimmedString(layout.scope);
+    const canDelete = createdBy === ctx.auth_user_id
+      || (scope === "GLOBAL" && ["SA", "GA", "DIRECTOR"].includes(ctx.roleCode));
+
+    if (!canDelete) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_LAYOUT_DELETE_FORBIDDEN", 403, "You cannot delete this layout");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("csn_tracker_layout")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      console.error("CSN_LAYOUT_DELETE_FAILED", JSON.stringify(error));
+      throw new Error("PROCUREMENT_CSN_LAYOUT_DELETE_FAILED");
+    }
+
+    return okResponse({ data: { id, deleted: true } }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CSN_LAYOUT_DELETE_FAILED";
+    const status = code === "PROCUREMENT_CSN_LAYOUT_NOT_FOUND" ? 404 : code.includes("FORBIDDEN") ? 403 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CSN tracker layout delete failed");
+  }
+}
+
+export async function previewDispatchQtyAdjustmentHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const id = getIdFromPath(req);
+    const body = await parseBody(req);
+    const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    const newDispatchQty = parseNullableNumber(body.value ?? body.dispatch_qty);
+    if (newDispatchQty == null || newDispatchQty < 0) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_DISPATCH_QTY_REQUIRED", 400, "dispatch_qty must be zero or greater");
+    }
+
+    const csn = await getCsnById(id, companyId);
+    if (!csn) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");
+    }
+
+    const preview = await computeDispatchQtyPreview(csn, newDispatchQty);
+    return okResponse({ data: preview }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CSN_DISPATCH_PREVIEW_FAILED";
+    const status = code === "PROCUREMENT_CSN_NOT_FOUND" ? 404 : code.includes("REQUIRED") ? 400 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CSN dispatch preview failed");
+  }
+}
+
+export async function confirmDispatchQtyAdjustmentHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const id = getIdFromPath(req);
+    const body = await parseBody(req);
+    const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    const action = toUpperTrimmedString(body.action || "SAVE_ONLY");
+    const newDispatchQty = parseNullableNumber(body.value ?? body.dispatch_qty);
+    const knockOffQty = parseNullableNumber(body.knock_off_qty) ?? 0;
+    const reason = toTrimmedString(body.reason || body.knock_off_reason);
+    if (newDispatchQty == null || newDispatchQty < 0) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_DISPATCH_QTY_REQUIRED", 400, "dispatch_qty must be zero or greater");
+    }
+
+    const csn = await getCsnById(id, companyId);
+    if (!csn) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");
+    }
+
+    const preview = await computeDispatchQtyPreview(csn, newDispatchQty);
+    const poLine = await getPoLineSnapshot(toTrimmedString(csn.po_line_id));
+    if (!poLine) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_LINE_NOT_FOUND", 404, "PO line not found");
+    }
+
+    const nowIso = new Date().toISOString();
+    const changedRows: CsnRow[] = [];
+
+    const updateCsnQty = async (rowId: string, quantity: number): Promise<CsnRow> => {
+      const before = await getCsnById(rowId, companyId);
+      if (!before) {
+        throw new Error("PROCUREMENT_CSN_NOT_FOUND");
+      }
+      const updates = {
+        po_qty: quantity,
+        dispatch_qty: quantity,
+        last_updated_at: nowIso,
+        last_updated_by: ctx.auth_user_id,
+      };
+      const { data, error } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("consignment_note")
+        .update(updates)
+        .eq("id", rowId)
+        .select("*")
+        .single();
+      if (error || !data) {
+        console.error("CSN_DISPATCH_QTY_UPDATE_FAILED", JSON.stringify(error));
+        throw new Error("PROCUREMENT_CSN_DISPATCH_CONFIRM_FAILED");
+      }
+      await writeCsnFieldHistory(rowId, before, data as CsnRow, ctx.auth_user_id, ["dispatch_qty"]);
+      return data as CsnRow;
+    };
+
+    if (action === "SAVE_ONLY") {
+      changedRows.push(await updateCsnQty(id, newDispatchQty));
+    } else if (action === "CREATE_CSN") {
+      if (Number(preview.remainder ?? 0) <= 0 || Number(preview.sibling_count ?? 0) > 0) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_DISPATCH_ACTION_INVALID", 400, "Create CSN is only valid for a first split with positive remainder");
+      }
+      changedRows.push(await updateCsnQty(id, newDispatchQty));
+      changedRows.push(await cloneBalanceCsnFromSource(csn, Number(preview.remainder ?? 0), ctx.auth_user_id));
+    } else if (action === "KNOCK_OFF") {
+      if (Number(preview.remainder ?? 0) <= 0) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_DISPATCH_ACTION_INVALID", 400, "Nothing remains to knock off");
+      }
+      changedRows.push(await updateCsnQty(id, newDispatchQty));
+      const nextKnockedOffQty = Number(poLine.knocked_off_qty ?? 0) + Number(preview.remainder ?? 0);
+      const { error: lineError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("purchase_order_line")
+        .update({
+          knocked_off_qty: nextKnockedOffQty,
+          knock_off_reason: reason || null,
+          line_status: nextKnockedOffQty >= Number(poLine.ordered_qty ?? 0) ? "KNOCKED_OFF" : poLine.line_status,
+          last_updated_at: nowIso,
+        })
+        .eq("id", toTrimmedString(csn.po_line_id));
+      if (lineError) {
+        console.error("CSN_DISPATCH_KNOCK_OFF_FAILED", JSON.stringify(lineError));
+        throw new Error("PROCUREMENT_CSN_DISPATCH_CONFIRM_FAILED");
+      }
+    } else if (action === "RECONCILE") {
+      const allocations = Array.isArray(body.allocations) ? body.allocations : [];
+      const normalized = allocations.map((entry) => ({
+        id: toTrimmedString((entry as Record<string, unknown>).id),
+        qty: parseNullableNumber((entry as Record<string, unknown>).qty) ?? 0,
+      })).filter((entry) => entry.id);
+      const totalAllocated = normalized.reduce((sum, entry) => sum + Number(entry.qty ?? 0), 0);
+      const targetTotal = Number(poLine.ordered_qty ?? 0) - Number(poLine.knocked_off_qty ?? 0);
+      if (Number((totalAllocated + knockOffQty).toFixed(6)) !== Number(targetTotal.toFixed(6))) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_RECONCILE_TOTAL_INVALID", 400, "Reconciled quantities plus knock-off must match the line balance");
+      }
+      for (const entry of normalized) {
+        changedRows.push(await updateCsnQty(entry.id, Number(entry.qty ?? 0)));
+      }
+      if (knockOffQty > 0) {
+        const { error: lineError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("purchase_order_line")
+          .update({
+            knocked_off_qty: Number(poLine.knocked_off_qty ?? 0) + knockOffQty,
+            knock_off_reason: reason || null,
+            last_updated_at: nowIso,
+          })
+          .eq("id", toTrimmedString(csn.po_line_id));
+        if (lineError) {
+          console.error("CSN_RECONCILE_KNOCK_OFF_FAILED", JSON.stringify(lineError));
+          throw new Error("PROCUREMENT_CSN_DISPATCH_CONFIRM_FAILED");
+        }
+      }
+    } else {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_DISPATCH_ACTION_INVALID", 400, "Unknown dispatch reconciliation action");
+    }
+
+    return okResponse({ data: await enrichTrackerRows(changedRows) }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CSN_DISPATCH_CONFIRM_FAILED";
+    const status = code === "PROCUREMENT_CSN_NOT_FOUND" || code === "PROCUREMENT_PO_LINE_NOT_FOUND"
+      ? 404
+      : code.includes("INVALID") || code.includes("REQUIRED")
+        ? 400
+        : 500;
+    return procurementErrorResponse(req, ctx, code, status, "CSN dispatch reconciliation failed");
+  }
+}
+
 export async function inlineUpdateCSNHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const id = getIdFromPath(req);
@@ -1236,7 +2051,9 @@ export async function inlineUpdateCSNHandler(req: Request, ctx: ProcurementHandl
       await syncSubCsnsFromMother(id, updates);
     }
 
-    return okResponse({ data }, ctx.request_id, req);
+    await writeCsnFieldHistory(id, csn, data as CsnRow, ctx.auth_user_id, [field]);
+
+    return okResponse({ data: await enrichCsnUserDisplays(data) }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_TRACKER_INLINE_UPDATE_FAILED";
     const status = code === "PROCUREMENT_CSN_NOT_FOUND" ? 404 : code.includes("INVALID") || code.includes("READ_ONLY") ? 400 : 500;
