@@ -2,18 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
-import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
-import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ModalBase from "../../../../components/layer/ModalBase.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { openScreen, openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import { requestWideWorkspace } from "../../../../store/wideWorkspace.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   confirmCSNDispatchQty,
   createSubCSN,
   createCSNTrackerLayout,
+  deleteSubCSN,
   deleteCSNTrackerLayout,
   getAllAlertCounts,
   getCSNFieldHistory,
@@ -336,12 +335,13 @@ function FieldHistoryButton({ rowId, fieldName, activeKey, histories, loadingHis
       <button
         type="button"
         onClick={() => onToggle(key, rowId, fieldName)}
-        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-[10px] font-semibold text-slate-500"
+        title="Field history"
+        className="inline-flex h-4.5 w-4.5 items-center justify-center rounded-full border border-slate-300 bg-white text-[9px] font-semibold text-slate-500"
       >
         i
       </button>
       {isOpen ? (
-        <div className="absolute right-0 z-20 mt-2 w-80 border border-slate-300 bg-white p-3 text-[11px] shadow-xl">
+        <div className="absolute right-0 z-20 mt-1 w-72 border border-slate-300 bg-white p-2 text-[10px] shadow-xl">
           <div className="mb-2 font-semibold text-slate-700">Field History</div>
           {loadingHistoryKey === key ? (
             <div className="text-slate-500">Loading...</div>
@@ -369,7 +369,7 @@ function FieldHistoryButton({ rowId, fieldName, activeKey, histories, loadingHis
 
 function EditField({ label, children, rowId, fieldName, activeHistoryKey, histories, loadingHistoryKey, onToggleHistory }) {
   return (
-    <label className="grid gap-1 text-[11px] font-medium text-slate-600">
+    <label className="grid gap-0.5 text-[10px] font-medium text-slate-600">
       <span className="flex items-center justify-between gap-2">
         <span>{label}</span>
         <FieldHistoryButton
@@ -388,15 +388,67 @@ function EditField({ label, children, rowId, fieldName, activeHistoryKey, histor
 
 function TrackerSection({ eyebrow, title, children }) {
   return (
-    <section className="grid gap-3 border border-slate-200 bg-white p-3">
-      <div className="grid gap-1">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+    <section className="grid gap-2 border border-slate-200 bg-white px-2.5 py-2">
+      <div className="grid gap-0.5">
+        <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">
           {eyebrow}
         </div>
-        <div className="text-sm font-semibold text-slate-900">{title}</div>
+        <div className="text-[12px] font-semibold text-slate-900">{title}</div>
       </div>
       {children}
     </section>
+  );
+}
+
+function IconActionButton({ icon, title, onClick, disabled = false, tone = "neutral" }) {
+  const toneClass = disabled
+    ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+    : tone === "primary"
+      ? "border-sky-300 bg-sky-50 text-sky-900 hover:bg-sky-100"
+      : tone === "danger"
+        ? "border-rose-300 bg-rose-50 text-rose-800 hover:bg-rose-100"
+        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50";
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex h-[26px] w-[26px] items-center justify-center border text-[13px] transition ${toneClass}`}
+    >
+      <i className={`ti ${icon}`} />
+    </button>
+  );
+}
+
+function CompactPaginationStrip({ page, totalPages, startIndex, endIndex, totalItems, onPrev, onNext }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+      <div>
+        Rows {startIndex}-{endIndex} of {totalItems}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={onPrev}
+          disabled={page <= 1}
+          className="inline-flex h-[24px] min-w-[38px] items-center justify-center border border-slate-300 bg-white px-1.5 text-[10px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Prev
+        </button>
+        <div className="min-w-[66px] text-center text-[10px] font-semibold text-slate-700">
+          Page {page}/{totalPages}
+        </div>
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={page >= totalPages}
+          className="inline-flex h-[24px] min-w-[38px] items-center justify-center border border-slate-300 bg-white px-1.5 text-[10px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -562,7 +614,10 @@ export default function CSNTrackerPage() {
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_CSN_DETAIL.screen_code);
+    openScreenWithContext(OPERATION_SCREENS.PROC_CSN_DETAIL.screen_code, {
+      id: row.id,
+      refreshOnReturn: true,
+    });
     navigate(`/dashboard/procurement/csns/${encodeURIComponent(row.id)}`);
   }
 
@@ -685,6 +740,24 @@ export default function CSNTrackerPage() {
     }
   }
 
+  async function handleDeleteSubCsn(motherRow, subRow) {
+    if (!motherRow?.id || !subRow?.id) {
+      return;
+    }
+    setSavingRowId(motherRow.id);
+    setError("");
+    setNotice("");
+    try {
+      await deleteSubCSN(motherRow.id, subRow.id);
+      await invalidateTracker();
+      setNotice("Sub CSN deleted.");
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "PROCUREMENT_SUB_CSN_DELETE_FAILED");
+    } finally {
+      setSavingRowId("");
+    }
+  }
+
   async function saveLayout() {
     try {
       setError("");
@@ -739,43 +812,32 @@ export default function CSNTrackerPage() {
     switch (column.key) {
       case "expand":
         return (
-          <div className="grid justify-items-start gap-1">
+          <div className="grid justify-items-start">
             <button
               type="button"
-              onClick={() => (expandedRowId === row.id ? resetDraft(null) : resetDraft(row))}
-              className="inline-flex h-7 w-7 items-center justify-center border border-slate-300 bg-white text-slate-700"
+              onClick={(event) => {
+                event.stopPropagation();
+                expandedRowId === row.id ? resetDraft(null) : resetDraft(row);
+              }}
+              className="inline-flex h-[22px] w-[22px] items-center justify-center border border-slate-300 bg-white text-[10px] text-slate-700"
               title={expandedRowId === row.id ? "Collapse row" : "Expand row"}
             >
-              {expandedRowId === row.id ? "-" : "+"}
+              <i className={`ti ${expandedRowId === row.id ? "ti-chevron-up" : "ti-chevron-down"}`} />
             </button>
-            {!row.mother_csn_id ? (
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void handleCreateSubCsn(row);
-                }}
-                disabled={savingRowId === row.id}
-                className="border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-sky-900 disabled:opacity-50"
-                title="Create Sub CSN"
-              >
-                Split
-              </button>
-            ) : null}
           </div>
         );
       case "status":
         return (
           <span
             title={getStatusLabel(row.status)}
-            className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getBadgeTone(row.status)}`}
+            className={`inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] ${getBadgeTone(row.status)}`}
           >
             {row.status || "-"}
           </span>
         );
       case "csn_type":
         return (
-          <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getBadgeTone(row.csn_type)}`}>
+          <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] ${getBadgeTone(row.csn_type)}`}>
             {row.csn_type || "-"}
           </span>
         );
@@ -800,62 +862,60 @@ export default function CSNTrackerPage() {
 
   const currentRow = rows.find((row) => row.id === expandedRowId) || null;
   const currentGroupOptions = currentRow?.material_group_options || [];
+  const subCsnsForCurrentRow = useMemo(
+    () => rows.filter((entry) => entry.mother_csn_id === expandedRowId),
+    [expandedRowId, rows]
+  );
 
   return (
     <>
       <ErpMasterListTemplate
         eyebrow="Procurement"
         title="Consignment Tracker"
-        actions={[
-          {
-            key: "columns",
-            label: "▦",
-            title: "Columns",
-            tone: "neutral",
-            onClick: () => setShowColumns(true),
-          },
-          {
-            key: "layouts",
-            label: "◫",
-            title: "Save Layout",
-            tone: "neutral",
-            onClick: () => setShowSaveLayout(true),
-          },
-          {
-            key: "refresh",
-            label: "↻",
-            title: trackerQuery.isFetching ? "Refreshing" : "Refresh",
-            tone: "neutral",
-            onClick: () => void invalidateTracker(),
-          },
-        ]}
+        actions={[]}
         notices={[
           ...(error ? [{ key: "csn-tracker-error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "csn-tracker-notice", tone: "success", message: notice }] : []),
         ]}
         filterSection={{
-          eyebrow: "Tracker Alerts",
-          title: "Arrival, LC, and vessel readiness",
+          eyebrow: "",
+          title: "",
           children: (
             <div className="grid gap-2">
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => openAlerts("lc")}
-                  className="inline-flex items-center gap-2 border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] font-semibold text-amber-900"
-                >
-                  LC Alerts: {Number(alertsQuery.data?.lc_alert ?? 0)}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => openAlerts("vessel")}
-                  className="inline-flex items-center gap-2 border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] font-semibold text-amber-900"
-                >
-                  Vessel Booking: {Number(alertsQuery.data?.vessel_booking_alert ?? 0)}
-                </button>
+              <div className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 bg-slate-50 px-2 py-1.5">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">
+                  <span className="font-semibold text-sky-800">Procurement</span>
+                  <span className="text-slate-300">/</span>
+                  <span className="font-semibold text-slate-900">Consignment Tracker</span>
+                  <button
+                    type="button"
+                    onClick={() => openAlerts("lc")}
+                    className="inline-flex items-center border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.1em] text-amber-900"
+                    title="Open LC alerts"
+                  >
+                    LC {Number(alertsQuery.data?.lc_alert ?? 0)}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openAlerts("vessel")}
+                    className="inline-flex items-center border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.1em] text-amber-900"
+                    title="Open vessel-booking alerts"
+                  >
+                    Vessel {Number(alertsQuery.data?.vessel_booking_alert ?? 0)}
+                  </button>
+                </div>
+                <div className="flex items-center gap-1">
+                  <IconActionButton icon="ti-columns" title="Columns" onClick={() => setShowColumns(true)} />
+                  <IconActionButton icon="ti-device-floppy" title="Save layout" onClick={() => setShowSaveLayout(true)} />
+                  <IconActionButton
+                    icon="ti-refresh"
+                    title={trackerQuery.isFetching ? "Refreshing" : "Refresh"}
+                    onClick={() => void invalidateTracker()}
+                  />
+                </div>
               </div>
 
-              <div className="grid gap-2 xl:grid-cols-[220px_180px_180px_170px_170px_minmax(0,1fr)]">
+              <div className="grid gap-2 xl:grid-cols-[210px_130px_130px_128px_128px_200px_minmax(0,1fr)]">
                 <label className="grid gap-1 text-[11px] font-medium text-slate-600">
                   Company
                   <select
@@ -864,7 +924,7 @@ export default function CSNTrackerPage() {
                       setCompanyId(event.target.value);
                       setPage(1);
                     }}
-                    className="h-9 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   >
                     <option value="">Select company</option>
                     {companyOptions.map((entry) => (
@@ -883,7 +943,7 @@ export default function CSNTrackerPage() {
                       setStatus(event.target.value);
                       setPage(1);
                     }}
-                    className="h-9 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   >
                     <option value="">ALL</option>
                     {STATUS_OPTIONS.map((entry) => (
@@ -902,7 +962,7 @@ export default function CSNTrackerPage() {
                       setCsnType(event.target.value);
                       setPage(1);
                     }}
-                    className="h-9 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   >
                     <option value="">ALL</option>
                     {["IMPORT", "DOMESTIC", "BULK"].map((entry) => (
@@ -922,7 +982,7 @@ export default function CSNTrackerPage() {
                       setDateFrom(event.target.value);
                       setPage(1);
                     }}
-                    className="h-9 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   />
                 </label>
 
@@ -935,17 +995,17 @@ export default function CSNTrackerPage() {
                       setDateTo(event.target.value);
                       setPage(1);
                     }}
-                    className="h-9 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   />
                 </label>
 
-                <label className="grid min-w-0 gap-1 text-[11px] font-medium text-slate-600 xl:col-span-2">
+                <label className="grid min-w-0 gap-1 text-[11px] font-medium text-slate-600">
                   Layout
                   <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                     <select
                       value={selectedLayoutId}
                       onChange={(event) => applyLayout(event.target.value)}
-                      className="h-9 min-w-0 flex-1 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      className="h-[26px] min-w-0 flex-1 border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                     >
                       <option value="">Default (All Columns)</option>
                       {savedLayouts.map((layout) => (
@@ -958,45 +1018,45 @@ export default function CSNTrackerPage() {
                       type="button"
                       onClick={() => void removeSelectedLayout()}
                       disabled={!selectedLayoutId}
-                      className="border border-rose-300 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-900 disabled:opacity-50"
+                      className="inline-flex h-[26px] items-center border border-rose-300 bg-rose-50 px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-rose-900 disabled:opacity-50"
                     >
                       Delete
                     </button>
                   </div>
                 </label>
-              </div>
-
-              <div className="grid gap-2 xl:grid-cols-[minmax(0,1fr)]">
-                <QuickFilterInput
-                  label="Search"
-                  value={search}
-                  onChange={setSearch}
-                  placeholder="CSN, vendor, material, PO"
-                  className="min-w-0"
-                />
+                <label className="grid min-w-0 gap-1 text-[11px] font-medium text-slate-600">
+                  Search
+                  <input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="CSN, vendor, material, PO"
+                    className="h-[26px] min-w-0 border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none placeholder:text-slate-400 focus:border-sky-500"
+                  />
+                </label>
               </div>
             </div>
           ),
         }}
         listSection={{
-          eyebrow: "Tracker Grid",
-          title: trackerQuery.isLoading ? "Loading consignment tracker" : `${total} CSN row${total === 1 ? "" : "s"}`,
+          eyebrow: "",
+          title: "",
           children: (
             <div className="grid gap-2">
-              <ErpPaginationStrip
+              <CompactPaginationStrip
                 page={page}
-                setPage={setPage}
                 totalPages={totalPages}
                 startIndex={startIndex}
                 endIndex={endIndex}
                 totalItems={total}
+                onPrev={() => setPage((current) => Math.max(1, current - 1))}
+                onNext={() => setPage((current) => Math.min(totalPages, current + 1))}
               />
               <div className="overflow-auto border border-slate-300 bg-white">
-                <table className="min-w-full border-collapse text-[10px]">
+                <table className="min-w-full border-collapse text-[10px] leading-[1.15]">
                   <thead className="bg-slate-100 text-left text-[9px] uppercase tracking-[0.08em] text-slate-600">
                     <tr>
                       {visibleColumns.map((column) => (
-                        <th key={column.key} className="border-b border-r border-slate-200 px-1.5 py-1.5 font-semibold" style={{ minWidth: column.width }}>
+                        <th key={column.key} className="border-b border-r border-slate-200 px-1.5 py-1 font-semibold" style={{ minWidth: column.width }}>
                           {column.label}
                         </th>
                       ))}
@@ -1010,119 +1070,187 @@ export default function CSNTrackerPage() {
                         visibleColumns={visibleColumns}
                         expanded={expandedRowId === row.id}
                         onOpenDetail={openDetail}
+                        onToggleExpand={(targetRow) => (expandedRowId === targetRow.id ? resetDraft(null) : resetDraft(targetRow))}
                         renderCell={renderCell}
                       >
                         {expandedRowId === row.id && currentRow && draft ? (
                           <tr className="bg-slate-50">
-                            <td colSpan={visibleColumns.length} className="border-t border-slate-300 px-3 py-3">
-                              <div className="grid gap-3">
-                                <div className="flex flex-wrap items-start justify-between gap-3 border border-slate-200 bg-white px-3 py-2">
-                                  <div className="grid gap-1">
-                                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            <td colSpan={visibleColumns.length} className="border-t border-slate-300 px-2 py-2">
+                              <div className="grid gap-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 bg-white px-2 py-1.5">
+                                  <div className="grid gap-0.5">
+                                    <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                                       Tracker Row
                                     </div>
-                                    <div className="text-sm font-semibold text-slate-900">
+                                    <div className="text-[13px] font-semibold text-slate-900">
                                       {row.csn_display_number || row.csn_number || row.id}
                                     </div>
-                                    <div className="text-[11px] text-slate-600">
+                                    <div className="text-[10px] text-slate-600">
                                       {row.display_reference_number || row.po_number || row.sto_number || "-"} | {row.material_name || "-"} | {row.company_label || "-"}
                                     </div>
                                   </div>
-                                  <div className="flex flex-wrap items-center gap-2">
+                                  <div className="flex flex-wrap items-center gap-1">
                                     {!row.mother_csn_id ? (
-                                      <button
-                                        type="button"
+                                      <IconActionButton
+                                        icon="ti-git-branch"
+                                        title="Create Sub CSN"
                                         onClick={() => void handleCreateSubCsn(row)}
                                         disabled={savingRowId === row.id}
-                                        className="border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-900 disabled:opacity-50"
-                                      >
-                                        Create Sub CSN
-                                      </button>
+                                        tone="primary"
+                                      />
                                     ) : null}
-                                    <button
-                                      type="button"
-                                      onClick={() => openDetail(row)}
-                                      className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
-                                    >
-                                      Open Detail
-                                    </button>
+                                    <IconActionButton icon="ti-external-link" title="Open full detail" onClick={() => openDetail(row)} />
+                                    <IconActionButton
+                                      icon="ti-check"
+                                      title={savingRowId === row.id ? "Saving" : "Save"}
+                                      onClick={() => void saveExpandedRow(row)}
+                                      disabled={savingRowId === row.id}
+                                      tone="primary"
+                                    />
+                                    <IconActionButton icon="ti-chevron-up" title="Collapse" onClick={() => resetDraft(null)} />
                                   </div>
                                 </div>
 
                                 <TrackerSection eyebrow="Allocation" title="Dispatch balance and commercial flags">
-                                  <div className="grid gap-3 lg:grid-cols-4">
+                                  <div className="grid gap-2 lg:grid-cols-4">
                                     <EditField label="Dispatch Qty" rowId={row.id} fieldName="dispatch_qty" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="number" min="0" step="0.0001" value={draft.dispatch_qty ?? ""} onChange={(event) => patchDraft("dispatch_qty", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                                      <input type="number" min="0" step="0.0001" value={draft.dispatch_qty ?? ""} onChange={(event) => patchDraft("dispatch_qty", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="Material Group" rowId={row.id} fieldName="material_category_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       {currentGroupOptions.length > 0 ? (
-                                        <select value={draft.material_category_id ?? ""} onChange={(event) => patchDraft("material_category_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
+                                        <select value={draft.material_category_id ?? ""} onChange={(event) => patchDraft("material_category_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500">
                                           <option value="">Select group</option>
                                           {currentGroupOptions.map((option) => (
                                             <option key={option.id} value={option.id}>{option.group_name}</option>
                                           ))}
                                         </select>
                                       ) : (
-                                        <div className="h-9 border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-600">
+                                        <div className="h-[26px] border border-slate-200 bg-slate-100 px-2 py-1 text-[11px] text-slate-600">
                                           {row.material_name || "-"}
                                         </div>
                                       )}
                                     </EditField>
                                     <EditField label="Indent Required" rowId={row.id} fieldName="indent_required" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <select value={draft.indent_required ? "YES" : "NO"} onChange={(event) => patchDraft("indent_required", event.target.value === "YES")} className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
+                                      <select value={draft.indent_required ? "YES" : "NO"} onChange={(event) => patchDraft("indent_required", event.target.value === "YES")} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500">
                                         {YES_NO_OPTIONS.map((option) => (
                                           <option key={option.label} value={option.value ? "YES" : "NO"}>{option.label}</option>
                                         ))}
                                       </select>
                                     </EditField>
                                     <EditField label="Indent Number" rowId={row.id} fieldName="vendor_indent_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.vendor_indent_number ?? ""} onChange={(event) => patchDraft("vendor_indent_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                                      <input value={draft.vendor_indent_number ?? ""} onChange={(event) => patchDraft("vendor_indent_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500" />
                                     </EditField>
                                   </div>
                                 </TrackerSection>
 
+                                {!row.mother_csn_id ? (
+                                  <TrackerSection eyebrow="Sub CSNs" title="Linked splits and allocated quantities">
+                                    <div className="grid gap-2">
+                                      <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                                        <span>{subCsnsForCurrentRow.length} linked row{subCsnsForCurrentRow.length === 1 ? "" : "s"}</span>
+                                        <IconActionButton
+                                          icon="ti-git-branch"
+                                          title="Create Sub CSN"
+                                          onClick={() => void handleCreateSubCsn(row)}
+                                          disabled={savingRowId === row.id}
+                                          tone="primary"
+                                        />
+                                      </div>
+                                      {subCsnsForCurrentRow.length > 0 ? (
+                                        <div className="overflow-auto border border-slate-200">
+                                          <table className="min-w-full border-collapse text-[10px]">
+                                            <thead className="bg-slate-100 uppercase tracking-[0.08em] text-slate-500">
+                                              <tr>
+                                                <th className="border-b border-r border-slate-200 px-1.5 py-1 text-left font-semibold">Label</th>
+                                                <th className="border-b border-r border-slate-200 px-1.5 py-1 text-left font-semibold">Allotted Company</th>
+                                                <th className="border-b border-r border-slate-200 px-1.5 py-1 text-left font-semibold">Qty</th>
+                                                <th className="border-b border-r border-slate-200 px-1.5 py-1 text-left font-semibold">Status</th>
+                                                <th className="border-b border-slate-200 px-1.5 py-1 text-right font-semibold">Delete</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {subCsnsForCurrentRow.map((subRow) => {
+                                                const canDelete = String(subRow.status || "").toUpperCase() === "ORD" && !subRow.sto_id;
+                                                return (
+                                                  <tr key={subRow.id} className="border-b border-slate-200 last:border-b-0">
+                                                    <td className="border-r border-slate-200 px-1.5 py-1 text-slate-700">{subRow.csn_display_number || subRow.csn_number || subRow.id}</td>
+                                                    <td className="border-r border-slate-200 px-1.5 py-1 text-slate-700">{subRow.consignee_company_label || "-"}</td>
+                                                    <td className="border-r border-slate-200 px-1.5 py-1 text-slate-700">{subRow.dispatch_qty || "-"}</td>
+                                                    <td className="border-r border-slate-200 px-1.5 py-1">
+                                                      <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] ${getBadgeTone(subRow.status)}`}>
+                                                        {subRow.status || "-"}
+                                                      </span>
+                                                    </td>
+                                                    <td className="px-1.5 py-1 text-right">
+                                                      {canDelete ? (
+                                                        <IconActionButton
+                                                          icon="ti-trash"
+                                                          title="Delete Sub CSN"
+                                                          onClick={() => void handleDeleteSubCsn(row, subRow)}
+                                                          disabled={savingRowId === row.id}
+                                                          tone="danger"
+                                                        />
+                                                      ) : (
+                                                        <span className="text-[10px] text-slate-400">-</span>
+                                                      )}
+                                                    </td>
+                                                  </tr>
+                                                );
+                                              })}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      ) : (
+                                        <div className="border border-dashed border-slate-300 bg-slate-50 px-2 py-2 text-[10px] text-slate-500">
+                                          No sub CSNs linked yet.
+                                        </div>
+                                      )}
+                                    </div>
+                                  </TrackerSection>
+                                ) : null}
+
                                 <TrackerSection eyebrow="Shipment Timeline" title="ETD, ATD, ETA, and arrival chain">
-                                  <div className="grid gap-3 lg:grid-cols-4">
+                                  <div className="grid gap-2 lg:grid-cols-4">
                                     <EditField label="Scheduled ETA Port" rowId={row.id} fieldName="scheduled_eta_to_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.scheduled_eta_to_port ?? ""} onChange={(event) => patchDraft("scheduled_eta_to_port", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.scheduled_eta_to_port ?? ""} onChange={(event) => patchDraft("scheduled_eta_to_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="ETD" rowId={row.id} fieldName="etd" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.etd ?? ""} onChange={(event) => patchDraft("etd", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.etd ?? ""} onChange={(event) => patchDraft("etd", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="ATD" rowId={row.id} fieldName={row.csn_type === "IMPORT" ? "bl_date" : "lr_date"} activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.atd ?? ""} onChange={(event) => patchDraft("atd", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.atd ?? ""} onChange={(event) => patchDraft("atd", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="ETA at Port" rowId={row.id} fieldName="eta_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.eta_at_port ?? ""} onChange={(event) => patchDraft("eta_at_port", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.eta_at_port ?? ""} onChange={(event) => patchDraft("eta_at_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="ATA at Port" rowId={row.id} fieldName="ata_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.ata_at_port ?? ""} onChange={(event) => patchDraft("ata_at_port", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.ata_at_port ?? ""} onChange={(event) => patchDraft("ata_at_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                   </div>
                                 </TrackerSection>
 
                                 <TrackerSection eyebrow="Documents" title="BL, invoice, BOE, and statutory references">
-                                  <div className="grid gap-3 lg:grid-cols-4">
+                                  <div className="grid gap-2 lg:grid-cols-4">
                                     <EditField label="BL Number" rowId={row.id} fieldName="bl_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.bl_number ?? ""} onChange={(event) => patchDraft("bl_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input value={draft.bl_number ?? ""} onChange={(event) => patchDraft("bl_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="BL Date" rowId={row.id} fieldName="bl_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.bl_date ?? ""} onChange={(event) => patchDraft("bl_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.bl_date ?? ""} onChange={(event) => patchDraft("bl_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="Invoice Number" rowId={row.id} fieldName="invoice_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.invoice_number ?? ""} onChange={(event) => patchDraft("invoice_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input value={draft.invoice_number ?? ""} onChange={(event) => patchDraft("invoice_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="Invoice Date" rowId={row.id} fieldName="invoice_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.invoice_date ?? ""} onChange={(event) => patchDraft("invoice_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.invoice_date ?? ""} onChange={(event) => patchDraft("invoice_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="BOE Number" rowId={row.id} fieldName="boe_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.boe_number ?? ""} onChange={(event) => patchDraft("boe_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input value={draft.boe_number ?? ""} onChange={(event) => patchDraft("boe_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="BOE Date" rowId={row.id} fieldName="boe_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.boe_date ?? ""} onChange={(event) => patchDraft("boe_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.boe_date ?? ""} onChange={(event) => patchDraft("boe_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="Destination Port" rowId={row.id} fieldName="port_of_discharge_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <select value={draft.port_of_discharge_id ?? ""} onChange={(event) => patchDraft("port_of_discharge_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
+                                      <select value={draft.port_of_discharge_id ?? ""} onChange={(event) => patchDraft("port_of_discharge_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
                                         <option value="">Select port</option>
                                         {portOptions.map((option) => (
                                           <option key={option.value} value={option.value}>{option.label}</option>
@@ -1130,7 +1258,7 @@ export default function CSNTrackerPage() {
                                       </select>
                                     </EditField>
                                     <EditField label="Allotted Company" rowId={row.id} fieldName="consignee_company_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <select value={draft.consignee_company_id ?? ""} onChange={(event) => patchDraft("consignee_company_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
+                                      <select value={draft.consignee_company_id ?? ""} onChange={(event) => patchDraft("consignee_company_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
                                         <option value="">Select company</option>
                                         {allottedCompanyOptions.map((option) => (
                                           <option key={option.value} value={option.value}>{option.label}</option>
@@ -1141,9 +1269,9 @@ export default function CSNTrackerPage() {
                                 </TrackerSection>
 
                                 <TrackerSection eyebrow="Logistics" title="Transport, LR, and post-clearance handoff">
-                                  <div className="grid gap-3 lg:grid-cols-4">
+                                  <div className="grid gap-2 lg:grid-cols-4">
                                     <EditField label="Transporter" rowId={row.id} fieldName="transporter_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <select value={draft.transporter_id ?? ""} onChange={(event) => patchDraft("transporter_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
+                                      <select value={draft.transporter_id ?? ""} onChange={(event) => patchDraft("transporter_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
                                         <option value="">Select transporter</option>
                                         {transporterOptions.map((option) => (
                                           <option key={option.value} value={option.value}>{option.label}</option>
@@ -1151,44 +1279,44 @@ export default function CSNTrackerPage() {
                                       </select>
                                     </EditField>
                                     <EditField label="LR Date" rowId={row.id} fieldName="lr_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.lr_date ?? ""} onChange={(event) => patchDraft("lr_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.lr_date ?? ""} onChange={(event) => patchDraft("lr_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="LR Number" rowId={row.id} fieldName="lr_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.lr_number ?? ""} onChange={(event) => patchDraft("lr_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input value={draft.lr_number ?? ""} onChange={(event) => patchDraft("lr_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="Post-clearance LR Date" rowId={row.id} fieldName="post_clearance_lr_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.post_clearance_lr_date ?? ""} onChange={(event) => patchDraft("post_clearance_lr_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.post_clearance_lr_date ?? ""} onChange={(event) => patchDraft("post_clearance_lr_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                   </div>
                                 </TrackerSection>
 
                                 <TrackerSection eyebrow="Receiving" title="GE, GRN, LC, and completion tracking">
-                                  <div className="grid gap-3 lg:grid-cols-4">
+                                  <div className="grid gap-2 lg:grid-cols-4">
                                     <EditField label="GE Number" rowId={row.id} fieldName="gate_entry_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.gate_entry_id ?? ""} onChange={(event) => patchDraft("gate_entry_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input value={draft.gate_entry_id ?? ""} onChange={(event) => patchDraft("gate_entry_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="GE Date" rowId={row.id} fieldName="gate_entry_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.gate_entry_date ?? ""} onChange={(event) => patchDraft("gate_entry_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.gate_entry_date ?? ""} onChange={(event) => patchDraft("gate_entry_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="GRN Number" rowId={row.id} fieldName="grn_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.grn_id ?? ""} onChange={(event) => patchDraft("grn_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input value={draft.grn_id ?? ""} onChange={(event) => patchDraft("grn_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="GRN Date" rowId={row.id} fieldName="grn_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.grn_date ?? ""} onChange={(event) => patchDraft("grn_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.grn_date ?? ""} onChange={(event) => patchDraft("grn_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="LC Number" rowId={row.id} fieldName="lc_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.lc_number ?? ""} onChange={(event) => patchDraft("lc_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input value={draft.lc_number ?? ""} onChange={(event) => patchDraft("lc_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="LC Opened Date" rowId={row.id} fieldName="lc_opened_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.lc_opened_date ?? ""} onChange={(event) => patchDraft("lc_opened_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.lc_opened_date ?? ""} onChange={(event) => patchDraft("lc_opened_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="Soft Copy Received" rowId={row.id} fieldName="soft_copy_received" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <select value={draft.soft_copy_received ? "YES" : "NO"} onChange={(event) => patchDraft("soft_copy_received", event.target.value === "YES")} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
+                                      <select value={draft.soft_copy_received ? "YES" : "NO"} onChange={(event) => patchDraft("soft_copy_received", event.target.value === "YES")} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
                                         {YES_NO_OPTIONS.map((option) => <option key={option.label} value={option.value ? "YES" : "NO"}>{option.label}</option>)}
                                       </select>
                                     </EditField>
                                     <EditField label="Hard Copy Received" rowId={row.id} fieldName="hard_copy_received" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <select value={draft.hard_copy_received ? "YES" : "NO"} onChange={(event) => patchDraft("hard_copy_received", event.target.value === "YES")} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
+                                      <select value={draft.hard_copy_received ? "YES" : "NO"} onChange={(event) => patchDraft("hard_copy_received", event.target.value === "YES")} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
                                         {YES_NO_OPTIONS.map((option) => <option key={option.label} value={option.value ? "YES" : "NO"}>{option.label}</option>)}
                                       </select>
                                     </EditField>
@@ -1196,52 +1324,41 @@ export default function CSNTrackerPage() {
                                 </TrackerSection>
 
                                 <TrackerSection eyebrow="Courier And CHA" title="Hard-copy handoff and sub-CSN linkage">
-                                  <div className="grid gap-3 lg:grid-cols-4">
+                                  <div className="grid gap-2 lg:grid-cols-4">
                                     <EditField label="Courier Number" rowId={row.id} fieldName="hard_copy_courier_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.hard_copy_courier_number ?? ""} onChange={(event) => patchDraft("hard_copy_courier_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input value={draft.hard_copy_courier_number ?? ""} onChange={(event) => patchDraft("hard_copy_courier_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="Courier Dispatch Date" rowId={row.id} fieldName="courier_dispatch_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.courier_dispatch_date ?? ""} onChange={(event) => patchDraft("courier_dispatch_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.courier_dispatch_date ?? ""} onChange={(event) => patchDraft("courier_dispatch_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="Courier Received Date" rowId={row.id} fieldName="courier_received_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.courier_received_date ?? ""} onChange={(event) => patchDraft("courier_received_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.courier_received_date ?? ""} onChange={(event) => patchDraft("courier_received_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="Courier Date to CHA" rowId={row.id} fieldName="courier_date_to_cha" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.courier_date_to_cha ?? ""} onChange={(event) => patchDraft("courier_date_to_cha", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.courier_date_to_cha ?? ""} onChange={(event) => patchDraft("courier_date_to_cha", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="Courier CHA Receive Date" rowId={row.id} fieldName="courier_cha_receive_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.courier_cha_receive_date ?? ""} onChange={(event) => patchDraft("courier_cha_receive_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input type="date" value={draft.courier_cha_receive_date ?? ""} onChange={(event) => patchDraft("courier_cha_receive_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="CHA Docket Number" rowId={row.id} fieldName="cha_docket_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.cha_docket_number ?? ""} onChange={(event) => patchDraft("cha_docket_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                      <input value={draft.cha_docket_number ?? ""} onChange={(event) => patchDraft("cha_docket_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
-                                    {row.mother_csn_id ? (
-                                      <div className="grid gap-1 text-[11px] font-medium text-slate-600">
-                                        <span>Mother CSN</span>
-                                        <div className="h-9 border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-700">
-                                          {row.mother_csn_display_number || row.mother_csn_id}
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <div />
-                                    )}
+                                    <div />
                                     <div />
                                   </div>
                                 </TrackerSection>
 
                                 <TrackerSection eyebrow="Remarks" title="Final notes before saving">
                                   <EditField label="Remarks" rowId={row.id} fieldName="remarks" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <textarea value={draft.remarks ?? ""} onChange={(event) => patchDraft("remarks", event.target.value)} rows={3} className="border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-500" />
+                                    <textarea value={draft.remarks ?? ""} onChange={(event) => patchDraft("remarks", event.target.value)} rows={3} className="border border-slate-300 bg-white px-2 py-1 text-[11px] outline-none focus:border-sky-500" />
                                   </EditField>
                                 </TrackerSection>
 
-                                <div className="flex flex-wrap justify-end gap-2">
-                                  <button type="button" onClick={() => resetDraft(null)} className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700">
-                                    Cancel
-                                  </button>
-                                  <button type="button" onClick={() => void saveExpandedRow(row)} disabled={savingRowId === row.id} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
-                                    {savingRowId === row.id ? "Saving..." : "Save & Collapse"}
-                                  </button>
+                                <div className="grid gap-1 border border-slate-200 bg-white px-2 py-1.5 text-[10px] text-slate-600">
+                                  <span className="font-semibold uppercase tracking-[0.12em] text-slate-500">Mother CSN</span>
+                                  <span className="text-[11px] text-slate-800">
+                                    {row.mother_csn_display_number || "-"}
+                                  </span>
                                 </div>
                               </div>
                             </td>
@@ -1287,7 +1404,7 @@ export default function CSNTrackerPage() {
         onEscape={() => setShowSaveLayout(false)}
         actions={
           <>
-            <button type="button" onClick={() => setShowSaveLayout(false)} className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700">
+            <button type="button" onClick={() => setShowSaveLayout(false)} className="border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700">
               Cancel
             </button>
             <button type="button" onClick={() => void saveLayout()} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950">
@@ -1319,7 +1436,7 @@ export default function CSNTrackerPage() {
         width="min(760px, calc(100vw - 32px))"
         actions={
           <>
-            <button type="button" onClick={() => setDispatchDialog(null)} className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700">
+            <button type="button" onClick={() => setDispatchDialog(null)} className="border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700">
               Cancel
             </button>
             {dispatchDialog?.preview?.requires_reconciliation ? (
@@ -1419,15 +1536,16 @@ export default function CSNTrackerPage() {
   );
 }
 
-function FragmentRow({ row, visibleColumns, expanded, onOpenDetail, renderCell, children }) {
+function FragmentRow({ row, visibleColumns, expanded, onOpenDetail, renderCell, onToggleExpand, children }) {
   return (
     <>
       <tr
         className="cursor-pointer border-b border-slate-200 align-top hover:bg-sky-50"
+        onClick={() => onToggleExpand(row)}
         onDoubleClick={() => onOpenDetail(row)}
       >
         {visibleColumns.map((column) => (
-          <td key={column.key} className="border-r border-slate-200 px-2 py-2 text-xs text-slate-700">
+          <td key={column.key} className="border-r border-slate-200 px-1.5 py-1 text-[11px] text-slate-700">
             {renderCell(row, column)}
           </td>
         ))}
