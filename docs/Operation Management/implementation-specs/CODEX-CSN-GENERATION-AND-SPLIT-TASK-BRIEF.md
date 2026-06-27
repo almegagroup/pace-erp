@@ -555,7 +555,7 @@ Investigated directly in dev DB. Findings:
 - But its `related_csn_id` column is **NULL**, and neither CSN row (`CSN-000001`, `CSN-000003`) has `sto_id` or `consignee_company_id` set.
 - This means this particular STO was created through a path that never links back to a CSN — so the Tracker correctly shows nothing for "Company = Jayashree", because no CSN row's `consignee_company_id` is Jayashree. This is not a Tracker bug; it's a gap in whatever screen created `ASCSTO2627-0002` (it bypassed the CSN→STO linkage entirely).
 
-**Decision needed before Codex touches this (ask the business owner, don't guess):** should every STO be required to originate from a Sub-CSN (via the existing `transformSubCSNToSTOHandler` flow), making "STO without a related CSN" impossible going forward? If yes, find and lock down whatever screen/handler created `ASCSTO2627-0002` without going through that flow, and either route it through the Sub-CSN→STO transform or have it write `related_csn_id` + the CSN's `sto_id`/`consignee_company_id` itself. **Do not implement a fix for this sub-item until that's confirmed** — flag it back rather than guessing at scope.
+**RESOLVED — not a bug, no fix needed.** Checked `sto.handlers.ts` and the DB's `stock_transfer_order_sto_type_check` constraint: this system has exactly two STO types — `CONSIGNMENT_DISTRIBUTION` (always created from a Sub-CSN via the transform flow, sets `related_csn_id` + the CSN's `sto_id`/`consignee_company_id`) and `INTER_PLANT` (an independent plant-to-plant transfer, Gate-23, deliberately has no CSN link — required for Opening STOs per `STO_OPENING_REQUIRES_INTER_PLANT`). `ASCSTO2627-0002` has `sto_type = 'INTER_PLANT'`, so it correctly has no `related_csn_id` and correctly doesn't appear on the CSN Tracker — the Tracker only tracks `CONSIGNMENT_DISTRIBUTION` STOs. No action item here.
 
 ### 12.4 — PO Qty must stop being a mutated per-row allocation slice; add a real "Balance Qty" column
 
@@ -585,7 +585,7 @@ The "Remarks"/"Final notes before saving" section's `<textarea>` (~line 1353, cu
 ### Verification checklist (Part 12)
 1. No `ti-*` or any icon-font class anywhere in `CSNTrackerPage.jsx` after this round — only text labels or plain Unicode glyphs.
 2. Company filter has a working "ALL" option that does not get force-overwritten, and returns all ACL-scoped companies' CSNs when empty.
-3. 12.3 (STO linkage) is **not** touched without an explicit go-ahead from the business owner on the scope question raised above.
+3. 12.3 (STO linkage) — resolved as not-a-bug, no action item, nothing to verify.
 4. `po_qty` no longer changes value when sibling CSNs are created/edited against the same PO line — confirm by creating a second CSN against a PO line and checking the first CSN's `po_qty` stays at the PO line's full `ordered_qty`.
 5. New "Balance Qty" column appears, computed correctly, and updates live as `dispatch_qty` changes across sibling CSNs.
 6. Expand-row buttons and all field content visible without horizontal scrolling at a standard 1366×768 viewport.
