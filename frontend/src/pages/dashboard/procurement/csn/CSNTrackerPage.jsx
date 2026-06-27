@@ -12,6 +12,7 @@ import { requestWideWorkspace } from "../../../../store/wideWorkspace.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   confirmCSNDispatchQty,
+  createSubCSN,
   createCSNTrackerLayout,
   deleteCSNTrackerLayout,
   getAllAlertCounts,
@@ -385,6 +386,20 @@ function EditField({ label, children, rowId, fieldName, activeHistoryKey, histor
   );
 }
 
+function TrackerSection({ eyebrow, title, children }) {
+  return (
+    <section className="grid gap-3 border border-slate-200 bg-white p-3">
+      <div className="grid gap-1">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+          {eyebrow}
+        </div>
+        <div className="text-sm font-semibold text-slate-900">{title}</div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
 export default function CSNTrackerPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -647,6 +662,29 @@ export default function CSNTrackerPage() {
     }
   }
 
+  async function handleCreateSubCsn(row) {
+    const scopedCompanyId = companyId || row?.company_id || "";
+    if (!row?.id || !scopedCompanyId) {
+      setError("PROCUREMENT_SUB_CSN_COMPANY_REQUIRED");
+      return;
+    }
+    setSavingRowId(row.id);
+    setError("");
+    setNotice("");
+    try {
+      await createSubCSN(row.id, {
+        company_id: scopedCompanyId,
+      });
+      await invalidateTracker();
+      setNotice("Sub CSN created. Set its dispatch quantity from the tracker row.");
+      resetDraft(null);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_SUB_CSN_CREATE_FAILED");
+    } finally {
+      setSavingRowId("");
+    }
+  }
+
   async function saveLayout() {
     try {
       setError("");
@@ -701,13 +739,30 @@ export default function CSNTrackerPage() {
     switch (column.key) {
       case "expand":
         return (
-          <button
-            type="button"
-            onClick={() => (expandedRowId === row.id ? resetDraft(null) : resetDraft(row))}
-            className="inline-flex h-7 w-7 items-center justify-center border border-slate-300 bg-white text-slate-700"
-          >
-            {expandedRowId === row.id ? "-" : "+"}
-          </button>
+          <div className="grid justify-items-start gap-1">
+            <button
+              type="button"
+              onClick={() => (expandedRowId === row.id ? resetDraft(null) : resetDraft(row))}
+              className="inline-flex h-7 w-7 items-center justify-center border border-slate-300 bg-white text-slate-700"
+              title={expandedRowId === row.id ? "Collapse row" : "Expand row"}
+            >
+              {expandedRowId === row.id ? "-" : "+"}
+            </button>
+            {!row.mother_csn_id ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleCreateSubCsn(row);
+                }}
+                disabled={savingRowId === row.id}
+                className="border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-sky-900 disabled:opacity-50"
+                title="Create Sub CSN"
+              >
+                Split
+              </button>
+            ) : null}
+          </div>
         );
       case "status":
         return (
@@ -754,21 +809,21 @@ export default function CSNTrackerPage() {
         actions={[
           {
             key: "columns",
-            label: "COL",
+            label: "▦",
             title: "Columns",
             tone: "neutral",
             onClick: () => setShowColumns(true),
           },
           {
             key: "layouts",
-            label: "LAY",
+            label: "◫",
             title: "Save Layout",
             tone: "neutral",
             onClick: () => setShowSaveLayout(true),
           },
           {
             key: "refresh",
-            label: "REF",
+            label: "↻",
             title: trackerQuery.isFetching ? "Refreshing" : "Refresh",
             tone: "neutral",
             onClick: () => void invalidateTracker(),
@@ -800,7 +855,7 @@ export default function CSNTrackerPage() {
                 </button>
               </div>
 
-              <div className="grid gap-2 xl:grid-cols-[220px_180px_180px_170px_170px_220px_minmax(0,1fr)]">
+              <div className="grid gap-2 xl:grid-cols-[220px_180px_180px_170px_170px_minmax(0,1fr)]">
                 <label className="grid gap-1 text-[11px] font-medium text-slate-600">
                   Company
                   <select
@@ -884,9 +939,9 @@ export default function CSNTrackerPage() {
                   />
                 </label>
 
-                <label className="grid gap-1 text-[11px] font-medium text-slate-600">
+                <label className="grid min-w-0 gap-1 text-[11px] font-medium text-slate-600 xl:col-span-2">
                   Layout
-                  <div className="flex gap-2">
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                     <select
                       value={selectedLayoutId}
                       onChange={(event) => applyLayout(event.target.value)}
@@ -909,12 +964,15 @@ export default function CSNTrackerPage() {
                     </button>
                   </div>
                 </label>
+              </div>
 
+              <div className="grid gap-2 xl:grid-cols-[minmax(0,1fr)]">
                 <QuickFilterInput
                   label="Search"
                   value={search}
                   onChange={setSearch}
                   placeholder="CSN, vendor, material, PO"
+                  className="min-w-0"
                 />
               </div>
             </div>
@@ -958,241 +1016,224 @@ export default function CSNTrackerPage() {
                           <tr className="bg-slate-50">
                             <td colSpan={visibleColumns.length} className="border-t border-slate-300 px-3 py-3">
                               <div className="grid gap-3">
-                                <div className="grid gap-3 lg:grid-cols-4">
-                                  <EditField
-                                    label="Dispatch Qty"
-                                    rowId={row.id}
-                                    fieldName="dispatch_qty"
-                                    activeHistoryKey={activeHistoryKey}
-                                    histories={histories}
-                                    loadingHistoryKey={loadingHistoryKey}
-                                    onToggleHistory={toggleHistory}
-                                  >
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      step="0.0001"
-                                      value={draft.dispatch_qty ?? ""}
-                                      onChange={(event) => patchDraft("dispatch_qty", event.target.value)}
-                                      className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-                                    />
-                                  </EditField>
-                                  <EditField
-                                    label="Material Group"
-                                    rowId={row.id}
-                                    fieldName="material_category_id"
-                                    activeHistoryKey={activeHistoryKey}
-                                    histories={histories}
-                                    loadingHistoryKey={loadingHistoryKey}
-                                    onToggleHistory={toggleHistory}
-                                  >
-                                    {currentGroupOptions.length > 0 ? (
-                                      <select
-                                        value={draft.material_category_id ?? ""}
-                                        onChange={(event) => patchDraft("material_category_id", event.target.value)}
-                                        className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+                                <div className="flex flex-wrap items-start justify-between gap-3 border border-slate-200 bg-white px-3 py-2">
+                                  <div className="grid gap-1">
+                                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                      Tracker Row
+                                    </div>
+                                    <div className="text-sm font-semibold text-slate-900">
+                                      {row.csn_display_number || row.csn_number || row.id}
+                                    </div>
+                                    <div className="text-[11px] text-slate-600">
+                                      {row.display_reference_number || row.po_number || row.sto_number || "-"} | {row.material_name || "-"} | {row.company_label || "-"}
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    {!row.mother_csn_id ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleCreateSubCsn(row)}
+                                        disabled={savingRowId === row.id}
+                                        className="border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-900 disabled:opacity-50"
                                       >
-                                        <option value="">Select group</option>
-                                        {currentGroupOptions.map((option) => (
-                                          <option key={option.id} value={option.id}>
-                                            {option.group_name}
-                                          </option>
+                                        Create Sub CSN
+                                      </button>
+                                    ) : null}
+                                    <button
+                                      type="button"
+                                      onClick={() => openDetail(row)}
+                                      className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                                    >
+                                      Open Detail
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <TrackerSection eyebrow="Allocation" title="Dispatch balance and commercial flags">
+                                  <div className="grid gap-3 lg:grid-cols-4">
+                                    <EditField label="Dispatch Qty" rowId={row.id} fieldName="dispatch_qty" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="number" min="0" step="0.0001" value={draft.dispatch_qty ?? ""} onChange={(event) => patchDraft("dispatch_qty", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="Material Group" rowId={row.id} fieldName="material_category_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      {currentGroupOptions.length > 0 ? (
+                                        <select value={draft.material_category_id ?? ""} onChange={(event) => patchDraft("material_category_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
+                                          <option value="">Select group</option>
+                                          {currentGroupOptions.map((option) => (
+                                            <option key={option.id} value={option.id}>{option.group_name}</option>
+                                          ))}
+                                        </select>
+                                      ) : (
+                                        <div className="h-9 border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-600">
+                                          {row.material_name || "-"}
+                                        </div>
+                                      )}
+                                    </EditField>
+                                    <EditField label="Indent Required" rowId={row.id} fieldName="indent_required" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <select value={draft.indent_required ? "YES" : "NO"} onChange={(event) => patchDraft("indent_required", event.target.value === "YES")} className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
+                                        {YES_NO_OPTIONS.map((option) => (
+                                          <option key={option.label} value={option.value ? "YES" : "NO"}>{option.label}</option>
                                         ))}
                                       </select>
+                                    </EditField>
+                                    <EditField label="Indent Number" rowId={row.id} fieldName="vendor_indent_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input value={draft.vendor_indent_number ?? ""} onChange={(event) => patchDraft("vendor_indent_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                                    </EditField>
+                                  </div>
+                                </TrackerSection>
+
+                                <TrackerSection eyebrow="Shipment Timeline" title="ETD, ATD, ETA, and arrival chain">
+                                  <div className="grid gap-3 lg:grid-cols-4">
+                                    <EditField label="Scheduled ETA Port" rowId={row.id} fieldName="scheduled_eta_to_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.scheduled_eta_to_port ?? ""} onChange={(event) => patchDraft("scheduled_eta_to_port", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="ETD" rowId={row.id} fieldName="etd" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.etd ?? ""} onChange={(event) => patchDraft("etd", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="ATD" rowId={row.id} fieldName={row.csn_type === "IMPORT" ? "bl_date" : "lr_date"} activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.atd ?? ""} onChange={(event) => patchDraft("atd", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="ETA at Port" rowId={row.id} fieldName="eta_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.eta_at_port ?? ""} onChange={(event) => patchDraft("eta_at_port", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="ATA at Port" rowId={row.id} fieldName="ata_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.ata_at_port ?? ""} onChange={(event) => patchDraft("ata_at_port", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                  </div>
+                                </TrackerSection>
+
+                                <TrackerSection eyebrow="Documents" title="BL, invoice, BOE, and statutory references">
+                                  <div className="grid gap-3 lg:grid-cols-4">
+                                    <EditField label="BL Number" rowId={row.id} fieldName="bl_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input value={draft.bl_number ?? ""} onChange={(event) => patchDraft("bl_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="BL Date" rowId={row.id} fieldName="bl_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.bl_date ?? ""} onChange={(event) => patchDraft("bl_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="Invoice Number" rowId={row.id} fieldName="invoice_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input value={draft.invoice_number ?? ""} onChange={(event) => patchDraft("invoice_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="Invoice Date" rowId={row.id} fieldName="invoice_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.invoice_date ?? ""} onChange={(event) => patchDraft("invoice_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="BOE Number" rowId={row.id} fieldName="boe_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input value={draft.boe_number ?? ""} onChange={(event) => patchDraft("boe_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="BOE Date" rowId={row.id} fieldName="boe_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.boe_date ?? ""} onChange={(event) => patchDraft("boe_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="Destination Port" rowId={row.id} fieldName="port_of_discharge_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <select value={draft.port_of_discharge_id ?? ""} onChange={(event) => patchDraft("port_of_discharge_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
+                                        <option value="">Select port</option>
+                                        {portOptions.map((option) => (
+                                          <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                    </EditField>
+                                    <EditField label="Allotted Company" rowId={row.id} fieldName="consignee_company_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <select value={draft.consignee_company_id ?? ""} onChange={(event) => patchDraft("consignee_company_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
+                                        <option value="">Select company</option>
+                                        {allottedCompanyOptions.map((option) => (
+                                          <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                    </EditField>
+                                  </div>
+                                </TrackerSection>
+
+                                <TrackerSection eyebrow="Logistics" title="Transport, LR, and post-clearance handoff">
+                                  <div className="grid gap-3 lg:grid-cols-4">
+                                    <EditField label="Transporter" rowId={row.id} fieldName="transporter_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <select value={draft.transporter_id ?? ""} onChange={(event) => patchDraft("transporter_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
+                                        <option value="">Select transporter</option>
+                                        {transporterOptions.map((option) => (
+                                          <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                    </EditField>
+                                    <EditField label="LR Date" rowId={row.id} fieldName="lr_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.lr_date ?? ""} onChange={(event) => patchDraft("lr_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="LR Number" rowId={row.id} fieldName="lr_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input value={draft.lr_number ?? ""} onChange={(event) => patchDraft("lr_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="Post-clearance LR Date" rowId={row.id} fieldName="post_clearance_lr_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.post_clearance_lr_date ?? ""} onChange={(event) => patchDraft("post_clearance_lr_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                  </div>
+                                </TrackerSection>
+
+                                <TrackerSection eyebrow="Receiving" title="GE, GRN, LC, and completion tracking">
+                                  <div className="grid gap-3 lg:grid-cols-4">
+                                    <EditField label="GE Number" rowId={row.id} fieldName="gate_entry_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input value={draft.gate_entry_id ?? ""} onChange={(event) => patchDraft("gate_entry_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="GE Date" rowId={row.id} fieldName="gate_entry_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.gate_entry_date ?? ""} onChange={(event) => patchDraft("gate_entry_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="GRN Number" rowId={row.id} fieldName="grn_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input value={draft.grn_id ?? ""} onChange={(event) => patchDraft("grn_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="GRN Date" rowId={row.id} fieldName="grn_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.grn_date ?? ""} onChange={(event) => patchDraft("grn_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="LC Number" rowId={row.id} fieldName="lc_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input value={draft.lc_number ?? ""} onChange={(event) => patchDraft("lc_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="LC Opened Date" rowId={row.id} fieldName="lc_opened_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.lc_opened_date ?? ""} onChange={(event) => patchDraft("lc_opened_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="Soft Copy Received" rowId={row.id} fieldName="soft_copy_received" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <select value={draft.soft_copy_received ? "YES" : "NO"} onChange={(event) => patchDraft("soft_copy_received", event.target.value === "YES")} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
+                                        {YES_NO_OPTIONS.map((option) => <option key={option.label} value={option.value ? "YES" : "NO"}>{option.label}</option>)}
+                                      </select>
+                                    </EditField>
+                                    <EditField label="Hard Copy Received" rowId={row.id} fieldName="hard_copy_received" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <select value={draft.hard_copy_received ? "YES" : "NO"} onChange={(event) => patchDraft("hard_copy_received", event.target.value === "YES")} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
+                                        {YES_NO_OPTIONS.map((option) => <option key={option.label} value={option.value ? "YES" : "NO"}>{option.label}</option>)}
+                                      </select>
+                                    </EditField>
+                                  </div>
+                                </TrackerSection>
+
+                                <TrackerSection eyebrow="Courier And CHA" title="Hard-copy handoff and sub-CSN linkage">
+                                  <div className="grid gap-3 lg:grid-cols-4">
+                                    <EditField label="Courier Number" rowId={row.id} fieldName="hard_copy_courier_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input value={draft.hard_copy_courier_number ?? ""} onChange={(event) => patchDraft("hard_copy_courier_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="Courier Dispatch Date" rowId={row.id} fieldName="courier_dispatch_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.courier_dispatch_date ?? ""} onChange={(event) => patchDraft("courier_dispatch_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="Courier Received Date" rowId={row.id} fieldName="courier_received_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.courier_received_date ?? ""} onChange={(event) => patchDraft("courier_received_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="Courier Date to CHA" rowId={row.id} fieldName="courier_date_to_cha" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.courier_date_to_cha ?? ""} onChange={(event) => patchDraft("courier_date_to_cha", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="Courier CHA Receive Date" rowId={row.id} fieldName="courier_cha_receive_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input type="date" value={draft.courier_cha_receive_date ?? ""} onChange={(event) => patchDraft("courier_cha_receive_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    <EditField label="CHA Docket Number" rowId={row.id} fieldName="cha_docket_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input value={draft.cha_docket_number ?? ""} onChange={(event) => patchDraft("cha_docket_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                                    </EditField>
+                                    {row.mother_csn_id ? (
+                                      <div className="grid gap-1 text-[11px] font-medium text-slate-600">
+                                        <span>Mother CSN</span>
+                                        <div className="h-9 border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-700">
+                                          {row.mother_csn_display_number || row.mother_csn_id}
+                                        </div>
+                                      </div>
                                     ) : (
-                                      <div className="h-9 border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-600">
-                                        {row.material_name || "-"}
-                                      </div>
+                                      <div />
                                     )}
-                                  </EditField>
-                                  <EditField
-                                    label="Indent Required"
-                                    rowId={row.id}
-                                    fieldName="indent_required"
-                                    activeHistoryKey={activeHistoryKey}
-                                    histories={histories}
-                                    loadingHistoryKey={loadingHistoryKey}
-                                    onToggleHistory={toggleHistory}
-                                  >
-                                    <select
-                                      value={draft.indent_required ? "YES" : "NO"}
-                                      onChange={(event) => patchDraft("indent_required", event.target.value === "YES")}
-                                      className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-                                    >
-                                      {YES_NO_OPTIONS.map((option) => (
-                                        <option key={option.label} value={option.value ? "YES" : "NO"}>
-                                          {option.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </EditField>
-                                  <EditField
-                                    label="Indent Number"
-                                    rowId={row.id}
-                                    fieldName="vendor_indent_number"
-                                    activeHistoryKey={activeHistoryKey}
-                                    histories={histories}
-                                    loadingHistoryKey={loadingHistoryKey}
-                                    onToggleHistory={toggleHistory}
-                                  >
-                                    <input
-                                      value={draft.vendor_indent_number ?? ""}
-                                      onChange={(event) => patchDraft("vendor_indent_number", event.target.value)}
-                                      className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-                                    />
-                                  </EditField>
-                                </div>
-
-                                <div className="grid gap-3 lg:grid-cols-4">
-                                  <EditField label="Scheduled ETA Port" rowId={row.id} fieldName="scheduled_eta_to_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.scheduled_eta_to_port ?? ""} onChange={(event) => patchDraft("scheduled_eta_to_port", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="ETD" rowId={row.id} fieldName="etd" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.etd ?? ""} onChange={(event) => patchDraft("etd", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="ATD" rowId={row.id} fieldName={row.csn_type === "IMPORT" ? "bl_date" : "lr_date"} activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.atd ?? ""} onChange={(event) => patchDraft("atd", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="Current ETA" rowId={row.id} fieldName="eta_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.eta_at_port ?? ""} onChange={(event) => patchDraft("eta_at_port", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                </div>
-
-                                <div className="grid gap-3 lg:grid-cols-4">
-                                  <EditField label="ATA" rowId={row.id} fieldName="ata_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.ata_at_port ?? ""} onChange={(event) => patchDraft("ata_at_port", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="BL Number" rowId={row.id} fieldName="bl_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input value={draft.bl_number ?? ""} onChange={(event) => patchDraft("bl_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="BL Date" rowId={row.id} fieldName="bl_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.bl_date ?? ""} onChange={(event) => patchDraft("bl_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="Invoice Number" rowId={row.id} fieldName="invoice_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input value={draft.invoice_number ?? ""} onChange={(event) => patchDraft("invoice_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="Invoice Date" rowId={row.id} fieldName="invoice_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.invoice_date ?? ""} onChange={(event) => patchDraft("invoice_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                </div>
-
-                                <div className="grid gap-3 lg:grid-cols-4">
-                                  <EditField label="BOE Number" rowId={row.id} fieldName="boe_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input value={draft.boe_number ?? ""} onChange={(event) => patchDraft("boe_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="BOE Date" rowId={row.id} fieldName="boe_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.boe_date ?? ""} onChange={(event) => patchDraft("boe_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="Destination Port" rowId={row.id} fieldName="port_of_discharge_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <select value={draft.port_of_discharge_id ?? ""} onChange={(event) => patchDraft("port_of_discharge_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
-                                      <option value="">Select port</option>
-                                      {portOptions.map((option) => (
-                                        <option key={option.value} value={option.value}>{option.label}</option>
-                                      ))}
-                                    </select>
-                                  </EditField>
-                                  <EditField label="Allotted Company" rowId={row.id} fieldName="consignee_company_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <select value={draft.consignee_company_id ?? ""} onChange={(event) => patchDraft("consignee_company_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
-                                      <option value="">Select company</option>
-                                      {allottedCompanyOptions.map((option) => (
-                                        <option key={option.value} value={option.value}>{option.label}</option>
-                                      ))}
-                                    </select>
-                                  </EditField>
-                                </div>
-
-                                <div className="grid gap-3 lg:grid-cols-4">
-                                  <EditField label="Transporter" rowId={row.id} fieldName="transporter_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <select value={draft.transporter_id ?? ""} onChange={(event) => patchDraft("transporter_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
-                                      <option value="">Select transporter</option>
-                                      {transporterOptions.map((option) => (
-                                        <option key={option.value} value={option.value}>{option.label}</option>
-                                      ))}
-                                    </select>
-                                  </EditField>
-                                  <EditField label="LR Date" rowId={row.id} fieldName="lr_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.lr_date ?? ""} onChange={(event) => patchDraft("lr_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="LR Number" rowId={row.id} fieldName="lr_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input value={draft.lr_number ?? ""} onChange={(event) => patchDraft("lr_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="Post-clearance LR Date" rowId={row.id} fieldName="post_clearance_lr_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.post_clearance_lr_date ?? ""} onChange={(event) => patchDraft("post_clearance_lr_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                </div>
-
-                                <div className="grid gap-3 lg:grid-cols-4">
-                                  <EditField label="GE Number" rowId={row.id} fieldName="gate_entry_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input value={draft.gate_entry_id ?? ""} onChange={(event) => patchDraft("gate_entry_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="GE Date" rowId={row.id} fieldName="gate_entry_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.gate_entry_date ?? ""} onChange={(event) => patchDraft("gate_entry_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="GRN Number" rowId={row.id} fieldName="grn_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input value={draft.grn_id ?? ""} onChange={(event) => patchDraft("grn_id", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="GRN Date" rowId={row.id} fieldName="grn_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.grn_date ?? ""} onChange={(event) => patchDraft("grn_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                </div>
-
-                                <div className="grid gap-3 lg:grid-cols-4">
-                                  <EditField label="LC Number" rowId={row.id} fieldName="lc_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input value={draft.lc_number ?? ""} onChange={(event) => patchDraft("lc_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="LC Opened Date" rowId={row.id} fieldName="lc_opened_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.lc_opened_date ?? ""} onChange={(event) => patchDraft("lc_opened_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="Soft Copy Received" rowId={row.id} fieldName="soft_copy_received" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <select value={draft.soft_copy_received ? "YES" : "NO"} onChange={(event) => patchDraft("soft_copy_received", event.target.value === "YES")} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
-                                      {YES_NO_OPTIONS.map((option) => <option key={option.label} value={option.value ? "YES" : "NO"}>{option.label}</option>)}
-                                    </select>
-                                  </EditField>
-                                  <EditField label="Hard Copy Received" rowId={row.id} fieldName="hard_copy_received" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <select value={draft.hard_copy_received ? "YES" : "NO"} onChange={(event) => patchDraft("hard_copy_received", event.target.value === "YES")} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
-                                      {YES_NO_OPTIONS.map((option) => <option key={option.label} value={option.value ? "YES" : "NO"}>{option.label}</option>)}
-                                    </select>
-                                  </EditField>
-                                </div>
-
-                                <div className="grid gap-3 lg:grid-cols-4">
-                                  <EditField label="Courier Number" rowId={row.id} fieldName="hard_copy_courier_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input value={draft.hard_copy_courier_number ?? ""} onChange={(event) => patchDraft("hard_copy_courier_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="Courier Dispatch Date" rowId={row.id} fieldName="courier_dispatch_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.courier_dispatch_date ?? ""} onChange={(event) => patchDraft("courier_dispatch_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="Courier Received Date" rowId={row.id} fieldName="courier_received_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.courier_received_date ?? ""} onChange={(event) => patchDraft("courier_received_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="Courier Date to CHA" rowId={row.id} fieldName="courier_date_to_cha" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.courier_date_to_cha ?? ""} onChange={(event) => patchDraft("courier_date_to_cha", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                </div>
-
-                                <div className="grid gap-3 lg:grid-cols-4">
-                                  <EditField label="Courier CHA Receive Date" rowId={row.id} fieldName="courier_cha_receive_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input type="date" value={draft.courier_cha_receive_date ?? ""} onChange={(event) => patchDraft("courier_cha_receive_date", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  <EditField label="CHA Docket Number" rowId={row.id} fieldName="cha_docket_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <input value={draft.cha_docket_number ?? ""} onChange={(event) => patchDraft("cha_docket_number", event.target.value)} className="h-9 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-                                  </EditField>
-                                  {row.mother_csn_id ? (
-                                    <div className="grid gap-1 text-[11px] font-medium text-slate-600">
-                                      <span>Mother CSN</span>
-                                      <div className="h-9 border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-700">
-                                        {row.mother_csn_display_number || row.mother_csn_id}
-                                      </div>
-                                    </div>
-                                  ) : (
                                     <div />
-                                  )}
-                                  <div />
-                                </div>
+                                  </div>
+                                </TrackerSection>
 
-                                <EditField label="Remarks" rowId={row.id} fieldName="remarks" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                  <textarea value={draft.remarks ?? ""} onChange={(event) => patchDraft("remarks", event.target.value)} rows={3} className="border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-500" />
-                                </EditField>
+                                <TrackerSection eyebrow="Remarks" title="Final notes before saving">
+                                  <EditField label="Remarks" rowId={row.id} fieldName="remarks" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                    <textarea value={draft.remarks ?? ""} onChange={(event) => patchDraft("remarks", event.target.value)} rows={3} className="border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-500" />
+                                  </EditField>
+                                </TrackerSection>
 
                                 <div className="flex flex-wrap justify-end gap-2">
                                   <button type="button" onClick={() => resetDraft(null)} className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700">

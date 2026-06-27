@@ -7,12 +7,9 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
-  createSubCSN,
-  deleteSubCSN,
   getCSN,
   listCSNs,
   listPorts,
@@ -202,44 +199,6 @@ export default function CSNDetailPage() {
     }
   }
 
-  async function handleCreateSubCsn() {
-    if (!detail?.id || !detail?.company_id) {
-      return;
-    }
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      await createSubCSN(detail.id, {
-        company_id: detail.company_id,
-      });
-      setNotice("Sub CSN created. Set its dispatch quantity from the Tracker.");
-      await loadDetail();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_SUB_CSN_CREATE_FAILED");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleDeleteSubCsn(subId) {
-    if (!detail?.id) return;
-    const confirmed = await openActionConfirm({ eyebrow: "CSN", title: "Delete this sub CSN?", confirmLabel: "Delete" });
-    if (!confirmed) return;
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      await deleteSubCSN(detail.id, subId);
-      setNotice("Sub CSN deleted.");
-      await loadDetail();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_SUB_CSN_DELETE_FAILED");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function handleMarkInTransit() {
     if (!detail?.id || !detail?.company_id) {
       return;
@@ -311,6 +270,10 @@ export default function CSNDetailPage() {
         </div>
       ) : (
         <div className="grid gap-4">
+          <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            Use the CSN Tracker expanded row for split-dispatch, Sub-CSN, and bulk field-edit work. This detail screen stays available for document review and lifecycle follow-up.
+          </div>
+
           {detail.mother_csn_id ? (
             <div className="border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
               Sub CSN of {getCsnDisplayLabel(motherCsn) || detail.mother_csn_id}
@@ -447,19 +410,10 @@ export default function CSNDetailPage() {
             </ErpSectionCard>
           ) : null}
 
-          <ErpSectionCard eyebrow="Sub CSNs" title="Split dispatch management">
+          <ErpSectionCard eyebrow="Sub CSNs" title="Split dispatch references">
             <div className="grid gap-3">
-              <div className="grid gap-3 lg:grid-cols-[auto]">
-                <div className="flex items-end">
-                  <button
-                    type="button"
-                    onClick={() => void handleCreateSubCsn()}
-                    disabled={saving}
-                    className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900 disabled:opacity-50"
-                  >
-                    Add Sub CSN
-                  </button>
-                </div>
+              <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                Sub-CSN creation, reconciliation, and deletion now happen from the CSN Tracker row so the full working flow stays in one surface.
               </div>
               <ErpDenseGrid
                 columns={[
@@ -474,20 +428,9 @@ export default function CSNDetailPage() {
                   },
                   {
                     key: "actions",
-                    label: "Actions",
-                    width: "120px",
-                    render: (row) =>
-                      !row.gate_entry_id ? (
-                        <button
-                          type="button"
-                          onClick={() => void handleDeleteSubCsn(row.id)}
-                          className="border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-900"
-                        >
-                          Delete
-                        </button>
-                      ) : (
-                        "—"
-                      ),
+                    label: "Tracker",
+                    width: "180px",
+                    render: () => "Manage from Tracker",
                   },
                 ]}
                 rows={subCsns}

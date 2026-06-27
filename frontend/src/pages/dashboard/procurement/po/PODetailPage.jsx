@@ -166,7 +166,10 @@ export default function PODetailPage() {
   );
   const vendors = vendorQuery.vendors;
   const paymentTerms = paymentTermQuery.paymentTerms;
-  const costCenters = Array.isArray(costCenterQuery.data?.data) ? costCenterQuery.data.data : [];
+  const costCenters = useMemo(
+    () => (Array.isArray(costCenterQuery.data?.data) ? costCenterQuery.data.data : []),
+    [costCenterQuery.data?.data]
+  );
   const csns = Array.isArray(csnQuery.data) ? csnQuery.data : [];
   const loading =
     poDetailQuery.isLoading ||
@@ -202,6 +205,14 @@ export default function PODetailPage() {
         label: `${entry.cost_center_code || entry.id} | ${entry.cost_center_name || entry.name || ""}`,
       })),
     [costCenters]
+  );
+  const paymentTermMap = useMemo(
+    () => new Map(paymentTermOptions.map((entry) => [entry.value, entry.label])),
+    [paymentTermOptions]
+  );
+  const costCenterMap = useMemo(
+    () => new Map(costCenterOptions.map((entry) => [entry.value, entry.label])),
+    [costCenterOptions]
   );
   const isImportPo = useMemo(
     () =>
@@ -522,12 +533,20 @@ export default function PODetailPage() {
                 {
                   key: "cost_center_id",
                   label: "Cost Center",
-                  render: (row) => row.cost_center_display || row.cost_center_id || "—",
+                  render: (row) =>
+                    row.cost_center_display ||
+                    costCenterMap.get(row.cost_center_id) ||
+                    row.cost_center_id ||
+                    "—",
                 },
                 {
                   key: "payment_term_id",
                   label: "Payment Term",
-                  render: (row) => row.payment_term_display || row.payment_term_id || "—",
+                  render: (row) =>
+                    row.payment_term_display ||
+                    paymentTermMap.get(row.payment_term_id) ||
+                    row.payment_term_id ||
+                    "—",
                 },
                 {
                   key: "line_status",
