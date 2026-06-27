@@ -523,4 +523,76 @@ The business owner rejected the current Tracker's visual density — too much wa
 5. Confirm the Mother CSN strip shows a clear empty/dash state on mother/independent rows rather than disappearing.
 6. Same eslint/build/deno-check/structural-integrity checks as prior parts.
 
+---
+
+## Part 12 — Post-Part-11 live bug round (icon library correction, PO/Balance qty fix, filter/STO gaps, layout fixes)
+
+Business owner tested the Part 11 build live and found multiple real defects. Root causes investigated directly against the live dev DB (`ytapuwiqicmvpanmzelb`) before writing this Part — do not re-investigate root cause for items where it's already stated below, just implement the fix.
+
+### 12.0 — CORRECTION: this project has no icon font (supersedes Part 11's `ti-*` icon instructions)
+
+Part 11 told Codex to use Tabler icon classes (`ti-columns`, `ti-git-branch`, `ti-chevron-up`, etc.). **This was wrong** — `@tabler/icons` (or any icon font/library) is not installed or loaded anywhere in this project (confirmed: no `ti` CSS in `index.html`, no icon package in `frontend/package.json`, no other page in the codebase uses `ti-*` classes). Every icon-only button on the live Tracker rendered as a blank box because the glyph font doesn't exist.
+
+Claude already fixed this directly in `frontend/src/pages/dashboard/procurement/csn/CSNTrackerPage.jsx` (commit `b02a65e`) by replacing `IconActionButton`'s `<i className="ti ...">` with short uppercase text labels (SPLIT, OPEN, SAVE, COLLAPSE, DEL, COLUMNS, etc.) and replacing the row expand/collapse chevron with plain `▲`/`▼` characters. **Codex: do not reintroduce `ti-*` icon classes anywhere in this file or any new code for this module.** All future action controls must be short text-label buttons (matching the rest of the app's plain-text convention) or plain Unicode glyphs already proven to render (▲ ▼) — never an icon font class.
+
+### 12.1 — Filter bar: remove vertical gap regression (already fixed, no action needed)
+
+The huge blank gap between the filter row and the data table (seen live) was a regression Claude introduced in the Part 11 footer-positioning fix — CSS Grid's `align-content` defaults to stretch, and the global `ErpScreenScaffold.jsx` content wrapper was made `flex-1` to pin the footer strip, which stretched the row tracks on short-content pages. Already fixed (commit `40ca692`) by adding `content-start` to that grid container. No action needed from Codex; mentioned here only so the history is in one place.
+
+### 12.2 — Company filter needs an explicit "ALL" option
+
+Currently `CSNTrackerPage.jsx`'s Company `<select>` (~line 934-948) only offers "Select company" + the user's assigned companies, and a `useEffect` (~line 508) force-defaults `companyId` to `companyOptions[0]?.value` whenever it's empty — so the user can never actually view all companies at once, unlike the Status and CSN Type filters which both correctly have an "ALL" option (empty-string value, no force-default).
+
+**Fix:**
+- Add an explicit `<option value="">ALL</option>` as the first option in the Company select (matching the Status/CSN Type pattern), and rename the placeholder text from "Select company" to "ALL".
+- Remove the force-default behavior in the `useEffect` at ~line 508 that overwrites an empty `companyId` with the first company — leave it empty (= ALL) unless the user explicitly picks one.
+- `getCSNTracker(...)` / the backend `listCSNsHandler` must support `company_id` being omitted/empty and, in that case, return rows across **all companies the requesting user's ACL/company-scope allows** (not all companies system-wide) — check how other list endpoints in this codebase already do an empty-company_id = "all scoped companies" filter (e.g. check `listPurchaseOrdersHandler` or similar in `po.handlers.ts` for the existing pattern) and reuse it rather than inventing a new scoping rule.
+
+### 12.3 — STO not appearing in tracker for a company filter — confirmed as a real data-linkage gap, not a display bug
+
+Investigated directly in dev DB. Findings:
+- `erp_procurement.stock_transfer_order` has STO `ASCSTO2627-0002` (Almega Surface Coats LLP → Jayashree Industries, status `PENDING_APPROVAL`) — confirmed it exists.
+- But its `related_csn_id` column is **NULL**, and neither CSN row (`CSN-000001`, `CSN-000003`) has `sto_id` or `consignee_company_id` set.
+- This means this particular STO was created through a path that never links back to a CSN — so the Tracker correctly shows nothing for "Company = Jayashree", because no CSN row's `consignee_company_id` is Jayashree. This is not a Tracker bug; it's a gap in whatever screen created `ASCSTO2627-0002` (it bypassed the CSN→STO linkage entirely).
+
+**Decision needed before Codex touches this (ask the business owner, don't guess):** should every STO be required to originate from a Sub-CSN (via the existing `transformSubCSNToSTOHandler` flow), making "STO without a related CSN" impossible going forward? If yes, find and lock down whatever screen/handler created `ASCSTO2627-0002` without going through that flow, and either route it through the Sub-CSN→STO transform or have it write `related_csn_id` + the CSN's `sto_id`/`consignee_company_id` itself. **Do not implement a fix for this sub-item until that's confirmed** — flag it back rather than guessing at scope.
+
+### 12.4 — PO Qty must stop being a mutated per-row allocation slice; add a real "Balance Qty" column
+
+Confirmed via dev DB: PO line `ASCPO2627-0201` line item has `ordered_qty = 100`. After the business owner created a second CSN against the same PO line with `dispatch_qty = 50`, **both** CSN rows now show `po_qty = 50` (split 50/50) — i.e. `consignment_note.po_qty` is being treated as a mutable "this row's current slice of the PO line" by `computeDispatchQtyPreview()` (`csn.handlers.ts` ~line 1007-1060, used by the `/dispatch-qty/preview` and `/dispatch-qty/confirm` endpoints) and `recalculateAndBuildUpdates()`. This matches the business owner's earlier (locked) instruction that GE/GRN must always operate against the PO line's full original ordered qty, not whatever a CSN's `po_qty` currently shows — so `po_qty` silently changing per CSN is actively misleading on the Tracker grid.
+
+**Fix:**
+- `consignment_note.po_qty` should always display/store the PO line's full `ordered_qty` for every CSN against that line — stop writing the reconciled "current_qty"/"suggested_qty" slice into `po_qty`. (Check every place `po_qty` is currently set to a computed slice — `computeDispatchQtyPreview`, `recalculateAndBuildUpdates`, the sub-CSN creation/clone path at ~line 581, and the dispatch-qty confirm handler ~line 1942 — and change them to stop mutating `po_qty`; only `dispatch_qty` should be written per the existing locked rule that dispatch_qty starts at 0 and is manually allocated.)
+- Add a new **computed (not stored) "Balance Qty"** value per CSN row, shown as a new Tracker column between "PO Qty"/"Order Qty" and "Dispatch Qty": `Balance Qty = po_line.ordered_qty − po_line.knocked_off_qty − SUM(dispatch_qty of all non-knocked-off CSNs against that same po_line_id)`. This must be computed server-side in `listCSNsHandler`/`enrichTrackerRows` (one extra query per distinct `po_line_id` in the result set, or a single batched query, not N+1 per row) and returned as a new field, e.g. `balance_qty`, then added to `buildColumnDefs()` in `CSNTrackerPage.jsx` right after the existing Order/PO Qty column.
+- Keep `computeDispatchQtyPreview`'s actual purpose (warning the user if total dispatch_qty across siblings would exceed the PO line's available balance) — just stop conflating that preview math with the stored `po_qty` field.
+
+### 12.5 — Expand-row action buttons and content get clipped off-screen, need horizontal scroll just to see them
+
+Business owner reports that in the expanded row, the per-row action buttons (Split/Save/Collapse/etc.) and some field content are pushed off to the right, requiring a horizontal scroll all the way to the end to see them — they should always be visible at the left without scrolling.
+
+- Audit the expand-row markup in `CSNTrackerPage.jsx` for any wrapping element that allows horizontal overflow without wrapping (e.g. a flex row with `flex-nowrap` and no `min-w-0`/`flex-wrap` on a row that's wider than the visible table viewport, or content sitting inside a table `<td>` that inherits the table's horizontal scroll container from the main grid).
+- The expand-row's own header bar and section bodies must render in their own full-width block **below** the scrollable table, not inside a `<td>` that's still subject to the table's horizontal scroll — confirm this is actually the case structurally (it's supposed to be a `colSpan` full-width row per earlier parts; if it currently still scrolls horizontally with the table, that's the bug to fix).
+- Buttons specifically must always stay left-aligned/visible without requiring scroll — do not let `flex-wrap` reflow push them past the visible width.
+
+### 12.6 — Expand-row action buttons need keyboard shortcuts
+
+Per this app's existing keyboard-native convention (footer hints like "Enter Open", "Esc Back", "Ctrl+K Command Bar" used elsewhere), add keyboard shortcuts for the expand-row actions while a row is expanded: e.g. `Ctrl+S` = Save, `Esc` = Collapse, `Ctrl+Shift+S` (or similar, avoid clashing with existing global shortcuts in `MenuShell.jsx`/`ErpScreenScaffold.jsx`) = Create Sub CSN. Check `MenuShell.jsx` and `ErpScreenScaffold.jsx` for already-bound global shortcuts before picking keys, to avoid collisions. Show the bound key in each button's `title` tooltip (e.g. "Save (Ctrl+S)").
+
+### 12.7 — "Remarks" section textarea is oversized
+
+The "Remarks"/"Final notes before saving" section's `<textarea>` (~line 1353, currently `rows={3}` but rendering far larger than 3 rows' worth of space in the live build) takes up disproportionate vertical space compared to every other compact field in the expand body. Reduce it to genuinely match `rows={3}` sizing (check for any CSS forcing it taller, e.g. a parent grid/flex stretch — same class of bug as 12.1, the `align-content`/stretch regression may also be affecting this textarea's grid cell since `TrackerSection` is a `grid` container; verify after 12.1's fix is confirmed live whether this is already resolved before changing the textarea itself) and confirm it visually matches the density of the surrounding fields.
+
+### Verification checklist (Part 12)
+1. No `ti-*` or any icon-font class anywhere in `CSNTrackerPage.jsx` after this round — only text labels or plain Unicode glyphs.
+2. Company filter has a working "ALL" option that does not get force-overwritten, and returns all ACL-scoped companies' CSNs when empty.
+3. 12.3 (STO linkage) is **not** touched without an explicit go-ahead from the business owner on the scope question raised above.
+4. `po_qty` no longer changes value when sibling CSNs are created/edited against the same PO line — confirm by creating a second CSN against a PO line and checking the first CSN's `po_qty` stays at the PO line's full `ordered_qty`.
+5. New "Balance Qty" column appears, computed correctly, and updates live as `dispatch_qty` changes across sibling CSNs.
+6. Expand-row buttons and all field content visible without horizontal scrolling at a standard 1366×768 viewport.
+7. Keyboard shortcuts work while a row is expanded and are shown in tooltips; no collision with existing global shortcuts.
+8. Remarks textarea visually matches the density of other compact fields (not oversized).
+9. Same eslint/build/deno-check/structural-integrity checks as prior parts.
+
+Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
+
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
