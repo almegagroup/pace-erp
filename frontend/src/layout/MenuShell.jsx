@@ -32,6 +32,7 @@ import {
   unsubscribeWorkspaceShell,
 } from "../store/workspaceShell.js";
 import { lockWorkspace } from "../store/workspaceLock.js";
+import { subscribeWideWorkspace } from "../store/wideWorkspace.js";
 import {
   getClusterAdmission,
   openPendingClusterWindow,
@@ -240,6 +241,7 @@ export default function MenuShell() {
   const [collapsed, setCollapsed] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [actionRailCollapsed, setActionRailCollapsed] = useState(false);
+  const [wideWorkspace, setWideWorkspace] = useState(false);
   const [activeZone, setActiveZone] = useState("content");
   const [menuFocusIndex, setMenuFocusIndex] = useState(0);
   const [drawerPath, setDrawerPath] = useState([]);
@@ -751,6 +753,8 @@ export default function MenuShell() {
     subscribeWorkspaceShell(listener);
     return () => unsubscribeWorkspaceShell(listener);
   }, []);
+
+  useEffect(() => subscribeWideWorkspace(setWideWorkspace), []);
 
   useEffect(() => {
     const listener = (snapshot) => {
@@ -1453,7 +1457,8 @@ export default function MenuShell() {
     <div className="erp-app-shell flex h-screen overflow-hidden text-slate-900">
       <aside
         aria-label="Workspace navigation"
-        className={`flex shrink-0 flex-col border-r bg-[#f4f7fa] ${workspaceMode ? "w-[92px]" : collapsed ? "w-[92px]" : aclWorkspace ? "w-[236px]" : "w-[272px]"} ${zoneBorder(activeZone, "menu")}`}
+        className={`flex shrink-0 flex-col border-r bg-[#f4f7fa] ${wideWorkspace ? "w-0 overflow-hidden border-none" : workspaceMode ? "w-[92px]" : collapsed ? "w-[92px]" : aclWorkspace ? "w-[236px]" : "w-[272px]"} ${zoneBorder(activeZone, "menu")}`}
+        aria-hidden={wideWorkspace}
       >
         <div className="border-b border-slate-500 bg-[linear-gradient(180deg,#0d4f90_0%,#13426f_100%)] px-3 py-3 text-white">
           <div className="flex items-center gap-2">

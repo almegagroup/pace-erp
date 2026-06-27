@@ -8,6 +8,7 @@ import ModalBase from "../../../../components/layer/ModalBase.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { requestWideWorkspace } from "../../../../store/wideWorkspace.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   confirmCSNDispatchQty,
@@ -365,6 +366,7 @@ export default function CSNTrackerPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
+  useEffect(() => requestWideWorkspace(), []);
   const [companyId, setCompanyId] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
