@@ -515,7 +515,8 @@ async function getMaterialGroupOptionsByMaterialIds(materialIds: string[]): Prom
     .eq("active", true);
 
   if (error) {
-    throw new Error("PROCUREMENT_MATERIAL_GROUP_LOOKUP_FAILED");
+    console.error("CSN_MATERIAL_GROUP_LOOKUP_FAILED", JSON.stringify(error));
+    throw new Error(`PROCUREMENT_MATERIAL_GROUP_LOOKUP_FAILED: ${error.message}`);
   }
 
   const grouped = new Map<string, Array<Record<string, unknown>>>();
@@ -809,6 +810,11 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     || paymentTermResult.error || portResult.error || companyResult.error
     || poLineResult.error || gateEntryResult.error || grnResult.error
   ) {
+    console.error("CSN_TRACKER_ENRICH_FAILED", JSON.stringify({
+      po: poResult.error, sto: stoResult.error, vendor: vendorResult.error, material: materialResult.error,
+      transporter: transporterResult.error, paymentTerm: paymentTermResult.error, port: portResult.error,
+      company: companyResult.error, poLine: poLineResult.error, gateEntry: gateEntryResult.error, grn: grnResult.error,
+    }));
     throw new Error("PROCUREMENT_TRACKER_ENRICH_FAILED");
   }
 
@@ -1689,12 +1695,14 @@ export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerCon
 
     const { data, error, count } = await query;
     if (error) {
-      throw new Error("PROCUREMENT_TRACKER_LIST_FAILED");
+      console.error("CSN_TRACKER_LIST_QUERY_FAILED", JSON.stringify(error));
+      throw new Error(`PROCUREMENT_TRACKER_LIST_FAILED: ${error.message}`);
     }
 
     const enriched = await enrichTrackerRows((data as CsnRow[] | null) ?? []);
     return okResponse({ data: enriched, total: count ?? 0 }, ctx.request_id, req);
   } catch (err) {
+    console.error("CSN_TRACKER_LIST_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_TRACKER_LIST_FAILED";
     return procurementErrorResponse(req, ctx, code, 500, "Tracker list failed");
   }
