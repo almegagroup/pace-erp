@@ -30,8 +30,8 @@ const CSN_STATUS = {
   CANCELLED: "CAN",
   KNOCKED_OFF: "KOF",
 } as const;
-const EDITABLE_CSN_STATUSES = new Set([CSN_STATUS.ORDERED, CSN_STATUS.IN_TRANSIT]);
-const READONLY_CSN_STATUSES = new Set([CSN_STATUS.GATE_ENTRY_DONE, CSN_STATUS.GRN_DONE]);
+const EDITABLE_CSN_STATUSES = new Set<string>([CSN_STATUS.ORDERED, CSN_STATUS.IN_TRANSIT]);
+const READONLY_CSN_STATUSES = new Set<string>([CSN_STATUS.GATE_ENTRY_DONE, CSN_STATUS.GRN_DONE]);
 const DATE_FIELDS = new Set([
   "scheduled_eta_to_port",
   "etd",
@@ -86,6 +86,7 @@ const MOTHER_PROPAGATION_FIELDS = [
 ];
 const BOOLEAN_FIELDS = new Set([
   "indent_required",
+  "has_rebate",
   "soft_copy_received",
   "hard_copy_received",
   "etd_is_manual_override",
@@ -93,6 +94,7 @@ const BOOLEAN_FIELDS = new Set([
 ]);
 const NUMERIC_FIELDS = new Set([
   "dispatch_qty",
+  "rebate_rate",
   "received_qty",
   "transit_days_snapshot",
 ]);
@@ -100,6 +102,9 @@ const MANUAL_EDITABLE_FIELDS = [
   "dispatch_qty",
   "material_category_id",
   "indent_required",
+  "has_rebate",
+  "rebate_rate",
+  "rebate_remarks",
   "vendor_indent_number",
   "etd",
   "etd_is_manual_override",
@@ -348,14 +353,14 @@ async function generateProcurementDocNumber(docType: string): Promise<string> {
 }
 
 async function getCsnById(id: string, companyId?: string): Promise<CsnRow | null> {
-  let query = serviceRoleClient
+  let query: any = serviceRoleClient
     .schema("erp_procurement")
     .from("consignment_note")
     .select("*")
     .eq("id", id);
 
   if (companyId) {
-    query = query.eq("company_id", companyId);
+    query = query.or(`company_id.eq.${companyId},consignee_company_id.eq.${companyId}`);
   }
 
   const { data, error } = await query.maybeSingle();
@@ -370,6 +375,47 @@ async function getCompanyScopedCompanyId(
   bodyOrQueryCompanyId?: string,
 ): Promise<string> {
   return toTrimmedString(bodyOrQueryCompanyId) || toTrimmedString(ctx.context.companyId);
+}
+
+async function getAccessibleCompanyIds(ctx: ProcurementHandlerContext): Promise<string[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_map")
+    .from("user_companies")
+    .select("company_id")
+    .eq("auth_user_id", ctx.auth_user_id);
+
+  if (error) {
+    throw new Error("PROCUREMENT_COMPANY_SCOPE_FAILED");
+  }
+
+  return [...new Set(((data as Record<string, unknown>[] | null) ?? [])
+    .map((row) => toTrimmedString(row.company_id))
+    .filter(Boolean))];
+}
+
+async function resolveScopedCompanyIds(
+  ctx: ProcurementHandlerContext,
+  requestedCompanyId?: string,
+): Promise<string[]> {
+  const explicitCompanyId = toTrimmedString(requestedCompanyId);
+  if (explicitCompanyId) {
+    const scopedCompanyId = await getCompanyScopedCompanyId(ctx, explicitCompanyId);
+    return scopedCompanyId ? [scopedCompanyId] : [];
+  }
+  return await getAccessibleCompanyIds(ctx);
+}
+
+function buildCompanyScopeOrFilter(companyIds: string[]): string {
+  const normalized = [...new Set(companyIds.map((value) => toTrimmedString(value)).filter(Boolean))];
+  if (normalized.length === 0) {
+    return "";
+  }
+  if (normalized.length === 1) {
+    const companyId = normalized[0];
+    return `company_id.eq.${companyId},consignee_company_id.eq.${companyId}`;
+  }
+  const joined = normalized.join(",");
+  return `company_id.in.(${joined}),consignee_company_id.in.(${joined})`;
 }
 
 async function getImportLeadTime(csn: CsnRow): Promise<Record<string, unknown> | null> {
@@ -578,7 +624,7 @@ async function cloneBalanceCsnFromSource(
     ...sourceCsn,
     id: undefined,
     csn_number: csnNumber,
-    po_qty: quantity,
+    po_qty: sourceCsn.po_qty ?? null,
     dispatch_qty: quantity,
     total_received_qty: 0,
     gate_entry_id: null,
@@ -785,9 +831,9 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     ...rows.map((row) => toTrimmedString(row.consignee_company_id)),
   ].filter(Boolean))];
 
-  const [poResult, stoResult, motherResult, vendorResult, materialResult, transporterResult, paymentTermResult, portResult, companyResult, poLineResult, gateEntryResult, grnResult, materialGroupOptions] = await Promise.all([
+  const [poResult, stoResult, motherResult, vendorResult, materialResult, transporterResult, paymentTermResult, portResult, companyResult, poLineResult, stoLineResult, poLineCsnResult, gateEntryResult, grnResult, materialGroupOptions] = await Promise.all([
     poIds.length
-      ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, po_number, po_date, expected_delivery_date").in("id", poIds)
+      ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, po_number, po_date, expected_delivery_date, delivery_type").in("id", poIds)
       : Promise.resolve({ data: [], error: null }),
     stoIds.length
       ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, sto_date").in("id", stoIds)
@@ -818,7 +864,25 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds)
       : Promise.resolve({ data: [], error: null }),
     poLineIds.length
-      ? serviceRoleClient.schema("erp_procurement").from("purchase_order_line").select("id").in("id", poLineIds)
+      ? serviceRoleClient
+        .schema("erp_procurement")
+        .from("purchase_order_line")
+        .select("id, ordered_qty, knocked_off_qty, line_status, unit_rate, currency_code")
+        .in("id", poLineIds)
+      : Promise.resolve({ data: [], error: null }),
+    stoIds.length
+      ? serviceRoleClient
+        .schema("erp_procurement")
+        .from("stock_transfer_order_line")
+        .select("id, sto_id, material_id, quantity, uom_code, payment_term_id, transfer_price, transfer_price_currency, currency_code")
+        .in("sto_id", stoIds)
+      : Promise.resolve({ data: [], error: null }),
+    poLineIds.length
+      ? serviceRoleClient
+        .schema("erp_procurement")
+        .from("consignment_note")
+        .select("po_line_id, dispatch_qty, status")
+        .in("po_line_id", poLineIds)
       : Promise.resolve({ data: [], error: null }),
     gateEntryIds.length
       ? serviceRoleClient.schema("erp_procurement").from("gate_entry").select("id, ge_number").in("id", gateEntryIds)
@@ -832,12 +896,13 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   if (
     poResult.error || stoResult.error || motherResult.error || vendorResult.error || materialResult.error || transporterResult.error
     || paymentTermResult.error || portResult.error || companyResult.error
-    || poLineResult.error || gateEntryResult.error || grnResult.error
+    || poLineResult.error || stoLineResult.error || poLineCsnResult.error || gateEntryResult.error || grnResult.error
   ) {
     console.error("CSN_TRACKER_ENRICH_FAILED", JSON.stringify({
       po: poResult.error, sto: stoResult.error, mother: motherResult.error, vendor: vendorResult.error, material: materialResult.error,
       transporter: transporterResult.error, paymentTerm: paymentTermResult.error, port: portResult.error,
-      company: companyResult.error, poLine: poLineResult.error, gateEntry: gateEntryResult.error, grn: grnResult.error,
+      company: companyResult.error, poLine: poLineResult.error, stoLine: stoLineResult.error, poLineCsns: poLineCsnResult.error,
+      gateEntry: gateEntryResult.error, grn: grnResult.error,
     }));
     throw new Error("PROCUREMENT_TRACKER_ENRICH_FAILED");
   }
@@ -852,27 +917,53 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   const portMap = new Map((portResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const companyMap = new Map((companyResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const poLineMap = new Map((poLineResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const stoLineMap = new Map(
+    ((stoLineResult.data ?? []) as Record<string, unknown>[]).map((row) => {
+      const key = [
+        toTrimmedString(row.sto_id),
+        toTrimmedString(row.material_id),
+        toTrimmedString(row.uom_code),
+        String(parseNullableNumber(row.quantity) ?? ""),
+      ].join("|");
+      return [key, row];
+    }),
+  );
   const gateEntryMap = new Map((gateEntryResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const grnMap = new Map((grnResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const poLineBalanceMap = new Map<string, number>();
+  for (const row of (poLineCsnResult.data ?? []) as Record<string, unknown>[]) {
+    const poLineId = toTrimmedString(row.po_line_id);
+    if (!poLineId || toUpperTrimmedString(row.status) === CSN_STATUS.KNOCKED_OFF) {
+      continue;
+    }
+    const nextValue = Number(poLineBalanceMap.get(poLineId) ?? 0) + Number(row.dispatch_qty ?? 0);
+    poLineBalanceMap.set(poLineId, Number(nextValue.toFixed(6)));
+  }
 
   const enriched = rows.map((row) => {
-    const po = poMap.get(toTrimmedString(row.po_id));
-    const sto = stoMap.get(toTrimmedString(row.sto_id));
-    const mother = motherMap.get(toTrimmedString(row.mother_csn_id));
-    const vendor = vendorMap.get(toTrimmedString(row.vendor_id));
-    const material = materialMap.get(toTrimmedString(row.material_id));
+    const po = poMap.get(toTrimmedString(row.po_id)) as Record<string, unknown> | undefined;
+    const sto = stoMap.get(toTrimmedString(row.sto_id)) as Record<string, unknown> | undefined;
+    const mother = motherMap.get(toTrimmedString(row.mother_csn_id)) as Record<string, unknown> | undefined;
+    const vendor = vendorMap.get(toTrimmedString(row.vendor_id)) as Record<string, unknown> | undefined;
+    const material = materialMap.get(toTrimmedString(row.material_id)) as Record<string, unknown> | undefined;
     const transporter = transporterMap.get(
       toTrimmedString(row.transporter_id) || toTrimmedString(row.domestic_transporter_id),
-    );
-    const paymentTerm = paymentTermMap.get(toTrimmedString(row.payment_term_id));
+    ) as Record<string, unknown> | undefined;
+    const paymentTerm = paymentTermMap.get(toTrimmedString(row.payment_term_id)) as Record<string, unknown> | undefined;
     const referenceType = paymentTerm?.reference_date_type as Record<string, unknown> | undefined;
-    const dischargePort = portMap.get(toTrimmedString(row.port_of_discharge_id));
-    const loadingPort = portMap.get(toTrimmedString(row.port_of_loading_id));
-    const consigneeCompany = companyMap.get(toTrimmedString(row.consignee_company_id));
-    const owningCompany = companyMap.get(toTrimmedString(row.company_id));
-    const poLine = poLineMap.get(toTrimmedString(row.po_line_id));
-    const gateEntry = gateEntryMap.get(toTrimmedString(row.gate_entry_id));
-    const grn = grnMap.get(toTrimmedString(row.grn_id));
+    const dischargePort = portMap.get(toTrimmedString(row.port_of_discharge_id)) as Record<string, unknown> | undefined;
+    const loadingPort = portMap.get(toTrimmedString(row.port_of_loading_id)) as Record<string, unknown> | undefined;
+    const consigneeCompany = companyMap.get(toTrimmedString(row.consignee_company_id)) as Record<string, unknown> | undefined;
+    const owningCompany = companyMap.get(toTrimmedString(row.company_id)) as Record<string, unknown> | undefined;
+    const poLine = poLineMap.get(toTrimmedString(row.po_line_id)) as Record<string, unknown> | undefined;
+    const stoLine = stoLineMap.get([
+      toTrimmedString(row.sto_id),
+      toTrimmedString(row.material_id),
+      toTrimmedString(row.po_uom_code),
+      String(parseNullableNumber(row.po_qty) ?? ""),
+    ].join("|")) as Record<string, unknown> | undefined;
+    const gateEntry = gateEntryMap.get(toTrimmedString(row.gate_entry_id)) as Record<string, unknown> | undefined;
+    const grn = grnMap.get(toTrimmedString(row.grn_id)) as Record<string, unknown> | undefined;
     const materialGroups = materialGroupOptions.get(toTrimmedString(row.material_id)) ?? [];
     const selectedMaterialGroup = materialGroups.find((entry) => toTrimmedString(entry.id) === toTrimmedString(row.material_category_id)) ?? null;
     const isDetachedSubCsn = Boolean(row.mother_csn_id) && !toTrimmedString(row.sto_id);
@@ -898,6 +989,13 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       })();
       return anchor ? addDays(anchor, creditDays) : null;
     })();
+    const vendorCompany = companyMap.get(toTrimmedString(row.vendor_id)) as Record<string, unknown> | undefined;
+    const orderedQty = Number(poLine?.ordered_qty ?? row.po_qty ?? 0);
+    const activeDispatchQty = Number(poLineBalanceMap.get(toTrimmedString(row.po_line_id)) ?? 0);
+    const balanceQty = row.po_line_id
+      ? Number(Math.max(0, orderedQty - Number((poLine as Record<string, unknown> | undefined)?.knocked_off_qty ?? 0) - activeDispatchQty).toFixed(6))
+      : null;
+
     return {
       ...row,
       po_number: po?.po_number ?? null,
@@ -905,13 +1003,19 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       sto_number: sto?.sto_number ?? null,
       sto_date: sto?.sto_date ?? null,
       display_reference_number: sto?.sto_number ?? po?.po_number ?? null,
+      delivery_type: row.delivery_type ?? po?.delivery_type ?? null,
       csn_display_number: csnNumber
         ? `${isDetachedSubCsn ? "Sub-CSN" : "CSN"}-${csnNumber}`
         : null,
-      vendor_name: vendor?.vendor_name ?? vendor?.name ?? null,
+      vendor_name: vendor?.vendor_name ?? vendor?.name ?? (vendorCompany
+        ? `${toTrimmedString(vendorCompany.company_code)} | ${toTrimmedString(vendorCompany.company_name)}`
+        : null),
       material_name: material?.material_name ?? null,
       material_code: material?.pace_code ?? null,
       base_uom_code: material?.base_uom_code ?? null,
+      po_rate: poLine?.unit_rate ?? stoLine?.transfer_price ?? row.transfer_price ?? null,
+      currency_code: toTrimmedString(poLine?.currency_code) || toTrimmedString(stoLine?.currency_code) || toTrimmedString(stoLine?.transfer_price_currency) || null,
+      balance_qty: balanceQty,
       transporter_name: transporter?.transporter_name ?? row.transporter_name_freetext ?? row.domestic_transporter_freetext ?? null,
       payment_term_name: paymentTerm?.name ?? null,
       payment_term_reference_type_code: referenceType?.code ?? null,
@@ -939,10 +1043,10 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       grn_number: grn?.grn_number ?? null,
       actual_arrival_date: row.gate_entry_date ?? row.ata_at_port ?? null,
       eta_plant: row.eta_to_plant_calculated ?? null,
-    };
+    } as CsnRow;
   });
 
-  const withLeadMeta = await Promise.all(enriched.map(async (row) => {
+  const withLeadMeta = await Promise.all(enriched.map(async (row: CsnRow) => {
     try {
       const [importLeadTime, domesticLeadTime] = await Promise.all([
         toUpperTrimmedString(row.csn_type) === "IMPORT" ? getImportLeadTime(row) : Promise.resolve(null),
@@ -953,7 +1057,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
         import_sail_time_days: importLeadTime?.sail_time_days ?? null,
         import_clearance_days: importLeadTime?.clearance_days ?? null,
         domestic_transit_days: domesticLeadTime?.transit_days ?? null,
-      };
+      } as CsnRow;
     } catch {
       return row;
     }
@@ -1028,7 +1132,7 @@ async function computeDispatchQtyPreview(
   const knockedOffQty = Number(poLine.knocked_off_qty ?? 0);
   const accountedAfterEdit = activeCsns.reduce((sum, row) => {
     const isTarget = toTrimmedString(row.id) === targetId;
-    return sum + Number(isTarget ? newDispatchQty : row.po_qty ?? 0);
+    return sum + Number(isTarget ? newDispatchQty : row.dispatch_qty ?? 0);
   }, 0);
   const remainder = Number(Math.max(0, orderedQty - knockedOffQty - accountedAfterEdit).toFixed(6));
   const siblingRows = activeCsns.filter((row) => toTrimmedString(row.id) !== targetId);
@@ -1037,18 +1141,9 @@ async function computeDispatchQtyPreview(
     id: toTrimmedString(row.id),
     csn_number: row.csn_number,
     status: row.status,
-    current_qty: Number(toTrimmedString(row.id) === targetId ? newDispatchQty : row.po_qty ?? 0),
-    suggested_qty: Number(toTrimmedString(row.id) === targetId ? newDispatchQty : row.po_qty ?? 0),
+    current_qty: Number(toTrimmedString(row.id) === targetId ? newDispatchQty : row.dispatch_qty ?? 0),
+    suggested_qty: Number(toTrimmedString(row.id) === targetId ? newDispatchQty : row.dispatch_qty ?? 0),
   }));
-
-  if (remainder > 0 && siblingRows.length > 0) {
-    const recipientId = toTrimmedString(siblingRows[siblingRows.length - 1]?.id);
-    for (const entry of suggestedAllocations) {
-      if (toTrimmedString(entry.id) === recipientId) {
-        entry.suggested_qty = Number(entry.current_qty ?? 0) + remainder;
-      }
-    }
-  }
 
   return {
     csn_id: targetId,
@@ -1057,8 +1152,9 @@ async function computeDispatchQtyPreview(
     knocked_off_qty: knockedOffQty,
     new_dispatch_qty: newDispatchQty,
     remainder,
-    requires_reconciliation: remainder > 0 && siblingRows.length > 0,
-    requires_prompt: remainder > 0 && siblingRows.length === 0,
+    can_reconcile: siblingRows.length > 0,
+    requires_reconciliation: false,
+    requires_prompt: remainder > 0,
     sibling_count: siblingRows.length,
     csns: suggestedAllocations,
   };
@@ -1067,7 +1163,7 @@ async function computeDispatchQtyPreview(
 export async function listCSNsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const url = new URL(req.url);
-    const companyId = await getCompanyScopedCompanyId(ctx, url.searchParams.get("company_id") ?? "");
+    const companyIds = await resolveScopedCompanyIds(ctx, url.searchParams.get("company_id") ?? "");
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const csnType = toUpperTrimmedString(url.searchParams.get("csn_type"));
     const poId = toTrimmedString(url.searchParams.get("po_id"));
@@ -1076,13 +1172,17 @@ export async function listCSNsHandler(req: Request, ctx: ProcurementHandlerConte
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
     const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
 
-    let query = serviceRoleClient
+    let query: any = serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
       .select("*", { count: "exact" })
-      .eq("company_id", companyId)
-      .order("created_at", { ascending: false })
-      .range(offset, offset + limit - 1);
+      .order("created_at", { ascending: false });
+    query = query.range(offset, offset + limit - 1);
+
+    const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
+    if (companyScopeFilter) {
+      query = query.or(companyScopeFilter);
+    }
 
     if (status) query = query.eq("status", status);
     if (csnType) query = query.eq("csn_type", csnType);
@@ -1121,7 +1221,9 @@ export async function getCSNHandler(req: Request, ctx: ProcurementHandlerContext
       throw new Error("PROCUREMENT_CSN_DETAIL_FAILED");
     }
 
-    const gateEntryIds = [...new Set((gateEntryLineResult.data ?? []).map((row) => toTrimmedString((row as Record<string, unknown>).gate_entry_id)).filter(Boolean))];
+    const gateEntryIds = [...new Set(((gateEntryLineResult.data ?? []) as Record<string, unknown>[])
+      .map((row: Record<string, unknown>) => toTrimmedString(row.gate_entry_id))
+      .filter(Boolean))];
     const gateEntryResult = gateEntryIds.length
       ? await serviceRoleClient.schema("erp_procurement").from("gate_entry").select("*").in("id", gateEntryIds)
       : { data: [], error: null };
@@ -1538,17 +1640,20 @@ export async function markCSNArrivedHandler(req: Request, ctx: ProcurementHandle
 
 export async function getLCAlertCountHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    const companyId = await getCompanyScopedCompanyId(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
+    const companyIds = await resolveScopedCompanyIds(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
     const threshold = addDays(todayIsoDate(), 3);
-    const { count, error } = await serviceRoleClient
+    let query: any = serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
       .select("id", { count: "exact", head: true })
-      .eq("company_id", companyId)
       .eq("lc_required", true)
-      .is("lc_opened_date", null)
-      .lte("eta_at_port", threshold)
-      .not("status", "in", '("GRD","CAN","KOF")');
+      .is("lc_opened_date", null);
+    query = query.lte("eta_at_port", threshold).not("status", "in", '("GRD","CAN","KOF")');
+    const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
+    if (companyScopeFilter) {
+      query = query.or(companyScopeFilter);
+    }
+    const { count, error } = await query;
     if (error) {
       throw new Error("PROCUREMENT_LC_ALERT_COUNT_FAILED");
     }
@@ -1561,18 +1666,23 @@ export async function getLCAlertCountHandler(req: Request, ctx: ProcurementHandl
 
 export async function getLCAlertListHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    const companyId = await getCompanyScopedCompanyId(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
+    const companyIds = await resolveScopedCompanyIds(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
     const threshold = addDays(todayIsoDate(), 3);
-    const { data, error } = await serviceRoleClient
+    let query: any = serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
       .select("*")
-      .eq("company_id", companyId)
       .eq("lc_required", true)
-      .is("lc_opened_date", null)
+      .is("lc_opened_date", null);
+    query = query
       .lte("eta_at_port", threshold)
       .not("status", "in", '("GRD","CAN","KOF")')
       .order("eta_at_port", { ascending: true });
+    const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
+    if (companyScopeFilter) {
+      query = query.or(companyScopeFilter);
+    }
+    const { data, error } = await query;
     if (error) {
       throw new Error("PROCUREMENT_LC_ALERT_LIST_FAILED");
     }
@@ -1585,16 +1695,20 @@ export async function getLCAlertListHandler(req: Request, ctx: ProcurementHandle
 
 export async function getVesselBookingAlertCountHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    const companyId = await getCompanyScopedCompanyId(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
+    const companyIds = await resolveScopedCompanyIds(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
     const threshold = subtractDays(todayIsoDate(), 3);
-    const { data, error } = await serviceRoleClient
+    let query: any = serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
       .select("*")
-      .eq("company_id", companyId)
       .eq("csn_type", "IMPORT")
       .is("vessel_booking_confirmed_date", null)
       .not("status", "in", '("GED","GRD","CAN","KOF")');
+    const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
+    if (companyScopeFilter) {
+      query = query.or(companyScopeFilter);
+    }
+    const { data, error } = await query;
 
     if (error) {
       throw new Error("PROCUREMENT_VESSEL_ALERT_COUNT_FAILED");
@@ -1615,16 +1729,20 @@ export async function getVesselBookingAlertCountHandler(req: Request, ctx: Procu
 
 export async function getVesselBookingAlertListHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    const companyId = await getCompanyScopedCompanyId(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
+    const companyIds = await resolveScopedCompanyIds(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
     const threshold = subtractDays(todayIsoDate(), 3);
-    const { data, error } = await serviceRoleClient
+    let query: any = serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
       .select("*")
-      .eq("company_id", companyId)
       .eq("csn_type", "IMPORT")
       .is("vessel_booking_confirmed_date", null)
       .not("status", "in", '("GED","GRD","CAN","KOF")');
+    const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
+    if (companyScopeFilter) {
+      query = query.or(companyScopeFilter);
+    }
+    const { data, error } = await query;
 
     if (error) {
       throw new Error("PROCUREMENT_VESSEL_ALERT_LIST_FAILED");
@@ -1647,32 +1765,39 @@ export async function getVesselBookingAlertListHandler(req: Request, ctx: Procur
 
 export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    const companyId = await getCompanyScopedCompanyId(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
+    const companyIds = await resolveScopedCompanyIds(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
     const [lcCount, vesselAlertCount] = await Promise.all([
       (async () => {
         const threshold = addDays(todayIsoDate(), 3);
-        const { count, error } = await serviceRoleClient
+        let query: any = serviceRoleClient
           .schema("erp_procurement")
           .from("consignment_note")
           .select("id", { count: "exact", head: true })
-          .eq("company_id", companyId)
           .eq("lc_required", true)
-          .is("lc_opened_date", null)
-          .lte("eta_at_port", threshold)
-          .not("status", "in", '("GRD","CAN","KOF")');
+          .is("lc_opened_date", null);
+        query = query.lte("eta_at_port", threshold).not("status", "in", '("GRD","CAN","KOF")');
+        const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
+        if (companyScopeFilter) {
+          query = query.or(companyScopeFilter);
+        }
+        const { count, error } = await query;
         if (error) throw new Error("PROCUREMENT_LC_ALERT_COUNT_FAILED");
         return count ?? 0;
       })(),
       (async () => {
         const threshold = subtractDays(todayIsoDate(), 3);
-        const { data, error } = await serviceRoleClient
+        let query: any = serviceRoleClient
           .schema("erp_procurement")
           .from("consignment_note")
           .select("*")
-          .eq("company_id", companyId)
           .eq("csn_type", "IMPORT")
           .is("vessel_booking_confirmed_date", null)
           .not("status", "in", '("GED","GRD","CAN","KOF")');
+        const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
+        if (companyScopeFilter) {
+          query = query.or(companyScopeFilter);
+        }
+        const { data, error } = await query;
         if (error) throw new Error("PROCUREMENT_VESSEL_ALERT_COUNT_FAILED");
         const enriched = await enrichTrackerRows((data as CsnRow[] | null) ?? []);
         return enriched.filter((row) => {
@@ -1697,7 +1822,7 @@ export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHan
 export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const url = new URL(req.url);
-    const companyId = await getCompanyScopedCompanyId(ctx, url.searchParams.get("company_id") ?? "");
+    const companyIds = await resolveScopedCompanyIds(ctx, url.searchParams.get("company_id") ?? "");
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const csnType = toUpperTrimmedString(url.searchParams.get("csn_type"));
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
@@ -1709,13 +1834,17 @@ export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerCon
     const sortBy = toTrimmedString(url.searchParams.get("sort_by")) || "created_at";
     const sortDirection = toUpperTrimmedString(url.searchParams.get("sort_direction")) === "ASC";
 
-    let query = serviceRoleClient
+    let query: any = serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
       .select("*", { count: "exact" })
-      .eq("company_id", companyId)
-      .order(sortBy, { ascending: sortDirection })
-      .range(offset, offset + limit - 1);
+      .order(sortBy, { ascending: sortDirection });
+    query = query.range(offset, offset + limit - 1);
+
+    const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
+    if (companyScopeFilter) {
+      query = query.or(companyScopeFilter);
+    }
 
     if (status) query = query.eq("status", status);
     if (csnType) query = query.eq("csn_type", csnType);
@@ -1770,12 +1899,15 @@ export async function listCsnFieldHistoryHandler(req: Request, ctx: ProcurementH
 
 export async function listTrackerLayoutsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
-    const { data, error } = await serviceRoleClient
+    let query: any = serviceRoleClient
       .schema("erp_procurement")
       .from("csn_tracker_layout")
-      .select("*")
+      .select("*");
+    query = query
       .or(`scope.eq.GLOBAL,and(scope.eq.USER,created_by.eq.${ctx.auth_user_id})`)
       .order("created_at", { ascending: false });
+
+    const { data, error } = await query;
 
     if (error) {
       console.error("CSN_LAYOUT_LIST_FAILED", JSON.stringify(error));
@@ -1939,7 +2071,6 @@ export async function confirmDispatchQtyAdjustmentHandler(req: Request, ctx: Pro
         throw new Error("PROCUREMENT_CSN_NOT_FOUND");
       }
       const updates = {
-        po_qty: quantity,
         dispatch_qty: quantity,
         last_updated_at: nowIso,
         last_updated_by: ctx.auth_user_id,
@@ -1962,8 +2093,8 @@ export async function confirmDispatchQtyAdjustmentHandler(req: Request, ctx: Pro
     if (action === "SAVE_ONLY") {
       changedRows.push(await updateCsnQty(id, newDispatchQty));
     } else if (action === "CREATE_CSN") {
-      if (Number(preview.remainder ?? 0) <= 0 || Number(preview.sibling_count ?? 0) > 0) {
-        return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_DISPATCH_ACTION_INVALID", 400, "Create CSN is only valid for a first split with positive remainder");
+      if (Number(preview.remainder ?? 0) <= 0) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_DISPATCH_ACTION_INVALID", 400, "Nothing remains to create as a new CSN");
       }
       changedRows.push(await updateCsnQty(id, newDispatchQty));
       changedRows.push(await cloneBalanceCsnFromSource(csn, Number(preview.remainder ?? 0), ctx.auth_user_id));

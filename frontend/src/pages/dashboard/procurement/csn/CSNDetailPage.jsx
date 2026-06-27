@@ -88,8 +88,6 @@ function getTone(value) {
       return "sky";
     case "DOMESTIC":
       return "emerald";
-    case "BULK":
-      return "violet";
     default:
       return "slate";
   }
@@ -386,25 +384,6 @@ export default function CSNDetailPage() {
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Transporter Name">
                   <input value={form.domestic_transporter_freetext} onChange={(event) => patchField("domestic_transporter_freetext", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-              </div>
-            </ErpSectionCard>
-          ) : null}
-
-          {detail.csn_type === "BULK" ? (
-            <ErpSectionCard eyebrow="Bulk Fields" title="Bulk receiving">
-              <div className="grid gap-3 lg:grid-cols-2">
-                <ErpDenseFormRow label="Gate Entry Date">
-                  <input type="date" value={form.gate_entry_date || ""} onChange={(event) => patchField("gate_entry_date", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Received Qty">
-                  <input type="number" min="0" step="0.0001" value={form.received_qty || ""} onChange={(event) => patchField("received_qty", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Invoice Number">
-                  <input value={form.invoice_number} onChange={(event) => patchField("invoice_number", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Remarks">
-                  <input value={form.remarks} onChange={(event) => patchField("remarks", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
                 </ErpDenseFormRow>
               </div>
             </ErpSectionCard>

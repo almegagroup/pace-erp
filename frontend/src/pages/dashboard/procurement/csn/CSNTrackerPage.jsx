@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
@@ -40,6 +40,9 @@ const YES_NO_OPTIONS = [
 ];
 const TRACKER_FIELDS = [
   "dispatch_qty",
+  "has_rebate",
+  "rebate_rate",
+  "rebate_remarks",
   "material_category_id",
   "indent_required",
   "vendor_indent_number",
@@ -143,8 +146,6 @@ function getBadgeTone(value) {
       return "bg-sky-100 text-sky-800";
     case "DOMESTIC":
       return "bg-emerald-100 text-emerald-800";
-    case "BULK":
-      return "bg-violet-100 text-violet-800";
     case "GED":
       return "bg-[#FAC775] text-[#412402]";
     case "GRD":
@@ -174,6 +175,9 @@ function buildDraft(row) {
     acc[field] = row?.[field] ?? (field.endsWith("_received") || field.endsWith("_override") ? false : "");
     return acc;
   }, {});
+  if (!draft.consignee_company_id) {
+    draft.consignee_company_id = row?.consignee_company_id ?? row?.company_id ?? "";
+  }
   draft.atd = row?.atd ?? "";
   return draft;
 }
@@ -217,15 +221,19 @@ function buildColumnDefs() {
     { key: "material_group_name", label: "Material Group", width: "150px" },
     { key: "po_date", label: "PO Date", width: "120px" },
     { key: "po_qty", label: "Order Qty", width: "110px" },
+    { key: "balance_qty", label: "Balance Qty", width: "110px" },
     { key: "dispatch_qty", label: "Dispatch Qty", width: "110px" },
     { key: "base_uom_code", label: "Base UOM", width: "100px" },
     { key: "po_uom_code", label: "Order UOM", width: "100px" },
+    { key: "po_rate", label: "PO Rate", width: "100px" },
+    { key: "currency_code", label: "Currency", width: "90px" },
     { key: "indent_required", label: "Indent?", width: "90px" },
     { key: "vendor_indent_number", label: "Indent Number", width: "140px" },
     { key: "has_rebate", label: "Has Rebate", width: "100px" },
     { key: "rebate_rate", label: "Rebate Rate", width: "110px" },
     { key: "rebate_remarks", label: "Rebate Remarks", width: "160px" },
     { key: "baseline_schedule", label: "Baseline ETD/ETA", width: "140px" },
+    { key: "delivery_type", label: "Delivery Type", width: "120px" },
     { key: "scheduled_eta_to_port", label: "Scheduled ETA Port", width: "140px" },
     { key: "etd", label: "ETD", width: "120px" },
     { key: "atd", label: "ATD", width: "120px" },
@@ -400,19 +408,7 @@ function TrackerSection({ eyebrow, title, children }) {
   );
 }
 
-const ICON_ACTION_LABELS = {
-  "ti-git-branch": "Split",
-  "ti-external-link": "Open",
-  "ti-check": "Save",
-  "ti-chevron-up": "Collapse",
-  "ti-chevron-down": "Expand",
-  "ti-columns": "Columns",
-  "ti-device-floppy": "Save Layout",
-  "ti-refresh": "Refresh",
-  "ti-trash": "Del",
-};
-
-function IconActionButton({ icon, title, onClick, disabled = false, tone = "neutral" }) {
+function IconActionButton({ glyph, title, onClick, disabled = false, tone = "neutral" }) {
   const toneClass = disabled
     ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
     : tone === "primary"
@@ -420,16 +416,15 @@ function IconActionButton({ icon, title, onClick, disabled = false, tone = "neut
       : tone === "danger"
         ? "border-rose-300 bg-rose-50 text-rose-800 hover:bg-rose-100"
         : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50";
-  const label = ICON_ACTION_LABELS[icon] || title;
   return (
     <button
       type="button"
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className={`inline-flex h-[26px] items-center justify-center whitespace-nowrap border px-2 text-[10px] font-semibold uppercase tracking-[0.04em] transition ${toneClass}`}
+      className={`inline-flex h-[26px] min-w-[26px] items-center justify-center whitespace-nowrap border px-1.5 text-[10px] font-semibold uppercase tracking-[0.04em] transition ${toneClass}`}
     >
-      {label}
+      {glyph}
     </button>
   );
 }
@@ -471,6 +466,7 @@ export default function CSNTrackerPage() {
   const { runtimeContext } = useMenu();
   useEffect(() => requestWideWorkspace(), []);
   const [companyId, setCompanyId] = useState("");
+  const [companyInitialized, setCompanyInitialized] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -504,10 +500,12 @@ export default function CSNTrackerPage() {
   );
 
   useEffect(() => {
-    if (!companyId) {
-      setCompanyId(runtimeContext?.selectedCompanyId || companyOptions[0]?.value || "");
+    if (companyInitialized) {
+      return;
     }
-  }, [companyId, companyOptions, runtimeContext?.selectedCompanyId]);
+    setCompanyId(runtimeContext?.selectedCompanyId || companyOptions[0]?.value || "");
+    setCompanyInitialized(true);
+  }, [companyInitialized, companyOptions, runtimeContext?.selectedCompanyId]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -519,10 +517,9 @@ export default function CSNTrackerPage() {
 
   const trackerQuery = useQuery({
     queryKey: ["csn-tracker", companyId, status, csnType, dateFrom, dateTo, page],
-    enabled: Boolean(companyId),
     queryFn: () =>
       getCSNTracker({
-        company_id: companyId,
+        company_id: companyId || undefined,
         status: status || undefined,
         csn_type: csnType || undefined,
         date_from: dateFrom || undefined,
@@ -534,8 +531,7 @@ export default function CSNTrackerPage() {
 
   const alertsQuery = useQuery({
     queryKey: ["csn-alert-counts", companyId],
-    enabled: Boolean(companyId),
-    queryFn: () => getAllAlertCounts({ company_id: companyId }),
+    queryFn: () => getAllAlertCounts({ company_id: companyId || undefined }),
   });
 
   const layoutsQuery = useQuery({
@@ -696,11 +692,12 @@ export default function CSNTrackerPage() {
             preview,
             allocations: (preview.csns || []).map((entry) => ({
               id: entry.id,
-              qty: entry.suggested_qty,
+              qty: entry.current_qty,
               label: entry.csn_number ? `${entry.csn_number}` : entry.id,
             })),
             knock_off_qty: preview.remainder || 0,
             reason: "",
+            mode: "prompt",
           });
           return;
         }
@@ -879,6 +876,41 @@ export default function CSNTrackerPage() {
     () => rows.filter((entry) => entry.mother_csn_id === expandedRowId),
     [expandedRowId, rows]
   );
+  const currentRowSupportsSubCsn = Boolean(currentRow && !currentRow.mother_csn_id);
+
+  const handleExpandedRowKeyDown = useEffectEvent((event) => {
+    if (!currentRow || !draft) {
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      resetDraft(null);
+      return;
+    }
+    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "s" && currentRowSupportsSubCsn) {
+      event.preventDefault();
+      void handleCreateSubCsn(currentRow);
+      return;
+    }
+    if (event.ctrlKey && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      void saveExpandedRow(currentRow);
+      return;
+    }
+    if (event.ctrlKey && event.key.toLowerCase() === "o") {
+      event.preventDefault();
+      openDetail(currentRow);
+    }
+  });
+
+  useEffect(() => {
+    if (!currentRow || !draft) {
+      return undefined;
+    }
+
+    window.addEventListener("keydown", handleExpandedRowKeyDown);
+    return () => window.removeEventListener("keydown", handleExpandedRowKeyDown);
+  }, [currentRow, draft]);
 
   return (
     <>
@@ -918,10 +950,10 @@ export default function CSNTrackerPage() {
                   </button>
                 </div>
                 <div className="flex items-center gap-1">
-                  <IconActionButton icon="ti-columns" title="Columns" onClick={() => setShowColumns(true)} />
-                  <IconActionButton icon="ti-device-floppy" title="Save layout" onClick={() => setShowSaveLayout(true)} />
+                  <IconActionButton glyph="CL" title="Columns" onClick={() => setShowColumns(true)} />
+                  <IconActionButton glyph="LY" title="Save layout" onClick={() => setShowSaveLayout(true)} />
                   <IconActionButton
-                    icon="ti-refresh"
+                    glyph="RF"
                     title={trackerQuery.isFetching ? "Refreshing" : "Refresh"}
                     onClick={() => void invalidateTracker()}
                   />
@@ -939,7 +971,7 @@ export default function CSNTrackerPage() {
                     }}
                     className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   >
-                    <option value="">Select company</option>
+                    <option value="">ALL</option>
                     {companyOptions.map((entry) => (
                       <option key={entry.value} value={entry.value}>
                         {entry.label}
@@ -978,7 +1010,7 @@ export default function CSNTrackerPage() {
                     className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   >
                     <option value="">ALL</option>
-                    {["IMPORT", "DOMESTIC", "BULK"].map((entry) => (
+                    {["IMPORT", "DOMESTIC"].map((entry) => (
                       <option key={entry} value={entry}>
                         {entry}
                       </option>
@@ -1088,8 +1120,8 @@ export default function CSNTrackerPage() {
                       >
                         {expandedRowId === row.id && currentRow && draft ? (
                           <tr className="bg-slate-50">
-                            <td colSpan={visibleColumns.length} className="border-t border-slate-300 px-2 py-2">
-                              <div className="grid gap-2">
+                            <td colSpan={visibleColumns.length} className="border-t border-slate-300 px-0 py-2">
+                              <div className="sticky left-0 grid w-[min(1180px,calc(100vw-64px))] gap-2 px-2">
                                 <div className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 bg-white px-2 py-1.5">
                                   <div className="grid gap-0.5">
                                     <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -1105,22 +1137,22 @@ export default function CSNTrackerPage() {
                                   <div className="flex flex-wrap items-center gap-1">
                                     {!row.mother_csn_id ? (
                                       <IconActionButton
-                                        icon="ti-git-branch"
-                                        title="Create Sub CSN"
+                                        glyph="+"
+                                        title="Create Sub CSN (Ctrl+Shift+S)"
                                         onClick={() => void handleCreateSubCsn(row)}
                                         disabled={savingRowId === row.id}
                                         tone="primary"
                                       />
                                     ) : null}
-                                    <IconActionButton icon="ti-external-link" title="Open full detail" onClick={() => openDetail(row)} />
+                                    <IconActionButton glyph="OP" title="Open full detail (Ctrl+O)" onClick={() => openDetail(row)} />
                                     <IconActionButton
-                                      icon="ti-check"
-                                      title={savingRowId === row.id ? "Saving" : "Save"}
+                                      glyph="SV"
+                                      title={savingRowId === row.id ? "Saving" : "Save (Ctrl+S)"}
                                       onClick={() => void saveExpandedRow(row)}
                                       disabled={savingRowId === row.id}
                                       tone="primary"
                                     />
-                                    <IconActionButton icon="ti-chevron-up" title="Collapse" onClick={() => resetDraft(null)} />
+                                    <IconActionButton glyph="X" title="Collapse (Esc)" onClick={() => resetDraft(null)} />
                                   </div>
                                 </div>
 
@@ -1153,6 +1185,32 @@ export default function CSNTrackerPage() {
                                     <EditField label="Indent Number" rowId={row.id} fieldName="vendor_indent_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input value={draft.vendor_indent_number ?? ""} onChange={(event) => patchDraft("vendor_indent_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500" />
                                     </EditField>
+                                    <EditField label="Has Rebate" rowId={row.id} fieldName="has_rebate" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <select value={draft.has_rebate ? "YES" : "NO"} onChange={(event) => patchDraft("has_rebate", event.target.value === "YES")} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500">
+                                        {YES_NO_OPTIONS.map((option) => (
+                                          <option key={option.label} value={option.value ? "YES" : "NO"}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                    </EditField>
+                                    <EditField label="Rebate Rate" rowId={row.id} fieldName="rebate_rate" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="0.0001"
+                                        value={draft.rebate_rate ?? ""}
+                                        onChange={(event) => patchDraft("rebate_rate", event.target.value)}
+                                        disabled={!draft.has_rebate}
+                                        className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-400"
+                                      />
+                                    </EditField>
+                                    <EditField label="Rebate Remarks" rowId={row.id} fieldName="rebate_remarks" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input
+                                        value={draft.rebate_remarks ?? ""}
+                                        onChange={(event) => patchDraft("rebate_remarks", event.target.value)}
+                                        disabled={!draft.has_rebate}
+                                        className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-400"
+                                      />
+                                    </EditField>
                                   </div>
                                 </TrackerSection>
 
@@ -1162,8 +1220,8 @@ export default function CSNTrackerPage() {
                                       <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.12em] text-slate-500">
                                         <span>{subCsnsForCurrentRow.length} linked row{subCsnsForCurrentRow.length === 1 ? "" : "s"}</span>
                                         <IconActionButton
-                                          icon="ti-git-branch"
-                                          title="Create Sub CSN"
+                                          glyph="+"
+                                          title="Create Sub CSN (Ctrl+Shift+S)"
                                           onClick={() => void handleCreateSubCsn(row)}
                                           disabled={savingRowId === row.id}
                                           tone="primary"
@@ -1197,7 +1255,7 @@ export default function CSNTrackerPage() {
                                                     <td className="px-1.5 py-1 text-right">
                                                       {canDelete ? (
                                                         <IconActionButton
-                                                          icon="ti-trash"
+                                                          glyph="DL"
                                                           title="Delete Sub CSN"
                                                           onClick={() => void handleDeleteSubCsn(row, subRow)}
                                                           disabled={savingRowId === row.id}
@@ -1224,44 +1282,58 @@ export default function CSNTrackerPage() {
 
                                 <TrackerSection eyebrow="Shipment Timeline" title="ETD, ATD, ETA, and arrival chain">
                                   <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
-                                    <EditField label="Scheduled ETA Port" rowId={row.id} fieldName="scheduled_eta_to_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.scheduled_eta_to_port ?? ""} onChange={(event) => patchDraft("scheduled_eta_to_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
-                                    </EditField>
+                                    {row.csn_type === "IMPORT" ? (
+                                      <EditField label="Scheduled ETA Port" rowId={row.id} fieldName="scheduled_eta_to_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                        <input type="date" value={draft.scheduled_eta_to_port ?? ""} onChange={(event) => patchDraft("scheduled_eta_to_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                                      </EditField>
+                                    ) : null}
                                     <EditField label="ETD" rowId={row.id} fieldName="etd" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input type="date" value={draft.etd ?? ""} onChange={(event) => patchDraft("etd", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="ATD" rowId={row.id} fieldName={row.csn_type === "IMPORT" ? "bl_date" : "lr_date"} activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input type="date" value={draft.atd ?? ""} onChange={(event) => patchDraft("atd", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
-                                    <EditField label="ETA at Port" rowId={row.id} fieldName="eta_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.eta_at_port ?? ""} onChange={(event) => patchDraft("eta_at_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
-                                    </EditField>
-                                    <EditField label="ATA at Port" rowId={row.id} fieldName="ata_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.ata_at_port ?? ""} onChange={(event) => patchDraft("ata_at_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
-                                    </EditField>
+                                    {row.csn_type === "IMPORT" ? (
+                                      <>
+                                        <EditField label="ETA at Port" rowId={row.id} fieldName="eta_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                          <input type="date" value={draft.eta_at_port ?? ""} onChange={(event) => patchDraft("eta_at_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                                        </EditField>
+                                        <EditField label="ATA at Port" rowId={row.id} fieldName="ata_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                          <input type="date" value={draft.ata_at_port ?? ""} onChange={(event) => patchDraft("ata_at_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                                        </EditField>
+                                      </>
+                                    ) : null}
                                   </div>
                                 </TrackerSection>
 
                                 <TrackerSection eyebrow="Documents" title="BL, invoice, BOE, and statutory references">
                                   <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
-                                    <EditField label="BL Number" rowId={row.id} fieldName="bl_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.bl_number ?? ""} onChange={(event) => patchDraft("bl_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
-                                    </EditField>
-                                    <EditField label="BL Date" rowId={row.id} fieldName="bl_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.bl_date ?? ""} onChange={(event) => patchDraft("bl_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
-                                    </EditField>
+                                    {row.csn_type === "IMPORT" ? (
+                                      <>
+                                        <EditField label="BL Number" rowId={row.id} fieldName="bl_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                          <input value={draft.bl_number ?? ""} onChange={(event) => patchDraft("bl_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                                        </EditField>
+                                        <EditField label="BL Date" rowId={row.id} fieldName="bl_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                          <input type="date" value={draft.bl_date ?? ""} onChange={(event) => patchDraft("bl_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                                        </EditField>
+                                      </>
+                                    ) : null}
                                     <EditField label="Invoice Number" rowId={row.id} fieldName="invoice_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input value={draft.invoice_number ?? ""} onChange={(event) => patchDraft("invoice_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
                                     <EditField label="Invoice Date" rowId={row.id} fieldName="invoice_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input type="date" value={draft.invoice_date ?? ""} onChange={(event) => patchDraft("invoice_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
-                                    <EditField label="BOE Number" rowId={row.id} fieldName="boe_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.boe_number ?? ""} onChange={(event) => patchDraft("boe_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
-                                    </EditField>
-                                    <EditField label="BOE Date" rowId={row.id} fieldName="boe_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.boe_date ?? ""} onChange={(event) => patchDraft("boe_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
-                                    </EditField>
+                                    {row.csn_type === "IMPORT" ? (
+                                      <>
+                                        <EditField label="BOE Number" rowId={row.id} fieldName="boe_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                          <input value={draft.boe_number ?? ""} onChange={(event) => patchDraft("boe_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                                        </EditField>
+                                        <EditField label="BOE Date" rowId={row.id} fieldName="boe_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                          <input type="date" value={draft.boe_date ?? ""} onChange={(event) => patchDraft("boe_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                                        </EditField>
+                                      </>
+                                    ) : null}
                                     <EditField label="Destination Port" rowId={row.id} fieldName="port_of_discharge_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <select value={draft.port_of_discharge_id ?? ""} onChange={(event) => patchDraft("port_of_discharge_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
                                         <option value="">Select port</option>
@@ -1317,12 +1389,16 @@ export default function CSNTrackerPage() {
                                     <EditField label="GRN Date" rowId={row.id} fieldName="grn_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input type="date" value={draft.grn_date ?? ""} onChange={(event) => patchDraft("grn_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
-                                    <EditField label="LC Number" rowId={row.id} fieldName="lc_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.lc_number ?? ""} onChange={(event) => patchDraft("lc_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
-                                    </EditField>
-                                    <EditField label="LC Opened Date" rowId={row.id} fieldName="lc_opened_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input type="date" value={draft.lc_opened_date ?? ""} onChange={(event) => patchDraft("lc_opened_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
-                                    </EditField>
+                                    {row.csn_type === "IMPORT" ? (
+                                      <>
+                                        <EditField label="LC Number" rowId={row.id} fieldName="lc_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                          <input value={draft.lc_number ?? ""} onChange={(event) => patchDraft("lc_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                                        </EditField>
+                                        <EditField label="LC Opened Date" rowId={row.id} fieldName="lc_opened_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                          <input type="date" value={draft.lc_opened_date ?? ""} onChange={(event) => patchDraft("lc_opened_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                                        </EditField>
+                                      </>
+                                    ) : null}
                                     <EditField label="Soft Copy Received" rowId={row.id} fieldName="soft_copy_received" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <select value={draft.soft_copy_received ? "YES" : "NO"} onChange={(event) => patchDraft("soft_copy_received", event.target.value === "YES")} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
                                         {YES_NO_OPTIONS.map((option) => <option key={option.label} value={option.value ? "YES" : "NO"}>{option.label}</option>)}
@@ -1363,7 +1439,7 @@ export default function CSNTrackerPage() {
 
                                 <TrackerSection eyebrow="Remarks" title="Final notes before saving">
                                   <EditField label="Remarks" rowId={row.id} fieldName="remarks" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                    <textarea value={draft.remarks ?? ""} onChange={(event) => patchDraft("remarks", event.target.value)} rows={3} className="border border-slate-300 bg-white px-2 py-1 text-[11px] outline-none focus:border-sky-500" />
+                                    <textarea value={draft.remarks ?? ""} onChange={(event) => patchDraft("remarks", event.target.value)} rows={2} className="min-h-[52px] border border-slate-300 bg-white px-2 py-1 text-[11px] outline-none focus:border-sky-500" />
                                   </EditField>
                                 </TrackerSection>
 
@@ -1444,7 +1520,7 @@ export default function CSNTrackerPage() {
       <ModalBase
         visible={Boolean(dispatchDialog)}
         eyebrow="CSN Dispatch Balance"
-        title={dispatchDialog?.preview?.requires_reconciliation ? "Reconcile CSN Quantities" : "Balance Requires Action"}
+        title={dispatchDialog?.mode === "reconcile" ? "Reconcile CSN Quantities" : "Balance Requires Action"}
         onEscape={() => setDispatchDialog(null)}
         width="min(760px, calc(100vw - 32px))"
         actions={
@@ -1452,7 +1528,7 @@ export default function CSNTrackerPage() {
             <button type="button" onClick={() => setDispatchDialog(null)} className="border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700">
               Cancel
             </button>
-            {dispatchDialog?.preview?.requires_reconciliation ? (
+            {dispatchDialog?.mode === "reconcile" ? (
               <button
                 type="button"
                 onClick={() =>
@@ -1471,7 +1547,7 @@ export default function CSNTrackerPage() {
           </>
         }
       >
-        {dispatchDialog?.preview?.requires_prompt ? (
+        {dispatchDialog?.mode !== "reconcile" ? (
           <div className="grid gap-3">
             <div className="text-sm text-slate-700">
               Balance remaining: <strong>{dispatchDialog.preview.remainder}</strong>
@@ -1484,6 +1560,20 @@ export default function CSNTrackerPage() {
               >
                 Create CSN for Balance
               </button>
+              {dispatchDialog?.preview?.can_reconcile ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDispatchDialog((current) => ({
+                      ...current,
+                      mode: "reconcile",
+                    }))
+                  }
+                  className="border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800"
+                >
+                  Reallocate Existing CSNs
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void saveExpandedRow(dispatchDialog.row, { action: "KNOCK_OFF", reason: dispatchDialog.reason })}
@@ -1497,7 +1587,7 @@ export default function CSNTrackerPage() {
               <input value={dispatchDialog.reason} onChange={(event) => setDispatchDialog((current) => ({ ...current, reason: event.target.value }))} className="h-10 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
             </label>
           </div>
-        ) : dispatchDialog?.preview?.requires_reconciliation ? (
+        ) : (
           <div className="grid gap-4">
             <div className="grid gap-2">
               {dispatchDialog.allocations.map((entry, index) => (
@@ -1543,7 +1633,7 @@ export default function CSNTrackerPage() {
               </label>
             </div>
           </div>
-        ) : null}
+        )}
       </ModalBase>
     </>
   );

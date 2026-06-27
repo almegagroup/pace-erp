@@ -19,6 +19,8 @@ import {
 
 const STO_TYPE_OPTIONS = ["CONSIGNMENT_DISTRIBUTION", "INTER_PLANT"];
 const MATERIAL_TYPES = ["RM", "PM", "INT", "FG", "TRA", "CONS"];
+const DELIVERY_TYPE_OPTIONS = ["STANDARD", "BULK", "TANKER"];
+const CURRENCY_OPTIONS = ["INR", "USD"];
 const FREIGHT_TERM_OPTIONS = [
   { value: "FOR", label: "FOR" },
   { value: "FREIGHT_SEPARATE", label: "Freight Separate" },
@@ -40,6 +42,7 @@ function createEmptyLine(defaultPaymentTermId = "") {
     quantity: "",
     uom_code: "",
     rate: "",
+    currency_code: "INR",
     payment_term_id: defaultPaymentTermId,
     freight_term: "FOR",
     gst_terms: "",
@@ -187,6 +190,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
     receiving_company_id: "",
     sending_cost_center_id: "",
     receiving_cost_center_id: "",
+    delivery_type: "STANDARD",
     sto_number: "",
     sto_date: new Date().toISOString().slice(0, 10),
     remarks: "",
@@ -199,7 +203,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
   const [notice, setNotice] = useState("");
   const [pickerIndex, setPickerIndex] = useState(null);
 
-  const companies = runtimeContext?.availableCompanies ?? [];
+  const companies = useMemo(() => runtimeContext?.availableCompanies ?? [], [runtimeContext?.availableCompanies]);
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const materialQuery = useMaterialOptionsQuery({
     material_type: materialType || undefined,
@@ -226,8 +230,14 @@ export default function StoCreateFormPage({ openingMode = false }) {
 
   const materials = materialQuery.materials;
   const paymentTerms = paymentTermQuery.paymentTerms;
-  const sendingCostCenters = Array.isArray(sendingCostCenterQuery.data?.data) ? sendingCostCenterQuery.data.data : [];
-  const receivingCostCenters = Array.isArray(receivingCostCenterQuery.data?.data) ? receivingCostCenterQuery.data.data : [];
+  const sendingCostCenters = useMemo(
+    () => (Array.isArray(sendingCostCenterQuery.data?.data) ? sendingCostCenterQuery.data.data : []),
+    [sendingCostCenterQuery.data?.data]
+  );
+  const receivingCostCenters = useMemo(
+    () => (Array.isArray(receivingCostCenterQuery.data?.data) ? receivingCostCenterQuery.data.data : []),
+    [receivingCostCenterQuery.data?.data]
+  );
   const isConsignmentSto = !openingMode && form.sto_type === "CONSIGNMENT_DISTRIBUTION";
   const defaultPaymentTermId = String(lastPaymentTermQuery.data?.payment_term_id || "");
 
@@ -401,6 +411,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
       quantity: String(row.dispatch_qty ?? row.po_qty ?? ""),
       uom_code: row.po_uom_code || "",
       rate: row.transfer_price != null ? String(row.transfer_price) : "",
+      currency_code: row.currency_code || "INR",
       payment_term_id: row.payment_term_id || defaultPaymentTermId || "",
       freight_term: row.freight_term || "FOR",
       gst_terms: row.gst_terms || "",
@@ -455,13 +466,14 @@ export default function StoCreateFormPage({ openingMode = false }) {
         sending_cost_center_id: form.sending_cost_center_id,
         receiving_cost_center_id: form.receiving_cost_center_id,
         remarks: form.remarks.trim() || null,
+        delivery_type: form.delivery_type,
         lines: lines.map((line) => ({
           material_id: line.material_id,
           source_csn_id: line.source_csn_id || null,
           quantity: Number(line.quantity),
           uom_code: line.uom_code || null,
           transfer_price: Number(line.rate),
-          transfer_price_currency: "BDT",
+          currency_code: line.currency_code || "INR",
           payment_term_id: line.payment_term_id,
           freight_term: line.freight_term,
           gst_terms: line.gst_terms || null,
@@ -554,6 +566,22 @@ export default function StoCreateFormPage({ openingMode = false }) {
           onChange={(event) => updateLine(index, { rate: event.target.value })}
           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
         />
+      ),
+    },
+    {
+      key: "currency_code",
+      label: "Curr",
+      width: "90px",
+      render: (_row, index) => (
+        <select
+          value={lines[index].currency_code || "INR"}
+          onChange={(event) => updateLine(index, { currency_code: event.target.value })}
+          className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+        >
+          {CURRENCY_OPTIONS.map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
       ),
     },
     {
@@ -742,6 +770,18 @@ export default function StoCreateFormPage({ openingMode = false }) {
                     options={receivingCostCenterOptions}
                     blankLabel="Select cost center"
                   />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Delivery Type <span className="text-rose-500">*</span>
+                  <select
+                    value={form.delivery_type}
+                    onChange={(event) => updateHeaderField("delivery_type", event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    {DELIVERY_TYPE_OPTIONS.map((entry) => (
+                      <option key={entry} value={entry}>{entry}</option>
+                    ))}
+                  </select>
                 </label>
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Material Type

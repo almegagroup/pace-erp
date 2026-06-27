@@ -28,7 +28,7 @@ type PreparedStoLine = {
   quantity: number;
   uom_code: string;
   transfer_price: number;
-  transfer_price_currency: string;
+  currency_code: string;
   payment_term_id: string;
   freight_term: string;
   gst_terms: string | null;
@@ -46,6 +46,8 @@ type PreparedStoLine = {
 const STO_TYPES = new Set(["CONSIGNMENT_DISTRIBUTION", "INTER_PLANT"]);
 const STO_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL", "CREATED", "DISPATCHED", "RECEIVED", "CLOSED", "CANCELLED"]);
 const STO_LINE_STATUSES = new Set(["OPEN", "RECEIVED", "KNOCKED_OFF"]);
+const DELIVERY_TYPES = new Set(["STANDARD", "BULK", "TANKER"]);
+const CURRENCY_CODES = new Set(["INR", "USD"]);
 const MUTABLE_STO_AMENDMENT_FIELDS = new Set([
   "quantity",
   "transfer_price",
@@ -493,6 +495,22 @@ async function getCostCenterRow(costCenterId: string): Promise<JsonRecord | null
   return (data as JsonRecord | null) ?? null;
 }
 
+async function getCompanyRow(companyId: string): Promise<JsonRecord | null> {
+  if (!companyId) return null;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("companies")
+    .select("id, gst_number")
+    .eq("id", companyId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("PROCUREMENT_COMPANY_LOOKUP_FAILED");
+  }
+
+  return (data as JsonRecord | null) ?? null;
+}
+
 function parseStoLineInput(
   line: JsonRecord,
   index: number,
@@ -523,7 +541,10 @@ function parseStoLineInput(
     quantity,
     uom_code: uomCode,
     transfer_price: transferPrice,
-    transfer_price_currency: toTrimmedString(line.transfer_price_currency) || "BDT",
+    currency_code: (() => {
+      const value = toUpperTrimmedString(line.currency_code || line.transfer_price_currency || "INR");
+      return CURRENCY_CODES.has(value) ? value : "INR";
+    })(),
     payment_term_id: paymentTermId,
     freight_term: freightTerm,
     gst_terms: toTrimmedString(line.gst_terms) || null,
@@ -606,44 +627,87 @@ async function insertStoApprovalLog(input: {
   }
 }
 
+async function buildCsnForInterPlantStoLine(input: {
+  sto: StoRow;
+  line: StoLineRow;
+  actionedBy: string;
+  deliveryType: string;
+  sendingCompanyHasGst: boolean;
+}): Promise<JsonRecord> {
+  const paymentTermId = toTrimmedString(input.line.payment_term_id);
+  const paymentTerm = paymentTermId ? await getPaymentTermRow(paymentTermId) : null;
+  const lcRequired = toUpperTrimmedString(paymentTerm?.payment_method) === "LC";
+
+  return {
+    csn_number: await generateProcurementDocNumber("CSN"),
+    csn_type: input.sendingCompanyHasGst ? "DOMESTIC" : "IMPORT",
+    delivery_type: DELIVERY_TYPES.has(input.deliveryType) ? input.deliveryType : "STANDARD",
+    status: "ORD",
+    company_id: input.sto.sending_company_id,
+    consignee_company_id: input.sto.receiving_company_id,
+    vendor_id: input.sto.sending_company_id,
+    material_id: input.line.material_id,
+    po_id: null,
+    po_line_id: null,
+    sto_id: input.sto.id,
+    po_qty: Number(input.line.quantity ?? 0),
+    dispatch_qty: 0,
+    po_uom_code: input.line.uom_code,
+    payment_term_id: paymentTermId || null,
+    lc_required: lcRequired,
+    has_rebate: input.line.has_rebate === true,
+    rebate_remarks: input.line.rebate_remarks ?? null,
+    created_by: input.actionedBy,
+    is_mother_csn: false,
+    mother_csn_id: null,
+  };
+}
+
 async function createCsnForSto(
   sto: StoRow,
   stoLines: StoLineRow[],
   actionedBy: string,
+  deliveryTypeInput?: string,
 ): Promise<void> {
   if (toUpperTrimmedString(sto.sto_type) !== "INTER_PLANT") {
     return;
   }
 
+  const sendingCompany = await getCompanyRow(toTrimmedString(sto.sending_company_id));
+  const sendingCompanyHasGst = Boolean(toTrimmedString(sendingCompany?.gst_number));
+  const deliveryType = toUpperTrimmedString(deliveryTypeInput || sto.delivery_type || "STANDARD") || "STANDARD";
+
   for (const line of stoLines) {
     const orderedQty = Number(line.quantity ?? 0);
-    const paymentTermId = toTrimmedString(line.payment_term_id);
-    const paymentTerm = paymentTermId ? await getPaymentTermRow(paymentTermId) : null;
-    const lcRequired = toUpperTrimmedString(paymentTerm?.payment_method) === "LC";
-    const csnNumber = await generateProcurementDocNumber("CSN");
+    const existingCsnQuery = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("consignment_note")
+      .select("id")
+      .eq("sto_id", toTrimmedString(sto.id))
+      .eq("material_id", toTrimmedString(line.material_id))
+      .eq("po_uom_code", toTrimmedString(line.uom_code))
+      .eq("po_qty", orderedQty)
+      .maybeSingle();
+
+    if (existingCsnQuery.error) {
+      throw new Error("PROCUREMENT_CSN_LOOKUP_FAILED");
+    }
+    if (existingCsnQuery.data?.id) {
+      continue;
+    }
+
+    const payload = await buildCsnForInterPlantStoLine({
+      sto,
+      line,
+      actionedBy,
+      deliveryType,
+      sendingCompanyHasGst,
+    });
+
     const { error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
-      .insert({
-        csn_number: csnNumber,
-        csn_type: "DOMESTIC",
-        status: "ORD",
-        company_id: sto.sending_company_id,
-        consignee_company_id: sto.receiving_company_id,
-        vendor_id: null,
-        material_id: line.material_id,
-        po_id: null,
-        po_line_id: null,
-        sto_id: sto.id,
-        po_qty: orderedQty,
-        dispatch_qty: orderedQty,
-        po_uom_code: line.uom_code,
-        payment_term_id: paymentTermId || null,
-        lc_required: lcRequired,
-        has_rebate: line.has_rebate === true,
-        rebate_remarks: line.rebate_remarks ?? null,
-        created_by: actionedBy,
-      });
+      .insert(payload);
 
     if (error) {
       throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
@@ -792,7 +856,8 @@ async function buildConsignmentStoFromSubCsns(input: {
         quantity: dispatchQty,
         uom_code: lineConfig.uom_code || toTrimmedString(subCsn.po_uom_code),
         transfer_price: lineConfig.transfer_price,
-        transfer_price_currency: lineConfig.transfer_price_currency,
+        transfer_price_currency: lineConfig.currency_code,
+        currency_code: lineConfig.currency_code,
         payment_term_id: lineConfig.payment_term_id,
         freight_term: lineConfig.freight_term,
         gst_terms: lineConfig.gst_terms,
@@ -847,11 +912,15 @@ export async function createSTOHandler(
     const sendingCostCenterId = toTrimmedString(body.sending_cost_center_id);
     const receivingCostCenterId = toTrimmedString(body.receiving_cost_center_id);
     const stoDate = toTrimmedString(body.sto_date) || todayIsoDate();
+    const deliveryType = toUpperTrimmedString(body.delivery_type || "STANDARD");
     const relatedCsnId = toTrimmedString(body.related_csn_id) || null;
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
 
     if (!STO_TYPES.has(stoType) || !sendingCompanyId || !receivingCompanyId || lines.length === 0) {
       return stoErrorResponse(req, ctx, "STO_CREATE_INVALID", 400, "sto_type, sending_company_id, receiving_company_id, and lines are required.");
+    }
+    if (!DELIVERY_TYPES.has(deliveryType)) {
+      return stoErrorResponse(req, ctx, "STO_DELIVERY_TYPE_INVALID", 400, "delivery_type must be STANDARD, BULK, or TANKER.");
     }
     if (!sendingCostCenterId || !receivingCostCenterId) {
       return stoErrorResponse(req, ctx, "STO_COST_CENTER_REQUIRED", 400, "Sending and receiving cost centers are required.");
@@ -946,7 +1015,8 @@ export async function createSTOHandler(
         quantity: line.quantity,
         uom_code: line.uom_code,
         transfer_price: line.transfer_price,
-        transfer_price_currency: line.transfer_price_currency,
+        transfer_price_currency: line.currency_code,
+        currency_code: line.currency_code,
         payment_term_id: line.payment_term_id,
         freight_term: line.freight_term,
         gst_terms: line.gst_terms,
@@ -968,6 +1038,8 @@ export async function createSTOHandler(
     if (lineError) {
       return stoErrorResponse(req, ctx, "STO_LINE_CREATE_FAILED", 500, "Unable to create STO lines.");
     }
+
+    await createCsnForSto(sto as StoRow, linePayload as StoLineRow[], ctx.auth_user_id, deliveryType);
 
     return okResponse(await hydrateSto(String(sto.id), ctx), ctx.request_id, req);
   } catch (error) {
@@ -1111,7 +1183,18 @@ export async function updateSTOHandler(
           quantity: quantity ?? undefined,
           uom_code: line.uom_code !== undefined ? toTrimmedString(line.uom_code) : undefined,
           transfer_price: line.transfer_price !== undefined ? parseNullableNumber(line.transfer_price) : undefined,
-          transfer_price_currency: line.transfer_price_currency !== undefined ? (toTrimmedString(line.transfer_price_currency) || "BDT") : undefined,
+          transfer_price_currency: line.currency_code !== undefined || line.transfer_price_currency !== undefined
+            ? (() => {
+              const value = toUpperTrimmedString(line.currency_code || line.transfer_price_currency || "INR");
+              return CURRENCY_CODES.has(value) ? value : "INR";
+            })()
+            : undefined,
+          currency_code: line.currency_code !== undefined || line.transfer_price_currency !== undefined
+            ? (() => {
+              const value = toUpperTrimmedString(line.currency_code || line.transfer_price_currency || "INR");
+              return CURRENCY_CODES.has(value) ? value : "INR";
+            })()
+            : undefined,
           payment_term_id: line.payment_term_id !== undefined ? (toTrimmedString(line.payment_term_id) || null) : undefined,
           freight_term: line.freight_term !== undefined ? (toTrimmedString(line.freight_term) || null) : undefined,
           gst_terms: line.gst_terms !== undefined ? (toTrimmedString(line.gst_terms) || null) : undefined,

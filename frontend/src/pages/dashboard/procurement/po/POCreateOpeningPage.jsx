@@ -27,6 +27,7 @@ const GST_TERM_OPTIONS = [
   { value: "INCLUSIVE", label: "GST Inclusive" },
   { value: "EXCLUSIVE", label: "GST Exclusive" },
 ];
+const CURRENCY_OPTIONS = ["INR", "USD"];
 const REBATE_BASIS_OPTIONS = [
   { value: "BASE_UOM", label: "Base UOM" },
   { value: "PO_UOM", label: "PO UOM" },
@@ -39,6 +40,7 @@ function createEmptyLine(defaultPaymentTermId = "") {
     uom_code: "",
     uomOptions: [],
     rate: "",
+    currency_code: "INR",
     delivery_date: "",
     payment_term_id: defaultPaymentTermId,
     freight_term: "FOR",
@@ -233,7 +235,10 @@ export default function POCreateOpeningPage() {
     { enabled: Boolean(form.company_id) }
   );
   const paymentTerms = paymentTermQuery.paymentTerms;
-  const costCenters = Array.isArray(costCenterQuery.data?.data) ? costCenterQuery.data.data : [];
+  const costCenters = useMemo(
+    () => (Array.isArray(costCenterQuery.data?.data) ? costCenterQuery.data.data : []),
+    [costCenterQuery.data?.data]
+  );
   const filterOptions = useMemo(
     () => ({
       companies: Array.isArray(filterOptionsQuery.data?.companies) ? filterOptionsQuery.data.companies : [],
@@ -283,10 +288,7 @@ export default function POCreateOpeningPage() {
   );
   const defaultPaymentTermId = paymentTerms[0]?.id || "";
 
-  const selectedVendor = useMemo(
-    () => vendorDetailCacheRef.current.get(form.vendor_id) ?? null,
-    [form.vendor_id, filterOptions.vendors]
-  );
+  const selectedVendor = useMemo(() => vendorDetailCacheRef.current.get(form.vendor_id) ?? null, [form.vendor_id]);
   const showIncoterm = useMemo(
     () => String(selectedVendor?.vendor_type || "").toUpperCase() === "IMPORT",
     [selectedVendor]
@@ -488,6 +490,7 @@ export default function POCreateOpeningPage() {
           ordered_qty: Number(line.quantity),
           po_uom_code: line.uom_code || null,
           unit_rate: Number(line.rate),
+          currency_code: line.currency_code || "INR",
           payment_term_id: line.payment_term_id,
           freight_term: line.freight_term,
           gst_terms: line.gst_terms || null,
@@ -623,6 +626,22 @@ export default function POCreateOpeningPage() {
           onChange={(event) => updateLine(index, { rate: event.target.value })}
           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
         />
+      ),
+    },
+    {
+      key: "currency_code",
+      label: "Curr",
+      width: "90px",
+      render: (_row, index) => (
+        <select
+          value={lines[index].currency_code || "INR"}
+          onChange={(event) => updateLine(index, { currency_code: event.target.value })}
+          className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+        >
+          {CURRENCY_OPTIONS.map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
       ),
     },
     {
