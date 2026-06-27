@@ -439,4 +439,45 @@ Implement this as a reusable rule evaluator (not 15 hardcoded if-statements scat
 
 ---
 
-**This brief is now considered complete across all 9 parts and ready to hand to Codex for implementation**, pending final confirmation from the business owner.
+## Part 10 — Follow-up: missing fields from Parts 1-9, plus Tracker UI redesign
+
+**Context:** Parts 1-9 were implemented across two Codex rounds (commits `592a04d`, `370707b`). Claude's post-implementation field-by-field audit against the locked design found real gaps — fields that were locked in this brief but never made it into the actual grid columns or expand-row form. This part lists exactly what's missing, plus a UI density/usability redesign requested by the business owner.
+
+### 10.1 — Missing grid columns (add these to `CSNTrackerPage.jsx`'s column list)
+
+| Column | Source field | Why it's missing-but-needed |
+|---|---|---|
+| Material Code | `material.pace_code` (already fetched in `enrichTrackerRows`'s `materialMap`, just not surfaced) | Locked in Part 4.1 alongside Material Name — only Material Name made it into the grid |
+| Base UOM | `material.base_uom_code` or equivalent | Part 4.1 locked Base UOM and Order UOM as two separate columns — only one UOM column (`po_uom_code`) exists today |
+| PO Date | `po.po_date` (already fetched as `poMap`) | Locked in Part 4.1, never added as its own column |
+| Has Rebate | `consignment_note.has_rebate` | Locked in Part 4.1, never added |
+| **Rebate Rate** (new, requested in this round) | `consignment_note.rebate_rate` — **did not exist, already added by Claude via migration `20260627060031_csn_add_rebate_rate.sql`, confirmed applied to dev** | New ask from the business owner — show alongside Has Rebate |
+| **Rebate Remarks** (new, requested in this round) | `consignment_note.rebate_remarks` — confirmed already exists, no migration needed | New ask from the business owner |
+| Calculated LC Opening Date | The Part 4.2 formula output (`ETD − 10 days`), distinct from `lc_opened_date` (when it was actually opened) | Locked in Part 4.2/8.3 as its own column — only `lc_opened_date` (the actual) is shown today, the calculated target date is missing entirely |
+| Baseline ETD/ETA (Domestic: PO ETD: Import: ETA to Port baseline) | The Part 4.2 baseline-only calculation (before any actual milestone overrides it) | Locked in Part 4.2 as a distinct column from the live-recalculating "ETA Plant" — only the live one is shown |
+| Destination Port | `consignment_note.port_of_discharge_id` → port name | Exists in the expand form (Part 4.3) but was also meant to be visible in the grid per Part 4.1/7.2 — add as a grid column too |
+
+### 10.2 — Missing expand-row fields (add these to the expand form in `CSNTrackerPage.jsx`)
+
+- **ATD** — present as a grid column today but **not editable in the expand form**. This is a serious functional gap: Part 4.2's entire calculation cascade depends on ATD being settable (it's one of the two explicit named drivers of "ETA to Plant" recalculation, per Part 4.2). Add it as an `EditField` exactly like `etd` is handled.
+- **Courier Date to CHA** (`courier_date_to_cha`) — locked in Part 6.3, missing from the expand form (only `courier_dispatch_date`, `courier_received_date`, `cha_docket_number`, `hard_copy_courier_number` are present).
+- **Courier CHA Receive Date** (`courier_cha_receive_date`) — same, locked in Part 6.3, missing.
+- **Mother CSN** (read-only reference) — locked in Part 5.3 as a required expand-only field for sub-CSNs (showing which CSN it was split from, persisting even after STO-link per Part 5.5). This is **completely absent** from the expand form right now — add it as a read-only field, visible only when `mother_csn_id` is set on the row.
+
+### 10.3 — CSN Tracker UI redesign (business owner feedback, this round)
+
+The current Tracker layout wastes vertical space and the action buttons are too verbose for a data-dense report screen. Redesign with these specific changes:
+
+1. **Pagination with a much higher visible row count.** Currently very few rows are visible per page given the available space. Target showing **at least 50-100 rows per page** before pagination kicks in — the whole point of the wide-workspace mode (added this session) was to maximize space for this exact reason. Audit the page's vertical layout (header, alert cards, filter bar, the "Tracker Alerts" section) for unnecessary padding/spacing that's eating row-display space, and tighten it.
+2. **Compact, icon-only action buttons.** Replace verbose text buttons (e.g. "COLUMNS", "SAVE LAYOUT", "REFRESH") with small icon buttons. Each icon button must show what it does via a **tooltip on hover/touch** (use `title` attribute at minimum, or a proper tooltip component if one exists in this codebase — check `frontend/src/components/` for an existing tooltip primitive before building a new one).
+3. **General principle: maximize usable space on this specific page.** This is a dense operational report (SAP ALV/ZMB51-style, per the earlier design discussion) — every bit of chrome (borders, padding, redundant headers) that isn't load-bearing should be trimmed specifically on this page. Don't change other pages' density — this is a CSN-Tracker-specific density pass, not a global design-system change.
+
+### Verification checklist (Part 10)
+1. Confirm every column listed in 10.1 renders real data (not blank) for at least one existing CSN row — `rebate_rate`/`rebate_remarks` columns already exist on `consignment_note` (migration applied), so this is purely a frontend/select-list wiring task, no schema work needed.
+2. Confirm editing ATD in the expand form actually triggers the Part 4.2 recalculation cascade (ETA to Plant updates), matching how editing ETD already behaves.
+3. Confirm Mother CSN reference only appears for rows with `mother_csn_id` set, and that it survives STO-linking (per Part 5.5 — don't regress this).
+4. Confirm the redesigned Tracker page shows materially more rows per screen than before on a standard laptop viewport (1366×768 or similar) without horizontal/vertical content getting cut off.
+5. Confirm every icon-only button has a working hover/touch tooltip naming its action — no unlabeled icons.
+6. Same eslint/build/deno-check/structural-integrity checks as prior parts. Pay special attention to the structural-integrity check on `CSNTrackerPage.jsx` given how large it already is (1300+ lines) — this is exactly the file where the "stranded code after closing brace" bug class has the highest chance of recurring.
+
+Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
