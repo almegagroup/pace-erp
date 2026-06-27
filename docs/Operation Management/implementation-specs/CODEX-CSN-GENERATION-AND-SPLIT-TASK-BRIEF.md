@@ -595,4 +595,57 @@ The "Remarks"/"Final notes before saving" section's `<textarea>` (~line 1353, cu
 
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
 
+---
+
+## Part 13 — Second live bug round (dispatch-qty reconciliation logic, domestic field gating, rebate fields, allotted-company default, PO rate/currency)
+
+Investigated directly against the live dev DB / code before writing this Part.
+
+### 13.1 — Dispatch-qty balance prompt must always offer "Create CSN / Knock Off" when there's a remainder, never silently auto-dump it onto an existing sibling
+
+Reproduced the reported bug. Root cause is in `computeDispatchQtyPreview()` (`csn.handlers.ts` ~line 1007-1062):
+- `requires_prompt` is only `true` when `remainder > 0 && siblingRows.length === 0` (~line 1061) — i.e. only the *first* time a balance appears, with no other CSN yet against that PO line.
+- The moment at least one sibling CSN exists, `requires_reconciliation` becomes `true` instead (~line 1060), and the backend silently computes a `suggested_qty` that dumps the entire remainder onto the **last** sibling CSN (~line 1044-1050: `recipientId = siblingRows[siblingRows.length - 1]`) — so editing a second CSN's dispatch_qty down from 50 to 30 silently proposes bumping the *first* CSN from 50 to 70, instead of asking the user the same "Create CSN for Balance / Knock Off Balance" question it asked the first time.
+
+This is wrong per the business owner: every time a balance/remainder appears on a dispatch-qty edit, the user must always be asked to choose between creating a new CSN for the balance or knocking it off — regardless of whether sibling CSNs already exist. The "reconciliation" editor (manually typing new quantities for multiple existing siblings at once) is a different, separate, manually-invoked action — it must not be the automatic default just because a sibling happens to exist.
+
+**Fix:**
+- Change `requires_prompt` to be `true` whenever `remainder > 0`, regardless of `siblingRows.length`. Remove the auto-redistribution of `suggested_qty` onto an existing sibling for this default path.
+- Keep `requires_reconciliation` / the manual multi-sibling quantity editor available, but only as an explicit alternate action the user can choose to open from the dialog (e.g. an additional "Manually Reallocate Across Existing CSNs" button next to "Create CSN for Balance" / "Knock Off Balance" in the `dispatchDialog` modal in `CSNTrackerPage.jsx` ~line 1474-1499) — not the default that fires automatically when siblings exist.
+- Verify by reproducing the exact reported scenario: PO line ordered_qty 100 → CSN A created with dispatch_qty 50 → CSN B created for the balance with dispatch_qty 50 → edit CSN B's dispatch_qty down to 30 → must show the same "Balance remaining: 20 — Create CSN for Balance / Knock Off Balance" prompt, must NOT silently propose changing CSN A's qty to 70.
+
+### 13.2 — Domestic CSNs must gate off IMPORT-only fields (LC, ETA/ATA at port, BL/BOE)
+
+`CSNTrackerPage.jsx`'s expand-row sections ("Shipment Timeline", "Receiving", and parts of "Documents") currently render LC Number/LC Opened Date, ETA at Port/ATA at Port, BL Number/BL Date, and BOE Number/BOE Date as live editable fields for every CSN regardless of `csn_type` — these are IMPORT-specific (the code already knows this elsewhere: see the `csn_type === "IMPORT"` branches in `evaluateRedFields` ~line 266-319 and the ATD field mapping at ~line 1233). For `csn_type === "DOMESTIC"`, these fields should be inactive (disabled, greyed out, or hidden — match whatever pattern this codebase already uses elsewhere for conditionally-inapplicable fields; check `EditField`/other master pages for an existing "disabled with explanatory tone" convention before inventing a new one).
+
+- LC Number, LC Opened Date — IMPORT only (LC = Letter of Credit, only relevant to import consignments per `purchase_order.lc_required`).
+- ETA at Port, ATA at Port, Scheduled ETA Port — IMPORT only (port arrival doesn't apply to domestic LR-based dispatch, which already has its own `lr_date`/`lr_number` under Logistics).
+- BL Number, BL Date, BOE Number, BOE Date — IMPORT only (Bill of Lading / Bill of Entry don't exist for domestic moves).
+- Keep ETD if it's meaningful for domestic too (check with business owner if domestic uses a dispatch-date-from-vendor concept distinct from LR Date — if it's redundant with LR Date for domestic, disable it too).
+
+### 13.3 — "Has Rebate" / "Rebate Rate" / "Rebate Remarks" have no editable input anywhere
+
+`has_rebate`, `rebate_rate`, `rebate_remarks` exist as read-only **display columns** in `buildColumnDefs()` (~line 225-227) but there is no `EditField` for any of them anywhere in the expand-row body — they can never actually be set by a user. Add them as editable fields in the expand body (a new small section, or add to an existing logical section like "Allocation" or "Documents" — pick whichever groups data most sensibly given the rest of Part 11's section layout): `has_rebate` as a Yes/No select (matching the existing `YES_NO_OPTIONS` pattern used for `soft_copy_received`/`hard_copy_received`), `rebate_rate` as a numeric input, `rebate_remarks` as a text input — and only enable `rebate_rate`/`rebate_remarks` for editing when `has_rebate` is Yes (disable/grey them out when No, consistent with how this app handles conditional fields elsewhere).
+
+### 13.4 — Allotted Company should default to the CSN's own (mother) company until explicitly changed
+
+`buildDraft()` (`CSNTrackerPage.jsx` ~line 172-179) falls back every field to `""` when the row's value is null, including `consignee_company_id` — so the "Allotted Company" select always shows blank/"Select company" instead of visually defaulting to the CSN's own company (`row.company_id`) until the user actively picks a different one, per the business owner's expectation that an unset Allotted Company implicitly means "stays with the mother/owning company."
+
+**Fix:** in `buildDraft()`, default `consignee_company_id` to `row?.consignee_company_id ?? row?.company_id ?? ""` instead of the generic empty-string fallback, so the select visually shows the owning company pre-selected when nothing else has been set. Confirm with the business owner whether this should also write `consignee_company_id = company_id` to the database on save when left at this default (vs. leaving it `null` in the DB and only defaulting visually) — implement the **visual-default-only** version unless told otherwise, since silently writing a value the user never explicitly chose could break "is this CSN actually allotted elsewhere" checks used elsewhere (e.g. STO-eligibility checks in Part 5.7's delete-sub-csn rule).
+
+### 13.5 — Add PO Rate column; Currency column needs a decision first (no currency field exists in the schema)
+
+- **PO Rate**: `erp_procurement.purchase_order_line.unit_rate` exists and is populated — add it to `enrichTrackerRows`'s response (join via the existing `po_line_id` lookup already used for other PO-line-sourced fields) and add a new read-only "PO Rate" column to `buildColumnDefs()`, placed near "Order Qty"/"PO Qty".
+- **Currency**: confirmed via direct schema inspection — neither `erp_procurement.purchase_order` nor `purchase_order_line` has any currency column at all. This system currently has no multi-currency support on POs. **Do not invent a currency value or assume INR** — flag this back to the business owner: either (a) all POs are implicitly INR-only today and a "Currency" column should just be a hardcoded display constant for now, or (b) a real `currency_code` column needs to be added to `purchase_order` first (a proper schema change, separate from this Tracker UI work). Do not implement 13.5's currency half until that's confirmed.
+
+### Verification checklist (Part 13)
+1. Reproduce the exact dispatch-qty scenario in 13.1 and confirm it now always prompts Create CSN/Knock Off, never silently changes a sibling's qty.
+2. Confirm DOMESTIC CSNs show LC/ETA/ATA/BL/BOE fields as inactive, IMPORT CSNs unaffected (still fully editable).
+3. Confirm Has Rebate/Rebate Rate/Rebate Remarks are now editable, with rate/remarks disabled when Has Rebate = No.
+4. Confirm Allotted Company visually defaults to the owning company on rows where `consignee_company_id` is null, and that nothing gets silently written to the DB beyond what the user explicitly changes.
+5. Confirm PO Rate column appears and is correct; Currency column is NOT implemented until the business owner confirms the schema approach.
+6. Same eslint/build/deno-check/structural-integrity checks as prior parts.
+
+Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
+
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
