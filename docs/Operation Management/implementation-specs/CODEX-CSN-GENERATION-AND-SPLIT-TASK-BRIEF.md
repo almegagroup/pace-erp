@@ -648,4 +648,67 @@ This is wrong per the business owner: every time a balance/remainder appears on 
 
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
 
+---
+
+## Part 14 — INTER_PLANT STO must auto-create its own CSN (corrects Part 12.3 — there IS a real gap, just not the one originally diagnosed)
+
+Business owner corrected Claude's Part 12.3 read: per the design already locked in Part 3.5 ("INTER_PLANT-type STOs have no such re-link step — their CSN was auto-created by the STO itself"), **every STO — both `CONSIGNMENT_DISTRIBUTION` and `INTER_PLANT` — is supposed to have a CSN row**, so every STO shows up on the CSN Tracker. `CONSIGNMENT_DISTRIBUTION` already works (the CSN is the sub-CSN that gets linked). `INTER_PLANT` does not: `createSTOHandler`'s `INTER_PLANT` branch (`sto.handlers.ts` ~line 904-936) inserts the STO row but never creates a `consignment_note` row at all — confirmed by reading the code. This is the actual gap to fix, not the STO/CSN linkage question raised in Part 12.3 (which is now resolved/moot once this Part lands, since every STO will have a CSN).
+
+### 14.0 — Schema groundwork (already applied directly by Claude, migration `20260627103301_csn_split_delivery_type_and_allow_sto_origin.sql`, dev DB confirmed)
+
+A `consignment_note` row was previously always PO-driven (`po_id`, `po_line_id` were `NOT NULL` FKs to `purchase_order`/`purchase_order_line`), which made it structurally impossible to create a CSN for an `INTER_PLANT` STO (no PO exists for a plant-to-plant transfer). Fixed:
+- `po_id` and `po_line_id` are now nullable on `consignment_note`.
+- New constraint `consignment_note_origin_check`: `po_id IS NOT NULL OR sto_id IS NOT NULL` — every CSN must trace to either a PO or an STO, never neither.
+- `csn_type`'s old three-value set (`IMPORT`/`DOMESTIC`/`BULK`) was overloading two different dimensions PO already keeps separate (`purchase_order.vendor_type`: DOMESTIC/IMPORT, and `purchase_order.delivery_type`: STANDARD/BULK/TANKER). Split the same way on `consignment_note`:
+  - `csn_type` constraint changed to just `IMPORT`/`DOMESTIC` (existing rows backfilled — there were no `BULK` rows in dev data, so this was a clean cutover).
+  - New column `delivery_type` (`STANDARD`/`BULK`/`TANKER`, NOT NULL) added and backfilled from each existing CSN's PO's `delivery_type` (defaulting to `STANDARD` for any row with no resolvable PO).
+- **Codex must update every place in `csn.handlers.ts` and `CSNTrackerPage.jsx` that reads/writes `csn_type` expecting a possible `"BULK"` value** — there are none left; `csn_type` is now strictly `IMPORT`/`DOMESTIC`. Add `delivery_type` as a new read-only Tracker column (and an editable field on creation flows that currently set `csn_type` to a delivery-type-like value — grep for every CSN/sub-CSN creation call site, e.g. `createSubCSNHandler`'s clone-from-mother logic, and make sure `delivery_type` gets copied/set alongside `csn_type`).
+
+### 14.1 — `createSTOHandler`'s `INTER_PLANT` branch must auto-create a CSN
+
+Add CSN creation to the `INTER_PLANT` branch in `sto.handlers.ts` (~line 904, right after the STO + STO-line inserts succeed), one CSN per STO line, with this field mapping (locked by the business owner):
+
+| `consignment_note` column | Value |
+|---|---|
+| `po_id`, `po_line_id` | `NULL` (no PO — this CSN originates from the STO) |
+| `sto_id` | this STO's `id` |
+| `company_id` | `sending_company_id` (the consignor — mirrors how `CONSIGNMENT_DISTRIBUTION` sets `company_id` to the sending/mother company) |
+| `consignee_company_id` | `receiving_company_id` |
+| `vendor_id` | **`sending_company_id`** — there is no real vendor for an inter-plant move; per the business owner, reuse this column to hold the consignor company's id. (No FK constraint exists on `vendor_id` today, confirmed — this is structurally safe, but it means anywhere the UI/API currently resolves `vendor_id` → vendor name for display must be taught to check `sto_id`/origin first and resolve a **company** name instead when this CSN is STO-originated. Find every such resolver — `enrichTrackerRows`'s vendor-name lookup in `csn.handlers.ts`, and any frontend label using `row.vendor_name`/similar — and branch on origin.) |
+| `payment_term_id` | the STO line's own `payment_term_id` (`stock_transfer_order_line.payment_term_id` — already exists and is populated at STO-line entry, per the business owner: "interplant-e deoar jayga ache, setai hobe") |
+| `material_id` | the STO line's `material_id` |
+| `po_qty` | the STO line's `quantity` |
+| `po_uom_code` | the STO line's `uom_code` |
+| `delivery_type` | whatever Standard/Bulk/Tanker option was chosen on the STO line/header (mirror the PO's own delivery-type picker — Codex must add this same picker to the INTER_PLANT STO creation form if it doesn't already exist; check `STOCreatePage`/equivalent frontend for the existing PO delivery-type picker to copy the UI pattern from) |
+| `csn_type` | `DOMESTIC` if the **sending company** (`sending_company_id`) has a non-null/non-empty `erp_master.companies.gst_number`, else `IMPORT`. (Locked reasoning, confirmed by the business owner: this mirrors `purchase_order.vendor_type`, which is keyed off the vendor/source side, not the buyer/receiving side — so for an STO, the *sending* company plays the vendor's role.) |
+| `dispatch_qty` | `0` (manually allocated later, same rule as every other CSN/sub-CSn per the existing locked rule) |
+| `status` | `'ORD'` |
+| `csn_number` | freshly generated via the same `generateProcurementDocNumber("CSN")` used everywhere else |
+| `is_mother_csn`, `mother_csn_id` | `false` / `NULL` — this is a standalone CSN, not part of a Sub-CSN tree |
+| `created_by` | `ctx.auth_user_id` |
+
+- Write this as a new helper function (e.g. `buildCsnForInterPlantStoLine`) called once per STO line inside the `INTER_PLANT` creation branch, mirroring how `buildConsignmentStoFromSubCsns` is structured as its own helper for the other STO type — don't inline this logic into `createSTOHandler` directly.
+- The CSN Tracker's existing "PO Number" display column (Part 5.5 already made this conditionally show PO Number vs STO Number based on whether `sto_id` is set) should already correctly show the STO number for these rows with no further change — verify this rather than re-implementing it.
+- Apply the **same** auto-creation on STO **revoke** for `INTER_PLANT` per the already-locked Part 3.5 rule ("revoke just reactivates that same CSN directly") — i.e. if an `INTER_PLANT` STO's CSN was closed by a Cancel/Knock-off and that action gets revoked, reactivate the existing CSN row (don't create a second one).
+
+### 14.2 — Tracker company filter must show INTER_PLANT-originated CSNs for both sending and receiving companies
+
+Since `company_id` = sending company and `consignee_company_id` = receiving company for these rows (mirroring `CONSIGNMENT_DISTRIBUTION`), confirm `listCSNsHandler`'s company filter (already being touched in Part 12.2 for the "ALL companies" fix) matches a CSN when the filtered company is **either** `company_id` **or** `consignee_company_id` — not just `company_id` — so a user filtering by the receiving company (e.g. Jayashree in the reported case) actually sees these rows. Check whether this OR-matching already exists or whether it's only ever filtered by `company_id` today (likely the latter, given the original Part 12.3 symptom) and fix it as part of this Part rather than Part 12.2, since it specifically depends on this Part's new data existing.
+
+### Verification checklist (Part 14)
+1. Confirm the schema migration's effects: `po_id`/`po_line_id` nullable, `consignment_note_origin_check` exists, `delivery_type` column exists and is backfilled, `csn_type` constraint only allows IMPORT/DOMESTIC.
+2. Create a new INTER_PLANT STO (Almega → Jayashree) end-to-end through the UI and confirm a CSN row is auto-created with the exact field mapping in 14.1's table — check directly in the dev DB.
+3. Confirm that CSN appears on the Tracker when filtering by Company = Almega (sending) AND when filtering by Company = Jayashree (receiving).
+4. Confirm the Tracker's PO/STO reference column shows the STO number (not blank, not an error) for this row.
+5. Confirm `csn_type` resolves correctly based on the sending company's `gst_number` — test with one GST-registered sending company and (if a non-GST company exists in dev data) one without.
+6. Confirm cancelling then revoking this STO reactivates the same CSN row (no duplicate).
+7. Same eslint/build/deno-check/structural-integrity checks as prior parts.
+
+Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
+4. Confirm Allotted Company visually defaults to the owning company on rows where `consignee_company_id` is null, and that nothing gets silently written to the DB beyond what the user explicitly changes.
+5. Confirm PO Rate column appears and is correct; Currency column is NOT implemented until the business owner confirms the schema approach.
+6. Same eslint/build/deno-check/structural-integrity checks as prior parts.
+
+Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
+
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
