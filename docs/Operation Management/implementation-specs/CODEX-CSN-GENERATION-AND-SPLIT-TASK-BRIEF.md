@@ -633,17 +633,25 @@ This is wrong per the business owner: every time a balance/remainder appears on 
 
 **Fix:** in `buildDraft()`, default `consignee_company_id` to `row?.consignee_company_id ?? row?.company_id ?? ""` instead of the generic empty-string fallback, so the select visually shows the owning company pre-selected when nothing else has been set. Confirm with the business owner whether this should also write `consignee_company_id = company_id` to the database on save when left at this default (vs. leaving it `null` in the DB and only defaulting visually) — implement the **visual-default-only** version unless told otherwise, since silently writing a value the user never explicitly chose could break "is this CSN actually allotted elsewhere" checks used elsewhere (e.g. STO-eligibility checks in Part 5.7's delete-sub-csn rule).
 
-### 13.5 — Add PO Rate column; Currency column needs a decision first (no currency field exists in the schema)
+### 13.5 — Add PO Rate column and Currency column (per-line dropdown, locked)
 
+Resolved with the business owner: Currency must be a real **per-line dropdown** on both PO and STO lines (not a hardcoded display constant, not header-level). Schema groundwork already applied directly by Claude (migration `20260627103821_add_currency_code_to_po_and_sto_lines.sql`, dev DB confirmed):
+- `erp_procurement.purchase_order_line.currency_code` — new column, `text NOT NULL DEFAULT 'INR'`, `CHECK (currency_code IN ('INR','USD'))`.
+- `erp_procurement.stock_transfer_order_line.currency_code` — same column/constraint added.
+- (Currency list is currently just `INR`/`USD` — matches the only two values already in use in `erp_master.vendor_material_currency.currency_code`, which has no FK/master-table backing it either; reuse that same flat two-value list rather than building a new currency master table.)
+
+**Fix:**
 - **PO Rate**: `erp_procurement.purchase_order_line.unit_rate` exists and is populated — add it to `enrichTrackerRows`'s response (join via the existing `po_line_id` lookup already used for other PO-line-sourced fields) and add a new read-only "PO Rate" column to `buildColumnDefs()`, placed near "Order Qty"/"PO Qty".
-- **Currency**: confirmed via direct schema inspection — neither `erp_procurement.purchase_order` nor `purchase_order_line` has any currency column at all. This system currently has no multi-currency support on POs. **Do not invent a currency value or assume INR** — flag this back to the business owner: either (a) all POs are implicitly INR-only today and a "Currency" column should just be a hardcoded display constant for now, or (b) a real `currency_code` column needs to be added to `purchase_order` first (a proper schema change, separate from this Tracker UI work). Do not implement 13.5's currency half until that's confirmed.
+- **Currency dropdown on PO line entry**: find the PO line-item entry form (wherever `unit_rate` is entered) and add a Currency `<select>` (INR/USD) next to it, defaulting to INR, writing to the new `purchase_order_line.currency_code` column.
+- **Currency dropdown on STO line entry**: same addition to the STO line-item entry form, writing to `stock_transfer_order_line.currency_code` — this applies to both `CONSIGNMENT_DISTRIBUTION` and `INTER_PLANT` STO line entry (relevant for Part 14's INTER_PLANT CSN auto-creation, which should also read this value).
+- **Currency column on CSN Tracker**: read-only column, sourced from the originating PO line's `currency_code` for PO-driven CSNs, or the originating STO line's `currency_code` for STO-originated (`INTER_PLANT`, per Part 14) CSNs — branch on `sto_id`/origin the same way Part 14.1's vendor-name resolver does.
 
 ### Verification checklist (Part 13)
 1. Reproduce the exact dispatch-qty scenario in 13.1 and confirm it now always prompts Create CSN/Knock Off, never silently changes a sibling's qty.
 2. Confirm DOMESTIC CSNs show LC/ETA/ATA/BL/BOE fields as inactive, IMPORT CSNs unaffected (still fully editable).
 3. Confirm Has Rebate/Rebate Rate/Rebate Remarks are now editable, with rate/remarks disabled when Has Rebate = No.
 4. Confirm Allotted Company visually defaults to the owning company on rows where `consignee_company_id` is null, and that nothing gets silently written to the DB beyond what the user explicitly changes.
-5. Confirm PO Rate column appears and is correct; Currency column is NOT implemented until the business owner confirms the schema approach.
+5. Confirm PO Rate column appears and is correct; confirm Currency dropdown (INR/USD) appears on both PO line entry and STO line entry, defaults to INR, and the Tracker's Currency column shows the correct value for both PO-driven and (once Part 14 lands) STO-originated CSNs.
 6. Same eslint/build/deno-check/structural-integrity checks as prior parts.
 
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
@@ -703,12 +711,5 @@ Since `company_id` = sending company and `consignee_company_id` = receiving comp
 5. Confirm `csn_type` resolves correctly based on the sending company's `gst_number` — test with one GST-registered sending company and (if a non-GST company exists in dev data) one without.
 6. Confirm cancelling then revoking this STO reactivates the same CSN row (no duplicate).
 7. Same eslint/build/deno-check/structural-integrity checks as prior parts.
-
-Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
-4. Confirm Allotted Company visually defaults to the owning company on rows where `consignee_company_id` is null, and that nothing gets silently written to the DB beyond what the user explicitly changes.
-5. Confirm PO Rate column appears and is correct; Currency column is NOT implemented until the business owner confirms the schema approach.
-6. Same eslint/build/deno-check/structural-integrity checks as prior parts.
-
-Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
 
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
