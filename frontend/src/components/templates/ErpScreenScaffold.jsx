@@ -394,7 +394,7 @@ export default function ErpScreenScaffold({
           </div>
         </div>
 
-        <div className="grid flex-1 gap-[var(--erp-section-gap)]">{children}</div>
+        <div className="grid flex-1 content-start gap-[var(--erp-section-gap)]">{children}</div>
 
         <ErpCommandStrip hints={footerHints} />
       </div>
