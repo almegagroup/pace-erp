@@ -230,6 +230,7 @@ export function ErpActionStrip({ actions = [] }) {
             key={action.key ?? `${action.label}-${index}`}
             ref={action.buttonRef}
             type="button"
+            title={action.title ?? (hintTokens.join(" | ") || undefined)}
             disabled={action.disabled}
             onClick={action.onClick}
             onKeyDown={action.onKeyDown}

@@ -765,6 +765,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
 
   const poIds = [...new Set(rows.map((row) => toTrimmedString(row.po_id)).filter(Boolean))];
   const stoIds = [...new Set(rows.map((row) => toTrimmedString(row.sto_id)).filter(Boolean))];
+  const motherIds = [...new Set(rows.map((row) => toTrimmedString(row.mother_csn_id)).filter(Boolean))];
   const vendorIds = [...new Set(rows.map((row) => toTrimmedString(row.vendor_id)).filter(Boolean))];
   const materialIds = [...new Set(rows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   const paymentTermIds = [...new Set(rows.map((row) => toTrimmedString(row.payment_term_id)).filter(Boolean))];
@@ -784,18 +785,21 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     ...rows.map((row) => toTrimmedString(row.consignee_company_id)),
   ].filter(Boolean))];
 
-  const [poResult, stoResult, vendorResult, materialResult, transporterResult, paymentTermResult, portResult, companyResult, poLineResult, gateEntryResult, grnResult, materialGroupOptions] = await Promise.all([
+  const [poResult, stoResult, motherResult, vendorResult, materialResult, transporterResult, paymentTermResult, portResult, companyResult, poLineResult, gateEntryResult, grnResult, materialGroupOptions] = await Promise.all([
     poIds.length
       ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, po_number, po_date, expected_delivery_date").in("id", poIds)
       : Promise.resolve({ data: [], error: null }),
     stoIds.length
       ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, sto_date").in("id", stoIds)
       : Promise.resolve({ data: [], error: null }),
+    motherIds.length
+      ? serviceRoleClient.schema("erp_procurement").from("consignment_note").select("id, csn_number, mother_csn_id, sto_id").in("id", motherIds)
+      : Promise.resolve({ data: [], error: null }),
     vendorIds.length
       ? serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_name").in("id", vendorIds)
       : Promise.resolve({ data: [], error: null }),
     materialIds.length
-      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name").in("id", materialIds)
+      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, pace_code, base_uom_code").in("id", materialIds)
       : Promise.resolve({ data: [], error: null }),
     transporterIds.length
       ? serviceRoleClient.schema("erp_master").from("transporter_master").select("id, transporter_name").in("id", transporterIds)
@@ -826,12 +830,12 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   ]);
 
   if (
-    poResult.error || stoResult.error || vendorResult.error || materialResult.error || transporterResult.error
+    poResult.error || stoResult.error || motherResult.error || vendorResult.error || materialResult.error || transporterResult.error
     || paymentTermResult.error || portResult.error || companyResult.error
     || poLineResult.error || gateEntryResult.error || grnResult.error
   ) {
     console.error("CSN_TRACKER_ENRICH_FAILED", JSON.stringify({
-      po: poResult.error, sto: stoResult.error, vendor: vendorResult.error, material: materialResult.error,
+      po: poResult.error, sto: stoResult.error, mother: motherResult.error, vendor: vendorResult.error, material: materialResult.error,
       transporter: transporterResult.error, paymentTerm: paymentTermResult.error, port: portResult.error,
       company: companyResult.error, poLine: poLineResult.error, gateEntry: gateEntryResult.error, grn: grnResult.error,
     }));
@@ -840,6 +844,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
 
   const poMap = new Map((poResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const stoMap = new Map((stoResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const motherMap = new Map((motherResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const vendorMap = new Map((vendorResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const materialMap = new Map((materialResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const transporterMap = new Map((transporterResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
@@ -853,6 +858,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   const enriched = rows.map((row) => {
     const po = poMap.get(toTrimmedString(row.po_id));
     const sto = stoMap.get(toTrimmedString(row.sto_id));
+    const mother = motherMap.get(toTrimmedString(row.mother_csn_id));
     const vendor = vendorMap.get(toTrimmedString(row.vendor_id));
     const material = materialMap.get(toTrimmedString(row.material_id));
     const transporter = transporterMap.get(
@@ -904,6 +910,8 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
         : null,
       vendor_name: vendor?.vendor_name ?? vendor?.name ?? null,
       material_name: material?.material_name ?? null,
+      material_code: material?.pace_code ?? null,
+      base_uom_code: material?.base_uom_code ?? null,
       transporter_name: transporter?.transporter_name ?? row.transporter_name_freetext ?? row.domestic_transporter_freetext ?? null,
       payment_term_name: paymentTerm?.name ?? null,
       payment_term_reference_type_code: referenceType?.code ?? null,
@@ -923,6 +931,9 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
         : null,
       material_group_name: selectedMaterialGroup?.group_name ?? null,
       material_group_options: materialGroups,
+      mother_csn_display_number: mother?.csn_number
+        ? `${mother?.mother_csn_id && !mother?.sto_id ? "Sub-CSN" : "CSN"}-${toTrimmedString(mother.csn_number)}`
+        : null,
       expected_delivery_date: po?.expected_delivery_date ?? null,
       ge_number: gateEntry?.ge_number ?? null,
       grn_number: grn?.grn_number ?? null,
