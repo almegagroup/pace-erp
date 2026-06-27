@@ -400,6 +400,18 @@ function TrackerSection({ eyebrow, title, children }) {
   );
 }
 
+const ICON_ACTION_LABELS = {
+  "ti-git-branch": "Split",
+  "ti-external-link": "Open",
+  "ti-check": "Save",
+  "ti-chevron-up": "Collapse",
+  "ti-chevron-down": "Expand",
+  "ti-columns": "Columns",
+  "ti-device-floppy": "Save Layout",
+  "ti-refresh": "Refresh",
+  "ti-trash": "Del",
+};
+
 function IconActionButton({ icon, title, onClick, disabled = false, tone = "neutral" }) {
   const toneClass = disabled
     ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
@@ -408,15 +420,16 @@ function IconActionButton({ icon, title, onClick, disabled = false, tone = "neut
       : tone === "danger"
         ? "border-rose-300 bg-rose-50 text-rose-800 hover:bg-rose-100"
         : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50";
+  const label = ICON_ACTION_LABELS[icon] || title;
   return (
     <button
       type="button"
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className={`inline-flex h-[26px] w-[26px] items-center justify-center border text-[13px] transition ${toneClass}`}
+      className={`inline-flex h-[26px] items-center justify-center whitespace-nowrap border px-2 text-[10px] font-semibold uppercase tracking-[0.04em] transition ${toneClass}`}
     >
-      <i className={`ti ${icon}`} />
+      {label}
     </button>
   );
 }
@@ -819,10 +832,10 @@ export default function CSNTrackerPage() {
                 event.stopPropagation();
                 expandedRowId === row.id ? resetDraft(null) : resetDraft(row);
               }}
-              className="inline-flex h-[22px] w-[22px] items-center justify-center border border-slate-300 bg-white text-[10px] text-slate-700"
+              className="inline-flex h-[22px] w-[22px] items-center justify-center border border-slate-300 bg-white text-[12px] font-bold text-slate-700"
               title={expandedRowId === row.id ? "Collapse row" : "Expand row"}
             >
-              <i className={`ti ${expandedRowId === row.id ? "ti-chevron-up" : "ti-chevron-down"}`} />
+              {expandedRowId === row.id ? "▲" : "▼"}
             </button>
           </div>
         );
@@ -1112,7 +1125,7 @@ export default function CSNTrackerPage() {
                                 </div>
 
                                 <TrackerSection eyebrow="Allocation" title="Dispatch balance and commercial flags">
-                                  <div className="grid gap-2 lg:grid-cols-4">
+                                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
                                     <EditField label="Dispatch Qty" rowId={row.id} fieldName="dispatch_qty" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input type="number" min="0" step="0.0001" value={draft.dispatch_qty ?? ""} onChange={(event) => patchDraft("dispatch_qty", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500" />
                                     </EditField>
@@ -1210,7 +1223,7 @@ export default function CSNTrackerPage() {
                                 ) : null}
 
                                 <TrackerSection eyebrow="Shipment Timeline" title="ETD, ATD, ETA, and arrival chain">
-                                  <div className="grid gap-2 lg:grid-cols-4">
+                                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
                                     <EditField label="Scheduled ETA Port" rowId={row.id} fieldName="scheduled_eta_to_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input type="date" value={draft.scheduled_eta_to_port ?? ""} onChange={(event) => patchDraft("scheduled_eta_to_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
@@ -1230,7 +1243,7 @@ export default function CSNTrackerPage() {
                                 </TrackerSection>
 
                                 <TrackerSection eyebrow="Documents" title="BL, invoice, BOE, and statutory references">
-                                  <div className="grid gap-2 lg:grid-cols-4">
+                                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
                                     <EditField label="BL Number" rowId={row.id} fieldName="bl_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input value={draft.bl_number ?? ""} onChange={(event) => patchDraft("bl_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
@@ -1269,7 +1282,7 @@ export default function CSNTrackerPage() {
                                 </TrackerSection>
 
                                 <TrackerSection eyebrow="Logistics" title="Transport, LR, and post-clearance handoff">
-                                  <div className="grid gap-2 lg:grid-cols-4">
+                                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
                                     <EditField label="Transporter" rowId={row.id} fieldName="transporter_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <select value={draft.transporter_id ?? ""} onChange={(event) => patchDraft("transporter_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
                                         <option value="">Select transporter</option>
@@ -1291,7 +1304,7 @@ export default function CSNTrackerPage() {
                                 </TrackerSection>
 
                                 <TrackerSection eyebrow="Receiving" title="GE, GRN, LC, and completion tracking">
-                                  <div className="grid gap-2 lg:grid-cols-4">
+                                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
                                     <EditField label="GE Number" rowId={row.id} fieldName="gate_entry_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input value={draft.gate_entry_id ?? ""} onChange={(event) => patchDraft("gate_entry_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
@@ -1324,7 +1337,7 @@ export default function CSNTrackerPage() {
                                 </TrackerSection>
 
                                 <TrackerSection eyebrow="Courier And CHA" title="Hard-copy handoff and sub-CSN linkage">
-                                  <div className="grid gap-2 lg:grid-cols-4">
+                                  <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
                                     <EditField label="Courier Number" rowId={row.id} fieldName="hard_copy_courier_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input value={draft.hard_copy_courier_number ?? ""} onChange={(event) => patchDraft("hard_copy_courier_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                                     </EditField>
