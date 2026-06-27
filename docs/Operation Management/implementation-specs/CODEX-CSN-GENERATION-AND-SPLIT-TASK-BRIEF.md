@@ -481,3 +481,46 @@ The current Tracker layout wastes vertical space and the action buttons are too 
 6. Same eslint/build/deno-check/structural-integrity checks as prior parts. Pay special attention to the structural-integrity check on `CSNTrackerPage.jsx` given how large it already is (1300+ lines) — this is exactly the file where the "stranded code after closing brace" bug class has the highest chance of recurring.
 
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
+
+---
+
+## Part 11 — Tracker density redesign (locked via mockup approval with business owner)
+
+The business owner rejected the current Tracker's visual density — too much wasted vertical space top and bottom, fields/buttons too large, too few rows visible. Two mockups were shown and approved; implement exactly what they show.
+
+### 11.1 — Header and filter bar (collapsed/default view)
+
+- Collapse the header into a single compact row: eyebrow + title + alert counts inline (e.g. "Procurement · Consignment Tracker · LC: 0 · Vessel: 0") — no separate large "Tracker Alerts" card section taking its own vertical block.
+- Action buttons (Columns, Save Layout, Refresh) become **small icon-only buttons** (~26x26px) using Tabler icons (`ti-columns`, `ti-device-floppy`, `ti-refresh`), each with a `title` tooltip (reuse the `title` prop already added to `ErpActionStrip` in Part 10 — don't reintroduce text labels).
+- Filter row (Company, Status, CSN Type, Date From, Date To, Layout, Search) becomes one tight row of small (~26px height) inputs, wrapping only if the viewport is too narrow — not stacked in a tall multi-row block by default.
+- Pagination/footer strip becomes a single compact line: "Rows X-Y of Z" on the left, Prev/Page/Next compact on the right — no large separate block.
+
+### 11.2 — Table row density
+
+- Reduce row height and cell padding significantly (target similar to the mockup: ~2-3px vertical padding per cell, 11px font) so meaningfully more rows are visible without scrolling on a standard laptop viewport, on top of the LIMIT=100 paging already set in Part 10.
+- Status column renders as a small colored badge (already exists per Part 6.1/8.1 — just ensure the badge itself is compact, not oversized).
+
+### 11.3 — Expand-row redesign
+
+- Header bar of the expanded row: CSN display number/label on the left, **icon-only action buttons** on the right — Create Sub CSN (`ti-git-branch`), Open full detail page (`ti-external-link`), Save (`ti-check`), Collapse (`ti-chevron-up`) — each with a `title` tooltip. No text-label buttons here.
+- Body is organized into the section groups already built in the prior round (Allocation, Shipment Timeline, Documents, Logistics, Receiving, Courier And CHA, Remarks) — keep that grouping, but tighten each section's grid to ~4 fields per row with small (~26px) inputs and a small uppercase section label (10-11px, muted color) above each group — matching the mockup's density, not the current oversized spacing.
+- **New: add a "Sub CSNs" section** (bordered box, placed right after "Allocation") that is only rendered when the row has at least one sub-CSN created from it (i.e. `is_mother_csn` true or a non-empty sub-CSN list is available) — contents:
+  - A small header showing the count (e.g. "Sub CSNs (2)") and the **Create Sub CSN** icon button (`ti-git-branch`) on the same line.
+  - A compact mini-table listing each sub-CSN: its display label (reusing the existing `Sub-CSN-<n>` / `CSN-<n>` logic from Part 5.1 depending on STO-link state), Allotted Company, Qty, Status badge, and a small delete icon (`ti-trash`) that only renders/enables per the existing delete rules from Part 5.7 (status `ORD` and no `sto_id`) — reuse the existing delete-sub-csn endpoint/handler, don't build a new one.
+- The "Mother CSN" read-only reference (Part 5.3/10.2) stays as a small strip at the bottom of the expand body — shows the actual mother reference when this row is itself a sub-CSN, or an empty/dash state when it isn't (don't hide the strip entirely on mother rows — show it in a clearly-empty state instead, per the mockup).
+- Every `i`-icon history indicator (Part 4.3) stays, just sized to fit the now-smaller field layout without overlapping the input or label.
+
+### 11.4 — Row interaction: single-click vs double-click (locked, new behavior)
+
+- **Single click on the row (or its expand chevron)** — toggles the row's expand/collapse state in place. Does not navigate.
+- **Double-click anywhere on the row** — navigates to the full `CSNDetailPage` for that CSN (same destination as the expand-row's "Open full detail page" icon button). Match the existing app-wide double-click-opens-detail convention used on other list pages (e.g. `STOListPage.jsx`) — including the paired `openScreen()`/`openScreenWithContext()` + `navigate()` call (continuity rule from earlier in this session — don't regress that).
+
+### Verification checklist (Part 11)
+1. Confirm a standard 1366×768 laptop viewport shows materially more rows than before (target: noticeably closer to the "50-100 rows visible without scrolling the page itself" goal — the table's own internal scroll is fine, the surrounding chrome should not eat the space).
+2. Confirm every icon-only button (header strip + expand-row header) has a working hover/touch tooltip and no two controls visually overlap at any standard viewport width.
+3. Confirm the new Sub CSNs section only appears for rows that actually have sub-CSNs, the Create Sub CSN button works from there, and the delete icon respects the existing ORD/no-STO-link rule.
+4. Confirm single-click expands/collapses in place (no navigation) and double-click navigates to CSNDetailPage with proper screen-stack continuity.
+5. Confirm the Mother CSN strip shows a clear empty/dash state on mother/independent rows rather than disappearing.
+6. Same eslint/build/deno-check/structural-integrity checks as prior parts.
+
+Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
