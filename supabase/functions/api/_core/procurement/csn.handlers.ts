@@ -507,28 +507,48 @@ async function getMaterialGroupOptionsByMaterialIds(materialIds: string[]): Prom
     return new Map();
   }
 
-  const { data, error } = await serviceRoleClient
+  const { data: memberRows, error: memberError } = await serviceRoleClient
     .schema("erp_master")
-    .from("material_category_assignment")
-    .select("material_id, group_id, is_primary, active, group:group_id(id, group_name)")
-    .in("material_id", normalized)
-    .eq("active", true);
+    .from("material_category_group_member")
+    .select("material_id, group_id, is_primary")
+    .in("material_id", normalized);
 
-  if (error) {
-    console.error("CSN_MATERIAL_GROUP_LOOKUP_FAILED", JSON.stringify(error));
-    throw new Error(`PROCUREMENT_MATERIAL_GROUP_LOOKUP_FAILED: ${error.message}`);
+  if (memberError) {
+    console.error("CSN_MATERIAL_GROUP_MEMBER_LOOKUP_FAILED", JSON.stringify(memberError));
+    throw new Error(`PROCUREMENT_MATERIAL_GROUP_LOOKUP_FAILED: ${memberError.message}`);
   }
 
+  const members = (memberRows as Record<string, unknown>[] | null) ?? [];
+  const groupIds = [...new Set(members.map((row) => toTrimmedString(row.group_id)).filter(Boolean))];
+
+  const { data: groupRows, error: groupError } = groupIds.length > 0
+    ? await serviceRoleClient
+      .schema("erp_master")
+      .from("material_category_group")
+      .select("id, group_name")
+      .in("id", groupIds)
+    : { data: [], error: null };
+
+  if (groupError) {
+    console.error("CSN_MATERIAL_GROUP_NAME_LOOKUP_FAILED", JSON.stringify(groupError));
+    throw new Error(`PROCUREMENT_MATERIAL_GROUP_LOOKUP_FAILED: ${groupError.message}`);
+  }
+
+  const groupNameById = new Map(
+    ((groupRows as Record<string, unknown>[] | null) ?? []).map((row) => [toTrimmedString(row.id), toTrimmedString(row.group_name)]),
+  );
+
   const grouped = new Map<string, Array<Record<string, unknown>>>();
-  for (const row of (data as Record<string, unknown>[] | null) ?? []) {
+  for (const row of members) {
     const materialId = toTrimmedString(row.material_id);
-    if (!materialId) {
+    const groupId = toTrimmedString(row.group_id);
+    if (!materialId || !groupId) {
       continue;
     }
     const current = grouped.get(materialId) ?? [];
     current.push({
-      id: toTrimmedString(row.group_id) || toTrimmedString((row.group as Record<string, unknown> | null)?.id),
-      group_name: toTrimmedString((row.group as Record<string, unknown> | null)?.group_name),
+      id: groupId,
+      group_name: groupNameById.get(groupId) ?? "",
       is_primary: row.is_primary === true,
     });
     grouped.set(materialId, current);

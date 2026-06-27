@@ -589,16 +589,16 @@ async function getPrimaryMaterialCategoryId(materialId: string): Promise<string 
 
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
-    .from("material_category_assignment")
+    .from("material_category_group_member")
     .select("group_id")
     .eq("material_id", materialId)
-    .eq("active", true)
     .order("is_primary", { ascending: false })
     .limit(1)
     .maybeSingle();
 
   if (error) {
-    throw new Error("PROCUREMENT_MATERIAL_CATEGORY_LOOKUP_FAILED");
+    console.error("PO_MATERIAL_CATEGORY_LOOKUP_FAILED", JSON.stringify(error));
+    throw new Error(`PROCUREMENT_MATERIAL_CATEGORY_LOOKUP_FAILED: ${error.message}`);
   }
 
   return toTrimmedString(data?.group_id) || null;
