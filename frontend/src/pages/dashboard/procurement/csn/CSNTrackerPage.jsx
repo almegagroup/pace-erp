@@ -1547,10 +1547,10 @@ export default function CSNTrackerPage() {
           </>
         }
       >
-        {dispatchDialog?.mode !== "reconcile" ? (
+        {!dispatchDialog ? null : dispatchDialog.mode !== "reconcile" ? (
           <div className="grid gap-3">
             <div className="text-sm text-slate-700">
-              Balance remaining: <strong>{dispatchDialog.preview.remainder}</strong>
+              Balance remaining: <strong>{dispatchDialog.preview?.remainder}</strong>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
