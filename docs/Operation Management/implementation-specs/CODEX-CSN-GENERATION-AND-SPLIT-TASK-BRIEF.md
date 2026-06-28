@@ -760,3 +760,39 @@ The one existing INTER_PLANT-originated CSN row (`csn_number = '000005'`, linked
 5. Same eslint/build/deno-check/structural-integrity checks as prior parts.
 
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
+
+---
+
+## Part 16 — CSN status (TRN/GED) must be fully automatic, no manual override buttons
+
+Business owner reviewed the ORD→TRN→GED→GRD lifecycle and locked: **every status transition must be derived from real data, never a manual button.** Investigation found the two transitions are currently in inconsistent states:
+
+- **GED is already correct.** `gate_entry.handlers.ts` (~line 225-257, the function that links a real Gate Entry to a CSN) already auto-bumps `status` from `ORD`/`TRN` to `GED` the moment a real `gate_entry_id` gets linked, alongside setting `gate_entry_date` from the real GE record. This is the right pattern — no change needed to this function.
+- **GRD is already correct.** `grn.handlers.ts` (~line 788-799) already sets `status: "GRD"` automatically the moment a real GRN gets created against the CSN's linked gate-entry-line, alongside the real `grn_id`/`grn_date`. No change needed.
+- **TRN has no automatic derivation at all.** The only way to reach `TRN` today is the manual `markCSNInTransitHandler` endpoint (`csn.handlers.ts` ~line 1550-1590), triggered by a "Mark In Transit" button on `CSNDetailPage.jsx` (~line 204-225) — and confusingly, that handler sets the `etd` field, not the `ATD` field (`bl_date`/`lr_date`) the Tracker actually surfaces as "ATD". Saving the Tracker's own ATD field today never changes status at all.
+- **A redundant manual override for GED also exists.** `markCSNArrivedHandler` (`csn.handlers.ts` ~line 1592-1630+) lets a user force `status: "GED"` and fabricate `ata_at_port`/`gate_entry_date` **without any real Gate Entry record existing**, via a "Mark Arrived" button on `CSNDetailPage.jsx` (~line 227-240) — bypassing the correct automatic path entirely.
+
+### 16.1 — Add automatic ORD → TRN derivation
+
+In the CSN update path (`updateCSNHandler` / `recalculateAndBuildUpdates` in `csn.handlers.ts`, wherever the Tracker's inline field save is processed), detect when the relevant ATD field transitions from empty to set:
+- `csn_type === "IMPORT"`: `bl_date` newly set.
+- `csn_type === "DOMESTIC"`: `lr_date` newly set.
+
+If the CSN's current `status` is `ORD` at that moment, auto-update it to `TRN` as part of the same update — mirroring exactly how `gate_entry.handlers.ts` auto-bumps `ORD`/`TRN` → `GED` on real GE link. Do not require any separate confirmation step or additional endpoint call.
+
+### 16.2 — Remove the manual "Mark In Transit" and "Mark Arrived" buttons and their handlers entirely
+
+- Remove the `mark-transit` and `mark-arrived` actions and their handler functions (`handleMarkInTransit`, `handleMarkArrived`) from `CSNDetailPage.jsx` (~lines 204-261).
+- Remove `markCSNInTransitHandler` and `markCSNArrivedHandler` from `csn.handlers.ts`, their route registrations in `procurement.routes.ts`, and their corresponding entries in `_acl/route-acl-registry.ts` (check both — this is exactly the dual-registration cleanup this session has repeatedly had to verify when *adding* routes; do it carefully in reverse when *removing* one, so no orphaned registry entry causes confusion later).
+- Remove `markCSNInTransit`/`markCSNArrived` from `procurementApi.js` if nothing else calls them after this change (grep to confirm).
+- GED has no equivalent manual button to add (16.1 handles TRN; GED's only path is now exclusively the real Gate Entry link, which was already the case for the primary path — this just removes the redundant manual override).
+
+### Verification checklist (Part 16)
+1. Confirm saving an IMPORT CSN's ATD field (which writes `bl_date`) on an `ORD` row auto-flips status to `TRN`, with no separate action.
+2. Confirm the same for a DOMESTIC CSN's ATD field (`lr_date`).
+3. Confirm no "Mark In Transit"/"Mark Arrived" buttons remain anywhere in the CSN UI, and the corresponding backend routes return 404 (fully removed, not just hidden).
+4. Confirm GED still only ever happens via a real Gate Entry link (per existing `gate_entry.handlers.ts` logic, untouched) and GRD still only via a real GRN (per existing `grn.handlers.ts` logic, untouched).
+5. Re-confirm GE Number/GRN Number/their dates remain read-only on the Tracker (already fixed in a prior round — just don't regress it).
+6. Same eslint/build/deno-check/structural-integrity checks as prior parts, plus a route-ACL-registry diff check to confirm no orphaned entries remain for the removed routes.
+
+Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
