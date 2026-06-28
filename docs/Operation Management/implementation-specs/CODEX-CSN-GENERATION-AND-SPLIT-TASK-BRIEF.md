@@ -825,3 +825,34 @@ Mirror exactly how `transporter_id` already works in the "Logistics" `TrackerSec
 4. Same eslint/build/deno-check/structural-integrity checks as prior parts.
 
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
+
+---
+
+## Part 18 — CHA and Transporter dropdowns must show Name + Location and be searchable (auto-suggest), never show raw UUID
+
+Business owner's requirement: for both the CHA dropdown (Part 17) and the existing Transporter dropdown, pull ID, Name, **and Location** from the database; the dropdown must display Name + Location (never the raw UUID anywhere — selecting an option must only ever show/store the readable name, the UUID stays purely internal); and the dropdown itself must be **searchable/auto-suggest** (type-to-filter), not a plain static `<select>`.
+
+Neither `erp_master.transporter_master` nor `erp_master.cha_master` has a dedicated "location"/"city" column — both only have a free-text `address` column. Use `address` as the location signal for both (confirmed via direct schema inspection; if a future structured city/location master is wanted, that's a separate larger change — not in scope here, flag back if this address-only approach isn't sufficient).
+
+### 18.1 — Replace both plain `<select>` dropdowns with `ErpComboboxField`
+
+This component already exists and is already used across many other pages in this app (`frontend/src/components/forms/ErpComboboxField.jsx` — searchable, type-to-filter, keyboard-navigable, takes `options: { value, label }[]`, never reinvent this). In `CSNTrackerPage.jsx`:
+- Replace the Transporter `<select>` (~line 1358, bound to `transporter_id`) with `ErpComboboxField`.
+- Replace the CHA `<select>` (added in Part 17, bound to `cha_id`) with `ErpComboboxField`.
+
+### 18.2 — Option labels must combine Name + Location
+
+In `transporterOptions`/`chaOptions` (the `useMemo` blocks building dropdown options from `transportersQuery`/`chasQuery` data), change the `label` to combine name and address, e.g. `` `${row.transporter_name} — ${row.address || "No address on file"}` `` and the equivalent for CHA using `cha_name`/`address`. The dropdown's closed-state display and the search-matching must both work against this combined label (this falls out naturally from `ErpComboboxField`'s existing `label` matching — no special-casing needed).
+
+### 18.3 — Confirm no UUID ever surfaces to the user
+
+- Confirm the Tracker grid's "Transporter"/"CHA" columns continue to show the resolved name only (`transporter_name`/`cha_name` from `enrichTrackerRows`, already correct, not affected by this Part) — just double-check after the dropdown swap that nothing regresses this.
+- Confirm `ErpComboboxField`'s collapsed-state display shows the matched label (name + location), never the raw `value` (UUID) — this is already how the component behaves (see `selectedLabel` in its source), just verify after wiring real data through it.
+
+### Verification checklist (Part 18)
+1. Both Transporter and CHA fields are now type-to-search comboboxes, not plain `<select>` elements.
+2. Each option's visible text is `Name — Address` (or a clean equivalent), never a UUID.
+3. Selecting an option still saves the correct `transporter_id`/`cha_id` underneath (functionally unchanged from Part 17/the pre-existing transporter behavior — only the input control and label changed).
+4. Same eslint/build/deno-check/structural-integrity checks as prior parts.
+
+Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
