@@ -796,3 +796,32 @@ If the CSN's current `status` is `ORD` at that moment, auto-update it to `TRN` a
 6. Same eslint/build/deno-check/structural-integrity checks as prior parts, plus a route-ACL-registry diff check to confirm no orphaned entries remain for the removed routes.
 
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
+
+---
+
+## Part 17 — Add the missing CHA field to the Tracker (linked dropdown + freetext fallback, mirrors Transporter)
+
+`consignment_note` already has `cha_id` (FK) and `cha_name_freetext` columns, and a full CHA master module already exists (`erp_master.cha_master`, with working CRUD already wired in `procurementApi.js` as `listCHAs`/`createCHA`/etc.) — but the CSN Tracker's expand-row editor never exposes a CHA field at all, neither dropdown nor text. This is a real gap, found while reviewing the Logistics section against Transporter's existing pattern.
+
+### 17.1 — Add CHA as a linked dropdown with freetext fallback
+
+Mirror exactly how `transporter_id` already works in the "Logistics" `TrackerSection` of `CSNTrackerPage.jsx` (~line 1358):
+- Add a "CHA" dropdown sourced from `listCHAs({ is_active: true, limit: 500 })` (same call pattern as the existing `listTransporters` query ~line 544), bound to `cha_id`.
+- Add a "CHA Name (if not listed)" text input bound to `cha_name_freetext`, enabled whenever `cha_id` is empty (same intended fallback relationship the column names already imply — `domestic_transporter_id`/`domestic_transporter_freetext` follow the identical naming convention elsewhere in this table, for reference).
+- Place both fields in the existing "Logistics" section, next to Transporter.
+
+### 17.2 — Backend must accept `cha_id`/`cha_name_freetext` on save
+
+`cha_id` and `cha_name_freetext` are currently **not** in `csn.handlers.ts`'s editable-fields whitelist (`MANUAL_EDITABLE_FIELDS`/`TRACKER_FIELDS` etc. — grep confirmed zero matches for either field anywhere in the file). Add both to whichever whitelist(s) the existing `transporter_id`/`transporter_name_freetext` fields are already in, so `updateCSNHandler` actually persists them instead of silently stripping them.
+
+### 17.3 — Tracker grid + enrichment
+
+- Add a read-only "CHA" column to `buildColumnDefs()`, resolving the CHA's name the same way `transporter_name` is resolved today (`enrichTrackerRows` already does a transporter lookup — add an equivalent CHA lookup batched the same way, falling back to `cha_name_freetext` when `cha_id` is null, mirroring how `transporter_name_freetext` likely already falls back today).
+
+### Verification checklist (Part 17)
+1. Confirm the CHA dropdown lists real CHAs from `cha_master` and saves `cha_id` correctly.
+2. Confirm the freetext fallback works and saves `cha_name_freetext` when no `cha_id` is set.
+3. Confirm the Tracker's CHA column displays the resolved name (from master or freetext) correctly.
+4. Same eslint/build/deno-check/structural-integrity checks as prior parts.
+
+Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
