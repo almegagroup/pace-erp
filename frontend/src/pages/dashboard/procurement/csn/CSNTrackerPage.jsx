@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ModalBase from "../../../../components/layer/ModalBase.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
@@ -603,7 +604,7 @@ export default function CSNTrackerPage() {
     const raw = Array.isArray(transportersQuery.data) ? transportersQuery.data : [];
     return raw.map((row) => ({
       value: row.id,
-      label: row.transporter_name || row.name || row.id,
+      label: `${row.transporter_name || row.name || "Unnamed transporter"} — ${row.address || "No address on file"}`,
     }));
   }, [transportersQuery.data]);
 
@@ -611,7 +612,7 @@ export default function CSNTrackerPage() {
     const raw = Array.isArray(chasQuery.data) ? chasQuery.data : [];
     return raw.map((row) => ({
       value: row.id,
-      label: row.cha_name || row.name || row.id,
+      label: `${row.cha_name || row.name || "Unnamed CHA"} — ${row.address || "No address on file"}`,
     }));
   }, [chasQuery.data]);
 
@@ -1372,20 +1373,24 @@ export default function CSNTrackerPage() {
                                 <TrackerSection eyebrow="Logistics" title="Transport, LR, and post-clearance handoff">
                                   <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
                                     <EditField label="Transporter" rowId={row.id} fieldName="transporter_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <select value={draft.transporter_id ?? ""} onChange={(event) => patchDraft("transporter_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
-                                        <option value="">Select transporter</option>
-                                        {transporterOptions.map((option) => (
-                                          <option key={option.value} value={option.value}>{option.label}</option>
-                                        ))}
-                                      </select>
+                                      <ErpComboboxField
+                                        value={draft.transporter_id ?? ""}
+                                        onChange={(value) => patchDraft("transporter_id", value)}
+                                        options={transporterOptions}
+                                        blankLabel="Select transporter"
+                                        placeholder="Select transporter"
+                                        inputClassName="h-[26px] px-2 py-0 text-[11px]"
+                                      />
                                     </EditField>
                                     <EditField label="CHA" rowId={row.id} fieldName="cha_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <select value={draft.cha_id ?? ""} onChange={(event) => patchDraft("cha_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
-                                        <option value="">Select CHA</option>
-                                        {chaOptions.map((option) => (
-                                          <option key={option.value} value={option.value}>{option.label}</option>
-                                        ))}
-                                      </select>
+                                      <ErpComboboxField
+                                        value={draft.cha_id ?? ""}
+                                        onChange={(value) => patchDraft("cha_id", value)}
+                                        options={chaOptions}
+                                        blankLabel="Select CHA"
+                                        placeholder="Select CHA"
+                                        inputClassName="h-[26px] px-2 py-0 text-[11px]"
+                                      />
                                     </EditField>
                                     <EditField label="CHA Name (if not listed)" rowId={row.id} fieldName="cha_name_freetext" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input
