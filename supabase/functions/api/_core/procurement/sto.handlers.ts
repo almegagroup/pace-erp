@@ -643,8 +643,8 @@ async function buildCsnForInterPlantStoLine(input: {
     csn_type: input.sendingCompanyHasGst ? "DOMESTIC" : "IMPORT",
     delivery_type: DELIVERY_TYPES.has(input.deliveryType) ? input.deliveryType : "STANDARD",
     status: "ORD",
-    company_id: input.sto.sending_company_id,
-    consignee_company_id: input.sto.receiving_company_id,
+    company_id: input.sto.receiving_company_id,
+    consignee_company_id: null,
     vendor_id: input.sto.sending_company_id,
     material_id: input.line.material_id,
     po_id: null,
@@ -879,6 +879,9 @@ async function buildConsignmentStoFromSubCsns(input: {
       .from("consignment_note")
       .update({
         sto_id: sto.id,
+        company_id: input.receivingCompanyId,
+        vendor_id: input.sendingCompanyId,
+        consignee_company_id: null,
         last_updated_at: new Date().toISOString(),
         last_updated_by: input.actionedBy,
       })
