@@ -1249,6 +1249,7 @@ export async function getCSNHandler(req: Request, ctx: ProcurementHandlerContext
       },
     }, ctx.request_id, req);
   } catch (err) {
+    console.error("CSN_DETAIL_HANDLER_ERROR", err instanceof Error ? err.stack || err.message : JSON.stringify(err));
     const code = (err as Error).message || "PROCUREMENT_CSN_DETAIL_FAILED";
     const status = code === "PROCUREMENT_CSN_NOT_FOUND" ? 404 : 500;
     return procurementErrorResponse(req, ctx, code, status, "CSN detail failed");
