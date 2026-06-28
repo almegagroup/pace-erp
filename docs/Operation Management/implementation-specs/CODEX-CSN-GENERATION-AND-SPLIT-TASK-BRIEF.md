@@ -713,3 +713,50 @@ Since `company_id` = sending company and `consignee_company_id` = receiving comp
 7. Same eslint/build/deno-check/structural-integrity checks as prior parts.
 
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
+
+---
+
+## Part 15 — Company/Vendor must flip to the receiving/sending side once a CSN becomes STO-linked (corrects Part 14.1's field mapping)
+
+Business owner caught an inconsistency in Part 14.1: comparing against the PO case (`Company` = buyer/Almega, `Vendor` = real supplier/AADLER), the same roles must hold for any STO-linked CSN — **`Vendor` is always whoever is the *source* of the goods, `Company` is always whoever is *receiving/procuring* them.** Locked lifecycle:
+
+| Stage | `company_id` | `vendor_id` | `consignee_company_id` |
+|---|---|---|---|
+| Mother CSN (PO-driven, not yet split) | Mother/owning company | the real PO vendor | `NULL` |
+| Sub-CSN created (not yet STO-linked) | Mother/owning company (inherited, unchanged) | the real PO vendor (inherited, unchanged) | intended destination company (informational only — transfer hasn't happened yet) |
+| Sub-CSN becomes STO-linked (`sto_id` set) — **CONSIGNMENT_DISTRIBUTION** | **flips to the receiving company** (`stock_transfer_order.receiving_company_id`) | **flips to the sending/mother company's id** (`stock_transfer_order.sending_company_id`) | **cleared to `NULL`** (no longer meaningful — `company_id` itself now carries the destination) |
+| INTER_PLANT CSN (created directly at STO creation, already STO-linked from birth — corrects Part 14.1) | `sto.receiving_company_id` (was wrongly `sending_company_id` in Part 14.1) | `sto.sending_company_id` (unchanged, this part of 14.1 was already correct) | `NULL` (was wrongly `sto.receiving_company_id` in Part 14.1) |
+
+This makes `Allotted Company` purely a **pre-STO-link planning field** — it shows the intended destination while a sub-CSN is still unlinked, and becomes irrelevant (cleared) the moment the real transfer (STO) exists, because at that point `Company` itself directly tells you the destination.
+
+### 15.1 — Fix `buildConsignmentStoFromSubCsns` (CONSIGNMENT_DISTRIBUTION linking)
+
+In `sto.handlers.ts`, the per-CSN update at the end of the loop (~line 877-885) currently only sets `sto_id`:
+```ts
+.update({
+  sto_id: sto.id,
+  last_updated_at: new Date().toISOString(),
+  last_updated_by: input.actionedBy,
+})
+```
+Change it to also flip `company_id` to `input.receivingCompanyId`, `vendor_id` to `input.sendingCompanyId`, and `consignee_company_id` to `null`. The mother CSN itself is untouched (only the sub-CSN row being linked changes) — confirm this doesn't break the existing Part 5.5 rule that linking never touches CSN `status`, and confirm `mother_csn_id` is still never cleared (Part 5.1's persistence rule).
+
+### 15.2 — Fix `createCsnForSto`'s INTER_PLANT mapping (corrects Part 14.1)
+
+In `buildCsnForInterPlantStoLine` (`sto.handlers.ts`), swap:
+- `company_id`: was `input.sto.sending_company_id` → change to `input.sto.receiving_company_id`.
+- `vendor_id`: stays `input.sto.sending_company_id` (this was already correct).
+- `consignee_company_id`: was `input.sto.receiving_company_id` → change to `null` (remove this field from the insert entirely, or explicitly set `null`).
+
+### 15.3 — Data correction (already applied directly by Claude, dev DB confirmed)
+
+The one existing INTER_PLANT-originated CSN row (`csn_number = '000005'`, linked to STO `ASCSTO2627-0002`, Almega → Jayashree) was already corrected directly in the dev DB to match the table above: `company_id` is now Jayashree's id, `vendor_id` is now Almega's id, `consignee_company_id` is now `NULL`. No further data fix needed — just make sure the code changes in 15.1/15.2 don't re-break this row on any future update to this STO/CSN.
+
+### Verification checklist (Part 15)
+1. Create a new INTER_PLANT STO and confirm the auto-created CSN shows `Company` = receiving company, `Vendor` = sending company, `Allotted Company` = blank — matching the existing dev-DB-corrected `CSN-000005` example.
+2. Create a Sub-CSN from a PO-driven mother CSN, set an Allotted Company, confirm `Company` still shows the mother/owning company while unlinked.
+3. Link that sub-CSN to a `CONSIGNMENT_DISTRIBUTION` STO and confirm `Company` flips to the receiving company, `Vendor` flips to the sending/mother company, and `Allotted Company` clears to blank — same end-state as the INTER_PLANT case.
+4. Confirm CSN `status` and `mother_csn_id` are unaffected by the link (regression check against Part 5.5/5.1).
+5. Same eslint/build/deno-check/structural-integrity checks as prior parts.
+
+Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
