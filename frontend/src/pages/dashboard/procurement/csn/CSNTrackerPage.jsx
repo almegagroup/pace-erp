@@ -1183,7 +1183,7 @@ export default function CSNTrackerPage() {
                                       </select>
                                     </EditField>
                                     <EditField label="Indent Number" rowId={row.id} fieldName="vendor_indent_number" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                                      <input value={draft.vendor_indent_number ?? ""} onChange={(event) => patchDraft("vendor_indent_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500" />
+                                      <input disabled={!draft.indent_required} value={draft.vendor_indent_number ?? ""} onChange={(event) => patchDraft("vendor_indent_number", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" />
                                     </EditField>
                                     <EditField label="Has Rebate" rowId={row.id} fieldName="has_rebate" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <select value={draft.has_rebate ? "YES" : "NO"} onChange={(event) => patchDraft("has_rebate", event.target.value === "YES")} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500">
