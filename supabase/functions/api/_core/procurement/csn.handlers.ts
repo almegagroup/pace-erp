@@ -55,6 +55,7 @@ const TRACKER_INLINE_FIELDS = new Set([
   "lr_number_port_to_plant",
   "transporter_id",
   "domestic_transporter_id",
+  "cha_id",
   "vessel_name",
   "voyage_number",
   "bl_number",
@@ -119,6 +120,8 @@ const MANUAL_EDITABLE_FIELDS = [
   "ata_at_port",
   "transporter_id",
   "transporter_name_freetext",
+  "cha_id",
+  "cha_name_freetext",
   "lr_date",
   "lr_number",
   "gate_entry_id",
@@ -826,12 +829,13 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     ...rows.map((row) => toTrimmedString(row.transporter_id)),
     ...rows.map((row) => toTrimmedString(row.domestic_transporter_id)),
   ].filter(Boolean))];
+  const chaIds = [...new Set(rows.map((row) => toTrimmedString(row.cha_id)).filter(Boolean))];
   const companyIds = [...new Set([
     ...rows.map((row) => toTrimmedString(row.company_id)),
     ...rows.map((row) => toTrimmedString(row.consignee_company_id)),
   ].filter(Boolean))];
 
-  const [poResult, stoResult, motherResult, vendorResult, materialResult, transporterResult, paymentTermResult, portResult, companyResult, poLineResult, stoLineResult, poLineCsnResult, gateEntryResult, grnResult, materialGroupOptions] = await Promise.all([
+  const [poResult, stoResult, motherResult, vendorResult, materialResult, transporterResult, chaResult, paymentTermResult, portResult, companyResult, poLineResult, stoLineResult, poLineCsnResult, gateEntryResult, grnResult, materialGroupOptions] = await Promise.all([
     poIds.length
       ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, po_number, po_date, expected_delivery_date, delivery_type").in("id", poIds)
       : Promise.resolve({ data: [], error: null }),
@@ -849,6 +853,9 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       : Promise.resolve({ data: [], error: null }),
     transporterIds.length
       ? serviceRoleClient.schema("erp_master").from("transporter_master").select("id, transporter_name").in("id", transporterIds)
+      : Promise.resolve({ data: [], error: null }),
+    chaIds.length
+      ? serviceRoleClient.schema("erp_master").from("cha_master").select("id, cha_name").in("id", chaIds)
       : Promise.resolve({ data: [], error: null }),
     paymentTermIds.length
       ? serviceRoleClient
@@ -895,12 +902,13 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
 
   if (
     poResult.error || stoResult.error || motherResult.error || vendorResult.error || materialResult.error || transporterResult.error
+    || chaResult.error
     || paymentTermResult.error || portResult.error || companyResult.error
     || poLineResult.error || stoLineResult.error || poLineCsnResult.error || gateEntryResult.error || grnResult.error
   ) {
     console.error("CSN_TRACKER_ENRICH_FAILED", JSON.stringify({
       po: poResult.error, sto: stoResult.error, mother: motherResult.error, vendor: vendorResult.error, material: materialResult.error,
-      transporter: transporterResult.error, paymentTerm: paymentTermResult.error, port: portResult.error,
+      transporter: transporterResult.error, cha: chaResult.error, paymentTerm: paymentTermResult.error, port: portResult.error,
       company: companyResult.error, poLine: poLineResult.error, stoLine: stoLineResult.error, poLineCsns: poLineCsnResult.error,
       gateEntry: gateEntryResult.error, grn: grnResult.error,
     }));
@@ -913,6 +921,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   const vendorMap = new Map((vendorResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const materialMap = new Map((materialResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const transporterMap = new Map((transporterResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const chaMap = new Map((chaResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const paymentTermMap = new Map((paymentTermResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const portMap = new Map((portResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const companyMap = new Map((companyResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
@@ -949,6 +958,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     const transporter = transporterMap.get(
       toTrimmedString(row.transporter_id) || toTrimmedString(row.domestic_transporter_id),
     ) as Record<string, unknown> | undefined;
+    const cha = chaMap.get(toTrimmedString(row.cha_id)) as Record<string, unknown> | undefined;
     const paymentTerm = paymentTermMap.get(toTrimmedString(row.payment_term_id)) as Record<string, unknown> | undefined;
     const referenceType = paymentTerm?.reference_date_type as Record<string, unknown> | undefined;
     const dischargePort = portMap.get(toTrimmedString(row.port_of_discharge_id)) as Record<string, unknown> | undefined;
@@ -1017,6 +1027,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       currency_code: toTrimmedString(poLine?.currency_code) || toTrimmedString(stoLine?.currency_code) || toTrimmedString(stoLine?.transfer_price_currency) || null,
       balance_qty: balanceQty,
       transporter_name: transporter?.transporter_name ?? row.transporter_name_freetext ?? row.domestic_transporter_freetext ?? null,
+      cha_name: cha?.cha_name ?? row.cha_name_freetext ?? null,
       payment_term_name: paymentTerm?.name ?? null,
       payment_term_reference_type_code: referenceType?.code ?? null,
       payment_term_credit_days: paymentTerm?.credit_days ?? null,

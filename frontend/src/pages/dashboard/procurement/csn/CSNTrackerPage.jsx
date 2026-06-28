@@ -17,6 +17,7 @@ import {
   getAllAlertCounts,
   getCSNFieldHistory,
   getCSNTracker,
+  listCHAs,
   listCSNTrackerLayouts,
   listPorts,
   listTransporters,
@@ -60,6 +61,8 @@ const TRACKER_FIELDS = [
   "ata_at_port",
   "transporter_id",
   "transporter_name_freetext",
+  "cha_id",
+  "cha_name_freetext",
   "lr_date",
   "lr_number",
   "gate_entry_id",
@@ -227,6 +230,7 @@ function buildColumnDefs() {
     { key: "po_uom_code", label: "Order UOM", width: "100px" },
     { key: "po_rate", label: "PO Rate", width: "100px" },
     { key: "currency_code", label: "Currency", width: "90px" },
+    { key: "cha_name", label: "CHA", width: "160px" },
     { key: "indent_required", label: "Indent?", width: "90px" },
     { key: "vendor_indent_number", label: "Indent Number", width: "140px" },
     { key: "has_rebate", label: "Has Rebate", width: "100px" },
@@ -543,6 +547,10 @@ export default function CSNTrackerPage() {
     queryKey: ["csn-transporters"],
     queryFn: () => listTransporters({ is_active: "true", limit: 500 }),
   });
+  const chasQuery = useQuery({
+    queryKey: ["csn-chas"],
+    queryFn: () => listCHAs({ is_active: true, limit: 500 }),
+  });
 
   const dischargePortsQuery = useQuery({
     queryKey: ["csn-discharge-ports"],
@@ -598,6 +606,14 @@ export default function CSNTrackerPage() {
       label: row.transporter_name || row.name || row.id,
     }));
   }, [transportersQuery.data]);
+
+  const chaOptions = useMemo(() => {
+    const raw = Array.isArray(chasQuery.data) ? chasQuery.data : [];
+    return raw.map((row) => ({
+      value: row.id,
+      label: row.cha_name || row.name || row.id,
+    }));
+  }, [chasQuery.data]);
 
   const portOptions = useMemo(() => {
     const raw = Array.isArray(dischargePortsQuery.data) ? dischargePortsQuery.data : [];
@@ -1362,6 +1378,22 @@ export default function CSNTrackerPage() {
                                           <option key={option.value} value={option.value}>{option.label}</option>
                                         ))}
                                       </select>
+                                    </EditField>
+                                    <EditField label="CHA" rowId={row.id} fieldName="cha_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <select value={draft.cha_id ?? ""} onChange={(event) => patchDraft("cha_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500">
+                                        <option value="">Select CHA</option>
+                                        {chaOptions.map((option) => (
+                                          <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                    </EditField>
+                                    <EditField label="CHA Name (if not listed)" rowId={row.id} fieldName="cha_name_freetext" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                                      <input
+                                        value={draft.cha_name_freetext ?? ""}
+                                        onChange={(event) => patchDraft("cha_name_freetext", event.target.value)}
+                                        disabled={Boolean(draft.cha_id)}
+                                        className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-400"
+                                      />
                                     </EditField>
                                     <EditField label="LR Date" rowId={row.id} fieldName="lr_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                                       <input type="date" value={draft.lr_date ?? ""} onChange={(event) => patchDraft("lr_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
