@@ -856,3 +856,25 @@ In `transporterOptions`/`chaOptions` (the `useMemo` blocks building dropdown opt
 4. Same eslint/build/deno-check/structural-integrity checks as prior parts.
 
 Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
+
+---
+
+## Part 19 — CSN Tracker's CHA dropdown must be scoped to the CSN's own company
+
+`erp_master.cha_company_map` already exists specifically to restrict which companies may use which CHA (managed via `CHAMasterPage.jsx`'s "Manage" → Company Mapping UI, backed by `mapChaToCompanyHandler`/`listChaCompanyMapsHandler`). But `listCHAsHandler` (`l2_masters.handlers.ts` ~line 1441-1456), which the Tracker's CHA dropdown (Part 17) calls, has **no company filter at all** — it returns every active CHA system-wide regardless of mapping, making the company-mapping feature meaningless from the Tracker's point of view.
+
+### 19.1 — Add company scoping to `listCHAsHandler`
+
+Mirror the exact pattern already used for company-scoped vendor listing in `po.handlers.ts` (~line 1045-1080, the vendor/material filter-options handler that queries `vendor_company_map`): accept an optional `company_id` query param in `listCHAsHandler`. When present, first query `cha_company_map` for `company_id = <param> AND active = true` to get the allowed `cha_id` list, then filter `cha_master` to `.in("id", allowedChaIds)`. When `company_id` is absent, keep today's unfiltered behavior (so the CHA Master admin page's own CHA list, which has no company context, is unaffected).
+
+### 19.2 — Tracker must pass `company_id` when fetching CHA options
+
+In `CSNTrackerPage.jsx`'s `chasQuery` (added in Part 17, ~line 550), pass the CSN row's own `company_id` (use the **expanded row's own `company_id`**, since a Sub-CSN/STO-originated CSN's company can differ from the Tracker's top-level company filter per Part 15's flip logic). Re-fetch/re-key the query by company so switching between expanded rows of different companies shows the correct scoped CHA list for each.
+
+### Verification checklist (Part 19)
+1. Confirm `listCHAsHandler` with `company_id` set only returns CHAs mapped+active for that company.
+2. Confirm `listCHAsHandler` with no `company_id` (e.g. from the CHA Master admin page) is unaffected — still returns all active CHAs.
+3. Confirm the Tracker's CHA dropdown only shows CHAs mapped to the expanded row's own company.
+4. Same eslint/build/deno-check/structural-integrity checks as prior parts.
+
+Commit message should end with `Co-Authored-By: Codex <noreply@openai.com>`.
