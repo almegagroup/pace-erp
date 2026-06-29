@@ -548,11 +548,6 @@ export default function CSNTrackerPage() {
     queryKey: ["csn-transporters"],
     queryFn: () => listTransporters({ is_active: "true", limit: 500 }),
   });
-  const chasQuery = useQuery({
-    queryKey: ["csn-chas"],
-    queryFn: () => listCHAs({ is_active: true, limit: 500 }),
-  });
-
   const dischargePortsQuery = useQuery({
     queryKey: ["csn-discharge-ports"],
     queryFn: () => listPorts({ is_active: "true", port_role: "DISCHARGE" }),
@@ -571,6 +566,15 @@ export default function CSNTrackerPage() {
     const baseRows = Array.isArray(trackerQuery.data?.data) ? trackerQuery.data.data : [];
     return baseRows.map((row) => ({ ...row, ...computeDerived(row) }));
   }, [trackerQuery.data]);
+  const expandedRowCompanyId = useMemo(
+    () => rows.find((row) => row.id === expandedRowId)?.company_id || "",
+    [expandedRowId, rows]
+  );
+  const chasQuery = useQuery({
+    queryKey: ["csn-chas", expandedRowCompanyId || ""],
+    queryFn: () => listCHAs({ is_active: true, limit: 500, company_id: expandedRowCompanyId || undefined }),
+    enabled: Boolean(expandedRowCompanyId),
+  });
 
   const filteredRows = useMemo(() => {
     if (!debouncedSearch) {

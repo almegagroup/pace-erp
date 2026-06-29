@@ -1442,10 +1442,32 @@ export async function listCHAsHandler(req: Request, ctx: ProcurementHandlerConte
   try {
     const url = new URL(req.url);
     const activeParam = url.searchParams.get("is_active");
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
+    let allowedChaIds: string[] | null = null;
+    if (companyId) {
+      const { data: companyMapData, error: companyMapError } = await serviceRoleClient
+        .schema("erp_master")
+        .from("cha_company_map")
+        .select("cha_id")
+        .eq("company_id", companyId)
+        .eq("active", true);
+      if (companyMapError) {
+        throw new Error("PROCUREMENT_CHA_LIST_FAILED");
+      }
+      allowedChaIds = [...new Set(((companyMapData as Record<string, unknown>[] | null) ?? [])
+        .map((row) => toTrimmedString(row.cha_id))
+        .filter(Boolean))];
+      if (allowedChaIds.length === 0) {
+        return okResponse({ data: [] }, ctx.request_id, req);
+      }
+    }
     let query = serviceRoleClient.schema("erp_master").from("cha_master").select("*").order("cha_name", { ascending: true });
     if (activeParam === "all") { /* no filter */ }
     else if (activeParam === "false") query = query.eq("active", false);
     else query = query.eq("active", true);
+    if (allowedChaIds) {
+      query = query.in("id", allowedChaIds);
+    }
     const { data, error } = await query;
     if (error) throw new Error("PROCUREMENT_CHA_LIST_FAILED");
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
