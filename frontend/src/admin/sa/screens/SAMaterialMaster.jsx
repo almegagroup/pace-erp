@@ -34,13 +34,14 @@ import {
 import { useMaterialTypeCategoriesQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 
 /* ─── constants ─────────────────────────────────────────────────────────── */
-const MATERIAL_TYPES = ["RM", "PM", "INT", "FG", "TRA", "CONS"];
+const MATERIAL_TYPES = ["RM", "PM", "INT", "SFG", "FG", "TRA", "CONS"];
 const PAGE_SIZE = 50;
 
 const TYPE_LABEL = {
   RM: "Raw Material",
   PM: "Packaging Material",
   INT: "Intermediate",
+  SFG: "Semi-Finished Goods",
   FG: "Finished Good",
   TRA: "Trading",
   CONS: "Consumable",

@@ -15,7 +15,7 @@ import { assertManagerOrSARole, assertOmSaContext } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
-const ALLOWED_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "FG", "TRA", "CONS"]);
+const ALLOWED_MATERIAL_TYPES = new Set(["RM", "PM", "INT", "SFG", "FG", "TRA", "CONS"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));

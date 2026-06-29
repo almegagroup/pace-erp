@@ -18,7 +18,7 @@ import {
 } from "../procurementApi.js";
 
 const STO_TYPE_OPTIONS = ["CONSIGNMENT_DISTRIBUTION", "INTER_PLANT"];
-const MATERIAL_TYPES = ["RM", "PM", "INT", "FG", "TRA", "CONS"];
+const MATERIAL_TYPES = ["RM", "PM", "INT", "SFG", "FG", "TRA", "CONS"];
 const DELIVERY_TYPE_OPTIONS = ["STANDARD", "BULK", "TANKER"];
 const CURRENCY_OPTIONS = ["INR", "USD"];
 const FREIGHT_TERM_OPTIONS = [

@@ -103,7 +103,7 @@ export default function MaterialListPage() {
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
-                {["RM", "PM", "INT", "FG", "TRA", "CONS"].map((entry) => (
+                {["RM", "PM", "INT", "SFG", "FG", "TRA", "CONS"].map((entry) => (
                   <option key={entry} value={entry}>
                     {entry}
                   </option>

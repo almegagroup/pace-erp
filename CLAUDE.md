@@ -373,11 +373,20 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - Individual RM/PM reversal → P262 from COR6 equivalent
 - Shop floor print → not required
 
+**104.7 — Costing Scenario Discovery (2026-06-29 — NOT LOCKED):**
+- Core principle (directional): Stock Layer always shows 100% physical actual; Reco Layer (AP recognition/billing) entirely separate, never adjusts stock
+- Scenario 3 (unapproved deviation mixed into current dispatch, e.g. mistake+correction inflating output) — OPEN, no resolution. Needs Accounts/Commercial + possibly Asian Paints alignment
+- Scenario 4 (small separable excess, e.g. 5-50kg) — tentative: deferred recognition via Salvage stock, not a loss
+- RM-line approval status (Approved/Unapproved per deviation) — NOT rule-based, explicit manual tracking, workflow undecided
+- Cross-PO RM/PM derivation (Process PO batch → multiple Packing POs) — resolved: ratio of qty drawn ÷ batch total
+- See feasibility doc Section 104.7 for full detail — full costing session still required
+
 **⚠️ PENDING (next session):**
 - P261 issue location override — not yet confirmed by user
 - S003 → F003 transfer trigger — who, when (not yet discussed)
 - 83.4 Process PO / Packing PO header + line fields (not yet discussed)
 - 83.6, 83.8–83.12 review and lock
+- Section 104 dedicated costing session (see 104.7 open items above)
 
 ---
 

@@ -6994,6 +6994,21 @@ Dispatch directly from F003
 
 **Scope:** Admix only — Hypershot and IWC use Fixed BOM (separate design). Stroke Master stores formulation templates at Prodshade level — no packing information.
 
+**Material Type — SFG added (LOCKED — 2026-06-29, applied to dev):**
+
+Material Type list extended from `RM, PM, INT, FG, TRA, CONS` to add **SFG (Semi-Finished Goods)** — represents Process PO bulk output (Prodshade + Batch, pre-packing) before Packing PO converts it into full FG SKU. Migration `20260629181941_gate27_27_1_add_sfg_material_type.sql` applied to dev (constraint + `material_code_sequence` seed row `SFG-00001...`). Backend (`material_type_category.handlers.ts`) and frontend (`SAMaterialMaster.jsx`, `MaterialListPage.jsx`, `StoCreateFormPage.jsx`) updated to match.
+
+**Page / TX Code (LOCKED — 2026-06-29):**
+
+| Field | Value |
+|---|---|
+| Page Name | Stroke Master |
+| menu_code | `PROD_STROKE_MASTER` |
+| tx_code | `PR01` (first use of new `PR` — Production — prefix; verified free against live `erp_menu.menu_master` registry) |
+| Route | `/dashboard/om/production/stroke-master` |
+
+> All subsequent Gate-27 Production pages (Process PO, Packing PO, etc.) continue the `PR` series — `PR02`, `PR03`, ...
+
 ---
 
 #### Master Header Fields
@@ -7003,6 +7018,7 @@ Dispatch directly from F003
 | Prodshade | Formulation identity — Product + Shade (no pack code) |
 | Description | Free text description of the stroke |
 | Stroke Number | User-entered — manually assigned. Purely numeric only (no letters or special characters). |
+| PO Type | Which Process PO type this Stroke applies to (MTO / HPS / MTS / INT / MTEST) — added 2026-06-29 |
 | Created By | System-captured — who created the entry |
 | Created Date | System-captured — when created |
 
@@ -7021,6 +7037,8 @@ Dispatch directly from F003
 - **Prodshade + Stroke Number** combo must be unique — system blocks duplicate combination
 - Sum of all RM Dosage % **must equal exactly 100** — system blocks save if not 100
 - At Process PO creation: Standard Qty = Dosage% × Batch Size (order qty)
+
+**Governance (confirmed 2026-06-29):** SA never creates or edits formulation/BOM data. Stroke Master creation is exclusively QA's responsibility, per company — each company's QA maintains its own Strokes.
 
 ---
 
@@ -7366,6 +7384,35 @@ QA matches entered actuals against physical batch paper
 | New item add | ✅ Allowed |
 | Wrong formulation discovered | QA does NOT save → instructs user to prune Final → prune Standard → create new PO |
 | Stock movement | ✅ Happens here — P261 (RM consumed) + PM consumed + P231 (FG receipt) |
+
+---
+
+#### Final / Verify Line Table — Column Design (DRAFT — discussion in progress, 2026-06-29 — NOT LOCKED)
+
+Single line table used across Final and Verify (column set fixed, activation differs by stage):
+
+| # | Column | Final (Production) | Verify (QA) |
+|---|---|---|---|
+| 1 | Material Code | Read-only | Read-only |
+| 2 | Material Description | Read-only | Read-only |
+| 3 | Batch Number | FG line: actual generated Batch No. RM/PM line: placeholder (populates once RM/PM batch management is enabled) | Same |
+| 4 | Material Type | RM / PM / FG | Same |
+| 5 | UoM | Read-only | Read-only |
+| 6 | Standard Qty | Read-only reference | Read-only reference |
+| 7 | Actual Quantity | ✅ Editable (Production enters) | ✅ Editable (QA can correct) |
+| 8 | **Approved Deviation?** | ❌ Inactive | ✅ Active — QA marks Yes / No / N-A |
+| 9 | **Deviation Qty** | ❌ Inactive (not shown/calculated yet) | ✅ Active — auto-calculated (Actual − Standard) |
+| 10 | Storage Location | Read-only (segment default, override at Standard) | Read-only |
+| 11 | Movement Type | Read-only (e.g. 261, 231) | Read-only |
+| 12 | Cost Center | Read-only | Read-only |
+
+**Rules:**
+- `Deviation Qty` = Actual Qty − Standard Qty per line (system-calculated, neutral fact — no judgment).
+- `Approved Deviation?` is a per-line flag, **not** a whole-batch flag. A batch can have multiple lines, some Approved (e.g. recurring Caustic/Water trade-off — known, pre-approved, normal), some Not Approved (e.g. an ad-hoc correction material outside the formulation — see 104.7 Scenario 3/4).
+- No deviation on a line → `Approved Deviation?` = N-A, `Deviation Qty` = 0.
+- Marking is QA's responsibility (judgment call), entered at Verify only — Production never marks this, Production only enters Actual Quantity at Final.
+- Goods Issue (261) and FG Receipt (231/231-equivalent) post the **full Actual Quantity** regardless of the Approved Deviation flag — Stock is never filtered or held back based on this flag (see 104.7 core principle: Stock Layer = 100% physical actual, always).
+- `Approved Deviation? = No` rows are what feed the Unrecognized Variance tracking discussed in **Section 104.7** — not yet a locked settlement mechanism, see that section's open items.
 
 ---
 
@@ -12229,6 +12276,77 @@ The following topics need formal discovery and locking:
 - [ ] IWC and Powder costing — same framework or separate?
 - [ ] Financial year close — WAR reset rules
 - [ ] AP rate disputes — system handling
+
+---
+
+### 104.7 — Production Scenario Discovery (2026-06-29 session)
+
+**Status:** 🔴 NOT LOCKED — Discovery/concept notes only. These scenarios surfaced real production cases that the costing/Reco design must eventually handle, but none of the mechanisms below are approved for implementation yet. A formal decision session (with Accounts/Commercial input, and possibly Asian Paints alignment) is required before locking.
+
+---
+
+**Core principle discussed (directional, not locked):**
+
+```
+Stock Layer  — must always reflect 100% physical actual (RM consumed, FG produced).
+               Never suppressed or adjusted to match what AP will recognize.
+
+Reco Layer   — entirely separate from Stock. Only the AP-recognized/approved portion
+               flows into Reco. Stock postings are never modified to make this layer balance.
+```
+
+If this separation holds, Stock integrity is never compromised by Reco/billing disputes — but the mechanics of the Reco Layer itself (below) are open.
+
+---
+
+**Scenario 1 — RM substitution within approved formulation tolerance**
+
+Caustic/Water trade off against each other inside the same formulation (e.g. Caustic +50 KG, Water −50 KG, total output unchanged). Treated as **pre-approved, recurring, normal** — no Reco issue, because total output = order qty = dispatch qty.
+
+**Scenario 1b — Split dispatch of a single batch**
+
+One batch/Packing PO (e.g. 43 barrels) dispatched across multiple invoices/months (e.g. 20 + 23, or partial with balance pending). RM/PM qty must be allocated to each dispatch **proportionally** (dispatch qty ÷ total batch qty) for Reco recognition timing — this allocation is Reco-layer only, does not touch Stock. Un-dispatched portion stays "Pending Recognition."
+
+**Scenario 2 — Production batch larger than order qty**
+
+10,000 KG batch produced against a 9,890 KG order. Balance (110 KG) becomes a separate Balance Packing PO (per 83.14 mechanism, no FO link), proportionally carrying its own share of RM deviation. Same proportional allocation rule as 1b applies, nested: Batch → Packing PO → Dispatch.
+
+**Scenario 3 — Unapproved/non-separable deviation (OPEN PROBLEM)**
+
+A mistake in RM dosing gets "corrected" ad-hoc with additional materials outside the approved formulation pattern, inflating output (e.g. planned 9,890 KG batch becomes 11,000 KG actual). The deviation is **mixed into the FG itself** — not separable from what's being dispatched right now (unlike Scenario 2's clean balance).
+
+- Asian will not recognize this deviation, even proportionally.
+- PACE cannot simply absorb it as a write-off either (explicitly rejected by business owner).
+- The unresolved variance must stay tagged to the **Batch Number**, not settled once — because future dispatches drawing from the same batch (e.g. balance portion sold against a later FO) carry the same unresolved tag and must be re-evaluated each time.
+- **No resolution agreed.** Requires Accounts/Commercial policy decision, possibly direct alignment with Asian Paints.
+
+**Scenario 4 — Small separable excess (salvage)**
+
+Minor over-dosing (e.g. extra water → 5 KG or 50 KG excess output) that is NOT mixed into today's dispatch — it can be physically held back and blended into a future batch of the same Prodshade.
+
+- Tentative direction: this is **not a loss**, just **deferred recognition** — held as a Salvage/Excess stock concept (qty + source batch reference), recognized later when blended into a batch that gets dispatched. Same proportional Reco mechanism applies at that future point.
+- Unlike Scenario 3, this is resolvable because the excess is separable from the current dispatch.
+- Salvage stock mechanism itself (stock type, blending into future Stroke/formulation, valuation) is **not designed yet**.
+
+**RM-line-level approval status (not a fixed rule):**
+
+Whether a given RM deviation (qty change on an existing line, or an entirely new line added) is "Approved" or "Unapproved" by Asian is **not determined by any system rule** (e.g. "inside formulation = approved, outside = not"). It must be tracked as an **explicit, case-by-case approval status** per deviation — workflow (who marks it, at what stage) not yet decided.
+
+**Cross-PO derivation (resolved — not a gap):**
+
+Since Process PO and Packing PO are separate documents (per 83.4 Option A — link via Batch Number, not an explicit link field), a concern was raised about how to derive per-dispatch RM/PM allocation. Resolved: each Packing PO records how much bulk qty it drew from a given Process PO's Batch — that ratio (Packing PO qty ÷ Process PO batch total) is sufficient to derive proportional RM/PM allocation, even across separate documents. Dispatch-level sub-allocation then applies within the Packing PO's own qty, same mechanism as Scenario 1b.
+
+**Multi-product invoices (resolved — not a gap):**
+
+If one invoice bundles dispatches from multiple Packing POs (different products/batches), this does not add complexity — RM/PM Recognition is computed at Packing PO + Dispatch level, before invoice grouping. Invoice is a billing-level aggregation only.
+
+---
+
+**⚠️ Explicitly NOT locked — production cannot go live on these scenarios until decided:**
+- [ ] Scenario 3 — final settlement/write-off policy for unapproved, non-separable variance
+- [ ] RM-line approval status — who marks it, at what production stage, what UI
+- [ ] Salvage/Excess stock mechanism — stock type, blending workflow, valuation
+- [ ] Whether "Stock Layer vs Reco Layer" separation (core principle above) survives Accounts team review
 
 ---
 
