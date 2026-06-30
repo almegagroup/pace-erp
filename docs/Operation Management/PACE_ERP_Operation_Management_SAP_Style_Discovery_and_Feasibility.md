@@ -6834,7 +6834,22 @@ New FO arrives for same production?
 **FO link and Stock Location (LOCKED — 2026-06-11):**
 - FO → Packing PO link is location-independent
 - Link can be done whether FG stock is in S003 (Shop Floor) or F003 (FG Store)
-- F003 stock record carries: Material + Batch + Packing PO ref + FO ref (NULL until linked) + Qty
+- F003 stock record carries: Material + Batch + Packing PO ref + FO ref (NULL until linked) + **Container Count** + Qty (KG)
+
+**F003 Stock Record — Container Count (LOCKED — 2026-06-30):**
+- Every F003 stock row stores both KG qty AND container count (barrel/IBC/jar/bottle count — whatever the Packing PO packed)
+- For flexible fill codes (599/000/001): container count stored from Packing PO (e.g. 10 barrels), KG qty is the actual fill total
+- For fixed fill codes (050/310/510 etc.): container count stored from Packing PO, KG qty = count × fixed fill qty
+- MMBE shows Packing PO level breakdown:
+
+| SKU | Packing PO | Batch | Container Count | KG |
+|---|---|---|---|---|
+| 6763PH57599 | PPO-001 | B-001 | 10 barrels | 2300 |
+| 6763PH57599 | PPO-002 | B-001 | 9 barrels | 2250 |
+| **Total** | | | **19 barrels** | **4550 KG** |
+
+- UOM conversion for 599/000/001 NOT stored in Material Master (fill qty is flexible, no fixed factor). Container count is transaction-level only.
+- UOM conversion for fixed fill codes (050, 310, 510 etc.) stored in Material Master UOM Conversions tab by SA (e.g. 1 Bottle = 0.05 KG, 1 Carton = 2 KG).
 - When FO is linked to Packing PO → FO ref on F003 stock record is automatically populated
 
 **Design Rule:** FO and SO are reference/linkage fields — not direct DB edits. All FO updates and FO-Packing PO link actions are tracked system actions with full audit trail (who, when, old value, new value).
@@ -6990,9 +7005,13 @@ Dispatch directly from F003
 
 ### 83.3 — Stroke Master
 
-**LOCKED — 2026-06-09**
+**LOCKED — 2026-06-09 — Scope expanded 2026-06-30**
 
-**Scope:** Admix only — Hypershot and IWC use Fixed BOM (separate design). Stroke Master stores formulation templates at Prodshade level — no packing information.
+**Scope (REVISED 2026-06-30 — supersedes the original "Admix only" lock):** Stroke Master now covers Formulation/BOM data for **all Process PO Types** — MTO, HPS, MTS, INT, MTEST. Originally locked as Admix-only with Hypershot/IWC on a separate SA-managed Fixed BOM; that split is removed.
+
+**Governance change (LOCKED — 2026-06-30):** SA will **never** create or edit Formulation/BOM data, for any Process PO Type. This is exclusively an ACL (QA) user responsibility, company-wise — same Create→Manager-Approve workflow applies uniformly across MTO/HPS/MTS/INT/MTEST. There is no separate SA-managed Fixed BOM master anymore.
+
+Stroke Master stores formulation templates at Prodshade level — no packing information.
 
 **Material Type — SFG added (LOCKED — 2026-06-29, applied to dev):**
 
@@ -7011,38 +7030,131 @@ Material Type list extended from `RM, PM, INT, FG, TRA, CONS` to add **SFG (Semi
 
 ---
 
-#### Master Header Fields
+#### Master Header Fields (LOCKED — 2026-06-30, finalized field order)
+
+**Entry order:** Material Type → PO Type → Prod → Shade → Description → Stroke Number → Base UOM → Conversion UOM → Conversion Factor → Created By/Date.
 
 | Field | Detail |
 |---|---|
-| Prodshade | Formulation identity — Product + Shade (no pack code) |
+| Material Type | Entered **first**. Only **2 options** here (not the full 7-value Material Type list): **SFG** or **INT**. Dropdown shows a description on selection. |
+| PO Type | Entered **second**, filtered by Material Type selected above: Material Type = SFG → PO Type options are MTO / HPS / MTS / MTEST. Material Type = INT → PO Type option is INT only. Dropdown shows a description of each option on selection. |
+| Prod | Product code — separate input field (not combined with Shade in the UI) |
+| Shade | Shade code — separate input field |
 | Description | Free text description of the stroke |
 | Stroke Number | User-entered — manually assigned. Purely numeric only (no letters or special characters). |
-| PO Type | Which Process PO type this Stroke applies to (MTO / HPS / MTS / INT / MTEST) — added 2026-06-29 |
+| Base UOM | e.g. KG — maps to `material_master.base_uom_code` |
+| Conversion UOM | e.g. LTR — maps to `material_uom_conversion.to_uom_code`. Needed because MTS/IWC formulation input (RM) is measured in KG but output is measured in LTR — same Stroke/BOM page is reused for Fixed BOM (HPS/MTS), so this conversion must live here. |
+| Conversion Factor | maps to `material_uom_conversion.conversion_factor` (e.g. how many KG per Litre — density-based) |
 | Created By | System-captured — who created the entry |
 | Created Date | System-captured — when created |
 
+**No separate Alt UOM 1 / Alt UOM 2 fields here** — considered and dropped as redundant with Conversion UOM/Factor. Alt UOM (`purchase_uom_code` / `issue_uom_code`) usage, if any, belongs to the Packing side (Pack Code/Packing PO), not Stroke Master.
+
+**Material Master record creation/mapping (LOCKED — 2026-06-30):**
+
+**One Material Master record per Prodshade — independent of Stroke count.** A Prodshade can have many Strokes (formulation versions); the Material Master record is created **once** per Prodshade, not once per Stroke. When entering a Prod+Shade in Stroke Master, the system checks whether a Material Master record already exists for that exact Prod+Shade combo:
+- Exists → reuse it, no new Material Master record created, the new Stroke just references the same Prodshade identity
+- Doesn't exist → create one (mapping below)
+
+When a Prod+Shade combination is entered that doesn't yet exist as a Material Master (SFG/INT) record, the system creates one with this mapping:
+
+```
+material_master.material_name   = Prod + Shade (combo)
+material_master.external_code   = Prod + Shade (combo)
+material_master.document_name   = Description (from Stroke Master header)
+material_master.pace_code       = Auto-generated (unchanged — e.g. SFG-00001)
+material_master.base_uom_code   = Base UOM (from Stroke Master header)
+material_uom_conversion row     = Base UOM → Conversion UOM, with Conversion Factor
+
+material_master.shade_code / pack_code — NOT used in this flow (left as-is, unused columns per 2026-06-30 discussion)
+```
+
 ---
 
-#### RM Lines (one row per RM)
+#### RM Lines (LOCKED — 2026-06-30, one row per ingredient)
 
-| Field | Detail |
-|---|---|
-| RM Item | Primary raw material |
-| Alternate RM(s) | Substitute material(s) — can be used if primary unavailable |
-| Dosage % | Percentage of this RM in the formulation |
+| # | Column | Detail |
+|---|---|---|
+| 1 | Material Type | **RM** or **INT** — a formulation line's ingredient can be a Raw Material or an Intermediate material (e.g. Caustic Liquid). Filters column 2. |
+| 2 | Item | Dropdown of materials matching the Material Type above, scoped to the company-mapped material list |
+| 3 | Dosage % | Percentage of this ingredient in the formulation. Applies uniformly across **all PO Types** (MTO/HPS/MTS/INT) — overrides the earlier "Dosage% for MTO, BOM qty for HPS/MTS" split. Sum of all lines **must equal exactly 100** — system blocks save if not 100. |
+| 4 | UOM | — |
+| 5 | Has Alternate? | Yes / No |
+| 6 | Material Group | Only active if column 5 = Yes. Searchable dropdown of existing groups **+ "Create Group"** inline option. Creating asks for Group Name + Description; on save it appears immediately in the dropdown and is the same underlying data shown on the **Material Group Master page (PM04 — currently mis-labeled "Material Categories", rename pending)** — i.e. `erp_master.material_category_group`. |
+| 7 | Members | Once a Group is selected/created, add Alternate Material(s) as members here — unlimited, stored as `material_category_group_member` rows. |
 
-**Dosage validation rules:**
-- Same RM **can appear more than once** in a stroke (e.g. added at different stages of production)
-- **Prodshade + Stroke Number** combo must be unique — system blocks duplicate combination
-- Sum of all RM Dosage % **must equal exactly 100** — system blocks save if not 100
+**Reused mechanism:** Alternate Material does **not** get its own new table — it reuses the existing (previously unused) `material_category_group` / `material_category_group_member` tables and the PM04 page.
+
+**Group has no "Primary" concept (LOCKED — 2026-06-30, design decision; implementation/cleanup deferred):**
+
+A Material Group is a **flat list of functionally-interchangeable materials** — no member is permanently "the primary" at the Group level. Which material is the "main" one is purely contextual to each Stroke RM Line (whatever is selected in column 2, Item), not a property of the Group itself.
+
+- **Reason this came up:** the same Group can be reused across different Strokes where a *different* material is the line's own Item each time (e.g. Stroke X uses Material A as Item with Group G1 as its alternates; Stroke Y uses Material B as Item, also pointing at G1). A single stored `is_primary` flag on the group can't represent both — it's a global flag, but "which one is primary" is per-line.
+- **Resulting rule:** when showing Alternates for a Stroke RM Line, the system displays **all Group Members except whichever material is selected as the line's own Item** — the stored `is_primary` flag on `material_category_group_member` is not used for this.
+- **Implementation note (not yet done — to action when Gate-27 implementation starts):** the `is_primary` column and its "one primary per group" partial unique index (`idx_mcgm_one_primary`) on `material_category_group_member` become vestigial under this model. Decide then whether to drop them via migration or leave unused — deferred, not blocking this design lock.
+
+**Duplicate Group detection (LOCKED — 2026-06-30):**
+
+Duplicate check is based on the **exact member set**, not any overlap/subset relationship.
+
+```
+Group 1 = {A, B, C, D}
+
+Create new group with {A, B}       → ✅ Allowed (subset, but not an exact match — different group)
+Create new group with {A, B, C}    → ✅ Allowed (different subset — different group)
+Create new group with {A, B, C, D} → ❌ Blocked — "A group with this exact combination already exists"
+```
+
+Any partial/subset combination is allowed as its own distinct Group. Only an **exact same set of members** (regardless of entry order) triggers the duplicate block.
+
+**Rules:**
+- Same RM/INT item **can appear more than once** in a stroke (e.g. added at different stages of production)
+- **Prodshade + Stroke Number** combo must be unique — system blocks duplicate combination, shows error message, will not let entry proceed until resolved
 - At Process PO creation: Standard Qty = Dosage% × Batch Size (order qty)
 
 **Governance (confirmed 2026-06-29):** SA never creates or edits formulation/BOM data. Stroke Master creation is exclusively QA's responsibility, per company — each company's QA maintains its own Strokes.
 
+**Material Group Membership = Live Reference, not a snapshot (LOCKED — 2026-06-30):**
+
+Member Add/Remove for an existing Group is only possible from the **PM04 (Material Group Master)** page — not from Stroke Master or its Approval screen (per the edit-rule table above). When a member is added/removed there, the same exact-set Duplicate Group check (above) runs again on save.
+
+Any Stroke (DRAFT or ACTIVE) that references that Group shows the Alternate list **live, as it currently stands** — not a copy taken at the time the Stroke was created or approved. This does not violate the Stroke immutability rule (83.3 Stroke Lifecycle): the Stroke's own RM/Dosage data is still locked once ACTIVE, but the Group's member list lives outside the Stroke as an external reference, so it can legitimately change over time.
+
 ---
 
 #### Approval Workflow (SAP MI07 style)
+
+**Page / TX Code (LOCKED — 2026-06-30):**
+
+| Field | Value |
+|---|---|
+| Page Name | Stroke Master Approval |
+| menu_code | `PROD_STROKE_APPROVAL` |
+| tx_code | `PR02` |
+| Route | `/dashboard/om/production/stroke-approval` |
+
+**Approval screen edit rules (LOCKED — 2026-06-30):**
+
+| Can Manager... | Allowed? |
+|---|---|
+| Edit any RM/INT line (Item, Dosage %) | ✅ Yes |
+| Save with Dosage % sum ≠ 100 | ❌ Blocked (same validation as creation) |
+| Edit/delete an existing Material Group's Members | ❌ No — membership changes are creation-time only (QA), not editable from Approval |
+| Select a different Material Group for a line | ✅ Yes |
+| Create a brand new Material Group inline | ✅ Yes (same inline create flow) |
+| Change the line's Item (Primary Material) | ✅ Yes — but doing so **resets that line's Material Group selection**; Manager must re-set Group/Alternate fields fresh |
+| Change header **Material Type** (SFG/INT) | ❌ No — locked, immutable on this screen |
+| Change header **PO Type** | ❌ No — locked, immutable on this screen |
+
+**Reject action (LOCKED — 2026-06-30 — intentional exception to the system-wide "no delete, only PRUNE" rule):**
+
+```
+Manager Reject →
+  All data QA created for this Stroke (header, RM/INT lines, dosage) is HARD DELETED from DB
+  Material Group(s) referenced are NOT deleted (shared resource, may be used by other Strokes)
+```
+
+**Why hard delete here, not PRUNE:** This Stroke never reached ACTIVE/committed status — it's still a DRAFT. PRUNE exists to preserve traceability on real, committed business documents (Process PO, Packing PO, etc.) per 83.4. A rejected DRAFT Stroke was never a real document, so preserving it as "PRUNED" would just accumulate corrupt/half-formed records with no value. This exception is scoped to Stroke Master Reject only — the PRUNE rule for committed documents elsewhere is unchanged.
 
 ```
 QA person:
@@ -7059,6 +7171,39 @@ Manager:
 After Manager Save:
   → Stroke is ACTIVE
   → Available for selection at Process PO creation
+
+  → SFG Material Master + Company Mapping (LOCKED — 2026-06-30):
+
+  Check: Does SFG Material Master exist for this Prodshade?
+
+  [NO — first company creating a Stroke for this Prodshade]
+    → Create Material Master:
+         material_type = SFG
+         material_name = Prodshade code (e.g. 6763PH53)
+         pace_code = auto-generated (SFG-00001, SFG-00002, ...)
+    → Create plant extension for this company
+
+  [YES — another company already created a Stroke for this Prodshade]
+    → Material Master unchanged (same global record)
+    → Create plant extension for this company only (if not already mapped)
+```
+
+**Material Master scope (LOCKED — 2026-06-30):**
+- SFG Material Master is **Prodshade-level, global** — one record per Prodshade regardless of how many companies produce it
+- Strokes are **company-specific** — CMP003 and CMP004 can both have Stroke 2 for 6763PH53 with entirely different RM formulations; they are separate records, each company sees only their own
+- Trigger for Material Master creation = **PR02 Approve** (not PR01 DRAFT — rejected Strokes must not create stale Material Master records)
+
+Example:
+```
+CMP003 PR02 Approve (6763PH53, Stroke 2, RM: A+B+C):
+  → SFG-00001 created (6763PH53)
+  → CMP003 plant extension: SFG-00001 ↔ CMP003
+
+CMP004 PR02 Approve (6763PH53, Stroke 2, RM: A+D+E — different formulation):
+  → SFG-00001 already exists → no new Material Master
+  → CMP004 plant extension: SFG-00001 ↔ CMP004
+
+Final: 1 Material Master (SFG-00001), 2 plant extensions, 2 separate Strokes
 ```
 
 **Key rules:**
@@ -7086,6 +7231,9 @@ After Manager Save:
 - No physical delete — DEACTIVATED is the terminal state
 - **Deactivation authority:** QA person OR Manager — either can deactivate
 
+> ⚠️ **PENDING DESIGN — MTS Stroke Selection at Process PO (2026-06-30):**
+> MTS (IWC + Powder) এ একটা Prodshade এর multiple ACTIVE Stroke থাকতে পারে, কিন্তু প্রতিবার user কে dropdown দিলে wrong stroke choice হওয়ার risk আছে। MTS Process PO create করার সময় কীভাবে stroke select/auto-assign হবে সেটা আলাদা design session এ ঠিক করতে হবে। Stroke approve/ACTIVE হওয়ার flow আপাতত same — শুধু Process PO তে MTS stroke pick করার mechanism pending।
+
 **Prodshade Pack Config — Manager Responsibility (LOCKED — 2026-06-11):**
 
 After Stroke approval, Manager must also configure **Prodshade Pack Config** for that Prodshade before any Process PO can be created.
@@ -7107,6 +7255,144 @@ Both required — missing either = Process PO cannot be created
 ```
 
 > Full Pack Config design → see **83.17**
+
+---
+
+### PR03 — Change BOM Item (LOCKED — 2026-06-30)
+
+| Field | Value |
+|---|---|
+| Page Name | Change BOM Item |
+| menu_code | `PROD_CHANGE_BOM_ITEM` |
+| tx_code | `PR03` |
+| Route | `/dashboard/om/production/change-bom-item` |
+
+**Purpose:** Formally substitute RM/INT items on an existing ACTIVE approved Stroke (BOM). Creates a Change Request document — does NOT directly edit the Stroke. Change Request must be approved via PR04 (separate approval page) before the Stroke is updated.
+
+**Authority (LOCKED — 2026-06-30):**
+
+| Role | Create Change Request (PR03) | Approve (PR04) |
+|---|---|---|
+| L1/L2 Manager | ✅ If present in that company | ❌ |
+| L1/L2 Auditor | ✅ Only if no L1/L2 Manager in that company (Auditor can be from any company — global role) | ❌ |
+| L3 Manager | ❌ | ✅ Must be from same company |
+| L4 Manager / Director / SA/GA | ❌ | — |
+
+**Rule:** Approver is always the L3 Manager of the same company — never cross-company. Creator is L1/L2 Manager if available; falls back to L1/L2 Auditor (global) if no L1/L2 Manager exists in that company.
+
+**Dosage% is read-only on this page — only Item and Group assignments change.**
+
+---
+
+#### Page Flow
+
+1. User selects Stroke: Prod + Shade → Stroke Number dropdown (only ACTIVE Strokes shown)
+2. Header loads → fully read-only (Material Type, PO Type, Prod, Shade, Description, Stroke Number, Base UOM)
+3. RM Lines load — user makes item/group changes per line (see below)
+4. Submit → Change Request created in DRAFT → enters PR04 approval queue
+
+---
+
+#### Per-Line Operations (LOCKED — 2026-06-30)
+
+| # | Condition on line | What user does | Result |
+|---|---|---|---|
+| 1 | Has Alternate = Yes, Group assigned, target material already in Group | Dropdown shows Group members minus current item → pick new item | Item swapped within same Group |
+| 2 | Has Alternate = No | Free RM/INT search → pick any material | Item replaced, no Group (Alternate stays No) |
+| 3 | Has Alternate = Yes, Group assigned, but target not in Group's member list | User goes to PM04 (Material Group Master) → adds member → returns → now pick via scenario 1 | Workflow note — no special UI on PR03; user resolves in PM04 first |
+| 4 | Has Alternate = Yes, any Group | Change Group field to a different Group → pick item from new Group's member list | Group + Item both change |
+| 5 | Has Alternate = No | Toggle Has Alternate → Yes → Select existing Group OR inline-create new Group (same flow as PR01) + add members | Alternate mechanism enabled for this line; item may or may not change |
+
+**RM Lines table columns (PR03):**
+
+| Line | Material Type | Current Item | New Item | UOM | Has Alt? | Material Group | Members Preview |
+|---|---|---|---|---|---|---|---|
+| read-only | read-only | read-only | editable (dropdown or free search) | read-only | editable (toggle) | editable (select or inline create) | read-only preview |
+
+- **Dosage% column: not shown** (read-only, no change allowed — confusing to display)
+- **UOM: read-only** — material substitution does not change unit of measure
+- A line with no changes is submitted as-is (no delta = that line passes through unchanged)
+
+---
+
+#### Change Request Document
+
+On Submit:
+```
+Change Request created:
+  - Stroke reference (Prod + Shade + Stroke Number)
+  - Per-line delta: Current Item → New Item, Current Group → New Group, Old Alt flag → New Alt flag
+  - Creator (L1/L2 Manager), created_at
+  - Status: DRAFT → enters PR04 approval queue
+```
+
+On PR04 Approve:
+```
+Stroke Master RM lines updated live:
+  - Item, Material Group, Has Alternate flag updated per approved delta
+  - Change Request status → APPROVED, audit trail preserved
+  - Stroke itself remains ACTIVE (approval does not change Stroke status)
+```
+
+On PR04 Reject:
+```
+Change Request → REJECTED (soft, not hard deleted — audit trail preserved)
+Stroke Master → unchanged
+```
+
+> **Note:** Unlike PR02 Reject (hard delete of a DRAFT Stroke), PR03 Change Request Reject is a soft cancel — the Change Request record is preserved as REJECTED for audit. The Stroke is a committed ACTIVE document, so full traceability is required.
+
+**BOM Change — Effect on Existing Process POs (LOCKED — 2026-06-30):**
+
+- Change approved → Stroke RM lines updated live
+- Already-created or in-progress Process POs referencing this Stroke → **unaffected** — they continue with the formulation snapshotted at PO creation time
+- Future Process POs created after approval → automatically use the updated formulation
+- Exception: If a user wants the new formulation on an already-created PO → **PRUNE that PO** → wait for change approval → create a new PO (which will pick up the updated stroke)
+
+---
+
+### PR04 — Change BOM Item Approval (LOCKED — 2026-06-30)
+
+| Field | Value |
+|---|---|
+| Page Name | Change BOM Item Approval |
+| menu_code | `PROD_CHANGE_BOM_ITEM_APPROVAL` |
+| tx_code | `PR04` |
+| Route | `/dashboard/om/production/change-bom-item-approval` |
+
+**Authority:** L3 Manager of the same company only.
+
+**Structure (mirrors PR02 — Stroke Master Approval):**
+
+**Section 1 — Change Request Info (read-only)**
+
+| Field | Value |
+|---|---|
+| Stroke reference | Prod + Shade + Stroke Number |
+| Requested by | P-Code + Name |
+| Requested date | timestamp |
+| Status | PENDING |
+
+**Section 2 — RM Lines: Current vs Proposed**
+
+L3 Manager sees each line showing current state vs proposed change side by side. Changed lines are highlighted; unchanged lines are dimmed.
+
+| Line | Current Item | Proposed Item | Current Group | Proposed Group | Has Alt (Current) | Has Alt (Proposed) |
+|---|---|---|---|---|---|---|
+| editable by L3 Manager | read-only | editable | read-only | editable | read-only | editable |
+
+**L3 Manager can edit the Proposed columns before approving** — same authority as PR02 Manager editing RM lines. If L3 Manager edits the proposal, the approved version reflects L3 Manager's edits (not the original proposed version).
+
+Dosage% is not shown (no dosage change allowed in Change BOM Item flow).
+
+**Section 3 — Action**
+
+| Action | Result |
+|---|---|
+| **Approve** | Proposed (possibly edited) changes applied to Stroke Master RM lines live. Change Request → APPROVED. Audit trail preserved. |
+| **Reject** | Change Request → REJECTED (soft cancel). Stroke unchanged. Audit trail preserved. |
+
+> Reject here is **soft** (not hard delete) — unlike PR02 where Reject = hard delete of DRAFT. PR04 Reject preserves the Change Request record for audit since the Stroke is a committed ACTIVE document.
 
 ---
 
@@ -7215,6 +7501,26 @@ When dispatch needed:
   Balance > 0 → system shows alert → user creates additional Packing PO
   Balance = 0 → all output accounted for ✅
   ```
+
+---
+
+#### Barrel Fill Qty Change Rule (LOCKED — 2026-06-30)
+
+**Rule: One barrel = One Packing PO. Fill qty is immutable once Goods Issue is posted.**
+
+If fill qty needs to change after Goods Issue (e.g., more material added to same barrel from another batch of same SKU + same Stroke):
+
+```
+Step 1: Reverse Goods Issue on existing Packing PO
+Step 2: Prune the existing Packing PO
+Step 3: Create new Packing PO → per barrel = actual total qty (e.g. 230 KG)
+```
+
+**Why not edit the existing PO:** Posted documents are immutable in PACE ERP — Goods Issue posted = document locked. Editing a posted Packing PO is never allowed.
+
+**Why not create a second Packing PO for the extra qty:** One barrel = One Packing PO. Two POs for one barrel creates dispatch and traceability confusion.
+
+**Batch mixing rule:** Multiple Process PO batches can physically share one barrel ONLY IF same SKU + same Stroke (chemically identical). The new Packing PO reflects the combined total qty from all contributing batches.
 
 ---
 
@@ -7894,22 +8200,102 @@ Example:
 
 ---
 
-### 83.15 — Pack BOM Design
+### 83.15 — Pack BOM Design (UPDATED — 2026-06-30)
 
-**Added: 2026-06-08**
+---
 
-| FG Type | Pack BOM | PM Selection | Notes |
-|---|---|---|---|
-| Admix | **None** | Manual at Packing PO creation | No pattern — barrel type and label vary per order |
-| Hypershot | Fixed BOM | Auto-populated at Packing PO creation | Same PM for same SKU every time |
-| IWC | Fixed BOM | Auto-populated at Packing PO creation | Same PM for same SKU every time |
+#### Pack Code Master (LOCKED — 2026-06-30)
 
-**Admix PM Selection Rules:**
-- User manually adds PM lines to Packing PO
-- Dropdown filtered to `material_type = PM` only — wrong material type cannot be entered
-- Specific PM choice (which barrel, which label) = user judgment, no system enforcement
-- Error catch: Verify stage — QA can edit PM lines before final posting
-- No additional validation layer needed (Verify correction policy is sufficient)
+| Field | Value |
+|---|---|
+| Page Name | Pack Code Master |
+| menu_code | `SA_OM_PACK_CODE_MASTER` |
+| tx_code | `OM08` |
+| Route | `/admin/sa/om/pack-code-master` |
+| Menu | SA → Operation Management → Pack Code Master |
+
+**Who manages:** SA (system admin)
+**How seeded:** All known pack codes pre-populated via migration at go-live. SA page allows adding new codes or editing existing ones in future.
+
+**Fields:**
+
+| Field | Notes |
+|---|---|
+| Pack Code | 050, 110, 120, etc. |
+| Description | Informational only (e.g. "~1 Ltr / ~1 KG container") — not system-enforced |
+| BOM Required | Yes = Pack BOM must be defined before Packing PO can be created. No = PM entered manually at Packing PO time. |
+| Active | Yes / No |
+| Created by / Date | auto |
+
+**No fill qty or fill UOM on Pack Code Master** — same pack code can have different fill qty/UOM per product (e.g. 210 = 1 Ltr for liquid products, 1 KG for others). All detail belongs at Pack BOM/SKU level.
+
+**Initial seed — all 15 pack codes (migration):**
+
+| Pack Code | Description | BOM Required |
+|---|---|---|
+| 050 | 50 ml bottle | Yes |
+| 110 | 100 ml bottle | Yes |
+| 120 | 200 ml bottle | Yes |
+| 207 | 1 KG pouch | Yes |
+| 210 | ~1 Ltr / ~1 KG container | Yes |
+| 250 | 5 Ltr bottle | Yes |
+| 310 | 10 KG/Ltr jar or bag | Yes |
+| 320 | 20 KG/Ltr jar or bag | Yes |
+| 330 | 30 KG/Ltr jar or bag | Yes |
+| 340 | 40 KG/Ltr jar or bag | Yes |
+| 350 | 50 KG/Ltr jar or bag | Yes |
+| 450 | 250 KG barrel (fixed) | Yes |
+| 510 | 1 MT IBC (fixed) | Yes |
+| 599 | Barrel (flexible fill) | **No** |
+| 000 | Tanker (flexible fill) | **No** |
+| 001 | Sample pack | **No** |
+
+---
+
+#### Pack BOM / SKU Design (LOCKED — 2026-06-30)
+
+**Page:** PR06 — Pack BOM (menu_code: `PROD_PACK_BOM`, tx_code: `PR06`, route: `/dashboard/om/production/pack-bom`)
+**Who creates:** Manager (same company)
+**Prerequisite:** Prodshade must have at least one ACTIVE Stroke (SFG Material Master must exist)
+
+**Pack BOM is defined at SKU level:**
+```
+Prodshade + Pack Code + Variant (optional) = unique SKU → FG Material Master auto-created
+```
+
+Variant is needed for pack codes where same code has different physical containers (e.g. 310 Jar vs 310 Bag — different PM, different SKU).
+
+**On Save:**
+- Check: FG Material Master for this Prodshade + Pack Code + Variant exists?
+- NO → Create FG Material Master (material_type = FG, pace_code = FG-00001...)
+- YES → reuse existing (editing Pack BOM only)
+- Company plant extension created for this company
+
+**Pack BOM has two types:**
+
+| BOM Required = Yes | BOM Required = No (599 / 000 / 001) |
+|---|---|
+| Header + PM Lines defined | Header only — no PM lines |
+| PM auto-populated at Packing PO creation | PM manually entered at Packing PO time |
+
+**PM Lines (for BOM Required = Yes):**
+
+| Field | Notes |
+|---|---|
+| PM Item | material_type = PM only |
+| Qty | per dispatch unit (per carton / per jar / per IBC etc.) |
+| UOM | from material master |
+
+Fill qty, fill UOM, container type, carton qty — all captured implicitly via PM lines (e.g. 050 BOM will list 40 bottles + 1 carton box + labels, which encodes all structure).
+
+---
+
+**Original 83.15 table (superseded):**
+
+| FG Type | Pack BOM | PM Selection |
+|---|---|---|
+| Admix (MTO) / MTEST | None (599/001 = BOM Required No) | Manual at Packing PO |
+| Hypershot (HPS) / IWC (MTS) | Fixed BOM per SKU | Auto-populated at Packing PO |
 
 **Packing is NEVER part of Stroke/RM definition.**
 
