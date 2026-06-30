@@ -1,7 +1,5 @@
--- GST Terms moved from order-group (header) level to per-material-line
--- level, per design correction during the PO Create redesign session
--- (2026-06-24): same vendor, different materials can have different
--- GST treatment.
+-- GST Terms moved from order-group (header) level to per-material-line level.
+-- Same vendor, different materials can have different GST treatment.
 
 ALTER TABLE erp_procurement.po_order_group
   DROP COLUMN IF EXISTS gst_terms;
