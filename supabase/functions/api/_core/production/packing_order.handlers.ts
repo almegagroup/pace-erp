@@ -402,13 +402,18 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       const mat = line.material as JsonRecord | null;
       const baseUom = (mat?.base_uom_code ?? "KG") as string;
 
-      await postStockMovement({
+      const posting = await postStockMovement({
         documentNumber: docNumber, documentDate: today, postingDate: today,
         movementTypeCode: "P261", companyId: poData.company_id,
         storageLocationId: slocId, materialId: line.material_id,
         quantity: qty, baseUomCode: baseUom, unitValue: 0,
         stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id,
       });
+
+      // Track the ledger entry for future reversal (P262)
+      await serviceRoleClient.schema("erp_production").from("packing_order_line")
+        .update({ stock_ledger_id: posting.stock_ledger_id })
+        .eq("id", line.id as string);
     }
 
     const now = new Date().toISOString();
@@ -433,18 +438,67 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
     const { data: po } = await serviceRoleClient.schema("erp_production").from("packing_order")
       .select("*").eq("id", id).maybeSingle();
     if (!po) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Not found");
-    if ((po as JsonRecord).status === "REVERSED") {
+    const poData = po as JsonRecord;
+    if (poData.status === "REVERSED") {
       return packErr(req, ctx, "PROD_PACK_ALREADY_REVERSED", 409, "Already reversed");
+    }
+
+    // If FINAL: reverse PM stock movements (P262 for each posted P261)
+    if (poData.status === "FINAL") {
+      const { data: pmLines } = await serviceRoleClient
+        .schema("erp_production").from("packing_order_line")
+        .select(`
+          id, material_id, actual_qty, total_qty, issue_sloc_id, stock_ledger_id,
+          material:erp_master.material_master!material_id(base_uom_code)
+        `)
+        .eq("packing_order_id", id)
+        .eq("line_type", "PM");
+
+      // Get segment config for pm_sloc fallback
+      const { data: segConfig } = await serviceRoleClient
+        .schema("erp_production").from("production_segment_location_config")
+        .select("pm_sloc_id")
+        .eq("company_id", poData.company_id as string)
+        .eq("segment_code", poData.segment_code as string)
+        .maybeSingle();
+
+      const defaultPmSlocId = (segConfig as JsonRecord | null)?.pm_sloc_id as string | null;
+      const today = todayIso();
+      const revDocNum = `${poData.po_number as string}-REV`;
+
+      for (const line of (pmLines ?? []) as JsonRecord[]) {
+        const qty = Number(line.actual_qty ?? line.total_qty ?? 0);
+        if (qty <= 0) continue;
+
+        const slocId = (line.issue_sloc_id || defaultPmSlocId) as string | null;
+        if (!slocId) continue;
+
+        const mat = line.material as JsonRecord | null;
+        const baseUom = (mat?.base_uom_code ?? "KG") as string;
+
+        await postStockMovement({
+          documentNumber: revDocNum, documentDate: today, postingDate: today,
+          movementTypeCode: "P262", companyId: poData.company_id,
+          storageLocationId: slocId, materialId: line.material_id,
+          quantity: qty, baseUomCode: baseUom, unitValue: 0,
+          stockTypeCode: "UNRESTRICTED", direction: "IN",
+          postedBy: ctx.auth_user_id,
+          reversalOfId: (line.stock_ledger_id as string | null) ?? null,
+        });
+      }
     }
 
     const now = new Date().toISOString();
     await serviceRoleClient.schema("erp_production").from("packing_order")
-      .update({ status: "REVERSED", reversed_by: ctx.auth_user_id, reversed_at: now, last_updated_at: now, last_updated_by: ctx.auth_user_id })
+      .update({
+        status: "REVERSED",
+        plan_feed_id: null,
+        reversed_by: ctx.auth_user_id,
+        reversed_at: now,
+        last_updated_at: now,
+        last_updated_by: ctx.auth_user_id,
+      })
       .eq("id", id);
-
-    // Delink from FO
-    await serviceRoleClient.schema("erp_production").from("packing_order")
-      .update({ plan_feed_id: null }).eq("id", id);
 
     return okResponse({ id, status: "REVERSED" }, ctx.request_id, req);
   } catch (err) {

@@ -52,11 +52,72 @@ async function fetchOrderLines(orderId: string): Promise<JsonRecord[]> {
     .select(`
       id, material_id, planned_qty, actual_qty, uom_code,
       issue_sloc_id, is_rm, display_order, stock_ledger_id,
-      material:erp_master.material_master!material_id(id, pace_code, material_name, base_uom_code)
+      material:erp_master.material_master!material_id(id, pace_code, material_name, base_uom_code, production_mode)
     `)
     .eq("process_order_id", orderId)
     .order("display_order");
   return (data ?? []) as JsonRecord[];
+}
+
+// Returns UNRESTRICTED balance per material in a company.
+// For INT materials, also adds planned output from active INT POs (not yet VERIFIED).
+async function checkStockAvailability(
+  companyId: string,
+  needed: Map<string, number>,
+): Promise<{ material_id: string; needed: number; available: number }[]> {
+  const matIds = Array.from(needed.keys());
+  if (matIds.length === 0) return [];
+
+  const { data: ledgerRows } = await serviceRoleClient
+    .schema("erp_inventory").from("stock_ledger")
+    .select("material_id, direction, quantity")
+    .eq("company_id", companyId)
+    .eq("stock_type_code", "UNRESTRICTED")
+    .in("material_id", matIds);
+
+  const available = new Map<string, number>();
+  for (const row of (ledgerRows ?? []) as JsonRecord[]) {
+    const mid = row.material_id as string;
+    const qty = Number(row.quantity ?? 0);
+    available.set(mid, (available.get(mid) ?? 0) + ((row.direction as string) === "IN" ? qty : -qty));
+  }
+
+  // Find INT materials and credit their planned output from active (not-yet-VERIFIED) INT POs
+  const { data: matRows } = await serviceRoleClient
+    .schema("erp_master").from("material_master")
+    .select("id, production_mode")
+    .in("id", matIds);
+
+  const intMats = new Set(
+    ((matRows ?? []) as JsonRecord[])
+      .filter(m => m.production_mode === "INT")
+      .map(m => m.id as string),
+  );
+
+  if (intMats.size > 0) {
+    const { data: intPOs } = await serviceRoleClient
+      .schema("erp_production").from("process_order")
+      .select("material_id, planned_qty, actual_qty")
+      .eq("company_id", companyId)
+      .eq("po_type", "INT")
+      .in("status", ["STANDARD", "QA_APPROVED", "BATCH_STARTED", "FINAL"])
+      .in("material_id", Array.from(intMats));
+
+    for (const ip of (intPOs ?? []) as JsonRecord[]) {
+      const mid = ip.material_id as string;
+      const qty = Number(ip.actual_qty ?? ip.planned_qty ?? 0);
+      available.set(mid, (available.get(mid) ?? 0) + qty);
+    }
+  }
+
+  const short: { material_id: string; needed: number; available: number }[] = [];
+  for (const [mid, neededQty] of needed.entries()) {
+    const avail = available.get(mid) ?? 0;
+    if (avail < neededQty - 0.0001) {
+      short.push({ material_id: mid, needed: neededQty, available: Math.max(0, avail) });
+    }
+  }
+  return short;
 }
 
 async function getSegmentLocConfig(companyId: string, segmentCode: string): Promise<JsonRecord | null> {
@@ -212,6 +273,32 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         .select("status").eq("id", strokeId).maybeSingle();
       if (!stroke || (stroke as JsonRecord).status !== "APPROVED") {
         return poErr(req, ctx, "PROD_PO_STROKE_NOT_APPROVED", 422, "Stroke master must be APPROVED");
+      }
+    }
+
+    // Availability check — UNRESTRICTED stock per material (INT exception: credit active INT PO planned output)
+    if (strokeId && poType !== "MTEST") {
+      const { data: strokeLines } = await serviceRoleClient
+        .schema("erp_production").from("stroke_line")
+        .select("material_id, dosage_pct")
+        .eq("stroke_master_id", strokeId);
+
+      if (strokeLines && strokeLines.length > 0) {
+        const needed = new Map<string, number>();
+        for (const sl of strokeLines as JsonRecord[]) {
+          const mid = sl.material_id as string;
+          const qty = (Number(sl.dosage_pct) / 100) * plannedQty;
+          needed.set(mid, (needed.get(mid) ?? 0) + qty);
+        }
+
+        const short = await checkStockAvailability(companyId, needed);
+        if (short.length > 0) {
+          const detail = short
+            .map(s => `${s.material_id.slice(0, 8)} (need ${s.needed.toFixed(3)}, have ${s.available.toFixed(3)})`)
+            .join("; ");
+          return poErr(req, ctx, "PROD_PO_INSUFFICIENT_STOCK", 422,
+            `Insufficient UNRESTRICTED stock for ${short.length} material(s): ${detail}`);
+        }
       }
     }
 
@@ -479,6 +566,45 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
             is_rm: lu.is_rm !== false,
             display_order: 9999,
           });
+      }
+    }
+
+    // INT dependency check: any RM line whose material has production_mode = 'INT'
+    // must have sufficient VERIFIED INT process order output in this company.
+    const allLines = await fetchOrderLines(id);
+    const intNeeded = new Map<string, number>();
+    for (const line of allLines) {
+      const mat = line.material as JsonRecord | null;
+      if ((mat as JsonRecord | null)?.production_mode === "INT") {
+        const mid = line.material_id as string;
+        const qty = Number(line.actual_qty ?? line.planned_qty ?? 0);
+        intNeeded.set(mid, (intNeeded.get(mid) ?? 0) + qty);
+      }
+    }
+
+    if (intNeeded.size > 0) {
+      const { data: verifiedIntPOs } = await serviceRoleClient
+        .schema("erp_production").from("process_order")
+        .select("material_id, actual_qty")
+        .eq("company_id", po.company_id as string)
+        .eq("po_type", "INT")
+        .eq("status", "VERIFIED")
+        .in("material_id", Array.from(intNeeded.keys()));
+
+      const verifiedQty = new Map<string, number>();
+      for (const ip of (verifiedIntPOs ?? []) as JsonRecord[]) {
+        const mid = ip.material_id as string;
+        verifiedQty.set(mid, (verifiedQty.get(mid) ?? 0) + Number(ip.actual_qty ?? 0));
+      }
+
+      const unmet: string[] = [];
+      for (const [mid, needed] of intNeeded.entries()) {
+        if ((verifiedQty.get(mid) ?? 0) < needed - 0.0001) unmet.push(mid.slice(0, 8));
+      }
+
+      if (unmet.length > 0) {
+        return poErr(req, ctx, "PROD_PO_INT_NOT_VERIFIED", 422,
+          `INT material(s) not yet VERIFIED: ${unmet.join(", ")}. Complete INT Process Orders first.`);
       }
     }
 
