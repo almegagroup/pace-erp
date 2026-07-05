@@ -67,6 +67,8 @@ import SACostCenterMaster from "../admin/sa/screens/SACostCenterMaster.jsx";
 import SAMachineMaster from "../admin/sa/screens/SAMachineMaster.jsx";
 import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
 import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
+import SAProductionBatchSeriesPage from "../admin/sa/screens/SAProductionBatchSeriesPage.jsx";
+import SAProductionSegmentLocationPage from "../admin/sa/screens/SAProductionSegmentLocationPage.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
 import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
@@ -162,6 +164,13 @@ import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDoc
 import OpeningStockListPage from "../pages/dashboard/procurement/opening-stock/OpeningStockListPage.jsx";
 import OpeningStockDetailPage from "../pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx";
 
+// Gate-27: L3 Production pages
+import PlanFeedPage from "../pages/dashboard/production/PlanFeedPage.jsx";
+import StrokeMasterPage from "../pages/dashboard/production/StrokeMasterPage.jsx";
+import PackConfigPage from "../pages/dashboard/production/PackConfigPage.jsx";
+import ProcessOrderPage from "../pages/dashboard/production/ProcessOrderPage.jsx";
+import PackingOrderPage from "../pages/dashboard/production/PackingOrderPage.jsx";
+import OrderOverviewPage from "../pages/dashboard/production/OrderOverviewPage.jsx";
 
 export default function AppRouter() {
   return (
@@ -302,6 +311,16 @@ export default function AppRouter() {
                       element={<SAMaterialMaster />}
                     />
                     <Route path="om/vendors" element={<SAVendorMaster />} />
+
+                    {/* Gate-27: L3 Production SA config */}
+                    <Route
+                      path="production/batch-series"
+                      element={<SAProductionBatchSeriesPage />}
+                    />
+                    <Route
+                      path="production/segment-locations"
+                      element={<SAProductionSegmentLocationPage />}
+                    />
 
                   </Route>
                 </Route>
@@ -682,6 +701,32 @@ export default function AppRouter() {
                   <Route
                     path="procurement/physical-inventory/:id"
                     element={<PIDocumentDetailPage />}
+                  />
+
+                  {/* ── Gate-27: L3 Production ───────────────────────── */}
+                  <Route
+                    path="production/plan-feed"
+                    element={<PlanFeedPage />}
+                  />
+                  <Route
+                    path="production/stroke-master"
+                    element={<StrokeMasterPage />}
+                  />
+                  <Route
+                    path="production/pack-config"
+                    element={<PackConfigPage />}
+                  />
+                  <Route
+                    path="production/process-orders"
+                    element={<ProcessOrderPage />}
+                  />
+                  <Route
+                    path="production/packing-orders"
+                    element={<PackingOrderPage />}
+                  />
+                  <Route
+                    path="production/order-overview"
+                    element={<OrderOverviewPage />}
                   />
                 </Route>
               </Route>

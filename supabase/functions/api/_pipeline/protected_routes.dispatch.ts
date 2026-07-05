@@ -10,6 +10,7 @@ import { dispatchWorkflowRoutes } from "../_routes/workflow.routes.ts";
 import { dispatchHrRoutes } from "../_routes/hr.routes.ts";
 import { dispatchOmRoutes } from "../_routes/om.routes.ts";
 import { dispatchProcurementRoutes } from "../_routes/procurement.routes.ts";
+import { dispatchProductionRoutes } from "../_routes/production.routes.ts";
 import { dispatchMenuRoutes } from "../_routes/menu.routes.ts";
 import { dispatchSessionRoutes } from "../_routes/session.routes.ts";
 import { logoutHandler } from "../_core/auth/logout.handler.ts";
@@ -81,6 +82,15 @@ const procurement = await dispatchProcurementRoutes(
   contextResult
 );
 if (procurement) return procurement;
+
+const production = await dispatchProductionRoutes(
+  routeKey,
+  req,
+  requestId,
+  sessionResult,
+  contextResult
+);
+if (production) return production;
 
 const menu = await dispatchMenuRoutes(
   routeKey,

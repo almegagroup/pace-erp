@@ -520,4 +520,53 @@ export const OPERATION_SCREENS = Object.freeze({
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
+
+  // ── Gate-27: L3 Production ───────────────────────────────────────────────
+  PROD_PLAN_FEED: {
+    screen_code: "PROD_PLAN_FEED",
+    route: "/dashboard/production/plan-feed",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_STROKE_MASTER: {
+    screen_code: "PROD_STROKE_MASTER",
+    route: "/dashboard/production/stroke-master",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_PACK_CONFIG: {
+    screen_code: "PROD_PACK_CONFIG",
+    route: "/dashboard/production/pack-config",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_PROCESS_ORDER: {
+    screen_code: "PROD_PROCESS_ORDER",
+    route: "/dashboard/production/process-orders",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_PACKING_ORDER: {
+    screen_code: "PROD_PACKING_ORDER",
+    route: "/dashboard/production/packing-orders",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_ORDER_OVERVIEW: {
+    screen_code: "PROD_ORDER_OVERVIEW",
+    route: "/dashboard/production/order-overview",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
 });

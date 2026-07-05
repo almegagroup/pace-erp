@@ -36,6 +36,8 @@ const MANAGER_OR_SA_ROLES = new Set([
   "DIRECTOR",
   "L4_MANAGER",
   "L3_MANAGER",
+  "L2_AUDITOR",
+  "L1_AUDITOR",
   "L2_MANAGER",
 ]);
 

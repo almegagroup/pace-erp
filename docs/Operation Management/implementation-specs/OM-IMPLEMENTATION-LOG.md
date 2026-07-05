@@ -1406,3 +1406,105 @@ Confirmed via MCP SQL queries on dev project (ytapuwiqicmvpanmzelb):
 
 
 
+
+---
+
+## Gate-27 — L3 Production Domain (BOM, Process Order, Packing Order, Dispatch)
+
+**Started:** 2026-07-06
+**Completed:** 2026-07-06
+**Implemented by:** Claude (full session — DB, Backend, Frontend, ACL, Snapshots)
+**Design Reference:** Feasibility doc Sections 83.1–83.5, 83.7, 83.14, 83.17, 83.18
+
+### Scope
+
+Full L3 Production domain for Liquid first (Admix, HPS, IWC):
+- Stroke Master (BOM) with dosage-based RM lines
+- Prodshade Pack Code Configuration
+- Batch Number Series (company-level for MTO/MTEST, per-prodshade for HPS/IWC)
+- Production Segment Location Config (segment → rm_sloc / pm_sloc / shopfloor_sloc / fg_sloc)
+- Plan Feed (FO — Firm Order management with 3-tab UI)
+- Process Orders (full lifecycle: STANDARD → QA_APPROVED → BATCH_STARTED → FINAL → VERIFIED | QA_REJECTED | REVERSED)
+- Packing Orders (STANDARD → FINAL | REVERSED, PM consumption at Finalize)
+- Order Overview (combined read-only dashboard)
+
+### DB — Migration Files
+
+| Migration | Purpose | Status |
+|-----------|---------|--------|
+| `20260706010743_gate27_production_schema.sql` | `erp_production` schema, 11 tables, P231/P232 movement types | ✅ Applied (MCP) |
+| `20260706020000_gate27_production_acl.sql` | ACL entries: GRP_ACL_PRODUCTION group, 6 PROD_* pages in erp_menu + acl.menu_master, CAP_PROD_OPERATOR + CAP_PROD_PLANNER capabilities | ✅ Applied (MCP) |
+| `20260706030000_gate27_production_doc_series.sql` | Number series for PROC_PO + PACK_PO for all 4 business companies | ✅ Applied (MCP) |
+| `20260706040000_gate27_production_schema_corrections.sql` | Corrective columns (notes, qa_rejection_reason, fg_stock_ledger_id, batch_started_by, is_rm, uom_code, stock_ledger_id, sku, cancelled_by, total_qty_kg) | ✅ Applied (MCP) |
+
+### DB — Data Changes (via MCP, no migration needed)
+
+- `CAP_PROD_OPERATOR` assigned to ALL work contexts for all 4 business companies (`acl.work_context_capabilities`)
+- `version_role_capabilities`: CAP_PROD_OPERATOR added for all roles × all 4 ACL versions
+- `version_work_context_capabilities`: CAP_PROD_OPERATOR added for all WCs × all 4 ACL versions
+- `version_capability_menu_actions`: all PROD_* menu actions added for all 4 ACL versions
+- ACL snapshots regenerated: `acl.generate_acl_snapshot()` for all 4 companies
+- Menu snapshots regenerated: `rebuild_acl_menu_snapshot()` for all 9 users × 4 companies
+
+### Backend Files
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `supabase/functions/api/_core/production/production.shared.ts` | Shared types, role checks, parse helpers | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/production.utils.ts` | `generateCompanyDocNumber()` shared util | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/stroke_master.handlers.ts` | 6 handlers (list, get, create, update, approve, revert) | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/pack_config.handlers.ts` | 5 handlers (listPackCodes, togglePackCode, listPackConfigs, upsertPackConfig, deletePackConfig) | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/batch_series.handlers.ts` | 3 handlers + `generateBatchNumber()` | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/segment_location.handlers.ts` | 2 handlers (list, upsert) | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/plan_feed.handlers.ts` | 6 handlers (list, get, create, update, cancel, summary) | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/process_order.handlers.ts` | 10 handlers (full lifecycle incl. stock posting at Verify) | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/packing_order.handlers.ts` | 7 handlers (full lifecycle incl. PM consumption at Finalize) | ✅ VERIFIED |
+| `supabase/functions/api/_routes/production.routes.ts` | Route dispatcher for all /api/production/* | ✅ VERIFIED |
+| `supabase/functions/api/_pipeline/protected_routes.dispatch.ts` | Added `dispatchProductionRoutes` call | ✅ VERIFIED |
+
+### Frontend Files
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `frontend/src/pages/dashboard/production/prodApi.js` | All /api/production/* API calls (37 functions) | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/StrokeMasterPage.jsx` | Stroke Master list + detail drawer + create drawer | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/PackConfigPage.jsx` | Pack Codes (read) + Prodshade Configs (create/delete) tabs | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/PlanFeedPage.jsx` | 3-tab FO management (Create / Edit / Total Table with modal) | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/ProcessOrderPage.jsx` | Full Process Order lifecycle with drawer, modals, all actions | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/PackingOrderPage.jsx` | Packing Order lifecycle (create, link FO, finalize, reverse) | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/OrderOverviewPage.jsx` | Combined overview: Process Orders + expandable Packing Orders | ✅ VERIFIED |
+| `frontend/src/admin/sa/screens/SAProductionBatchSeriesPage.jsx` | SA screen for batch number series management | ✅ VERIFIED |
+| `frontend/src/admin/sa/screens/SAProductionSegmentLocationPage.jsx` | SA/Manager screen for segment location config | ✅ VERIFIED |
+
+### Navigation Wiring
+
+| File | Change | Status |
+|------|--------|--------|
+| `frontend/src/navigation/screens/projects/operationModule/operationScreens.js` | Added 6 PROD_* screen entries | ✅ VERIFIED |
+| `frontend/src/router/AppRouter.jsx` | Imports + Routes for 6 production pages + 2 SA screens | ✅ VERIFIED |
+
+### ACL / Access Design
+
+| Screen | Who Can Access |
+|--------|---------------|
+| PROD_STROKE_MASTER | All ACL users (CAP_PROD_OPERATOR); Approve/Revert = Manager+ |
+| PROD_PACK_CONFIG | All ACL users; Write = Manager+ |
+| PROD_PLAN_FEED | All ACL users; Create/Edit = Manager+ |
+| PROD_PROCESS_ORDER | All ACL users; QA actions = Manager+ or L1/L2 Auditor |
+| PROD_PACKING_ORDER | All ACL users; Finalize = Manager+ |
+| PROD_ORDER_OVERVIEW | All ACL users (read-only) |
+| SA_PROD_BATCH_SERIES | SA + Manager+ (SA admin panel route) |
+| SA_PROD_SEGMENT_LOCATIONS | SA + Manager+ (SA admin panel route) |
+
+### Stock Movement Logic
+
+| Event | Movement |
+|-------|---------|
+| Process Order VERIFY | P261 (RM out from rm_sloc) + P261 (PM out from pm_sloc) + P231 (FG in to shopfloor_sloc) |
+| Process Order REVERSE from VERIFIED | P232 (FG out reversal) + P262 (RM/PM in reversal) |
+| Packing Order FINALIZE | P261 (PM out from pm_sloc per segment config) |
+
+### Gate-27 Status: ✅ VERIFIED
+
+All DB, Backend, Frontend, ACL, and Snapshot steps complete. Production pages visible in sidebar for all ACL users across all 4 business companies.
+
