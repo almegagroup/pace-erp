@@ -82,8 +82,15 @@ function assertManagerOrSARole(ctx: ProcurementHandlerContext): void {
   }
 }
 
-function deriveMovementType(_stockType: string): string {
-  return "P561";
+function deriveMovementType(stockType: string): string {
+  switch (toUpperTrimmedString(stockType)) {
+    case "QUALITY_INSPECTION":
+      return "P563";
+    case "BLOCKED":
+      return "P565";
+    default:
+      return "P561";
+  }
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
