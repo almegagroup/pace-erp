@@ -210,7 +210,7 @@ export async function getProcurementPlanningHandler(
           .from("stock_ledger")
           .select("material_id, posting_date, direction, movement_type_code")
           .eq("direction", "IN")
-          .in("movement_type_code", ["P101", "P561", "P563", "P565"]);
+          .in("movement_type_code", ["P101", "P561"]);
 
         const { data, error } = await query;
         if (error) {
