@@ -7071,17 +7071,36 @@ material_master.shade_code / pack_code — NOT used in this flow (left as-is, un
 
 ---
 
-#### RM Lines (LOCKED — 2026-06-30, one row per ingredient)
+#### RM Lines (LOCKED — 2026-06-30, revised 2026-06-30)
+
+**Line structure follows SAP OUTPUT/INPUT model (LOCKED — 2026-06-30):**
+
+Every Stroke has one OUTPUT line (auto-filled from header Prod+Shade) and one or more INPUT lines (RM/INT ingredients).
+
+**OUTPUT line (system-generated, not user-entered):**
+
+| Column | Value |
+|---|---|
+| Type | OUTPUT |
+| Material Type | SFG or INT (from header) |
+| Item | Auto-filled from Prod+Shade header — not editable |
+| Dosage % | Real-time sum of all INPUT lines — system-calculated. Displayed as running total. When = 100 → save allowed; otherwise system blocks. |
+| UOM | Base UOM (from header) |
+| Has Alternate? | — (not applicable) |
+| Material Group | — (not applicable) |
+
+**INPUT lines (user-entered, one row per ingredient):**
 
 | # | Column | Detail |
 |---|---|---|
-| 1 | Material Type | **RM** or **INT** — a formulation line's ingredient can be a Raw Material or an Intermediate material (e.g. Caustic Liquid). Filters column 2. |
-| 2 | Item | Dropdown of materials matching the Material Type above, scoped to the company-mapped material list |
-| 3 | Dosage % | Percentage of this ingredient in the formulation. Applies uniformly across **all PO Types** (MTO/HPS/MTS/INT) — overrides the earlier "Dosage% for MTO, BOM qty for HPS/MTS" split. Sum of all lines **must equal exactly 100** — system blocks save if not 100. |
-| 4 | UOM | — |
-| 5 | Has Alternate? | Yes / No |
-| 6 | Material Group | Only active if column 5 = Yes. Searchable dropdown of existing groups **+ "Create Group"** inline option. Creating asks for Group Name + Description; on save it appears immediately in the dropdown and is the same underlying data shown on the **Material Group Master page (PM04 — currently mis-labeled "Material Categories", rename pending)** — i.e. `erp_master.material_category_group`. |
-| 7 | Members | Once a Group is selected/created, add Alternate Material(s) as members here — unlimited, stored as `material_category_group_member` rows. |
+| 1 | Type | INPUT (fixed — user cannot change) |
+| 2 | Material Type | **RM** or **INT** — a formulation line's ingredient can be a Raw Material or an Intermediate material (e.g. Caustic Liquid). Filters column 3. |
+| 3 | Item | Dropdown of materials matching the Material Type above, scoped to the company-mapped material list |
+| 4 | Dosage % | Percentage of this ingredient in the formulation. Applies uniformly across **all PO Types** (MTO/HPS/MTS/INT). Sum of all INPUT lines **must equal exactly 100** — drives the OUTPUT line Dosage% display — system blocks save if not 100. |
+| 5 | UOM | — |
+| 6 | Has Alternate? | Yes / No |
+| 7 | Material Group | Only active if column 6 = Yes. Searchable dropdown of existing groups **+ "Create Group"** inline option. Creating asks for Group Name + Description; on save it appears immediately in the dropdown and is the same underlying data shown on the **Material Group Master page (PM04 — currently mis-labeled "Material Categories", rename pending)** — i.e. `erp_master.material_category_group`. |
+| 8 | Members | Once a Group is selected/created, add Alternate Material(s) as members here — unlimited, stored as `material_category_group_member` rows. |
 
 **Reused mechanism:** Alternate Material does **not** get its own new table — it reuses the existing (previously unused) `material_category_group` / `material_category_group_member` tables and the PM04 page.
 
@@ -7438,7 +7457,7 @@ Dosage% is not shown (no dosage change allowed in Change BOM Item flow).
 - Linked to Process PO by explicit link (mandatory)
 - PM items: added manually (Admix/PMTO) or auto-populated from Pack BOM (Hypershot/IWC/Powder)
 - SO number = reference field — SO links to **FO** (not directly to Packing PO)
-- In-order goods movement: P261 (RM issue) and P262 (reversal) from within Process PO
+- Goods movements: P261 (SFG + PM issue) + P231 (FG receipt) at Final save. Reversal via P262 (COR6 Correction) or CORS.
 
 **Packing PO creation timing (by type):**
 
@@ -7466,10 +7485,12 @@ Standard phase:
   5. Balance check: Process PO qty = Σ all Packing PO qtys
 
 Final phase:
-  Both Process PO and all linked Packing POs go through Final
+  Process PO: data entry only — no movements yet
+  Packing PO: terminal step — movements posted at Final save
+    → P261 (SFG from S003, batch-specific) + P261 (PM from pm_sloc) + P231 (FG → F003)
 
-Verify phase:
-  Both verified → P261 (RM consumed) + PM consumed + P231 (FG → S003)
+Verify phase (Process PO only — Packing PO has no Verify):
+  Process PO verified → P261 (RM consumed) + P101 (SFG → S003)
 
 Post-Verify:
   FO formally linked to respective Packing PO(s) — after internal confirmation
@@ -7590,12 +7611,31 @@ Step 5: Save
 
 ---
 
-#### Production Cycle — Standard → QA Approval → Final → Verify (LOCKED — 2026-06-10)
+#### Production Cycle — Standard → QA Approval → Final → Verify (LOCKED — 2026-07-03)
 
 **Full cycle applies to: MTO, HPS** — Standard → QA Online Approval → Start Batch → Final → Verify
 **IWC (MTS):** Standard → Start Batch → Final → Verify (**no QA Online Approval**)
 **INT Process PO:** simple cycle only (no QA approval, no batch number — see 83.5)
 **MTEST:** one-step cycle — fully manual (see 83.4 PO Types)
+
+**Process PO Status Flow (MTO/HPS):**
+
+```
+STANDARD (PR09 saved)
+    ↓
+QA_PENDING (submitted to PR16 queue)
+    ↓ Approve                    ↓ Reject
+QA_APPROVED                  QA_REJECTED → PRUNED immediately
+    ↓ Production "Start Batch"       (new PO must be created)
+BATCH_STARTED
+    ↓
+FINAL (PR11)
+    ↓
+VERIFIED (PR12 — stock movements posted)
+```
+
+**PR10 Edit** available only at: **QA_APPROVED** status only (before Start Batch)
+**Pruning** available at: STANDARD (before QA submit), QA_APPROVED via PR10 (before Start Batch) — reservation cancelled on prune
 
 ---
 
@@ -7618,20 +7658,40 @@ Step 5: Save
 **Phase 2 — QA Online Approval (between Standard and Final)**
 
 ```
-Standard saved → QA gets notification / sees in queue
+Standard saved → Status = QA_PENDING → appears in PR16 QA queue
     ↓
-QA reviews: SKU ✅ / Stroke ✅ / Quantity ✅
+QA reviews: SKU ✅ / Stroke ✅ / Machine ✅ / Qty ✅ / Component lines ✅
     ↓
-QA Approve → Production queue shows [Start Batch] button for this PO
-QA Reject  → PO permanently locked (no further actions) → Production creates new PO
+QA Approve → Status = QA_APPROVED → Production sees [Start Batch] on PR16
+QA Reject  → Status = QA_REJECTED → PRUNED immediately (no edit, no reuse)
+                Production must create a new Process PO from scratch
 ```
 
 | Rule | Detail |
 |---|---|
 | Cancellation before QA approval | ✅ Possible — PO number existed, no batch number |
 | Cancellation after QA approval, before Start Batch | ✅ Possible — batch number not yet generated |
-| What QA checks | SKU correctness, Stroke correctness, Batch size/qty |
-| Rejected PO | Locked — cannot be edited, finalised, or reused |
+| What QA checks | SKU, Stroke, Machine assignment, batch size/qty, component lines |
+| Rejected PO | PRUNED immediately — PR10 Edit not available on rejected PO |
+| PR10 Edit | Only available when status = QA_APPROVED |
+
+**PR16 — QA Approval Queue (LOCKED — 2026-07-03):**
+
+CSN Tracker-style expandable queue. Same page, role-based buttons via work context capability.
+
+- **Collapsed row:** PO Number | Prodshade | Stroke | Machine | Target Qty | Created By | Status
+- **Expanded row:** Full component grid — Formulation Material | Dosage% | Actual Material | Dosage% | Planned Qty (all read-only)
+
+Role-based actions (same screen, different capabilities):
+
+| Capability | Status seen | Action available |
+|---|---|---|
+| QA_APPROVE | QA_PENDING | [Approve] [Reject + reason] |
+| QA_APPROVE | QA_APPROVED | Read-only (already approved) |
+| PRODUCTION_START | QA_PENDING | Read-only (no action yet) |
+| PRODUCTION_START | QA_APPROVED | [Start Batch] |
+
+Reject flow: QA enters reason → PO immediately PRUNED → disappears from active queue.
 
 ---
 
@@ -7661,16 +7721,17 @@ Production physically charges the batch (batch number in hand)
 **Phase 4 — Final**
 
 ```
-Production completes batch → enters actual quantities
+Production completes batch → enters actual quantities + AP approval status per line
 ```
 
 | Action | Detail |
 |---|---|
 | Who | Production team |
-| What | Actual qty entered for every RM line |
+| What | Actual qty + AP Approved status entered for every INPUT line; Actual Output entered for OUTPUT line |
 | Standard qty | Shown as reference (read-only) |
 | Actual qty | User enters — can differ from standard |
-| New RM add | ✅ Allowed — user selects from RM master, enters qty (no dosage%) |
+| AP Approved | Yes / No / Partial toggle per INPUT line — Production enters at this stage (see Line Table below) |
+| New RM add | ✅ Allowed — user selects from RM master, enters qty (no dosage%); must also set AP Approved status |
 | RM remove | ❌ Not allowed — enter 0 for unused items |
 | Stock movement | ❌ None — data entry only |
 
@@ -7693,32 +7754,161 @@ QA matches entered actuals against physical batch paper
 
 ---
 
-#### Final / Verify Line Table — Column Design (DRAFT — discussion in progress, 2026-06-29 — NOT LOCKED)
+#### Final / Verify Line Table — Column Design (LOCKED — 2026-07-04)
 
-Single line table used across Final and Verify (column set fixed, activation differs by stage):
+The Final phase component grid has two row types: **INPUT lines** (RM consumed) and **OUTPUT line** (SFG produced). Column structure differs by type.
 
-| # | Column | Final (Production) | Verify (QA) |
+---
+
+**INPUT lines (RM — what went into the batch):**
+
+| # | Column | Standard Phase | Final Phase | Verify Phase |
+|---|---|---|---|---|
+| 1 | Formulation Material | Read-only | Read-only | Read-only |
+| 2 | Dosage % | Read-only | Read-only | Read-only |
+| 3 | Actual Material | ✅ Editable (alternate dropdown) | Read-only | Read-only |
+| 4 | Storage Location | ✅ Editable (override segment default) | ✅ Editable | ✅ Editable |
+| 5 | Standard Qty | Read-only | Read-only | Read-only |
+| 6 | Actual Qty | — | ✅ Editable | ✅ Editable (QA can correct) |
+| 7 | **Approved** | — | ✅ Yes/No/Partial toggle (see rules) | Read-only |
+| 8 | **AP Approved Qty** | — | Auto or manual (see rules) | Read-only |
+| 9 | **Variance** | — | Auto = Actual − AP Approved (display only) | Read-only |
+
+**Approved toggle behaviour:**
+
+| Toggle | Condition | AP Approved Qty | Variance |
 |---|---|---|---|
-| 1 | Material Code | Read-only | Read-only |
-| 2 | Material Description | Read-only | Read-only |
-| 3 | Batch Number | FG line: actual generated Batch No. RM/PM line: placeholder (populates once RM/PM batch management is enabled) | Same |
-| 4 | Material Type | RM / PM / FG | Same |
-| 5 | UoM | Read-only | Read-only |
-| 6 | Standard Qty | Read-only reference | Read-only reference |
-| 7 | Actual Quantity | ✅ Editable (Production enters) | ✅ Editable (QA can correct) |
-| 8 | **Approved Deviation?** | ❌ Inactive | ✅ Active — QA marks Yes / No / N-A |
-| 9 | **Deviation Qty** | ❌ Inactive (not shown/calculated yet) | ✅ Active — auto-calculated (Actual − Standard) |
-| 10 | Storage Location | Read-only (segment default, override at Standard) | Read-only |
-| 11 | Movement Type | Read-only (e.g. 261, 231) | Read-only |
-| 12 | Cost Center | Read-only | Read-only |
+| **YES (inactive)** | Standard Qty = Actual Qty | = Actual Qty | 0 — auto-set, no user action needed |
+| **YES (active)** | Standard Qty ≠ Actual Qty, user selects Yes | = Actual Qty | 0 (AP recognizes full actual) |
+| **NO** | Standard Qty ≠ Actual Qty, user selects No | = Standard Qty | Actual − Standard |
+| **PARTIAL** | Standard Qty ≠ Actual Qty, user selects Partial | Manual entry | Actual − Manual entry |
 
-**Rules:**
-- `Deviation Qty` = Actual Qty − Standard Qty per line (system-calculated, neutral fact — no judgment).
-- `Approved Deviation?` is a per-line flag, **not** a whole-batch flag. A batch can have multiple lines, some Approved (e.g. recurring Caustic/Water trade-off — known, pre-approved, normal), some Not Approved (e.g. an ad-hoc correction material outside the formulation — see 104.7 Scenario 3/4).
-- No deviation on a line → `Approved Deviation?` = N-A, `Deviation Qty` = 0.
-- Marking is QA's responsibility (judgment call), entered at Verify only — Production never marks this, Production only enters Actual Quantity at Final.
-- Goods Issue (261) and FG Receipt (231/231-equivalent) post the **full Actual Quantity** regardless of the Approved Deviation flag — Stock is never filtered or held back based on this flag (see 104.7 core principle: Stock Layer = 100% physical actual, always).
-- `Approved Deviation? = No` rows are what feed the Unrecognized Variance tracking discussed in **Section 104.7** — not yet a locked settlement mechanism, see that section's open items.
+> When **Standard Qty = Actual Qty**: Approved is auto-set to YES and the toggle is **inactive** (no dropdown shown). Zero-deviation lines require no action from Production.
+> When **Standard Qty ≠ Actual Qty**: toggle becomes active — Production must select Yes / No / Partial.
+> Works for not-in-formulation materials too: Standard = 0; deviation always present → toggle always active.
+
+---
+
+**New Row Addition at Final / Verify (LOCKED — 2026-07-04):**
+
+Production (at Final) or QA (at Verify) can add materials not present in the original formulation.
+
+| Column | New Row Behaviour |
+|---|---|
+| Formulation Material | **N/A — blank** (not in BOM) |
+| Dosage % | **N/A — blank** |
+| Actual Material | ✅ Editable — user selects from full RM master |
+| Storage Location | ✅ Editable |
+| Standard Qty | **0, read-only** (not in BOM = standard always 0) |
+| Actual Qty | ✅ Editable |
+| Approved | **Always active** (Std = 0, Actual > 0 → always a deviation) |
+| AP Approved Qty | Yes → Actual, No → 0, Partial → manual |
+| Variance | Auto = Actual − AP Approved |
+| Movement Type | P261, read-only |
+
+---
+
+**OUTPUT line (SFG — what the batch produced):**
+
+> This is the equivalent of SAP COR6's FG output line. In PACE, the Process PO produces **SFG** (bulk pre-packing), not FG. FG is only created after Packing PO completes. The OUTPUT row sits in the same component table as INPUT rows.
+
+> **Batch Number** is shown in the **PO header**, not as a column in the line table. It is generated at "Start Batch" click and is visible in the header across all phases.
+
+| # | Column | Detail |
+|---|---|---|
+| 1 | Material | SFG Prodshade — read-only |
+| 2 | Standard Qty | Read-only — planned batch size |
+| 3 | **Actual Qty** | ✅ Editable — Production enters actual SFG produced |
+| 4 | **AP Approved Qty** | Auto-calculated = SUM(AP Approved Qty for all INPUT lines). Not manually editable. |
+| 5 | **Variance** | Actual Qty − AP Approved Qty (display only) |
+
+> AP Approved Output is derived from INPUT AP approvals — not entered separately.
+> Variance on OUTPUT = excess/shortfall production that AP does not recognize (e.g. 10,000.75 KG actual vs 10,000 KG AP approved).
+
+---
+
+**System flags (auto-set at Final save):**
+
+- `has_unapproved_deviation = TRUE` if **any INPUT line Variance > 0** (i.e. any Approved = No, or Partial with Actual > AP Approved). System sets this — Production does not mark it manually.
+- Batches with `has_unapproved_deviation = TRUE` are flagged for analysis queue.
+
+**Stock movements (at Verify, not Final):**
+- P261 posts **full Actual Qty** for each INPUT line — Stock Layer is never filtered by AP approval status.
+- P231 posts **full Actual Output** for OUTPUT line.
+- AP Approved columns are Reco Layer only — they never affect stock postings.
+
+**Verify phase (QA):**
+- QA can edit Actual Qty (correct Final entries against batch paper).
+- QA can add new items.
+- AP Approved Qty recalculates automatically when QA edits Actual Qty (Yes/No behaviour reapplied).
+- Stock movements trigger at Verify save.
+
+---
+
+#### Final and Verify Phase UI Layout (LOCKED — 2026-07-04)
+
+**Page Header (read-only, always visible — identical in Final and Verify):**
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│  Process PO — Final                                    [Save as Final] │
+│  PO: PO-4041  │  Batch: BM0953  │  Status: BATCH_STARTED             │
+│  Machine: Admix Line 1  │  Stroke No: 042                             │
+│  Prodshade: Admix SR    │  Description: SR PCE High Conc Liquid       │
+│  Type: MTO  │  Std Size: 10,000 KG                                    │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+> **Prodshade** and **Description** are auto-populated from the Process PO (set at Standard phase).
+> **Stroke Number** is shown in both Final and Verify — it is critical for batch paper matching.
+> **Machine Name** is auto-populated from machine assignment (set at Standard phase).
+
+**Component Table — INPUT section:**
+
+```
+── INPUT ──────────────────────────────────────────────────────────────────────────────────────────
+ Formulation Mat  │ Dos% │ Actual Mat │ SLoc   │  Std  │ Actual   │ Approved  │ AP Appr │ Var  │ Mvt
+──────────────────┼──────┼────────────┼────────┼───────┼──────────┼───────────┼─────────┼──────┼─────
+ Water            │  28% │ —          │ [R003] │  2800 │ [2540]   │ YES ★     │  2540   │    0 │ 261
+ Caustic Flakes   │   3% │ —          │ [R003] │   300 │ [  420]  │ [YES ▼]   │   420   │    0 │ 261
+ SR PCE           │  28% │ —          │ [R003] │  2800 │ [ 3040]  │ [NO  ▼]   │  2800   │  240 │ 261
+ Caramel (added)  │   —  │ —          │ [R003] │     0 │ [  0.75] │ [YES ▼]   │  0.75   │    0 │ 261
+──────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                              [+ Add Row]
+```
+
+**Component Table — OUTPUT section:**
+
+```
+── OUTPUT ──────────────────────────────────────────────────────────────────────────────────────────
+ Material         │      │            │ SLoc   │  Std  │ Actual    │           │ AP Appr │ Var  │ Mvt
+──────────────────┼──────┼────────────┼────────┼───────┼───────────┼───────────┼─────────┼──────┼─────
+ Admix SR (SFG)   │  —   │ —          │ [S003] │ 10000 │[10000.75] │  (auto)   │ 10000   │ 0.75 │ 101
+```
+
+**UI rules — Final phase:**
+- **★** = Approved auto-set YES, toggle inactive (Standard = Actual, no deviation)
+- **[YES ▼] / [NO ▼] / [PARTIAL ▼]** = active dropdown (Standard ≠ Actual)
+- SLoc shown in `[ ]` = editable field
+- Movement Type (Mvt) = last column, read-only. **261** for all INPUT rows, **101** for OUTPUT (SFG receipt)
+- INPUT and OUTPUT sections separated by a visual divider — not interleaved
+- **[+ Add Row]** below INPUT section only — new RM additions go into INPUT, never OUTPUT
+- OUTPUT has no Add Row — exactly one OUTPUT line per Process PO
+- **[Save as Final]** in page header top-right
+
+**UI rules — Verify phase (differences from Final):**
+
+| Behaviour | Final (Production) | Verify (QA) |
+|---|---|---|
+| Button label | [Save as Final] | [Save & Post Stock] |
+| Actual Qty | Editable | ✅ Editable (QA corrects against batch paper) |
+| Actual Material | Read-only | ✅ Editable (QA can correct wrong alternate) |
+| SLoc | Editable | ✅ Editable |
+| Approved toggle | Editable | ✅ Editable (QA has final override) |
+| AP Approved Qty | Auto/manual | Auto-recalculates on Approved change; manual if Partial |
+| Add Row | ✅ Allowed | ✅ Allowed |
+| Delete Row | ❌ Not allowed | ✅ Allowed — **only for rows NOT in formulation** (added rows only; formulation rows cannot be deleted, enter 0 instead) |
+| Stock posting | ❌ None | ✅ Posts at save: INPUT → P261, OUTPUT → 101 |
 
 ---
 
@@ -7741,7 +7931,7 @@ Process PO inherits all 4 locations from its segment at creation time.
 ```
 P261 → RM consumed FROM rm_sloc (e.g. R003 for Liquid)
 P261 → PM consumed FROM pm_sloc (e.g. P003 for Liquid)
-P231 → FG receipt  TO   shopfloor_sloc (e.g. S003)
+101  → SFG receipt  TO   shopfloor_sloc (e.g. S003)
 ```
 
 **P261 Issue Location — Default Chain:**
@@ -7783,16 +7973,40 @@ Material + Batch Number + Packing PO ref + FO ref (NULL or populated) + Qty + Lo
 
 ---
 
-**SAP Equivalent Mapping (LOCKED — 2026-06-11):**
+**SAP Equivalent Mapping + TX Code Table (LOCKED — 2026-07-03):**
 
-| SAP Transaction | PACE Equivalent | Notes |
-|---|---|---|
-| ZCoR1 (Create Process Order) | Process PO Standard phase | Stroke → RM auto-populate, availability check |
-| ZCoR2 (Change Process Order) | Process PO edit / Pruning | Used for PO pruning workflow |
-| COR6 (Confirmation) | Final + Verify | Actual qty entry (Final) + stock posting (Verify) |
-| COID (Info System) | Process PO list page | Status filter, date range, SKU, plant |
-| CORS / Reversal | Step-by-step reversal | Verify→Final→QA Approved→Standard→Prune |
-| ZBatVar (Batch Variance) | Batch variance report | Planned qty vs Actual qty — quantity only (no cost variance in Phase 1) |
+| TX Code | SAP Equivalent | Screen | Who |
+|---|---|---|---|
+| PR09 | ZCoR1 | Process PO Standard (Create) | Production |
+| PR10 | ZCoR2 | Edit / Prune | Production (QA_APPROVED status only) |
+| PR11 | COR6 | Final | Production |
+| PR12 | COR6 | Verify | Production |
+| PR13 | COID | Process PO List | All |
+| PR14 | ZBatVar | Batch Variance Report | Production / Manager |
+| PR15 | CORS | Reversal | Production / Manager |
+| PR16 | ZQA01 | QA Approval Queue | QA + Production |
+| PR17 | — | Batch Number Release | Manager |
+
+> **TX Code scope:** PR09 / PR11 / PR12 / PR15 serve **both Process PO and Packing PO** — PO Type field (PMTO/PHPS/PMTS/PTEST) drives behavior. PR10, PR16, PR17 are **Process PO only** — Packing PO has no QA Approval step and no Batch Number.
+>
+> **PR10 Edit availability:** Only when status = QA_APPROVED. QA_REJECTED → straight PRUNE, PR10 not available.
+
+**PR10 (ZCoR2) — Edit Rules (LOCKED — 2026-07-04):**
+
+| Rule | Detail |
+|---|---|
+| Available at | QA_APPROVED and BATCH_STARTED — closes after Final is saved (VERIFIED = no PR10) |
+| Status after edit | **Stays QA_APPROVED / BATCH_STARTED** — no re-approval needed |
+| **RM Qty change** | ✅ **Only this** — Standard Qty auto-recalculates, reservation document auto-updates |
+| **Machine assignment** | ✅ **Only this** — can change machine while batch is approved/started |
+| Stroke change | ❌ Blocked |
+| Alternate material | ❌ Blocked — handled at Final via Actual Material column |
+| SLoc change | ❌ Blocked — set at Standard, editable at Final/Verify |
+| RM add / prune | ❌ Blocked — do this at Standard phase |
+| Planned output qty | ❌ Blocked |
+| PO Type / Prodshade | ❌ Blocked |
+
+> PR10 is intentionally minimal — only qty and machine. Keeping it simple avoids complexity and conflicts with Final phase entries.
 
 **COR6 specific decisions (LOCKED — 2026-06-11):**
 - Activity confirmation (machine time, labor time) → **deferred to Section 104**
@@ -7808,23 +8022,132 @@ Material + Batch Number + Packing PO ref + FO ref (NULL or populated) + Qty + Lo
 
 ---
 
-**Reversal Rules (LOCKED — 2026-06-10)**
+**PR15 (CORS) — Full Reversal Design (LOCKED — 2026-07-04)**
 
-Full step-by-step reversal from any stage back to beginning:
+CORS reverses from current status directly to STANDARD in one step (no intermediate step-through):
+
+| From Status | CORS Action | What happens |
+|---|---|---|
+| VERIFIED | → STANDARD | P262 (all RM), 102 (SFG), actuals cleared, batch VOIDED, reservations reinstated |
+| FINAL | → STANDARD | Actuals cleared, batch VOIDED, reservations reinstated (no stock to reverse — stock wasn't posted) |
+| BATCH_STARTED | → STANDARD | Batch VOIDED, reservations reinstated |
+| QA_APPROVED | → STANDARD | Reservations cancelled (no batch, no stock) |
+| STANDARD | → CANCELLED | PO number retired (no batch, no stock, no reservation) |
+
+**Rules:**
+- **Reason mandatory** at every CORS action — user must enter reason before confirming
+- Batch VOIDED only if status ≥ BATCH_STARTED (i.e. batch number was generated)
+- Who can reverse: **Production or Manager** (role-gated)
+- After CORS → STANDARD: PO is live again at STANDARD, user can re-run or Prune
+
+---
+
+**PO Prune (LOCKED — 2026-07-04):**
+
+| When | Detail |
+|---|---|
+| Available at | STANDARD status only (before QA submit) |
+| **Reason mandatory** | Yes — user must enter reason |
+| Batch number | N/A — batch not yet generated at STANDARD |
+| Effect | PO → CANCELLED, PO number retired |
+
+---
+
+**PR12 (COR6) — Post-Verify Correction Mode (LOCKED — 2026-07-04):**
+
+PR12 serves two modes based on PO status:
+
+| Status when opening PR12 | Mode |
+|---|---|
+| FINAL | Initial Verify — enters actuals, save posts stock |
+| VERIFIED | **Correction Mode** — individual line P261/P262 corrections |
+
+**Correction Mode flow (VERIFIED status):**
+
+- PO number enter করলে component grid খুলবে — সব verified materials list, কিন্তু **qty blank**
+- QA যে line correct করতে চায় সেখানে delta qty দেবে
+- Per line:
+
+| Column | Detail |
+|---|---|
+| Material | Read-only |
+| Dosage% | Read-only (formulation), blank (added lines) |
+| SLoc | Default segment SLoc, editable |
+| Qty | **Blank — QA manually enters correction delta** |
+| Approved | Yes / No / Partial |
+| AP Approved | Auto or manual per toggle |
+| Movement Type | **QA manually selects: 261 (issue more) or 262 (reverse)** |
+
+- Positive qty + 261 → additional goods issue
+- Positive qty + 262 → goods reversal
+- New material add: same row-add, no dosage%, always 261, SLoc default
+- **Who:** QA only — Production cannot access Correction Mode
+- **Storage:** Append — each correction = new goods movement document. Net Actual = sum of all movements. History in Document Flow.
+- **AP Approved edge case:** if Partial and AP Approved > new net Actual → system flags, user must re-enter
+
+---
+
+**Batch Number State Machine (LOCKED — 2026-07-04):**
+
+| State | Meaning | Shows in Start Batch drawer? |
+|---|---|---|
+| ACTIVE | Assigned to a live PO (BATCH_STARTED through VERIFIED) | ❌ |
+| VOIDED | PO cancelled/CORSed — retired by default | ❌ |
+| RELEASED | Manager released for reuse, not yet assigned to any PO | ✅ |
+| RELEASED + ACTIVE | Was RELEASED, now assigned to new PO | ❌ |
+
+**Transitions:**
 
 ```
-SO linked → FO linked → Packing PO linked
-  can be reversed step by step back to Standard
-
-Verify → can be reversed to Final
-Final  → can be reversed to QA Approved state
-QA Approved → can be reversed to Standard (cancellation)
-Standard → can be Pruned
+(new batch generated at Start Batch) → ACTIVE
+ACTIVE → CORS/Prune → VOIDED
+VOIDED → Manager PR17 → RELEASED      (reason mandatory)
+RELEASED → Start Batch assign → RELEASED + ACTIVE
+RELEASED + ACTIVE → CORS → VOIDED     (same rules as ACTIVE)
 ```
 
-- Each reversal reverses only that stage's actions
-- Stock movements reversed at Verify reversal
-- Batch Number voided if Final is reversed (Start Batch is un-done)
+---
+
+**Start Batch — Batch Number Selection (LOCKED — 2026-07-04):**
+
+```
+[Start Batch] clicked
+       ↓
+System checks: Company + PO Type এ RELEASED (not ACTIVE) batch numbers আছে?
+       ↓ Yes                              ↓ No
+Drawer opens →                       Auto-generate new sequential number
+ shows RELEASED list                  (no user prompt)
+ user selects or skips
+       ↓ Select          ↓ Skip
+ State: RELEASED+ACTIVE  Auto-generate new number
+```
+
+Search key = **Company + PO Type** (NOT Prodshade — Prodshade was wrong, that's why PO was voided in the first place)
+
+---
+
+**PR17 — Batch Number Release (LOCKED — 2026-07-04):**
+
+| Item | Detail |
+|---|---|
+| TX Code | PR17 |
+| Who | Manager (role-gated) |
+| Scope | Company-filtered — Manager sees own company's VOIDED batch numbers only |
+
+**Table:**
+
+| Column | Detail |
+|---|---|
+| Batch Number | |
+| PO Type | MTO / HPS / MTS / MTEST |
+| Voided Date | |
+| Previous Prodshade | Prodshade of the voided PO |
+| Previous Stroke | Stroke number of the voided PO |
+| Machine Name | Machine assigned on the voided PO |
+
+**Action:** Row select → **[Release]** button → **Reason mandatory (text field)** → Batch number: VOIDED → **RELEASED**
+
+> Released batch numbers appear in Start Batch drawer for same Company + PO Type. Once assigned to a new PO (RELEASED + ACTIVE), they no longer appear in the drawer.
 
 ---
 
@@ -7896,6 +8219,282 @@ Step 3: Before Final phase — INT must be complete
 | Blocked / FOR_REPROCESS | ❌ No |
 
 > In-Transit and QA stock are excluded at PO creation — physically not available yet. Only unrestricted stock (+ INT planned output for INT materials) counts for reservation.
+
+---
+
+#### Material Reservation Mechanism (LOCKED — 2026-06-30)
+
+**SAP-equivalent: MB21 (Reservation Document) — soft hold, no stock movement.**
+
+Process PO Standard Save → system creates a **Reservation Document** per component line. Stock does NOT physically move. Material stays in UNRESTRICTED — but the reserved qty is deducted from freely available calculation.
+
+**Reservation Document Fields (SAP MB21 equivalent):**
+
+| Field | Source |
+|---|---|
+| Reservation Number | System-generated |
+| Process PO Reference | Parent Process PO |
+| Material Code | Component line |
+| Plant | From Process PO |
+| Storage Location | From segment config (rm_sloc or pm_sloc) |
+| Required Qty | From BOM snapshot at Standard save |
+| UOM | Material base UOM |
+| Required By Date | Planned start date of Process PO |
+| Issued Qty | Updated as P261 Goods Issues are posted at Verify |
+| Balance Qty | Required − Issued |
+| Status | OPEN → PARTIAL → FULLY_ISSUED → CANCELLED |
+
+**Available Stock formula (display on PR09 component line grid):**
+
+```
+Available = stock_snapshot(UNRESTRICTED, material, plant)
+          − SUM(open_reservations.balance_qty WHERE material = X AND plant = Y)
+```
+
+Open reservations = all OPEN + PARTIAL reservation documents across ALL Process POs for that material+plant. Sources include:
+1. Process PO Standard save reservations
+2. Delivery schedule / dispatch pick window reservations (future — same table, same formula)
+
+**Reservation lifecycle:**
+
+```
+Process PO Standard Save    → Reservation Document OPEN (per component line)
+Process PO Verify (P261)    → Issued Qty updated → PARTIAL or FULLY_ISSUED
+Process PO PRUNE/Cancel     → Reservation Document CANCELLED (no stock impact)
+BOM qty change (PR10 Edit)  → Reservation Document Required Qty updated
+```
+
+**No movement types P250/P251** — RESERVED stock_type in stock_type_master is reserved for physical warehouse segregation use cases (e.g. QA-hold override, physical bin separation), NOT for production order reservations.
+
+---
+
+#### Alternate Material Substitution on Component Lines (LOCKED — 2026-07-03)
+
+**When:** Production can substitute a formulation material (X) with a registered alternate (X1) at any phase before Verify posting — Standard create (PR09), Edit (PR10), Final (PR11), or Verify screen before P261 is posted (PR12). Instructions to substitute can arrive at any point in the production cycle.
+
+**Component grid — two separate material columns:**
+
+| Formulation Material | Dosage% | Actual Material | Dosage% | Planned Qty |
+|---|---|---|---|---|
+| X *(read-only)* | 25% | *(same)* | 25% | 250 KG |
+| Y *(read-only)* | 30% | *(same)* | 30% | 300 KG |
+| Z *(read-only)* | 45% | X1 *(changed)* | 45% | 450 KG |
+
+**Formulation Material column:** Always read-only. Populated from BOM/Stroke snapshot at Standard save. Never changes — this is the AP reconciliation reference.
+
+**Actual Material column:**
+- Default = NULL (displayed as "*(same)*" — inherits Formulation Material)
+- Dropdown is available — shows only registered alternates of the Formulation Material
+- User only touches this column when a substitution is needed
+- If user selects X1 → Actual Material = X1 (explicit substitution recorded)
+- Dosage% on Actual side = always inherited from Formulation (not independently calculated)
+
+**DB storage:**
+- `actual_material_id = NULL` → no substitution (formulation material used)
+- `actual_material_id = <X1 id>` → substitution recorded
+
+**Reservation behavior on substitution:**
+- Actual Material changed X → X1: Reservation for X → CANCELLED, Reservation for X1 → OPEN (same qty)
+- Alternate must be registered in Stroke/BOM alternate list before substitution is allowed
+- If alternate not registered: user must first add it to the alternate list in Stroke Master, then return to PO
+
+**Substitution edit window:**
+- PR09 Standard → ✅ allowed
+- PR10 Edit → ✅ allowed
+- PR11 Final → ✅ allowed (instruction can arrive at any phase)
+- PR12 Verify (before P261 posted) → ✅ allowed
+- PR12 Verify (after P261 posted) → ❌ locked — consumption already recorded
+
+**At Verify (PR12):** P261 posts for Actual Material (X1 if substituted, X if not)
+
+**In all views (COID PR13, Final PR11, Verify PR12, reports):**
+- Both columns always shown side by side — Formulation | Actual
+- NULL Actual = shows Formulation material in both columns (greyed on Actual side)
+- Substituted rows: Formulation = X, Actual = X1, Dosage% same in both
+
+**AP Reconciliation:** Always references Formulation Material column — what the stroke/BOM called for.
+**Actual consumption / costing:** References Actual Material column — what was physically issued.
+
+---
+
+#### Packing PO — Lifecycle Design (LOCKED — 2026-07-05)
+
+##### Status Flow
+
+```
+STANDARD → FINAL (terminal — movements happen here)
+               ↓
+         COR6 Correction Mode (QA only, post-Final, append)
+               ↓
+          CORS → STANDARD → PO Prune (if needed)
+```
+
+| Status | Who | Action |
+|---|---|---|
+| STANDARD | Production | Create, freely editable |
+| FINAL | Production | Actual qty entry → movements posted on save |
+| COR6 Correction | QA only | Append corrections (P261/P262), no approval, status stays FINAL |
+| CORS → STANDARD | Production / Manager | Full reversal, reason mandatory |
+
+**No QA Approval. No Batch Number. No Verify phase.**
+
+---
+
+##### PR09 — Standard Create (Packing PO mode)
+
+PO Type = PMTO / PHPS / PMTS / PTEST triggers Packing PO behavior.
+
+**Header fields:**
+
+| Field | Rule |
+|---|---|
+| PO Type | PMTO / PHPS / PMTS / PTEST |
+| PO Number | Auto-generated |
+| Linked Process PO | Mandatory — same company, STANDARD+ status |
+| SKU (FG material) | Auto from Prodshade + Pack Code |
+| Pack Code | Auto from Prodshade Pack Config |
+| Fill Qty per Pack (KG) | User enters |
+| Number of Packs | User enters |
+| Total Packing Qty | Auto = Fill Qty × Number of Packs |
+| Machine (packing machine) | User selects |
+| Scheduled Date | User enters |
+| FO Number | Optional — informal reference only |
+
+**INPUT — SFG line (always auto-populated):**
+
+| Field | Value |
+|---|---|
+| Material | SFG of the Prodshade |
+| Std Qty | = Total Packing Qty (KG) |
+| SLoc | S003 (editable) |
+| Movement Type | P261 |
+
+**INPUT — PM lines:**
+
+| Pack Code | PM at Standard | Final entry |
+|---|---|---|
+| 599 / 000 / 001 (BOM Required = No) | User manually adds rows. Qty entered **per pack** (not total). System auto-calculates Total Std Qty = Qty per Pack × Number of Packs | Actual qty entered manually |
+| 510 / BOM Required = Yes | Auto-populated from Pack BOM × Number of Packs | Edit actual qty |
+
+> **599/000/001 example** — Fill Qty 230 KG, 23 barrels:
+>
+> | Material | Qty per Pack | Total Std Qty |
+> |---|---|---|
+> | SFG | — | 5,060 KG (auto) |
+> | Barrel | 1 | 23 |
+> | Label | 1 | 23 |
+>
+> User is effectively creating the BOM manually at Standard time for these pack codes.
+
+**OUTPUT line (auto):**
+
+| Field | Value |
+|---|---|
+| FG SKU | Auto from Pack Code + Prodshade |
+| Std Qty | = Total Packing Qty (KG) |
+| Movement Type | P231 |
+
+---
+
+##### PR11 — Final (Packing PO — Terminal Step)
+
+**Final is the terminal step for Packing PO. Stock movements happen at Final save.**
+
+**INPUT section:**
+
+| Column | SFG Line | PM Lines |
+|---|---|---|
+| Material | Read only | Read only (BOM) / Editable if 599/000/001 |
+| Std Qty | Read only | Read only |
+| Actual Qty | Editable | Editable |
+| AP Approved Qty | Yes / No / Partial dropdown | Yes / No / Partial dropdown |
+| Variance | Auto | Auto |
+| SLoc | S003 (editable) | pm_sloc (editable) |
+| Movement Type | P261 | P261 |
+
+**SFG Batch Number — Drawer:**
+- SFG line has a Batch Number field → click opens drawer
+- Drawer shows: Process PO Number | Batch Number | Available Qty in S003
+- User selects the correct Process PO + Batch
+- SFG consumed from that batch at Final save (remaining qty stays in S003)
+
+**Row add at Final:** New PM rows can be added (extra consumable). 0 qty → ignored.
+
+**OUTPUT section:**
+
+| Column | Rule |
+|---|---|
+| FG Material | Auto from SKU |
+| Actual Output | Editable by Production |
+| AP Approved Output | SUM(all INPUT AP Approved Qty) — auto-calculated |
+| Variance | Actual Output − AP Approved Output |
+| Movement Type | P231 |
+
+**AP Approved Rules (same as Process PO):**
+
+| Selection | AP Approved Qty |
+|---|---|
+| Yes | = Std Qty |
+| No | = 0 |
+| Partial | Manual entry |
+| Auto-YES | When Std = Actual (dropdown inactive, cannot change) |
+
+**Movements at Final save:**
+
+| Movement | Material | Direction |
+|---|---|---|
+| P261 | SFG (actual qty, from selected batch) | S003 → consumed |
+| P261 | Each PM line (actual qty) | pm_sloc → consumed |
+| P231 | FG (actual output qty) | → F003 |
+
+---
+
+##### PR12 — COR6 Correction Mode (Packing PO)
+
+> Packing PO has **no Initial Verify mode**. PR12 opens directly in Correction Mode when PO Type is Packing.
+
+| Rule | Detail |
+|---|---|
+| Who | QA only |
+| When | Post-Final (FINAL status) |
+| Lines shown | All INPUT lines from Final — qty blank |
+| Add qty | → P261 movement |
+| Reduce qty | → P262 movement |
+| SLoc | Default from Final, editable |
+| Model | Append — corrections accumulate, no overwrite |
+| Approval | None required (QA is the authority) |
+| Status after | FINAL (no change) |
+
+---
+
+##### PR15 — CORS Full Reversal (Packing PO)
+
+**Any status → STANDARD directly. Reason mandatory.**
+
+**Reversal movements (when Final was saved):**
+
+| Movement | Material | Direction |
+|---|---|---|
+| P262 | SFG | Released back to S003 |
+| P262 | Each PM | Returned to pm_sloc |
+| P102 | FG | Reversed from F003 |
+
+If COR6 corrections exist → those movements also reversed (opposite direction).
+If still at STANDARD → no movements, status reset only.
+
+**After CORS:** PO can be Pruned.
+
+---
+
+##### PO Prune (Packing PO)
+
+| Rule | Detail |
+|---|---|
+| Available at | STANDARD status only |
+| Reason | Mandatory |
+| Effect | Delinks from Process PO. Process PO balance freed. |
+| Stock | All movements must be reversed before Prune (CORS handles this) |
+| Record | Preserved as PRUNED — never physically deleted |
 
 ---
 
@@ -8060,9 +8659,22 @@ User reviews → confirms → movement posted
 
 ### 83.10 — Under / Over Delivery Tolerance
 
+**Applicability by PO Type (UPDATED — 2026-07-04):**
+
+| PO Type | Delivery Tolerance | Reason |
+|---|---|---|
+| MTO | ❌ Not applicable | Liquid mass balance — actual output = actual RM total. No independent output target to check against. |
+| HPS | ❌ Not applicable | Same — liquid mass balance |
+| MTEST | ❌ Not applicable | Same — small test batch, mass balance applies |
+| MTS | 🔶 Deferred | May apply — design when MTS is implemented |
+| INT | ❌ Not applicable | Simple cycle, no output tolerance concept |
+
+> **MTO/HPS/MTEST principle:** Whatever RM qty goes in = SFG qty that comes out. Actual output is always the sum of actual RM inputs. A delivery tolerance hard block would be physically meaningless — the output IS the inputs. AP Approved qty handles recognition separately via the AP Reco model.
+
+**MTS (future — deferred):**
+
 | Item | Decision |
 |---|---|
-| Scope | All production orders — not Admix-specific |
 | Level | FG Material Master |
 | Enable / Disable | Per FG material — configured via UI by SA/authorized user |
 | Under Delivery Tolerance | % value — set per FG material when enabled |
@@ -8071,13 +8683,8 @@ User reviews → confirms → movement posted
 | Override | Authorized user opens specific PO → edits tolerance for that PO only |
 | Override scope | That PO only — material master tolerance unchanged |
 | Audit trail | Mandatory on every override (who, when, old value, new value) |
-| Override authority | Role-restricted — approved users only |
 
-**Design Rule:**
-- At Process PO creation: tolerance values copied from FG material master
-- Material master is the default source — PO holds its own copy (overridable)
-- Disabled tolerance = no check, goods movement proceeds freely
-- SA manages which materials have tolerance enabled via material master UI
+> Material master tolerance field exists in schema (future-ready). MTS implementation will activate the check. MTO/HPS/MTEST POs skip tolerance check entirely at Verify.
 
 ---
 
@@ -8204,7 +8811,9 @@ Example:
 
 ---
 
-#### Pack Code Master (LOCKED — 2026-06-30)
+#### OM08 — Pack Code Master (LOCKED — 2026-06-30)
+
+**Page structure: 2 tabs**
 
 | Field | Value |
 |---|---|
@@ -8214,22 +8823,24 @@ Example:
 | Route | `/admin/sa/om/pack-code-master` |
 | Menu | SA → Operation Management → Pack Code Master |
 
-**Who manages:** SA (system admin)
-**How seeded:** All known pack codes pre-populated via migration at go-live. SA page allows adding new codes or editing existing ones in future.
+---
 
-**Fields:**
+**Tab 1 — Pack Code Catalog**
+
+**Who manages:** SA only
+**How seeded:** All 15 pack codes pre-populated via migration at go-live. SA can add new codes or edit existing.
 
 | Field | Notes |
 |---|---|
 | Pack Code | 050, 110, 120, etc. |
-| Description | Informational only (e.g. "~1 Ltr / ~1 KG container") — not system-enforced |
-| BOM Required | Yes = Pack BOM must be defined before Packing PO can be created. No = PM entered manually at Packing PO time. |
+| Description | Informational only |
+| BOM Required | Yes = Pack BOM must exist before Packing PO. No = PM entered manually at Packing PO time. |
 | Active | Yes / No |
 | Created by / Date | auto |
 
-**No fill qty or fill UOM on Pack Code Master** — same pack code can have different fill qty/UOM per product (e.g. 210 = 1 Ltr for liquid products, 1 KG for others). All detail belongs at Pack BOM/SKU level.
+**No fill qty or fill UOM on Tab 1** — detail belongs at SKU level.
 
-**Initial seed — all 15 pack codes (migration):**
+**Initial seed — 15 pack codes (migration):**
 
 | Pack Code | Description | BOM Required |
 |---|---|---|
@@ -8252,50 +8863,178 @@ Example:
 
 ---
 
-#### Pack BOM / SKU Design (LOCKED — 2026-06-30)
+**Tab 2 — Prodshade Pack Config (LOCKED — 2026-06-30)**
 
-**Page:** PR06 — Pack BOM (menu_code: `PROD_PACK_BOM`, tx_code: `PR06`, route: `/dashboard/om/production/pack-bom`)
-**Who creates:** Manager (same company)
-**Prerequisite:** Prodshade must have at least one ACTIVE Stroke (SFG Material Master must exist)
+**Who manages:** SA only
+**Scope:** Global per Prodshade — NOT company-specific (pack format is a product decision, not a factory decision)
+**Prerequisite:** Prodshade must have at least one ACTIVE Stroke (PR02 approved → SFG Material Master exists)
 
-**Pack BOM is defined at SKU level:**
+**SA flow:**
+1. Select Prodshade (from globally approved prodshades)
+2. Link pack codes allowed for that prodshade (+ Variant if applicable, e.g. 310-JAR / 310-BAG)
+3. For fill-size pack codes (599, 000): also enter allowed fill sizes
+
+**On link → FG Material Master auto-created (LOCKED — 2026-06-30):**
+
+Material Master field mapping differs by production type (MTS vs MTO/HPS):
+
+| Field | MTS (IWC / Powder) | MTO / HPS (Admix / Hypershot) |
+|---|---|---|
+| `material_name` | Description (human-readable product name) | SKU (product identifier code) |
+| `document_name` | SKU | Description |
+| `external_code` | SKU | SKU |
+| `material_type` | FG | FG |
+| `shade_code` | Prodshade code | Prodshade code |
+| `pack_code` | Pack Code | Pack Code |
+| `pace_code` | Auto-generated (FG-00001...) | Auto-generated |
+| `base_uom_code` | KG (default for all liquid FG) | KG |
+
+UOM Alt1 / Alt2 / conversion factors → SA fills in Material Master separately after auto-creation.
+`production_mode` → not used at auto-creation time (deferred, not needed now).
+
 ```
-Prodshade + Pack Code + Variant (optional) = unique SKU → FG Material Master auto-created
+Prodshade + Pack Code + Variant = unique SKU → FG Material Master (FG-00001...) created immediately
+Company plant extensions inherited from SFG material's existing plant extensions
 ```
 
-Variant is needed for pack codes where same code has different physical containers (e.g. 310 Jar vs 310 Bag — different PM, different SKU).
+**Tab 2 UI:**
+```
+Prodshade: [dropdown — globally approved prodshades]
 
-**On Save:**
-- Check: FG Material Master for this Prodshade + Pack Code + Variant exists?
-- NO → Create FG Material Master (material_type = FG, pace_code = FG-00001...)
-- YES → reuse existing (editing Pack BOM only)
-- Company plant extension created for this company
+Pack Code | Variant   | Fill Size(s)     | BOM Required | Actions
+120       | —         | —                | Yes          | Delete
+207       | —         | —                | Yes          | Delete
+310       | JAR       | —                | Yes          | Delete
+310       | BAG       | —                | Yes          | Delete
+599       | —         | 230 KG, 250 KG   | No           | Edit / Delete
+000       | —         | — (full tanker)  | No           | Edit / Delete
+                                                          [+ Link Pack Code]
+```
 
-**Pack BOM has two types:**
-
-| BOM Required = Yes | BOM Required = No (599 / 000 / 001) |
-|---|---|
-| Header + PM Lines defined | Header only — no PM lines |
-| PM auto-populated at Packing PO creation | PM manually entered at Packing PO time |
-
-**PM Lines (for BOM Required = Yes):**
-
-| Field | Notes |
-|---|---|
-| PM Item | material_type = PM only |
-| Qty | per dispatch unit (per carton / per jar / per IBC etc.) |
-| UOM | from material master |
-
-Fill qty, fill UOM, container type, carton qty — all captured implicitly via PM lines (e.g. 050 BOM will list 40 bottles + 1 carton box + labels, which encodes all structure).
+**Rules:**
+- SA cannot delete a linked pack code if a Pack BOM (PR06) or Packing PO already exists for that SKU
+- Stroke company-specific; Pack Config global — they are independent scopes
 
 ---
 
-**Original 83.15 table (superseded):**
+#### Pack BOM Pages (LOCKED — 2026-06-30)
 
-| FG Type | Pack BOM | PM Selection |
+4 pages — same structure as Stroke Master but with key differences (no Stroke concept, no Dosage%, absolute Qty, row add/delete/edit allowed):
+
+| TX Code | Page Name | Who |
 |---|---|---|
-| Admix (MTO) / MTEST | None (599/001 = BOM Required No) | Manual at Packing PO |
-| Hypershot (HPS) / IWC (MTS) | Fixed BOM per SKU | Auto-populated at Packing PO |
+| `PR05` | Pack BOM — Create | Procurement |
+| `PR06` | Pack BOM — Approval | L1 Manager Procurement |
+| `PR07` | Change Pack BOM | Procurement |
+| `PR08` | Change Pack BOM Approval | L1 Manager Procurement |
+
+**Lifecycle:**
+```
+PR05 Create → DRAFT
+    ↓
+PR06 Approve → ACTIVE          (BOM Required = Yes only)
+    ↓
+PR07 Change (any time post-ACTIVE — add / delete / edit PM rows)
+    ↓
+PR08 Approve → BOM lines live update
+    (cycle repeats as consumables change over time)
+```
+
+**599 / 000 / 001:** Pack BOM created via PR05, but auto-ACTIVE immediately — no PR06 approval needed.
+
+---
+
+#### PR05 — Pack BOM Create (LOCKED — 2026-06-30)
+
+**Header:**
+
+| Field | Notes |
+|---|---|
+| FG SKU | Select from Material Master (material_type = FG, SA-linked only) |
+| Material Type | Auto = FG (display only — Pack BOM always for FG) |
+| PO Type | Auto-derived from SKU (display only — no separate field) |
+| UOM Conversions | Read-only from Material Master (Alt UOM 1, Alt UOM 2, conversion factors) — reference for Procurement entering line qty |
+| Created By / Date | System |
+
+No Stroke Number. No Dosage%. No Conversion UOM / Factor. No Prod+Shade manual entry.
+
+**Lines — SAP OUTPUT/INPUT model:**
+
+| Type | Material | Qty | UOM | Editable |
+|---|---|---|---|---|
+| OUTPUT | FG SKU | BOM Required=Yes → 1 / BOM Required=No → blank | Outer pack unit (CTN/BAG/BBL/IBC/TANKER) | ❌ auto |
+| INPUT | Prodshade (SFG liquid) | BOM Required=Yes → KG per outer pack (from UOM conversion) / BOM Required=No → blank (calculated at Packing PO time) | KG | ❌ auto |
+| INPUT | PM material | qty | PM base UOM | ✅ user adds rows |
+| INPUT | PM material | qty | PM base UOM | ✅ user adds rows |
+| … | … | … | … | ✅ unlimited rows |
+
+**PM Input line columns (same mechanism as Stroke Master RM lines):**
+
+| # | Column | Detail |
+|---|---|---|
+| 1 | Type | INPUT (fixed) |
+| 2 | PM Material | Dropdown, material_type = PM only |
+| 3 | Qty | Absolute qty per 1 outer pack unit |
+| 4 | UOM | From PM base_uom_code (auto, not editable) |
+| 5 | Has Alternate? | Yes / No |
+| 6 | Material Group | Searchable dropdown + inline Create Group — reuses `erp_master.material_category_group` (same as Stroke Master) |
+| 7 | Members | Alternate PM materials — unlimited, stored as `material_category_group_member` rows. Group membership is live (external reference, not BOM snapshot). |
+
+**BOM Required = No (599 / 000 / 001) qty calculation at Packing PO time:**
+
+| Pack Code | OUTPUT qty | Prodshade INPUT qty | Source |
+|---|---|---|---|
+| 599 | number_of_barrels (BBL) | barrels × fill_qty_per_barrel | Both from Packing PO header |
+| 000 | 1 (TANKER) | total_KG | Packing PO order qty |
+| 001 | batch_qty (KG) | batch_qty | Packing PO order qty |
+
+**Submit behaviour:**
+- BOM Required = Yes → DRAFT → enters PR06 queue
+- 599 / 000 / 001 → auto-ACTIVE (no approval step)
+
+**BOM Required = Yes — hard block:**
+Pack BOM must be ACTIVE before Packing PO can be created for that SKU. System blocks PO creation if no approved BOM exists.
+
+---
+
+#### PR06 — Pack BOM Approval (LOCKED — 2026-06-30)
+
+**Applies to:** BOM Required = Yes pack codes only (599/000/001 skip this step)
+
+**L1 Manager Procurement can:**
+- View all lines
+- Edit PM lines (qty, add row, delete row) before approving
+- Approve → BOM becomes ACTIVE
+- Reject → BOM back to DRAFT (Procurement revises and resubmits)
+
+---
+
+#### PR07 — Change Pack BOM (LOCKED — 2026-06-30)
+
+**Works on ACTIVE Pack BOM — used any time consumables change**
+
+**Procurement can:**
+- Add new PM rows
+- Delete existing PM rows
+- Edit PM qty
+- Substitute PM item (one PM replaced with another)
+- Edit Material Group membership (or go to PM04 to add member, return to PR07)
+
+Submit → Change Request created → enters PR08 queue
+
+**In-progress Packing POs:** Unaffected — they use the BOM snapshot taken at PO creation time. Change applies only to future Packing POs.
+
+---
+
+#### PR08 — Change Pack BOM Approval (LOCKED — 2026-06-30)
+
+**L1 Manager Procurement can:**
+- Review proposed changes
+- Edit the proposed changes before approving
+- Approve → Pack BOM lines updated live (ACTIVE BOM modified in place)
+- Reject → BOM unchanged, Change Request marked REJECTED (audit trail preserved)
+
+**599 / 000 / 001 post-ACTIVE edits:** Procurement can edit directly (no PR07/PR08 flow — same logic as auto-ACTIVE on creation).
 
 **Packing is NEVER part of Stroke/RM definition.**
 
@@ -12665,77 +13404,151 @@ The following topics need formal discovery and locking:
 
 ---
 
-### 104.7 — Production Scenario Discovery (2026-06-29 session)
+### 104.7 — Production AP Reco Model (LOCKED — 2026-07-04)
 
-**Status:** 🔴 NOT LOCKED — Discovery/concept notes only. These scenarios surfaced real production cases that the costing/Reco design must eventually handle, but none of the mechanisms below are approved for implementation yet. A formal decision session (with Accounts/Commercial input, and possibly Asian Paints alignment) is required before locking.
+**Status:** ✅ LOCKED (core model). Scenario 3 settlement policy remains open — see end of section.
 
 ---
 
-**Core principle discussed (directional, not locked):**
+#### Core Principle (LOCKED — 2026-07-04)
 
 ```
-Stock Layer  — must always reflect 100% physical actual (RM consumed, FG produced).
-               Never suppressed or adjusted to match what AP will recognize.
+Stock Layer  — always 100% physical actual. P261 consumes actual RM qty.
+               P231 receives actual FG/SFG qty. Never filtered or adjusted
+               based on AP approval status.
 
-Reco Layer   — entirely separate from Stock. Only the AP-recognized/approved portion
-               flows into Reco. Stock postings are never modified to make this layer balance.
+Reco Layer   — entirely separate. Only AP-approved portion flows into Reco.
+               Stock postings are NEVER modified to make Reco balance.
 ```
 
-If this separation holds, Stock integrity is never compromised by Reco/billing disputes — but the mechanics of the Reco Layer itself (below) are open.
+---
+
+#### AP Approved Qty Model (LOCKED — 2026-07-04)
+
+AP approval is tracked as a **quantity field per RM INPUT line** — not a binary flag.
+
+- `AP Approved Qty` = the quantity Asian Paints recognizes for billing/reco purposes.
+- Entered by Production at Final phase via Yes/No/Partial toggle (see Section 83.4 Final/Verify Line Table).
+- `AP Approved Qty` is independent of formulation membership — a material not in the formulation can still have AP Approved Qty > 0 (e.g. Caramel added ad-hoc but AP approved it).
+
+**AP Approved Output (SFG):**
+- Not entered separately.
+- Auto-calculated = SUM(AP Approved Qty for all INPUT lines).
+- Denominator for all dispatch Reco calculations.
 
 ---
 
-**Scenario 1 — RM substitution within approved formulation tolerance**
+#### Dispatch Reco Calculation (LOCKED — 2026-07-04)
 
-Caustic/Water trade off against each other inside the same formulation (e.g. Caustic +50 KG, Water −50 KG, total output unchanged). Treated as **pre-approved, recurring, normal** — no Reco issue, because total output = order qty = dispatch qty.
+```
+Dispatch Ratio    = Dispatch Qty ÷ AP Approved Output Qty
+Per-RM AP Reco    = RM AP Approved Qty × Dispatch Ratio
+```
 
-**Scenario 1b — Split dispatch of a single batch**
+> Denominator is **AP Approved Output** — not Actual Output.
+> Excess/shortfall production that AP did not approve is excluded from the denominator.
 
-One batch/Packing PO (e.g. 43 barrels) dispatched across multiple invoices/months (e.g. 20 + 23, or partial with balance pending). RM/PM qty must be allocated to each dispatch **proportionally** (dispatch qty ÷ total batch qty) for Reco recognition timing — this allocation is Reco-layer only, does not touch Stock. Un-dispatched portion stays "Pending Recognition."
+**Example (10,000 KG AP Approved Output, 5,000 KG dispatch):**
 
-**Scenario 2 — Production batch larger than order qty**
-
-10,000 KG batch produced against a 9,890 KG order. Balance (110 KG) becomes a separate Balance Packing PO (per 83.14 mechanism, no FO link), proportionally carrying its own share of RM deviation. Same proportional allocation rule as 1b applies, nested: Batch → Packing PO → Dispatch.
-
-**Scenario 3 — Unapproved/non-separable deviation (OPEN PROBLEM)**
-
-A mistake in RM dosing gets "corrected" ad-hoc with additional materials outside the approved formulation pattern, inflating output (e.g. planned 9,890 KG batch becomes 11,000 KG actual). The deviation is **mixed into the FG itself** — not separable from what's being dispatched right now (unlike Scenario 2's clean balance).
-
-- Asian will not recognize this deviation, even proportionally.
-- PACE cannot simply absorb it as a write-off either (explicitly rejected by business owner).
-- The unresolved variance must stay tagged to the **Batch Number**, not settled once — because future dispatches drawing from the same batch (e.g. balance portion sold against a later FO) carry the same unresolved tag and must be re-evaluated each time.
-- **No resolution agreed.** Requires Accounts/Commercial policy decision, possibly direct alignment with Asian Paints.
-
-**Scenario 4 — Small separable excess (salvage)**
-
-Minor over-dosing (e.g. extra water → 5 KG or 50 KG excess output) that is NOT mixed into today's dispatch — it can be physically held back and blended into a future batch of the same Prodshade.
-
-- Tentative direction: this is **not a loss**, just **deferred recognition** — held as a Salvage/Excess stock concept (qty + source batch reference), recognized later when blended into a batch that gets dispatched. Same proportional Reco mechanism applies at that future point.
-- Unlike Scenario 3, this is resolvable because the excess is separable from the current dispatch.
-- Salvage stock mechanism itself (stock type, blending into future Stroke/formulation, valuation) is **not designed yet**.
-
-**RM-line-level approval status (not a fixed rule):**
-
-Whether a given RM deviation (qty change on an existing line, or an entirely new line added) is "Approved" or "Unapproved" by Asian is **not determined by any system rule** (e.g. "inside formulation = approved, outside = not"). It must be tracked as an **explicit, case-by-case approval status** per deviation — workflow (who marks it, at what stage) not yet decided.
-
-**Cross-PO derivation (resolved — not a gap):**
-
-Since Process PO and Packing PO are separate documents (per 83.4 Option A — link via Batch Number, not an explicit link field), a concern was raised about how to derive per-dispatch RM/PM allocation. Resolved: each Packing PO records how much bulk qty it drew from a given Process PO's Batch — that ratio (Packing PO qty ÷ Process PO batch total) is sufficient to derive proportional RM/PM allocation, even across separate documents. Dispatch-level sub-allocation then applies within the Packing PO's own qty, same mechanism as Scenario 1b.
-
-**Multi-product invoices (resolved — not a gap):**
-
-If one invoice bundles dispatches from multiple Packing POs (different products/batches), this does not add complexity — RM/PM Recognition is computed at Packing PO + Dispatch level, before invoice grouping. Invoice is a billing-level aggregation only.
+| RM | AP Approved | AP Reco (50% dispatch) |
+|---|---|---|
+| Water | 2,540 | 1,270 |
+| Caustic | 420.25 | 210.13 |
+| SR PCE | 2,800 | 1,400 |
+| Ligno | 900 | 450 |
+| Caramel | 0.75 | 0.375 |
 
 ---
 
-**⚠️ Explicitly NOT locked — production cannot go live on these scenarios until decided:**
-- [ ] Scenario 3 — final settlement/write-off policy for unapproved, non-separable variance
-- [ ] RM-line approval status — who marks it, at what production stage, what UI
-- [ ] Salvage/Excess stock mechanism — stock type, blending workflow, valuation
-- [ ] Whether "Stock Layer vs Reco Layer" separation (core principle above) survives Accounts team review
+#### Three Reports (LOCKED — 2026-07-04)
+
+| Report | Data Source | Purpose |
+|---|---|---|
+| **Production Report** | Actual Qty (all lines) | Physical batch record — what was consumed/produced |
+| **AP Reco Report** | AP Approved Qty × Dispatch Ratio | AP billing basis — what PACE shows AP for recognition |
+| **Costing Report** | Actual vs Standard vs AP Approved variance | Internal variance tracking per batch/dispatch |
 
 ---
 
-**Status: 🔴 PENDING DEDICATED SESSION**
-**Prerequisite:** 83.4 fields design + 83.6–83.12 lock first, then schedule costing session.
+#### Reversal Basis (LOCKED — 2026-07-04)
+
+When a Process PO is partially or fully reversed:
+
+```
+Reversal Ratio = Reversal Qty ÷ Actual Total FG Output
+Per-RM Reversed = Actual RM Qty × Reversal Ratio
+```
+
+> Reversal always uses **Actual** proportions — not AP Approved proportions.
+> Stock was consumed at actual ratios; stock must be restored at actual ratios.
+
+Separate AP Reco reversal:
+```
+AP Reco Reversal per RM = AP Approved Qty × Reversal Ratio
+```
+
+These are two separate calculations. Stock reversal and Reco reversal happen together but are computed independently.
+
+---
+
+#### Return Receipt (LOCKED — 2026-07-04)
+
+Customer returns packed barrels with only SKU + Qty — no FO/SO reference on label.
+
+**Batch Number is printed on every barrel label.** Return receipt requires Batch Number as mandatory field.
+
+From Batch Number → source Process PO → actual RM ratios derivable.
+
+```
+RM content in returned qty = Actual RM Ratio × Returned Qty
+AP Reco reversal           = AP Reco Ratio  × Returned Qty
+```
+
+Two separate reversals, computed from the same source batch record.
+
+---
+
+#### has_unapproved_deviation Flag (LOCKED — 2026-07-04)
+
+- System auto-sets `has_unapproved_deviation = TRUE` at Final save when **any INPUT line Variance > 0** (Actual Qty > AP Approved Qty).
+- Production does not mark this manually.
+- Batches with this flag appear in an analysis queue for review.
+- Flag persists on the batch record permanently — not cleared even if later dispatched/closed.
+
+---
+
+#### Excess FG (FOR_REPROCESS) (LOCKED — 2026-07-04)
+
+When Actual Output > AP Approved Output (e.g. 10,000.75 KG actual vs 10,000 KG approved), the excess (0.75 KG) goes to FOR_REPROCESS stock.
+
+**The excess barrel contains proportional shares of ALL RMs** — it is physically impossible to isolate which "extra" RM caused the excess. RM content of excess barrel = proportional share of all actual inputs.
+
+AP cannot be shown proportional actuals for normally-consumed RMs (e.g. showing Gluconate at 292.946 KG instead of 300 KG standard would cause underpayment for correctly-used material).
+
+**Resolution:** Excess FG is held in FOR_REPROCESS stock with source batch reference. AP Reco for excess is deferred — recognized when the excess is blended into a future batch that gets dispatched (Scenario 4 mechanism, see below).
+
+---
+
+#### Scenario Status (2026-07-04)
+
+**Scenario 1 — RM substitution within AP-approved tolerance** ✅ RESOLVED
+Caustic/Water trade-off (Caustic +50 KG, Water −50 KG, output unchanged). Set Approved = Yes for both lines at Final. AP recognizes full actual. No Reco issue.
+
+**Scenario 1b — Split dispatch of single batch** ✅ RESOLVED
+Dispatch Ratio applied per dispatch event. Un-dispatched portion stays "Pending Recognition" in Reco Layer.
+
+**Scenario 2 — Batch larger than order qty** ✅ RESOLVED
+Balance goes to Balance Packing PO (83.14 mechanism). Same proportional allocation applies: Batch → Packing PO → Dispatch.
+
+**Scenario 3 — Unapproved non-separable deviation** 🔴 OPEN
+Mistake + ad-hoc correction inflates output (e.g. 9,890 KG planned → 11,000 KG actual). Deviation is mixed into FG — physically inseparable from dispatched stock. AP will not recognize. PACE cannot write off (rejected by business owner). Unresolved variance tagged to Batch Number. **Requires Accounts/Commercial policy decision + AP alignment before production go-live.**
+
+**Scenario 4 — Small separable excess (salvage)** 🔶 DIRECTIONAL
+Minor excess held in FOR_REPROCESS (not dispatched today). Deferred recognition — recognized when blended into a future batch of same Prodshade. Salvage stock mechanism (blending workflow, valuation) not yet designed.
+
+---
+
+**⚠️ Still requires decision before go-live:**
+- [ ] Scenario 3 — settlement/write-off policy for unapproved, non-separable variance
+- [ ] Salvage/Excess stock blending workflow and valuation (Scenario 4 mechanism)
 
