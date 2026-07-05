@@ -4,7 +4,7 @@
  * Gate: 27 | Domain: PRODUCTION
  * Purpose: SA/Manager — configure production segment location mapping per company.
  *          Segment (ADMIX/HPS/IWC/POWDER/INT) → rm_sloc, pm_sloc, shopfloor_sloc, fg_sloc.
- *          Used at Verify to determine where P261/P231 stock movements post.
+ *          Used at Verify to determine where P261/P101 stock movements post.
  */
 
 import React, { useState } from "react";
@@ -106,7 +106,7 @@ export default function SAProductionSegmentLocationPage() {
         {/* Explanation */}
         <div className="mb-4 px-3 py-2 bg-sky-50 border border-sky-200 rounded text-xs text-sky-700">
           <strong>How this is used:</strong> At Process Order VERIFY, P261 (RM consumption) posts from <code>rm_sloc</code>,
-          PM consumption from <code>pm_sloc</code>, and P231 (FG receipt) posts to <code>shopfloor_sloc</code>.
+          PM consumption from <code>pm_sloc</code>, and P101 (FG receipt) posts to <code>shopfloor_sloc</code>.
         </div>
 
         {listQ.isLoading ? (
@@ -182,7 +182,7 @@ export default function SAProductionSegmentLocationPage() {
           {[
             { key: "rm_sloc_id", label: "RM Storage Location ID", hint: "Source for raw material P261" },
             { key: "pm_sloc_id", label: "PM Storage Location ID", hint: "Source for packaging material P261" },
-            { key: "shopfloor_sloc_id", label: "Shopfloor Sloc ID", hint: "FG destination for P231" },
+            { key: "shopfloor_sloc_id", label: "Shopfloor Sloc ID", hint: "FG destination for P101 (production GR)" },
             { key: "fg_sloc_id", label: "FG Storage Location ID", hint: "Final FG sloc (optional)" },
           ].map(({ key, label, hint }) => (
             <div key={key} className="flex flex-col gap-1">

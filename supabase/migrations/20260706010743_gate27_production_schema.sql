@@ -305,7 +305,9 @@ CREATE INDEX idx_packing_order_process   ON erp_production.packing_order (proces
 CREATE INDEX idx_packing_order_status    ON erp_production.packing_order (status);
 
 -- ── MOVEMENT TYPES (P231/P232) ───────────────────────────────────────────────
--- P231: Production Receipt — posts FG/SFG into target location (S003 or F003)
+-- NOTE: Superseded by migration 20260706050000_align_movement_types_to_sap.
+-- SAP 101 covers both vendor GRN and production FG receipt — PACE uses P101 for both.
+-- P231/P232 inserted here are deleted in the corrective migration.
 -- P261/P262 already exist for GI (issue) to production orders
 INSERT INTO erp_inventory.movement_type_master
   (code, name, direction, source_stock_type, target_stock_type,

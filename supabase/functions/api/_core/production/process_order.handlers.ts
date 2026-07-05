@@ -5,7 +5,7 @@
  * Phase: 27
  * Domain: PRODUCTION
  * Purpose: Process Order full lifecycle — STANDARD → QA_APPROVED → BATCH_STARTED → FINAL → VERIFIED.
- *          Stock movements (P261 RM/PM out + P231 FG in) fire at VERIFIED.
+ *          Stock movements (P261 RM/PM out + P101 FG in) fire at VERIFIED.
  * Authority: Backend
  * DB column names: material_id, planned_qty, actual_qty, qa_decided_by/at, issue_sloc_id
  */
@@ -494,7 +494,7 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
 }
 
 // POST /api/production/process-orders/:id/verify
-// Stock movements fire here: P261 RM/PM issues + P231 FG receipt.
+// Stock movements fire here: P261 RM/PM issues + P101 FG receipt (SAP 101 = GR for both PO and Production Order).
 export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertManagerOrSARole(ctx);
@@ -565,7 +565,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       ledgerEntries.push({ line_id: line.id, movement: "P261", direction: "OUT", ...posting });
     }
 
-    // P231: FG receipt into shopfloor sloc
+    // P101: FG receipt into shopfloor sloc (SAP 101 = GR for Production Order, same code as vendor GRN)
     const shopfloorSlocId = segConfig.shopfloor_sloc_id as string | null;
     if (!shopfloorSlocId) {
       return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422,
@@ -579,7 +579,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
 
     const fgPosting = await postStockMovement({
       documentNumber: docNumber, documentDate: today, postingDate: today,
-      movementTypeCode: "P231", companyId: po.company_id,
+      movementTypeCode: "P101", companyId: po.company_id,
       storageLocationId: shopfloorSlocId, materialId: po.material_id,
       quantity: verifiedQty, baseUomCode: fgUom,
       unitValue: 0, stockTypeCode: "UNRESTRICTED", direction: "IN",
@@ -603,7 +603,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       id, status: "VERIFIED",
       batch_number: po.batch_number,
       verified_qty: verifiedQty,
-      ledger_entries: [...ledgerEntries, { movement: "P231", direction: "IN", ...fgPosting }],
+      ledger_entries: [...ledgerEntries, { movement: "P101", direction: "IN", ...fgPosting }],
     }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PO_VERIFY_FAILED";
@@ -638,7 +638,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       const revDocNum = `${po.po_number}-REV`;
       const segConfig = await getSegmentLocConfig(po.company_id as string, po.segment_code as string);
 
-      // P232: Reverse the FG receipt
+      // P102: Reverse the FG receipt (P101 reversal)
       if (po.fg_stock_ledger_id && segConfig?.shopfloor_sloc_id) {
         const { data: prodMat } = await serviceRoleClient
           .schema("erp_master").from("material_master")
@@ -647,7 +647,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
 
         await postStockMovement({
           documentNumber: revDocNum, documentDate: today, postingDate: today,
-          movementTypeCode: "P232", companyId: po.company_id,
+          movementTypeCode: "P102", companyId: po.company_id,
           storageLocationId: segConfig.shopfloor_sloc_id,
           materialId: po.material_id,
           quantity: po.actual_qty as number,
