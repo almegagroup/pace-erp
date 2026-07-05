@@ -83,16 +83,8 @@ function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
   // Protected by upstream pipeline / ACL layer.
 }
 
-function derivePIMovementType(stockType: string, difference: number): string {
-  const isSurplus = difference > 0;
-  switch (toUpperTrimmedString(stockType)) {
-    case "QUALITY_INSPECTION":
-      return isSurplus ? "P703" : "P704";
-    case "BLOCKED":
-      return isSurplus ? "P705" : "P706";
-    default:
-      return isSurplus ? "P701" : "P702";
-  }
+function derivePIMovementType(_stockType: string, difference: number): string {
+  return difference > 0 ? "P701" : "P702";
 }
 
 async function generateProcurementDocNumber(docType: string): Promise<string> {
