@@ -376,7 +376,7 @@ export default function ErpScreenScaffold({
 
   return (
     <section className="flex min-h-full flex-col text-slate-900">
-      <div className="mx-auto flex max-w-none flex-1 flex-col gap-[var(--erp-section-gap)]">
+      <div className="mx-auto w-full flex max-w-none flex-1 flex-col gap-[var(--erp-section-gap)]">
         <div className="sticky top-0 z-20 overflow-hidden border-b border-slate-300 bg-white">
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-1.5">
             <div className="min-w-0">

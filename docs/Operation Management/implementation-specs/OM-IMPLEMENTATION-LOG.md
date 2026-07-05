@@ -891,6 +891,20 @@ doc for the corresponding design updates.
 
 ---
 
+## Hotfix — ErpScreenScaffold full-width regression (2026-07-05)
+
+**Root cause:** `ErpScreenScaffold` (line 379) wraps all page content in:
+```jsx
+<div className="mx-auto flex max-w-none flex-1 flex-col ...">
+```
+In a `flex-col` flex container, `mx-auto` overrides the default `align-self: stretch` behavior — the child no longer fills the cross-axis (horizontal) width; instead it shrinks to its content width. Result: all ERP screens appeared in a narrow centered column (visible on Port Master / OM03 and all other screens using `ErpScreenScaffold`).
+
+**Fix:** Added `w-full` to the same div (`mx-auto w-full flex max-w-none flex-1 flex-col ...`). With an explicit `width: 100%`, the auto margins have no free space to absorb and the element fills the full available width. The `mx-auto` is now harmless (useful if a `max-w-*` constraint is ever added later).
+
+**File changed:** `frontend/src/components/templates/ErpScreenScaffold.jsx` line 379
+
+---
+
 ## Gate-27 — FG Domain: Liquid First (Admix + Hypershot + IWC), Powder Later
 
 **Scope:** Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment, FG Receipt, FG QA, Dispatch Instruction (Liquid), Customer Return, Reuse/Rework/Scrap, FOR_REPROCESS flow.
