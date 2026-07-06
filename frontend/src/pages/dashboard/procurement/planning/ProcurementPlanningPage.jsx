@@ -52,7 +52,6 @@ export default function ProcurementPlanningPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [selectedPlantId, setSelectedPlantId] = useState("");
   const [shortageOnly, setShortageOnly] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
 
@@ -84,30 +83,9 @@ export default function ProcurementPlanningPage() {
     void loadPlanning();
   }, [loadPlanning, refreshToken]);
 
-  const plantOptions = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          rows
-            .map((row) => String(row.plant_id || "").trim())
-            .filter(Boolean)
-        )
-      ).sort((left, right) => left.localeCompare(right)),
-    [rows]
-  );
-
-  useEffect(() => {
-    if (selectedPlantId && !plantOptions.includes(selectedPlantId)) {
-      setSelectedPlantId("");
-    }
-  }, [plantOptions, selectedPlantId]);
-
   const normalizedSearch = search.trim().toLowerCase();
   const visibleRows = useMemo(() => {
     return rows.filter((row) => {
-      if (selectedPlantId && row.plant_id !== selectedPlantId) {
-        return false;
-      }
       if (!normalizedSearch) {
         return true;
       }
@@ -120,7 +98,7 @@ export default function ProcurementPlanningPage() {
         .toLowerCase();
       return haystack.includes(normalizedSearch);
     });
-  }, [normalizedSearch, rows, selectedPlantId]);
+  }, [normalizedSearch, rows]);
 
   const shortageCount = useMemo(
     () => visibleRows.filter((row) => Number(row.net_available ?? 0) < 0).length,
@@ -148,7 +126,7 @@ export default function ProcurementPlanningPage() {
         eyebrow: "Filters",
         title: "Cross-plant shortage planning",
         children: (
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_220px_220px]">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_220px]">
             <QuickFilterInput
               label="Material Search"
               value={search}
@@ -156,21 +134,6 @@ export default function ProcurementPlanningPage() {
               primaryFocus
               placeholder="Search material code or material name"
             />
-            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Plant
-              <select
-                value={selectedPlantId}
-                onChange={(event) => setSelectedPlantId(event.target.value)}
-                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-              >
-                <option value="">ALL</option>
-                {plantOptions.map((plantId) => (
-                  <option key={plantId} value={plantId}>
-                    {plantId}
-                  </option>
-                ))}
-              </select>
-            </label>
             <label className="flex items-end gap-3 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
               <input
                 type="checkbox"
@@ -283,7 +246,7 @@ export default function ProcurementPlanningPage() {
                 },
               ]}
               rows={visibleRows}
-              rowKey={(row) => `${row.company_id}-${row.plant_id}-${row.material_id}`}
+              rowKey={(row) => `${row.company_id}-${row.material_id}`}
               getRowProps={(row) => ({
                 className: rowTone(Number(row.net_available ?? 0)),
               })}

@@ -88,7 +88,7 @@ export default function SACompanyProjectMap() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const loadProjects = useCallback(async (preferredProjectId = selectedProjectId) => {
+  const loadProjects = useCallback(async (preferredProjectId) => {
     setLoading(true);
     setError("");
 
@@ -117,9 +117,9 @@ export default function SACompanyProjectMap() {
     } finally {
       setLoading(false);
     }
-  }, [selectedProjectId]);
+  }, []);
 
-  const loadCompanyMap = useCallback(async (projectId = selectedProjectId) => {
+  const loadCompanyMap = useCallback(async (projectId) => {
     if (!projectId) {
       setProjectDetail(null);
       setCompanies([]);
@@ -144,7 +144,7 @@ export default function SACompanyProjectMap() {
     } finally {
       setLoading(false);
     }
-  }, [selectedProjectId]);
+  }, []);
 
   useEffect(() => {
     void loadProjects(initialProjectId);

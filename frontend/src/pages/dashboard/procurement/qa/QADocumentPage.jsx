@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -7,8 +8,8 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { listMaterials, listStorageLocations, listVendors } from "../../om/omApi.js";
+import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   addQATestLine,
   assignQAOfficer,
@@ -19,6 +20,12 @@ import {
   updateQATestLine,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import {
+  useMaterialOptionsQuery,
+  useStorageLocationOptionsQuery,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -69,22 +76,44 @@ function buildDecisionRow() {
 
 export default function QADocumentPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { id = "" } = useParams();
   const { runtimeContext, shellProfile } = useMenu();
-  const [detail, setDetail] = useState(null);
-  const [grn, setGrn] = useState(null);
-  const [materials, setMaterials] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [storageLocations, setStorageLocations] = useState([]);
   const [testForm, setTestForm] = useState(buildBlankTestForm());
   const [editingLineId, setEditingLineId] = useState("");
   const [editingLineForm, setEditingLineForm] = useState(buildBlankTestForm());
   const [decisionRows, setDecisionRows] = useState([buildDecisionRow()]);
   const [assignToUser, setAssignToUser] = useState("");
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "qa-document-detail", id],
+    queryFn: async () => {
+      const qaData = await getQADocument(id);
+      const grnData = qaData?.grn_id ? await getGRN(qaData.grn_id).catch(() => null) : null;
+      return { detail: qaData, grn: grnData };
+    },
+    enabled: Boolean(id),
+  });
+  const detail = detailQuery.data?.detail ?? null;
+  const grn = detailQuery.data?.grn ?? null;
+  const companyId = detail?.company_id || runtimeContext?.selectedCompanyId || undefined;
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const storageLocationQuery = useStorageLocationOptionsQuery(
+    { company_id: companyId },
+    { enabled: Boolean(companyId) }
+  );
+  const materials = materialQuery.materials;
+  const vendors = vendorQuery.vendors;
+  const storageLocations = storageLocationQuery.storageLocations;
+  const loading =
+    detailQuery.isLoading ||
+    materialQuery.isLoading ||
+    vendorQuery.isLoading ||
+    storageLocationQuery.isLoading;
 
   const roleCode = shellProfile?.roleCode || "";
   const myAssignee = shellProfile?.userCode || "";
@@ -128,49 +157,23 @@ export default function QADocumentPage() {
         !String(row.storage_location_id || "").trim()
     );
 
-  async function loadDetail() {
-    if (!id) {
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const qaData = await getQADocument(id);
-      const companyId = qaData?.company_id || runtimeContext?.selectedCompanyId || undefined;
-      const [grnData, materialData, vendorData, storageData] = await Promise.all([
-        qaData?.grn_id ? getGRN(qaData.grn_id).catch(() => null) : Promise.resolve(null),
-        listMaterials({ limit: 200, offset: 0 }),
-        listVendors({ limit: 200, offset: 0 }),
-        listStorageLocations({ company_id: companyId }),
-      ]);
-
-      setDetail(qaData);
-      setGrn(grnData);
-      setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-      setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-      setStorageLocations(Array.isArray(storageData) ? storageData : []);
-      setAssignToUser(String(qaData?.assigned_to || ""));
-      setDecisionRows([buildDecisionRow()]);
-      setEditingLineId("");
-      setEditingLineForm(buildBlankTestForm());
-      setTestForm(buildBlankTestForm());
-    } catch (loadError) {
-      setDetail(null);
-      setGrn(null);
-      setMaterials([]);
-      setVendors([]);
-      setStorageLocations([]);
-      setError(
-        loadError instanceof Error ? loadError.message : "PROCUREMENT_QA_DOCUMENT_FAILED"
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
+  useEffect(() => {
+    const nextError =
+      detailQuery.error?.message ||
+      materialQuery.error?.message ||
+      vendorQuery.error?.message ||
+      storageLocationQuery.error?.message ||
+      "";
+    setError(nextError);
+  }, [detailQuery.error, materialQuery.error, storageLocationQuery.error, vendorQuery.error]);
 
   useEffect(() => {
-    void loadDetail();
-  }, [id, runtimeContext?.selectedCompanyId]);
+    setAssignToUser(String(detail?.assigned_to || ""));
+    setDecisionRows([buildDecisionRow()]);
+    setEditingLineId("");
+    setEditingLineForm(buildBlankTestForm());
+    setTestForm(buildBlankTestForm());
+  }, [detail?.id, detail?.assigned_to]);
 
   async function handleAssign(nextAssignedTo) {
     if (!detail?.id || !nextAssignedTo) {
@@ -183,7 +186,7 @@ export default function QADocumentPage() {
     try {
       await assignQAOfficer(detail.id, { assigned_to: nextAssignedTo });
       setNotice("QA document assignment updated.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (assignError) {
       setError(
         assignError instanceof Error ? assignError.message : "PROCUREMENT_QA_ASSIGN_FAILED"
@@ -204,7 +207,7 @@ export default function QADocumentPage() {
       await addQATestLine(detail.id, testForm);
       setTestForm(buildBlankTestForm());
       setNotice("QA test line added.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(
         saveError instanceof Error ? saveError.message : "PROCUREMENT_QA_TEST_CREATE_FAILED"
@@ -241,7 +244,7 @@ export default function QADocumentPage() {
       setEditingLineId("");
       setEditingLineForm(buildBlankTestForm());
       setNotice("QA test line updated.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(
         saveError instanceof Error ? saveError.message : "PROCUREMENT_QA_TEST_UPDATE_FAILED"
@@ -252,16 +255,16 @@ export default function QADocumentPage() {
   }
 
   async function handleDeleteLine(lineId) {
-    if (!detail?.id || !window.confirm("Delete this test line?")) {
-      return;
-    }
+    if (!detail?.id) return;
+    const confirmed = await openActionConfirm({ eyebrow: "QA Document", title: "Delete this test line?", confirmLabel: "Delete" });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");
     try {
       await deleteQATestLine(detail.id, lineId);
       setNotice("QA test line deleted.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(
         saveError instanceof Error ? saveError.message : "PROCUREMENT_QA_TEST_DELETE_FAILED"
@@ -291,12 +294,8 @@ export default function QADocumentPage() {
     if (!detail?.id || decisionSubmitDisabled) {
       return;
     }
-    const confirmed = window.confirm(
-      "This will post stock movements. Cannot be undone."
-    );
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "QA Decision", title: "Submit QA decision?", message: "This will post stock movements. Cannot be undone.", confirmLabel: "Submit" });
+    if (!confirmed) return;
 
     setSaving(true);
     setError("");
@@ -310,20 +309,23 @@ export default function QADocumentPage() {
           remarks: row.remarks || undefined,
         })),
       });
-      setDetail((current) =>
+      queryClient.setQueryData(["procurement", "qa-document-detail", id], (current) =>
         current
           ? {
               ...current,
-              ...(response?.qa_document ?? {}),
-              decision_lines: response?.decision_lines ?? [],
-              public_status:
-                response?.qa_document?.public_status || "DECISION_MADE",
+              detail: {
+                ...current.detail,
+                ...(response?.qa_document ?? {}),
+                decision_lines: response?.decision_lines ?? [],
+                public_status:
+                  response?.qa_document?.public_status || "DECISION_MADE",
+              },
             }
           : current
       );
       setDecisionRows([]);
       setNotice("Usage decision posted successfully.");
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (saveError) {
       setError(
         saveError instanceof Error ? saveError.message : "PROCUREMENT_QA_DECISION_FAILED"
@@ -356,6 +358,7 @@ export default function QADocumentPage() {
             try {
               popScreen();
             } catch {
+              openScreen(OPERATION_SCREENS.PROC_QA_QUEUE.screen_code);
               navigate("/dashboard/procurement/qa-queue");
             }
           },
@@ -394,7 +397,6 @@ export default function QADocumentPage() {
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
               <ErpFieldPreview label="Storage Location" value={primaryStorageLocation?.storage_location_name || primaryStorageLocation?.storage_location_code || grn?.lines?.[0]?.storage_location_id || "—"} />
               <ErpFieldPreview label="Stock Type" value={grn?.lines?.[0]?.target_stock_type || "QUALITY_INSPECTION"} />
-              <ErpFieldPreview label="Plant" value={detail.plant_id || "—"} />
               <ErpFieldPreview label="GRN Posting Date" value={grn?.posting_date || "—"} />
               <ErpFieldPreview label="Created At" value={detail.created_at || "—"} />
             </div>

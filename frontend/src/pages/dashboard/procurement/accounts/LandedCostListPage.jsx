@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listVendors } from "../../om/omApi.js";
 import { getGRN, listLandedCosts } from "../procurementApi.js";
 
 const LIMIT = 50;
@@ -24,81 +25,62 @@ function statusTone(status) {
 export default function LandedCostListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [grnMap, setGrnMap] = useState(new Map());
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [refreshToken, setRefreshToken] = useState(0);
   const companyId = runtimeContext?.selectedCompanyId || "";
-
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const [lcData, vendorData] = await Promise.all([
-          listLandedCosts({
-            company_id: companyId || undefined,
-            status: status || undefined,
-            limit: 200,
-          }),
-          listVendors({ limit: 200, offset: 0 }),
-        ]);
-        const items = Array.isArray(lcData?.items) ? lcData.items : [];
-        const uniqueGrnIds = Array.from(new Set(items.map((row) => row.grn_id).filter(Boolean)));
-        const grnEntries = await Promise.all(
-          uniqueGrnIds.map(async (grnId) => {
-            try {
-              return [grnId, await getGRN(grnId)];
-            } catch {
-              return [grnId, null];
-            }
-          })
-        );
-        if (!active) {
-          return;
-        }
-        const filteredItems = items.filter((row) => {
-          if (dateFrom && String(row.lc_date || "") < dateFrom) return false;
-          if (dateTo && String(row.lc_date || "") > dateTo) return false;
-          return true;
-        });
-        setRows(filteredItems);
-        setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-        setGrnMap(new Map(grnEntries));
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setVendors([]);
-        setGrnMap(new Map());
-        setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_LC_LIST_FAILED");
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companyId, dateFrom, dateTo, refreshToken, status]);
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const landedCostParams = useMemo(
+    () => ({
+      company_id: companyId || undefined,
+      status: status || undefined,
+      limit: 200,
+    }),
+    [companyId, status]
+  );
+  const landedCostQuery = useQuery({
+    queryKey: ["procurement", "landed-costs", landedCostParams],
+    queryFn: async () => {
+      const lcData = await listLandedCosts(landedCostParams);
+      const items = Array.isArray(lcData?.items) ? lcData.items : [];
+      const uniqueGrnIds = Array.from(new Set(items.map((row) => row.grn_id).filter(Boolean)));
+      const grnEntries = await Promise.all(
+        uniqueGrnIds.map(async (grnId) => {
+          try {
+            return [grnId, await getGRN(grnId)];
+          } catch {
+            return [grnId, null];
+          }
+        })
+      );
+      return { items, grnEntries };
+    },
+  });
 
   useEffect(() => {
     setPage(1);
   }, [dateFrom, dateTo, status]);
 
+  const vendors = vendorQuery.vendors;
+  const loading = landedCostQuery.isLoading || vendorQuery.isLoading;
+  const error = landedCostQuery.error?.message || vendorQuery.error?.message || "";
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]
+  );
+  const grnMap = useMemo(
+    () => new Map(landedCostQuery.data?.grnEntries ?? []),
+    [landedCostQuery.data?.grnEntries]
+  );
+  const rows = useMemo(
+    () =>
+      (landedCostQuery.data?.items ?? []).filter((row) => {
+        if (dateFrom && String(row.lc_date || "") < dateFrom) return false;
+        if (dateTo && String(row.lc_date || "") > dateTo) return false;
+        return true;
+      }),
+    [dateFrom, dateTo, landedCostQuery.data?.items]
   );
   const total = rows.length;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
@@ -113,7 +95,7 @@ export default function LandedCostListPage() {
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_LC_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_LC_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/accounts/landed-costs/${encodeURIComponent(row.id)}`);
   }
 
@@ -126,7 +108,10 @@ export default function LandedCostListPage() {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => setRefreshToken((value) => value + 1),
+          onClick: () => {
+            void landedCostQuery.refetch();
+            void vendorQuery.refetch();
+          },
         },
         {
           key: "create",

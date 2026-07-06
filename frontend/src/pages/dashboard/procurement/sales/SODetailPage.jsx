@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listCustomers, listMaterials } from "../../om/omApi.js";
 import {
   cancelSalesOrder,
   getSalesOrder,
@@ -14,6 +14,12 @@ import {
   listSalesInvoices,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
+import {
+  useCustomerOptionsQuery,
+  useMaterialOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function getStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -52,17 +58,43 @@ function toNumber(value) {
 
 export default function SODetailPage() {
   const navigate = useNavigate();
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
-  const [detail, setDetail] = useState(null);
-  const [customers, setCustomers] = useState([]);
-  const [materials, setMaterials] = useState([]);
-  const [linkedInvoices, setLinkedInvoices] = useState([]);
   const [issueLines, setIssueLines] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const customerQuery = useCustomerOptionsQuery({ limit: 200, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: 300, offset: 0 });
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "so-detail", id],
+    queryFn: async () => {
+      const soData = await getSalesOrder(id);
+      const soDetail = soData?.data ?? soData;
+      const invoiceData = await listSalesInvoices({
+        company_id: soDetail?.company_id || runtimeContext?.selectedCompanyId || undefined,
+        customer_id: soDetail?.customer_id || undefined,
+      });
+      const invoiceRows = Array.isArray(invoiceData?.items) ? invoiceData.items : [];
+      return {
+        detail: soDetail,
+        linkedInvoices: invoiceRows.filter(
+          (entry) => String(entry.so_id || "") === String(soDetail?.id || "")
+        ),
+      };
+    },
+    enabled: Boolean(id),
+  });
+  const detail = detailQuery.data?.detail ?? null;
+  const customers = customerQuery.customers;
+  const materials = materialQuery.materials;
+  const linkedInvoices = detailQuery.data?.linkedInvoices ?? [];
+  const loading =
+    detailQuery.isLoading ||
+    customerQuery.isLoading ||
+    materialQuery.isLoading;
 
   const customerMap = useMemo(
     () => new Map(customers.map((entry) => [entry.id, entry])),
@@ -73,50 +105,27 @@ export default function SODetailPage() {
     [materials]
   );
 
-  async function loadDetail() {
-    if (!id) {
-      setError("PROCUREMENT_SO_NOT_FOUND");
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const soData = await getSalesOrder(id);
-      const soDetail = soData?.data ?? soData;
-      const [customerData, materialData, invoiceData] = await Promise.all([
-        listCustomers({ limit: 200, offset: 0 }),
-        listMaterials({ limit: 300, offset: 0 }),
-        listSalesInvoices({
-          company_id: soDetail?.company_id || runtimeContext?.selectedCompanyId || undefined,
-          customer_id: soDetail?.customer_id || undefined,
-        }),
-      ]);
-      const invoiceRows = Array.isArray(invoiceData?.items) ? invoiceData.items : [];
-      setDetail(soDetail);
-      setCustomers(Array.isArray(customerData?.data) ? customerData.data : []);
-      setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-      setLinkedInvoices(invoiceRows.filter((entry) => String(entry.so_id || "") === String(soDetail?.id || "")));
-      setIssueLines(
-        Array.isArray(soDetail?.lines)
-          ? soDetail.lines.map((line) => ({
-              so_line_id: line.id,
-              qty_to_issue: "",
-              storage_location_id: line.issue_storage_location_id || "",
-            }))
-          : []
-      );
-    } catch (loadError) {
-      setDetail(null);
-      setLinkedInvoices([]);
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_SO_DETAIL_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
+  useEffect(() => {
+    const nextError =
+      (!id ? "PROCUREMENT_SO_NOT_FOUND" : "") ||
+      detailQuery.error?.message ||
+      customerQuery.error?.message ||
+      materialQuery.error?.message ||
+      "";
+    setError(nextError);
+  }, [customerQuery.error, detailQuery.error, id, materialQuery.error]);
 
   useEffect(() => {
-    void loadDetail();
-  }, [id, runtimeContext?.selectedCompanyId]);
+    setIssueLines(
+      Array.isArray(detail?.lines)
+        ? detail.lines.map((line) => ({
+            so_line_id: line.id,
+            qty_to_issue: "",
+            storage_location_id: line.issue_storage_location_id || "",
+          }))
+        : []
+    );
+  }, [detail?.lines]);
 
   function updateIssueLine(lineId, patch) {
     setIssueLines((current) =>
@@ -131,7 +140,7 @@ export default function SODetailPage() {
     try {
       await action();
       setNotice(successMessage);
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_SO_ACTION_FAILED");
     } finally {
@@ -140,10 +149,8 @@ export default function SODetailPage() {
   }
 
   async function handleCancel() {
-    const reason = window.prompt("Cancellation reason", "");
-    if (!reason) {
-      return;
-    }
+    const reason = await openActionPrompt({ eyebrow: "Sales Order", title: "Cancel this SO?", label: "Cancellation reason", required: true });
+    if (!reason) return;
     await runAction(
       () => cancelSalesOrder(id, { reason }),
       "Sales order cancelled."
@@ -164,9 +171,8 @@ export default function SODetailPage() {
       return;
     }
 
-    if (!window.confirm("Issue stock for the selected lines?")) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "Sales Order", title: "Issue stock?", message: "Stock will be issued for the selected lines.", confirmLabel: "Issue Stock" });
+    if (!confirmed) return;
 
     setSaving(true);
     setError("");
@@ -181,7 +187,7 @@ export default function SODetailPage() {
           ? `Delivery Challan ${latestDc?.dc_number || "-"} and Gate Exit ${latestGxo?.exit_number || "-"} auto-generated.`
           : "Stock issued successfully."
       );
-      await loadDetail();
+      await detailQuery.refetch();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_SO_ISSUE_FAILED");
     } finally {
@@ -190,10 +196,8 @@ export default function SODetailPage() {
   }
 
   async function handleKnockOff(lineId) {
-    const reason = window.prompt("Reason", "");
-    if (!reason) {
-      return;
-    }
+    const reason = await openActionPrompt({ eyebrow: "Sales Order", title: "Knock off this line?", label: "Reason", required: true });
+    if (!reason) return;
     await runAction(
       () => knockOffSOLine(id, lineId, { reason }),
       "SO line knocked off."

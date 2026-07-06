@@ -231,6 +231,129 @@ export async function createCompanySeriesHandler(
   }
 }
 
+export async function updateCompanySeriesHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertSARole(ctx);
+    const segments = getPathSegments(req);
+    const seriesId = toTrimmedString(segments[4]); // [api, procurement, number-series, company, {id}]
+    if (!seriesId) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_ID_MISSING", 400, "Series ID is required.");
+    }
+    const body = await parseBody(req);
+    const prefix = toTrimmedString(body.prefix);
+    const numberPadding = parsePositiveInt(body.number_padding, 5);
+    if (!prefix) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_UPDATE_INVALID", 400, "prefix is required.");
+    }
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_series")
+      .update({ prefix, number_padding: numberPadding })
+      .eq("id", seriesId)
+      .select("*")
+      .single();
+    if (error || !data) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_UPDATE_FAILED", 500, "Unable to update series.");
+    }
+    return okResponse(data, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "NUMBER_SERIES_COMPANY_UPDATE_FAILED";
+    const status = code === "SA_REQUIRED" ? 403 : 500;
+    return numberSeriesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function deleteCompanySeriesHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertSARole(ctx);
+    const segments = getPathSegments(req);
+    const seriesId = toTrimmedString(segments[4]); // [api, procurement, number-series, company, {id}]
+    if (!seriesId) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_ID_MISSING", 400, "Series ID is required.");
+    }
+    // Fetch series to get company_id + document_type for counter check
+    const { data: series } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_series")
+      .select("company_id, document_type")
+      .eq("id", seriesId)
+      .single();
+    if (!series) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_NOT_FOUND", 404, "Series not found.");
+    }
+    // Block delete if any counter has already generated documents
+    const { data: usedCounters } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_counter")
+      .select("last_number")
+      .eq("company_id", series.company_id)
+      .eq("document_type", series.document_type)
+      .gt("last_number", 0);
+    if (usedCounters && usedCounters.length > 0) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_IN_USE", 409, "Cannot delete a series that has already generated documents.");
+    }
+    const { error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_series")
+      .delete()
+      .eq("id", seriesId);
+    if (error) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COMPANY_DELETE_FAILED", 500, "Unable to delete series.");
+    }
+    return okResponse({ deleted: true }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "NUMBER_SERIES_COMPANY_DELETE_FAILED";
+    const status = code === "SA_REQUIRED" ? 403 : 500;
+    return numberSeriesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function deleteCompanyCounterHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertSARole(ctx);
+    const segments = getPathSegments(req);
+    // path: api/procurement/number-series/counters/{id}
+    const counterId = toTrimmedString(segments[4]);
+    if (!counterId) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_ID_MISSING", 400, "Counter ID is required.");
+    }
+    const { data: counter } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_counter")
+      .select("last_number")
+      .eq("id", counterId)
+      .single();
+    if (!counter) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_NOT_FOUND", 404, "Counter not found.");
+    }
+    if (Number(counter.last_number ?? 0) > 0) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_IN_USE", 409, "Cannot delete a counter that has already generated documents.");
+    }
+    const { error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("company_doc_number_counter")
+      .delete()
+      .eq("id", counterId);
+    if (error) {
+      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_DELETE_FAILED", 500, "Unable to delete counter.");
+    }
+    return okResponse({ deleted: true }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "NUMBER_SERIES_COUNTER_DELETE_FAILED";
+    const status = code === "SA_REQUIRED" ? 403 : 500;
+    return numberSeriesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
 export async function listCompanyCountersHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -292,8 +415,30 @@ export async function createCompanyCounterHandler(
     if (fetchError) {
       return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_LOOKUP_FAILED", 500, "Unable to validate existing FY counter.");
     }
+
+    // If counter already exists: allow update only if NOT YET USED (last_number = 0)
     if (existing?.id) {
-      return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_ALREADY_EXISTS", 409, "Counter already exists for this company, document type, and FY.");
+      const { data: existingFull } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("company_doc_number_counter")
+        .select("last_number")
+        .eq("id", existing.id)
+        .single();
+      if (Number(existingFull?.last_number ?? 0) > 0) {
+        return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_ALREADY_USED", 409, "Counter already has documents generated. Starting number cannot be changed.");
+      }
+      // Update starting_number of unused counter
+      const { data: updated, error: updateError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("company_doc_number_counter")
+        .update({ starting_number: Number(startingNumber) })
+        .eq("id", existing.id)
+        .select("*")
+        .single();
+      if (updateError || !updated) {
+        return numberSeriesErrorResponse(req, ctx, "NUMBER_SERIES_COUNTER_UPDATE_FAILED", 500, "Unable to update FY counter starting number.");
+      }
+      return okResponse(updated, ctx.request_id, req);
     }
 
     const { data, error } = await serviceRoleClient

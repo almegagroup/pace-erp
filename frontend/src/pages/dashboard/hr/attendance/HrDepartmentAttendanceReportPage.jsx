@@ -16,7 +16,8 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
-import { getDepartmentAttendanceReport, shiftIsoDate } from "../hrApi.js";
+import { useDepartmentAttendanceReportQuery } from "../../../../hooks/queries/useHrMasterQueries.js";
+import { shiftIsoDate } from "../hrApi.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -63,25 +64,12 @@ function buildCsvRows(departments) {
 export default function HrDepartmentAttendanceReportPage() {
   const [fromDate, setFromDate] = useState(() => shiftIsoDate(todayIso(), -6));
   const [toDate,   setToDate]   = useState(() => todayIso());
-  const [data,     setData]     = useState(null);
-  const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
+  const reportQuery = useDepartmentAttendanceReportQuery({ fromDate, toDate });
+  const data = reportQuery.data ?? null;
+  const loading = reportQuery.isFetching;
 
-  useErpScreenHotkeys({ onF8: () => handleLoad() });
-
-  async function handleLoad() {
-    setError("");
-    setLoading(true);
-    try {
-      const result = await getDepartmentAttendanceReport({ fromDate, toDate });
-      setData(result);
-    } catch (err) {
-      setError(formatError(err, "Could not load department report."));
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }
+  useErpScreenHotkeys({ onF8: () => void reportQuery.refetch() });
 
   function handleExport() {
     if (!data?.departments?.length) return;
@@ -125,7 +113,7 @@ export default function HrDepartmentAttendanceReportPage() {
 
           <button
             type="button"
-            onClick={handleLoad}
+            onClick={() => void reportQuery.refetch()}
             disabled={loading}
             className="self-end px-4 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
           >

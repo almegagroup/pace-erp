@@ -7,6 +7,7 @@ import {
 } from "../navigation/screenStackEngine.js";
 import { hardLogout } from "../store/sessionWarning.js";
 import { startClusterWindowOwnershipGuard } from "../store/sessionCluster.js";
+import { isRouteAllowed } from "./routeIndex.js";
 
 export default function ProtectedBranchShell({
   rootScreenCode,
@@ -18,7 +19,7 @@ export default function ProtectedBranchShell({
   useEffect(() => {
     if (loading || allowedRoutes.size === 0) return;
 
-    if (!allowedRoutes.has(location.pathname)) {
+    if (!isRouteAllowed(allowedRoutes, location.pathname)) {
       resetToScreen(rootScreenCode);
       return;
     }
@@ -31,7 +32,7 @@ export default function ProtectedBranchShell({
 
   useEffect(() => {
     if (loading || allowedRoutes.size === 0) return undefined;
-    if (!allowedRoutes.has(location.pathname)) return undefined;
+    if (!isRouteAllowed(allowedRoutes, location.pathname)) return undefined;
 
     return startClusterWindowOwnershipGuard(() => {
       hardLogout({ broadcast: false });
@@ -40,7 +41,7 @@ export default function ProtectedBranchShell({
 
   if (loading) return null;
   if (allowedRoutes.size === 0) return null;
-  if (!allowedRoutes.has(location.pathname)) return null;
+  if (!isRouteAllowed(allowedRoutes, location.pathname)) return null;
 
   return <Outlet />;
 }

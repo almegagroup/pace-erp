@@ -11,15 +11,14 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { OmHandlerContext } from "./shared.ts";
-import { assertOmAdminContext } from "./shared.ts";
+import { assertManagerOrSARole } from "./shared.ts";
 
 type JsonRecord = Record<string, unknown>;
 
 const ALLOWED_CUSTOMER_TYPES = new Set(["DOMESTIC", "EXPORT"]);
 const CUSTOMER_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL", "ACTIVE", "INACTIVE", "BLOCKED"]);
-const MUTABLE_CUSTOMER_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL"]);
 const CUSTOMER_TRANSITIONS = new Map<string, Set<string>>([
-  ["DRAFT", new Set(["PENDING_APPROVAL"])],
+  ["DRAFT", new Set(["ACTIVE", "INACTIVE", "PENDING_APPROVAL"])],
   ["PENDING_APPROVAL", new Set(["ACTIVE", "DRAFT"])],
   ["ACTIVE", new Set(["INACTIVE", "BLOCKED"])],
   ["INACTIVE", new Set(["ACTIVE"])],
@@ -84,56 +83,141 @@ async function getCustomerById(id: string): Promise<Record<string, unknown> | nu
   return (data as Record<string, unknown> | null) ?? null;
 }
 
+async function ensureVendorExists(vendorId: string): Promise<boolean> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("vendor_master")
+    .select("id")
+    .eq("id", vendorId)
+    .maybeSingle();
+
+  return !error && Boolean(data?.id);
+}
+
+async function ensureParentCustomerExists(parentCustomerId: string): Promise<boolean> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("parent_customer_master")
+    .select("id")
+    .eq("id", parentCustomerId)
+    .maybeSingle();
+
+  return !error && Boolean(data?.id);
+}
+
+// Vendor-linked customer rows derive display name + GST live from
+// vendor_master at read time (no copy stored), so editing the vendor record
+// keeps the customer view in sync automatically. Contact/phone/email stay
+// customer-specific (sales contact can differ from the procurement contact,
+// and vendor's own contacts live in a separate multi-row table).
+async function enrichCustomerRows(rows: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
+  if (rows.length === 0) return rows;
+
+  const vendorIds = [...new Set(rows.map((r) => r.vendor_id as string).filter(Boolean))];
+  const parentIds = [...new Set(rows.map((r) => r.parent_customer_id as string).filter(Boolean))];
+
+  const [vendorResult, parentResult] = await Promise.all([
+    vendorIds.length
+      ? serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_code, vendor_name, gst_number").in("id", vendorIds)
+      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+    parentIds.length
+      ? serviceRoleClient.schema("erp_master").from("parent_customer_master").select("id, parent_customer_code, parent_customer_name").in("id", parentIds)
+      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+  ]);
+
+  const vendorMap = new Map<string, Record<string, unknown>>();
+  for (const v of (vendorResult.data ?? []) as Record<string, unknown>[]) {
+    vendorMap.set(v.id as string, v);
+  }
+  const parentMap = new Map<string, Record<string, unknown>>();
+  for (const p of (parentResult.data ?? []) as Record<string, unknown>[]) {
+    parentMap.set(p.id as string, p);
+  }
+
+  return rows.map((row) => {
+    const vendor = row.vendor_id ? vendorMap.get(row.vendor_id as string) : null;
+    const parent = row.parent_customer_id ? parentMap.get(row.parent_customer_id as string) : null;
+    return {
+      ...row,
+      customer_name: vendor ? vendor.vendor_name : row.customer_name,
+      gst_number: vendor ? vendor.gst_number : row.gst_number,
+      vendor_code: vendor?.vendor_code ?? null,
+      parent_customer_code: parent?.parent_customer_code ?? null,
+      parent_customer_name: parent?.parent_customer_name ?? null,
+    };
+  });
+}
+
 export async function createCustomerHandler(
   req: Request,
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
+    const vendorId = toTrimmedString(body.vendor_id);
+    const parentCustomerId = toTrimmedString(body.parent_customer_id);
     const customerName = toTrimmedString(body.customer_name);
     const customerType = toTrimmedString(body.customer_type).toUpperCase();
     const deliveryAddress = toTrimmedString(body.delivery_address);
 
-    if (!customerName || !deliveryAddress || !ALLOWED_CUSTOMER_TYPES.has(customerType)) {
+    if ((!customerName && !vendorId) || !deliveryAddress || !ALLOWED_CUSTOMER_TYPES.has(customerType)) {
       return customerErrorResponse(req, ctx, "OM_INVALID_CUSTOMER_TYPE", 400, "Invalid customer type");
+    }
+    if (vendorId && !(await ensureVendorExists(vendorId))) {
+      return customerErrorResponse(req, ctx, "OM_VENDOR_NOT_FOUND", 404, "Vendor not found");
+    }
+    if (parentCustomerId && !(await ensureParentCustomerExists(parentCustomerId))) {
+      return customerErrorResponse(req, ctx, "OM_PARENT_CUSTOMER_NOT_FOUND", 404, "Parent customer not found");
     }
 
     const { data: customerCode, error: codeError } = await serviceRoleClient.rpc("generate_customer_code");
     if (codeError || !customerCode) {
+      console.error("[createCustomerHandler] generate_customer_code RPC failed:", JSON.stringify(codeError));
       throw new Error("OM_CUSTOMER_CREATE_FAILED");
     }
+
+    const insertPayload = {
+      customer_code: String(customerCode),
+      vendor_id: vendorId || null,
+      parent_customer_id: parentCustomerId || null,
+      // Vendor-linked: name/GST resolve live from vendor_master (see enrichCustomerRows) — not stored here.
+      customer_name: vendorId ? null : customerName,
+      customer_type: customerType,
+      delivery_address: deliveryAddress,
+      billing_address: toTrimmedString(body.billing_address) || null,
+      gst_number: vendorId ? null : toTrimmedString(body.gst_number) || null,
+      pan_number: toTrimmedString(body.pan_number) || null,
+      primary_contact_person: toTrimmedString(body.primary_contact_person) || null,
+      phone: toTrimmedString(body.phone) || null,
+      primary_email: toTrimmedString(body.primary_email) || null,
+      currency_code: toTrimmedString(body.currency_code).toUpperCase() || "BDT",
+      status: "ACTIVE",
+      approved_by: ctx.auth_user_id,
+      approved_at: new Date().toISOString(),
+      created_by: ctx.auth_user_id,
+    };
+    console.log("[createCustomerHandler] insert payload:", JSON.stringify(insertPayload));
 
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("customer_master")
-      .insert({
-        customer_code: String(customerCode),
-        customer_name: customerName,
-        customer_type: customerType,
-        delivery_address: deliveryAddress,
-        billing_address: toTrimmedString(body.billing_address) || null,
-        gst_number: toTrimmedString(body.gst_number) || null,
-        pan_number: toTrimmedString(body.pan_number) || null,
-        primary_contact_person: toTrimmedString(body.primary_contact_person) || null,
-        phone: toTrimmedString(body.phone) || null,
-        primary_email: toTrimmedString(body.primary_email) || null,
-        currency_code: toTrimmedString(body.currency_code).toUpperCase() || "BDT",
-        status: "DRAFT",
-        created_by: ctx.auth_user_id,
-      })
+      .insert(insertPayload)
       .select("*")
       .single();
 
     if (error || !data) {
+      console.error("[createCustomerHandler] insert failed:", JSON.stringify(error));
       throw new Error("OM_CUSTOMER_CREATE_FAILED");
     }
 
-    return okResponse({ data }, ctx.request_id, req);
+    const [enriched] = await enrichCustomerRows([data as Record<string, unknown>]);
+    return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {
+    console.error("[createCustomerHandler] caught error:", err);
     const code = (err as Error).message || "OM_CUSTOMER_CREATE_FAILED";
-    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("INVALID") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("INVALID") ? 400 : 500;
     return customerErrorResponse(req, ctx, code, status, "Customer create failed");
   }
 }
@@ -143,7 +227,7 @@ export async function listCustomersHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const url = new URL(req.url);
     const customerType = toTrimmedString(url.searchParams.get("customer_type")).toUpperCase();
@@ -174,10 +258,11 @@ export async function listCustomersHandler(
       throw new Error("OM_CUSTOMER_LIST_FAILED");
     }
 
-    return okResponse({ data: data ?? [], total: count ?? 0 }, ctx.request_id, req);
+    const enriched = await enrichCustomerRows((data ?? []) as Record<string, unknown>[]);
+    return okResponse({ data: enriched, total: count ?? 0 }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_CUSTOMER_LIST_FAILED";
-    const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
     return customerErrorResponse(req, ctx, code, status, "Customer list failed");
   }
 }
@@ -187,7 +272,7 @@ export async function getCustomerHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const id = toTrimmedString(new URL(req.url).searchParams.get("id"));
     if (!id) {
@@ -199,10 +284,11 @@ export async function getCustomerHandler(
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 404, "Customer not found");
     }
 
-    return okResponse({ data: customer }, ctx.request_id, req);
+    const [enriched] = await enrichCustomerRows([customer]);
+    return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_CUSTOMER_LOOKUP_FAILED";
-    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
     return customerErrorResponse(req, ctx, code, status, "Customer lookup failed");
   }
 }
@@ -212,7 +298,7 @@ export async function updateCustomerHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
@@ -225,17 +311,15 @@ export async function updateCustomerHandler(
       return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 404, "Customer not found");
     }
 
-    const currentStatus = String(existing.status ?? "");
-    if (!MUTABLE_CUSTOMER_STATUSES.has(currentStatus)) {
-      return customerErrorResponse(req, ctx, "OM_CUSTOMER_LOCKED", 422, "Customer is locked");
-    }
+    const isVendorLinked = Boolean(existing.vendor_id);
 
     const updates: JsonRecord = {};
     const mutableFields = [
-      "customer_name",
+      // customer_name/gst_number stay live-derived from the vendor when linked
+      // (see enrichCustomerRows) — editing them here would have no effect.
+      ...(isVendorLinked ? [] : ["customer_name", "gst_number"]),
       "delivery_address",
       "billing_address",
-      "gst_number",
       "pan_number",
       "primary_contact_person",
       "phone",
@@ -247,6 +331,14 @@ export async function updateCustomerHandler(
       if (body[field] !== undefined) {
         updates[field] = body[field];
       }
+    }
+
+    if (body.parent_customer_id !== undefined) {
+      const parentCustomerId = toTrimmedString(body.parent_customer_id);
+      if (parentCustomerId && !(await ensureParentCustomerExists(parentCustomerId))) {
+        return customerErrorResponse(req, ctx, "OM_PARENT_CUSTOMER_NOT_FOUND", 404, "Parent customer not found");
+      }
+      updates.parent_customer_id = parentCustomerId || null;
     }
 
     if (Object.keys(updates).length === 0) {
@@ -265,10 +357,11 @@ export async function updateCustomerHandler(
       throw new Error("OM_CUSTOMER_UPDATE_FAILED");
     }
 
-    return okResponse({ data }, ctx.request_id, req);
+    const [enriched] = await enrichCustomerRows([data as Record<string, unknown>]);
+    return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_CUSTOMER_UPDATE_FAILED";
-    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("LOCKED") ? 422 : code.includes("NO_CHANGES") ? 400 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("LOCKED") ? 422 : code.includes("NO_CHANGES") ? 400 : 500;
     return customerErrorResponse(req, ctx, code, status, "Customer update failed");
   }
 }
@@ -278,7 +371,7 @@ export async function changeCustomerStatusHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const id = toTrimmedString(body.id);
@@ -323,7 +416,7 @@ export async function changeCustomerStatusHandler(
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_CUSTOMER_STATUS_UPDATE_FAILED";
-    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("TRANSITION") ? 422 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("TRANSITION") ? 422 : 500;
     return customerErrorResponse(req, ctx, code, status, "Customer status update failed");
   }
 }
@@ -333,7 +426,7 @@ export async function mapCustomerToCompanyHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    assertOmAdminContext(ctx);
+    assertManagerOrSARole(ctx);
 
     const body = await parseBody(req);
     const customerId = toTrimmedString(body.customer_id);
@@ -364,7 +457,37 @@ export async function mapCustomerToCompanyHandler(
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_CUSTOMER_COMPANY_MAP_FAILED";
-    const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : 500;
     return customerErrorResponse(req, ctx, code, status, "Customer company map failed");
+  }
+}
+
+export async function listCustomerCompanyMapsHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const customerId = toTrimmedString(new URL(req.url).searchParams.get("customer_id"));
+    if (!customerId) {
+      return customerErrorResponse(req, ctx, "OM_CUSTOMER_NOT_FOUND", 400, "customer_id required");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("customer_company_map")
+      .select("*, companies:company_id(id, company_code, company_name)")
+      .eq("customer_id", customerId)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      throw new Error("OM_CUSTOMER_COMPANY_MAP_LIST_FAILED");
+    }
+
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_CUSTOMER_COMPANY_MAP_LIST_FAILED";
+    const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
+    return customerErrorResponse(req, ctx, code, status, "Customer company map list failed");
   }
 }

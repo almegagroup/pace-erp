@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -6,8 +7,12 @@ import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormT
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listMaterials, listVendors } from "../../om/omApi.js";
 import { addRTVLine, createRTV, getGRN, listGRNs } from "../procurementApi.js";
+import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
+import {
+  useMaterialOptionsQuery,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const REASON_OPTIONS = [
   "SHORT_RECEIVED",
@@ -27,10 +32,7 @@ export default function RTVCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [step, setStep] = useState(1);
-  const [grnRows, setGrnRows] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [materials, setMaterials] = useState([]);
-  const [selectedGrn, setSelectedGrn] = useState(null);
+  const [selectedGrnId, setSelectedGrnId] = useState("");
   const [search, setSearch] = useState("");
   const [form, setForm] = useState({
     reason_category: "QUALITY_REJECTION",
@@ -38,47 +40,64 @@ export default function RTVCreatePage() {
     remarks: "",
   });
   const [lineItems, setLineItems] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const companyId = runtimeContext?.selectedCompanyId || "";
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const grnQuery = useQuery({
+    queryKey: ["procurement", "rtv-create-grns", companyId || null],
+    queryFn: () =>
+      listGRNs({
+        company_id: companyId || undefined,
+        status: "POSTED",
+        limit: 200,
+      }),
+  });
+  const selectedGrnQuery = useQuery({
+    queryKey: ["procurement", "rtv-create-grn-detail", selectedGrnId || null],
+    queryFn: () => getGRN(selectedGrnId),
+    enabled: Boolean(selectedGrnId),
+  });
+  const grnRows = Array.isArray(grnQuery.data?.items) ? grnQuery.data.items : [];
+  const vendors = vendorQuery.vendors;
+  const materials = materialQuery.materials;
+  const selectedGrn = selectedGrnQuery.data ?? null;
+  const loading =
+    grnQuery.isLoading ||
+    vendorQuery.isLoading ||
+    materialQuery.isLoading ||
+    selectedGrnQuery.isLoading;
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const [grnData, vendorData, materialData] = await Promise.all([
-          listGRNs({
-            company_id: companyId || undefined,
-            status: "POSTED",
-            limit: 200,
-          }),
-          listVendors({ limit: 200, offset: 0 }),
-          listMaterials({ limit: 200, offset: 0 }),
-        ]);
-        if (!active) {
-          return;
-        }
-        setGrnRows(Array.isArray(grnData?.items) ? grnData.items : []);
-        setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-        setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_RTV_SETUP_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
+    const nextError =
+      grnQuery.error?.message ||
+      selectedGrnQuery.error?.message ||
+      vendorQuery.error?.message ||
+      materialQuery.error?.message ||
+      "";
+    setError(nextError);
+  }, [grnQuery.error, materialQuery.error, selectedGrnQuery.error, vendorQuery.error]);
+
+  useEffect(() => {
+    if (!selectedGrn) {
+      return;
     }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companyId]);
+    setLineItems(
+      Array.isArray(selectedGrn?.lines)
+        ? selectedGrn.lines.map((line) => ({
+            grn_line_id: line.id,
+            material_id: line.material_id,
+            storage_location_id: line.storage_location_id || "",
+            blocked_qty: Number(line.blocked_qty ?? line.received_qty ?? 0),
+            return_qty: "",
+            uom_code: line.uom_code || "",
+            po_rate: line.grn_rate ?? "",
+          }))
+        : []
+    );
+    setStep(2);
+  }, [selectedGrn]);
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
@@ -109,30 +128,8 @@ export default function RTVCreatePage() {
   }, [grnRows, search, vendorMap]);
 
   async function handleSelectGrn(grnRow) {
-    setLoading(true);
     setError("");
-    try {
-      const detail = await getGRN(grnRow.id);
-      setSelectedGrn(detail);
-      setLineItems(
-        Array.isArray(detail?.lines)
-          ? detail.lines.map((line) => ({
-              grn_line_id: line.id,
-              material_id: line.material_id,
-              storage_location_id: line.storage_location_id || "",
-              blocked_qty: Number(line.blocked_qty ?? line.received_qty ?? 0),
-              return_qty: "",
-              uom_code: line.uom_code || "",
-              po_rate: line.grn_rate ?? "",
-            }))
-          : []
-      );
-      setStep(2);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_RTV_GRN_FETCH_FAILED");
-    } finally {
-      setLoading(false);
-    }
+    setSelectedGrnId(grnRow.id);
   }
 
   function updateLine(index, patch) {
@@ -330,10 +327,11 @@ export default function RTVCreatePage() {
                   </div>
                   <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
                     <ErpDenseFormRow label="Storage Location">
-                      <input
+                      <LocationSelect
+                        companyId={companyId}
+                        projectCode="PRJ009"
                         value={line.storage_location_id}
-                        onChange={(event) => updateLine(index, { storage_location_id: event.target.value })}
-                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                        onChange={(id) => updateLine(index, { storage_location_id: id })}
                       />
                     </ErpDenseFormRow>
                     <ErpDenseFormRow label="Return Qty">

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -6,9 +7,12 @@ import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormT
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listMaterials, listVendors } from "../../om/omApi.js";
 import { listPurchaseOrders } from "../procurementApi.js";
 import { createGateEntry, listOpenCSNsForGE } from "../procurementApi.js";
+import {
+  useMaterialOptionsQuery,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function createEmptyLine() {
   return {
@@ -41,14 +45,33 @@ export default function GateEntryCreatePage() {
     remarks: "",
   });
   const [lines, setLines] = useState([createEmptyLine()]);
-  const [openCsns, setOpenCsns] = useState([]);
-  const [materials, setMaterials] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [purchaseOrders, setPurchaseOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const gateEntrySetupQuery = useQuery({
+    queryKey: ["procurement", "gate-entry-create-setup", form.company_id || null],
+    queryFn: async () => {
+      const [csnData, poData] = await Promise.all([
+        listOpenCSNsForGE({ company_id: form.company_id }),
+        listPurchaseOrders({ limit: 200, offset: 0 }),
+      ]);
+      return {
+        openCsns: Array.isArray(csnData?.items) ? csnData.items : [],
+        purchaseOrders: Array.isArray(poData?.data) ? poData.data : [],
+      };
+    },
+    enabled: Boolean(form.company_id),
+  });
+  const openCsns = gateEntrySetupQuery.data?.openCsns ?? [];
+  const materials = materialQuery.materials;
+  const vendors = vendorQuery.vendors;
+  const purchaseOrders = gateEntrySetupQuery.data?.purchaseOrders ?? [];
+  const loading =
+    gateEntrySetupQuery.isLoading ||
+    materialQuery.isLoading ||
+    vendorQuery.isLoading;
 
   const companyOptions = useMemo(
     () =>
@@ -81,35 +104,13 @@ export default function GateEntryCreatePage() {
   }, [companyOptions, form.company_id, runtimeContext?.selectedCompanyId]);
 
   useEffect(() => {
-    let active = true;
-    async function loadMasters() {
-      if (!form.company_id) return;
-      setLoading(true);
-      setError("");
-      try {
-        const [csnData, materialData, vendorData, poData] = await Promise.all([
-          listOpenCSNsForGE({ company_id: form.company_id }),
-          listMaterials({ limit: 200, offset: 0 }),
-          listVendors({ limit: 200, offset: 0 }),
-          listPurchaseOrders({ limit: 200, offset: 0 }),
-        ]);
-        if (!active) return;
-        setOpenCsns(Array.isArray(csnData?.items) ? csnData.items : []);
-        setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-        setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-        setPurchaseOrders(Array.isArray(poData?.data) ? poData.data : []);
-      } catch (loadError) {
-        if (!active) return;
-        setError(loadError instanceof Error ? loadError.message : "GE_CREATE_SETUP_FAILED");
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-    void loadMasters();
-    return () => {
-      active = false;
-    };
-  }, [form.company_id]);
+    const nextError =
+      gateEntrySetupQuery.error?.message ||
+      materialQuery.error?.message ||
+      vendorQuery.error?.message ||
+      "";
+    setError(nextError);
+  }, [gateEntrySetupQuery.error, materialQuery.error, vendorQuery.error]);
 
   function updateLine(index, patch) {
     setLines((current) => current.map((line, lineIndex) => (lineIndex === index ? { ...line, ...patch } : line)));

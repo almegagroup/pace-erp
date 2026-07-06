@@ -13,10 +13,14 @@ import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { createMaterial, listUoms } from "../omApi.js";
+import { ADMIN_SCREENS } from "../../../../navigation/screens/adminScreens.js";
+import { useMenu } from "../../../../context/useMenu.js";
+import { createMaterial } from "../omApi.js";
+import { useUomsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 export default function MaterialCreatePage() {
-  const [uoms, setUoms] = useState([]);
+  const { shellProfile } = useMenu();
+  const isSA = shellProfile?.roleCode === "SA" || shellProfile?.roleCode === "GA";
   const [form, setForm] = useState({
     material_type: "RM",
     material_name: "",
@@ -25,36 +29,16 @@ export default function MaterialCreatePage() {
     description: "",
     is_batch_managed: false,
   });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const uomQuery = useUomsQuery({ is_active: true });
+  const uoms = Array.isArray(uomQuery.data?.data) ? uomQuery.data.data : [];
+  const loading = uomQuery.isLoading;
 
   useEffect(() => {
-    let active = true;
-    async function loadUoms() {
-      setLoading(true);
-      setError("");
-      try {
-        const result = await listUoms({ is_active: true });
-        if (active) {
-          setUoms(Array.isArray(result?.data) ? result.data : []);
-        }
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "OM_UOM_LIST_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void loadUoms();
-    return () => {
-      active = false;
-    };
-  }, []);
+    setError(uomQuery.error?.message || "");
+  }, [uomQuery.error]);
 
   function updateField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -69,7 +53,7 @@ export default function MaterialCreatePage() {
     setError("");
     setNotice("");
     try {
-      await createMaterial({
+      const result = await createMaterial({
         material_type: form.material_type,
         material_name: form.material_name.trim(),
         base_uom_code: form.base_uom_code,
@@ -78,7 +62,11 @@ export default function MaterialCreatePage() {
         is_batch_managed: form.is_batch_managed,
       });
       setNotice("Material created.");
-      openScreen(OPERATION_SCREENS.OM_MATERIAL_LIST.screen_code, { mode: "replace" });
+      if (isSA) {
+        openScreen(ADMIN_SCREENS.SA_MATERIAL_DETAIL.screen_code, { mode: "replace", context: { id: result?.data?.id } });
+      } else {
+        openScreen(OPERATION_SCREENS.OM_MATERIAL_LIST.screen_code, { mode: "replace" });
+      }
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OM_MATERIAL_CREATE_FAILED");
     } finally {

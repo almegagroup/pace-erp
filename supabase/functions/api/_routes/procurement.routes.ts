@@ -11,7 +11,10 @@
 import type { ContextResolution } from "../_pipeline/context.ts";
 import type { SessionResolution } from "../_pipeline/session.ts";
 import {
+  confirmDispatchQtyAdjustmentHandler,
   createSubCSNHandler,
+  createTrackerLayoutHandler,
+  deleteTrackerLayoutHandler,
   deleteSubCSNHandler,
   getAllAlertCountsHandler,
   getCSNHandler,
@@ -21,9 +24,13 @@ import {
   getVesselBookingAlertCountHandler,
   getVesselBookingAlertListHandler,
   inlineUpdateCSNHandler,
+  listAvailableSubCsnsForStoHandler,
+  listCsnFieldHistoryHandler,
   listCSNsHandler,
+  listTrackerLayoutsHandler,
   markCSNArrivedHandler,
   markCSNInTransitHandler,
+  previewDispatchQtyAdjustmentHandler,
   updateCSNHandler,
 } from "../_core/procurement/csn.handlers.ts";
 import {
@@ -93,9 +100,12 @@ import {
 import {
   createCompanyCounterHandler,
   createCompanySeriesHandler,
+  deleteCompanyCounterHandler,
+  deleteCompanySeriesHandler,
   listCompanyCountersHandler,
   listCompanySeriesHandler,
   listGlobalSeriesHandler,
+  updateCompanySeriesHandler,
   updateGlobalStartingHandler,
 } from "../_core/procurement/number_series.handlers.ts";
 import {
@@ -120,41 +130,78 @@ import {
 } from "../_core/procurement/physical_inventory.handlers.ts";
 import {
   createCHAHandler,
+  deleteImportLeadTimeHandler,
+  deleteDomesticLeadTimeHandler,
+  updateImportLeadTimeHandler,
+  updateDomesticLeadTimeHandler,
+  deleteTransitTimeHandler,
+  listProcurementCompaniesHandler,
   createMaterialCategoryHandler,
   createPaymentTermsHandler,
   createPortHandler,
+  createReferenceDateTypeHandler,
   createTransporterHandler,
+  deleteCHAHandler,
+  deletePaymentTermsHandler,
+  deletePortHandler,
+  deleteTransporterHandler,
+  getChaContactsHandler,
+  getChaEmailsHandler,
+  getGstProfileLookupHandler,
   getPaymentTermsHandler,
+  getTransporterContactsHandler,
+  getTransporterEmailsHandler,
   listCHAPortsHandler,
   listCHAsHandler,
+  listChaCompanyMapsHandler,
   listDomesticLeadTimesHandler,
   listImportLeadTimesHandler,
   listMaterialCategoriesHandler,
   listPaymentTermsHandler,
   listPortsHandler,
+  listReferenceDateTypesHandler,
   listTransitTimesHandler,
   listTransportersHandler,
+  listTransporterCompanyMapsHandler,
   mapCHAToPortHandler,
+  mapChaToCompanyHandler,
+  mapTransporterToCompanyHandler,
+  toggleCHAHandler,
+  togglePaymentTermsHandler,
+  togglePortHandler,
+  toggleReferenceDateTypeHandler,
+  unmapCHAPortHandler,
+  updateCHAHandler,
   updatePaymentTermsHandler,
   updatePortHandler,
   updateTransporterHandler,
   upsertDomesticLeadTimeHandler,
   upsertImportLeadTimeHandler,
+  upsertChaContactsHandler,
+  upsertChaEmailsHandler,
   upsertTransitTimeHandler,
+  upsertTransporterContactsHandler,
+  upsertTransporterEmailsHandler,
 } from "../_core/procurement/l2_masters.handlers.ts";
 import {
   amendPOHandler,
   approveAmendmentHandler,
   approvePOHandler,
+  approvePOOrderGroupHandler,
   cancelPOHandler,
   confirmPOHandler,
+  confirmPOOrderGroupHandler,
   createPOHandler,
   deletePOHandler,
   getPOHandler,
+  getPOOrderGroupHandler,
+  getPoFilterOptionsHandler,
   knockOffPOLineHandler,
   knockOffPOHandler,
   listPOsHandler,
+  listPOOrderGroupsHandler,
   rejectPOHandler,
+  rejectPOOrderGroupHandler,
   updatePOHandler,
 } from "../_core/procurement/po.handlers.ts";
 import {
@@ -187,13 +234,19 @@ import {
   updateSOHandler,
 } from "../_core/procurement/sales_order.handlers.ts";
 import {
+  approveSTOHandler,
+  approveSTOAmendmentHandler,
   cancelSTOHandler,
+  amendSTOHandler,
   closeSTOHandler,
+  confirmSTOHandler,
   confirmSTOReceiptHandler,
   createSTOHandler,
   dispatchSTOHandler,
   getSTOHandler,
+  getLastStoPaymentTermHandler,
   listSTOsHandler,
+  rejectSTOHandler,
   transformSubCSNToSTOHandler,
   updateGateExitOutboundWeightHandler,
   updateSTOHandler,
@@ -217,6 +270,8 @@ export async function dispatchProcurementRoutes(
   switch (routeKey) {
     case "GET:/api/procurement/csns":
       return await listCSNsHandler(req, ctx);
+    case "GET:/api/procurement/csns/available-for-sto":
+      return await listAvailableSubCsnsForStoHandler(req, ctx);
     case "GET:/api/procurement/alerts/lc-count":
       return await getLCAlertCountHandler(req, ctx);
     case "GET:/api/procurement/alerts/lc":
@@ -229,18 +284,33 @@ export async function dispatchProcurementRoutes(
       return await getAllAlertCountsHandler(req, ctx);
     case "GET:/api/procurement/tracker":
       return await getTrackerHandler(req, ctx);
+    case "GET:/api/procurement/tracker/layouts":
+      return await listTrackerLayoutsHandler(req, ctx);
+    case "POST:/api/procurement/tracker/layouts":
+      return await createTrackerLayoutHandler(req, ctx);
     case "GET:/api/procurement/payment-terms":
       return await listPaymentTermsHandler(req, ctx);
     case "POST:/api/procurement/payment-terms":
       return await createPaymentTermsHandler(req, ctx);
+    case "POST:/api/procurement/payment-terms/toggle":
+      return await togglePaymentTermsHandler(req, ctx);
+    case "GET:/api/procurement/reference-date-types":
+      return await listReferenceDateTypesHandler(req, ctx);
+    case "POST:/api/procurement/reference-date-type":
+      return await createReferenceDateTypeHandler(req, ctx);
+    case "POST:/api/procurement/reference-date-type/toggle":
+      return await toggleReferenceDateTypeHandler(req, ctx);
     case "GET:/api/procurement/ports":
       return await listPortsHandler(req, ctx);
     case "POST:/api/procurement/ports":
       return await createPortHandler(req, ctx);
+    case "POST:/api/procurement/ports/toggle":
+      return await togglePortHandler(req, ctx);
     case "GET:/api/procurement/port-transit":
       return await listTransitTimesHandler(req, ctx);
     case "POST:/api/procurement/port-transit":
       return await upsertTransitTimeHandler(req, ctx);
+
     case "GET:/api/procurement/material-categories":
       return await listMaterialCategoriesHandler(req, ctx);
     case "POST:/api/procurement/material-categories":
@@ -257,10 +327,40 @@ export async function dispatchProcurementRoutes(
       return await listTransportersHandler(req, ctx);
     case "POST:/api/procurement/transporters":
       return await createTransporterHandler(req, ctx);
+    case "GET:/api/procurement/gst-profile":
+      return await getGstProfileLookupHandler(req, ctx);
+    case "GET:/api/procurement/transporters/contacts":
+      return await getTransporterContactsHandler(req, ctx);
+    case "POST:/api/procurement/transporters/contacts":
+      return await upsertTransporterContactsHandler(req, ctx);
+    case "GET:/api/procurement/transporters/emails":
+      return await getTransporterEmailsHandler(req, ctx);
+    case "POST:/api/procurement/transporters/emails":
+      return await upsertTransporterEmailsHandler(req, ctx);
+    case "GET:/api/procurement/transporters/company-map":
+      return await listTransporterCompanyMapsHandler(req, ctx);
+    case "POST:/api/procurement/transporters/company-map":
+      return await mapTransporterToCompanyHandler(req, ctx);
     case "GET:/api/procurement/chas":
       return await listCHAsHandler(req, ctx);
     case "POST:/api/procurement/chas":
       return await createCHAHandler(req, ctx);
+    case "GET:/api/procurement/chas/contacts":
+      return await getChaContactsHandler(req, ctx);
+    case "POST:/api/procurement/chas/contacts":
+      return await upsertChaContactsHandler(req, ctx);
+    case "GET:/api/procurement/chas/emails":
+      return await getChaEmailsHandler(req, ctx);
+    case "POST:/api/procurement/chas/emails":
+      return await upsertChaEmailsHandler(req, ctx);
+    case "GET:/api/procurement/chas/company-map":
+      return await listChaCompanyMapsHandler(req, ctx);
+    case "POST:/api/procurement/chas/company-map":
+      return await mapChaToCompanyHandler(req, ctx);
+    case "GET:/api/procurement/companies":
+      return await listProcurementCompaniesHandler(req, ctx);
+    case "POST:/api/procurement/chas/toggle":
+      return await toggleCHAHandler(req, ctx);
     case "GET:/api/procurement/number-series/global":
       return await listGlobalSeriesHandler(req, ctx);
     case "GET:/api/procurement/number-series/company":
@@ -339,10 +439,16 @@ export async function dispatchProcurementRoutes(
       return await createSTOHandler(req, ctx);
     case "GET:/api/procurement/stos":
       return await listSTOsHandler(req, ctx);
+    case "GET:/api/procurement/stos/last-payment-term":
+      return await getLastStoPaymentTermHandler(req, ctx);
     case "POST:/api/procurement/purchase-orders":
       return await createPOHandler(req, ctx);
     case "GET:/api/procurement/purchase-orders":
       return await listPOsHandler(req, ctx);
+    case "GET:/api/procurement/po-order-groups":
+      return await listPOOrderGroupsHandler(req, ctx);
+    case "GET:/api/procurement/po-filter-options":
+      return await getPoFilterOptionsHandler(req, ctx);
     default:
       break;
   }
@@ -357,6 +463,22 @@ export async function dispatchProcurementRoutes(
     if (req.method === "DELETE") {
       return await deletePOHandler(req, ctx);
     }
+  }
+
+  if (/^\/api\/procurement\/po-order-groups\/[^/]+\/confirm$/.test(pathname) && req.method === "POST") {
+    return await confirmPOOrderGroupHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/po-order-groups\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+    return await approvePOOrderGroupHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/po-order-groups\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
+    return await rejectPOOrderGroupHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/po-order-groups\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getPOOrderGroupHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/csns\/[^/]+$/.test(pathname)) {
@@ -376,6 +498,10 @@ export async function dispatchProcurementRoutes(
     return await deleteSubCSNHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/csns\/[^/]+\/history$/.test(pathname) && req.method === "GET") {
+    return await listCsnFieldHistoryHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/csns\/[^/]+\/mark-in-transit$/.test(pathname) && req.method === "POST") {
     return await markCSNInTransitHandler(req, ctx);
   }
@@ -388,8 +514,20 @@ export async function dispatchProcurementRoutes(
     return await transformSubCSNToSTOHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/preview$/.test(pathname) && req.method === "POST") {
+    return await previewDispatchQtyAdjustmentHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/confirm$/.test(pathname) && req.method === "POST") {
+    return await confirmDispatchQtyAdjustmentHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/tracker\/[^/]+\/inline$/.test(pathname) && req.method === "PUT") {
     return await inlineUpdateCSNHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/tracker\/layouts\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteTrackerLayoutHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/payment-terms\/[^/]+$/.test(pathname)) {
@@ -399,18 +537,39 @@ export async function dispatchProcurementRoutes(
     if (req.method === "PUT") {
       return await updatePaymentTermsHandler(req, ctx);
     }
+    if (req.method === "DELETE") {
+      return await deletePaymentTermsHandler(req, ctx);
+    }
   }
 
-  if (/^\/api\/procurement\/ports\/[^/]+$/.test(pathname) && req.method === "PUT") {
-    return await updatePortHandler(req, ctx);
+  if (/^\/api\/procurement\/ports\/[^/]+$/.test(pathname)) {
+    if (req.method === "PUT") {
+      return await updatePortHandler(req, ctx);
+    }
+    if (req.method === "DELETE") {
+      return await deletePortHandler(req, ctx);
+    }
   }
 
-  if (/^\/api\/procurement\/transporters\/[^/]+$/.test(pathname) && req.method === "PUT") {
-    return await updateTransporterHandler(req, ctx);
+  if (/^\/api\/procurement\/transporters\/[^/]+$/.test(pathname)) {
+    if (req.method === "PUT") return await updateTransporterHandler(req, ctx);
+    if (req.method === "DELETE") return await deleteTransporterHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/number-series\/global\/[^/]+$/.test(pathname) && req.method === "PATCH") {
     return await updateGlobalStartingHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/number-series\/company\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateCompanySeriesHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/number-series\/company\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteCompanySeriesHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/number-series\/counters\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteCompanyCounterHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/number-series\/company\/[^/]+\/[^/]+\/counters$/.test(pathname)) {
@@ -471,12 +630,47 @@ export async function dispatchProcurementRoutes(
     return await postDifferencesHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/port-transit\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteTransitTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/lead-times\/import\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteImportLeadTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/lead-times\/import\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateImportLeadTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/lead-times\/domestic\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteDomesticLeadTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/lead-times\/domestic\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateDomesticLeadTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/chas\/[^/]+\/ports\/[^/]+$/.test(pathname)) {
+    if (req.method === "DELETE") {
+      return await unmapCHAPortHandler(req, ctx);
+    }
+  }
+
   if (/^\/api\/procurement\/chas\/[^/]+\/ports$/.test(pathname)) {
     if (req.method === "GET") {
       return await listCHAPortsHandler(req, ctx);
     }
     if (req.method === "POST") {
       return await mapCHAToPortHandler(req, ctx);
+    }
+  }
+
+  if (/^\/api\/procurement\/chas\/[^/]+$/.test(pathname)) {
+    if (req.method === "PATCH") {
+      return await updateCHAHandler(req, ctx);
+    }
+    if (req.method === "DELETE") {
+      return await deleteCHAHandler(req, ctx);
     }
   }
 
@@ -651,6 +845,26 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/stos\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
     return await cancelSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/confirm$/.test(pathname) && req.method === "POST") {
+    return await confirmSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+    return await approveSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
+    return await rejectSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/amend$/.test(pathname) && req.method === "PUT") {
+    return await amendSTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/stos\/[^/]+\/approve-amendment$/.test(pathname) && req.method === "POST") {
+    return await approveSTOAmendmentHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/stos\/[^/]+\/dispatch$/.test(pathname) && req.method === "POST") {

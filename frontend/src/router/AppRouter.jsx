@@ -63,17 +63,13 @@ import SAMenuGovernance from "../admin/sa/screens/SAMenuGovernance.jsx";
 import SAOmUomMaster from "../admin/sa/screens/SAOmUomMaster.jsx";
 import SAOmStorageLocations from "../admin/sa/screens/SAOmStorageLocations.jsx";
 import SAOmNumberSeries from "../admin/sa/screens/SAOmNumberSeries.jsx";
-import SAOmMaterialCategoryGroups from "../admin/sa/screens/SAOmMaterialCategoryGroups.jsx";
 import SACostCenterMaster from "../admin/sa/screens/SACostCenterMaster.jsx";
 import SAMachineMaster from "../admin/sa/screens/SAMachineMaster.jsx";
-import SAPaymentTermsMaster from "../admin/sa/screens/SAPaymentTermsMaster.jsx";
-import SAPortMaster from "../admin/sa/screens/SAPortMaster.jsx";
-import SAPortTransitMaster from "../admin/sa/screens/SAPortTransitMaster.jsx";
-import SALeadTimeMasters from "../admin/sa/screens/SALeadTimeMasters.jsx";
-import SATransporterMaster from "../admin/sa/screens/SATransporterMaster.jsx";
-import SACHAMaster from "../admin/sa/screens/SACHAMaster.jsx";
-import SAOpeningStockListPage from "../admin/sa/screens/SAOpeningStockListPage.jsx";
-import SAOpeningStockDetailPage from "../admin/sa/screens/SAOpeningStockDetailPage.jsx";
+import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
+import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
+import SAProductionBatchSeriesPage from "../admin/sa/screens/SAProductionBatchSeriesPage.jsx";
+import SAProductionSegmentLocationPage from "../admin/sa/screens/SAProductionSegmentLocationPage.jsx";
+import SAPackCodeMasterPage from "../admin/sa/screens/SAPackCodeMasterPage.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
 import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
@@ -104,10 +100,8 @@ import HrYearlyLeaveSummaryPage from "../pages/dashboard/hr/attendance/HrYearlyL
 import HrDepartmentAttendanceReportPage from "../pages/dashboard/hr/attendance/HrDepartmentAttendanceReportPage.jsx";
 import HrLeaveUsageReportPage from "../pages/dashboard/hr/attendance/HrLeaveUsageReportPage.jsx";
 import MaterialListPage from "../pages/dashboard/om/material/MaterialListPage.jsx";
-import MaterialCreatePage from "../pages/dashboard/om/material/MaterialCreatePage.jsx";
 import MaterialDetailPage from "../pages/dashboard/om/material/MaterialDetailPage.jsx";
 import VendorListPage from "../pages/dashboard/om/vendor/VendorListPage.jsx";
-import VendorCreatePage from "../pages/dashboard/om/vendor/VendorCreatePage.jsx";
 import VendorDetailPage from "../pages/dashboard/om/vendor/VendorDetailPage.jsx";
 import AslListPage from "../pages/dashboard/om/asl/AslListPage.jsx";
 import AslCreatePage from "../pages/dashboard/om/asl/AslCreatePage.jsx";
@@ -117,7 +111,10 @@ import CustomerCreatePage from "../pages/dashboard/om/customer/CustomerCreatePag
 import CustomerDetailPage from "../pages/dashboard/om/customer/CustomerDetailPage.jsx";
 import POListPage from "../pages/dashboard/procurement/po/POListPage.jsx";
 import POCreatePage from "../pages/dashboard/procurement/po/POCreatePage.jsx";
+import POCreateOpeningPage from "../pages/dashboard/procurement/po/POCreateOpeningPage.jsx";
 import PODetailPage from "../pages/dashboard/procurement/po/PODetailPage.jsx";
+import POOrderGroupListPage from "../pages/dashboard/procurement/po/POOrderGroupListPage.jsx";
+import POOrderGroupDetailPage from "../pages/dashboard/procurement/po/POOrderGroupDetailPage.jsx";
 import CSNTrackerPage from "../pages/dashboard/procurement/csn/CSNTrackerPage.jsx";
 import CSNDetailPage from "../pages/dashboard/procurement/csn/CSNDetailPage.jsx";
 import CSNAlertsPage from "../pages/dashboard/procurement/csn/CSNAlertsPage.jsx";
@@ -131,6 +128,7 @@ import QAQueuePage from "../pages/dashboard/procurement/qa/QAQueuePage.jsx";
 import QADocumentPage from "../pages/dashboard/procurement/qa/QADocumentPage.jsx";
 import STOListPage from "../pages/dashboard/procurement/sto/STOListPage.jsx";
 import STOCreatePage from "../pages/dashboard/procurement/sto/STOCreatePage.jsx";
+import STOCreateOpeningPage from "../pages/dashboard/procurement/sto/STOCreateOpeningPage.jsx";
 import STODetailPage from "../pages/dashboard/procurement/sto/STODetailPage.jsx";
 import RTVListPage from "../pages/dashboard/procurement/rtv/RTVListPage.jsx";
 import RTVCreatePage from "../pages/dashboard/procurement/rtv/RTVCreatePage.jsx";
@@ -145,6 +143,13 @@ import BlockedIVListPage from "../pages/dashboard/procurement/accounts/BlockedIV
 import ProcurementPlanningPage from "../pages/dashboard/procurement/planning/ProcurementPlanningPage.jsx";
 import PlantTransferListPage from "../pages/dashboard/procurement/transfer/PlantTransferListPage.jsx";
 import PlantTransferDetailPage from "../pages/dashboard/procurement/transfer/PlantTransferDetailPage.jsx";
+import PaymentTermsMasterPage from "../pages/dashboard/procurement/masters/PaymentTermsMasterPage.jsx";
+import PortMasterPage from "../pages/dashboard/procurement/masters/PortMasterPage.jsx";
+import PortTransitMasterPage from "../pages/dashboard/procurement/masters/PortTransitMasterPage.jsx";
+import MaterialCategoryMasterPage from "../pages/dashboard/procurement/masters/MaterialCategoryMasterPage.jsx";
+import ImportLeadTimeMasterPage from "../pages/dashboard/procurement/masters/ImportLeadTimeMasterPage.jsx";
+import TransporterMasterPage from "../pages/dashboard/procurement/masters/TransporterMasterPage.jsx";
+import CHAMasterPage from "../pages/dashboard/procurement/masters/CHAMasterPage.jsx";
 import StockLedgerReportPage from "../pages/dashboard/procurement/reports/StockLedgerReportPage.jsx";
 import CurrentStockPage from "../pages/dashboard/procurement/reports/CurrentStockPage.jsx";
 import StockValuationPage from "../pages/dashboard/procurement/reports/StockValuationPage.jsx";
@@ -157,35 +162,28 @@ import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvo
 import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
 import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocumentListPage.jsx";
 import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
+import OpeningStockListPage from "../pages/dashboard/procurement/opening-stock/OpeningStockListPage.jsx";
+import OpeningStockDetailPage from "../pages/dashboard/procurement/opening-stock/OpeningStockDetailPage.jsx";
 
-const PaymentTermsMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/PaymentTermsMasterPage.jsx"),
-);
-const PortMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/PortMasterPage.jsx"),
-);
-const PortTransitMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/PortTransitMasterPage.jsx"),
-);
-const MaterialCategoryMasterPage = lazy(() =>
-  import(
-    "../pages/dashboard/procurement/masters/MaterialCategoryMasterPage.jsx"
-  ),
-);
-const ImportLeadTimeMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/ImportLeadTimeMasterPage.jsx"),
-);
-const DomesticLeadTimeMasterPage = lazy(() =>
-  import(
-    "../pages/dashboard/procurement/masters/DomesticLeadTimeMasterPage.jsx"
-  ),
-);
-const TransporterMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/TransporterMasterPage.jsx"),
-);
-const CHAMasterPage = lazy(() =>
-  import("../pages/dashboard/procurement/masters/CHAMasterPage.jsx"),
-);
+// Gate-27: L3 Production pages
+import PlanFeedPage from "../pages/dashboard/production/PlanFeedPage.jsx";
+import StrokeMasterPage from "../pages/dashboard/production/StrokeMasterPage.jsx";
+import StrokeApprovalPage from "../pages/dashboard/production/StrokeApprovalPage.jsx";
+import ChangeBomItemPage from "../pages/dashboard/production/ChangeBomItemPage.jsx";
+import ChangeBomItemApprovalPage from "../pages/dashboard/production/ChangeBomItemApprovalPage.jsx";
+import PackBomCreatePage from "../pages/dashboard/production/PackBomCreatePage.jsx";
+import PackBomApprovalPage from "../pages/dashboard/production/PackBomApprovalPage.jsx";
+import ChangePackBomPage from "../pages/dashboard/production/ChangePackBomPage.jsx";
+import ChangePackBomApprovalPage from "../pages/dashboard/production/ChangePackBomApprovalPage.jsx";
+import ProductionPOCreatePage from "../pages/dashboard/production/ProductionPOCreatePage.jsx";
+import ProductionPOEditPage from "../pages/dashboard/production/ProductionPOEditPage.jsx";
+import ProductionPOFinalPage from "../pages/dashboard/production/ProductionPOFinalPage.jsx";
+import ProductionPOVerifyPage from "../pages/dashboard/production/ProductionPOVerifyPage.jsx";
+import OrderListPage from "../pages/dashboard/production/OrderListPage.jsx";
+import BatchVariancePage from "../pages/dashboard/production/BatchVariancePage.jsx";
+import ReversalPage from "../pages/dashboard/production/ReversalPage.jsx";
+import ProductionQAQueuePage from "../pages/dashboard/production/QAQueuePage.jsx";
+import BatchReleasePage from "../pages/dashboard/production/BatchReleasePage.jsx";
 
 export default function AppRouter() {
   return (
@@ -314,10 +312,6 @@ export default function AppRouter() {
                       element={<SAOmNumberSeries />}
                     />
                     <Route
-                      path="om/material-category-groups"
-                      element={<SAOmMaterialCategoryGroups />}
-                    />
-                    <Route
                       path="om/cost-centers"
                       element={<SACostCenterMaster />}
                     />
@@ -326,37 +320,25 @@ export default function AppRouter() {
                       element={<SAMachineMaster />}
                     />
                     <Route
-                      path="payment-terms"
-                      element={<SAPaymentTermsMaster />}
+                      path="om/materials"
+                      element={<SAMaterialMaster />}
+                    />
+                    <Route path="om/vendors" element={<SAVendorMaster />} />
+
+                    {/* Gate-27: L3 Production SA config */}
+                    <Route
+                      path="om/pack-code-master"
+                      element={<SAPackCodeMasterPage />}
                     />
                     <Route
-                      path="ports"
-                      element={<SAPortMaster />}
+                      path="production/batch-series"
+                      element={<SAProductionBatchSeriesPage />}
                     />
                     <Route
-                      path="port-transit"
-                      element={<SAPortTransitMaster />}
+                      path="production/segment-locations"
+                      element={<SAProductionSegmentLocationPage />}
                     />
-                    <Route
-                      path="lead-times"
-                      element={<SALeadTimeMasters />}
-                    />
-                    <Route
-                      path="transporters"
-                      element={<SATransporterMaster />}
-                    />
-                    <Route
-                      path="chas"
-                      element={<SACHAMaster />}
-                    />
-                    <Route
-                      path="opening-stock"
-                      element={<SAOpeningStockListPage />}
-                    />
-                    <Route
-                      path="opening-stock/:id"
-                      element={<SAOpeningStockDetailPage />}
-                    />
+
                   </Route>
                 </Route>
               </Route>
@@ -488,18 +470,10 @@ export default function AppRouter() {
                   />
                   <Route path="om/materials" element={<MaterialListPage />} />
                   <Route
-                    path="om/material/create"
-                    element={<MaterialCreatePage />}
-                  />
-                  <Route
                     path="om/material/detail"
                     element={<MaterialDetailPage />}
                   />
                   <Route path="om/vendors" element={<VendorListPage />} />
-                  <Route
-                    path="om/vendor/create"
-                    element={<VendorCreatePage />}
-                  />
                   <Route
                     path="om/vendor/detail"
                     element={<VendorDetailPage />}
@@ -534,8 +508,20 @@ export default function AppRouter() {
                     element={<POCreatePage />}
                   />
                   <Route
+                    path="procurement/purchase-orders/create-opening"
+                    element={<POCreateOpeningPage />}
+                  />
+                  <Route
                     path="procurement/purchase-orders/:id"
                     element={<PODetailPage />}
+                  />
+                  <Route
+                    path="procurement/po-order-groups"
+                    element={<POOrderGroupListPage />}
+                  />
+                  <Route
+                    path="procurement/po-order-groups/:id"
+                    element={<POOrderGroupDetailPage />}
                   />
                   <Route
                     path="procurement/csn-tracker"
@@ -588,6 +574,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/stos/create"
                     element={<STOCreatePage />}
+                  />
+                  <Route
+                    path="procurement/stos/create-opening"
+                    element={<STOCreateOpeningPage />}
                   />
                   <Route
                     path="procurement/stos/:id"
@@ -646,6 +636,34 @@ export default function AppRouter() {
                     element={<PlantTransferDetailPage />}
                   />
                   <Route
+                    path="procurement/masters/payment-terms"
+                    element={<PaymentTermsMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/ports"
+                    element={<PortMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/port-transit"
+                    element={<PortTransitMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/material-categories"
+                    element={<MaterialCategoryMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/lead-times"
+                    element={<ImportLeadTimeMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/transporters"
+                    element={<TransporterMasterPage />}
+                  />
+                  <Route
+                    path="procurement/masters/cha"
+                    element={<CHAMasterPage />}
+                  />
+                  <Route
                     path="procurement/reports/stock-ledger"
                     element={<StockLedgerReportPage />}
                   />
@@ -686,6 +704,14 @@ export default function AppRouter() {
                     element={<SalesInvoiceDetailPage />}
                   />
                   <Route
+                    path="procurement/opening-stock"
+                    element={<OpeningStockListPage />}
+                  />
+                  <Route
+                    path="procurement/opening-stock/:id"
+                    element={<OpeningStockDetailPage />}
+                  />
+                  <Route
                     path="procurement/physical-inventory"
                     element={<PIDocumentListPage />}
                   />
@@ -693,38 +719,26 @@ export default function AppRouter() {
                     path="procurement/physical-inventory/:id"
                     element={<PIDocumentDetailPage />}
                   />
-                  <Route
-                    path="procurement/masters/payment-terms"
-                    element={<PaymentTermsMasterPage />}
-                  />
-                  <Route
-                    path="procurement/masters/ports"
-                    element={<PortMasterPage />}
-                  />
-                  <Route
-                    path="procurement/masters/port-transit"
-                    element={<PortTransitMasterPage />}
-                  />
-                  <Route
-                    path="procurement/masters/material-categories"
-                    element={<MaterialCategoryMasterPage />}
-                  />
-                  <Route
-                    path="procurement/masters/import-lead-times"
-                    element={<ImportLeadTimeMasterPage />}
-                  />
-                  <Route
-                    path="procurement/masters/domestic-lead-times"
-                    element={<DomesticLeadTimeMasterPage />}
-                  />
-                  <Route
-                    path="procurement/masters/transporters"
-                    element={<TransporterMasterPage />}
-                  />
-                  <Route
-                    path="procurement/masters/cha"
-                    element={<CHAMasterPage />}
-                  />
+
+                  {/* ── Gate-27: L3 Production (PR00–PR17) ──────────── */}
+                  <Route path="production/plan-feed" element={<PlanFeedPage />} />
+                  <Route path="production/stroke-master" element={<StrokeMasterPage />} />
+                  <Route path="production/stroke-approval" element={<StrokeApprovalPage />} />
+                  <Route path="production/change-bom-item" element={<ChangeBomItemPage />} />
+                  <Route path="production/change-bom-approval" element={<ChangeBomItemApprovalPage />} />
+                  <Route path="production/pack-bom-create" element={<PackBomCreatePage />} />
+                  <Route path="production/pack-bom-approval" element={<PackBomApprovalPage />} />
+                  <Route path="production/change-pack-bom" element={<ChangePackBomPage />} />
+                  <Route path="production/change-pack-bom-approval" element={<ChangePackBomApprovalPage />} />
+                  <Route path="production/po-create" element={<ProductionPOCreatePage />} />
+                  <Route path="production/po-edit" element={<ProductionPOEditPage />} />
+                  <Route path="production/po-final" element={<ProductionPOFinalPage />} />
+                  <Route path="production/po-verify" element={<ProductionPOVerifyPage />} />
+                  <Route path="production/order-list" element={<OrderListPage />} />
+                  <Route path="production/batch-variance" element={<BatchVariancePage />} />
+                  <Route path="production/reversal" element={<ReversalPage />} />
+                  <Route path="production/qa-queue" element={<ProductionQAQueuePage />} />
+                  <Route path="production/batch-release" element={<BatchReleasePage />} />
                 </Route>
               </Route>
 

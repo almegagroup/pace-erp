@@ -17,7 +17,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
-import { getLeaveUsageReport } from "../hrApi.js";
+import { useLeaveUsageReportQuery } from "../../../../hooks/queries/useHrMasterQueries.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -64,25 +64,12 @@ function buildCsvRows(usageRows) {
 
 export default function HrLeaveUsageReportPage() {
   const [year,    setYear]    = useState(currentYear);
-  const [data,    setData]    = useState(null);
-  const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState("");
+  const usageQuery = useLeaveUsageReportQuery({ year });
+  const data = usageQuery.data ?? null;
+  const loading = usageQuery.isFetching;
 
-  useErpScreenHotkeys({ onF8: () => handleLoad() });
-
-  async function handleLoad() {
-    setError("");
-    setLoading(true);
-    try {
-      const result = await getLeaveUsageReport({ year });
-      setData(result);
-    } catch (err) {
-      setError(formatError(err, "Could not load leave usage report."));
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }
+  useErpScreenHotkeys({ onF8: () => void usageQuery.refetch() });
 
   function handleExport() {
     if (!data?.usage?.length) return;
@@ -112,7 +99,7 @@ export default function HrLeaveUsageReportPage() {
 
           <button
             type="button"
-            onClick={handleLoad}
+            onClick={() => void usageQuery.refetch()}
             disabled={loading}
             className="self-end px-4 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
           >

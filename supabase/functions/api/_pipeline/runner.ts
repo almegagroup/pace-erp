@@ -31,6 +31,7 @@ import {
 } from "../_core/session/session.cluster.types.ts";
 
 import { log } from "../_lib/logger.ts";
+import { lookupRouteAcl } from "../_acl/route-acl-registry.ts";
 
 import type { SessionResolution } from "./session.ts";
 import type { ContextResolution } from "./context.ts";
@@ -170,10 +171,12 @@ async function resolveProtectedRouteAclMeta(
   resourceCode?: string;
   action?: VwedAction;
 }> {
+  // Gate-1: ACL support routes (session management etc.)
   if (ACL_SUPPORT_ROUTES.has(routeKey)) {
     return { skipAcl: true };
   }
 
+  // Gate-2: Workflow decision (special dynamic ACL)
   if (routeKey === "POST:/api/workflow/decision") {
     const body = await req.clone().json().catch(() => null);
     const workflowRequestId =
@@ -201,6 +204,22 @@ async function resolveProtectedRouteAclMeta(
     };
   }
 
+  // Gate-3: Central Route ACL Registry (procurement, OM, and all future routes)
+  const url = new URL(req.url);
+  const registryResult = lookupRouteAcl(req.method, url.pathname);
+  if (registryResult.found) {
+    const meta = registryResult.meta;
+    if (meta.skipAcl) {
+      return { skipAcl: true };
+    }
+    return {
+      skipAcl: false,
+      resourceCode: meta.resourceCode,
+      action: meta.action,
+    };
+  }
+
+  // Gate-4: HR route meta (legacy — will be migrated to registry in future)
   const hrRouteMeta: Record<string, { resourceCode: string; action: VwedAction }> = {
     "POST:/api/hr/leave/request": {
       resourceCode: "HR_LEAVE_APPLY",
@@ -390,7 +409,10 @@ async function resolveProtectedRouteAclMeta(
     };
   }
 
-  return { skipAcl: false };
+  // PERMANENT RULE: Any unregistered protected route must fail loudly.
+  // Silent return here would cause ACL_DENY_INCOMPLETE_INPUT which is hard to debug.
+  // Instead throw a clear error — dev MUST register the route in route-acl-registry.ts.
+  throw new Error("ROUTE_ACL_NOT_REGISTERED");
 }
 
 export async function runPipeline(
@@ -644,11 +666,32 @@ if (contextResult.status !== "RESOLVED") {
   throw new Error("CONTEXT_NOT_RESOLVED_AFTER_CHECK");
 }
 
-const aclRouteMeta = await resolveProtectedRouteAclMeta(
-  req,
-  routeKey,
-  contextResult
-);
+let aclRouteMeta: { skipAcl: boolean; resourceCode?: string; action?: VwedAction };
+try {
+  aclRouteMeta = await resolveProtectedRouteAclMeta(req, routeKey, contextResult);
+} catch (aclRegistryErr) {
+  const errMsg = (aclRegistryErr as Error).message ?? "";
+  if (errMsg === "ROUTE_ACL_NOT_REGISTERED") {
+    log({
+      level: "ERROR",
+      request_id: requestId,
+      gate_id: "6A",
+      route_key: routeKey,
+      event: "ROUTE_ACL_NOT_REGISTERED",
+      meta: { path: new URL(req.url).pathname, method: req.method },
+    });
+    return errorResponse(
+      "ROUTE_ACL_NOT_REGISTERED",
+      "This route is not registered in the ACL registry. Add it to route-acl-registry.ts.",
+      requestId,
+      "NONE",
+      500,
+      { gateId: "6A", routeKey },
+      req
+    );
+  }
+  throw aclRegistryErr;
+}
 
 const tAcl0 = performance.now();
     const acl = await stepAcl(req, requestId, {

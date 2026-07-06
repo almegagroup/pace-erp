@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -6,8 +7,11 @@ import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { listMaterials, listVendors } from "../../om/omApi.js";
+import {
+  useMaterialOptionsQuery,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   acknowledgeDebitNote,
   createDebitNote,
@@ -20,6 +24,7 @@ import {
   settleDebitNote,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -62,16 +67,34 @@ function dnTone(status) {
 }
 
 export default function RTVDetailPage() {
-  const { id = "" } = useParams();
-  const [detail, setDetail] = useState(null);
-  const [grn, setGrn] = useState(null);
-  const [vendors, setVendors] = useState([]);
-  const [materials, setMaterials] = useState([]);
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const [replacementGrnId, setReplacementGrnId] = useState("");
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "rtv-detail", id],
+    enabled: Boolean(id),
+    queryFn: () => getRTV(id),
+  });
+  const detail = detailQuery.data ?? null;
+  const grnQuery = useQuery({
+    queryKey: ["procurement", "rtv-detail-grn", detail?.grn_id || null],
+    enabled: Boolean(detail?.grn_id),
+    queryFn: () => getGRN(detail.grn_id),
+  });
+  const grn = grnQuery.data ?? null;
+  const vendors = vendorQuery.vendors;
+  const materials = materialQuery.materials;
+  const loading =
+    detailQuery.isLoading ||
+    grnQuery.isLoading ||
+    vendorQuery.isLoading ||
+    materialQuery.isLoading;
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
@@ -90,38 +113,19 @@ export default function RTVDetailPage() {
   const settlementMode = String(detail?.settlement_mode || "").toUpperCase();
   const status = String(detail?.status || "").toUpperCase();
 
-  async function loadDetail() {
-    if (!id) {
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const [rtvData, vendorData, materialData] = await Promise.all([
-        getRTV(id),
-        listVendors({ limit: 200, offset: 0 }),
-        listMaterials({ limit: 200, offset: 0 }),
-      ]);
-      const grnData = rtvData?.grn_id ? await getGRN(rtvData.grn_id).catch(() => null) : null;
-      setDetail(rtvData);
-      setGrn(grnData);
-      setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-      setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-      setReplacementGrnId("");
-    } catch (loadError) {
-      setDetail(null);
-      setGrn(null);
-      setVendors([]);
-      setMaterials([]);
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_RTV_FETCH_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
+  useEffect(() => {
+    setError(
+      detailQuery.error?.message ||
+      grnQuery.error?.message ||
+      vendorQuery.error?.message ||
+      materialQuery.error?.message ||
+      ""
+    );
+  }, [detailQuery.error?.message, grnQuery.error?.message, materialQuery.error?.message, vendorQuery.error?.message]);
 
   useEffect(() => {
-    void loadDetail();
-  }, [id]);
+    setReplacementGrnId("");
+  }, [detail?.id]);
 
   async function runAction(action, successMessage) {
     setSaving(true);
@@ -130,7 +134,7 @@ export default function RTVDetailPage() {
     try {
       await action();
       setNotice(successMessage);
-      await loadDetail();
+      await Promise.all([detailQuery.refetch(), grnQuery.refetch()]);
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_RTV_ACTION_FAILED");
     } finally {
@@ -139,10 +143,8 @@ export default function RTVDetailPage() {
   }
 
   async function handlePostRTV() {
-    const confirmed = window.confirm("Stock will be returned to vendor (P122 movement).");
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "RTV", title: "Post this RTV?", message: "Stock will be returned to vendor (P122 movement).", confirmLabel: "Post RTV" });
+    if (!confirmed) return;
     await runAction(() => postRTV(id, {}), "RTV posted successfully.");
   }
 

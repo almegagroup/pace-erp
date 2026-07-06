@@ -7,7 +7,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listCHAs } from "../procurementApi.js";
 import {
   addLCLine,
@@ -18,6 +18,7 @@ import {
   updateLCLine,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
 const COST_TYPES = [
   "FREIGHT",
@@ -53,7 +54,9 @@ function statusTone(status) {
 }
 
 export default function LandedCostDetailPage() {
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || routeId);
   const { runtimeContext } = useMenu();
   const [detail, setDetail] = useState(null);
   const [chaRows, setChaRows] = useState([]);
@@ -179,9 +182,9 @@ export default function LandedCostDetailPage() {
   }
 
   async function handleDeleteLine(lineId) {
-    if (!detail?.id || !window.confirm("Delete this landed cost line?")) {
-      return;
-    }
+    if (!detail?.id) return;
+    const confirmed = await openActionConfirm({ eyebrow: "Landed Cost", title: "Delete this line?", confirmLabel: "Delete" });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");
@@ -200,10 +203,8 @@ export default function LandedCostDetailPage() {
     if (!detail?.id) {
       return;
     }
-    const confirmed = window.confirm("Post this landed cost document?");
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = await openActionConfirm({ eyebrow: "Landed Cost", title: "Post this document?", confirmLabel: "Post" });
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");

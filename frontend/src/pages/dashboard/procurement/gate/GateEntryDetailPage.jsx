@@ -7,7 +7,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   createGRNDraft,
@@ -29,7 +29,9 @@ function statusTone(status) {
 
 export default function GateEntryDetailPage() {
   const navigate = useNavigate();
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
   const [detail, setDetail] = useState(null);
   const [gateExitForm, setGateExitForm] = useState({

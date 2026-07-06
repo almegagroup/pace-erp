@@ -244,7 +244,6 @@ async function postStockMovement(args: {
   documentNumber: string;
   movementTypeCode: string;
   companyId: string;
-  plantId: string | null;
   storageLocationId: string;
   materialId: string;
   quantity: number;
@@ -262,7 +261,6 @@ async function postStockMovement(args: {
       p_posting_date: todayIsoDate(),
       p_movement_type_code: args.movementTypeCode,
       p_company_id: args.companyId,
-      p_plant_id: args.plantId,
       p_storage_location_id: args.storageLocationId,
       p_material_id: args.materialId,
       p_quantity: args.quantity,
@@ -650,7 +648,6 @@ export async function submitUsageDecisionHandler(
     const baseUom = toTrimmedString(qaDocument.uom_code || grnLine.uom_code);
     const unitValue = Number(grnLine.grn_rate ?? 0);
     const companyId = String(qaDocument.company_id);
-    const plantId = toTrimmedString(qaDocument.plant_id) || null;
     let nextLineNumber = await getNextDecisionLineNumber(qaDocumentId);
     const createdDecisionLines: JsonRecord[] = [];
     let hasReject = false;
@@ -674,7 +671,6 @@ export async function submitUsageDecisionHandler(
         documentNumber: String(qaDocument.qa_number),
         movementTypeCode: config.movementType,
         companyId,
-        plantId,
         storageLocationId: decisionLine.storage_location_id,
         materialId: String(qaDocument.material_id),
         quantity: decisionLine.quantity,

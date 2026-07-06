@@ -6,8 +6,12 @@ import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormT
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listCustomers, listMaterials } from "../../om/omApi.js";
-import { createSalesOrder, listPaymentTerms } from "../procurementApi.js";
+import { createSalesOrder } from "../procurementApi.js";
+import {
+  useCustomerOptionsQuery,
+  useMaterialOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
+import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 
 function createEmptyLine() {
   return {
@@ -34,9 +38,6 @@ function formatFixed(value, digits = 2) {
 export default function SOCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [customers, setCustomers] = useState([]);
-  const [materials, setMaterials] = useState([]);
-  const [paymentTerms, setPaymentTerms] = useState([]);
   const [form, setForm] = useState({
     company_id: runtimeContext?.selectedCompanyId || "",
     customer_id: "",
@@ -47,10 +48,27 @@ export default function SOCreatePage() {
     remarks: "",
   });
   const [lines, setLines] = useState([createEmptyLine()]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const customerQuery = useCustomerOptionsQuery({
+    limit: 200,
+    offset: 0,
+    status: "ACTIVE",
+  });
+  const materialQuery = useMaterialOptionsQuery({
+    limit: 300,
+    offset: 0,
+    status: "ACTIVE",
+  });
+  const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
+  const customers = customerQuery.customers;
+  const materials = materialQuery.materials;
+  const paymentTerms = paymentTermQuery.paymentTerms;
+  const loading =
+    customerQuery.isLoading ||
+    materialQuery.isLoading ||
+    paymentTermQuery.isLoading;
 
   const customerOptions = useMemo(
     () =>
@@ -87,45 +105,24 @@ export default function SOCreatePage() {
   );
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const [customerData, materialData, paymentData] = await Promise.all([
-          listCustomers({ limit: 200, offset: 0, status: "ACTIVE" }),
-          listMaterials({ limit: 300, offset: 0, status: "ACTIVE" }),
-          listPaymentTerms({ is_active: true }),
-        ]);
-        if (!active) {
-          return;
-        }
-        const customerRows = Array.isArray(customerData?.data) ? customerData.data : [];
-        const materialRows = Array.isArray(materialData?.data) ? materialData.data : [];
-        const paymentRows = Array.isArray(paymentData) ? paymentData : [];
-        setCustomers(customerRows);
-        setMaterials(materialRows);
-        setPaymentTerms(paymentRows);
-        setForm((current) => ({
-          ...current,
-          company_id: current.company_id || runtimeContext?.selectedCompanyId || companyOptions[0]?.value || "",
-          payment_term_id: current.payment_term_id || paymentRows[0]?.id || "",
-        }));
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_SO_SETUP_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
+    const nextError =
+      customerQuery.error?.message ||
+      materialQuery.error?.message ||
+      paymentTermQuery.error?.message ||
+      "";
+    setError(nextError);
+  }, [customerQuery.error, materialQuery.error, paymentTermQuery.error]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
     }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companyOptions, runtimeContext?.selectedCompanyId]);
+    setForm((current) => ({
+      ...current,
+      company_id: current.company_id || runtimeContext?.selectedCompanyId || companyOptions[0]?.value || "",
+      payment_term_id: current.payment_term_id || paymentTerms[0]?.id || "",
+    }));
+  }, [companyOptions, loading, paymentTerms, runtimeContext?.selectedCompanyId]);
 
   useEffect(() => {
     if (!selectedCustomer) {

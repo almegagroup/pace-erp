@@ -2,264 +2,536 @@
  * File-ID: 26.2
  * File-Path: frontend/src/pages/dashboard/procurement/masters/PaymentTermsMasterPage.jsx
  * Gate: 26
- * Phase: 26
  * Domain: PROCUREMENT
- * Purpose: Payment Terms master page for L2_MANAGER+ users.
+ * Purpose: Payment Terms master + Reference Date Types management.
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useState } from "react";
-import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
-import ErpSelectionSection from "../../../../components/forms/ErpSelectionSection.jsx";
-import ErpScreenScaffold, {
-  ErpSectionCard,
-} from "../../../../components/templates/ErpScreenScaffold.jsx";
+import React, { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import {
   createPaymentTerm,
-  listPaymentTerms,
+  createReferenceDateType,
+  deletePaymentTerm,
+  listReferenceDateTypes,
+  togglePaymentTerm,
+  toggleReferenceDateType,
   updatePaymentTerm,
 } from "../procurementApi.js";
+import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 
-const PAYMENT_METHOD_OPTIONS = ["CREDIT", "ADVANCE", "LC", "TT", "DA", "DP", "MIXED"];
-const REFERENCE_DATE_OPTIONS = ["INVOICE_DATE", "DELIVERY_DATE"];
+const PAYMENT_METHODS = ["CREDIT", "ADVANCE"];
+const PAYMENT_TYPES   = ["LC", "TT", "DA", "DP", "MIXED", "N_A"];
+const LC_TYPES        = ["AT_SIGHT", "USANCE", "N_A"];
+const SOURCE_DOCS     = ["CSN", "IV", "MANUAL"];
+const TABS = [
+  { key: "terms",   label: "Payment Terms" },
+  { key: "ref",     label: "Reference Date Types" },
+];
 
-function normalizeRows(result) {
-  if (Array.isArray(result)) return result;
-  if (Array.isArray(result?.data)) return result.data;
-  return [];
-}
-
-function buildFormState(row) {
-  return {
-    name: row?.name ?? "",
-    payment_method: row?.payment_method ?? "CREDIT",
-    reference_date: row?.reference_date ?? "INVOICE_DATE",
-    credit_days: row?.credit_days ?? 0,
-    advance_pct: row?.advance_pct ?? 0,
-    lc_type: row?.lc_type ?? "",
-    usance_days: row?.usance_days ?? 0,
-    description: row?.description ?? "",
-    active: row?.active ?? true,
-  };
-}
+const EMPTY_TERM = {
+  name: "", payment_method: "CREDIT", payment_type: "N_A", reference_date_type_id: "",
+  credit_days: "", advance_pct: "", lc_type: "N_A", usance_days: "", description: "",
+};
+const EMPTY_REF = { code: "", label: "", source_document: "CSN", source_field: "", description: "" };
 
 export default function PaymentTermsMasterPage() {
-  const [rows, setRows] = useState([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [form, setForm] = useState(buildFormState());
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [tab, setTab]               = useState("terms");
+  const [saving, setSaving]         = useState(false);
+  const [error, setError]           = useState("");
+  const [notice, setNotice]         = useState("");
+  const termQuery = usePaymentTermOptionsQuery({ is_active: "all" });
+  const refTypeQuery = useQuery({
+    queryKey: ["procurement", "reference-date-types", "all"],
+    queryFn: async () => {
+      const refResult = await listReferenceDateTypes({ active: "false" });
+      return Array.isArray(refResult) ? refResult : (refResult?.data ?? []);
+    },
+  });
+  const terms = termQuery.paymentTerms;
+  const refTypes = refTypeQuery.data ?? [];
+  const loading = termQuery.isLoading || refTypeQuery.isLoading;
 
-  const selectedRow = useMemo(
-    () => rows.find((row) => row.id === selectedId) ?? null,
-    [rows, selectedId],
-  );
+  // Payment Terms
+  const [editId, setEditId]         = useState(null);
+  const [editDraft, setEditDraft]   = useState({});
+  const [termForm, setTermForm]     = useState(EMPTY_TERM);
 
-  async function loadRows() {
-    setLoading(true);
-    setError("");
-    try {
-      const result = await listPaymentTerms({ is_active: "" });
-      const nextRows = normalizeRows(result);
-      setRows(nextRows);
-      if (!selectedId && nextRows[0]?.id) {
-        setSelectedId(nextRows[0].id);
-        setForm(buildFormState(nextRows[0]));
-      }
-    } catch (loadError) {
-      setRows([]);
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PAYMENT_TERMS_LIST_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
+  // Reference Date Types
+  const [refForm, setRefForm]       = useState(EMPTY_REF);
 
   useEffect(() => {
-    void loadRows();
-  }, []);
+    setError(termQuery.error?.message || refTypeQuery.error?.message || "");
+  }, [refTypeQuery.error, termQuery.error]);
 
-  function handleSelect(row) {
-    setSelectedId(row.id);
-    setForm(buildFormState(row));
-    setError("");
-    setNotice("");
+  function flash(msg, isError = false) {
+    if (isError) setError(msg); else { setError(""); setNotice(msg); }
   }
 
-  function handleNew() {
-    setSelectedId("");
-    setForm(buildFormState());
-    setError("");
-    setNotice("");
+  function startEdit(row) {
+    setEditId(row.id);
+    setEditDraft({
+      name: row.name,
+      payment_method: row.payment_method,
+      payment_type: row.payment_type ?? "N_A",
+      reference_date_type_id: row.reference_date_type_id,
+      credit_days: row.credit_days ?? "",
+      advance_pct: row.advance_pct ?? "",
+      lc_type: row.lc_type ?? "N_A",
+      usance_days: row.usance_days ?? "",
+      description: row.description ?? "",
+    });
+    setError(""); setNotice("");
   }
 
-  async function handleSave() {
-    if (!form.name.trim()) {
-      setError("Payment term name is required.");
-      return;
+  function cancelEdit() { setEditId(null); setEditDraft({}); }
+
+  async function saveEdit(row) {
+    if (!editDraft.name?.trim() || !editDraft.reference_date_type_id) {
+      flash("Name and Reference Date Type are required.", true); return;
     }
-
     setSaving(true);
-    setError("");
-    setNotice("");
-    const payload = {
-      name: form.name.trim(),
-      payment_method: form.payment_method,
-      reference_date: form.reference_date,
-      credit_days: Number(form.credit_days ?? 0),
-      advance_pct: Number(form.advance_pct ?? 0),
-      lc_type: form.lc_type.trim() || null,
-      usance_days: Number(form.usance_days ?? 0),
-      description: form.description.trim() || null,
-      active: form.active,
-    };
-
     try {
-      const saved = selectedId
-        ? await updatePaymentTerm(selectedId, payload)
-        : await createPaymentTerm(payload);
-      setNotice(selectedId ? "Payment term updated." : "Payment term created.");
-      await loadRows();
-      if (saved?.id) {
-        setSelectedId(saved.id);
-        setForm(buildFormState(saved));
-      }
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PAYMENT_TERMS_SAVE_FAILED");
-    } finally {
-      setSaving(false);
-    }
+      await updatePaymentTerm(row.id, {
+        name: editDraft.name.trim(),
+        payment_method: editDraft.payment_method,
+        payment_type: editDraft.payment_type || "N_A",
+        reference_date_type_id: editDraft.reference_date_type_id,
+        credit_days: editDraft.credit_days === "" ? null : Number(editDraft.credit_days),
+        advance_pct: editDraft.advance_pct === "" ? null : Number(editDraft.advance_pct),
+        lc_type: editDraft.lc_type || "N_A",
+        usance_days: editDraft.usance_days === "" ? null : Number(editDraft.usance_days),
+        description: editDraft.description?.trim() || null,
+      });
+      setEditId(null); setEditDraft({});
+      flash("Payment term updated.");
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
+    } catch (e) { flash(e instanceof Error ? e.message : "UPDATE_FAILED", true); }
+    finally { setSaving(false); }
   }
+
+  async function handleToggleTerm(row) {
+    setSaving(true);
+    try {
+      await togglePaymentTerm({ id: row.id, active: !row.active });
+      flash(`Payment term ${!row.active ? "activated" : "deactivated"}.`);
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
+    } catch (e) { flash(e instanceof Error ? e.message : "TOGGLE_FAILED", true); }
+    finally { setSaving(false); }
+  }
+
+  async function handleDeleteTerm(row) {
+    const confirmed = await openActionConfirm({
+      eyebrow: "Payment Terms",
+      title: `Delete "${row.name}"?`,
+      message: "This cannot be undone. Fails if referenced by any open PO.",
+      confirmLabel: "Delete", cancelLabel: "Cancel",
+    });
+    if (!confirmed) return;
+    setSaving(true);
+    try {
+      await deletePaymentTerm(row.id);
+      flash("Payment term deleted.");
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
+    } catch (e) { flash(e instanceof Error ? e.message : "DELETE_FAILED", true); }
+    finally { setSaving(false); }
+  }
+
+  async function handleCreateTerm() {
+    if (!termForm.name.trim() || !termForm.reference_date_type_id) {
+      flash("Name and Reference Date Type are required.", true); return;
+    }
+    setSaving(true);
+    try {
+      await createPaymentTerm({
+        name: termForm.name.trim(),
+        payment_method: termForm.payment_method,
+        payment_type: termForm.payment_type || "N_A",
+        reference_date_type_id: termForm.reference_date_type_id,
+        credit_days: termForm.credit_days === "" ? null : Number(termForm.credit_days),
+        advance_pct: termForm.advance_pct === "" ? null : Number(termForm.advance_pct),
+        lc_type: termForm.lc_type || "N_A",
+        usance_days: termForm.usance_days === "" ? null : Number(termForm.usance_days),
+        description: termForm.description.trim() || null,
+      });
+      setTermForm(EMPTY_TERM);
+      flash("Payment term created.");
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
+    } catch (e) { flash(e instanceof Error ? e.message : "CREATE_FAILED", true); }
+    finally { setSaving(false); }
+  }
+
+  async function handleToggleRef(row) {
+    setSaving(true);
+    try {
+      await toggleReferenceDateType({ id: row.id, is_active: !row.is_active });
+      flash(`Reference date type ${!row.is_active ? "activated" : "deactivated"}.`);
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
+    } catch (e) { flash(e instanceof Error ? e.message : "TOGGLE_FAILED", true); }
+    finally { setSaving(false); }
+  }
+
+  async function handleCreateRef() {
+    if (!refForm.code.trim() || !refForm.label.trim() || !refForm.source_document) {
+      flash("Code, label, and source document are required.", true); return;
+    }
+    setSaving(true);
+    try {
+      await createReferenceDateType({
+        code: refForm.code.trim().toUpperCase(),
+        label: refForm.label.trim(),
+        source_document: refForm.source_document,
+        source_field: refForm.source_field.trim() || null,
+        description: refForm.description.trim() || null,
+      });
+      setRefForm(EMPTY_REF);
+      flash("Reference date type created.");
+      await Promise.all([termQuery.refetch(), refTypeQuery.refetch()]);
+    } catch (e) { flash(e instanceof Error ? e.message : "CREATE_FAILED", true); }
+    finally { setSaving(false); }
+  }
+
+  const activeRefTypes = refTypes.filter((r) => r.is_active !== false);
 
   return (
     <ErpScreenScaffold
       eyebrow="Procurement Masters"
       title="Payment Terms"
+      actions={[{
+        key: "refresh", label: loading ? "Refreshing..." : "Refresh",
+        tone: "neutral",
+        onClick: () => void Promise.all([termQuery.refetch(), refTypeQuery.refetch()]),
+        disabled: loading,
+      }]}
       notices={[
-        ...(error ? [{ key: "payment-terms-error", tone: "error", message: error }] : []),
-        ...(notice ? [{ key: "payment-terms-notice", tone: "success", message: notice }] : []),
-      ]}
-      actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => void loadRows() },
-        { key: "new", label: "New", tone: "neutral", onClick: handleNew },
-        { key: "save", label: saving ? "Saving..." : "Save", tone: "primary", onClick: () => void handleSave(), disabled: saving },
+        ...(error  ? [{ key: "err", tone: "error",   message: error  }] : []),
+        ...(notice ? [{ key: "ok",  tone: "success", message: notice }] : []),
       ]}
     >
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
-        <ErpSectionCard eyebrow="Register" title="Payment terms register">
-          <ErpSelectionSection label="All Terms" />
-          <ErpDenseGrid
-            columns={[
-              { key: "code", label: "Code", width: "120px" },
-              { key: "name", label: "Name" },
-              { key: "payment_method", label: "Method", width: "110px" },
-              { key: "credit_days", label: "Credit Days", width: "110px", render: (row) => row.credit_days ?? 0 },
-              { key: "active", label: "Active", width: "80px", render: (row) => (row.active ? "YES" : "NO") },
-            ]}
-            rows={rows}
-            rowKey={(row) => row.id}
-            getRowProps={(row) => ({
-              onClick: () => handleSelect(row),
-              className: row.id === selectedId ? "!bg-sky-50 !border-l-[3px] !border-l-sky-600" : undefined,
-            })}
-            emptyMessage={loading ? "Loading payment terms..." : "No payment terms found."}
-            maxHeight="460px"
-          />
-        </ErpSectionCard>
-
-        <ErpSectionCard eyebrow="Form" title={selectedRow ? `Edit | ${selectedRow.name}` : "Create payment term"}>
-          <ErpSelectionSection label="Payment Terms Form" />
-          <div className="grid gap-3 md:grid-cols-2">
-            <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-2">
-              Name
-              <input
-                value={form.name}
-                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
-              />
-            </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Payment Method
-              <select
-                value={form.payment_method}
-                onChange={(event) => setForm((current) => ({ ...current, payment_method: event.target.value }))}
-                className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
-              >
-                {PAYMENT_METHOD_OPTIONS.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Reference Date
-              <select
-                value={form.reference_date}
-                onChange={(event) => setForm((current) => ({ ...current, reference_date: event.target.value }))}
-                className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
-              >
-                {REFERENCE_DATE_OPTIONS.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Credit Days
-              <input
-                type="number"
-                min="0"
-                value={form.credit_days}
-                onChange={(event) => setForm((current) => ({ ...current, credit_days: event.target.value }))}
-                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
-              />
-            </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Advance %
-              <input
-                type="number"
-                min="0"
-                value={form.advance_pct}
-                onChange={(event) => setForm((current) => ({ ...current, advance_pct: event.target.value }))}
-                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
-              />
-            </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              LC Type
-              <input
-                value={form.lc_type}
-                onChange={(event) => setForm((current) => ({ ...current, lc_type: event.target.value }))}
-                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
-              />
-            </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-700">
-              Usance Days
-              <input
-                type="number"
-                min="0"
-                value={form.usance_days}
-                onChange={(event) => setForm((current) => ({ ...current, usance_days: event.target.value }))}
-                className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
-              />
-            </label>
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-700 md:col-span-2">
-              <input
-                type="checkbox"
-                checked={form.active}
-                onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))}
-              />
-              Active
-            </label>
-            <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-2">
-              Description
-              <textarea
-                value={form.description}
-                onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-                className="min-h-[88px] border border-slate-300 bg-[#fffef7] px-2 py-2 text-sm outline-none focus:border-sky-500"
-              />
-            </label>
-          </div>
-        </ErpSectionCard>
+      <div className="flex border-b border-slate-200 mb-4">
+        {TABS.map((t) => (
+          <button key={t.key} type="button"
+            onClick={() => { setTab(t.key); setError(""); setNotice(""); }}
+            className={`px-5 py-2.5 text-sm font-semibold -mb-px border-b-2 transition-colors ${
+              tab === t.key
+                ? "border-sky-600 text-sky-700"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >{t.label}</button>
+        ))}
       </div>
+
+      {tab === "terms" && (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_380px]">
+          <ErpSectionCard eyebrow="Payment Terms Register" title="All payment terms">
+            <div className="overflow-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Code</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Name</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Method</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Type</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Reference Date</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Credit Days</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Status</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading && <tr><td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>}
+                  {!loading && terms.length === 0 && <tr><td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">No payment terms yet.</td></tr>}
+                  {terms.map((row) => {
+                    const isEditing = editId === row.id;
+                    return (
+                      <React.Fragment key={row.id}>
+                        <tr
+                          className={`border-b border-slate-100 transition-colors ${isEditing ? "bg-sky-50" : "hover:bg-slate-50 cursor-pointer"}`}
+                          onClick={() => { if (!isEditing) startEdit(row); }}
+                        >
+                          <td className="px-3 py-2 font-mono text-xs text-slate-700">{row.code}</td>
+                          <td className="px-3 py-2 font-semibold text-slate-900">
+                            {isEditing ? (
+                              <input autoFocus value={editDraft.name}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, name: e.target.value }))}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-7 w-full border border-sky-400 bg-white px-2 text-sm outline-none"
+                              />
+                            ) : row.name}
+                          </td>
+                          <td className="px-3 py-2">
+                            {isEditing ? (
+                              <select value={editDraft.payment_method}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, payment_method: e.target.value }))}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-7 border border-sky-400 bg-white px-1 text-sm outline-none"
+                              >
+                                {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                              </select>
+                            ) : (
+                              <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{row.payment_method}</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            {isEditing ? (
+                              <select value={editDraft.payment_type}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, payment_type: e.target.value }))}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-7 border border-sky-400 bg-white px-1 text-sm outline-none"
+                              >
+                                {PAYMENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                              </select>
+                            ) : (
+                              <span className="inline-flex rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800">{row.payment_type ?? "N_A"}</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600">
+                            {isEditing ? (
+                              <select value={editDraft.reference_date_type_id}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, reference_date_type_id: e.target.value }))}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-7 border border-sky-400 bg-white px-1 text-sm outline-none"
+                              >
+                                <option value="">— select —</option>
+                                {activeRefTypes.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+                              </select>
+                            ) : (row.reference_date_type?.label ?? "—")}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600">
+                            {isEditing ? (
+                              <input type="number" min="0" value={editDraft.credit_days}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, credit_days: e.target.value }))}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-7 w-16 border border-sky-400 bg-white px-1 text-sm outline-none"
+                              />
+                            ) : (row.credit_days ?? "—")}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${row.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                              {row.active ? "ACTIVE" : "INACTIVE"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                            {isEditing ? (
+                              <div className="flex gap-1">
+                                <button type="button" disabled={saving} onClick={() => void saveEdit(row)}
+                                  className="border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:opacity-50">Save</button>
+                                <button type="button" onClick={cancelEdit}
+                                  className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700">Cancel</button>
+                              </div>
+                            ) : (
+                              <div className="flex gap-1">
+                                <button type="button" disabled={saving} onClick={() => void handleToggleTerm(row)}
+                                  className={`border px-2 py-1 text-[11px] font-semibold disabled:opacity-50 ${row.active ? "border-rose-300 bg-rose-50 text-rose-800" : "border-emerald-400 bg-emerald-50 text-emerald-900"}`}>
+                                  {row.active ? "Deactivate" : "Activate"}
+                                </button>
+                                <button type="button" disabled={saving} onClick={() => void handleDeleteTerm(row)}
+                                  className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">Delete</button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                        {isEditing && (
+                          <tr className="bg-sky-50">
+                            <td colSpan={8} className="px-3 pb-3">
+                              <div className="grid grid-cols-3 gap-3 pt-1">
+                                <label className="grid gap-1 text-[11px] font-semibold text-slate-600">
+                                  Advance %
+                                  <input type="number" min="0" max="100" value={editDraft.advance_pct}
+                                    onChange={(e) => setEditDraft((d) => ({ ...d, advance_pct: e.target.value }))}
+                                    className="h-7 border border-sky-300 bg-white px-2 text-sm outline-none" />
+                                </label>
+                                <label className="grid gap-1 text-[11px] font-semibold text-slate-600">
+                                  LC Type
+                                  <select value={editDraft.lc_type}
+                                    onChange={(e) => setEditDraft((d) => ({ ...d, lc_type: e.target.value }))}
+                                    className="h-7 border border-sky-300 bg-white px-1 text-sm outline-none">
+                                    {LC_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                                  </select>
+                                </label>
+                                <label className="grid gap-1 text-[11px] font-semibold text-slate-600">
+                                  Usance Days
+                                  <input type="number" min="0" value={editDraft.usance_days}
+                                    onChange={(e) => setEditDraft((d) => ({ ...d, usance_days: e.target.value }))}
+                                    className="h-7 border border-sky-300 bg-white px-2 text-sm outline-none" />
+                                </label>
+                                <label className="grid gap-1 text-[11px] font-semibold text-slate-600 col-span-3">
+                                  Description
+                                  <input value={editDraft.description}
+                                    onChange={(e) => setEditDraft((d) => ({ ...d, description: e.target.value }))}
+                                    className="h-7 border border-sky-300 bg-white px-2 text-sm outline-none" />
+                                </label>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </ErpSectionCard>
+
+          <ErpSectionCard eyebrow="Create Payment Term" title="New term">
+            <div className="grid gap-3">
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Name <span className="text-rose-500">*</span>
+                <input value={termForm.name} onChange={(e) => setTermForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Net 30 from BL"
+                  className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Payment Method <span className="text-rose-500">*</span>
+                <select value={termForm.payment_method} onChange={(e) => setTermForm((f) => ({ ...f, payment_method: e.target.value }))}
+                  className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500">
+                  {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Payment Type
+                <select value={termForm.payment_type} onChange={(e) => setTermForm((f) => ({ ...f, payment_type: e.target.value }))}
+                  className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500">
+                  {PAYMENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Reference Date <span className="text-rose-500">*</span>
+                <select value={termForm.reference_date_type_id} onChange={(e) => setTermForm((f) => ({ ...f, reference_date_type_id: e.target.value }))}
+                  className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500">
+                  <option value="">— select —</option>
+                  {activeRefTypes.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+                </select>
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Credit Days
+                  <input type="number" min="0" value={termForm.credit_days}
+                    onChange={(e) => setTermForm((f) => ({ ...f, credit_days: e.target.value }))}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Advance %
+                  <input type="number" min="0" max="100" value={termForm.advance_pct}
+                    onChange={(e) => setTermForm((f) => ({ ...f, advance_pct: e.target.value }))}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  LC Type
+                  <select value={termForm.lc_type} onChange={(e) => setTermForm((f) => ({ ...f, lc_type: e.target.value }))}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500">
+                    {LC_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Usance Days
+                  <input type="number" min="0" value={termForm.usance_days}
+                    onChange={(e) => setTermForm((f) => ({ ...f, usance_days: e.target.value }))}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                </label>
+              </div>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Description
+                <textarea value={termForm.description} onChange={(e) => setTermForm((f) => ({ ...f, description: e.target.value }))}
+                  rows={2} className="border border-slate-300 bg-[#fffef7] px-2 py-1.5 text-sm outline-none focus:border-sky-500" />
+              </label>
+              <button type="button" disabled={saving} onClick={() => void handleCreateTerm()}
+                className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
+                {saving ? "Creating..." : "Create Payment Term"}
+              </button>
+            </div>
+          </ErpSectionCard>
+        </div>
+      )}
+
+      {tab === "ref" && (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_360px]">
+          <ErpSectionCard eyebrow="Reference Date Types" title="All reference date types">
+            <div className="overflow-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Code</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Label</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Source</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Field</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Status</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading && <tr><td colSpan={6} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>}
+                  {!loading && refTypes.length === 0 && <tr><td colSpan={6} className="px-3 py-6 text-center text-sm text-slate-400">No reference date types found.</td></tr>}
+                  {refTypes.map((row) => (
+                    <tr key={row.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-3 py-2 font-mono text-xs font-semibold text-slate-800">{row.code}</td>
+                      <td className="px-3 py-2 text-slate-900">{row.label}</td>
+                      <td className="px-3 py-2">
+                        <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{row.source_document}</span>
+                      </td>
+                      <td className="px-3 py-2 font-mono text-xs text-slate-500">{row.source_field ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${row.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                          {row.is_active ? "ACTIVE" : "INACTIVE"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <button type="button" disabled={saving} onClick={() => void handleToggleRef(row)}
+                          className={`border px-2 py-1 text-[11px] font-semibold disabled:opacity-50 ${row.is_active ? "border-rose-300 bg-rose-50 text-rose-800" : "border-emerald-400 bg-emerald-50 text-emerald-900"}`}>
+                          {row.is_active ? "Deactivate" : "Activate"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </ErpSectionCard>
+
+          <ErpSectionCard eyebrow="Add Reference Date Type" title="New type">
+            <div className="grid gap-3">
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Code <span className="text-rose-500">*</span>
+                <input value={refForm.code} onChange={(e) => setRefForm((f) => ({ ...f, code: e.target.value.toUpperCase() }))}
+                  placeholder="e.g. ETD_DATE"
+                  className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Label <span className="text-rose-500">*</span>
+                <input value={refForm.label} onChange={(e) => setRefForm((f) => ({ ...f, label: e.target.value }))}
+                  placeholder="e.g. ETD Date"
+                  className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Source Document <span className="text-rose-500">*</span>
+                <select value={refForm.source_document} onChange={(e) => setRefForm((f) => ({ ...f, source_document: e.target.value }))}
+                  className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500">
+                  {SOURCE_DOCS.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Source Field
+                <input value={refForm.source_field} onChange={(e) => setRefForm((f) => ({ ...f, source_field: e.target.value }))}
+                  placeholder="e.g. etd (column name in DB)"
+                  className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Description
+                <textarea value={refForm.description} onChange={(e) => setRefForm((f) => ({ ...f, description: e.target.value }))}
+                  rows={2} className="border border-slate-300 bg-[#fffef7] px-2 py-1.5 text-sm outline-none focus:border-sky-500" />
+              </label>
+              <button type="button" disabled={saving} onClick={() => void handleCreateRef()}
+                className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
+                {saving ? "Creating..." : "Add Reference Date Type"}
+              </button>
+            </div>
+          </ErpSectionCard>
+        </div>
+      )}
     </ErpScreenScaffold>
   );
 }

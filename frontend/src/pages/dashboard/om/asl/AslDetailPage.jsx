@@ -4,19 +4,25 @@
  * Gate: 15
  * Phase: 15
  * Domain: OPERATION_MANAGEMENT
- * Purpose: Render approved source list detail, edit, and status workflows.
+ * Purpose: Render approved source list detail, edit, and status workflows, including
+ *          the per-pair UOM, currency, and payment term lists.
  * Authority: Frontend
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
+import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import { useUomsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import {
   changeVendorMaterialInfoStatus,
   getVendorMaterialInfo,
-  listUoms,
+  unmapVendorMaterialInfo,
   updateVendorMaterialInfo,
 } from "../omApi.js";
 
@@ -28,19 +34,63 @@ const ASL_TRANSITIONS = {
   BLOCKED: ["ACTIVE"],
 };
 
+function makeUomRow(source) {
+  return {
+    key: crypto.randomUUID(),
+    uom_code: source?.uom_code ?? "",
+    conversion_factor: String(source?.conversion_factor ?? "1"),
+    is_default: source?.is_default ?? false,
+  };
+}
+
+function makeCurrencyRow(source) {
+  return {
+    key: crypto.randomUUID(),
+    currency_code: source?.currency_code ?? "",
+    is_default: source?.is_default ?? false,
+  };
+}
+
+function makePaymentTermRow(source) {
+  return {
+    key: crypto.randomUUID(),
+    payment_term_id: source?.payment_term_id ?? "",
+    is_default: source?.is_default ?? false,
+  };
+}
+
+function withSingleDefault(rows, key) {
+  return rows.map((row) => (row.key === key ? { ...row, is_default: true } : { ...row, is_default: false }));
+}
+
 export default function AslDetailPage() {
   const [searchParams] = useSearchParams();
   const context = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchId = searchParams.get("id");
   const id = searchId || context.id || "";
-  const [record, setRecord] = useState(null);
-  const [uoms, setUoms] = useState([]);
   const [form, setForm] = useState(null);
+  const [uomRows, setUomRows] = useState([]);
+  const [currencyRows, setCurrencyRows] = useState([]);
+  const [paymentTermRows, setPaymentTermRows] = useState([]);
   const [editMode, setEditMode] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [confirmUnmap, setConfirmUnmap] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const detailQuery = useQuery({
+    queryKey: ["om", "asl-detail", id],
+    queryFn: async () => {
+      const result = await getVendorMaterialInfo({ id });
+      return result?.data ?? null;
+    },
+    enabled: Boolean(id),
+  });
+  const uomQuery = useUomsQuery({ is_active: true });
+  const paymentTermQuery = usePaymentTermOptionsQuery();
+  const record = detailQuery.data ?? null;
+  const uoms = Array.isArray(uomQuery.data?.data) ? uomQuery.data.data : [];
+  const paymentTerms = paymentTermQuery.paymentTerms;
+  const loading = detailQuery.isLoading || uomQuery.isLoading || paymentTermQuery.isLoading;
 
   useEffect(() => {
     if (!searchId && context.id) {
@@ -49,57 +99,60 @@ export default function AslDetailPage() {
   }, [context.id, searchId]);
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!id) {
-        setError("OM_VMI_NOT_FOUND");
-        setLoading(false);
-        return;
-      }
-      setLoading(true);
-      setError("");
-      try {
-        const [recordResult, uomResult] = await Promise.all([
-          getVendorMaterialInfo(id),
-          listUoms({ is_active: true }),
-        ]);
-        if (!active) {
-          return;
-        }
-        const row = recordResult?.data ?? null;
-        setRecord(row);
-        setUoms(Array.isArray(uomResult?.data) ? uomResult.data : []);
-        setForm({
-          vendor_material_code: row?.vendor_material_code ?? "",
-          pack_size_description: row?.pack_size_description ?? "",
-          lead_time_days: row?.lead_time_days ?? "",
-          po_uom_code: row?.po_uom_code ?? "",
-          conversion_factor: row?.conversion_factor ?? 1,
-        });
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "OM_VMI_LOOKUP_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
+    if (!record) {
+      return;
     }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [id]);
+    setForm({
+      vendor_material_code: record.vendor_material_code ?? "",
+      pack_size_description: record.pack_size_description ?? "",
+    });
+    setUomRows((record.uoms ?? []).map((entry) => makeUomRow(entry)));
+    setCurrencyRows((record.currencies ?? []).map((entry) => makeCurrencyRow(entry)));
+    setPaymentTermRows((record.payment_terms ?? []).map((entry) => makePaymentTermRow(entry)));
+  }, [record]);
+
+  useEffect(() => {
+    setError(
+      (!id ? "OM_VMI_NOT_FOUND" : "") ||
+      detailQuery.error?.message ||
+      uomQuery.error?.message ||
+      paymentTermQuery.error?.message ||
+      ""
+    );
+  }, [detailQuery.error, id, paymentTermQuery.error, uomQuery.error]);
 
   function setField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateUomRow(key, field, value) {
+    setUomRows((rows) => rows.map((row) => (row.key === key ? { ...row, [field]: value } : row)));
+  }
+
+  function updateCurrencyRow(key, field, value) {
+    setCurrencyRows((rows) => rows.map((row) => (row.key === key ? { ...row, [field]: value } : row)));
+  }
+
+  function updatePaymentTermRow(key, field, value) {
+    setPaymentTermRows((rows) => rows.map((row) => (row.key === key ? { ...row, [field]: value } : row)));
   }
 
   async function handleSave() {
     if (!record?.id || !form) {
       return;
     }
+    const validUoms = uomRows.filter((row) => row.uom_code && Number(row.conversion_factor) > 0);
+    if (validUoms.length === 0) {
+      setError("OM_INVALID_UOM");
+      return;
+    }
+    const validCurrencies = currencyRows.filter((row) => row.currency_code);
+    if (validCurrencies.length === 0) {
+      setError("OM_INVALID_CURRENCY");
+      return;
+    }
+    const validPaymentTerms = paymentTermRows.filter((row) => row.payment_term_id);
+
     setSaving(true);
     setError("");
     setNotice("");
@@ -108,11 +161,23 @@ export default function AslDetailPage() {
         id: record.id,
         vendor_material_code: form.vendor_material_code,
         pack_size_description: form.pack_size_description,
-        lead_time_days: form.lead_time_days ? Number(form.lead_time_days) : null,
-        po_uom_code: form.po_uom_code,
-        conversion_factor: Number(form.conversion_factor),
+        uoms: validUoms.map((row) => ({
+          uom_code: row.uom_code,
+          conversion_factor: Number(row.conversion_factor),
+          is_default: row.is_default,
+        })),
+        currencies: validCurrencies.map((row) => ({
+          currency_code: row.currency_code,
+          is_default: row.is_default,
+        })),
+        payment_terms: validPaymentTerms.map((row) => ({
+          payment_term_id: row.payment_term_id,
+          is_default: row.is_default,
+        })),
       });
-      setRecord(result?.data ?? record);
+      if (result?.data) {
+        await detailQuery.refetch();
+      }
       setEditMode(false);
       setNotice("ASL row updated.");
     } catch (saveError) {
@@ -123,6 +188,28 @@ export default function AslDetailPage() {
   }
 
   const allowedTargets = ASL_TRANSITIONS[String(record?.status || "").toUpperCase()] ?? [];
+
+  async function handleUnmap() {
+    if (!record?.id) {
+      return;
+    }
+    if (!confirmUnmap) {
+      setConfirmUnmap(true);
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await unmapVendorMaterialInfo(record.id);
+      openScreen(OPERATION_SCREENS.OM_ASL_LIST.screen_code, { mode: "replace" });
+    } catch (unmapError) {
+      setError(unmapError instanceof Error ? unmapError.message : "OM_VMI_UNMAP_FAILED");
+      setConfirmUnmap(false);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function handleStatusChange(newStatus) {
     if (!record?.id) {
@@ -136,7 +223,9 @@ export default function AslDetailPage() {
         id: record.id,
         new_status: newStatus,
       });
-      setRecord(result?.data ?? record);
+      if (result?.data) {
+        await detailQuery.refetch();
+      }
       setNotice(`ASL row moved to ${newStatus}.`);
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : "OM_VMI_STATUS_UPDATE_FAILED");
@@ -153,10 +242,20 @@ export default function AslDetailPage() {
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         { key: "edit", label: editMode ? "Cancel Edit" : "Edit", tone: "neutral", onClick: () => setEditMode((current) => !current), disabled: loading || !record },
         { key: "save", label: saving ? "Saving..." : "Save", tone: "primary", onClick: () => void handleSave(), disabled: saving || !editMode },
+        {
+          key: "unmap",
+          label: saving ? "Working..." : confirmUnmap ? "Confirm Unmap" : "Unmap",
+          tone: "danger",
+          onClick: () => void handleUnmap(),
+          disabled: saving || !record,
+        },
       ]}
       notices={[
         ...(error ? [{ key: "error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
+        ...(confirmUnmap
+          ? [{ key: "confirm-unmap", tone: "info", message: "Click \"Confirm Unmap\" again to permanently remove this vendor-material link and its UOM/currency/payment-term lists." }]
+          : []),
       ]}
     >
       {loading || !record || !form ? (
@@ -165,18 +264,21 @@ export default function AslDetailPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          <ErpSectionCard eyebrow="Header" title={`${record.vendor_id} | ${record.material_id}`}>
-            <div className="grid gap-3 md:grid-cols-4">
+          <ErpSectionCard
+            eyebrow="Header"
+            title={`${record.vendor_code ?? record.vendor_id} | ${record.pace_code ?? record.material_id}`}
+          >
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+              <ErpFieldPreview label="Vendor" value={record.vendor_name ?? record.vendor_code ?? "-"} />
+              <ErpFieldPreview label="Material" value={record.material_name ?? record.pace_code ?? "-"} />
               <ErpFieldPreview label="Status" value={record.status} tone="sky" />
-              <ErpFieldPreview label="PO UOM" value={record.po_uom_code} />
-              <ErpFieldPreview label="Factor" value={String(record.conversion_factor ?? "-")} />
-              <ErpFieldPreview label="Lead Time Days" value={String(record.lead_time_days ?? "-")} />
+              <ErpFieldPreview label="Base UOM (Material Master)" value={record.base_uom_code ?? "-"} />
             </div>
           </ErpSectionCard>
 
-          <ErpSectionCard eyebrow="View Or Edit" title="Approved source fields">
+          <ErpSectionCard eyebrow="View Or Edit" title="Vendor reference">
             {editMode ? (
-              <div className="grid gap-3">
+              <div className="grid gap-3 md:grid-cols-2">
                 <ErpDenseFormRow label="Vendor Material Code">
                   <input
                     value={form.vendor_material_code}
@@ -191,45 +293,199 @@ export default function AslDetailPage() {
                     className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                   />
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="PO UOM">
-                  <select
-                    value={form.po_uom_code}
-                    onChange={(event) => setField("po_uom_code", event.target.value)}
-                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                  >
-                    {uoms.map((entry) => (
-                      <option key={entry.id || entry.code} value={entry.code}>
-                        {entry.code} | {entry.name}
-                      </option>
-                    ))}
-                  </select>
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Conversion Factor">
-                  <input
-                    type="number"
-                    min="0.0001"
-                    step="0.0001"
-                    value={form.conversion_factor}
-                    onChange={(event) => setField("conversion_factor", event.target.value)}
-                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                  />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Lead Time Days">
-                  <input
-                    type="number"
-                    min="0"
-                    value={form.lead_time_days}
-                    onChange={(event) => setField("lead_time_days", event.target.value)}
-                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                  />
-                </ErpDenseFormRow>
               </div>
             ) : (
               <div className="grid gap-3 md:grid-cols-2">
                 <ErpFieldPreview label="Vendor Material Code" value={record.vendor_material_code} />
                 <ErpFieldPreview label="Pack Description" value={record.pack_size_description} />
-                <ErpFieldPreview label="PO UOM" value={record.po_uom_code} />
-                <ErpFieldPreview label="Conversion Factor" value={String(record.conversion_factor ?? "-")} />
+              </div>
+            )}
+          </ErpSectionCard>
+
+          <ErpSectionCard eyebrow="Procurement" title="Valid delivery UOMs (vendor-specific)">
+            {editMode ? (
+              <div className="grid gap-2">
+                {uomRows.map((row) => (
+                  <div key={row.key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2">
+                    <select
+                      value={row.uom_code}
+                      onChange={(event) => updateUomRow(row.key, "uom_code", event.target.value)}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    >
+                      <option value="">Select UOM</option>
+                      {uoms.map((entry) => (
+                        <option key={entry.id || entry.code} value={entry.code}>
+                          {entry.code} | {entry.name}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min="0.0001"
+                      step="0.0001"
+                      value={row.conversion_factor}
+                      onChange={(event) => updateUomRow(row.key, "conversion_factor", event.target.value)}
+                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    />
+                    <label className="flex items-center gap-1 text-xs text-slate-600">
+                      <input
+                        type="radio"
+                        name="detail-uom-default"
+                        checked={row.is_default}
+                        onChange={() => setUomRows((rows) => withSingleDefault(rows, row.key))}
+                      />
+                      Default
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setUomRows((rows) => rows.filter((entry) => entry.key !== row.key))}
+                      disabled={uomRows.length === 1}
+                      className="border border-slate-300 bg-white px-2 py-1 text-xs text-slate-500 disabled:opacity-40"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setUomRows((rows) => [...rows, makeUomRow()])}
+                  className="w-fit border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
+                >
+                  + Add UOM
+                </button>
+              </div>
+            ) : (
+              <div className="grid gap-1">
+                {(record.uoms ?? []).length === 0 ? (
+                  <p className="text-sm text-slate-500">No UOM linked.</p>
+                ) : (
+                  (record.uoms ?? []).map((entry) => (
+                    <div key={entry.id} className="flex items-center gap-3 text-sm">
+                      <span className="font-semibold text-slate-900">{entry.uom_code}</span>
+                      <span className="text-slate-600">1 {entry.uom_code} = {entry.conversion_factor} {record.base_uom_code}</span>
+                      {entry.is_default ? <span className="text-xs font-semibold uppercase text-sky-700">Default</span> : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </ErpSectionCard>
+
+          <ErpSectionCard eyebrow="Procurement" title="Valid currencies">
+            {editMode ? (
+              <div className="grid gap-2">
+                {currencyRows.map((row) => (
+                  <div key={row.key} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
+                    <select
+                      value={row.currency_code}
+                      onChange={(event) => updateCurrencyRow(row.key, "currency_code", event.target.value)}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    >
+                      <option value="">Select currency</option>
+                      {CURRENCY_OPTIONS.map((entry) => (
+                        <option key={entry.code} value={entry.code}>
+                          {entry.code} | {entry.country}
+                        </option>
+                      ))}
+                    </select>
+                    <label className="flex items-center gap-1 text-xs text-slate-600">
+                      <input
+                        type="radio"
+                        name="detail-currency-default"
+                        checked={row.is_default}
+                        onChange={() => setCurrencyRows((rows) => withSingleDefault(rows, row.key))}
+                      />
+                      Default
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setCurrencyRows((rows) => rows.filter((entry) => entry.key !== row.key))}
+                      disabled={currencyRows.length === 1}
+                      className="border border-slate-300 bg-white px-2 py-1 text-xs text-slate-500 disabled:opacity-40"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setCurrencyRows((rows) => [...rows, makeCurrencyRow()])}
+                  className="w-fit border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
+                >
+                  + Add Currency
+                </button>
+              </div>
+            ) : (
+              <div className="grid gap-1">
+                {(record.currencies ?? []).length === 0 ? (
+                  <p className="text-sm text-slate-500">No currency linked.</p>
+                ) : (
+                  (record.currencies ?? []).map((entry) => (
+                    <div key={entry.id} className="flex items-center gap-3 text-sm">
+                      <span className="font-semibold text-slate-900">{entry.currency_code}</span>
+                      {entry.is_default ? <span className="text-xs font-semibold uppercase text-sky-700">Default</span> : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </ErpSectionCard>
+
+          <ErpSectionCard eyebrow="Procurement" title="Payment terms (optional)">
+            {editMode ? (
+              <div className="grid gap-2">
+                {paymentTermRows.map((row) => (
+                  <div key={row.key} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
+                    <select
+                      value={row.payment_term_id}
+                      onChange={(event) => updatePaymentTermRow(row.key, "payment_term_id", event.target.value)}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    >
+                      <option value="">Select payment term</option>
+                      {paymentTerms.map((entry) => (
+                        <option key={entry.id} value={entry.id}>
+                          {entry.code} | {entry.name}
+                        </option>
+                      ))}
+                    </select>
+                    <label className="flex items-center gap-1 text-xs text-slate-600">
+                      <input
+                        type="radio"
+                        name="detail-payment-term-default"
+                        checked={row.is_default}
+                        onChange={() => setPaymentTermRows((rows) => withSingleDefault(rows, row.key))}
+                      />
+                      Default
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentTermRows((rows) => rows.filter((entry) => entry.key !== row.key))}
+                      className="border border-slate-300 bg-white px-2 py-1 text-xs text-slate-500"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setPaymentTermRows((rows) => [...rows, makePaymentTermRow()])}
+                  className="w-fit border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
+                >
+                  + Add Payment Term
+                </button>
+              </div>
+            ) : (
+              <div className="grid gap-1">
+                {(record.payment_terms ?? []).length === 0 ? (
+                  <p className="text-sm text-slate-500">No payment term linked — PO will use this vendor's last-used term.</p>
+                ) : (
+                  (record.payment_terms ?? []).map((entry) => (
+                    <div key={entry.id} className="flex items-center gap-3 text-sm">
+                      <span className="font-semibold text-slate-900">{entry.payment_term_code} | {entry.payment_term_name}</span>
+                      {entry.is_default ? <span className="text-xs font-semibold uppercase text-sky-700">Default</span> : null}
+                    </div>
+                  ))
+                )}
               </div>
             )}
           </ErpSectionCard>

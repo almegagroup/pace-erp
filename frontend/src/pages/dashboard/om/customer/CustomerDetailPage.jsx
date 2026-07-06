@@ -4,20 +4,34 @@
  * Gate: 15
  * Phase: 15
  * Domain: OPERATION_MANAGEMENT
- * Purpose: Render customer detail, edit, and status workflows.
+ * Purpose: Render RM/PM Sales Customer detail, edit, status, and company
+ *          mapping workflows, including Parent Company and Vendor link.
  * Authority: Frontend
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
+import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { CURRENCY_OPTIONS } from "../../../../data/currencyOptions.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
-import { changeCustomerStatus, getCustomer, mapCustomerToCompany, updateCustomer } from "../omApi.js";
+import {
+  changeCustomerStatus,
+  getCustomer,
+  listCustomerCompanyMaps,
+  mapCustomerToCompany,
+  updateCustomer,
+} from "../omApi.js";
+import {
+  useCompaniesForOmQuery,
+  useParentCustomersQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
 
 function getAllowedStatusTargets(status) {
   const transitions = {
-    DRAFT: ["PENDING_APPROVAL"],
+    DRAFT: ["ACTIVE", "INACTIVE", "PENDING_APPROVAL"],
     PENDING_APPROVAL: ["ACTIVE", "DRAFT"],
     ACTIVE: ["INACTIVE", "BLOCKED"],
     INACTIVE: ["ACTIVE"],
@@ -31,15 +45,42 @@ export default function CustomerDetailPage() {
   const context = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchId = searchParams.get("id");
   const id = searchId || context.id || "";
-  const [customer, setCustomer] = useState(null);
   const [form, setForm] = useState(null);
-  const [companyMapForm, setCompanyMapForm] = useState({ company_id: "" });
-  const [showCompanyMapping, setShowCompanyMapping] = useState(false);
+  const [mapCompanyId, setMapCompanyId] = useState("");
   const [editMode, setEditMode] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const parentCustomerQuery = useParentCustomersQuery();
+  const companiesQuery = useCompaniesForOmQuery();
+  const detailQuery = useQuery({
+    queryKey: ["om", "customer-detail", id],
+    queryFn: async () => {
+      const [result, companyMapResult] = await Promise.all([
+        getCustomer(id),
+        listCustomerCompanyMaps(id),
+      ]);
+      return {
+        customer: result?.data ?? null,
+        companyMaps: Array.isArray(companyMapResult?.data) ? companyMapResult.data : [],
+      };
+    },
+    enabled: Boolean(id),
+  });
+  const customer = detailQuery.data?.customer ?? null;
+  const parentCustomers = Array.isArray(parentCustomerQuery.data?.data)
+    ? parentCustomerQuery.data.data
+    : Array.isArray(parentCustomerQuery.data)
+    ? parentCustomerQuery.data
+    : [];
+  const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
+  const companyMaps = detailQuery.data?.companyMaps ?? [];
+  const loading =
+    detailQuery.isLoading ||
+    parentCustomerQuery.isLoading ||
+    companiesQuery.isLoading;
+
+  const isVendorLinked = Boolean(customer?.vendor_id);
 
   useEffect(() => {
     if (!searchId && context.id) {
@@ -48,45 +89,31 @@ export default function CustomerDetailPage() {
   }, [context.id, searchId]);
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!id) {
-        setError("OM_CUSTOMER_NOT_FOUND");
-        setLoading(false);
-        return;
-      }
-      setLoading(true);
-      setError("");
-      try {
-        const result = await getCustomer(id);
-        if (!active) {
-          return;
-        }
-        const row = result?.data ?? null;
-        setCustomer(row);
-        setForm({
-          customer_name: row?.customer_name ?? "",
-          delivery_address: row?.delivery_address ?? "",
-          billing_address: row?.billing_address ?? "",
-          primary_contact_person: row?.primary_contact_person ?? "",
-          phone: row?.phone ?? "",
-          primary_email: row?.primary_email ?? "",
-        });
-      } catch (loadError) {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : "OM_CUSTOMER_LOOKUP_FAILED");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
+    if (!customer) {
+      return;
     }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [id]);
+    setForm({
+      customer_name: customer.customer_name ?? "",
+      gst_number: customer.gst_number ?? "",
+      currency_code: customer.currency_code ?? "BDT",
+      parent_customer_id: customer.parent_customer_id ?? "",
+      delivery_address: customer.delivery_address ?? "",
+      billing_address: customer.billing_address ?? "",
+      primary_contact_person: customer.primary_contact_person ?? "",
+      phone: customer.phone ?? "",
+      primary_email: customer.primary_email ?? "",
+    });
+  }, [customer]);
+
+  useEffect(() => {
+    setError(
+      (!id ? "OM_CUSTOMER_NOT_FOUND" : "") ||
+      detailQuery.error?.message ||
+      parentCustomerQuery.error?.message ||
+      companiesQuery.error?.message ||
+      ""
+    );
+  }, [companiesQuery.error, detailQuery.error, id, parentCustomerQuery.error]);
 
   function setField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -106,14 +133,18 @@ export default function CustomerDetailPage() {
     try {
       const result = await updateCustomer({
         id: customer.id,
-        customer_name: form.customer_name,
+        ...(isVendorLinked ? {} : { customer_name: form.customer_name, gst_number: form.gst_number }),
+        parent_customer_id: form.parent_customer_id || "",
+        currency_code: form.currency_code,
         delivery_address: form.delivery_address,
         billing_address: form.billing_address,
         primary_contact_person: form.primary_contact_person,
         phone: form.phone,
         primary_email: form.primary_email,
       });
-      setCustomer(result?.data ?? customer);
+      if (result?.data) {
+        await detailQuery.refetch();
+      }
       setEditMode(false);
       setNotice("Customer updated.");
     } catch (saveError) {
@@ -124,7 +155,7 @@ export default function CustomerDetailPage() {
   }
 
   async function handleCompanyMapSave() {
-    if (!customer?.id || !companyMapForm.company_id.trim()) {
+    if (!customer?.id || !mapCompanyId) {
       setError("OM_COMPANY_NOT_FOUND");
       return;
     }
@@ -134,9 +165,10 @@ export default function CustomerDetailPage() {
     try {
       await mapCustomerToCompany({
         customer_id: customer.id,
-        company_id: companyMapForm.company_id.trim(),
+        company_id: mapCompanyId,
       });
-      setCompanyMapForm({ company_id: "" });
+      await detailQuery.refetch();
+      setMapCompanyId("");
       setNotice("Customer mapped to company");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OM_CUSTOMER_COMPANY_MAP_FAILED");
@@ -154,7 +186,9 @@ export default function CustomerDetailPage() {
     setNotice("");
     try {
       const result = await changeCustomerStatus({ id: customer.id, new_status: newStatus });
-      setCustomer(result?.data ?? customer);
+      if (result?.data) {
+        await detailQuery.refetch();
+      }
       setNotice(`Customer moved to ${newStatus}.`);
     } catch (statusError) {
       setError(statusError instanceof Error ? statusError.message : "OM_CUSTOMER_STATUS_UPDATE_FAILED");
@@ -168,7 +202,7 @@ export default function CustomerDetailPage() {
   return (
     <ErpScreenScaffold
       eyebrow="Operation Management"
-      title="Customer Detail"
+      title="RM/PM Sales Customer Detail"
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         { key: "edit", label: editMode ? "Cancel Edit" : "Edit", tone: "neutral", onClick: () => setEditMode((current) => !current), disabled: loading || !customer },
@@ -191,18 +225,68 @@ export default function CustomerDetailPage() {
               <ErpFieldPreview label="Type" value={customer.customer_type} />
               <ErpFieldPreview label="Currency" value={customer.currency_code} />
               <ErpFieldPreview label="GST Number" value={customer.gst_number} />
+              <ErpFieldPreview
+                label="Linked Vendor"
+                value={isVendorLinked ? `${customer.vendor_code} (name/GST mirror this vendor)` : "Independent customer"}
+              />
+              <ErpFieldPreview
+                label="Parent Company"
+                value={customer.parent_customer_code ? `${customer.parent_customer_code} | ${customer.parent_customer_name}` : "-"}
+              />
             </div>
           </ErpSectionCard>
 
           <ErpSectionCard eyebrow="View Or Edit" title="Customer fields">
             {editMode ? (
               <div className="grid gap-3">
-                <ErpDenseFormRow label="Customer Name" required>
-                  <input
-                    value={form.customer_name}
-                    onChange={(event) => setField("customer_name", event.target.value)}
-                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                  />
+                {isVendorLinked ? (
+                  <p className="border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                    Name and GST come live from the linked vendor ({customer.vendor_code}) — edit the vendor record to change them.
+                  </p>
+                ) : (
+                  <>
+                    <ErpDenseFormRow label="Customer Name" required>
+                      <input
+                        value={form.customer_name}
+                        onChange={(event) => setField("customer_name", event.target.value)}
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      />
+                    </ErpDenseFormRow>
+                    <ErpDenseFormRow label="GST Number">
+                      <input
+                        value={form.gst_number}
+                        onChange={(event) => setField("gst_number", event.target.value)}
+                        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                      />
+                    </ErpDenseFormRow>
+                  </>
+                )}
+                <ErpDenseFormRow label="Parent Company">
+                  <select
+                    value={form.parent_customer_id}
+                    onChange={(event) => setField("parent_customer_id", event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    <option value="">No parent company</option>
+                    {parentCustomers.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.parent_customer_code} | {entry.parent_customer_name}
+                      </option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Currency">
+                  <select
+                    value={form.currency_code}
+                    onChange={(event) => setField("currency_code", event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    {CURRENCY_OPTIONS.map((entry) => (
+                      <option key={entry.code} value={entry.code}>
+                        {entry.code} | {entry.country}
+                      </option>
+                    ))}
+                  </select>
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Delivery Address" required>
                   <textarea
@@ -274,34 +358,49 @@ export default function CustomerDetailPage() {
             </div>
           </ErpSectionCard>
 
-          <ErpSectionCard eyebrow="Company Mapping" title="Company Mapping">
-            <div className="grid gap-3">
-              <button
-                type="button"
-                onClick={() => setShowCompanyMapping((current) => !current)}
-                className="justify-self-start border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-900"
-              >
-                {showCompanyMapping ? "Hide" : "Show"} Company Mapping
-              </button>
-              {showCompanyMapping ? (
-                <div className="grid gap-3 border border-dashed border-slate-300 bg-slate-50 p-3">
-                  <ErpDenseFormRow label="Company ID" required>
-                    <input
-                      value={companyMapForm.company_id}
-                      onChange={(event) => setCompanyMapForm({ company_id: event.target.value })}
-                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-                    />
-                  </ErpDenseFormRow>
-                  <button
-                    type="button"
-                    onClick={() => void handleCompanyMapSave()}
-                    disabled={saving}
-                    className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900"
+          <ErpSectionCard eyebrow="Company Mapping" title="Map customer to companies">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+              <div className="grid gap-3">
+                <ErpDenseFormRow label="Company" required>
+                  <select
+                    value={mapCompanyId}
+                    onChange={(event) => setMapCompanyId(event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                   >
-                    Map to Company
-                  </button>
-                </div>
-              ) : null}
+                    <option value="">Select company</option>
+                    {companies.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.company_code} | {entry.company_name}
+                      </option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+                <button
+                  type="button"
+                  onClick={() => void handleCompanyMapSave()}
+                  disabled={saving}
+                  className="justify-self-start border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-900"
+                >
+                  {saving ? "Saving..." : "Map to Company"}
+                </button>
+              </div>
+              <ErpDenseGrid
+                columns={[
+                  {
+                    key: "company",
+                    label: "Company",
+                    render: (row) =>
+                      row.companies
+                        ? `${row.companies.company_code} | ${row.companies.company_name}`
+                        : companies.find((c) => c.id === row.company_id)?.company_name ?? row.company_id,
+                  },
+                  { key: "active", label: "Active", render: (row) => (row.active ? "YES" : "NO") },
+                ]}
+                rows={companyMaps}
+                rowKey={(row) => row.id ?? row.company_id}
+                emptyMessage="Not mapped to any company yet."
+                maxHeight="200px"
+              />
             </div>
           </ErpSectionCard>
         </div>

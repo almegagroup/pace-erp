@@ -19,8 +19,13 @@ import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenCommands } from "../../../hooks/useErpScreenCommands.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useErpListNavigation } from "../../../hooks/useErpListNavigation.js";
+import {
+  useLeaveRegisterQuery,
+  useLeaveTypeOptionsQuery,
+  useOutWorkRegisterQuery,
+} from "../../../hooks/queries/useHrMasterQueries.js";
 import { downloadCsvFile } from "../../../shared/downloadTabularFile.js";
-import { formatDateTime, formatIsoDate, listLeaveRegister, listLeaveTypes, listOutWorkRegister, shiftIsoDate } from "./hrApi.js";
+import { formatDateTime, formatIsoDate, shiftIsoDate } from "./hrApi.js";
 
 const PAGE_SIZE = 25;
 
@@ -256,17 +261,13 @@ function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCod
     normalizeCriteria(getActiveScreenContext()?.criteria)
   );
   const [error, setError] = useState("");
-  const [criteriaLeaveTypes, setCriteriaLeaveTypes] = useState([]);
   const availableCompanies = Array.isArray(runtimeContext?.availableCompanies)
     ? runtimeContext.availableCompanies
     : [];
-
-  useEffect(() => {
-    if (kind !== "leave") return;
-    listLeaveTypes()
-      .then((data) => setCriteriaLeaveTypes(data?.leave_types ?? []))
-      .catch(() => setCriteriaLeaveTypes([]));
-  }, [kind]);
+  const leaveTypeQuery = useLeaveTypeOptionsQuery(null, {
+    enabled: kind === "leave",
+  });
+  const criteriaLeaveTypes = leaveTypeQuery.leaveTypes;
 
   function updateCriteria(key, value) {
     setCriteria((current) => ({ ...current, [key]: value }));
@@ -382,15 +383,13 @@ function RegisterCriteriaPage({ kind, title, criteriaScreenCode, resultScreenCod
 
 // ─── RegisterResultsPage ──────────────────────────────────────────────────────
 
-function RegisterResultsPage({ kind, title, loader }) {
+function RegisterResultsPage({ kind, title }) {
   const navigate = useNavigate();
   const initialContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const searchRef = useRef(null);
   const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
   const [searchQuery, setSearchQuery] = useState(initialContext.parentState?.searchQuery ?? "");
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [page, setPage] = useState(initialContext.parentState?.page ?? 1);
   const [showColumnPicker, setShowColumnPicker] = useState(false);
@@ -404,28 +403,39 @@ function RegisterResultsPage({ kind, title, loader }) {
     useRegisterColumnVisibility(kind);
 
   // ── load data ─────────────────────────────────────────────────────────────
+  const validCriteria = Boolean(criteria.fromDate && criteria.toDate && criteria.companyId);
+  const leaveRegisterQuery = useLeaveRegisterQuery(
+    {
+      companyId: criteria.companyId,
+      fromDate: criteria.fromDate,
+      toDate: criteria.toDate,
+      leaveTypeCode: criteria.leaveTypeCode || undefined,
+    },
+    { enabled: kind === "leave" && validCriteria }
+  );
+  const outWorkRegisterQuery = useOutWorkRegisterQuery(
+    {
+      companyId: criteria.companyId,
+      fromDate: criteria.fromDate,
+      toDate: criteria.toDate,
+    },
+    { enabled: kind === "outWork" && validCriteria }
+  );
+  const registerQuery = kind === "leave" ? leaveRegisterQuery : outWorkRegisterQuery;
+  const rows = Array.isArray(registerQuery.data?.requests) ? registerQuery.data.requests : [];
+  const loading = registerQuery.isFetching;
+
   useEffect(() => {
-    let alive = true;
-    async function loadRows() {
-      setLoading(true);
-      setError("");
-      try {
-        if (!criteria.fromDate || !criteria.toDate || !criteria.companyId) {
-          throw new Error("REPORT_CRITERIA_REQUIRED");
-        }
-        const reportRows = await loader(criteria);
-        if (!alive) return;
-        setRows(reportRows);
-      } catch (loadError) {
-        if (!alive) return;
-        setError(loadError instanceof Error ? loadError.message : "REGISTER_REPORT_FAILED");
-      } finally {
-        if (alive) setLoading(false);
-      }
+    if (!validCriteria) {
+      setError("REPORT_CRITERIA_REQUIRED");
+      return;
     }
-    void loadRows();
-    return () => { alive = false; };
-  }, [criteria, loader]);
+    if (registerQuery.error) {
+      setError(registerQuery.error instanceof Error ? registerQuery.error.message : "REGISTER_REPORT_FAILED");
+      return;
+    }
+    setError("");
+  }, [registerQuery.error, validCriteria]);
 
   // ── filter ────────────────────────────────────────────────────────────────
   const filteredRows = useMemo(() => {
@@ -495,19 +505,9 @@ function RegisterResultsPage({ kind, title, loader }) {
   useEffect(
     () =>
       registerScreenRefreshCallback(() => {
-        void (async () => {
-          setLoading(true);
-          try {
-            const reportRows = await loader(criteria);
-            setRows(reportRows);
-          } catch (loadError) {
-            setError(loadError instanceof Error ? loadError.message : "REGISTER_REPORT_FAILED");
-          } finally {
-            setLoading(false);
-          }
-        })();
+        void registerQuery.refetch();
       }),
-    [criteria, loader],
+    [registerQuery],
   );
 
   useEffect(() => {
@@ -565,18 +565,7 @@ function RegisterResultsPage({ kind, title, loader }) {
     },
     refresh: {
       disabled: loading,
-      perform: () =>
-        void (async () => {
-          setLoading(true);
-          try {
-            const reportRows = await loader(criteria);
-            setRows(reportRows);
-          } catch (loadError) {
-            setError(loadError instanceof Error ? loadError.message : "REGISTER_REPORT_FAILED");
-          } finally {
-            setLoading(false);
-          }
-        })(),
+      perform: () => void registerQuery.refetch(),
     },
     focusSearch: { perform: () => searchRef.current?.focus?.() },
   });
@@ -734,32 +723,11 @@ export function LeaveRegisterCriteriaPage() {
   );
 }
 
-async function loadLeaveRegisterRows(criteria) {
-  const data = await listLeaveRegister({
-    companyId: criteria.companyId,
-    fromDate: criteria.fromDate,
-    toDate: criteria.toDate,
-    leaveTypeCode: criteria.leaveTypeCode || undefined,
-  });
-  return Array.isArray(data?.requests) ? data.requests : [];
-}
-
-async function loadOutWorkRegisterRows(criteria) {
-  const data = await listOutWorkRegister({
-    companyId: criteria.companyId,
-    fromDate: criteria.fromDate,
-    toDate: criteria.toDate,
-  });
-  return Array.isArray(data?.requests) ? data.requests : [];
-}
-
 export function LeaveRegisterResultsPage() {
   return (
     <RegisterResultsPage
       kind="leave"
       title="Leave Register Report"
-      criteriaScreenCode="HR_LEAVE_REGISTER"
-      loader={loadLeaveRegisterRows}
     />
   );
 }
@@ -780,8 +748,6 @@ export function OutWorkRegisterResultsPage() {
     <RegisterResultsPage
       kind="outWork"
       title="Out Work Register Report"
-      criteriaScreenCode="HR_OUT_WORK_REGISTER"
-      loader={loadOutWorkRegisterRows}
     />
   );
 }

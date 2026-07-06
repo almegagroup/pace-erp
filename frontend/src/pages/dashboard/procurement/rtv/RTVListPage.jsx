@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listVendors } from "../../om/omApi.js";
 import { getGRN, listRTVs } from "../procurementApi.js";
 
 const LIMIT = 50;
@@ -45,72 +46,54 @@ function normalizeSearch(value) {
 export default function RTVListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [grnMap, setGrnMap] = useState(new Map());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [settlementMode, setSettlementMode] = useState("");
   const [vendorId, setVendorId] = useState("");
   const [page, setPage] = useState(1);
-  const [refreshToken, setRefreshToken] = useState(0);
   const companyId = runtimeContext?.selectedCompanyId || "";
 
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const [rtvData, vendorData] = await Promise.all([
-          listRTVs({
-            company_id: companyId || undefined,
-            status: status || undefined,
-            settlement_mode: settlementMode || undefined,
-            vendor_id: vendorId || undefined,
-            limit: 200,
-          }),
-          listVendors({ limit: 200, offset: 0 }),
-        ]);
-        const items = Array.isArray(rtvData?.items) ? rtvData.items : [];
-        const uniqueGrnIds = Array.from(new Set(items.map((row) => row.grn_id).filter(Boolean)));
-        const grnEntries = await Promise.all(
-          uniqueGrnIds.map(async (grnId) => {
-            try {
-              const detail = await getGRN(grnId);
-              return [grnId, detail];
-            } catch {
-              return [grnId, null];
-            }
-          })
-        );
-        if (!active) {
-          return;
-        }
-        setRows(items);
-        setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-        setGrnMap(new Map(grnEntries));
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setVendors([]);
-        setGrnMap(new Map());
-        setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_RTV_LIST_FAILED");
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companyId, refreshToken, settlementMode, status, vendorId]);
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const rtvParams = useMemo(
+    () => ({
+      company_id: companyId || undefined,
+      status: status || undefined,
+      settlement_mode: settlementMode || undefined,
+      vendor_id: vendorId || undefined,
+      limit: 200,
+    }),
+    [companyId, settlementMode, status, vendorId]
+  );
+  const rtvQuery = useQuery({
+    queryKey: ["procurement", "rtvs", rtvParams],
+    queryFn: async () => {
+      const rtvData = await listRTVs(rtvParams);
+      const items = Array.isArray(rtvData?.items) ? rtvData.items : [];
+      const uniqueGrnIds = Array.from(new Set(items.map((row) => row.grn_id).filter(Boolean)));
+      const grnEntries = await Promise.all(
+        uniqueGrnIds.map(async (grnId) => {
+          try {
+            const detail = await getGRN(grnId);
+            return [grnId, detail];
+          } catch {
+            return [grnId, null];
+          }
+        })
+      );
+      return {
+        items,
+        grnMapEntries: grnEntries,
+      };
+    },
+  });
+  const rows = Array.isArray(rtvQuery.data?.items) ? rtvQuery.data.items : [];
+  const vendors = vendorQuery.vendors;
+  const grnMap = useMemo(() => new Map(rtvQuery.data?.grnMapEntries ?? []), [rtvQuery.data?.grnMapEntries]);
+  const loading = rtvQuery.isLoading || vendorQuery.isLoading;
+  const error =
+    rtvQuery.error?.message ||
+    vendorQuery.error?.message ||
+    "";
 
   useEffect(() => {
     setPage(1);
@@ -155,7 +138,7 @@ export default function RTVListPage() {
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_RTV_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_RTV_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/rtvs/${encodeURIComponent(row.id)}`);
   }
 
@@ -168,7 +151,10 @@ export default function RTVListPage() {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => setRefreshToken((value) => value + 1),
+          onClick: () => {
+            void rtvQuery.refetch();
+            void vendorQuery.refetch();
+          },
         },
         {
           key: "debit-notes",

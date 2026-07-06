@@ -8,7 +8,8 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -17,8 +18,8 @@ import ErpMasterListTemplate from "../../../../components/templates/ErpMasterLis
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listVendors } from "../../om/omApi.js";
 import { linkReplacementGRN, listExchangeRefs } from "../procurementApi.js";
+import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const LIMIT = 50;
 
@@ -39,54 +40,45 @@ function normalizeSearch(value) {
 export default function ExchangeRefListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
-  const [refreshToken, setRefreshToken] = useState(0);
   const [linkingRowId, setLinkingRowId] = useState("");
   const [replacementGrnId, setReplacementGrnId] = useState("");
   const companyId = runtimeContext?.selectedCompanyId || "";
-
-  const loadRows = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const [data, vendorData] = await Promise.all([
-        listExchangeRefs({
-          company_id: companyId || undefined,
-          status: status || undefined,
-          limit: 200,
-        }),
-        listVendors({ limit: 200, offset: 0 }),
-      ]);
-      setRows(Array.isArray(data?.items) ? data.items : []);
-      setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-    } catch (loadError) {
-      setRows([]);
-      setVendors([]);
-      setError(
-        loadError instanceof Error
-          ? loadError.message
-          : "PROCUREMENT_EXCHANGE_REF_LIST_FAILED"
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [companyId, status]);
-
-  useEffect(() => {
-    void loadRows();
-  }, [loadRows, refreshToken]);
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const exchangeRefParams = useMemo(
+    () => ({
+      company_id: companyId || undefined,
+      status: status || undefined,
+      limit: 200,
+    }),
+    [companyId, status]
+  );
+  const exchangeRefQuery = useQuery({
+    queryKey: ["procurement", "exchange-refs", exchangeRefParams],
+    queryFn: () => listExchangeRefs(exchangeRefParams),
+  });
+  const rows = Array.isArray(exchangeRefQuery.data?.items)
+    ? exchangeRefQuery.data.items
+    : [];
+  const vendors = vendorQuery.vendors;
+  const loading = exchangeRefQuery.isLoading || vendorQuery.isLoading;
 
   useEffect(() => {
     setPage(1);
   }, [search, status]);
+
+  useEffect(() => {
+    const nextError =
+      exchangeRefQuery.error?.message ||
+      vendorQuery.error?.message ||
+      "";
+    setError(nextError);
+  }, [exchangeRefQuery.error, vendorQuery.error]);
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
@@ -147,7 +139,7 @@ export default function ExchangeRefListPage() {
       setNotice("Replacement GRN linked successfully.");
       setLinkingRowId("");
       setReplacementGrnId("");
-      await loadRows();
+      await Promise.all([exchangeRefQuery.refetch(), vendorQuery.refetch()]);
     } catch (saveError) {
       setError(
         saveError instanceof Error
@@ -168,7 +160,8 @@ export default function ExchangeRefListPage() {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => setRefreshToken((value) => value + 1),
+          onClick: () =>
+            void Promise.all([exchangeRefQuery.refetch(), vendorQuery.refetch()]),
         },
       ]}
       notices={[

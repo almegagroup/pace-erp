@@ -766,16 +766,253 @@ pages. SA screens remain intact and untouched.
 - assertManagerOrSARole allows: SA, GA, DIRECTOR, L4_MANAGER, L3_MANAGER, L2_MANAGER
 - Read/list handlers remain unguarded (any authenticated user)
 - MaterialCategoryMasterPage is create-only — no update handler exists in backend
-- Lead time and port transit ID fields are plain text inputs — no dropdown loading
-- Routes nested under /dashboard/procurement/masters/
+- ~~Lead time and port transit ID fields are plain text inputs — no dropdown loading~~ —
+  **superseded 2026-06-22/23**: Lead Time Masters now have proper Vendor dropdowns (filtered by
+  `vendor_type`) and full Edit support; see "Gate-26 Follow-up" below. Port Transit still plain text.
+- Routes nested under /dashboard/procurement/masters/ — **was unwired in AppRouter.jsx for all
+  7 pages until 2026-06-19**; see "Gate-26 Follow-up" below.
+
+### Gate-26 Verification — VERIFIED by Claude on 2026-06-01
+
+| Check | Result |
+|-------|--------|
+| assertManagerOrSARole — 6 correct roles (SA, GA, DIRECTOR, L4_MANAGER, L3_MANAGER, L2_MANAGER) | ✅ |
+| All 12 write handlers use assertManagerOrSARole | ✅ |
+| 8 frontend pages exist with correct File-IDs (26.2–26.9) | ✅ |
+| AppRouter.jsx — all 8 lazy imports + Route entries wired | ✅ |
+| operationScreens.js — 8 PROC_*_MASTER screen codes, all with ACL universe | ✅ |
+| Minor bug (non-blocking): PaymentTermsMasterPage REFERENCE_DATE_OPTIONS includes "DELIVERY_DATE" but backend REFERENCE_DATES set does not — will cause 400 if selected | ⚠️ |
+
+Gate-26 VERIFIED. All governance changes correct. Minor enum mismatch in payment terms reference_date (DELIVERY_DATE) to be fixed in a future correction. Gate-27 can begin.
 
 ---
 
-## Gate-27 — FG Domain (Admix + Powder)
+## Gate-26 Follow-up — Page-by-Page Review & Fixes (2026-06-19 to 2026-06-23)
 
-**Scope:** BOM master, Process Order lifecycle, Material Issue (P261), FG Receipt, FG QA, Dispatch Instruction, Goods Issue (P601), Customer Return, Reuse/Rework/Scrap.
-**Dependency:** All L2 gates (21–25) complete
-**Status:** DESIGN IN PROGRESS — see Section 83 of feasibility doc (Admix/Liquid discovery)
+**Status:** DONE (Operation Masters + Procurement Masters reviewed)
+**Domain:** OPERATION_MASTERS, PROCUREMENT
+
+Per-page review pass over Operation Masters (Vendor, Vendor-Material Link/ASL, Customer) and
+all 7 Procurement Masters opened in Gate-26, fixing bugs found and redesigning pages where the
+existing design no longer matched real usage. See Section 14/15/18/89/94/95 of the feasibility
+doc for the corresponding design updates.
+
+### Vendor Master redesign (2026-06-19)
+- Dropped flat `primary_contact_person`/`phone`/`primary_email`/`cc_email_list` columns;
+  added `vendor_contacts` + `vendor_emails` (multi-row, one marked primary each).
+- Address split into 8 columns: `reg_address_line1/city/state/pin` + `corr_address_*`.
+- Added `country_code` for import vendors; added `vendor_banks` table (optional).
+- GST lookup always overwrites name + registered address (cache-first Applyflow resolver).
+- `vendor_company_map` for multi-company assignment.
+- Fixed `public.generate_vendor_code()` RPC (missing `WHERE` clause tripped Supabase's
+  safe-update guard via PostgREST; worked fine via direct SQL, masking the bug for a while).
+
+### Vendor-Material Info / ASL redesign (2026-06-22)
+- Replaced single pack-size/UOM/conversion fields with three child tables —
+  `vendor_material_uom`, `vendor_material_currency`, `vendor_material_payment_term` — each
+  supporting multiple rows with exactly one default (`ensureExactlyOneDefault`).
+  `resolvePoLineUom()` added to `po.handlers.ts` for PO-line UOM resolution.
+- `unmapVendorMaterialInfoHandler` now blocks unmap while any `purchase_order_line` referencing
+  it has `line_status IN ('OPEN','PARTIALLY_RECEIVED')`.
+
+### Customer Master redesign (2026-06-22)
+- Renamed/reframed as the RM/PM surplus-trading customer (not FG dispatch — confirmed via
+  `assertSalesMaterial` restricting Sales Order materials to `material_type IN ('RM','PM')`).
+  FG dispatch is a separate, undesigned Gate-27 concept.
+- Added `parent_customer_master` (+ code sequence) for grouping multiple Customer rows.
+- Added vendor-linked customers: `vendor_id` + `parent_customer_id` columns; Name/GST resolve
+  live from `vendor_master` when linked (no stored copy); address/contact/phone/email/currency
+  one-time auto-filled on first link, editable after.
+- `customer_name` made nullable with `CHECK (customer_name IS NOT NULL OR vendor_id IS NOT NULL)`.
+- Removed the DRAFT/PENDING_APPROVAL gate — new customers are created directly ACTIVE
+  (session policy: don't default new masters to an approval workflow unless asked).
+- Fixed stale `OM_ADMIN_REQUIRED` status-mapping bug in every catch block of
+  `customer.handlers.ts` (role-check failures were returning 500 instead of 403, because
+  `assertManagerOrSARole` actually throws `MANAGER_OR_SA_REQUIRED`).
+- Fixed missing `public.generate_customer_code()` wrapper (root cause of persistent 500s on
+  Customer create, masked behind a generic error code until Render logs were inspected).
+- Fixed `/api/admin/companies` being SA/GA-only despite serving as the generic Company Mapping
+  dropdown on Vendor/Material/Customer pages — extended to allow `MANAGER_OR_SA_ROLES`.
+
+### Sidebar reorder
+- Procurement Masters group moved after Operation Masters in the sidebar (masters-first ordering).
+
+### Procurement Masters router bug (2026-06-19)
+- All 7 Procurement Masters pages (Payment Terms, Port, Port Transit, Material Category,
+  Import/Domestic Lead Time, Transporter, CHA) had **zero `<Route>` registration** in
+  `AppRouter.jsx` despite full backend/ACL readiness from Gate-26 — every page redirected to the
+  landing page. Fixed by adding all 7 routes.
+
+### PM05 — Lead Time Masters fixes (2026-06-22/23)
+- `PROC_DOMESTIC_LEAD_TIME_MASTER` was completely missing from `acl.menu_master` — caused a 403
+  on the Domestic tab that (via `Promise.all`, not `allSettled`) also broke the Import tab's
+  display even though Import itself had full access.
+- Added missing Edit (`PATCH /api/procurement/lead-times/import/:id` and `.../domestic/:id`) —
+  `upsert*` handlers had only ever inserted, never updated, despite the name.
+- Found and fixed a path-segment bug while adding Edit: `getIdFromPath()` hardcoded
+  `segments[3]`, correct only for 4-segment paths (`/api/x/y/:id`) — wrong for the 5-segment
+  `/api/procurement/lead-times/import/:id`, where it silently returned `"import"` instead of the
+  id. This meant **Delete had been silently broken** on these two endpoints the whole time.
+  Added `getLastPathSegment()` and applied it to Delete + the new Update handlers.
+- Fixed empty Vendor dropdown: `listVendors()` returns `{data, total}`, but the page assumed a
+  bare array; added the same defensive `v?.data ?? []` unwrap already used for Companies, and
+  fixed the query param name (`is_active` → `status`).
+- Fixed Vendor dropdown showing both Import and Domestic vendors on both tabs — now two separate
+  filtered `listVendors({vendor_type: "IMPORT" | "DOMESTIC"})` calls.
+- Removed Material Category entirely from Import Lead Time Master (column, validation, UI) — no
+  real use at this granularity; table was empty so the column was dropped outright. See feasibility
+  doc 89.6/89.7.
+
+### PM06 — Transporter Master fixes + redesign (2026-06-23)
+- Fixed `usage_direction` validation mismatch: backend accepted `{INBOUND,OUTBOUND,BOTH}` but
+  the only frontend caller sent `{IMPORT,DOMESTIC,BOTH}` — every create/update with
+  Direction=IMPORT or DOMESTIC was 400ing (and, after the app-layer fix, still 500ing because the
+  table's own `transporter_master_usage_direction_check` CHECK constraint wasn't updated in the
+  same pass — caught from Render/Postgres logs after the first "fix" shipped).
+- Fixed `listTransportersHandler` ignoring `is_active` and always filtering `active=true` — a
+  deactivated transporter could never be listed again to reactivate it.
+- Full redesign (see feasibility doc 94.1): GST autofill (With GST / Without GST toggle),
+  multi-row `transporter_contacts`/`transporter_emails`, `transporter_company_map`. New
+  broad-access (`skipAcl: true`) `GET /api/procurement/gst-profile` endpoint, reused by CHA below.
+
+### PM07 — CHA Master redesign (2026-06-23)
+- Same upgrade as Transporter, except GST is mandatory (no Without-GST path) —
+  `cha_master.gst_number` is now `NOT NULL`. Added `cha_contacts`/`cha_emails`/`cha_company_map`.
+  Existing Port Assignments tab (`cha_port_map`) unchanged. See feasibility doc 95.1.
+
+### Process note
+- Confirmed (again) that `mcp__supabase__apply_migration` records its own server timestamp,
+  distinct from the local migration filename — every migration this pass was renamed post-apply
+  via `mcp__supabase__list_migrations` before committing.
+- Confirmed a recurring root-cause class: **app-level enum/Set changes must be paired with a
+  check of the matching DB `CHECK` constraint, queried on its own** (not bundled with another
+  query whose output can bury it) — missed once this session (Transporter direction), causing a
+  500 in production after the "fix" was believed complete.
+
+---
+
+## Hotfix — ErpScreenScaffold full-width regression (2026-07-05)
+
+**Root cause:** `ErpScreenScaffold` (line 379) wraps all page content in:
+```jsx
+<div className="mx-auto flex max-w-none flex-1 flex-col ...">
+```
+In a `flex-col` flex container, `mx-auto` overrides the default `align-self: stretch` behavior — the child no longer fills the cross-axis (horizontal) width; instead it shrinks to its content width. Result: all ERP screens appeared in a narrow centered column (visible on Port Master / OM03 and all other screens using `ErpScreenScaffold`).
+
+**Fix:** Added `w-full` to the same div (`mx-auto w-full flex max-w-none flex-1 flex-col ...`). With an explicit `width: 100%`, the auto margins have no free space to absorb and the element fills the full available width. The `mx-auto` is now harmless (useful if a `max-w-*` constraint is ever added later).
+
+**File changed:** `frontend/src/components/templates/ErpScreenScaffold.jsx` line 379
+
+---
+
+## Gate-27 — FG Domain: Liquid First (Admix + Hypershot + IWC), Powder Later
+
+**Scope:** Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment, FG Receipt, FG QA, Dispatch Instruction (Liquid), Customer Return, Reuse/Rework/Scrap, FOR_REPROCESS flow.
+**Dependency:** All L2 gates (21–26) VERIFIED ✅
+**Status:** DESIGN IN PROGRESS
+
+---
+
+### Gate-27 Strategy Decision (2026-06-02)
+
+**Liquid-first approach (locked):**
+- Phase-1: Design + Implement Admix, Hypershot, IWC completely
+- Phase-2: Powder (separate go-live date, separate opening stock)
+- Rationale: Liquid go-live = 1 July 2026. Powder go-live = later (separate physical count at Powder go-live date)
+
+**L1/L2 Liquid readiness (verified 2026-06-02):**
+
+| Component | Status | Notes |
+|---|---|---|
+| Material Master (shade_code, pack_code, external_sku, production_mode) | ✅ Ready | Gate-12 — already built |
+| Stock Types (UNRESTRICTED, QA, BLOCKED, IN_TRANSIT, FOR_REPROCESS) | ✅ Ready | Gate-11 |
+| FOR_REPROCESS movements (P901–P906) | ✅ Ready | Gate-11 |
+| L2 Procurement for RM/PM | ✅ 100% Ready | No changes needed for Liquid RM/PM |
+| P231/P232 (FG Receipt from Production / Reversal) | ❌ Missing | Must add in Gate-27 |
+| P267/P268 (FOR_REPROCESS → Production Issue / Reversal) | ❌ Missing | Must add in Gate-27 |
+
+**FG Types in Liquid:**
+
+| Section | Type | BOM | SKU known upfront? |
+|---|---|---|---|
+| Admix (main) | ADMIX_STROKE | No fixed BOM — stroke per order | ❌ Shade/Pack determined per order |
+| Hypershot | FIXED_BOM | Pre-defined | ✅ SA maintains upfront |
+| IWC | FIXED_BOM | Pre-defined | ✅ SA maintains upfront |
+
+**SKU Structure (all FG types):**
+```
+Product Code (4) + Shade Code (4) + Pack Code (3) = 11 characters
+```
+
+**Two-Order Model (Admix) — UPDATED 2026-06-08:**
+- Process PO = RM only (stroke-based), created at Standard phase
+- Packing PO = PM only, created at Standard phase (immediately after Process PO), linked
+- 1 Process PO → N Packing POs (one-to-many)
+- Balance qty: Process PO actual output = Σ all Packing PO qty; balance > 0 → alert → new Packing PO needed
+- Pack type change: delink → delete old Packing PO → create new → relink (any stage, L3+ authorization)
+
+**Pending before design can be fully locked:**
+- [ ] Batch number format — business owner to provide existing format
+- [ ] Admix FG material master creation model — who creates, when, which screen (SOD decision at Process Order + Dispatch design stage)
+- [ ] Vessel/Machine tolerance values
+
+**Reform policy (locked 2026-06-02):**
+L1/L2 reform and UI polish will be done AFTER all layers (L3–L9) are implemented — unified polish pass for consistency across all screens.
+
+---
+
+### Gate-27 Concept Session — 2026-06-08
+
+**Session type:** General Admix Business Mechanism — concept foundation before formal sub-section lock
+
+**Key decisions locked (written to feasibility doc Sections 83.1, 83.4, 83.13–83.16):**
+
+| Topic | Decision |
+|---|---|
+| Document flow | FO (production time) → SO (dispatch time) → AP costing confirmation (soft gate) → dispatch |
+| Costing soft gate | Wrong stroke costing from AP → dispatch anyway → differential to Reco |
+| Process PO + Packing PO creation | Standard time — created together, linked immediately |
+| 1 Process PO → N Packing POs | One-to-many. Balance qty tracked. Balance > 0 → alert → new Packing PO |
+| Pack type change | Delink → delete → create new Packing PO → relink. Any stage. Auto stock reversal if needed. |
+| Pack types | Barrel (599, per barrel cost, PM=barrel+labels), Tanker (000, per KG, no PM), IBC (000, per KG, IBC itself=PM) |
+| Barrel mechanics | 2 PM types (210 KG / 230 KG barrel). Fill per barrel = variable, uniform per batch. Order qty divisible by fill. Balance barrel → additional Packing PO. |
+| Admix Pack BOM | None — PM selection fully manual in Packing PO. Verify stage catches errors. |
+| Hypershot/IWC Pack BOM | Fixed — auto-populated at Packing PO creation |
+| PACE costing | Weighted Average Rate (WAR) per item. Landed cost = item + freight + unloading. |
+| AP monthly rate | AP confirms rates at start of each month. Used for entire month. |
+| Sales Order costing | AP monthly rate + operational cost = what AP pays PACE |
+| Reco sources | Rate variance + Quantity variance (e.g. caustic always over-consumed) + Stroke mismatch |
+| Reco account | Bilateral clearing — monthly settlement. Either side pays. |
+| Procurement planning formula | (Current Unrestricted − Reserved) + In-Transit + QA. Pending PO excluded until In-Transit. |
+
+**Feasibility doc changes:**
+- 83.1: Revised — SO timing, costing soft gate, document flow diagram
+- 83.4: Major revision — Packing PO at Standard time, 1:N, balance qty, delink=delete, pack type change
+- 83.13: New — FG Costing System (WAR vs AP monthly rate, reco)
+- 83.14: New — Barrel Mechanics and Fill Quantity
+- 83.15: New — Pack BOM Design (Admix=none, Hypershot/IWC=fixed)
+- 83.16: New — Procurement Planning Formula
+
+**Next session:** Formal 83.1 sub-section lock → 83.2 → 83.3 ... one by one
+
+---
+
+### Gate-27 Implementation Items (PENDING — design not yet started)
+
+| ID | Item | Status |
+|---|---|---|
+| 27.1 | Add P231/P232/P267/P268 movement types to movement_type_master | PENDING |
+| 27.2 | Stroke Master DB (formulation templates) | PENDING |
+| 27.3 | Process PO DB (header + lines + approval + amendment) | PENDING |
+| 27.4 | Packing PO DB (header + lines + packing BOM) | PENDING |
+| 27.5 | FG Declaration flow | PENDING |
+| 27.6 | Machine/Mixer assignment (per Process PO) | PENDING |
+| 27.7 | FG Receipt movement (P231 posting) | PENDING |
+| 27.8 | FG QA (usage decision) | PENDING |
+| 27.9 | FOR_REPROCESS issue to production (P267 posting) | PENDING |
+| 27.10 | Batch number generation | PENDING |
+| 27.11 | Backend handlers (Process PO, Packing PO, FG Declaration, FG QA) | PENDING |
+| 27.12 | Frontend screens (Process PO, Packing PO, FG Declaration, FG QA) | PENDING |
 
 ---
 
@@ -940,8 +1177,216 @@ If Claude marks an item FAILED, it is logged here with reason. Codex must fix be
 
 ---
 
-*Last Updated: 2026-05-18*
-*Next Review: After PERF safe pass and before any destructive linter cleanup*
+## Post-Implementation Corrections
+
+**Reference File:** OM-CORRECTION-NOTES.md
+All corrections, improvements, and modifications found after implementation are tracked in OM-CORRECTION-NOTES.md.
+Once a fix is done and verified, it is logged here.
+
+| Fix-ID | Date | Area | Description | Fixed By |
+|--------|------|------|-------------|----------|
+| - | - | - | - | - |
+
+---
+
+## Session Polish — 2026-06-12
+
+Non-gate bugfixes and UX improvements done directly by Claude (no Codex task).
+
+### A — tx_code in Sidebar / Command Bar ✅ FIXED
+
+**Problem:** tx_code (e.g. OM01, PM03) was null in sidebar and Command Bar despite being set in `erp_menu.menu_master`.
+
+**Root cause chain:**
+1. `acl_runtime.ts` SELECT strings were missing `tx_code` column → null in snapshot JSON
+2. Even after adding `tx_code` to SELECT, snapshot was not being rebuilt — `.schema("erp_menu").rpc()` silently fails because `erp_menu` is not in PostgREST exposed schemas. The RPC call returned no error but did nothing.
+
+**Fix:**
+- Created public schema wrapper functions (`public.rebuild_sa_menu_snapshot`, `public.rebuild_acl_menu_snapshot`) that call the real `erp_menu.generate_menu_snapshot` internally
+- Changed SA and ACL RPC calls in `acl_runtime.ts` to use these public wrappers
+- Added `tx_code` to both SA and ACL SELECT strings
+- Created migration `20260612043111_fix_menu_snapshot_rpc_public_wrappers.sql`
+- tx_code font size in sidebar set to 14px (MenuShell.jsx)
+
+**Files changed:**
+| File | Change |
+|------|--------|
+| `supabase/functions/api/_shared/acl_runtime.ts` | tx_code added to SELECT strings; RPC calls changed to public wrappers |
+| `supabase/migrations/20260612043111_fix_menu_snapshot_rpc_public_wrappers.sql` | New — creates public wrapper functions + GRANTs |
+| `frontend/src/layout/MenuShell.jsx` | tx_code display at 14px in sidebar + Command Bar keywords |
+
+---
+
+### B — Inactivity Lock Delayed / Not Firing ✅ FIXED
+
+**Problem:** Inactivity lock was arriving very late or not at all when alt-tabbing away from the ERP.
+
+**Root cause:** `SessionWatchdog.jsx` had a `visibilitychange` listener that called `recordUserActivity()` on tab focus — this reset the idle clock every time user switched back, so the timer never expired.
+
+**Secondary problem:** Browser throttles `setInterval` in background tabs, so the 60s probe could fire much later than expected.
+
+**Fix:**
+- Removed `recordUserActivity()` from `visibilitychange` handler (was resetting idle clock)
+- Added immediate `tick()` call on tab focus to bypass background tab throttling
+- `lastPassiveProbeAtRef.current = 0` forces cooldown bypass on visibility restore
+
+**File changed:** `frontend/src/components/SessionWatchdog.jsx`
+
+---
+
+### C — OM02 Storage Locations Page Full Redesign ✅ DONE
+
+**Previous state:** Single page, raw UUID input for plant assignment, no edit, no toggle.
+
+**New design (2-tab):**
+
+**Tab 1 — Locations:**
+- Row-click inline edit (name + type editable, code read-only)
+- Activate / Deactivate toggle button per row
+- Friendly error messages (error code → human readable)
+- Create form on right panel (same pattern as SAOmUomMaster)
+
+**Tab 2 — Plant Assignments:**
+- Company dropdown (from `/api/admin/companies`) + Plant dropdown (from `/api/admin/projects`)
+- Left panel: assigned locations list with checkbox multi-select → "Remove X selected" batch unmap
+- Right panel: unassigned active locations with checkbox multi-select → "Assign (X)" batch assign
+
+**New backend handlers added to `location.handlers.ts`:**
+- `updateStorageLocationHandler` — PATCH name + type (SA only)
+- `toggleStorageLocationHandler` — POST toggle active (SA only)
+- `listPlantAssignmentsHandler` — GET assigned locations for company+plant (admin)
+- `unmapStorageLocationFromPlantHandler` — POST batch unmap from plant (SA only)
+
+**New routes (om.routes.ts):**
+- `PATCH /api/om/storage-location`
+- `POST /api/om/storage-location/toggle`
+- `GET /api/om/storage-location/plant-assignments`
+- `POST /api/om/storage-location/plant-unmap`
+
+**New omApi.js functions:**
+- `updateStorageLocation`, `toggleStorageLocation`, `listPlantAssignments`, `unmapStorageLocationsFromPlant`
+
+**Files changed:**
+| File | Change |
+|------|--------|
+| `supabase/functions/api/_core/om/location.handlers.ts` | +4 handlers (update, toggle, list-assignments, unmap) |
+| `supabase/functions/api/_routes/om.routes.ts` | +4 routes + imports |
+| `supabase/functions/api/_acl/route-acl-registry.ts` | +4 skipAcl entries |
+| `frontend/src/pages/dashboard/om/omApi.js` | +4 API helper functions |
+| `frontend/src/admin/sa/screens/SAOmStorageLocations.jsx` | Full rewrite — 2-tab layout |
+
+**Commit:** `c0526bc` — pushed to `dev` on 2026-06-12
+
+---
+
+*Last Updated: 2026-06-19*
+*Next: Continue page-by-page review — OM03 onwards*
+
+---
+
+## Session Polish — 2026-06-19
+
+Non-gate bugfixes and feature implementations done directly by Claude (no Codex task).
+Scope: Vendor Master (OM07) full implementation — SA admin screen.
+
+---
+
+### A — Vendor Master DB Redesign ✅ DONE
+
+**Migrations applied (all via `supabase db push --include-all --linked`):**
+
+| Migration | What |
+|-----------|------|
+| `20260619000000_vendor_master_redesign.sql` | Drop old flat contact/email columns; add country_code; create vendor_contacts + vendor_emails tables; create public.generate_vendor_code() wrapper |
+| `20260619010000_fix_om07_vendor_master_route.sql` | Fix OM07 route registration |
+| `20260619020000_vendor_banks_table.sql` | Create vendor_banks table (multi-row: bank_name, branch, account_number, routing_number, is_primary, is_active) |
+| `20260619030000_reload_postgrest_vendor_wrapper.sql` | NOTIFY pgrst reload after wrapper creation |
+| `20260619040000_vendor_address_split.sql` | Add reg_address_line1/city/state/pin + corr_address_line1/city/state/pin; migrate old registered_address → reg_address_line1; drop old address columns |
+| `20260619050000_fix_vendor_code_rpc.sql` | Recreate public.generate_vendor_code() without SET search_path='' (PostgREST skips functions with SET search_path during schema introspection) |
+| `20260619060000_fix_vendor_code_where_clause.sql` | Add WHERE id = 1 to UPDATE (pg error 21000: UPDATE requires WHERE clause) |
+
+**DB state after migration:**
+- `erp_master.vendor_master`: 8 new address columns, old address/contact/email columns dropped
+- `erp_master.vendor_contacts`: new child table
+- `erp_master.vendor_emails`: new child table
+- `erp_master.vendor_banks`: new child table
+- `public.generate_vendor_code()`: working, returns V-00001..V-99999 format
+
+---
+
+### B — generate_vendor_code RPC Fix ✅ FIXED
+
+**Problem:** Vendor create returned 500 error consistently.
+
+**Root cause (2-step):**
+1. `public.generate_vendor_code()` had `SET search_path = ''` → PostgREST skips this function during schema introspection → `/rest/v1/rpc/generate_vendor_code` returns 400 silently → backend returns 500
+2. After removing `SET search_path = ''`, plain `UPDATE erp_master.vendor_code_sequence SET last_number = last_number + 1` with no WHERE clause → PostgreSQL error 21000 (PostgREST/pg safety: unconditional UPDATE rejected)
+
+**Fix:**
+- Migration 050000: Remove `SET search_path = ''`
+- Migration 060000: Add `WHERE id = 1` (vendor_code_sequence has exactly one row)
+
+**Diagnosed via:** Render backend logs showing `[vendor.create] generate_vendor_code RPC failed: {"code":"21000","message":"UPDATE requires a WHERE clause"}`
+
+**Key lesson:** `SET search_path = ''` on any PostgreSQL function causes PostgREST to silently skip it — the function becomes unreachable via `/rest/v1/rpc/`. Never use this on public wrapper functions.
+
+---
+
+### C — Vendor Master Backend Update ✅ DONE
+
+**File:** `supabase/functions/api/_core/om/vendor.handlers.ts`
+
+**Changes:**
+- `createVendorHandler`: INSERT now includes all 8 address fields (reg_address_line1/city/state/pin + corr_address_line1/city/state/pin)
+- `updateVendorHandler`: mutableFields updated — added 8 address fields, removed old `registered_address`/`correspondence_address`
+- Added `console.error` logging to createVendorHandler for diagnosis (generate_vendor_code RPC failure + INSERT failure)
+
+---
+
+### D — Vendor Master Frontend (SAVendorMaster.jsx) ✅ DONE
+
+**File:** `frontend/src/admin/sa/screens/SAVendorMaster.jsx`
+
+**Changes:**
+1. **ESC key fix:** Replaced custom overlay with `DrawerBase` pattern so `BlockingLayer` intercepts ESC correctly — matches the rest of SA admin screens
+2. **GST auto-fill (always overwrite):** When GST number is looked up, vendor_name + reg_address_line1/state/pin are always overwritten (not "only if empty" — always fresh from API)
+3. **Address sections:** Two separate `<Section>` blocks — "Registered Address" (line1, city, state, pin) and "Correspondence Address" (line1, city, state, pin) — replacing old single textarea fields
+4. **BLANK form state:** Updated to include all 8 address fields, country_code, currency_code (default BDT); removed old flat contact/email/address fields
+5. **Only vendor_name mandatory** at create time — all other fields optional
+
+**BLANK object:**
+```js
+const BLANK = {
+  vendor_name: "", bin_number: "", tin_number: "", trade_license: "",
+  gst_number: "", gst_category: "", iec_code: "", import_license: "",
+  country_code: "", currency_code: "BDT",
+  reg_address_line1: "", reg_address_city: "", reg_address_state: "", reg_address_pin: "",
+  corr_address_line1: "", corr_address_city: "", corr_address_state: "", corr_address_pin: "",
+};
+```
+
+---
+
+### E — DB Verification ✅ VERIFIED
+
+Confirmed via MCP SQL queries on dev project (ytapuwiqicmvpanmzelb):
+- V-00004: GUJARAT POLYBONDS — DOMESTIC, GST auto-fill worked (reg_address_line1 populated from API)
+- V-00005: HS COMPANY — IMPORT, manual entry, all fields saved correctly
+- vendor_banks, vendor_contacts, vendor_emails tables exist and accessible
+
+---
+
+### Summary — 2026-06-19
+
+| Area | Status | Files |
+|------|--------|-------|
+| DB: address split (8 new columns, old dropped) | ✅ | Migration 040000 |
+| DB: vendor_contacts + vendor_emails tables | ✅ | Migration 000000 |
+| DB: vendor_banks table | ✅ | Migration 020000 |
+| DB: generate_vendor_code RPC fix | ✅ | Migration 050000 + 060000 |
+| BE: vendor.handlers.ts address fields | ✅ | vendor.handlers.ts |
+| FE: SAVendorMaster.jsx full update | ✅ | SAVendorMaster.jsx |
+| Feasibility doc: Section 14.3 + 85.6.2 updated | ✅ | Feasibility MD |
 
 
 
@@ -960,4 +1405,106 @@ If Claude marks an item FAILED, it is logged here with reason. Codex must fix be
 
 
 
+
+
+---
+
+## Gate-27 — L3 Production Domain (BOM, Process Order, Packing Order, Dispatch)
+
+**Started:** 2026-07-06
+**Completed:** 2026-07-06
+**Implemented by:** Claude (full session — DB, Backend, Frontend, ACL, Snapshots)
+**Design Reference:** Feasibility doc Sections 83.1–83.5, 83.7, 83.14, 83.17, 83.18
+
+### Scope
+
+Full L3 Production domain for Liquid first (Admix, HPS, IWC):
+- Stroke Master (BOM) with dosage-based RM lines
+- Prodshade Pack Code Configuration
+- Batch Number Series (company-level for MTO/MTEST, per-prodshade for HPS/IWC)
+- Production Segment Location Config (segment → rm_sloc / pm_sloc / shopfloor_sloc / fg_sloc)
+- Plan Feed (FO — Firm Order management with 3-tab UI)
+- Process Orders (full lifecycle: STANDARD → QA_APPROVED → BATCH_STARTED → FINAL → VERIFIED | QA_REJECTED | REVERSED)
+- Packing Orders (STANDARD → FINAL | REVERSED, PM consumption at Finalize)
+- Order Overview (combined read-only dashboard)
+
+### DB — Migration Files
+
+| Migration | Purpose | Status |
+|-----------|---------|--------|
+| `20260706010743_gate27_production_schema.sql` | `erp_production` schema, 11 tables, P231/P232 movement types | ✅ Applied (MCP) |
+| `20260706020000_gate27_production_acl.sql` | ACL entries: GRP_ACL_PRODUCTION group, 6 PROD_* pages in erp_menu + acl.menu_master, CAP_PROD_OPERATOR + CAP_PROD_PLANNER capabilities | ✅ Applied (MCP) |
+| `20260706030000_gate27_production_doc_series.sql` | Number series for PROC_PO + PACK_PO for all 4 business companies | ✅ Applied (MCP) |
+| `20260706040000_gate27_production_schema_corrections.sql` | Corrective columns (notes, qa_rejection_reason, fg_stock_ledger_id, batch_started_by, is_rm, uom_code, stock_ledger_id, sku, cancelled_by, total_qty_kg) | ✅ Applied (MCP) |
+
+### DB — Data Changes (via MCP, no migration needed)
+
+- `CAP_PROD_OPERATOR` assigned to ALL work contexts for all 4 business companies (`acl.work_context_capabilities`)
+- `version_role_capabilities`: CAP_PROD_OPERATOR added for all roles × all 4 ACL versions
+- `version_work_context_capabilities`: CAP_PROD_OPERATOR added for all WCs × all 4 ACL versions
+- `version_capability_menu_actions`: all PROD_* menu actions added for all 4 ACL versions
+- ACL snapshots regenerated: `acl.generate_acl_snapshot()` for all 4 companies
+- Menu snapshots regenerated: `rebuild_acl_menu_snapshot()` for all 9 users × 4 companies
+
+### Backend Files
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `supabase/functions/api/_core/production/production.shared.ts` | Shared types, role checks, parse helpers | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/production.utils.ts` | `generateCompanyDocNumber()` shared util | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/stroke_master.handlers.ts` | 6 handlers (list, get, create, update, approve, revert) | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/pack_config.handlers.ts` | 5 handlers (listPackCodes, togglePackCode, listPackConfigs, upsertPackConfig, deletePackConfig) | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/batch_series.handlers.ts` | 3 handlers + `generateBatchNumber()` | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/segment_location.handlers.ts` | 2 handlers (list, upsert) | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/plan_feed.handlers.ts` | 6 handlers (list, get, create, update, cancel, summary) | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/process_order.handlers.ts` | 10 handlers (full lifecycle incl. stock posting at Verify) | ✅ VERIFIED |
+| `supabase/functions/api/_core/production/packing_order.handlers.ts` | 7 handlers (full lifecycle incl. PM consumption at Finalize) | ✅ VERIFIED |
+| `supabase/functions/api/_routes/production.routes.ts` | Route dispatcher for all /api/production/* | ✅ VERIFIED |
+| `supabase/functions/api/_pipeline/protected_routes.dispatch.ts` | Added `dispatchProductionRoutes` call | ✅ VERIFIED |
+
+### Frontend Files
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `frontend/src/pages/dashboard/production/prodApi.js` | All /api/production/* API calls (37 functions) | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/StrokeMasterPage.jsx` | Stroke Master list + detail drawer + create drawer | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/PackConfigPage.jsx` | Pack Codes (read) + Prodshade Configs (create/delete) tabs | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/PlanFeedPage.jsx` | 3-tab FO management (Create / Edit / Total Table with modal) | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/ProcessOrderPage.jsx` | Full Process Order lifecycle with drawer, modals, all actions | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/PackingOrderPage.jsx` | Packing Order lifecycle (create, link FO, finalize, reverse) | ✅ VERIFIED |
+| `frontend/src/pages/dashboard/production/OrderOverviewPage.jsx` | Combined overview: Process Orders + expandable Packing Orders | ✅ VERIFIED |
+| `frontend/src/admin/sa/screens/SAProductionBatchSeriesPage.jsx` | SA screen for batch number series management | ✅ VERIFIED |
+| `frontend/src/admin/sa/screens/SAProductionSegmentLocationPage.jsx` | SA/Manager screen for segment location config | ✅ VERIFIED |
+
+### Navigation Wiring
+
+| File | Change | Status |
+|------|--------|--------|
+| `frontend/src/navigation/screens/projects/operationModule/operationScreens.js` | Added 6 PROD_* screen entries | ✅ VERIFIED |
+| `frontend/src/router/AppRouter.jsx` | Imports + Routes for 6 production pages + 2 SA screens | ✅ VERIFIED |
+
+### ACL / Access Design
+
+| Screen | Who Can Access |
+|--------|---------------|
+| PROD_STROKE_MASTER | All ACL users (CAP_PROD_OPERATOR); Approve/Revert = Manager+ |
+| PROD_PACK_CONFIG | All ACL users; Write = Manager+ |
+| PROD_PLAN_FEED | All ACL users; Create/Edit = Manager+ |
+| PROD_PROCESS_ORDER | All ACL users; QA actions = Manager+ or L1/L2 Auditor |
+| PROD_PACKING_ORDER | All ACL users; Finalize = Manager+ |
+| PROD_ORDER_OVERVIEW | All ACL users (read-only) |
+| SA_PROD_BATCH_SERIES | SA + Manager+ (SA admin panel route) |
+| SA_PROD_SEGMENT_LOCATIONS | SA + Manager+ (SA admin panel route) |
+
+### Stock Movement Logic
+
+| Event | Movement |
+|-------|---------|
+| Process Order VERIFY | P261 (RM out from rm_sloc) + P261 (PM out from pm_sloc) + P231 (FG in to shopfloor_sloc) |
+| Process Order REVERSE from VERIFIED | P232 (FG out reversal) + P262 (RM/PM in reversal) |
+| Packing Order FINALIZE | P261 (PM out from pm_sloc per segment config) |
+
+### Gate-27 Status: ✅ VERIFIED
+
+All DB, Backend, Frontend, ACL, and Snapshot steps complete. Production pages visible in sidebar for all ACL users across all 4 business companies.
 

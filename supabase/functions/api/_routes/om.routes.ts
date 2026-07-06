@@ -12,6 +12,16 @@ import type { SessionResolution } from "../_pipeline/session.ts";
 import type { ContextResolution } from "../_pipeline/context.ts";
 import {
   addMaterialCategoryMemberHandler,
+  removeMaterialCategoryMemberHandler,
+  updateMaterialCategoryGroupHandler,
+  deleteMaterialCategoryGroupHandler,
+  bulkSaveMaterialsHandler,
+  deleteMaterialsHandler,
+  importMaterialsCsvHandler,
+  listCompanyMappingHandler,
+  bulkMapMaterialsHandler,
+  bulkUnmapMaterialsHandler,
+  importCompanyMappingHandler,
   changeMaterialStatusHandler,
   createMaterialCategoryGroupHandler,
   createMaterialHandler,
@@ -22,41 +32,69 @@ import {
   listMaterialCategoryGroupsHandler,
   listMaterialsHandler,
   listMaterialUomConversionsHandler,
+  listMaterialCompanyExtensionsHandler,
+  listMaterialPlantExtensionsHandler,
   updateMaterialHandler,
+  updateMaterialUomConversionHandler,
 } from "../_core/om/material.handlers.ts";
 import {
   addVendorPaymentTermsHandler,
+  bulkMapVendorsHandler,
+  bulkUnmapVendorsHandler,
   changeVendorStatusHandler,
   createVendorHandler,
+  deleteVendorsHandler,
+  getVendorBanksHandler,
+  getVendorContactsHandler,
+  getVendorEmailsHandler,
   getVendorHandler,
   getVendorPaymentTermsHandler,
+  listVendorCompanyMappingHandler,
+  listVendorCompanyMapsHandler,
   listVendorsHandler,
   mapVendorToCompanyHandler,
   updateVendorHandler,
+  upsertVendorBanksHandler,
+  upsertVendorContactsHandler,
+  upsertVendorEmailsHandler,
 } from "../_core/om/vendor.handlers.ts";
 import {
   changeVendorMaterialInfoStatusHandler,
   createVendorMaterialInfoHandler,
   getVendorMaterialInfoHandler,
+  listMappedMaterialIdsForVendorHandler,
   listVendorMaterialInfosHandler,
+  unmapVendorMaterialInfoHandler,
   updateVendorMaterialInfoHandler,
 } from "../_core/om/vendor_material_info.handlers.ts";
 import {
   changeCustomerStatusHandler,
   createCustomerHandler,
   getCustomerHandler,
+  listCustomerCompanyMapsHandler,
   listCustomersHandler,
   mapCustomerToCompanyHandler,
   updateCustomerHandler,
 } from "../_core/om/customer.handlers.ts";
 import {
+  createParentCustomerHandler,
+  listParentCustomersHandler,
+  updateParentCustomerHandler,
+} from "../_core/om/parent_customer.handlers.ts";
+import {
   createUomHandler,
   listUomHandler,
+  toggleUomHandler,
+  updateUomHandler,
 } from "../_core/om/uom.handlers.ts";
 import {
   createStorageLocationHandler,
   listStorageLocationsHandler,
+  listPlantAssignmentsHandler,
   mapStorageLocationToPlantHandler,
+  unmapStorageLocationFromPlantHandler,
+  updateStorageLocationHandler,
+  toggleStorageLocationHandler,
 } from "../_core/om/location.handlers.ts";
 import {
   createNumberSeriesHandler,
@@ -65,10 +103,18 @@ import {
 import {
   createCostCenterHandler,
   listCostCentersHandler,
+  toggleCostCenterHandler,
+  updateCostCenterHandler,
 } from "../_core/om/cost_center.handlers.ts";
+import {
+  createMaterialTypeCategoryHandler,
+  listMaterialTypeCategoriesHandler,
+} from "../_core/om/material_type_category.handlers.ts";
 import {
   createMachineHandler,
   listMachinesHandler,
+  updateMachineHandler,
+  toggleMachineHandler,
 } from "../_core/om/machine.handlers.ts";
 
 export async function dispatchOmRoutes(
@@ -104,12 +150,38 @@ export async function dispatchOmRoutes(
       return await createMaterialUomConversionHandler(req, ctx);
     case "GET:/api/om/material/uom-conversions":
       return await listMaterialUomConversionsHandler(req, ctx);
+    case "PATCH:/api/om/material/uom-conversion":
+      return await updateMaterialUomConversionHandler(req, ctx);
+    case "GET:/api/om/material/company-extensions":
+      return await listMaterialCompanyExtensionsHandler(req, ctx);
+    case "GET:/api/om/material/plant-extensions":
+      return await listMaterialPlantExtensionsHandler(req, ctx);
+    case "POST:/api/om/materials/bulk-save":
+      return await bulkSaveMaterialsHandler(req, ctx);
+    case "DELETE:/api/om/materials":
+      return await deleteMaterialsHandler(req, ctx);
+    case "POST:/api/om/materials/import":
+      return await importMaterialsCsvHandler(req, ctx);
+    case "GET:/api/om/material/company-mapping":
+      return await listCompanyMappingHandler(req, ctx);
+    case "POST:/api/om/material/company-map-bulk":
+      return await bulkMapMaterialsHandler(req, ctx);
+    case "DELETE:/api/om/material/company-unmap-bulk":
+      return await bulkUnmapMaterialsHandler(req, ctx);
+    case "POST:/api/om/material/company-mapping-import":
+      return await importCompanyMappingHandler(req, ctx);
     case "POST:/api/om/material/category-group":
       return await createMaterialCategoryGroupHandler(req, ctx);
+    case "PATCH:/api/om/material/category-group":
+      return await updateMaterialCategoryGroupHandler(req, ctx);
+    case "DELETE:/api/om/material/category-group":
+      return await deleteMaterialCategoryGroupHandler(req, ctx);
     case "GET:/api/om/material/category-groups":
       return await listMaterialCategoryGroupsHandler(req, ctx);
     case "POST:/api/om/material/category-group/member":
       return await addMaterialCategoryMemberHandler(req, ctx);
+    case "DELETE:/api/om/material/category-group/member":
+      return await removeMaterialCategoryMemberHandler(req, ctx);
 
     case "POST:/api/om/vendor":
       return await createVendorHandler(req, ctx);
@@ -127,17 +199,43 @@ export async function dispatchOmRoutes(
       return await addVendorPaymentTermsHandler(req, ctx);
     case "GET:/api/om/vendor/payment-terms":
       return await getVendorPaymentTermsHandler(req, ctx);
+    case "GET:/api/om/vendor/company-maps":
+      return await listVendorCompanyMapsHandler(req, ctx);
+    case "DELETE:/api/om/vendors":
+      return await deleteVendorsHandler(req, ctx);
+    case "GET:/api/om/vendor/banks":
+      return await getVendorBanksHandler(req, ctx);
+    case "POST:/api/om/vendor/banks":
+      return await upsertVendorBanksHandler(req, ctx);
+    case "GET:/api/om/vendor/contacts":
+      return await getVendorContactsHandler(req, ctx);
+    case "POST:/api/om/vendor/contacts":
+      return await upsertVendorContactsHandler(req, ctx);
+    case "GET:/api/om/vendor/emails":
+      return await getVendorEmailsHandler(req, ctx);
+    case "POST:/api/om/vendor/emails":
+      return await upsertVendorEmailsHandler(req, ctx);
+    case "GET:/api/om/vendor/company-mapping":
+      return await listVendorCompanyMappingHandler(req, ctx);
+    case "POST:/api/om/vendor/company-map-bulk":
+      return await bulkMapVendorsHandler(req, ctx);
+    case "DELETE:/api/om/vendor/company-unmap-bulk":
+      return await bulkUnmapVendorsHandler(req, ctx);
 
     case "POST:/api/om/vendor-material-info":
       return await createVendorMaterialInfoHandler(req, ctx);
     case "GET:/api/om/vendor-material-infos":
       return await listVendorMaterialInfosHandler(req, ctx);
+    case "GET:/api/om/vendor-material-info/mapped-materials":
+      return await listMappedMaterialIdsForVendorHandler(req, ctx);
     case "GET:/api/om/vendor-material-info":
       return await getVendorMaterialInfoHandler(req, ctx);
     case "PATCH:/api/om/vendor-material-info":
       return await updateVendorMaterialInfoHandler(req, ctx);
     case "POST:/api/om/vendor-material-info/status":
       return await changeVendorMaterialInfoStatusHandler(req, ctx);
+    case "DELETE:/api/om/vendor-material-info":
+      return await unmapVendorMaterialInfoHandler(req, ctx);
 
     case "POST:/api/om/customer":
       return await createCustomerHandler(req, ctx);
@@ -151,18 +249,39 @@ export async function dispatchOmRoutes(
       return await changeCustomerStatusHandler(req, ctx);
     case "POST:/api/om/customer/company-map":
       return await mapCustomerToCompanyHandler(req, ctx);
+    case "GET:/api/om/customer/company-maps":
+      return await listCustomerCompanyMapsHandler(req, ctx);
+
+    case "GET:/api/om/parent-customers":
+      return await listParentCustomersHandler(req, ctx);
+    case "POST:/api/om/parent-customer":
+      return await createParentCustomerHandler(req, ctx);
+    case "PATCH:/api/om/parent-customer":
+      return await updateParentCustomerHandler(req, ctx);
 
     case "GET:/api/om/uoms":
       return await listUomHandler(req, ctx);
     case "POST:/api/om/uom":
       return await createUomHandler(req, ctx);
+    case "PATCH:/api/om/uom":
+      return await updateUomHandler(req, ctx);
+    case "POST:/api/om/uom/toggle":
+      return await toggleUomHandler(req, ctx);
 
     case "POST:/api/om/storage-location":
       return await createStorageLocationHandler(req, ctx);
     case "GET:/api/om/storage-locations":
       return await listStorageLocationsHandler(req, ctx);
+    case "PATCH:/api/om/storage-location":
+      return await updateStorageLocationHandler(req, ctx);
+    case "POST:/api/om/storage-location/toggle":
+      return await toggleStorageLocationHandler(req, ctx);
+    case "GET:/api/om/storage-location/plant-assignments":
+      return await listPlantAssignmentsHandler(req, ctx);
     case "POST:/api/om/storage-location/plant-map":
       return await mapStorageLocationToPlantHandler(req, ctx);
+    case "POST:/api/om/storage-location/plant-unmap":
+      return await unmapStorageLocationFromPlantHandler(req, ctx);
 
     case "POST:/api/om/number-series":
       return await createNumberSeriesHandler(req, ctx);
@@ -170,13 +289,25 @@ export async function dispatchOmRoutes(
       return await listNumberSeriesHandler(req, ctx);
     case "POST:/api/om/cost-center":
       return await createCostCenterHandler(req, ctx);
+    case "PATCH:/api/om/cost-center":
+      return await updateCostCenterHandler(req, ctx);
     case "GET:/api/om/cost-centers":
       return await listCostCentersHandler(req, ctx);
+    case "POST:/api/om/cost-center/toggle":
+      return await toggleCostCenterHandler(req, ctx);
+    case "GET:/api/om/material-type-categories":
+      return await listMaterialTypeCategoriesHandler(req, ctx);
+    case "POST:/api/om/material-type-category":
+      return await createMaterialTypeCategoryHandler(req, ctx);
 
     case "POST:/api/om/machine":
       return await createMachineHandler(req, ctx);
     case "GET:/api/om/machines":
       return await listMachinesHandler(req, ctx);
+    case "PATCH:/api/om/machine":
+      return await updateMachineHandler(req, ctx);
+    case "POST:/api/om/machine/toggle":
+      return await toggleMachineHandler(req, ctx);
 
     default:
       return null;

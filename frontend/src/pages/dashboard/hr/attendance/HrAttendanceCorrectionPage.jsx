@@ -18,12 +18,14 @@ import ErpScreenScaffold, {
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import {
+  useDayRecordsQuery,
+  useLeaveTypeOptionsQuery,
+  useOutWorkDestinationOptionsQuery,
+} from "../../../../hooks/queries/useHrMasterQueries.js";
+import {
   backdatedLeaveApply,
   backdatedOutWorkApply,
   formatIsoDate,
-  listDayRecords,
-  listLeaveTypes,
-  listOutWorkDestinations,
   submitCorrectionRequest,
   shiftIsoDate,
 } from "../hrApi.js";
@@ -600,10 +602,8 @@ export default function HrAttendanceCorrectionPage() {
   const [employeeId, setEmployeeId] = useState("");
   const [fromDate, setFromDate] = useState(() => shiftIsoDate(todayIso(), -14));
   const [toDate, setToDate] = useState(todayIso);
+  const [queryParams, setQueryParams] = useState(null);
 
-  // Records state
-  const [records, setRecords] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [hasLoaded, setHasLoaded] = useState(false);
   const [error, setError] = useState("");
 
@@ -611,19 +611,36 @@ export default function HrAttendanceCorrectionPage() {
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [applyKind, setApplyKind] = useState("leave"); // "leave" | "outWork"
 
-  // Supporting data
-  const [leaveTypes, setLeaveTypes] = useState([]);
-  const [destinations, setDestinations] = useState([]);
+  const dayRecordsQuery = useDayRecordsQuery(queryParams ?? {}, {
+    enabled: Boolean(queryParams),
+  });
+  const leaveTypeQuery = useLeaveTypeOptionsQuery();
+  const destinationQuery = useOutWorkDestinationOptionsQuery();
+  const records = Array.isArray(dayRecordsQuery.data?.records) ? dayRecordsQuery.data.records : [];
+  const loading = dayRecordsQuery.isFetching;
+  const leaveTypes = leaveTypeQuery.leaveTypes;
+  const destinations = destinationQuery.destinations;
 
-  // Load leave types + destinations on mount
   useEffect(() => {
-    listLeaveTypes()
-      .then((data) => setLeaveTypes(data?.leave_types ?? []))
-      .catch(() => {});
-    listOutWorkDestinations()
-      .then((data) => setDestinations(data?.destinations ?? []))
-      .catch(() => {});
-  }, []);
+    if (queryParams && !dayRecordsQuery.isFetching) {
+      setHasLoaded(true);
+    }
+  }, [dayRecordsQuery.isFetching, queryParams]);
+
+  useEffect(() => {
+    if (dayRecordsQuery.error) {
+      setError(formatError(dayRecordsQuery.error, "Day records could not be loaded."));
+      return;
+    }
+    if (leaveTypeQuery.error) {
+      setError(formatError(leaveTypeQuery.error, "Leave types could not be loaded."));
+      return;
+    }
+    if (destinationQuery.error) {
+      setError(formatError(destinationQuery.error, "Destination list could not be loaded."));
+      return;
+    }
+  }, [dayRecordsQuery.error, destinationQuery.error, leaveTypeQuery.error]);
 
   useErpScreenHotkeys({
     refresh: {
@@ -648,24 +665,14 @@ export default function HrAttendanceCorrectionPage() {
       return;
     }
 
-    setLoading(true);
     setError("");
     setHasLoaded(false);
     setSelectedRecord(null);
-
-    try {
-      const data = await listDayRecords({
-        employeeId: employeeId.trim(),
-        fromDate,
-        toDate,
-      });
-      setRecords(data?.records ?? []);
-      setHasLoaded(true);
-    } catch (err) {
-      setError(formatError(err, "Day records could not be loaded."));
-    } finally {
-      setLoading(false);
-    }
+    setQueryParams({
+      employeeId: employeeId.trim(),
+      fromDate,
+      toDate,
+    });
   }
 
   function handleRowClick(record) {
@@ -679,7 +686,7 @@ export default function HrAttendanceCorrectionPage() {
 
   function handleApplySuccess() {
     setSelectedRecord(null);
-    handleLoad();
+    void dayRecordsQuery.refetch();
   }
 
   return (

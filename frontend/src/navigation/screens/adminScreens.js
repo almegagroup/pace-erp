@@ -274,15 +274,6 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  SA_OM_MCG: {
-    screen_code: "SA_OM_MCG",
-    label: "Material Category Groups",
-    route: "/sa/om/material-category-groups",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
   SA_OM_COST_CENTER: {
     screen_code: "SA_OM_COST_CENTER",
     label: "Cost Centers",
@@ -301,65 +292,41 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  SA_PAYMENT_TERMS: {
-    screen_code: "SA_PAYMENT_TERMS",
-    route: "/sa/payment-terms",
+  SA_MATERIAL_MASTER: {
+    screen_code: "SA_MATERIAL_MASTER",
+    route: "/sa/om/materials",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: true,
+  },
+
+  SA_VENDOR_MASTER: {
+    screen_code: "SA_VENDOR_MASTER",
+    route: "/sa/om/vendors",
     universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
 
-  SA_PORT_MASTER: {
-    screen_code: "SA_PORT_MASTER",
-    route: "/sa/ports",
+  SA_OM_PACK_CODE_MASTER: {
+    screen_code: "SA_OM_PACK_CODE_MASTER",
+    route: "/sa/om/pack-code-master",
     universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
 
-  SA_PORT_TRANSIT: {
-    screen_code: "SA_PORT_TRANSIT",
-    route: "/sa/port-transit",
+  SA_PROD_BATCH_SERIES: {
+    screen_code: "SA_PROD_BATCH_SERIES",
+    route: "/sa/production/batch-series",
     universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
 
-  SA_LEAD_TIMES: {
-    screen_code: "SA_LEAD_TIMES",
-    route: "/sa/lead-times",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  SA_TRANSPORTERS: {
-    screen_code: "SA_TRANSPORTERS",
-    route: "/sa/transporters",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  SA_CHA_MASTER: {
-    screen_code: "SA_CHA_MASTER",
-    route: "/sa/chas",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  SA_OPENING_STOCK_LIST: {
-    screen_code: "SA_OPENING_STOCK_LIST",
-    route: "/sa/opening-stock",
-    universe: "ADMIN",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
-  SA_OPENING_STOCK_DETAIL: {
-    screen_code: "SA_OPENING_STOCK_DETAIL",
-    route: "/sa/opening-stock/:id",
+  SA_PROD_SEGMENT_LOCATIONS: {
+    screen_code: "SA_PROD_SEGMENT_LOCATIONS",
+    route: "/sa/production/segment-locations",
     universe: "ADMIN",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

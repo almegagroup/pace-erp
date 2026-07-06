@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -20,14 +21,11 @@ import { listCustomers } from "../omApi.js";
 const LIMIT = 50;
 
 export default function CustomerListPage() {
-  const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [customerType, setCustomerType] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -38,42 +36,27 @@ export default function CustomerListPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
+  const customerParams = useMemo(
+    () => ({
+      customer_type: customerType || undefined,
+      status: status || undefined,
+      search: debouncedSearch || undefined,
+      limit: LIMIT,
+      offset: (page - 1) * LIMIT,
+    }),
+    [customerType, debouncedSearch, page, status]
+  );
+  const customerQuery = useQuery({
+    queryKey: ["om", "customer-list", customerParams],
+    queryFn: () => listCustomers(customerParams),
+  });
+  const rows = Array.isArray(customerQuery.data?.data) ? customerQuery.data.data : [];
+  const total = Number(customerQuery.data?.total ?? 0);
+  const loading = customerQuery.isLoading;
+
   useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const result = await listCustomers({
-          customer_type: customerType || undefined,
-          status: status || undefined,
-          search: debouncedSearch || undefined,
-          limit: LIMIT,
-          offset: (page - 1) * LIMIT,
-        });
-        if (!active) {
-          return;
-        }
-        setRows(Array.isArray(result?.data) ? result.data : []);
-        setTotal(Number(result?.total ?? 0));
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setTotal(0);
-        setError(loadError instanceof Error ? loadError.message : "OM_CUSTOMER_LIST_FAILED");
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [customerType, debouncedSearch, page, status]);
+    setError(customerQuery.error?.message || "");
+  }, [customerQuery.error]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / LIMIT)), [total]);
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
@@ -82,9 +65,14 @@ export default function CustomerListPage() {
   return (
     <ErpMasterListTemplate
       eyebrow="Operation Management"
-      title="Customer Master"
+      title="RM/PM Sales Customer"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
+        {
+          key: "refresh",
+          label: loading ? "Refreshing..." : "Refresh",
+          tone: "neutral",
+          onClick: () => void customerQuery.refetch(),
+        },
         { key: "create", label: "Create Customer", tone: "primary", onClick: () => openScreen(OPERATION_SCREENS.OM_CUSTOMER_CREATE.screen_code) },
       ]}
       notices={error ? [{ key: "error", tone: "error", message: error }] : []}
@@ -162,7 +150,12 @@ export default function CustomerListPage() {
                   ),
                 },
                 { key: "customer_type", label: "Type" },
-                { key: "currency_code", label: "Currency" },
+                { key: "vendor_code", label: "Linked Vendor", render: (row) => row.vendor_code || "-" },
+                {
+                  key: "parent_customer_name",
+                  label: "Parent Company",
+                  render: (row) => (row.parent_customer_code ? `${row.parent_customer_code} | ${row.parent_customer_name}` : "-"),
+                },
                 { key: "status", label: "Status" },
               ]}
               rows={rows}

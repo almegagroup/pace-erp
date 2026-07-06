@@ -107,7 +107,6 @@ async function postStockMovement(params: {
   documentNumber: string;
   movementTypeCode: string;
   companyId: string;
-  plantId: string;
   storageLocationId: string;
   materialId: string;
   quantity: number;
@@ -126,7 +125,6 @@ async function postStockMovement(params: {
       p_posting_date: todayIsoDate(),
       p_movement_type_code: params.movementTypeCode,
       p_company_id: params.companyId,
-      p_plant_id: params.plantId,
       p_storage_location_id: params.storageLocationId,
       p_material_id: params.materialId,
       p_quantity: params.quantity,
@@ -148,7 +146,6 @@ async function postStockMovement(params: {
 
 async function fetchSnapshot(
   companyId: string,
-  plantId: string,
   slocId: string,
   materialId: string,
   stockTypeCode: string,
@@ -158,7 +155,6 @@ async function fetchSnapshot(
     .from("stock_snapshot")
     .select("quantity, valuation_rate")
     .eq("company_id", companyId)
-    .eq("plant_id", plantId)
     .eq("storage_location_id", slocId)
     .eq("material_id", materialId)
     .eq("stock_type_code", stockTypeCode)
@@ -172,6 +168,64 @@ async function fetchSnapshot(
     quantity: Number((data as Record<string, unknown>).quantity ?? 0),
     valuation_rate: Number((data as Record<string, unknown>).valuation_rate ?? 0),
   };
+}
+
+function uniqueTrimmedStrings(values: unknown[]): string[] {
+  return [...new Set(values.map((value) => toTrimmedString(value)).filter(Boolean))];
+}
+
+async function enrichPtoRows(rows: PtoRow[]): Promise<PtoRow[]> {
+  if (rows.length === 0) return rows;
+
+  const materialIds = uniqueTrimmedStrings(rows.map((row) => row.material_id));
+  const companyIds = uniqueTrimmedStrings([
+    ...rows.map((row) => row.source_company_id),
+    ...rows.map((row) => row.target_company_id),
+  ]);
+  const slocIds = uniqueTrimmedStrings([
+    ...rows.map((row) => row.source_sloc_id),
+    ...rows.map((row) => row.target_sloc_id),
+  ]);
+
+  const [materialsResult, companiesResult, slocsResult] = await Promise.all([
+    materialIds.length > 0
+      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name").in("id", materialIds)
+      : Promise.resolve({ data: [], error: null }),
+    companyIds.length > 0
+      ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds)
+      : Promise.resolve({ data: [], error: null }),
+    slocIds.length > 0
+      ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", slocIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  const materialLabelById = new Map<string, string>(
+    ((materialsResult.data as Array<Record<string, unknown>> | null) ?? []).map((row) => [
+      toTrimmedString(row.id),
+      `${toTrimmedString(row.pace_code)} - ${toTrimmedString(row.material_name)}`.trim(),
+    ]),
+  );
+  const companyLabelById = new Map<string, string>(
+    ((companiesResult.data as Array<Record<string, unknown>> | null) ?? []).map((row) => [
+      toTrimmedString(row.id),
+      toTrimmedString(row.company_name) || toTrimmedString(row.company_code),
+    ]),
+  );
+  const slocLabelById = new Map<string, string>(
+    ((slocsResult.data as Array<Record<string, unknown>> | null) ?? []).map((row) => [
+      toTrimmedString(row.id),
+      `${toTrimmedString(row.code)} - ${toTrimmedString(row.name)}`.trim(),
+    ]),
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    material_display: materialLabelById.get(toTrimmedString(row.material_id)) || toTrimmedString(row.material_id),
+    source_company_display: companyLabelById.get(toTrimmedString(row.source_company_id)) || toTrimmedString(row.source_company_id),
+    target_company_display: companyLabelById.get(toTrimmedString(row.target_company_id)) || toTrimmedString(row.target_company_id),
+    source_sloc_display: slocLabelById.get(toTrimmedString(row.source_sloc_id)) || toTrimmedString(row.source_sloc_id),
+    target_sloc_display: slocLabelById.get(toTrimmedString(row.target_sloc_id)) || toTrimmedString(row.target_sloc_id),
+  }));
 }
 
 async function fetchPto(ptoId: string): Promise<PtoRow> {
@@ -188,7 +242,8 @@ async function fetchPto(ptoId: string): Promise<PtoRow> {
   if (!data) {
     throw new Error("PTO_NOT_FOUND");
   }
-  return data as PtoRow;
+  const [enriched] = await enrichPtoRows([data as PtoRow]);
+  return enriched;
 }
 
 async function updatePto(ptoId: string, patch: JsonRecord): Promise<PtoRow> {
@@ -219,10 +274,8 @@ export async function createPTOHandler(
     const body = await parseBody(req);
     const transferType = toUpperTrimmedString(body.transfer_type);
     const sourceCompanyId = toTrimmedString(body.source_company_id);
-    const sourcePlantId = toTrimmedString(body.source_plant_id);
     const sourceSlocId = toTrimmedString(body.source_sloc_id);
     const targetCompanyId = toTrimmedString(body.target_company_id);
-    const targetPlantId = toTrimmedString(body.target_plant_id);
     const targetSlocId = toTrimmedString(body.target_sloc_id);
     const materialId = toTrimmedString(body.material_id);
     const transferQty = parsePositiveNumber(body.transfer_qty);
@@ -232,10 +285,8 @@ export async function createPTOHandler(
     if (
       !PTO_TRANSFER_TYPES.has(transferType)
       || !sourceCompanyId
-      || !sourcePlantId
       || !sourceSlocId
       || !targetCompanyId
-      || !targetPlantId
       || !targetSlocId
       || !materialId
       || !transferQty
@@ -254,10 +305,8 @@ export async function createPTOHandler(
         transfer_type: transferType,
         status: "DRAFT",
         source_company_id: sourceCompanyId,
-        source_plant_id: sourcePlantId,
         source_sloc_id: sourceSlocId,
         target_company_id: targetCompanyId,
-        target_plant_id: targetPlantId,
         target_sloc_id: targetSlocId,
         source_gstin: toTrimmedString(body.source_gstin) || null,
         target_gstin: toTrimmedString(body.target_gstin) || null,
@@ -329,8 +378,9 @@ export async function listPTOsHandler(
       return ptoErrorResponse(req, ctx, "PTO_LIST_FAILED", 500, "Unable to list PTOs.");
     }
 
+    const enriched = await enrichPtoRows((data as PtoRow[] | null) ?? []);
     return okResponse(
-      { data: data ?? [], total: count ?? 0, items: data ?? [] },
+      { data: enriched, total: count ?? 0, items: enriched },
       ctx.request_id,
       req,
     );
@@ -403,7 +453,6 @@ export async function oneStepTransferHandler(
     const quantity = Number(pto.transfer_qty ?? 0);
     const snapshot = await fetchSnapshot(
       String(pto.source_company_id),
-      String(pto.source_plant_id),
       String(pto.source_sloc_id),
       String(pto.material_id),
       "UNRESTRICTED",
@@ -417,7 +466,6 @@ export async function oneStepTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P301",
       companyId: String(pto.source_company_id),
-      plantId: String(pto.source_plant_id),
       storageLocationId: String(pto.source_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -431,7 +479,6 @@ export async function oneStepTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P301",
       companyId: String(pto.target_company_id),
-      plantId: String(pto.target_plant_id),
       storageLocationId: String(pto.target_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -480,7 +527,6 @@ export async function issueTransferHandler(
     const quantity = Number(pto.transfer_qty ?? 0);
     const snapshot = await fetchSnapshot(
       String(pto.source_company_id),
-      String(pto.source_plant_id),
       String(pto.source_sloc_id),
       String(pto.material_id),
       "UNRESTRICTED",
@@ -494,7 +540,6 @@ export async function issueTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P303",
       companyId: String(pto.source_company_id),
-      plantId: String(pto.source_plant_id),
       storageLocationId: String(pto.source_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -508,7 +553,6 @@ export async function issueTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P303",
       companyId: String(pto.source_company_id),
-      plantId: String(pto.source_plant_id),
       storageLocationId: String(pto.source_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -557,7 +601,6 @@ export async function receiveTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P305",
       companyId: String(pto.source_company_id),
-      plantId: String(pto.source_plant_id),
       storageLocationId: String(pto.source_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -571,7 +614,6 @@ export async function receiveTransferHandler(
       documentNumber: String(pto.pto_number),
       movementTypeCode: "P305",
       companyId: String(pto.target_company_id),
-      plantId: String(pto.target_plant_id),
       storageLocationId: String(pto.target_sloc_id),
       materialId: String(pto.material_id),
       quantity,
@@ -635,14 +677,13 @@ export async function storageLocationTransferHandler(
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
-    const plantId = toTrimmedString(body.plant_id);
     const sourceSlocId = toTrimmedString(body.source_sloc_id);
     const targetSlocId = toTrimmedString(body.target_sloc_id);
     const materialId = toTrimmedString(body.material_id);
     const transferQty = parsePositiveNumber(body.transfer_qty);
     const uomCode = toTrimmedString(body.uom_code);
 
-    if (!companyId || !plantId || !sourceSlocId || !targetSlocId || !materialId || !transferQty || !uomCode) {
+    if (!companyId || !sourceSlocId || !targetSlocId || !materialId || !transferQty || !uomCode) {
       return ptoErrorResponse(req, ctx, "PTO_SLOC_TRANSFER_INVALID", 400, "Missing required SLOC transfer fields.");
     }
     if (sourceSlocId === targetSlocId) {
@@ -651,7 +692,6 @@ export async function storageLocationTransferHandler(
 
     const snapshot = await fetchSnapshot(
       companyId,
-      plantId,
       sourceSlocId,
       materialId,
       "UNRESTRICTED",
@@ -666,7 +706,6 @@ export async function storageLocationTransferHandler(
       documentNumber,
       movementTypeCode: "P311",
       companyId,
-      plantId,
       storageLocationId: sourceSlocId,
       materialId,
       quantity: transferQty,
@@ -680,7 +719,6 @@ export async function storageLocationTransferHandler(
       documentNumber,
       movementTypeCode: "P311",
       companyId,
-      plantId,
       storageLocationId: targetSlocId,
       materialId,
       quantity: transferQty,

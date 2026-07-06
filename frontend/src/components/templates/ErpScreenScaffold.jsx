@@ -52,7 +52,11 @@ const SECTION_TONE_CLASS = Object.freeze({
   success: "border-emerald-200 bg-[#f5fffa]",
 });
 
-const RESERVED_MNEMONICS = new Set(["A", "C", "H", "K", "L", "M"]);
+// R and W are globally reserved by keyboardIntentEngine.js for plain
+// Alt+R (refresh) and Alt+W (focus work context) — a per-page action
+// must never be auto-assigned either letter, or the global handler wins
+// the race and the page-level click (e.g. Save) silently never fires.
+const RESERVED_MNEMONICS = new Set(["A", "C", "H", "K", "L", "M", "R", "W"]);
 
 function extractHintMnemonic(hint) {
   const match = /^Alt\+([A-Z])$/i.exec(hint ?? "");
@@ -226,6 +230,7 @@ export function ErpActionStrip({ actions = [] }) {
             key={action.key ?? `${action.label}-${index}`}
             ref={action.buttonRef}
             type="button"
+            title={action.title ?? (hintTokens.join(" | ") || undefined)}
             disabled={action.disabled}
             onClick={action.onClick}
             onKeyDown={action.onKeyDown}
@@ -250,6 +255,7 @@ export function ErpSectionCard({
   eyebrow,
   title,
   aside,
+  actions = [],
   children,
   className = "",
   tone = "default",
@@ -258,7 +264,7 @@ export function ErpSectionCard({
     <section
       className={`overflow-hidden border shadow-[0_4px_12px_rgba(15,23,42,0.04)] ${SECTION_TONE_CLASS[tone] ?? SECTION_TONE_CLASS.default} ${className}`.trim()}
     >
-      {(eyebrow || title || aside) ? (
+      {(eyebrow || title || aside || actions.length > 0) ? (
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-4 py-3">
           <div className="min-w-0">
             {eyebrow ? (
@@ -273,6 +279,7 @@ export function ErpSectionCard({
             ) : null}
           </div>
           {aside ? <Fragment>{aside}</Fragment> : null}
+          {actions.length > 0 ? <ErpActionStrip actions={actions} /> : null}
         </div>
       ) : null}
       <div className="px-4 py-4">
@@ -368,8 +375,8 @@ export default function ErpScreenScaffold({
   }, [mergedNotices]);
 
   return (
-    <section className="min-h-full text-slate-900">
-      <div className="mx-auto flex max-w-none flex-col gap-[var(--erp-section-gap)]">
+    <section className="flex min-h-full flex-col text-slate-900">
+      <div className="mx-auto w-full flex max-w-none flex-1 flex-col gap-[var(--erp-section-gap)]">
         <div className="sticky top-0 z-20 overflow-hidden border-b border-slate-300 bg-white">
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-1.5">
             <div className="min-w-0">
@@ -387,7 +394,7 @@ export default function ErpScreenScaffold({
           </div>
         </div>
 
-        <div className="grid gap-[var(--erp-section-gap)]">{children}</div>
+        <div className="grid flex-1 content-start gap-[var(--erp-section-gap)]">{children}</div>
 
         <ErpCommandStrip hints={footerHints} />
       </div>

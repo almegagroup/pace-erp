@@ -12,6 +12,7 @@ import AppRouter from "./router/AppRouter.jsx";
 import SessionOverlay from "./components/SessionOverlay.jsx";
 import LogoutConfirmOverlay from "./components/LogoutConfirmOverlay.jsx";
 import ActionConfirmOverlay from "./components/ActionConfirmOverlay.jsx";
+import ActionPromptOverlay from "./components/ActionPromptOverlay.jsx";
 import SessionClusterBridge from "./components/SessionClusterBridge.jsx";
 import ToastOverlay from "./components/ToastOverlay.jsx";
 
@@ -24,6 +25,7 @@ function App() {
       <ToastOverlay />
       <LogoutConfirmOverlay />
       <ActionConfirmOverlay />
+      <ActionPromptOverlay />
     </>
   );
 }

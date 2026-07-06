@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listVendors } from "../../om/omApi.js";
 import { listBlockedIVs, listIVs } from "../procurementApi.js";
 
 const LIMIT = 50;
@@ -33,75 +34,55 @@ function normalizeSearch(value) {
 export default function IVListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [blockedRows, setBlockedRows] = useState([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [vendorId, setVendorId] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [refreshToken, setRefreshToken] = useState(0);
   const companyId = runtimeContext?.selectedCompanyId || "";
 
-  useEffect(() => {
-    let active = true;
-
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const [ivData, blockedData, vendorData] = await Promise.all([
-          listIVs({
-            company_id: companyId || undefined,
-            status: status || undefined,
-            vendor_id: vendorId || undefined,
-            date_from: dateFrom || undefined,
-            date_to: dateTo || undefined,
-            limit: 200,
-          }),
-          listBlockedIVs({
-            company_id: companyId || undefined,
-            limit: 200,
-          }),
-          listVendors({ limit: 200, offset: 0 }),
-        ]);
-
-        if (!active) {
-          return;
-        }
-
-        setRows(Array.isArray(ivData?.items) ? ivData.items : []);
-        setBlockedRows(Array.isArray(blockedData?.items) ? blockedData.items : []);
-        setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setBlockedRows([]);
-        setVendors([]);
-        setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_IV_LIST_FAILED");
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companyId, dateFrom, dateTo, refreshToken, status, vendorId]);
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const invoiceQueryParams = useMemo(
+    () => ({
+      company_id: companyId || undefined,
+      status: status || undefined,
+      vendor_id: vendorId || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      limit: 200,
+    }),
+    [companyId, dateFrom, dateTo, status, vendorId]
+  );
+  const ivQuery = useQuery({
+    queryKey: ["procurement", "ivs", invoiceQueryParams],
+    queryFn: async () => {
+      const [ivData, blockedData] = await Promise.all([
+        listIVs(invoiceQueryParams),
+        listBlockedIVs({
+          company_id: companyId || undefined,
+          limit: 200,
+        }),
+      ]);
+      return {
+        rows: Array.isArray(ivData?.items) ? ivData.items : [],
+        blockedRows: Array.isArray(blockedData?.items) ? blockedData.items : [],
+      };
+    },
+  });
 
   useEffect(() => {
     setPage(1);
   }, [dateFrom, dateTo, search, status, vendorId]);
 
+  const rows = Array.isArray(ivQuery.data?.rows) ? ivQuery.data.rows : [];
+  const blockedRows = Array.isArray(ivQuery.data?.blockedRows) ? ivQuery.data.blockedRows : [];
+  const vendors = vendorQuery.vendors;
+  const loading = ivQuery.isLoading || vendorQuery.isLoading;
+  const error =
+    ivQuery.error?.message ||
+    vendorQuery.error?.message ||
+    "";
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]
@@ -139,7 +120,7 @@ export default function IVListPage() {
   }
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_IV_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_IV_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/accounts/invoice-verifications/${encodeURIComponent(row.id)}`);
   }
 
@@ -152,7 +133,10 @@ export default function IVListPage() {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => setRefreshToken((value) => value + 1),
+          onClick: () => {
+            void ivQuery.refetch();
+            void vendorQuery.refetch();
+          },
         },
         ...(blockedRows.length > 0
           ? [

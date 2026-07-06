@@ -56,6 +56,30 @@ export function updatePaymentTerm(id, payload) {
   return fetchProcurement("PUT", `/api/procurement/payment-terms/${encodeURIComponent(id)}`, payload);
 }
 
+export function deletePaymentTerm(id) {
+  return fetchProcurement("DELETE", `/api/procurement/payment-terms/${encodeURIComponent(id)}`);
+}
+
+export function togglePaymentTerm(payload) {
+  return fetchProcurement("POST", "/api/procurement/payment-terms/toggle", payload);
+}
+
+export function getPoFilterOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/po-filter-options", undefined, params);
+}
+
+export function listReferenceDateTypes(params) {
+  return fetchProcurement("GET", "/api/procurement/reference-date-types", undefined, params);
+}
+
+export function createReferenceDateType(payload) {
+  return fetchProcurement("POST", "/api/procurement/reference-date-type", payload);
+}
+
+export function toggleReferenceDateType(payload) {
+  return fetchProcurement("POST", "/api/procurement/reference-date-type/toggle", payload);
+}
+
 export function listPorts(params) {
   return fetchProcurement("GET", "/api/procurement/ports", undefined, params);
 }
@@ -68,12 +92,28 @@ export function updatePort(id, payload) {
   return fetchProcurement("PUT", `/api/procurement/ports/${encodeURIComponent(id)}`, payload);
 }
 
+export function deletePort(id) {
+  return fetchProcurement("DELETE", `/api/procurement/ports/${encodeURIComponent(id)}`);
+}
+
+export function togglePort(payload) {
+  return fetchProcurement("POST", "/api/procurement/ports/toggle", payload);
+}
+
 export function listTransitTimes(params) {
   return fetchProcurement("GET", "/api/procurement/port-transit", undefined, params);
 }
 
 export function upsertTransitTime(payload) {
   return fetchProcurement("POST", "/api/procurement/port-transit", payload);
+}
+
+export function deleteTransitTime(id) {
+  return fetchProcurement("DELETE", `/api/procurement/port-transit/${encodeURIComponent(id)}`);
+}
+
+export function listCompanies() {
+  return fetchProcurement("GET", "/api/procurement/companies");
 }
 
 export function listImportLeadTimes(params) {
@@ -92,6 +132,22 @@ export function upsertDomesticLeadTime(payload) {
   return fetchProcurement("POST", "/api/procurement/lead-times/domestic", payload);
 }
 
+export function deleteImportLeadTime(id) {
+  return fetchProcurement("DELETE", `/api/procurement/lead-times/import/${encodeURIComponent(id)}`);
+}
+
+export function deleteDomesticLeadTime(id) {
+  return fetchProcurement("DELETE", `/api/procurement/lead-times/domestic/${encodeURIComponent(id)}`);
+}
+
+export function updateImportLeadTime(id, payload) {
+  return fetchProcurement("PATCH", `/api/procurement/lead-times/import/${encodeURIComponent(id)}`, payload);
+}
+
+export function updateDomesticLeadTime(id, payload) {
+  return fetchProcurement("PATCH", `/api/procurement/lead-times/domestic/${encodeURIComponent(id)}`, payload);
+}
+
 export function listTransporters(params) {
   return fetchProcurement("GET", "/api/procurement/transporters", undefined, params);
 }
@@ -104,6 +160,38 @@ export function updateTransporter(id, payload) {
   return fetchProcurement("PUT", `/api/procurement/transporters/${encodeURIComponent(id)}`, payload);
 }
 
+export function deleteTransporter(id) {
+  return fetchProcurement("DELETE", `/api/procurement/transporters/${encodeURIComponent(id)}`);
+}
+
+export function lookupGstProfile(gstNumber) {
+  return fetchProcurement("GET", "/api/procurement/gst-profile", undefined, { gst_number: gstNumber });
+}
+
+export function listTransporterContacts(transporterId) {
+  return fetchProcurement("GET", "/api/procurement/transporters/contacts", undefined, { transporter_id: transporterId });
+}
+
+export function saveTransporterContacts(transporterId, contacts) {
+  return fetchProcurement("POST", "/api/procurement/transporters/contacts", { transporter_id: transporterId, contacts });
+}
+
+export function listTransporterEmails(transporterId) {
+  return fetchProcurement("GET", "/api/procurement/transporters/emails", undefined, { transporter_id: transporterId });
+}
+
+export function saveTransporterEmails(transporterId, emails) {
+  return fetchProcurement("POST", "/api/procurement/transporters/emails", { transporter_id: transporterId, emails });
+}
+
+export function listTransporterCompanyMaps(transporterId) {
+  return fetchProcurement("GET", "/api/procurement/transporters/company-map", undefined, { transporter_id: transporterId });
+}
+
+export function mapTransporterToCompany(payload) {
+  return fetchProcurement("POST", "/api/procurement/transporters/company-map", payload);
+}
+
 export function listCHAs(params) {
   return fetchProcurement("GET", "/api/procurement/chas", undefined, params);
 }
@@ -112,12 +200,52 @@ export function createCHA(payload) {
   return fetchProcurement("POST", "/api/procurement/chas", payload);
 }
 
+export function updateCHA(id, payload) {
+  return fetchProcurement("PATCH", `/api/procurement/chas/${encodeURIComponent(id)}`, payload);
+}
+
+export function deleteCHA(id) {
+  return fetchProcurement("DELETE", `/api/procurement/chas/${encodeURIComponent(id)}`);
+}
+
+export function toggleCHA(payload) {
+  return fetchProcurement("POST", "/api/procurement/chas/toggle", payload);
+}
+
 export function listCHAPorts(id) {
   return fetchProcurement("GET", `/api/procurement/chas/${encodeURIComponent(id)}/ports`);
 }
 
 export function mapCHAToPort(id, payload) {
   return fetchProcurement("POST", `/api/procurement/chas/${encodeURIComponent(id)}/ports`, payload);
+}
+
+export function unmapCHAPort(chaId, portId) {
+  return fetchProcurement("DELETE", `/api/procurement/chas/${encodeURIComponent(chaId)}/ports/${encodeURIComponent(portId)}`);
+}
+
+export function listChaContacts(chaId) {
+  return fetchProcurement("GET", "/api/procurement/chas/contacts", undefined, { cha_id: chaId });
+}
+
+export function saveChaContacts(chaId, contacts) {
+  return fetchProcurement("POST", "/api/procurement/chas/contacts", { cha_id: chaId, contacts });
+}
+
+export function listChaEmails(chaId) {
+  return fetchProcurement("GET", "/api/procurement/chas/emails", undefined, { cha_id: chaId });
+}
+
+export function saveChaEmails(chaId, emails) {
+  return fetchProcurement("POST", "/api/procurement/chas/emails", { cha_id: chaId, emails });
+}
+
+export function listChaCompanyMaps(chaId) {
+  return fetchProcurement("GET", "/api/procurement/chas/company-map", undefined, { cha_id: chaId });
+}
+
+export function mapChaToCompany(payload) {
+  return fetchProcurement("POST", "/api/procurement/chas/company-map", payload);
 }
 
 export function listMaterialCategories(params) {
@@ -142,6 +270,26 @@ export function createPurchaseOrder(data) {
 
 export function updatePurchaseOrder(id, data) {
   return fetchProcurement("PUT", `/api/procurement/purchase-orders/${encodeURIComponent(id)}`, data);
+}
+
+export function listPOOrderGroups(params) {
+  return fetchProcurement("GET", "/api/procurement/po-order-groups", undefined, params);
+}
+
+export function getPOOrderGroup(id) {
+  return fetchProcurement("GET", `/api/procurement/po-order-groups/${encodeURIComponent(id)}`);
+}
+
+export function confirmPOOrderGroup(id, payload) {
+  return fetchProcurement("POST", `/api/procurement/po-order-groups/${encodeURIComponent(id)}/confirm`, payload);
+}
+
+export function approvePOOrderGroup(id, payload) {
+  return fetchProcurement("POST", `/api/procurement/po-order-groups/${encodeURIComponent(id)}/approve`, payload);
+}
+
+export function rejectPOOrderGroup(id, payload) {
+  return fetchProcurement("POST", `/api/procurement/po-order-groups/${encodeURIComponent(id)}/reject`, payload);
 }
 
 export function confirmPurchaseOrder(id, data) {
@@ -196,6 +344,10 @@ export function createSubCSN(id, data) {
   return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/sub-csns`, data);
 }
 
+export function listAvailableSubCsnsForSto(params) {
+  return fetchProcurement("GET", "/api/procurement/csns/available-for-sto", undefined, params);
+}
+
 export function deleteSubCSN(id, subId) {
   return fetchProcurement(
     "DELETE",
@@ -225,6 +377,30 @@ export function getVesselBookingAlertList(params) {
 
 export function getCSNTracker(params) {
   return fetchProcurement("GET", "/api/procurement/tracker", undefined, params);
+}
+
+export function listCSNTrackerLayouts() {
+  return fetchProcurement("GET", "/api/procurement/tracker/layouts");
+}
+
+export function createCSNTrackerLayout(data) {
+  return fetchProcurement("POST", "/api/procurement/tracker/layouts", data);
+}
+
+export function deleteCSNTrackerLayout(id) {
+  return fetchProcurement("DELETE", `/api/procurement/tracker/layouts/${encodeURIComponent(id)}`);
+}
+
+export function getCSNFieldHistory(id, params) {
+  return fetchProcurement("GET", `/api/procurement/csns/${encodeURIComponent(id)}/history`, undefined, params);
+}
+
+export function previewCSNDispatchQty(id, data) {
+  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/dispatch-qty/preview`, data);
+}
+
+export function confirmCSNDispatchQty(id, data) {
+  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/dispatch-qty/confirm`, data);
 }
 
 export function inlineUpdateCSN(id, data) {
@@ -326,6 +502,10 @@ export function getSTO(id) {
   return fetchProcurement("GET", `/api/procurement/stos/${encodeURIComponent(id)}`);
 }
 
+export function getLastStoPaymentTerm(params) {
+  return fetchProcurement("GET", "/api/procurement/stos/last-payment-term", undefined, params);
+}
+
 export function createSTO(data) {
   return fetchProcurement("POST", "/api/procurement/stos", data);
 }
@@ -336,6 +516,26 @@ export function updateSTO(id, data) {
 
 export function cancelSTO(id, data) {
   return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/cancel`, data);
+}
+
+export function confirmSTO(id, data) {
+  return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/confirm`, data);
+}
+
+export function approveSTO(id, data) {
+  return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/approve`, data);
+}
+
+export function rejectSTO(id, data) {
+  return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/reject`, data);
+}
+
+export function amendSTO(id, data) {
+  return fetchProcurement("PUT", `/api/procurement/stos/${encodeURIComponent(id)}/amend`, data);
+}
+
+export function approveSTOAmendment(id, data) {
+  return fetchProcurement("POST", `/api/procurement/stos/${encodeURIComponent(id)}/approve-amendment`, data);
 }
 
 export function dispatchSTO(id, data) {

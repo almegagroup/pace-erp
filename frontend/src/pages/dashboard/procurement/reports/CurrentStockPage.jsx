@@ -43,7 +43,6 @@ function stockTypeTone(stockTypeCode) {
 
 export default function CurrentStockPage() {
   useMenu();
-  const [plantId, setPlantId] = useState("");
   const [companyId, setCompanyId] = useState("");
   const [materialId, setMaterialId] = useState("");
   const [stockTypeCode, setStockTypeCode] = useState("");
@@ -59,7 +58,6 @@ export default function CurrentStockPage() {
     setSearched(true);
     try {
       const response = await getCurrentStock({
-        plant_id: plantId.trim() || undefined,
         company_id: companyId.trim() || undefined,
         material_id: materialId.trim() || undefined,
         stock_type_code: stockTypeCode || undefined,
@@ -92,14 +90,6 @@ export default function CurrentStockPage() {
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Filters" title="Snapshot filters">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <ErpDenseFormRow label="Plant ID">
-              <input
-                type="text"
-                value={plantId}
-                onChange={(event) => setPlantId(event.target.value)}
-                className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
-              />
-            </ErpDenseFormRow>
             <ErpDenseFormRow label="Company ID">
               <input
                 type="text"
@@ -150,7 +140,6 @@ export default function CurrentStockPage() {
             <ErpDenseGrid
               columns={[
                 { key: "material_id", label: "Material ID", width: "220px" },
-                { key: "plant_id", label: "Plant ID", width: "180px" },
                 { key: "storage_location_id", label: "SLOC ID", width: "220px" },
                 {
                   key: "stock_type_code",
@@ -192,7 +181,7 @@ export default function CurrentStockPage() {
                 },
               ]}
               rows={rows}
-              rowKey={(row) => row.id ?? `${row.material_id}-${row.plant_id}-${row.storage_location_id}-${row.stock_type_code}`}
+              rowKey={(row) => row.id ?? `${row.material_id}-${row.company_id}-${row.storage_location_id}-${row.stock_type_code}`}
               emptyMessage={loading ? "Searching current stock..." : "No current stock matched the selected filters."}
             />
           )}

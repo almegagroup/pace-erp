@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -7,21 +7,30 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
-  createSubCSN,
-  deleteSubCSN,
   getCSN,
   listCSNs,
+  listPorts,
   markCSNArrived,
   markCSNInTransit,
   updateCSN,
 } from "../procurementApi.js";
 
+const STATUS_LABELS = {
+  ORD: "Ordered",
+  TRN: "In Transit",
+  GED: "GE Done",
+  GRD: "GRN Done",
+  CAN: "Cancelled",
+  KOF: "Knocked Off",
+};
+
 function buildForm(detail) {
   return {
     dispatch_qty: detail?.dispatch_qty ?? "",
-    port_of_loading: detail?.port_of_loading ?? "",
+    port_of_loading_id: detail?.port_of_loading_id ?? "",
     port_of_discharge_id: detail?.port_of_discharge_id ?? "",
     vessel_name: detail?.vessel_name ?? "",
     voyage_number: detail?.voyage_number ?? "",
@@ -53,6 +62,7 @@ function buildForm(detail) {
     received_qty: detail?.received_qty ?? "",
     invoice_number: detail?.invoice_number ?? "",
     remarks: detail?.remarks ?? "",
+    transit_days_snapshot: detail?.transit_days_snapshot ?? "",
   };
 }
 
@@ -66,22 +76,34 @@ function toPayload(form) {
 
 function getTone(value) {
   switch (String(value || "").toUpperCase()) {
-    case "IN_TRANSIT":
+    case "TRN":
       return "amber";
-    case "ARRIVED":
+    case "GED":
       return "emerald";
-    case "GRN_DONE":
-    case "CLOSED":
+    case "GRD":
+    case "CAN":
+    case "KOF":
       return "slate";
     case "IMPORT":
       return "sky";
     case "DOMESTIC":
       return "emerald";
-    case "BULK":
-      return "violet";
     default:
       return "slate";
   }
+}
+
+function getStatusLabel(value) {
+  return STATUS_LABELS[String(value || "").toUpperCase()] || value || "—";
+}
+
+function getCsnDisplayLabel(row) {
+  if (!row) {
+    return "—";
+  }
+  const prefix = row.mother_csn_id && !row.sto_id ? "Sub-CSN" : "CSN";
+  const number = row.csn_number || row.id || "";
+  return `${prefix}-${number}`;
 }
 
 export default function CSNDetailPage() {
@@ -90,7 +112,8 @@ export default function CSNDetailPage() {
   const [detail, setDetail] = useState(null);
   const [relatedCsns, setRelatedCsns] = useState([]);
   const [form, setForm] = useState(buildForm(null));
-  const [subDispatchQty, setSubDispatchQty] = useState("");
+  const [loadingPorts, setLoadingPorts] = useState([]);
+  const [dischargePorts, setDischargePorts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -108,7 +131,7 @@ export default function CSNDetailPage() {
     [detail?.mother_csn_id, relatedCsns]
   );
 
-  async function loadDetail() {
+  const loadDetail = useCallback(async () => {
     if (!id) {
       return;
     }
@@ -137,11 +160,17 @@ export default function CSNDetailPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [id, runtimeContext?.selectedCompanyId]);
 
   useEffect(() => {
     void loadDetail();
-  }, [id, runtimeContext?.selectedCompanyId]);
+    listPorts({ is_active: "true", port_role: "LOADING" }).then((data) => {
+      setLoadingPorts(Array.isArray(data) ? data : []);
+    }).catch(() => {});
+    listPorts({ is_active: "true", port_role: "DISCHARGE" }).then((data) => {
+      setDischargePorts(Array.isArray(data) ? data : []);
+    }).catch(() => {});
+  }, [loadDetail]);
 
   function patchField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -168,54 +197,12 @@ export default function CSNDetailPage() {
     }
   }
 
-  async function handleCreateSubCsn() {
-    if (!detail?.id || !detail?.company_id) {
-      return;
-    }
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      await createSubCSN(detail.id, {
-        company_id: detail.company_id,
-        dispatch_qty: subDispatchQty ? Number(subDispatchQty) : undefined,
-      });
-      setSubDispatchQty("");
-      setNotice("Sub CSN created.");
-      await loadDetail();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_SUB_CSN_CREATE_FAILED");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleDeleteSubCsn(subId) {
-    if (!detail?.id || !window.confirm("Delete this sub CSN?")) {
-      return;
-    }
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      await deleteSubCSN(detail.id, subId);
-      setNotice("Sub CSN deleted.");
-      await loadDetail();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_SUB_CSN_DELETE_FAILED");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function handleMarkInTransit() {
     if (!detail?.id || !detail?.company_id) {
       return;
     }
-    const actualEtd = window.prompt("Actual ETD (YYYY-MM-DD)", form.etd || "");
-    if (actualEtd === null) {
-      return;
-    }
+    const actualEtd = await openActionPrompt({ eyebrow: "CSN", title: "Mark In Transit", label: "Actual ETD (YYYY-MM-DD)", defaultValue: form.etd || "", placeholder: "YYYY-MM-DD" });
+    if (actualEtd === null) return;
     setSaving(true);
     setError("");
     setNotice("");
@@ -237,10 +224,8 @@ export default function CSNDetailPage() {
     if (!detail?.id || !detail?.company_id) {
       return;
     }
-    const arrivalDate = window.prompt("Arrival date (YYYY-MM-DD)", "");
-    if (arrivalDate === null) {
-      return;
-    }
+    const arrivalDate = await openActionPrompt({ eyebrow: "CSN", title: "Mark Arrived", label: "Arrival date (YYYY-MM-DD)", placeholder: "YYYY-MM-DD" });
+    if (arrivalDate === null) return;
     setSaving(true);
     setError("");
     setNotice("");
@@ -269,10 +254,10 @@ export default function CSNDetailPage() {
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         { key: "save", label: saving ? "Saving..." : "Save CSN", tone: "primary", onClick: () => void handleSave(), disabled: saving || loading || !detail },
-        ...(detail?.status === "ORDERED"
+        ...(detail?.status === "ORD"
           ? [{ key: "mark-transit", label: "Mark In Transit", tone: "neutral", onClick: () => void handleMarkInTransit(), disabled: saving }]
           : []),
-        ...(detail?.status === "IN_TRANSIT"
+        ...(detail?.status === "TRN"
           ? [{ key: "mark-arrived", label: "Mark Arrived", tone: "neutral", onClick: () => void handleMarkArrived(), disabled: saving }]
           : []),
       ]}
@@ -283,20 +268,31 @@ export default function CSNDetailPage() {
         </div>
       ) : (
         <div className="grid gap-4">
+          <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            Use the CSN Tracker expanded row for split-dispatch, Sub-CSN, and bulk field-edit work. This detail screen stays available for document review and lifecycle follow-up.
+          </div>
+
           {detail.mother_csn_id ? (
             <div className="border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
-              Sub CSN of {motherCsn?.csn_number || detail.mother_csn_id}
+              Sub CSN of {getCsnDisplayLabel(motherCsn) || detail.mother_csn_id}
             </div>
           ) : null}
 
-          <ErpSectionCard eyebrow="Header" title={detail.csn_number || "CSN"}>
+          <ErpSectionCard eyebrow="Header" title={getCsnDisplayLabel(detail)}>
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
               <ErpFieldPreview label="CSN Type" value={detail.csn_type} tone={getTone(detail.csn_type)} />
-              <ErpFieldPreview label="Status" value={detail.status} tone={getTone(detail.status)} />
+              <ErpFieldPreview label="Status" value={getStatusLabel(detail.status)} tone={getTone(detail.status)} />
               <ErpFieldPreview
-                label="Linked PO"
+                label={detail.sto_id ? "Linked STO" : "Linked PO"}
                 value={
-                  detail.po_id ? (
+                  detail.sto_id ? (
+                    <Link
+                      to={`/dashboard/procurement/stos/${encodeURIComponent(detail.sto_id)}`}
+                      className="text-sky-700 underline underline-offset-2"
+                    >
+                      {detail.sto_number || detail.sto_id}
+                    </Link>
+                  ) : detail.po_id ? (
                     <Link
                       to={`/dashboard/procurement/purchase-orders/${encodeURIComponent(detail.po_id)}`}
                       className="text-sky-700 underline underline-offset-2"
@@ -323,10 +319,16 @@ export default function CSNDetailPage() {
             <ErpSectionCard eyebrow="Import Fields" title="Import leg planning">
               <div className="grid gap-3 lg:grid-cols-2">
                 <ErpDenseFormRow label="Port Of Loading">
-                  <input value={form.port_of_loading} onChange={(event) => patchField("port_of_loading", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+                  <select value={form.port_of_loading_id} onChange={(event) => patchField("port_of_loading_id", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
+                    <option value="">— Select —</option>
+                    {loadingPorts.map((p) => <option key={p.id} value={p.id}>{p.port_code} — {p.port_name}</option>)}
+                  </select>
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="Discharge Port ID">
-                  <input value={form.port_of_discharge_id} onChange={(event) => patchField("port_of_discharge_id", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+                <ErpDenseFormRow label="Discharge Port">
+                  <select value={form.port_of_discharge_id} onChange={(event) => patchField("port_of_discharge_id", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
+                    <option value="">— Select —</option>
+                    {dischargePorts.map((p) => <option key={p.id} value={p.id}>{p.port_code} — {p.port_name}</option>)}
+                  </select>
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Vessel Name">
                   <input value={form.vessel_name} onChange={(event) => patchField("vessel_name", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
@@ -342,6 +344,18 @@ export default function CSNDetailPage() {
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Scheduled ETA Port">
                   <input type="date" value={form.scheduled_eta_to_port || ""} onChange={(event) => patchField("scheduled_eta_to_port", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Transit Days (Port→Plant)">
+                  <div className="grid gap-1">
+                    <input
+                      type="number" min="0"
+                      value={form.transit_days_snapshot}
+                      onChange={(event) => patchField("transit_days_snapshot", event.target.value === "" ? "" : Number(event.target.value))}
+                      placeholder="Auto-filled when port is set"
+                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                    />
+                    <span className="text-[10px] text-slate-400">Frozen at port assignment. Edit only to correct this specific shipment.</span>
+                  </div>
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="LC Required">
                   <div className="text-sm text-slate-700">{detail.lc_required ? "Yes" : "No"}</div>
@@ -375,48 +389,10 @@ export default function CSNDetailPage() {
             </ErpSectionCard>
           ) : null}
 
-          {detail.csn_type === "BULK" ? (
-            <ErpSectionCard eyebrow="Bulk Fields" title="Bulk receiving">
-              <div className="grid gap-3 lg:grid-cols-2">
-                <ErpDenseFormRow label="Gate Entry Date">
-                  <input type="date" value={form.gate_entry_date || ""} onChange={(event) => patchField("gate_entry_date", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Received Qty">
-                  <input type="number" min="0" step="0.0001" value={form.received_qty || ""} onChange={(event) => patchField("received_qty", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Invoice Number">
-                  <input value={form.invoice_number} onChange={(event) => patchField("invoice_number", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-                <ErpDenseFormRow label="Remarks">
-                  <input value={form.remarks} onChange={(event) => patchField("remarks", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
-                </ErpDenseFormRow>
-              </div>
-            </ErpSectionCard>
-          ) : null}
-
-          <ErpSectionCard eyebrow="Sub CSNs" title="Split dispatch management">
+          <ErpSectionCard eyebrow="Sub CSNs" title="Split dispatch references">
             <div className="grid gap-3">
-              <div className="grid gap-3 lg:grid-cols-[220px_auto]">
-                <ErpDenseFormRow label="Dispatch Qty">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.0001"
-                    value={subDispatchQty}
-                    onChange={(event) => setSubDispatchQty(event.target.value)}
-                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
-                  />
-                </ErpDenseFormRow>
-                <div className="flex items-end">
-                  <button
-                    type="button"
-                    onClick={() => void handleCreateSubCsn()}
-                    disabled={saving}
-                    className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900 disabled:opacity-50"
-                  >
-                    Add Sub CSN
-                  </button>
-                </div>
+              <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                Sub-CSN creation, reconciliation, and deletion now happen from the CSN Tracker row so the full working flow stays in one surface.
               </div>
               <ErpDenseGrid
                 columns={[
@@ -431,20 +407,9 @@ export default function CSNDetailPage() {
                   },
                   {
                     key: "actions",
-                    label: "Actions",
-                    width: "120px",
-                    render: (row) =>
-                      !row.gate_entry_id ? (
-                        <button
-                          type="button"
-                          onClick={() => void handleDeleteSubCsn(row.id)}
-                          className="border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-900"
-                        >
-                          Delete
-                        </button>
-                      ) : (
-                        "—"
-                      ),
+                    label: "Tracker",
+                    width: "180px",
+                    render: () => "Manage from Tracker",
                   },
                 ]}
                 rows={subCsns}

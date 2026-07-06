@@ -1,20 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import {
+  useCostCentersQuery,
+  useVendorOptionsQuery,
+} from "../../../../hooks/queries/useOmMasterQueries.js";
+import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { listVendors } from "../../om/omApi.js";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
   amendPurchaseOrder,
-  approveAmendment,
-  approvePurchaseOrder,
   cancelPurchaseOrder,
   confirmPurchaseOrder,
   getPurchaseOrder,
   knockOffPOLine,
   knockOffPO,
-  rejectPurchaseOrder,
+  updatePurchaseOrder,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
@@ -88,53 +92,183 @@ function buildAmendmentState(lines, po) {
   };
 }
 
+function buildEditState(po, vendorType) {
+  const line = po?.lines?.[0] ?? {};
+  return {
+    vendor_id: po?.vendor_id ?? "",
+    vendor_type: String(vendorType || po?.vendor_type || "DOMESTIC").toUpperCase(),
+    delivery_type: po?.delivery_type ?? "STANDARD",
+    incoterm: po?.incoterm ?? "",
+    payment_term_id: line.payment_term_id ?? po?.payment_term_id ?? "",
+    freight_term: po?.freight_term ?? line.freight_term ?? "FOR",
+    gst_terms: po?.gst_terms ?? line.gst_terms ?? "",
+    cost_center_id: line.cost_center_id ?? po?.cost_center_id ?? "",
+    expected_delivery_date: po?.expected_delivery_date ?? "",
+    remarks: po?.remarks ?? "",
+    has_rebate: Boolean(po?.has_rebate),
+    rebate_rate: po?.rebate_rate ?? "",
+    rebate_rate_uom_basis: po?.rebate_rate_uom_basis ?? "BASE_UOM",
+    rebate_remarks: po?.rebate_remarks ?? "",
+    line_material_id: line.material_id ?? "",
+    line_material_display: line.material_display || line.material_id || "",
+    ordered_qty: String(line.ordered_qty ?? ""),
+    unit_rate: String(line.unit_rate ?? ""),
+    po_uom_code: line.po_uom_code ?? "",
+    line_remarks: line.remarks ?? "",
+  };
+}
+
+function getRebateBasisLabel(value) {
+  switch (String(value || "").toUpperCase()) {
+    case "BASE_UOM":
+      return "Base UOM";
+    case "PO_UOM":
+      return "PO UOM";
+    default:
+      return "—";
+  }
+}
+
 export default function PODetailPage() {
-  const { id = "" } = useParams();
-  const { shellProfile, runtimeContext } = useMenu();
-  const [po, setPo] = useState(null);
-  const [vendors, setVendors] = useState([]);
-  const [csns, setCsns] = useState([]);
+  // NavigationStackBridge replays the screen-stack entry's literal route
+  // ("/.../purchase-orders/:id") whenever it's pushed without a `context.id`
+  // — the param ends up as the literal string ":id" instead of the real
+  // UUID. Fall back to the screen-stack context (the same pattern Material/
+  // Customer detail pages already use) whenever the path param looks wrong.
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const { runtimeContext } = useMenu();
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState(buildEditState(null, ""));
   const [amendmentOpen, setAmendmentOpen] = useState(false);
   const [amendmentForm, setAmendmentForm] = useState({ delivery_date: "", remarks: "", lines: [] });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
+  const poDetailQuery = useQuery({
+    queryKey: ["procurement", "purchase-order-detail", id],
+    enabled: Boolean(id),
+    queryFn: () => getPurchaseOrder(id),
+  });
+  const po = poDetailQuery.data?.data ?? poDetailQuery.data ?? null;
+  const companyId = po?.company_id || runtimeContext?.selectedCompanyId || "";
+  const csnQuery = useQuery({
+    queryKey: ["procurement", "po-csns", { companyId, id }],
+    enabled: Boolean(id && companyId),
+    queryFn: () => listPoCsns(companyId, id),
+  });
+  const costCenterQuery = useCostCentersQuery(
+    { company_id: companyId, active: true },
+    { enabled: Boolean(companyId) }
+  );
+  const vendors = vendorQuery.vendors;
+  const paymentTerms = paymentTermQuery.paymentTerms;
+  const costCenters = useMemo(
+    () => (Array.isArray(costCenterQuery.data?.data) ? costCenterQuery.data.data : []),
+    [costCenterQuery.data?.data]
+  );
+  const csns = Array.isArray(csnQuery.data) ? csnQuery.data : [];
+  const loading =
+    poDetailQuery.isLoading ||
+    vendorQuery.isLoading ||
+    paymentTermQuery.isLoading ||
+    csnQuery.isLoading ||
+    costCenterQuery.isLoading;
 
-  const canApprove = shellProfile?.roleCode === "PROC_HEAD" || shellProfile?.roleCode === "SA";
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]
   );
+  const selectedVendor = useMemo(
+    () => vendorMap.get(po?.vendor_id) ?? null,
+    [po?.vendor_id, vendorMap]
+  );
+  const editVendor = useMemo(
+    () => vendorMap.get(editForm.vendor_id) ?? null,
+    [editForm.vendor_id, vendorMap]
+  );
+  const paymentTermOptions = useMemo(
+    () =>
+      paymentTerms.map((entry) => ({
+        value: entry.id,
+        label: `${entry.code || entry.name} | ${entry.name}`,
+      })),
+    [paymentTerms]
+  );
+  const costCenterOptions = useMemo(
+    () =>
+      costCenters.map((entry) => ({
+        value: entry.id,
+        label: `${entry.cost_center_code || entry.id} | ${entry.cost_center_name || entry.name || ""}`,
+      })),
+    [costCenters]
+  );
+  const paymentTermMap = useMemo(
+    () => new Map(paymentTermOptions.map((entry) => [entry.value, entry.label])),
+    [paymentTermOptions]
+  );
+  const costCenterMap = useMemo(
+    () => new Map(costCenterOptions.map((entry) => [entry.value, entry.label])),
+    [costCenterOptions]
+  );
+  const isImportPo = useMemo(
+    () =>
+      String(selectedVendor?.vendor_type || "").toUpperCase() === "IMPORT" ||
+      String(po?.delivery_type || "").toUpperCase() === "IMPORT",
+    [po?.delivery_type, selectedVendor]
+  );
+  const isImportEditPo = useMemo(
+    () => String(editVendor?.vendor_type || editForm.vendor_type || "").toUpperCase() === "IMPORT",
+    [editForm.vendor_type, editVendor]
+  );
+  const deliveryDateLabel = isImportPo ? "ETA to Port" : "ETD";
+  const editDeliveryDateLabel = isImportEditPo ? "ETA to Port" : "ETD";
 
-  async function loadDetail() {
+  // Detail/vendors/payment-terms don't depend on each other — fetch them in
+  // parallel instead of three sequential round trips. CSNs and cost centers
+  // need the PO's company_id (known only once detail resolves), so they
+  // form a second parallel batch right after.
+  useEffect(() => {
     if (!id) {
       setError("PROCUREMENT_PO_NOT_FOUND");
       return;
     }
-    setLoading(true);
-    setError("");
-    try {
-      const detail = await getPurchaseOrder(id);
-      const vendorData = await listVendors({ limit: 200, offset: 0 });
-      const poRow = detail?.data ?? detail;
-      const csnRows = await listPoCsns(poRow?.company_id || runtimeContext?.selectedCompanyId || "", id);
-      setPo(poRow);
-      setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-      setCsns(Array.isArray(csnRows) ? csnRows : []);
-      setAmendmentForm(buildAmendmentState(poRow?.lines, poRow));
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_PO_DETAIL_FAILED");
-      setPo(null);
-      setCsns([]);
-    } finally {
-      setLoading(false);
-    }
-  }
+    const nextError =
+      poDetailQuery.error?.message ||
+      vendorQuery.error?.message ||
+      paymentTermQuery.error?.message ||
+      csnQuery.error?.message ||
+      costCenterQuery.error?.message ||
+      "";
+    setError(nextError);
+  }, [
+    costCenterQuery.error?.message,
+    csnQuery.error?.message,
+    id,
+    paymentTermQuery.error?.message,
+    poDetailQuery.error?.message,
+    vendorQuery.error?.message,
+  ]);
 
   useEffect(() => {
-    void loadDetail();
-  }, [id, runtimeContext?.selectedCompanyId]);
+    if (!po) {
+      return;
+    }
+    setAmendmentForm(buildAmendmentState(po?.lines, po));
+  }, [po]);
+
+  async function refreshDetailQueries() {
+    await Promise.all([
+      poDetailQuery.refetch(),
+      vendorQuery.refetch(),
+      paymentTermQuery.refetch(),
+      csnQuery.refetch(),
+      costCenterQuery.refetch(),
+    ]);
+  }
 
   async function runAction(action, successMessage) {
     setSaving(true);
@@ -143,7 +277,7 @@ export default function PODetailPage() {
     try {
       await action();
       setNotice(successMessage);
-      await loadDetail();
+      await refreshDetailQueries();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_PO_ACTION_FAILED");
     } finally {
@@ -158,30 +292,9 @@ export default function PODetailPage() {
     );
   }
 
-  async function handleApprove() {
-    const remarks = window.prompt("Approval remarks (optional)", "") ?? "";
-    await runAction(
-      () => approvePurchaseOrder(id, { remarks }),
-      "Purchase order approved."
-    );
-  }
-
-  async function handleReject() {
-    const remarks = window.prompt("Reject reason", "");
-    if (!remarks) {
-      return;
-    }
-    await runAction(
-      () => rejectPurchaseOrder(id, { remarks }),
-      "Purchase order rejected."
-    );
-  }
-
   async function handleCancelPo() {
-    const reason = window.prompt("Cancellation reason", "");
-    if (!reason) {
-      return;
-    }
+    const reason = await openActionPrompt({ eyebrow: "Purchase Order", title: "Cancel this PO?", label: "Cancellation reason", required: true });
+    if (!reason) return;
     await runAction(
       () => cancelPurchaseOrder(id, { reason }),
       "Purchase order cancelled."
@@ -189,10 +302,8 @@ export default function PODetailPage() {
   }
 
   async function handleKnockOffPo() {
-    const reason = window.prompt("Knock-off reason", "");
-    if (!reason) {
-      return;
-    }
+    const reason = await openActionPrompt({ eyebrow: "Purchase Order", title: "Knock off this PO?", label: "Knock-off reason", required: true });
+    if (!reason) return;
     await runAction(
       () => knockOffPO(id, { reason }),
       "Purchase order knocked off."
@@ -200,20 +311,11 @@ export default function PODetailPage() {
   }
 
   async function handleKnockOffLine(lineId) {
-    const reason = window.prompt("Line knock-off reason", "");
-    if (!reason) {
-      return;
-    }
+    const reason = await openActionPrompt({ eyebrow: "Purchase Order", title: "Knock off this line?", label: "Knock-off reason", required: true });
+    if (!reason) return;
     await runAction(
       () => knockOffPOLine(id, lineId, { reason }),
       "PO line knocked off."
-    );
-  }
-
-  async function handleApproveAmendment() {
-    await runAction(
-      () => approveAmendment(id),
-      "Amendment approved."
     );
   }
 
@@ -251,9 +353,93 @@ export default function PODetailPage() {
       }
       setAmendmentOpen(false);
       setNotice("Purchase order amendment submitted.");
-      await loadDetail();
+      await refreshDetailQueries();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PO_AMEND_FAILED");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openEditModal() {
+    const vendorType = vendorMap.get(po?.vendor_id)?.vendor_type || po?.vendor_type || "";
+    setEditForm(buildEditState(po, vendorType));
+    setEditOpen(true);
+    setError("");
+    setNotice("");
+  }
+
+  function closeEditModal() {
+    setEditOpen(false);
+  }
+
+  function updateEditField(key, value) {
+    setEditForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function handleSubmitEdit() {
+    if (!po?.company_id || !editForm.vendor_id) {
+      setError("Company and vendor are required.");
+      return;
+    }
+    if (!editForm.payment_term_id) {
+      setError("Payment term is required.");
+      return;
+    }
+    if (!editForm.cost_center_id) {
+      setError("Cost center is required.");
+      return;
+    }
+    if (!editForm.ordered_qty || !editForm.unit_rate) {
+      setError("Qty and rate are required.");
+      return;
+    }
+    if (isImportEditPo && !editForm.incoterm.trim()) {
+      setError("Incoterm is required for import purchase orders.");
+      return;
+    }
+    if (editForm.has_rebate && (editForm.rebate_rate === "" || !editForm.rebate_rate_uom_basis)) {
+      setError("Rebate rate and basis are required when rebate is enabled.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const resolvedVendorType = String(editVendor?.vendor_type || editForm.vendor_type || "DOMESTIC").toUpperCase();
+      await updatePurchaseOrder(id, {
+        company_id: po.company_id,
+        vendor_id: editForm.vendor_id,
+        payment_term_id: editForm.payment_term_id,
+        vendor_type: resolvedVendorType,
+        delivery_type: editForm.delivery_type,
+        freight_term: editForm.freight_term,
+        incoterm: resolvedVendorType === "IMPORT" ? editForm.incoterm.trim() || null : null,
+        gst_terms: editForm.gst_terms || null,
+        has_rebate: editForm.has_rebate,
+        rebate_remarks: editForm.has_rebate ? editForm.rebate_remarks.trim() || null : null,
+        rebate_rate: editForm.has_rebate && editForm.rebate_rate !== "" ? Number(editForm.rebate_rate) : null,
+        rebate_rate_uom_basis: editForm.has_rebate ? editForm.rebate_rate_uom_basis || null : null,
+        cost_center_id: editForm.cost_center_id,
+        expected_delivery_date: editForm.expected_delivery_date || null,
+        remarks: editForm.remarks.trim() || null,
+        lines: [
+          {
+            material_id: editForm.line_material_id,
+            ordered_qty: Number(editForm.ordered_qty),
+            unit_rate: Number(editForm.unit_rate),
+            po_uom_code: editForm.po_uom_code.trim() || null,
+            remarks: editForm.line_remarks.trim() || null,
+            cost_center_id: editForm.cost_center_id,
+          },
+        ],
+      });
+      await refreshDetailQueries();
+      setEditOpen(false);
+      setNotice("Purchase order updated.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PO_UPDATE_FAILED");
     } finally {
       setSaving(false);
     }
@@ -283,22 +469,20 @@ export default function PODetailPage() {
       ]}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
+        ...(po?.status === "DRAFT" ? [{ key: "edit", label: "Edit", tone: "neutral", onClick: openEditModal, disabled: saving }] : []),
         ...(po?.status === "DRAFT" ? [{ key: "confirm", label: saving ? "Confirming..." : "Confirm", tone: "primary", onClick: () => void handleConfirm(), disabled: saving }] : []),
-        ...(po?.status === "PENDING_APPROVAL" && canApprove
-          ? [
-              { key: "approve", label: saving ? "Approving..." : "Approve", tone: "primary", onClick: () => void handleApprove(), disabled: saving },
-              { key: "reject", label: "Reject", tone: "danger", onClick: () => void handleReject(), disabled: saving },
-            ]
-          : []),
+        // Approve/Reject/Approve-Amendment are deliberately NOT exposed here —
+        // approval authority lives only on the dedicated "Pending PO
+        // Approvals" page (PROC_PO_ORDER_APPROVALS, gated to the Procurement
+        // Head/Buyer capability), per 87.12A batch-approval design. Anyone
+        // who can open a PO's detail page should not also be able to
+        // approve it from here, even if they happen to hold an approver role.
         ...(po?.status === "CONFIRMED"
           ? [
               { key: "amend", label: "Amend", tone: "neutral", onClick: () => setAmendmentOpen(true), disabled: saving },
               { key: "cancel", label: "Cancel PO", tone: "danger", onClick: () => void handleCancelPo(), disabled: saving },
               { key: "knockoff", label: "Knock-Off PO", tone: "neutral", onClick: () => void handleKnockOffPo(), disabled: saving },
             ]
-          : []),
-        ...(po?.status === "PENDING_AMENDMENT" && canApprove
-          ? [{ key: "approve-amendment", label: "Approve Amendment", tone: "primary", onClick: () => void handleApproveAmendment(), disabled: saving }]
           : []),
       ]}
     >
@@ -312,23 +496,58 @@ export default function PODetailPage() {
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
               <ErpFieldPreview label="Status" value={po.status} tone={getHeaderStatusTone(po.status)} />
               <ErpFieldPreview label="PO Date" value={po.po_date} />
-              <ErpFieldPreview label="Company" value={po.company_id} />
+              <ErpFieldPreview label="Company" value={po.company_name || po.company_id} />
               <ErpFieldPreview label="Delivery Type" value={po.delivery_type} />
+              <ErpFieldPreview label="GST Terms" value={po.gst_terms || "Not specified"} />
+              <ErpFieldPreview label={deliveryDateLabel} value={po.expected_delivery_date || "—"} />
               {po.delivery_type === "IMPORT" ? (
                 <ErpFieldPreview label="Incoterm" value={po.incoterm || "—"} />
               ) : null}
               <ErpFieldPreview label="Freight Term" value={po.freight_term || "—"} />
+              <ErpFieldPreview label="Remarks" value={po.remarks || "—"} />
             </div>
           </ErpSectionCard>
+
+          {po.has_rebate ? (
+            <ErpSectionCard eyebrow="Commercials" title="Rebate">
+              <div className="grid gap-3 md:grid-cols-3">
+                <ErpFieldPreview label="Rebate Rate" value={po.rebate_rate ?? "—"} />
+                <ErpFieldPreview label="Basis" value={getRebateBasisLabel(po.rebate_rate_uom_basis)} />
+                <ErpFieldPreview label="Rebate Remarks" value={po.rebate_remarks || "—"} />
+              </div>
+            </ErpSectionCard>
+          ) : null}
 
           <ErpSectionCard eyebrow="Lines" title="PO lines">
             <ErpDenseGrid
               columns={[
                 { key: "line_number", label: "Line", width: "70px" },
-                { key: "material_id", label: "Material" },
+                {
+                  key: "material_id",
+                  label: "Material",
+                  render: (row) => row.material_display || row.material_id || "—",
+                },
                 { key: "ordered_qty", label: "Qty", width: "90px" },
                 { key: "po_uom_code", label: "UOM", width: "90px" },
                 { key: "unit_rate", label: "Rate", width: "90px" },
+                {
+                  key: "cost_center_id",
+                  label: "Cost Center",
+                  render: (row) =>
+                    row.cost_center_display ||
+                    costCenterMap.get(row.cost_center_id) ||
+                    row.cost_center_id ||
+                    "—",
+                },
+                {
+                  key: "payment_term_id",
+                  label: "Payment Term",
+                  render: (row) =>
+                    row.payment_term_display ||
+                    paymentTermMap.get(row.payment_term_id) ||
+                    row.payment_term_id ||
+                    "—",
+                },
                 {
                   key: "line_status",
                   label: "Status",
@@ -424,9 +643,278 @@ export default function PODetailPage() {
             />
           </ErpSectionCard>
 
+          <ErpSectionCard eyebrow="Audit" title="Audit">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <ErpFieldPreview label="Created By" value={po.created_by_display || po.created_by || "—"} />
+              <ErpFieldPreview label="Last Updated By" value={po.last_updated_by_display || "—"} />
+              {po.cancelled_by_display ? (
+                <ErpFieldPreview label="Cancelled By" value={po.cancelled_by_display} />
+              ) : null}
+              {po.knocked_off_by_display ? (
+                <ErpFieldPreview label="Knocked Off By" value={po.knocked_off_by_display} />
+              ) : null}
+            </div>
+          </ErpSectionCard>
+
           <DocumentFlowSection docType="PO" docId={po.id} />
         </div>
       )}
+
+      {editOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4">
+          <div className="w-full max-w-5xl border border-slate-300 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h2 className="text-sm font-semibold text-slate-900">Edit Draft Purchase Order</h2>
+              <button type="button" onClick={closeEditModal} className="border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700">
+                Close
+              </button>
+            </div>
+            <div className="grid gap-4 p-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Vendor
+                  <select
+                    value={editForm.vendor_id}
+                    onChange={(event) => {
+                      const nextVendor = vendorMap.get(event.target.value);
+                      setEditForm((current) => ({
+                        ...current,
+                        vendor_id: event.target.value,
+                        vendor_type: String(nextVendor?.vendor_type || "DOMESTIC").toUpperCase(),
+                        incoterm:
+                          String(nextVendor?.vendor_type || "DOMESTIC").toUpperCase() === "IMPORT"
+                            ? current.incoterm
+                            : "",
+                      }));
+                    }}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select vendor</option>
+                    {vendors.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {`${entry.vendor_code || ""} ${entry.vendor_name || entry.id}`.trim()}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Delivery Type
+                  <select
+                    value={editForm.delivery_type}
+                    onChange={(event) => updateEditField("delivery_type", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    {["STANDARD", "BULK", "TANKER"].map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </label>
+                {isImportEditPo ? (
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Incoterm
+                    <input
+                      value={editForm.incoterm}
+                      onChange={(event) => updateEditField("incoterm", event.target.value.toUpperCase())}
+                      className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                    />
+                  </label>
+                ) : null}
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Payment Term
+                  <select
+                    value={editForm.payment_term_id}
+                    onChange={(event) => updateEditField("payment_term_id", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select payment term</option>
+                    {paymentTermOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Freight Term
+                  <select
+                    value={editForm.freight_term}
+                    onChange={(event) => updateEditField("freight_term", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="FOR">FOR</option>
+                    <option value="FREIGHT_SEPARATE">Freight Separate</option>
+                    <option value="FREIGHT_AT_ACTUALS">Freight at Actuals</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  GST Terms
+                  <select
+                    value={editForm.gst_terms}
+                    onChange={(event) => updateEditField("gst_terms", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select GST terms</option>
+                    <option value="INCLUSIVE">GST Inclusive</option>
+                    <option value="EXCLUSIVE">GST Exclusive</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Cost Center
+                  <select
+                    value={editForm.cost_center_id}
+                    onChange={(event) => updateEditField("cost_center_id", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select cost center</option>
+                    {costCenterOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Material
+                  <input
+                    value={editForm.line_material_display}
+                    readOnly
+                    className="h-8 border border-slate-300 bg-slate-100 px-2 text-sm text-slate-500 outline-none"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Qty
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.0001"
+                    value={editForm.ordered_qty}
+                    onChange={(event) => updateEditField("ordered_qty", event.target.value)}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Rate
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.0001"
+                    value={editForm.unit_rate}
+                    onChange={(event) => updateEditField("unit_rate", event.target.value)}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  UOM
+                  <input
+                    value={editForm.po_uom_code}
+                    onChange={(event) => updateEditField("po_uom_code", event.target.value.toUpperCase())}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  {editDeliveryDateLabel}
+                  <input
+                    type="date"
+                    value={editForm.expected_delivery_date}
+                    onChange={(event) => updateEditField("expected_delivery_date", event.target.value)}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-2 xl:col-span-3">
+                  Remarks
+                  <input
+                    value={editForm.remarks}
+                    onChange={(event) => updateEditField("remarks", event.target.value)}
+                    className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-1 text-xs font-semibold text-slate-700">
+                <span>Has Rebate</span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditForm((current) => ({
+                        ...current,
+                        has_rebate: true,
+                        rebate_rate_uom_basis: current.rebate_rate_uom_basis || "BASE_UOM",
+                      }))
+                    }
+                    className={`px-3 py-2 text-xs font-semibold ${
+                      editForm.has_rebate
+                        ? "border border-emerald-700 bg-emerald-100 text-emerald-900"
+                        : "border border-slate-300 bg-white text-slate-700"
+                    }`}
+                  >
+                    Yes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditForm((current) => ({
+                        ...current,
+                        has_rebate: false,
+                        rebate_rate: "",
+                        rebate_rate_uom_basis: "BASE_UOM",
+                        rebate_remarks: "",
+                      }))
+                    }
+                    className={`px-3 py-2 text-xs font-semibold ${
+                      !editForm.has_rebate
+                        ? "border border-slate-700 bg-slate-200 text-slate-950"
+                        : "border border-slate-300 bg-white text-slate-700"
+                    }`}
+                  >
+                    No
+                  </button>
+                </div>
+              </div>
+
+              {editForm.has_rebate ? (
+                <div className="grid gap-3 md:grid-cols-3">
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Rebate Rate
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.0001"
+                      value={editForm.rebate_rate}
+                      onChange={(event) => updateEditField("rebate_rate", event.target.value)}
+                      className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Basis
+                    <select
+                      value={editForm.rebate_rate_uom_basis}
+                      onChange={(event) => updateEditField("rebate_rate_uom_basis", event.target.value)}
+                      className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                    >
+                      <option value="BASE_UOM">Base UOM</option>
+                      <option value="PO_UOM">PO UOM</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700 md:col-span-3">
+                    Rebate Remarks
+                    <input
+                      value={editForm.rebate_remarks}
+                      onChange={(event) => updateEditField("rebate_remarks", event.target.value)}
+                      className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500"
+                    />
+                  </label>
+                </div>
+              ) : null}
+
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={closeEditModal} className="border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">
+                  Cancel
+                </button>
+                <button type="button" disabled={saving} onClick={() => void handleSubmitEdit()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:cursor-not-allowed disabled:opacity-50">
+                  {saving ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {amendmentOpen ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4">

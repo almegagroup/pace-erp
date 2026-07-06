@@ -1323,42 +1323,48 @@ Only DOMESTIC and IMPORT exist in Phase-1. No "BOTH" type.
 
 ### 14.3 Vendor Master — Core Fields
 
+> **IMPLEMENTATION UPDATE (2026-06-19):** Address fields split into 4 separate columns each. Contacts, emails, and banks moved to separate child tables (multi-row). Only Vendor Name is mandatory at create time. SA creates vendors directly as ACTIVE.
+
 | Field Group | Field | Mandatory | Notes |
 |---|---|---|---|
-| **Basic** | Vendor Code | Yes | System auto-generated |
-| | Vendor Name | Yes | Legal/trade name |
-| | Vendor Type | Yes | DOMESTIC / IMPORT |
-| **Identity** | BIN Number | Domestic | API validation — triggers auto-fill |
-| | TIN | Optional | |
-| | Trade License | Optional | |
-| **GST (Domestic)** | GST Number | Domestic | API auto-fill: Name, Address, Category |
-| | GST Category | Domestic | From API |
-| **Address** | Registered Address | Yes | Auto from API for Domestic |
-| | Correspondence Address | Optional | |
-| **Contact** | Primary Contact Person | Yes | |
-| | Phone | Yes | |
-| | Primary Email | Yes | For PO auto-mail |
-| | CC Email List | Optional | All CC'd on PO auto-mail |
-| **Import** | IEC Code | Import | Importer Exporter Code |
-| | Import License | Import | |
-| **Bank** | Bank Name | Optional | Mandatory in future |
-| | Branch | Optional | |
-| | Account Number | Optional | |
-| | Routing Number | Optional | |
+| **Basic** | Vendor Code | Yes | System auto-generated (V-00001 format) |
+| | Vendor Name | Yes | Only mandatory field at create time |
+| | Vendor Type | No | DOMESTIC / IMPORT |
+| | Country Code | No | Import vendors — ISO country code |
+| | Currency Code | No | Default: BDT |
+| **Identity** | BIN Number | No | |
+| | TIN | No | |
+| | Trade License | No | |
+| **GST (Domestic)** | GST Number | No | API auto-fill: always overwrites Name + registered address (line1, state, pin) |
+| | GST Category | No | From API |
+| **Import** | IEC Code | No | Importer Exporter Code |
+| | Import License | No | |
+| **Registered Address** | reg_address_line1 | No | Auto from GST API for Domestic (always overwritten on GST fill) |
+| | reg_address_city | No | |
+| | reg_address_state | No | Auto from GST API |
+| | reg_address_pin | No | Auto from GST API |
+| **Correspondence Address** | corr_address_line1 | No | |
+| | corr_address_city | No | |
+| | corr_address_state | No | |
+| | corr_address_pin | No | |
+| **Contacts** | vendor_contacts table | No | Multi-row child table: contact_name, phone, designation, is_primary |
+| **Emails** | vendor_emails table | No | Multi-row child table: email, label, is_primary (for PO auto-mail) |
+| **Banks** | vendor_banks table | No | Multi-row child table: bank_name, branch, account_number, routing_number, is_primary, is_active |
 | **Payment** | Payment Terms | ❌ No static field | Dynamic — last used per vendor (see 14.5) |
-| | Currency | Yes | Auto: BDT for Domestic, Foreign for Import |
-| **Status** | Status | Yes | ACTIVE / INACTIVE / BLOCKED |
-| **Audit** | Created By | Yes | Procurement team only |
-| | Approved By | Yes | Any authorized approver (single level) |
+| **Status** | Status | Yes | SA creates directly as ACTIVE |
+| **Audit** | Created By | Yes | SA only (OM07 screen) |
 
 ### 14.4 Vendor Status Lifecycle
 
+> **IMPLEMENTATION UPDATE (2026-06-19):** Approval workflow not implemented in Phase-1. SA creates vendors directly as ACTIVE via OM07 screen.
+
 ```
-DRAFT → PENDING_APPROVAL → ACTIVE → INACTIVE / BLOCKED
+SA creates → ACTIVE (immediately)
 ```
 
+- Original design (DRAFT → PENDING_APPROVAL → ACTIVE) deferred to a future phase.
 - **BLOCKED:** No new POs. Existing open POs — Procurement team decides separately.
-- **INACTIVE (Deactivated):** Historical POs remain. No new POs. Requires: (1) Ledger balanced — no open payables, (2) Approval required.
+- **INACTIVE (Deactivated):** Historical POs remain. No new POs.
 
 ### 14.5 Payment Terms — Dynamic Last Used
 
@@ -1375,23 +1381,24 @@ DRAFT → PENDING_APPROVAL → ACTIVE → INACTIVE / BLOCKED
 ### 14.6 PO Auto-Mail
 
 On PO confirmation, system emails the PDF to:
-- Vendor primary email
-- All CC emails from CC list
+- Vendor primary email (from vendor_emails table, is_primary = true)
+- All other emails from vendor_emails table (as CC)
 
 ### 14.7 Multi-Company Support
 
-A vendor can be active in multiple companies simultaneously. Company-level mapping controls in which companies this vendor is usable.
+A vendor can be active in multiple companies simultaneously. Company-level mapping controls in which companies this vendor is usable (vendor_company_map table).
 
 ### 14.8 Vendor Governance Rules
 
+> **IMPLEMENTATION UPDATE (2026-06-19):** Phase-1 implementation — SA manages vendors via OM07 screen. Approval flow deferred.
+
 | Action | Who | Rule |
 |---|---|---|
-| Create | Procurement team | Only |
-| Edit | Procurement team | |
-| Approve | Any authorized approver | Single level |
-| Block | Procurement team + Approval | |
-| Deactivate | Procurement team + Approval | Ledger must be balanced first |
-| Multi-company assign | Procurement team | |
+| Create | SA only | Via OM07 admin screen. Vendor created directly as ACTIVE. |
+| Edit | SA only | All fields editable post-create |
+| Contacts / Emails / Banks | SA only | Managed as multi-row child records |
+| Block | SA only | Procurement team decision, SA executes |
+| Multi-company assign | SA only | Via vendor detail |
 
 ### 14.9 Critical Vendor Master Rules
 
@@ -1399,7 +1406,8 @@ A vendor can be active in multiple companies simultaneously. Company-level mappi
 2. Vendor must have a Vendor-Material Info Record for the specific material before PO line can be saved (see Section 15).
 3. Blocking a vendor does not cancel existing open POs — Procurement team decides separately.
 4. Vendor GSTIN is Phase-1 reference field — mandatory for GST invoice in Phase-3.
-5. Bank details are optional in Phase-1 — will be made mandatory in a future phase.
+5. Bank details stored in vendor_banks child table — multi-row, is_primary flag for default bank.
+6. GST auto-fill always overwrites: vendor_name, reg_address_line1, reg_address_state, reg_address_pin — regardless of existing values.
 
 ---
 
@@ -1420,16 +1428,24 @@ The Vendor-Material Info Record serves dual purpose in PACE-ERP:
 
 A Vendor-Material Info Record must exist and be Active for a vendor + material combination before a PO line can be saved. If no record exists → **hard block at PO line entry**.
 
-### 15.2 Record Fields
+### 15.2 Record Fields **[REVISED 2026-06-22 — multi-UOM/currency/payment-term]**
+
+The single-row "Pack Size / PO UOM / Conversion" fields below were replaced by three child tables — a vendor-material link can have **multiple UOMs, multiple currencies, and multiple payment terms simultaneously**, each with exactly one marked default (`ensureExactlyOneDefault` enforced server-side):
+
+- `vendor_material_uom` — one row per (pack size, PO UOM, conversion-to-base) option for this vendor+material; one row flagged default.
+- `vendor_material_currency` — one row per currency this vendor can be paid in for this material; one row flagged default.
+- `vendor_material_payment_term` — one row per applicable payment term; one row flagged default.
+
+PO line creation (`resolvePoLineUom()` in `po.handlers.ts`) resolves the default UOM unless the user explicitly picks an alternate from the vendor-material's UOM list. Unmapping a vendor-material link is blocked while any `purchase_order_line` referencing it has `line_status IN ('OPEN','PARTIALLY_RECEIVED')`.
 
 | Field | Description | Mandatory |
 |---|---|---|
 | Vendor | Link to vendor master | Yes |
 | Material | Link to material master (PACE code) | Yes |
 | Vendor's Material Code | Vendor's own code/name for this material | Optional |
-| Pack Size | Vendor-specific pack size (e.g., 25 KG Bag) | Yes |
-| PO UOM | Vendor's unit of measure (e.g., Bag, Drum, Carton) | Yes |
-| Conversion | PO UOM → Base UOM (e.g., 1 Bag = 25 KG) | Yes |
+| UOM options | One or more pack-size/UOM/conversion rows, one default | Yes (≥1) |
+| Currency options | One or more currency rows, one default | Yes (≥1) |
+| Payment term options | One or more payment-term rows, one default | Yes (≥1) |
 | Lead Time | Vendor's lead time in days for this material | Optional |
 | Last Price | Reference price — auto-updated on every GRN confirmation | Auto |
 | Status | ACTIVE / INACTIVE | Yes |
@@ -1535,11 +1551,41 @@ Example:
 
 ## Section 18 — Customer Master
 
-### 18.1 What is Customer Master?
+### 18.1 What is Customer Master? **[REVISED 2026-06-22]**
 
-Customer Master is the identity record for every customer who receives dispatched finished goods. It is the SD equivalent of Supplier Master.
+Customer Master in PACE ERP is **not** the FG-dispatch customer master implied in the original Phase-1 draft below — that concept (finished-goods dispatch customer) is undesigned and deferred to Gate-27. The Customer Master that actually exists serves **RM/PM surplus trading**: a Sales Order in this system is restricted to `material_type IN ('RM','PM')` (enforced by `assertSalesMaterial` in `sales_order.handlers.ts`), i.e. PACE selling off surplus raw/packing material to outside parties, not dispatching finished goods.
 
-### 18.2 Customer Master — Core Fields
+A **Parent Customer** concept groups multiple Customer rows under one umbrella (e.g. one corporate group with several billing entities) — `parent_customer_master` + `parent_customer_code_sequence`, with `erp_master.generate_parent_customer_code()`.
+
+A Customer can optionally be **vendor-linked**: if the same business entity is already a Vendor, the Customer row stores `vendor_id` and the Name + GST resolve live from `vendor_master` at read time (no stored copy, no drift). Delivery/billing address, contact, phone, email, and currency are one-time auto-filled from the vendor when first linked, then editable independently afterward (no ongoing sync). A non-vendor-linked customer requires its own `customer_name` directly (CHECK: `customer_name IS NOT NULL OR vendor_id IS NOT NULL`).
+
+### 18.2 Customer Master — Core Fields **[REVISED 2026-06-22]**
+
+| Field | Description | Mandatory |
+|---|---|---|
+| Customer code | System-generated | Yes |
+| Source | Direct entry, or linked to an existing Vendor | Yes (choose one) |
+| Vendor (if linked) | Reference → vendor_master; Name + GST always resolve live from vendor | If vendor-linked |
+| Parent Customer | Reference → parent_customer_master (optional grouping) | Optional |
+| Customer name | Required only if not vendor-linked | Conditional |
+| GSTIN | **Not mandatory** — RM/PM trading customers are not required to be GST-registered | Optional |
+| Delivery / billing address | One-time auto-fill from vendor if linked, else manual; editable after | Optional |
+| Contact person / phone / email | One-time auto-fill from vendor if linked, else manual; editable after | Optional |
+| Currency | One-time auto-fill from vendor if linked, else manual | Optional |
+| Status | ACTIVE / INACTIVE | Yes |
+| Created by / Approved by | Set automatically on create | — |
+
+Company Mapping (which business companies may transact with this customer) uses the same `*_company_map` pattern as Vendor — a dedicated mapping table + tab, not a single field.
+
+### 18.3 Customer Status Lifecycle **[REVISED 2026-06-22]**
+
+```
+ACTIVE  ⇄  INACTIVE
+```
+
+New customers are created **directly ACTIVE** — there is no DRAFT/PENDING_APPROVAL gate. (Session decision, 2026-06-22: do not default new masters to an approval-gated workflow unless explicitly requested for that entity.) Existing rows that were already in DRAFT can be transitioned directly to ACTIVE/INACTIVE from the list — no separate approval step. BLOCKED status and credit-limit/Phase-2 fields below remain undesigned for this RM/PM-trading Customer Master; the original DRAFT→PENDING_APPROVAL→ACTIVE→INACTIVE/BLOCKED lifecycle and the field list in the table below describe the *original, not-yet-built* FG-dispatch concept and are kept for Gate-27 reference only.
+
+#### Original Phase-1 draft (superseded — FG-dispatch concept, not built; see 18.1)
 
 | Field | Description | Mandatory |
 |---|---|---|
@@ -1559,8 +1605,6 @@ Customer Master is the identity record for every customer who receives dispatche
 | Status | ACTIVE / INACTIVE / BLOCKED | Yes |
 | Created by | Sales / dispatch user | Yes |
 | Approved by | Sales manager | Yes |
-
-### 18.3 Customer Status Lifecycle
 
 ```
 DRAFT → PENDING_APPROVAL → ACTIVE → INACTIVE / BLOCKED
@@ -6709,122 +6753,1864 @@ The core operational backbone remains the same. Only the **delivery and assignme
 
 ### 83.1 — Order Number Structure
 
+**Updated: 2026-06-09 — LOCKED**
+
 | Item | Decision |
 |---|---|
-| Formulation Order Number | External — received from customer/external system, NOT generated by PACE-ERP |
-| Sales Order Number | External — received from customer/external system, NOT generated by PACE-ERP |
-| Process PO Number | Internal — PACE-ERP generates |
-| Packing PO Number | Internal — PACE-ERP generates |
-| Formulation Order → Process PO | One-to-many (partial batches allowed) |
-| Formulation Order Number at creation | Optional — can be blank, filled later |
-| Formulation Order Number update | Allowed — via controlled system action, full audit trail (old value preserved) |
+| Formulation Order (FO) Number | External — received from AP/customer (Plan Feed), NOT generated by PACE-ERP |
+| Sales Order (SO) Number | External — received from AP/customer, NOT generated by PACE-ERP |
+| Process PO Number | Internal — PACE-ERP generates (global, pure numeric, never reset — Section 99) |
+| Packing PO Number | Internal — PACE-ERP generates (global, pure numeric, never reset — Section 99) |
+| FO level | SKU level — Product(4) + Shade(4) + Pack(3) = 11 chars (confirmed from GSheets) |
+| FO → Packing PO | One-to-many — 1 FO can link to N Packing POs (multiple batches to fulfill qty) |
+| FO → Process PO | No direct link — Process PO is shade/formulation level only |
+| SO → FO | Linked at SO creation time in PACE system |
 
-**Design Rule:** Formulation Order Number and Sales Order Number are reference fields only — stored on Process PO and Packing PO respectively. Direct DB edit is not required or permitted; system provides a tracked update action.
+**Document Flow (LOCKED — 2026-06-09):**
 
----
-
-### 83.2 — Production Types: MTO vs MTS
-
-| Type | Trigger | Formulation Order No | Notes |
-|---|---|---|---|
-| Make-to-Order (MTO) | Formulation Order received | Required at creation | Custom / variable formulation products |
-| Make-to-Stock (MTS) | Advance production (fixed formulation) | Blank at creation, filled at mapping | Fixed-formulation products produced proactively |
-
-**MTS Flow:**
 ```
-Produce FG in advance (no order)
-     ↓
-Formulation Order + Sales Order arrive
-     ↓
-Map to existing FG stock
-     ↓
+FO arrives from AP → Plan Feed shows FO details
+    ↓
+Standard phase: Process PO created + Packing PO created immediately after
+  [FO number stored as informal reference on Packing PO — optional at creation]
+    ↓
+Standard → Final → Verify (production completes)
+    ↓
+Internal confirmation arrives
+    ↓
+FO formally linked to Packing PO(s) in PACE system (post-Verify action)
+    ↓
+SO created in PACE system → SO linked to FO at SO creation time
+    ↓
 Dispatch
 ```
 
----
+**Key rules:**
+- FO is at **SKU level** (Product + Shade + Pack code) — pack code embedded in FO
+- FO arrives with Plan Feed — drives Process PO + Packing PO creation at Standard phase
+- FO formal link to Packing PO happens **post-Verify** (after internal confirmation) — not at creation
+- FO number at Packing PO creation = informal reference only (optional, can be blank)
+- SO links to **FO** (not directly to Packing PO) — at SO creation time in system
+- Process PO has **no direct FO link** — formulation/shade level only
+- Costing confirmation gate = **SOFT gate** (not a hard block)
 
-### 83.3 — Stroke System (Formulation Templates)
+**FO → Packing PO Link Rules (LOCKED — 2026-06-09):**
 
 | Item | Decision |
 |---|---|
-| Stroke definition | Pre-defined named formulation templates (Stroke 1, Stroke 2, ...) |
-| Stroke recall | At Process PO creation — user selects stroke |
-| Costing basis | Current rates at time of order (not historical stroke rates) |
-| Customer-specific strokes | No — same stroke available for all customers |
-| Ordered stroke cost | Captured at Process PO creation (based on current rates) |
-| Actual stroke cost | Captured at actual goods issue |
-| Variance | Ordered cost vs actual cost → finance reconciliation → receivable/payable |
+| FO links to | Packing PO(s) that fulfill the FO quantity — NOT excess/balance Packing POs |
+| Link timing | Post-Verify + internal confirmation — formal system action |
+| FO at Packing PO creation | Informal reference only — not required, not the formal link |
+| 1 FO → N Packing POs | Yes — when FO fulfilled across multiple batches |
+| Balance/Excess Packing PO | NOT linked to any FO — Process PO link only |
+| Balance stock visibility | Shows in FG Unrestricted stock — not under any FO |
+| Balance stock future use | (1) Link to future FO when it arrives, OR (2) Reuse in another product (FOR_REPROCESS / mixing) |
+
+**Balance Packing PO example:**
+```
+FO: 10,000 KG (AP order)
+Actual production: 10,140 KG
+
+Packing PO #1: 10,000 KG → Process PO linked ✅, FO linked ✅ (fulfills AP order)
+Packing PO #2:    140 KG → Process PO linked ✅, FO linked ❌ (PACE internal excess)
+                            → FG Unrestricted stock, no FO, available for future use
+```
+
+**FO Cancel Flow:**
+```
+FO cancel request
+    ↓ System checks: any formally linked Packing POs?
+    ↓ Yes → auto-delink all linked Packing POs → FO cancelled
+    
+New FO arrives for same production?
+    → Re-link new FO to same Packing PO(s)
+```
+
+**SO Number Entry (LOCKED — 2026-06-11):**
+- SO number is external (from AP) — PACE does NOT generate it
+- User manually types or copy-pastes the SO number when creating the SO record in PACE
+- PACE stores it as a reference field and links it to the FO at SO creation time
+
+**FO link and Stock Location (LOCKED — 2026-06-11):**
+- FO → Packing PO link is location-independent
+- Link can be done whether FG stock is in S003 (Shop Floor) or F003 (FG Store)
+- F003 stock record carries: Material + Batch + Packing PO ref + FO ref (NULL until linked) + **Container Count** + Qty (KG)
+
+**F003 Stock Record — Container Count (LOCKED — 2026-06-30):**
+- Every F003 stock row stores both KG qty AND container count (barrel/IBC/jar/bottle count — whatever the Packing PO packed)
+- For flexible fill codes (599/000/001): container count stored from Packing PO (e.g. 10 barrels), KG qty is the actual fill total
+- For fixed fill codes (050/310/510 etc.): container count stored from Packing PO, KG qty = count × fixed fill qty
+- MMBE shows Packing PO level breakdown:
+
+| SKU | Packing PO | Batch | Container Count | KG |
+|---|---|---|---|---|
+| 6763PH57599 | PPO-001 | B-001 | 10 barrels | 2300 |
+| 6763PH57599 | PPO-002 | B-001 | 9 barrels | 2250 |
+| **Total** | | | **19 barrels** | **4550 KG** |
+
+- UOM conversion for 599/000/001 NOT stored in Material Master (fill qty is flexible, no fixed factor). Container count is transaction-level only.
+- UOM conversion for fixed fill codes (050, 310, 510 etc.) stored in Material Master UOM Conversions tab by SA (e.g. 1 Bottle = 0.05 KG, 1 Carton = 2 KG).
+- When FO is linked to Packing PO → FO ref on F003 stock record is automatically populated
+
+**Design Rule:** FO and SO are reference/linkage fields — not direct DB edits. All FO updates and FO-Packing PO link actions are tracked system actions with full audit trail (who, when, old value, new value).
+
+---
+
+### 83.2 — Production Types: MTO vs MTS by Operation Type
+
+**Updated: 2026-06-11 — LOCKED**
+
+#### Operation Type Classification
+
+| Operation Type | MTO / MTS | BOM | FO exists | SO exists |
+|---|---|---|---|---|
+| Admix | **MTO** | None (stroke-based) | ✅ Yes | ✅ Yes |
+| Hypershot | **HPS** | Fixed BOM | ✅ Yes | ✅ Yes |
+| IWC | **MTS** | Fixed BOM | ❌ No | ✅ Yes |
+| INT | N/A | None — manual RM selection | ❌ No | ❌ No |
+| MTEST | N/A | None — fully manual | ❌ No | ❌ No |
+
+---
+
+#### Universal Rule (all three types)
+
+- **Two-Order Model** applies to all: Process PO + Packing PO — always
+- **Packing PO consumes Process PO's produced liquid (prodshade)** — universal across Admix, Hypershot, IWC
+- **Process PO ↔ Packing PO link**: always exists — which Packing PO links to which Process PO is always tracked
+
+**Production cycle by type:**
+
+| Step | Admix (MTO) | Hypershot (HPS) | IWC (MTS) |
+|---|---|---|---|
+| Standard | ✅ | ✅ | ✅ |
+| QA Online Approval | ✅ | ✅ | ❌ Not required |
+| Start Batch | ✅ | ✅ | ✅ |
+| Final | ✅ | ✅ | ✅ |
+| Verify | ✅ | ✅ | ✅ |
+
+**Packing PO creation timing:**
+
+| Type | Packing PO created when |
+|---|---|
+| Admix | Immediately at Standard (paired with Process PO) |
+| Hypershot | Immediately at Standard (paired with Process PO) |
+| IWC | **As per requirement** — NOT at Standard. Created separately when dispatch need arises. |
+
+---
+
+#### Admix — MTO
+
+```
+FO arrives → Process PO + Packing PO created (Standard phase)
+    ↓
+Standard → QA Online Approval → Start Batch → Final → Verify
+    ↓
+P261 (RM from R003) + P261 (PM from P003) + P231 (FG → S003)
+    ↓
+S003 → F003 Transfer (per Packing PO qty)
+    ↓
+Internal confirmation → FO formally linked to Packing PO(s) in F003
+    ↓
+SO created in PACE (SO number manually entered from AP) → SO linked to FO
+    ↓
+Dispatch (by Packing PO) from F003
+```
+
+| Item | Detail |
+|---|---|
+| Production trigger | FO arrival — production is reactive |
+| BOM | None — RM selected per stroke, PM added manually |
+| FO → link | Packing PO formal link (post-Verify, after internal confirmation) |
+| SO → link | FO (at SO creation time — SO number manually entered from AP) |
+| Dispatch unit | Packing PO |
+| SKU | Variable — shade/pack determined per order |
+
+---
+
+#### Hypershot — MTS
+
+```
+Produce in advance (no FO needed)
+    ↓
+Standard → QA Online Approval → Start Batch → Final → Verify
+    ↓
+P261 (RM from R003) + P261 (PM from P003) + P231 (FG → S003)
+    ↓
+S003 → F003 Transfer (per Packing PO qty) → FG stock builds in F003
+    ↓
+FO arrives → FO formally linked to Packing PO(s) from F003 stock
+    ↓
+SO created in PACE (SO number manually entered from AP) → SO linked to FO
+    ↓
+Dispatch (by Batch + qty) from F003
+```
+
+| Item | Detail |
+|---|---|
+| Production trigger | Advance — proactive stock build (no FO needed to start) |
+| BOM | Fixed BOM — auto-populated at Packing PO creation |
+| FO → link | Packing PO formal link (same mechanism as Admix — links to existing F003 Packing POs) |
+| SO → link | FO (at SO creation time — SO number manually entered from AP) |
+| Dispatch unit | Batch + qty |
+| SKU | Fixed — pre-defined |
+| Unallocated stock | Stays in F003 Unrestricted — available for next FO |
+
+---
+
+#### IWC — MTS
+
+```
+Produce in advance (no FO)
+    ↓
+Standard (Process PO only — no Packing PO at this stage)
+    ↓
+Start Batch → Final → Verify  [no QA Online Approval]
+    ↓
+P261 (RM from R003) + P261 (PM from P003) + P231 (FG → S003)
+    ↓
+S003 → F003 Transfer → FG liquid stock builds in F003
+    ↓
+Packing PO created as per requirement (when dispatch need arises)
+    ↓
+SO created in PACE (SO number manually entered from AP) → SKU + qty defined
+    ↓
+Dispatch directly from F003
+```
+
+| Item | Detail |
+|---|---|
+| Production trigger | Advance — proactive stock build |
+| BOM | Fixed BOM — auto-populated at Packing PO creation |
+| QA Online Approval | ❌ Not required — Fixed BOM, pre-defined SKU |
+| Packing PO timing | As per requirement — NOT at Standard |
+| FO | Does not exist for IWC |
+| SO → link | Direct — SO defines SKU + qty, no FO intermediary (SO number manually entered from AP) |
+| Dispatch unit | SKU + qty |
+| SKU | Fixed — pre-defined |
+
+---
+
+#### Comparison Summary
+
+| | Admix | Hypershot | IWC |
+|---|---|---|---|
+| Type | MTO | MTS | MTS |
+| BOM | None (stroke) | Fixed | Fixed |
+| FO | ✅ → Packing PO formal link (post-Verify) | ✅ → Packing PO formal link (post-transfer, from F003 stock) | ❌ None |
+| SO | ✅ → FO link | ✅ → FO link | ✅ → direct |
+| Dispatch unit | Packing PO | Batch + qty | SKU + qty |
+| Process ↔ Packing link | ✅ Universal | ✅ Universal | ✅ Universal |
+
+---
+
+### 83.3 — Stroke Master
+
+**LOCKED — 2026-06-09 — Scope expanded 2026-06-30**
+
+**Scope (REVISED 2026-06-30 — supersedes the original "Admix only" lock):** Stroke Master now covers Formulation/BOM data for **all Process PO Types** — MTO, HPS, MTS, INT, MTEST. Originally locked as Admix-only with Hypershot/IWC on a separate SA-managed Fixed BOM; that split is removed.
+
+**Governance change (LOCKED — 2026-06-30):** SA will **never** create or edit Formulation/BOM data, for any Process PO Type. This is exclusively an ACL (QA) user responsibility, company-wise — same Create→Manager-Approve workflow applies uniformly across MTO/HPS/MTS/INT/MTEST. There is no separate SA-managed Fixed BOM master anymore.
+
+Stroke Master stores formulation templates at Prodshade level — no packing information.
+
+**Material Type — SFG added (LOCKED — 2026-06-29, applied to dev):**
+
+Material Type list extended from `RM, PM, INT, FG, TRA, CONS` to add **SFG (Semi-Finished Goods)** — represents Process PO bulk output (Prodshade + Batch, pre-packing) before Packing PO converts it into full FG SKU. Migration `20260629181941_gate27_27_1_add_sfg_material_type.sql` applied to dev (constraint + `material_code_sequence` seed row `SFG-00001...`). Backend (`material_type_category.handlers.ts`) and frontend (`SAMaterialMaster.jsx`, `MaterialListPage.jsx`, `StoCreateFormPage.jsx`) updated to match.
+
+**Page / TX Code (LOCKED — 2026-06-29):**
+
+| Field | Value |
+|---|---|
+| Page Name | Stroke Master |
+| menu_code | `PROD_STROKE_MASTER` |
+| tx_code | `PR01` (first use of new `PR` — Production — prefix; verified free against live `erp_menu.menu_master` registry) |
+| Route | `/dashboard/om/production/stroke-master` |
+
+> All subsequent Gate-27 Production pages (Process PO, Packing PO, etc.) continue the `PR` series — `PR02`, `PR03`, ...
+
+---
+
+#### Master Header Fields (LOCKED — 2026-06-30, finalized field order)
+
+**Entry order:** Material Type → PO Type → Prod → Shade → Description → Stroke Number → Base UOM → Conversion UOM → Conversion Factor → Created By/Date.
+
+| Field | Detail |
+|---|---|
+| Material Type | Entered **first**. Only **2 options** here (not the full 7-value Material Type list): **SFG** or **INT**. Dropdown shows a description on selection. |
+| PO Type | Entered **second**, filtered by Material Type selected above: Material Type = SFG → PO Type options are MTO / HPS / MTS / MTEST. Material Type = INT → PO Type option is INT only. Dropdown shows a description of each option on selection. |
+| Prod | Product code — separate input field (not combined with Shade in the UI) |
+| Shade | Shade code — separate input field |
+| Description | Free text description of the stroke |
+| Stroke Number | User-entered — manually assigned. Purely numeric only (no letters or special characters). |
+| Base UOM | e.g. KG — maps to `material_master.base_uom_code` |
+| Conversion UOM | e.g. LTR — maps to `material_uom_conversion.to_uom_code`. Needed because MTS/IWC formulation input (RM) is measured in KG but output is measured in LTR — same Stroke/BOM page is reused for Fixed BOM (HPS/MTS), so this conversion must live here. |
+| Conversion Factor | maps to `material_uom_conversion.conversion_factor` (e.g. how many KG per Litre — density-based) |
+| Created By | System-captured — who created the entry |
+| Created Date | System-captured — when created |
+
+**No separate Alt UOM 1 / Alt UOM 2 fields here** — considered and dropped as redundant with Conversion UOM/Factor. Alt UOM (`purchase_uom_code` / `issue_uom_code`) usage, if any, belongs to the Packing side (Pack Code/Packing PO), not Stroke Master.
+
+**Material Master record creation/mapping (LOCKED — 2026-06-30):**
+
+**One Material Master record per Prodshade — independent of Stroke count.** A Prodshade can have many Strokes (formulation versions); the Material Master record is created **once** per Prodshade, not once per Stroke. When entering a Prod+Shade in Stroke Master, the system checks whether a Material Master record already exists for that exact Prod+Shade combo:
+- Exists → reuse it, no new Material Master record created, the new Stroke just references the same Prodshade identity
+- Doesn't exist → create one (mapping below)
+
+When a Prod+Shade combination is entered that doesn't yet exist as a Material Master (SFG/INT) record, the system creates one with this mapping:
+
+```
+material_master.material_name   = Prod + Shade (combo)
+material_master.external_code   = Prod + Shade (combo)
+material_master.document_name   = Description (from Stroke Master header)
+material_master.pace_code       = Auto-generated (unchanged — e.g. SFG-00001)
+material_master.base_uom_code   = Base UOM (from Stroke Master header)
+material_uom_conversion row     = Base UOM → Conversion UOM, with Conversion Factor
+
+material_master.shade_code / pack_code — NOT used in this flow (left as-is, unused columns per 2026-06-30 discussion)
+```
+
+---
+
+#### RM Lines (LOCKED — 2026-06-30, revised 2026-06-30)
+
+**Line structure follows SAP OUTPUT/INPUT model (LOCKED — 2026-06-30):**
+
+Every Stroke has one OUTPUT line (auto-filled from header Prod+Shade) and one or more INPUT lines (RM/INT ingredients).
+
+**OUTPUT line (system-generated, not user-entered):**
+
+| Column | Value |
+|---|---|
+| Type | OUTPUT |
+| Material Type | SFG or INT (from header) |
+| Item | Auto-filled from Prod+Shade header — not editable |
+| Dosage % | Real-time sum of all INPUT lines — system-calculated. Displayed as running total. When = 100 → save allowed; otherwise system blocks. |
+| UOM | Base UOM (from header) |
+| Has Alternate? | — (not applicable) |
+| Material Group | — (not applicable) |
+
+**INPUT lines (user-entered, one row per ingredient):**
+
+| # | Column | Detail |
+|---|---|---|
+| 1 | Type | INPUT (fixed — user cannot change) |
+| 2 | Material Type | **RM** or **INT** — a formulation line's ingredient can be a Raw Material or an Intermediate material (e.g. Caustic Liquid). Filters column 3. |
+| 3 | Item | Dropdown of materials matching the Material Type above, scoped to the company-mapped material list |
+| 4 | Dosage % | Percentage of this ingredient in the formulation. Applies uniformly across **all PO Types** (MTO/HPS/MTS/INT). Sum of all INPUT lines **must equal exactly 100** — drives the OUTPUT line Dosage% display — system blocks save if not 100. |
+| 5 | UOM | — |
+| 6 | Has Alternate? | Yes / No |
+| 7 | Material Group | Only active if column 6 = Yes. Searchable dropdown of existing groups **+ "Create Group"** inline option. Creating asks for Group Name + Description; on save it appears immediately in the dropdown and is the same underlying data shown on the **Material Group Master page (PM04 — currently mis-labeled "Material Categories", rename pending)** — i.e. `erp_master.material_category_group`. |
+| 8 | Members | Once a Group is selected/created, add Alternate Material(s) as members here — unlimited, stored as `material_category_group_member` rows. |
+
+**Reused mechanism:** Alternate Material does **not** get its own new table — it reuses the existing (previously unused) `material_category_group` / `material_category_group_member` tables and the PM04 page.
+
+**Group has no "Primary" concept (LOCKED — 2026-06-30, design decision; implementation/cleanup deferred):**
+
+A Material Group is a **flat list of functionally-interchangeable materials** — no member is permanently "the primary" at the Group level. Which material is the "main" one is purely contextual to each Stroke RM Line (whatever is selected in column 2, Item), not a property of the Group itself.
+
+- **Reason this came up:** the same Group can be reused across different Strokes where a *different* material is the line's own Item each time (e.g. Stroke X uses Material A as Item with Group G1 as its alternates; Stroke Y uses Material B as Item, also pointing at G1). A single stored `is_primary` flag on the group can't represent both — it's a global flag, but "which one is primary" is per-line.
+- **Resulting rule:** when showing Alternates for a Stroke RM Line, the system displays **all Group Members except whichever material is selected as the line's own Item** — the stored `is_primary` flag on `material_category_group_member` is not used for this.
+- **Implementation note (not yet done — to action when Gate-27 implementation starts):** the `is_primary` column and its "one primary per group" partial unique index (`idx_mcgm_one_primary`) on `material_category_group_member` become vestigial under this model. Decide then whether to drop them via migration or leave unused — deferred, not blocking this design lock.
+
+**Duplicate Group detection (LOCKED — 2026-06-30):**
+
+Duplicate check is based on the **exact member set**, not any overlap/subset relationship.
+
+```
+Group 1 = {A, B, C, D}
+
+Create new group with {A, B}       → ✅ Allowed (subset, but not an exact match — different group)
+Create new group with {A, B, C}    → ✅ Allowed (different subset — different group)
+Create new group with {A, B, C, D} → ❌ Blocked — "A group with this exact combination already exists"
+```
+
+Any partial/subset combination is allowed as its own distinct Group. Only an **exact same set of members** (regardless of entry order) triggers the duplicate block.
+
+**Rules:**
+- Same RM/INT item **can appear more than once** in a stroke (e.g. added at different stages of production)
+- **Prodshade + Stroke Number** combo must be unique — system blocks duplicate combination, shows error message, will not let entry proceed until resolved
+- At Process PO creation: Standard Qty = Dosage% × Batch Size (order qty)
+
+**Governance (confirmed 2026-06-29):** SA never creates or edits formulation/BOM data. Stroke Master creation is exclusively QA's responsibility, per company — each company's QA maintains its own Strokes.
+
+**Material Group Membership = Live Reference, not a snapshot (LOCKED — 2026-06-30):**
+
+Member Add/Remove for an existing Group is only possible from the **PM04 (Material Group Master)** page — not from Stroke Master or its Approval screen (per the edit-rule table above). When a member is added/removed there, the same exact-set Duplicate Group check (above) runs again on save.
+
+Any Stroke (DRAFT or ACTIVE) that references that Group shows the Alternate list **live, as it currently stands** — not a copy taken at the time the Stroke was created or approved. This does not violate the Stroke immutability rule (83.3 Stroke Lifecycle): the Stroke's own RM/Dosage data is still locked once ACTIVE, but the Group's member list lives outside the Stroke as an external reference, so it can legitimately change over time.
+
+---
+
+#### Approval Workflow (SAP MI07 style)
+
+**Page / TX Code (LOCKED — 2026-06-30):**
+
+| Field | Value |
+|---|---|
+| Page Name | Stroke Master Approval |
+| menu_code | `PROD_STROKE_APPROVAL` |
+| tx_code | `PR02` |
+| Route | `/dashboard/om/production/stroke-approval` |
+
+**Approval screen edit rules (LOCKED — 2026-06-30):**
+
+| Can Manager... | Allowed? |
+|---|---|
+| Edit any RM/INT line (Item, Dosage %) | ✅ Yes |
+| Save with Dosage % sum ≠ 100 | ❌ Blocked (same validation as creation) |
+| Edit/delete an existing Material Group's Members | ❌ No — membership changes are creation-time only (QA), not editable from Approval |
+| Select a different Material Group for a line | ✅ Yes |
+| Create a brand new Material Group inline | ✅ Yes (same inline create flow) |
+| Change the line's Item (Primary Material) | ✅ Yes — but doing so **resets that line's Material Group selection**; Manager must re-set Group/Alternate fields fresh |
+| Change header **Material Type** (SFG/INT) | ❌ No — locked, immutable on this screen |
+| Change header **PO Type** | ❌ No — locked, immutable on this screen |
+
+**Reject action (LOCKED — 2026-06-30 — intentional exception to the system-wide "no delete, only PRUNE" rule):**
+
+```
+Manager Reject →
+  All data QA created for this Stroke (header, RM/INT lines, dosage) is HARD DELETED from DB
+  Material Group(s) referenced are NOT deleted (shared resource, may be used by other Strokes)
+```
+
+**Why hard delete here, not PRUNE:** This Stroke never reached ACTIVE/committed status — it's still a DRAFT. PRUNE exists to preserve traceability on real, committed business documents (Process PO, Packing PO, etc.) per 83.4. A rejected DRAFT Stroke was never a real document, so preserving it as "PRUNED" would just accumulate corrupt/half-formed records with no value. This exception is scoped to Stroke Master Reject only — the PRUNE rule for committed documents elsewhere is unchanged.
+
+```
+QA person:
+  → Creates stroke master header
+  → Adds all RM lines with dosage %
+  → Submits
+
+Manager:
+  → Reviews entire entry (all RM lines visible)
+  → Can edit any RM line (dosage, alternate)
+  → Can delete wrong RM rows
+  → Saves → Save = Approved
+
+After Manager Save:
+  → Stroke is ACTIVE
+  → Available for selection at Process PO creation
+
+  → SFG Material Master + Company Mapping (LOCKED — 2026-06-30):
+
+  Check: Does SFG Material Master exist for this Prodshade?
+
+  [NO — first company creating a Stroke for this Prodshade]
+    → Create Material Master:
+         material_type = SFG
+         material_name = Prodshade code (e.g. 6763PH53)
+         pace_code = auto-generated (SFG-00001, SFG-00002, ...)
+    → Create plant extension for this company
+
+  [YES — another company already created a Stroke for this Prodshade]
+    → Material Master unchanged (same global record)
+    → Create plant extension for this company only (if not already mapped)
+```
+
+**Material Master scope (LOCKED — 2026-06-30):**
+- SFG Material Master is **Prodshade-level, global** — one record per Prodshade regardless of how many companies produce it
+- Strokes are **company-specific** — CMP003 and CMP004 can both have Stroke 2 for 6763PH53 with entirely different RM formulations; they are separate records, each company sees only their own
+- Trigger for Material Master creation = **PR02 Approve** (not PR01 DRAFT — rejected Strokes must not create stale Material Master records)
+
+Example:
+```
+CMP003 PR02 Approve (6763PH53, Stroke 2, RM: A+B+C):
+  → SFG-00001 created (6763PH53)
+  → CMP003 plant extension: SFG-00001 ↔ CMP003
+
+CMP004 PR02 Approve (6763PH53, Stroke 2, RM: A+D+E — different formulation):
+  → SFG-00001 already exists → no new Material Master
+  → CMP004 plant extension: SFG-00001 ↔ CMP004
+
+Final: 1 Material Master (SFG-00001), 2 plant extensions, 2 separate Strokes
+```
+
+**Key rules:**
+- No separate "Approve / Reject" buttons — Manager Save = Approved
+- Only Manager (L3+) can perform the Save/Approval action
+- Before Manager approval: stroke is in DRAFT — not available for Process PO
+- After approval: stroke is ACTIVE — visible in Process PO stroke dropdown
+- Stroke Number uniqueness: **Prodshade + Stroke Number** combo enforced by system — same Stroke Number can exist for different Prodshades, but not twice for the same Prodshade
+
+**Stroke Lifecycle (LOCKED — 2026-06-11):**
+
+| Status | Editable | Visible in Process PO dropdown |
+|---|---|---|
+| DRAFT | ✅ QA can edit | ❌ No |
+| ACTIVE | ❌ Immutable — no edits allowed | ✅ Yes |
+| DEACTIVATED | ❌ Immutable | ❌ No — hidden from dropdown |
+
+**Rules:**
+- Once ACTIVE: stroke cannot be edited — immutable forever
+- Reason: cannot predict when a stroke will be used in future Process POs — editing would cause inconsistency
+- Formula change → create **new Stroke Number** for same Prodshade (old stroke remains ACTIVE or is deactivated)
+- Deactivation: Manager can deactivate any ACTIVE stroke
+- Deactivated stroke: hidden from Process PO creation dropdown
+- Existing Process POs referencing a deactivated stroke → **unaffected** (historical reference preserved)
+- No physical delete — DEACTIVATED is the terminal state
+- **Deactivation authority:** QA person OR Manager — either can deactivate
+
+> ⚠️ **PENDING DESIGN — MTS Stroke Selection at Process PO (2026-06-30):**
+> MTS (IWC + Powder) এ একটা Prodshade এর multiple ACTIVE Stroke থাকতে পারে, কিন্তু প্রতিবার user কে dropdown দিলে wrong stroke choice হওয়ার risk আছে। MTS Process PO create করার সময় কীভাবে stroke select/auto-assign হবে সেটা আলাদা design session এ ঠিক করতে হবে। Stroke approve/ACTIVE হওয়ার flow আপাতত same — শুধু Process PO তে MTS stroke pick করার mechanism pending।
+
+**Prodshade Pack Config — Manager Responsibility (LOCKED — 2026-06-11):**
+
+After Stroke approval, Manager must also configure **Prodshade Pack Config** for that Prodshade before any Process PO can be created.
+
+Pack Config is at **Prodshade level** (not Stroke level) — all Strokes under the same Prodshade share one Pack Config.
+
+| What Manager configures | Detail |
+|---|---|
+| Allowed Pack Codes | Which pack codes (599/510/000) are valid for this Prodshade |
+| Fill Size per Pack Code | e.g. 599 → 230 KG per barrel, or 250 KG per barrel |
+| Multiple fill sizes | Same pack code can have multiple fill size options (e.g. 599 at 230 or 250) |
+
+**Prerequisite for Process PO creation:**
+```
+Prodshade must have:
+  1. At least one ACTIVE Stroke ✅
+  2. Prodshade Pack Config defined ✅
+Both required — missing either = Process PO cannot be created
+```
+
+> Full Pack Config design → see **83.17**
+
+---
+
+### PR03 — Change BOM Item (LOCKED — 2026-06-30)
+
+| Field | Value |
+|---|---|
+| Page Name | Change BOM Item |
+| menu_code | `PROD_CHANGE_BOM_ITEM` |
+| tx_code | `PR03` |
+| Route | `/dashboard/om/production/change-bom-item` |
+
+**Purpose:** Formally substitute RM/INT items on an existing ACTIVE approved Stroke (BOM). Creates a Change Request document — does NOT directly edit the Stroke. Change Request must be approved via PR04 (separate approval page) before the Stroke is updated.
+
+**Authority (LOCKED — 2026-06-30):**
+
+| Role | Create Change Request (PR03) | Approve (PR04) |
+|---|---|---|
+| L1/L2 Manager | ✅ If present in that company | ❌ |
+| L1/L2 Auditor | ✅ Only if no L1/L2 Manager in that company (Auditor can be from any company — global role) | ❌ |
+| L3 Manager | ❌ | ✅ Must be from same company |
+| L4 Manager / Director / SA/GA | ❌ | — |
+
+**Rule:** Approver is always the L3 Manager of the same company — never cross-company. Creator is L1/L2 Manager if available; falls back to L1/L2 Auditor (global) if no L1/L2 Manager exists in that company.
+
+**Dosage% is read-only on this page — only Item and Group assignments change.**
+
+---
+
+#### Page Flow
+
+1. User selects Stroke: Prod + Shade → Stroke Number dropdown (only ACTIVE Strokes shown)
+2. Header loads → fully read-only (Material Type, PO Type, Prod, Shade, Description, Stroke Number, Base UOM)
+3. RM Lines load — user makes item/group changes per line (see below)
+4. Submit → Change Request created in DRAFT → enters PR04 approval queue
+
+---
+
+#### Per-Line Operations (LOCKED — 2026-06-30)
+
+| # | Condition on line | What user does | Result |
+|---|---|---|---|
+| 1 | Has Alternate = Yes, Group assigned, target material already in Group | Dropdown shows Group members minus current item → pick new item | Item swapped within same Group |
+| 2 | Has Alternate = No | Free RM/INT search → pick any material | Item replaced, no Group (Alternate stays No) |
+| 3 | Has Alternate = Yes, Group assigned, but target not in Group's member list | User goes to PM04 (Material Group Master) → adds member → returns → now pick via scenario 1 | Workflow note — no special UI on PR03; user resolves in PM04 first |
+| 4 | Has Alternate = Yes, any Group | Change Group field to a different Group → pick item from new Group's member list | Group + Item both change |
+| 5 | Has Alternate = No | Toggle Has Alternate → Yes → Select existing Group OR inline-create new Group (same flow as PR01) + add members | Alternate mechanism enabled for this line; item may or may not change |
+
+**RM Lines table columns (PR03):**
+
+| Line | Material Type | Current Item | New Item | UOM | Has Alt? | Material Group | Members Preview |
+|---|---|---|---|---|---|---|---|
+| read-only | read-only | read-only | editable (dropdown or free search) | read-only | editable (toggle) | editable (select or inline create) | read-only preview |
+
+- **Dosage% column: not shown** (read-only, no change allowed — confusing to display)
+- **UOM: read-only** — material substitution does not change unit of measure
+- A line with no changes is submitted as-is (no delta = that line passes through unchanged)
+
+---
+
+#### Change Request Document
+
+On Submit:
+```
+Change Request created:
+  - Stroke reference (Prod + Shade + Stroke Number)
+  - Per-line delta: Current Item → New Item, Current Group → New Group, Old Alt flag → New Alt flag
+  - Creator (L1/L2 Manager), created_at
+  - Status: DRAFT → enters PR04 approval queue
+```
+
+On PR04 Approve:
+```
+Stroke Master RM lines updated live:
+  - Item, Material Group, Has Alternate flag updated per approved delta
+  - Change Request status → APPROVED, audit trail preserved
+  - Stroke itself remains ACTIVE (approval does not change Stroke status)
+```
+
+On PR04 Reject:
+```
+Change Request → REJECTED (soft, not hard deleted — audit trail preserved)
+Stroke Master → unchanged
+```
+
+> **Note:** Unlike PR02 Reject (hard delete of a DRAFT Stroke), PR03 Change Request Reject is a soft cancel — the Change Request record is preserved as REJECTED for audit. The Stroke is a committed ACTIVE document, so full traceability is required.
+
+**BOM Change — Effect on Existing Process POs (LOCKED — 2026-06-30):**
+
+- Change approved → Stroke RM lines updated live
+- Already-created or in-progress Process POs referencing this Stroke → **unaffected** — they continue with the formulation snapshotted at PO creation time
+- Future Process POs created after approval → automatically use the updated formulation
+- Exception: If a user wants the new formulation on an already-created PO → **PRUNE that PO** → wait for change approval → create a new PO (which will pick up the updated stroke)
+
+---
+
+### PR04 — Change BOM Item Approval (LOCKED — 2026-06-30)
+
+| Field | Value |
+|---|---|
+| Page Name | Change BOM Item Approval |
+| menu_code | `PROD_CHANGE_BOM_ITEM_APPROVAL` |
+| tx_code | `PR04` |
+| Route | `/dashboard/om/production/change-bom-item-approval` |
+
+**Authority:** L3 Manager of the same company only.
+
+**Structure (mirrors PR02 — Stroke Master Approval):**
+
+**Section 1 — Change Request Info (read-only)**
+
+| Field | Value |
+|---|---|
+| Stroke reference | Prod + Shade + Stroke Number |
+| Requested by | P-Code + Name |
+| Requested date | timestamp |
+| Status | PENDING |
+
+**Section 2 — RM Lines: Current vs Proposed**
+
+L3 Manager sees each line showing current state vs proposed change side by side. Changed lines are highlighted; unchanged lines are dimmed.
+
+| Line | Current Item | Proposed Item | Current Group | Proposed Group | Has Alt (Current) | Has Alt (Proposed) |
+|---|---|---|---|---|---|---|
+| editable by L3 Manager | read-only | editable | read-only | editable | read-only | editable |
+
+**L3 Manager can edit the Proposed columns before approving** — same authority as PR02 Manager editing RM lines. If L3 Manager edits the proposal, the approved version reflects L3 Manager's edits (not the original proposed version).
+
+Dosage% is not shown (no dosage change allowed in Change BOM Item flow).
+
+**Section 3 — Action**
+
+| Action | Result |
+|---|---|
+| **Approve** | Proposed (possibly edited) changes applied to Stroke Master RM lines live. Change Request → APPROVED. Audit trail preserved. |
+| **Reject** | Change Request → REJECTED (soft cancel). Stroke unchanged. Audit trail preserved. |
+
+> Reject here is **soft** (not hard delete) — unlike PR02 where Reject = hard delete of DRAFT. PR04 Reject preserves the Change Request record for audit since the Stroke is a committed ACTIVE document.
 
 ---
 
 ### 83.4 — Process PO and Packing PO (Two-Order Model)
 
-**Process PO:**
-- Covers formulation/stroke-based production
-- Consumes RM components
-- Produces: unpacked / bulk FG or Intermediate RM
-- Linked to: Formulation Order Number (reference)
+**Updated: 2026-06-11**
 
-**Packing PO:**
-- Separate from Process PO
-- Packing type decided at **FG Declaration time**
-- Packing BOM pulled automatically at creation
-- Components: qty editable (min = 0, no delete), new lines addable
-- In-order goods movement: 261 (issue) and 262 (reversal) from within order
-- Linked to: Sales Order Number (reference)
+---
 
-**Packing Change Scenarios:**
+#### Process PO Types (LOCKED — 2026-06-09)
 
-| Scenario | Trigger | Action |
+| Type Code | Operation | Description |
 |---|---|---|
-| Pre-declaration change | Drum → Tank before FG declared | Amendment at FG Declaration, new Packing PO |
-| Post-pack logistics change | Drum packed, truck unavailable, tank arranged | Reverse Packing PO, create new Packing PO (tank) |
-| Cost impact | Always | Packing type change = costing update = invoice update |
+| MTO | Admix | Make-to-Order, stroke-based, FO-driven |
+| HPS | Hypershot | Hypershot — MTS, Fixed BOM, FO formally links to Packing PO post-transfer (from F003 stock) |
+| MTS | IWC + Powder | Make-to-Stock, Fixed BOM, no FO |
+| INT | Intermediate | Produces INT material (e.g. Caustic Liquid) — consumed as RM in FG Process PO |
+| MTEST | Test/Sample batch | AP-requested small batches (5–10 KG). No stroke, no BOM — fully manual. Simplified one-step cycle. |
+
+#### Packing PO Types (LOCKED — 2026-06-10)
+
+| Type Code | Operation | Description |
+|---|---|---|
+| PMTO | Admix | Paired with MTO Process PO |
+| PHPS | Hypershot | Paired with HPS Process PO |
+| PMTS | IWC + Powder | Paired with MTS Process PO |
+| PTEST | Test/Sample batch | Paired with MTEST. Pack Code: 001. PM manually selected. Links to MTEST output only. |
+
+> INT Process PO has no paired Packing PO — INT produces RM/INT material, not FG.
+
+---
+
+#### Process PO
+
+- Covers formulation/stroke-based RM production only
+- Consumes RM components (NO PM — packing is always separate)
+- FO number = informal reference at creation (optional) — formal FO link is on Packing PO
+- Created at: Standard phase
+
+#### Packing PO
+
+- Separate from Process PO — always
+- Linked to Process PO by explicit link (mandatory)
+- PM items: added manually (Admix/PMTO) or auto-populated from Pack BOM (Hypershot/IWC/Powder)
+- SO number = reference field — SO links to **FO** (not directly to Packing PO)
+- Goods movements: P261 (SFG + PM issue) + P231 (FG receipt) at Final save. Reversal via P262 (COR6 Correction) or CORS.
+
+**Packing PO creation timing (by type):**
+
+| Type | When created |
+|---|---|
+| Admix (PMTO) | At Standard — immediately after Process PO. Minimum 1, user can add more. |
+| Hypershot (PHPS) | At Standard — immediately after Process PO. Minimum 1, user can add more. |
+| IWC (PMTS) | **As per requirement** — NOT at Standard. Created separately when dispatch need arises. |
+| MTEST (PTEST) | At MTEST creation — one-step cycle. |
+
+---
+
+#### Creation Flow (LOCKED — 2026-06-11)
+
+**Admix (MTO) / Hypershot (HPS):**
+```
+Standard phase:
+  1. Process PO created (RM, stroke/BOM reference, FO number informal)
+  2. Packing PO-1 created immediately → linked to Process PO (mandatory minimum 1)
+     → Pack Code, Fill qty per pack, Number of packs entered
+     → Total qty = Fill qty × Number of packs
+  3. [+ Add Packing PO] — user can add more Packing POs to same Process PO
+     → e.g. 2 FOs → 2 Packing POs created at Standard
+  4. PM items added (manual for PMTO / auto BOM for PHPS)
+  5. Balance check: Process PO qty = Σ all Packing PO qtys
+
+Final phase:
+  Process PO: data entry only — no movements yet
+  Packing PO: terminal step — movements posted at Final save
+    → P261 (SFG from S003, batch-specific) + P261 (PM from pm_sloc) + P231 (FG → F003)
+
+Verify phase (Process PO only — Packing PO has no Verify):
+  Process PO verified → P261 (RM consumed) + P101 (SFG → S003)
+
+Post-Verify:
+  FO formally linked to respective Packing PO(s) — after internal confirmation
+```
+
+**IWC (MTS):**
+```
+Standard phase:
+  1. Process PO created only (no Packing PO at this stage)
+
+Final → Verify:
+  P261 (RM consumed) + P231 (FG → S003) → S003 → F003
+
+When dispatch needed:
+  Packing PO created as per requirement → linked to Process PO
+  PM items auto-populated from Fixed BOM
+```
+
+---
+
+#### 1 Process PO → N Packing POs (LOCKED)
+
+- One Process PO can have multiple linked Packing POs
+- Reason: different pack types for same batch, excess/balance production
+- Balance qty tracking:
+  ```
+  Process PO actual output = Σ all linked Packing PO quantities
+  Balance = Process PO output − Σ Packing POs (unpacked qty)
+  Balance > 0 → system shows alert → user creates additional Packing PO
+  Balance = 0 → all output accounted for ✅
+  ```
+
+---
+
+#### Barrel Fill Qty Change Rule (LOCKED — 2026-06-30)
+
+**Rule: One barrel = One Packing PO. Fill qty is immutable once Goods Issue is posted.**
+
+If fill qty needs to change after Goods Issue (e.g., more material added to same barrel from another batch of same SKU + same Stroke):
+
+```
+Step 1: Reverse Goods Issue on existing Packing PO
+Step 2: Prune the existing Packing PO
+Step 3: Create new Packing PO → per barrel = actual total qty (e.g. 230 KG)
+```
+
+**Why not edit the existing PO:** Posted documents are immutable in PACE ERP — Goods Issue posted = document locked. Editing a posted Packing PO is never allowed.
+
+**Why not create a second Packing PO for the extra qty:** One barrel = One Packing PO. Two POs for one barrel creates dispatch and traceability confusion.
+
+**Batch mixing rule:** Multiple Process PO batches can physically share one barrel ONLY IF same SKU + same Stroke (chemically identical). The new Packing PO reflects the combined total qty from all contributing batches.
+
+---
+
+#### Pack Type Change (LOCKED — 2026-06-09)
+
+| When | Action |
+|---|---|
+| Any stage (Standard / Final / Verify) | Delink existing Packing PO → **PRUNE** → create new Packing PO → relink |
+| Stock postings exist (PM consumed / P231 posted) | System auto-reverses all postings before PRUNE |
+| Process PO | Always stable — never changed when pack type changes |
+| Authorization | Manager level (L3+) required for pack type change after Verify |
+| Audit trail | Mandatory — who changed, when, old pack type, new pack type |
+
+---
+
+#### Pruning (LOCKED)
+
+| Concept | Rule |
+|---|---|
+| Delete | ❌ Does NOT exist in PACE-ERP — no document is physically deleted |
+| Prune | ✅ All cancellations = PRUNED status |
+| Pruned document | No stock/financial liability. Record preserved. Hidden from active views. |
+| When to Prune | Any PO created in error, or replaced by a new PO (e.g. pack type change) |
+| Stock impact | All stock postings reversed before PRUNE — PRUNE itself has no stock impact |
+| Audit trail | Full — who pruned, when, reason |
+
+---
+
+#### Return Receipt Flow — FO-Driven (LOCKED — 2026-06-08)
+
+When customer returns dispatched material:
+
+```
+Step 1: User enters SKU
+  → Auto-filter list shows FOs linked to that SKU
+  → User selects FO
+
+Step 2: System auto-shows:
+  → Batch Number (from FO)
+  → Mother PO (Process PO linked to FO)
+  → User confirms selection
+
+Step 3: Child PO list appears
+  → All Packing POs linked to that Mother PO
+  → User selects which Packing PO is being returned
+
+Step 4: User enters:
+  → Return Qty (KG)
+  → Pack Qty (barrels / units)
+
+Step 5: Save
+  → Material enters BLOCKED stock
+  → Old Packing PO REVERSED → PRUNED
+  → New Packing PO CREATED (pack type of how it came back)
+  → New Packing PO ATTACHED to same Mother PO
+  → PM stock adjusted (old PM reversed, new PM consumed for storage)
+```
+
+**Return with pack type change (e.g. Tanker → returned in Barrel):**
+- Old Packing PO (Tanker) → REVERSED → PRUNED
+- New Packing PO (Barrel, barrel PM consumed) → CREATED → linked to Mother PO
+- Full traceability: FO → Batch → Mother PO → Old Packing PO (PRUNED) → New Packing PO
+
+---
 
 **Packing is never part of Stroke definition.**
 
 ---
 
-### 83.5 — Intermediate RM
+#### Production Cycle — Standard → QA Approval → Final → Verify (LOCKED — 2026-07-03)
 
-| Item | Decision |
-|---|---|
-| All products | No — only applicable products have intermediate step |
-| Flow | RM → [Process PO 1] → Intermediate RM stock → [Process PO 2 + other RMs] → FG |
-| Intermediate PO type | Separate independent Process PO |
-| Formulation Order Number on Intermediate PO | Not required — intermediate is treated as any other RM |
-| Material code | Intermediate RM has its own PACE material code |
-| Stock | Goes into inventory like any RM — weighted average cost tracked |
-| Reusability | Intermediate RM stock can be consumed by any compatible FG Process PO |
+**Full cycle applies to: MTO, HPS** — Standard → QA Online Approval → Start Batch → Final → Verify
+**IWC (MTS):** Standard → Start Batch → Final → Verify (**no QA Online Approval**)
+**INT Process PO:** simple cycle only (no QA approval, no batch number — see 83.5)
+**MTEST:** one-step cycle — fully manual (see 83.4 PO Types)
+
+**Process PO Status Flow (MTO/HPS):**
+
+```
+STANDARD (PR09 saved)
+    ↓
+QA_PENDING (submitted to PR16 queue)
+    ↓ Approve                    ↓ Reject
+QA_APPROVED                  QA_REJECTED → PRUNED immediately
+    ↓ Production "Start Batch"       (new PO must be created)
+BATCH_STARTED
+    ↓
+FINAL (PR11)
+    ↓
+VERIFIED (PR12 — stock movements posted)
+```
+
+**PR10 Edit** available only at: **QA_APPROVED** status only (before Start Batch)
+**Pruning** available at: STANDARD (before QA submit), QA_APPROVED via PR10 (before Start Batch) — reservation cancelled on prune
 
 ---
 
-### 83.6 — FG Reuse and Return Reuse
+**Phase 1 — Standard**
 
-| Scenario | Flow | Stock Type Path |
+| Action | Detail |
+|---|---|
+| Who | Production team |
+| What | Process PO + Packing PO created |
+| RM list | Auto-populated from Stroke Master (MTO) or Fixed BOM (HPS/MTS) |
+| Quantities | Standard qty calculated (Dosage% × Batch Size for MTO, BOM qty for HPS/MTS) |
+| RM edit | Not allowed at Standard — quantities come from formulation source |
+| PO Number | Generated at save ✅ |
+| Batch Number | ❌ Not yet generated |
+| Stock movement | ❌ None |
+| RM Reservation | ✅ Unrestricted stock only (no In-Transit, no QA) |
+
+---
+
+**Phase 2 — QA Online Approval (between Standard and Final)**
+
+```
+Standard saved → Status = QA_PENDING → appears in PR16 QA queue
+    ↓
+QA reviews: SKU ✅ / Stroke ✅ / Machine ✅ / Qty ✅ / Component lines ✅
+    ↓
+QA Approve → Status = QA_APPROVED → Production sees [Start Batch] on PR16
+QA Reject  → Status = QA_REJECTED → PRUNED immediately (no edit, no reuse)
+                Production must create a new Process PO from scratch
+```
+
+| Rule | Detail |
+|---|---|
+| Cancellation before QA approval | ✅ Possible — PO number existed, no batch number |
+| Cancellation after QA approval, before Start Batch | ✅ Possible — batch number not yet generated |
+| What QA checks | SKU, Stroke, Machine assignment, batch size/qty, component lines |
+| Rejected PO | PRUNED immediately — PR10 Edit not available on rejected PO |
+| PR10 Edit | Only available when status = QA_APPROVED |
+
+**PR16 — QA Approval Queue (LOCKED — 2026-07-03):**
+
+CSN Tracker-style expandable queue. Same page, role-based buttons via work context capability.
+
+- **Collapsed row:** PO Number | Prodshade | Stroke | Machine | Target Qty | Created By | Status
+- **Expanded row:** Full component grid — Formulation Material | Dosage% | Actual Material | Dosage% | Planned Qty (all read-only)
+
+Role-based actions (same screen, different capabilities):
+
+| Capability | Status seen | Action available |
 |---|---|---|
-| Undispatched FG → RM reuse | Authorized user reclassifies FG stock | UNRESTRICTED → FOR_REPROCESS |
-| Rejected / returned material → reuse | QA re-evaluation → approval | BLOCKED / QA → FOR_REPROCESS |
-| FOR_REPROCESS consumption | Process PO issues this material as RM component | FOR_REPROCESS → (consumed, stock reduced) |
-| FOR_REPROCESS cancelled | Authorized user reverses | FOR_REPROCESS → UNRESTRICTED |
+| QA_APPROVE | QA_PENDING | [Approve] [Reject + reason] |
+| QA_APPROVE | QA_APPROVED | Read-only (already approved) |
+| PRODUCTION_START | QA_PENDING | Read-only (no action yet) |
+| PRODUCTION_START | QA_APPROVED | [Start Batch] |
+
+Reject flow: QA enters reason → PO immediately PRUNED → disappears from active queue.
+
+---
+
+**Phase 3 — Start Batch (Production action, post-QA approval)**
+
+```
+Production queue page:
+  [PO#] [SKU] [Stroke] [Qty] | [Start Batch]
+    ↓
+Production clicks [Start Batch]
+    ↓
+Batch Number generated ✅
+    ↓
+Production physically charges the batch (batch number in hand)
+```
+
+| Rule | Detail |
+|---|---|
+| Batch Number generation | At "Start Batch" click — not at Standard, not at QA approval |
+| Batch Number scope | Per Company (not global) — each company has own sequence |
+| Batch Number ordering | FIFO — whichever PO's Start Batch is clicked first gets earlier number |
+| Batch Number reset | Per financial year |
+| After Start Batch | Cancellation not possible — batch is physically committed |
+
+---
+
+**Phase 4 — Final**
+
+```
+Production completes batch → enters actual quantities + AP approval status per line
+```
+
+| Action | Detail |
+|---|---|
+| Who | Production team |
+| What | Actual qty + AP Approved status entered for every INPUT line; Actual Output entered for OUTPUT line |
+| Standard qty | Shown as reference (read-only) |
+| Actual qty | User enters — can differ from standard |
+| AP Approved | Yes / No / Partial toggle per INPUT line — Production enters at this stage (see Line Table below) |
+| New RM add | ✅ Allowed — user selects from RM master, enters qty (no dosage%); must also set AP Approved status |
+| RM remove | ❌ Not allowed — enter 0 for unused items |
+| Stock movement | ❌ None — data entry only |
+
+---
+
+**Phase 5 — Verify**
+
+```
+QA matches entered actuals against physical batch paper
+```
+
+| Action | Detail |
+|---|---|
+| Who | QA person |
+| What | Confirm actual quantities match batch paper |
+| Actual qty edit | ✅ Allowed — QA can correct Final entries |
+| New item add | ✅ Allowed |
+| Wrong formulation discovered | QA does NOT save → instructs user to prune Final → prune Standard → create new PO |
+| Stock movement | ✅ Happens here — P261 (RM consumed) + PM consumed + P231 (FG receipt) |
+
+---
+
+#### Final / Verify Line Table — Column Design (LOCKED — 2026-07-04)
+
+The Final phase component grid has two row types: **INPUT lines** (RM consumed) and **OUTPUT line** (SFG produced). Column structure differs by type.
+
+---
+
+**INPUT lines (RM — what went into the batch):**
+
+| # | Column | Standard Phase | Final Phase | Verify Phase |
+|---|---|---|---|---|
+| 1 | Formulation Material | Read-only | Read-only | Read-only |
+| 2 | Dosage % | Read-only | Read-only | Read-only |
+| 3 | Actual Material | ✅ Editable (alternate dropdown) | Read-only | Read-only |
+| 4 | Storage Location | ✅ Editable (override segment default) | ✅ Editable | ✅ Editable |
+| 5 | Standard Qty | Read-only | Read-only | Read-only |
+| 6 | Actual Qty | — | ✅ Editable | ✅ Editable (QA can correct) |
+| 7 | **Approved** | — | ✅ Yes/No/Partial toggle (see rules) | Read-only |
+| 8 | **AP Approved Qty** | — | Auto or manual (see rules) | Read-only |
+| 9 | **Variance** | — | Auto = Actual − AP Approved (display only) | Read-only |
+
+**Approved toggle behaviour:**
+
+| Toggle | Condition | AP Approved Qty | Variance |
+|---|---|---|---|
+| **YES (inactive)** | Standard Qty = Actual Qty | = Actual Qty | 0 — auto-set, no user action needed |
+| **YES (active)** | Standard Qty ≠ Actual Qty, user selects Yes | = Actual Qty | 0 (AP recognizes full actual) |
+| **NO** | Standard Qty ≠ Actual Qty, user selects No | = Standard Qty | Actual − Standard |
+| **PARTIAL** | Standard Qty ≠ Actual Qty, user selects Partial | Manual entry | Actual − Manual entry |
+
+> When **Standard Qty = Actual Qty**: Approved is auto-set to YES and the toggle is **inactive** (no dropdown shown). Zero-deviation lines require no action from Production.
+> When **Standard Qty ≠ Actual Qty**: toggle becomes active — Production must select Yes / No / Partial.
+> Works for not-in-formulation materials too: Standard = 0; deviation always present → toggle always active.
+
+---
+
+**New Row Addition at Final / Verify (LOCKED — 2026-07-04):**
+
+Production (at Final) or QA (at Verify) can add materials not present in the original formulation.
+
+| Column | New Row Behaviour |
+|---|---|
+| Formulation Material | **N/A — blank** (not in BOM) |
+| Dosage % | **N/A — blank** |
+| Actual Material | ✅ Editable — user selects from full RM master |
+| Storage Location | ✅ Editable |
+| Standard Qty | **0, read-only** (not in BOM = standard always 0) |
+| Actual Qty | ✅ Editable |
+| Approved | **Always active** (Std = 0, Actual > 0 → always a deviation) |
+| AP Approved Qty | Yes → Actual, No → 0, Partial → manual |
+| Variance | Auto = Actual − AP Approved |
+| Movement Type | P261, read-only |
+
+---
+
+**OUTPUT line (SFG — what the batch produced):**
+
+> This is the equivalent of SAP COR6's FG output line. In PACE, the Process PO produces **SFG** (bulk pre-packing), not FG. FG is only created after Packing PO completes. The OUTPUT row sits in the same component table as INPUT rows.
+
+> **Batch Number** is shown in the **PO header**, not as a column in the line table. It is generated at "Start Batch" click and is visible in the header across all phases.
+
+| # | Column | Detail |
+|---|---|---|
+| 1 | Material | SFG Prodshade — read-only |
+| 2 | Standard Qty | Read-only — planned batch size |
+| 3 | **Actual Qty** | ✅ Editable — Production enters actual SFG produced |
+| 4 | **AP Approved Qty** | Auto-calculated = SUM(AP Approved Qty for all INPUT lines). Not manually editable. |
+| 5 | **Variance** | Actual Qty − AP Approved Qty (display only) |
+
+> AP Approved Output is derived from INPUT AP approvals — not entered separately.
+> Variance on OUTPUT = excess/shortfall production that AP does not recognize (e.g. 10,000.75 KG actual vs 10,000 KG AP approved).
+
+---
+
+**System flags (auto-set at Final save):**
+
+- `has_unapproved_deviation = TRUE` if **any INPUT line Variance > 0** (i.e. any Approved = No, or Partial with Actual > AP Approved). System sets this — Production does not mark it manually.
+- Batches with `has_unapproved_deviation = TRUE` are flagged for analysis queue.
+
+**Stock movements (at Verify, not Final):**
+- P261 posts **full Actual Qty** for each INPUT line — Stock Layer is never filtered by AP approval status.
+- P231 posts **full Actual Output** for OUTPUT line.
+- AP Approved columns are Reco Layer only — they never affect stock postings.
+
+**Verify phase (QA):**
+- QA can edit Actual Qty (correct Final entries against batch paper).
+- QA can add new items.
+- AP Approved Qty recalculates automatically when QA edits Actual Qty (Yes/No behaviour reapplied).
+- Stock movements trigger at Verify save.
+
+---
+
+#### Final and Verify Phase UI Layout (LOCKED — 2026-07-04)
+
+**Page Header (read-only, always visible — identical in Final and Verify):**
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│  Process PO — Final                                    [Save as Final] │
+│  PO: PO-4041  │  Batch: BM0953  │  Status: BATCH_STARTED             │
+│  Machine: Admix Line 1  │  Stroke No: 042                             │
+│  Prodshade: Admix SR    │  Description: SR PCE High Conc Liquid       │
+│  Type: MTO  │  Std Size: 10,000 KG                                    │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+> **Prodshade** and **Description** are auto-populated from the Process PO (set at Standard phase).
+> **Stroke Number** is shown in both Final and Verify — it is critical for batch paper matching.
+> **Machine Name** is auto-populated from machine assignment (set at Standard phase).
+
+**Component Table — INPUT section:**
+
+```
+── INPUT ──────────────────────────────────────────────────────────────────────────────────────────
+ Formulation Mat  │ Dos% │ Actual Mat │ SLoc   │  Std  │ Actual   │ Approved  │ AP Appr │ Var  │ Mvt
+──────────────────┼──────┼────────────┼────────┼───────┼──────────┼───────────┼─────────┼──────┼─────
+ Water            │  28% │ —          │ [R003] │  2800 │ [2540]   │ YES ★     │  2540   │    0 │ 261
+ Caustic Flakes   │   3% │ —          │ [R003] │   300 │ [  420]  │ [YES ▼]   │   420   │    0 │ 261
+ SR PCE           │  28% │ —          │ [R003] │  2800 │ [ 3040]  │ [NO  ▼]   │  2800   │  240 │ 261
+ Caramel (added)  │   —  │ —          │ [R003] │     0 │ [  0.75] │ [YES ▼]   │  0.75   │    0 │ 261
+──────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                              [+ Add Row]
+```
+
+**Component Table — OUTPUT section:**
+
+```
+── OUTPUT ──────────────────────────────────────────────────────────────────────────────────────────
+ Material         │      │            │ SLoc   │  Std  │ Actual    │           │ AP Appr │ Var  │ Mvt
+──────────────────┼──────┼────────────┼────────┼───────┼───────────┼───────────┼─────────┼──────┼─────
+ Admix SR (SFG)   │  —   │ —          │ [S003] │ 10000 │[10000.75] │  (auto)   │ 10000   │ 0.75 │ 101
+```
+
+**UI rules — Final phase:**
+- **★** = Approved auto-set YES, toggle inactive (Standard = Actual, no deviation)
+- **[YES ▼] / [NO ▼] / [PARTIAL ▼]** = active dropdown (Standard ≠ Actual)
+- SLoc shown in `[ ]` = editable field
+- Movement Type (Mvt) = last column, read-only. **261** for all INPUT rows, **101** for OUTPUT (SFG receipt)
+- INPUT and OUTPUT sections separated by a visual divider — not interleaved
+- **[+ Add Row]** below INPUT section only — new RM additions go into INPUT, never OUTPUT
+- OUTPUT has no Add Row — exactly one OUTPUT line per Process PO
+- **[Save as Final]** in page header top-right
+
+**UI rules — Verify phase (differences from Final):**
+
+| Behaviour | Final (Production) | Verify (QA) |
+|---|---|---|
+| Button label | [Save as Final] | [Save & Post Stock] |
+| Actual Qty | Editable | ✅ Editable (QA corrects against batch paper) |
+| Actual Material | Read-only | ✅ Editable (QA can correct wrong alternate) |
+| SLoc | Editable | ✅ Editable |
+| Approved toggle | Editable | ✅ Editable (QA has final override) |
+| AP Approved Qty | Auto/manual | Auto-recalculates on Approved change; manual if Partial |
+| Add Row | ✅ Allowed | ✅ Allowed |
+| Delete Row | ❌ Not allowed | ✅ Allowed — **only for rows NOT in formulation** (added rows only; formulation rows cannot be deleted, enter 0 instead) |
+| Stock posting | ❌ None | ✅ Posts at save: INPUT → P261, OUTPUT → 101 |
+
+---
+
+#### Storage Location Integration (LOCKED — 2026-06-11)
+
+**Production Segment Location Config:**
+
+Each production segment per company has 4 fixed storage locations. SA configures this master once:
+
+| Company | Segment | RM Sloc | PM Sloc | Shop Floor Sloc | FG Sloc |
+|---|---|---|---|---|---|
+| CMP001 | ADMIX (Liquid) | R003 | P003 | S003 | F003 |
+| CMP001 | POWDER | R001 | P001 | S001 | F001 |
+| CMP001 | TILE_ADHESIVE | R002 | P002 | S002 | F002 |
+
+Process PO inherits all 4 locations from its segment at creation time.
+
+**Goods Movement at Verify:**
+
+```
+P261 → RM consumed FROM rm_sloc (e.g. R003 for Liquid)
+P261 → PM consumed FROM pm_sloc (e.g. P003 for Liquid)
+101  → SFG receipt  TO   shopfloor_sloc (e.g. S003)
+```
+
+**P261 Issue Location — Default Chain:**
+
+```
+Process PO line: issue_from_sloc
+  Default → segment config rm_sloc (or pm_sloc for PM)
+  Override → user can change at Standard phase
+             (e.g. cross-segment material stored in different location)
+```
+
+**GRN Landing Location — Default Chain:**
+
+```
+GRN landing sloc:
+  Default → material_plant_ext.default_storage_location_id
+  Override → Stores can change at GR time if needed
+```
+
+**S003 → F003 Transfer (LOCKED — 2026-06-11):**
+
+```
+After Verify → FG is in S003 (Shop Floor)
+Transfer: S003 → F003 (FG Store)
+  - Per Packing PO, pack quantity
+  - FO link present or absent — does NOT affect transfer
+  - Both FO-linked and balance Packing POs use same mechanism
+```
+
+**F003 Stock Record structure:**
+
+```
+Material + Batch Number + Packing PO ref + FO ref (NULL or populated) + Qty + Location: F003
+```
+
+- FO ref can be populated before OR after transfer — link is on Packing PO, not on location
+- Balance Packing PO: FO ref = NULL until future FO arrives and is linked
+- When FO linked post-transfer → F003 stock record FO ref automatically populated
+
+---
+
+**SAP Equivalent Mapping + TX Code Table (LOCKED — 2026-07-03):**
+
+| TX Code | SAP Equivalent | Screen | Who |
+|---|---|---|---|
+| PR09 | ZCoR1 | Process PO Standard (Create) | Production |
+| PR10 | ZCoR2 | Edit / Prune | Production (QA_APPROVED status only) |
+| PR11 | COR6 | Final | Production |
+| PR12 | COR6 | Verify | Production |
+| PR13 | COID | Process PO List | All |
+| PR14 | ZBatVar | Batch Variance Report | Production / Manager |
+| PR15 | CORS | Reversal | Production / Manager |
+| PR16 | ZQA01 | QA Approval Queue | QA + Production |
+| PR17 | — | Batch Number Release | Manager |
+
+> **TX Code scope:** PR09 / PR11 / PR12 / PR15 serve **both Process PO and Packing PO** — PO Type field (PMTO/PHPS/PMTS/PTEST) drives behavior. PR10, PR16, PR17 are **Process PO only** — Packing PO has no QA Approval step and no Batch Number.
+>
+> **PR10 Edit availability:** Only when status = QA_APPROVED. QA_REJECTED → straight PRUNE, PR10 not available.
+
+**PR10 (ZCoR2) — Edit Rules (LOCKED — 2026-07-04):**
+
+| Rule | Detail |
+|---|---|
+| Available at | QA_APPROVED and BATCH_STARTED — closes after Final is saved (VERIFIED = no PR10) |
+| Status after edit | **Stays QA_APPROVED / BATCH_STARTED** — no re-approval needed |
+| **RM Qty change** | ✅ **Only this** — Standard Qty auto-recalculates, reservation document auto-updates |
+| **Machine assignment** | ✅ **Only this** — can change machine while batch is approved/started |
+| Stroke change | ❌ Blocked |
+| Alternate material | ❌ Blocked — handled at Final via Actual Material column |
+| SLoc change | ❌ Blocked — set at Standard, editable at Final/Verify |
+| RM add / prune | ❌ Blocked — do this at Standard phase |
+| Planned output qty | ❌ Blocked |
+| PO Type / Prodshade | ❌ Blocked |
+
+> PR10 is intentionally minimal — only qty and machine. Keeping it simple avoids complexity and conflicts with Final phase entries.
+
+**COR6 specific decisions (LOCKED — 2026-06-11):**
+- Activity confirmation (machine time, labor time) → **deferred to Section 104**
+- Actual qty only — no separate scrap field
+- No partial/interim posting — Under/Over Delivery Tolerance covers this (83.10)
+- Cost view in COID → **deferred to Section 104**
+
+**Reversal of individual RM/PM (LOCKED — 2026-06-11):**
+- Verified order → go into COR6 equivalent → P262 for specific RM/PM lines
+- Full Verify reversal → order goes back to Standard (stock fully reversed)
+
+**Shop floor print:** Not required — screen-based only.
+
+---
+
+**PR15 (CORS) — Full Reversal Design (LOCKED — 2026-07-04)**
+
+CORS reverses from current status directly to STANDARD in one step (no intermediate step-through):
+
+| From Status | CORS Action | What happens |
+|---|---|---|
+| VERIFIED | → STANDARD | P262 (all RM), 102 (SFG), actuals cleared, batch VOIDED, reservations reinstated |
+| FINAL | → STANDARD | Actuals cleared, batch VOIDED, reservations reinstated (no stock to reverse — stock wasn't posted) |
+| BATCH_STARTED | → STANDARD | Batch VOIDED, reservations reinstated |
+| QA_APPROVED | → STANDARD | Reservations cancelled (no batch, no stock) |
+| STANDARD | → CANCELLED | PO number retired (no batch, no stock, no reservation) |
+
+**Rules:**
+- **Reason mandatory** at every CORS action — user must enter reason before confirming
+- Batch VOIDED only if status ≥ BATCH_STARTED (i.e. batch number was generated)
+- Who can reverse: **Production or Manager** (role-gated)
+- After CORS → STANDARD: PO is live again at STANDARD, user can re-run or Prune
+
+---
+
+**PO Prune (LOCKED — 2026-07-04):**
+
+| When | Detail |
+|---|---|
+| Available at | STANDARD status only (before QA submit) |
+| **Reason mandatory** | Yes — user must enter reason |
+| Batch number | N/A — batch not yet generated at STANDARD |
+| Effect | PO → CANCELLED, PO number retired |
+
+---
+
+**PR12 (COR6) — Post-Verify Correction Mode (LOCKED — 2026-07-04):**
+
+PR12 serves two modes based on PO status:
+
+| Status when opening PR12 | Mode |
+|---|---|
+| FINAL | Initial Verify — enters actuals, save posts stock |
+| VERIFIED | **Correction Mode** — individual line P261/P262 corrections |
+
+**Correction Mode flow (VERIFIED status):**
+
+- PO number enter করলে component grid খুলবে — সব verified materials list, কিন্তু **qty blank**
+- QA যে line correct করতে চায় সেখানে delta qty দেবে
+- Per line:
+
+| Column | Detail |
+|---|---|
+| Material | Read-only |
+| Dosage% | Read-only (formulation), blank (added lines) |
+| SLoc | Default segment SLoc, editable |
+| Qty | **Blank — QA manually enters correction delta** |
+| Approved | Yes / No / Partial |
+| AP Approved | Auto or manual per toggle |
+| Movement Type | **QA manually selects: 261 (issue more) or 262 (reverse)** |
+
+- Positive qty + 261 → additional goods issue
+- Positive qty + 262 → goods reversal
+- New material add: same row-add, no dosage%, always 261, SLoc default
+- **Who:** QA only — Production cannot access Correction Mode
+- **Storage:** Append — each correction = new goods movement document. Net Actual = sum of all movements. History in Document Flow.
+- **AP Approved edge case:** if Partial and AP Approved > new net Actual → system flags, user must re-enter
+
+---
+
+**Batch Number State Machine (LOCKED — 2026-07-04):**
+
+| State | Meaning | Shows in Start Batch drawer? |
+|---|---|---|
+| ACTIVE | Assigned to a live PO (BATCH_STARTED through VERIFIED) | ❌ |
+| VOIDED | PO cancelled/CORSed — retired by default | ❌ |
+| RELEASED | Manager released for reuse, not yet assigned to any PO | ✅ |
+| RELEASED + ACTIVE | Was RELEASED, now assigned to new PO | ❌ |
+
+**Transitions:**
+
+```
+(new batch generated at Start Batch) → ACTIVE
+ACTIVE → CORS/Prune → VOIDED
+VOIDED → Manager PR17 → RELEASED      (reason mandatory)
+RELEASED → Start Batch assign → RELEASED + ACTIVE
+RELEASED + ACTIVE → CORS → VOIDED     (same rules as ACTIVE)
+```
+
+---
+
+**Start Batch — Batch Number Selection (LOCKED — 2026-07-04):**
+
+```
+[Start Batch] clicked
+       ↓
+System checks: Company + PO Type এ RELEASED (not ACTIVE) batch numbers আছে?
+       ↓ Yes                              ↓ No
+Drawer opens →                       Auto-generate new sequential number
+ shows RELEASED list                  (no user prompt)
+ user selects or skips
+       ↓ Select          ↓ Skip
+ State: RELEASED+ACTIVE  Auto-generate new number
+```
+
+Search key = **Company + PO Type** (NOT Prodshade — Prodshade was wrong, that's why PO was voided in the first place)
+
+---
+
+**PR17 — Batch Number Release (LOCKED — 2026-07-04):**
+
+| Item | Detail |
+|---|---|
+| TX Code | PR17 |
+| Who | Manager (role-gated) |
+| Scope | Company-filtered — Manager sees own company's VOIDED batch numbers only |
+
+**Table:**
+
+| Column | Detail |
+|---|---|
+| Batch Number | |
+| PO Type | MTO / HPS / MTS / MTEST |
+| Voided Date | |
+| Previous Prodshade | Prodshade of the voided PO |
+| Previous Stroke | Stroke number of the voided PO |
+| Machine Name | Machine assigned on the voided PO |
+
+**Action:** Row select → **[Release]** button → **Reason mandatory (text field)** → Batch number: VOIDED → **RELEASED**
+
+> Released batch numbers appear in Start Batch drawer for same Company + PO Type. Once assigned to a new PO (RELEASED + ACTIVE), they no longer appear in the drawer.
+
+---
+
+### 83.5 — Intermediate RM (INT)
+
+**LOCKED — 2026-06-09**
+
+**Real business example:** Caustic Flakes (RM) + Water (RM) → Sodium Hydroxide / Caustic Liquid (INT) → consumed in FG batch as RM
+
+**Dual procurement:** INT material can be produced in-house (INT Process PO) OR purchased directly from supplier (GRN). Both go into same stock pool. WAR recalculates on every receipt, regardless of source.
+
+| Item | Decision |
+|---|---|
+| Applicable products | Selected products only — not all FG require intermediate step |
+| Process PO type | INT (separate from MTO / HPS / MTS) |
+| FO number | Not required — INT has no customer order link |
+| Material code | Own PACE material code (material type = INT) |
+| Material master procurement type | Both — in-house + external purchase |
+| Stock | Goes into inventory like any RM — WAR tracked |
+| Reusability | INT stock can be consumed by any compatible FG Process PO |
+| Batch tracking | Not required for INT |
+
+**INT Process PO — Simple Cycle (no Standard / Final / Verify):**
+
+```
+User creates INT Process PO:
+  → RM inputs defined (e.g. Caustic Flakes 48% + Water 52%)
+  → Expected output qty entered (e.g. 100 KG Caustic Liquid)
+
+User completes consumption:
+  → RM issued (P261)
+  → INT output received into stock (INT receipt movement)
+  → Done — no multi-stage approval cycle
+```
+
+**INT Planned Output — FG Process PO Availability Mechanism (LOCKED — 2026-06-09):**
+
+When FG Process PO requires an INT material and stock is insufficient:
+
+```
+Step 1: User tries to create FG Process PO (Standard)
+  → System checks: Caustic Liquid Unrestricted stock = 20 KG, Required = 50 KG
+  → Shortfall: 30 KG → ❌ BLOCK — FG PO cannot be saved
+
+Step 2: User creates INT Process PO (35 KG planned output)
+  → System recognises: 20 KG (unrestricted) + 35 KG (INT planned) = 55 KG ≥ 50 KG ✅
+  → FG Process PO can now be saved and reserved
+
+Step 3: Before Final phase — INT must be complete
+  → Hard check at Final: Caustic Liquid actually in unrestricted stock?
+  → Yes → Final proceeds ✅
+  → No  → ❌ BLOCK — INT PO not complete yet
+```
+
+**Validation rules:**
+- INT PO planned output qty must ≥ FG PO shortfall amount
+- INT planned output = temporary availability — only counted for the linked FG PO, not in general procurement planning
+- INT PO must be completed before FG PO can proceed to Final phase
+- This mechanism is INT material only — does not apply to regular RM or PM
+
+**Availability Check at Process PO / Packing PO Creation (LOCKED — 2026-06-09):**
+
+| Stock Type | Counted at PO creation? |
+|---|---|
+| Unrestricted | ✅ Yes |
+| INT PO planned output (INT material only) | ✅ Yes (exception) |
+| In-Transit | ❌ No |
+| Quality Inspection | ❌ No |
+| Blocked / FOR_REPROCESS | ❌ No |
+
+> In-Transit and QA stock are excluded at PO creation — physically not available yet. Only unrestricted stock (+ INT planned output for INT materials) counts for reservation.
+
+---
+
+#### Material Reservation Mechanism (LOCKED — 2026-06-30)
+
+**SAP-equivalent: MB21 (Reservation Document) — soft hold, no stock movement.**
+
+Process PO Standard Save → system creates a **Reservation Document** per component line. Stock does NOT physically move. Material stays in UNRESTRICTED — but the reserved qty is deducted from freely available calculation.
+
+**Reservation Document Fields (SAP MB21 equivalent):**
+
+| Field | Source |
+|---|---|
+| Reservation Number | System-generated |
+| Process PO Reference | Parent Process PO |
+| Material Code | Component line |
+| Plant | From Process PO |
+| Storage Location | From segment config (rm_sloc or pm_sloc) |
+| Required Qty | From BOM snapshot at Standard save |
+| UOM | Material base UOM |
+| Required By Date | Planned start date of Process PO |
+| Issued Qty | Updated as P261 Goods Issues are posted at Verify |
+| Balance Qty | Required − Issued |
+| Status | OPEN → PARTIAL → FULLY_ISSUED → CANCELLED |
+
+**Available Stock formula (display on PR09 component line grid):**
+
+```
+Available = stock_snapshot(UNRESTRICTED, material, plant)
+          − SUM(open_reservations.balance_qty WHERE material = X AND plant = Y)
+```
+
+Open reservations = all OPEN + PARTIAL reservation documents across ALL Process POs for that material+plant. Sources include:
+1. Process PO Standard save reservations
+2. Delivery schedule / dispatch pick window reservations (future — same table, same formula)
+
+**Reservation lifecycle:**
+
+```
+Process PO Standard Save    → Reservation Document OPEN (per component line)
+Process PO Verify (P261)    → Issued Qty updated → PARTIAL or FULLY_ISSUED
+Process PO PRUNE/Cancel     → Reservation Document CANCELLED (no stock impact)
+BOM qty change (PR10 Edit)  → Reservation Document Required Qty updated
+```
+
+**No movement types P250/P251** — RESERVED stock_type in stock_type_master is reserved for physical warehouse segregation use cases (e.g. QA-hold override, physical bin separation), NOT for production order reservations.
+
+---
+
+#### Alternate Material Substitution on Component Lines (LOCKED — 2026-07-03)
+
+**When:** Production can substitute a formulation material (X) with a registered alternate (X1) at any phase before Verify posting — Standard create (PR09), Edit (PR10), Final (PR11), or Verify screen before P261 is posted (PR12). Instructions to substitute can arrive at any point in the production cycle.
+
+**Component grid — two separate material columns:**
+
+| Formulation Material | Dosage% | Actual Material | Dosage% | Planned Qty |
+|---|---|---|---|---|
+| X *(read-only)* | 25% | *(same)* | 25% | 250 KG |
+| Y *(read-only)* | 30% | *(same)* | 30% | 300 KG |
+| Z *(read-only)* | 45% | X1 *(changed)* | 45% | 450 KG |
+
+**Formulation Material column:** Always read-only. Populated from BOM/Stroke snapshot at Standard save. Never changes — this is the AP reconciliation reference.
+
+**Actual Material column:**
+- Default = NULL (displayed as "*(same)*" — inherits Formulation Material)
+- Dropdown is available — shows only registered alternates of the Formulation Material
+- User only touches this column when a substitution is needed
+- If user selects X1 → Actual Material = X1 (explicit substitution recorded)
+- Dosage% on Actual side = always inherited from Formulation (not independently calculated)
+
+**DB storage:**
+- `actual_material_id = NULL` → no substitution (formulation material used)
+- `actual_material_id = <X1 id>` → substitution recorded
+
+**Reservation behavior on substitution:**
+- Actual Material changed X → X1: Reservation for X → CANCELLED, Reservation for X1 → OPEN (same qty)
+- Alternate must be registered in Stroke/BOM alternate list before substitution is allowed
+- If alternate not registered: user must first add it to the alternate list in Stroke Master, then return to PO
+
+**Substitution edit window:**
+- PR09 Standard → ✅ allowed
+- PR10 Edit → ✅ allowed
+- PR11 Final → ✅ allowed (instruction can arrive at any phase)
+- PR12 Verify (before P261 posted) → ✅ allowed
+- PR12 Verify (after P261 posted) → ❌ locked — consumption already recorded
+
+**At Verify (PR12):** P261 posts for Actual Material (X1 if substituted, X if not)
+
+**In all views (COID PR13, Final PR11, Verify PR12, reports):**
+- Both columns always shown side by side — Formulation | Actual
+- NULL Actual = shows Formulation material in both columns (greyed on Actual side)
+- Substituted rows: Formulation = X, Actual = X1, Dosage% same in both
+
+**AP Reconciliation:** Always references Formulation Material column — what the stroke/BOM called for.
+**Actual consumption / costing:** References Actual Material column — what was physically issued.
+
+---
+
+#### Packing PO — Lifecycle Design (LOCKED — 2026-07-05)
+
+##### Status Flow
+
+```
+STANDARD → FINAL (terminal — movements happen here)
+               ↓
+         COR6 Correction Mode (QA only, post-Final, append)
+               ↓
+          CORS → STANDARD → PO Prune (if needed)
+```
+
+| Status | Who | Action |
+|---|---|---|
+| STANDARD | Production | Create, freely editable |
+| FINAL | Production | Actual qty entry → movements posted on save |
+| COR6 Correction | QA only | Append corrections (P261/P262), no approval, status stays FINAL |
+| CORS → STANDARD | Production / Manager | Full reversal, reason mandatory |
+
+**No QA Approval. No Batch Number. No Verify phase.**
+
+---
+
+##### PR09 — Standard Create (Packing PO mode)
+
+PO Type = PMTO / PHPS / PMTS / PTEST triggers Packing PO behavior.
+
+**Header fields:**
+
+| Field | Rule |
+|---|---|
+| PO Type | PMTO / PHPS / PMTS / PTEST |
+| PO Number | Auto-generated |
+| Linked Process PO | Mandatory — same company, STANDARD+ status |
+| SKU (FG material) | Auto from Prodshade + Pack Code |
+| Pack Code | Auto from Prodshade Pack Config |
+| Fill Qty per Pack (KG) | User enters |
+| Number of Packs | User enters |
+| Total Packing Qty | Auto = Fill Qty × Number of Packs |
+| Machine (packing machine) | User selects |
+| Scheduled Date | User enters |
+| FO Number | Optional — informal reference only |
+
+**INPUT — SFG line (always auto-populated):**
+
+| Field | Value |
+|---|---|
+| Material | SFG of the Prodshade |
+| Std Qty | = Total Packing Qty (KG) |
+| SLoc | S003 (editable) |
+| Movement Type | P261 |
+
+**INPUT — PM lines:**
+
+| Pack Code | PM at Standard | Final entry |
+|---|---|---|
+| 599 / 000 / 001 (BOM Required = No) | User manually adds rows. Qty entered **per pack** (not total). System auto-calculates Total Std Qty = Qty per Pack × Number of Packs | Actual qty entered manually |
+| 510 / BOM Required = Yes | Auto-populated from Pack BOM × Number of Packs | Edit actual qty |
+
+> **599/000/001 example** — Fill Qty 230 KG, 23 barrels:
+>
+> | Material | Qty per Pack | Total Std Qty |
+> |---|---|---|
+> | SFG | — | 5,060 KG (auto) |
+> | Barrel | 1 | 23 |
+> | Label | 1 | 23 |
+>
+> User is effectively creating the BOM manually at Standard time for these pack codes.
+
+**OUTPUT line (auto):**
+
+| Field | Value |
+|---|---|
+| FG SKU | Auto from Pack Code + Prodshade |
+| Std Qty | = Total Packing Qty (KG) |
+| Movement Type | P231 |
+
+---
+
+##### PR11 — Final (Packing PO — Terminal Step)
+
+**Final is the terminal step for Packing PO. Stock movements happen at Final save.**
+
+**INPUT section:**
+
+| Column | SFG Line | PM Lines |
+|---|---|---|
+| Material | Read only | Read only (BOM) / Editable if 599/000/001 |
+| Std Qty | Read only | Read only |
+| Actual Qty | Editable | Editable |
+| AP Approved Qty | Yes / No / Partial dropdown | Yes / No / Partial dropdown |
+| Variance | Auto | Auto |
+| SLoc | S003 (editable) | pm_sloc (editable) |
+| Movement Type | P261 | P261 |
+
+**SFG Batch Number — Drawer:**
+- SFG line has a Batch Number field → click opens drawer
+- Drawer shows: Process PO Number | Batch Number | Available Qty in S003
+- User selects the correct Process PO + Batch
+- SFG consumed from that batch at Final save (remaining qty stays in S003)
+
+**Row add at Final:** New PM rows can be added (extra consumable). 0 qty → ignored.
+
+**OUTPUT section:**
+
+| Column | Rule |
+|---|---|
+| FG Material | Auto from SKU |
+| Actual Output | Editable by Production |
+| AP Approved Output | SUM(all INPUT AP Approved Qty) — auto-calculated |
+| Variance | Actual Output − AP Approved Output |
+| Movement Type | P231 |
+
+**AP Approved Rules (same as Process PO):**
+
+| Selection | AP Approved Qty |
+|---|---|
+| Yes | = Std Qty |
+| No | = 0 |
+| Partial | Manual entry |
+| Auto-YES | When Std = Actual (dropdown inactive, cannot change) |
+
+**Movements at Final save:**
+
+| Movement | Material | Direction |
+|---|---|---|
+| P261 | SFG (actual qty, from selected batch) | S003 → consumed |
+| P261 | Each PM line (actual qty) | pm_sloc → consumed |
+| P231 | FG (actual output qty) | → F003 |
+
+---
+
+##### PR12 — COR6 Correction Mode (Packing PO)
+
+> Packing PO has **no Initial Verify mode**. PR12 opens directly in Correction Mode when PO Type is Packing.
+
+| Rule | Detail |
+|---|---|
+| Who | QA only |
+| When | Post-Final (FINAL status) |
+| Lines shown | All INPUT lines from Final — qty blank |
+| Add qty | → P261 movement |
+| Reduce qty | → P262 movement |
+| SLoc | Default from Final, editable |
+| Model | Append — corrections accumulate, no overwrite |
+| Approval | None required (QA is the authority) |
+| Status after | FINAL (no change) |
+
+---
+
+##### PR15 — CORS Full Reversal (Packing PO)
+
+**Any status → STANDARD directly. Reason mandatory.**
+
+**Reversal movements (when Final was saved):**
+
+| Movement | Material | Direction |
+|---|---|---|
+| P262 | SFG | Released back to S003 |
+| P262 | Each PM | Returned to pm_sloc |
+| P102 | FG | Reversed from F003 |
+
+If COR6 corrections exist → those movements also reversed (opposite direction).
+If still at STANDARD → no movements, status reset only.
+
+**After CORS:** PO can be Pruned.
+
+---
+
+##### PO Prune (Packing PO)
+
+| Rule | Detail |
+|---|---|
+| Available at | STANDARD status only |
+| Reason | Mandatory |
+| Effect | Delinks from Process PO. Process PO balance freed. |
+| Stock | All movements must be reversed before Prune (CORS handles this) |
+| Record | Preserved as PRUNED — never physically deleted |
+
+---
+
+### 83.6 — FG Reuse, Return and Reprocess
+
+**Updated: 2026-06-08**
+
+**Three scenarios after FG is produced or returned:**
+
+| Scenario | Description | Outcome |
+|---|---|---|
+| 1. Reject & Discard | Produced or returned, QA failed, written off | Scrap (P553) — stock removed, cost written off |
+| 2. Reprocess | Used in another batch — same or different SKU, with or without additional RM | FOR_REPROCESS → consumed in new Process PO |
+| 3. Mix into another order | Physically mixed with another FG batch being produced | FOR_REPROCESS → consumed as RM component in another Process PO |
+
+**Stock type path:**
+
+| Scenario | Flow |
+|---|---|
+| Undispatched FG → reuse | UNRESTRICTED → FOR_REPROCESS (authorized action) |
+| Returned material (after return receipt) | BLOCKED → QA decision → FOR_REPROCESS or SCRAP |
+| FOR_REPROCESS consumption | Process PO issues as RM component → stock consumed |
+| FOR_REPROCESS cancelled | FOR_REPROCESS → UNRESTRICTED (authorized reversal) |
+
+**Mixing scenario (e.g. C mixed into A batch):**
+```
+C (10 MT FG) → FOR_REPROCESS
+    ↓
+A's Process PO (10 MT batch):
+  9 MT → A's formulation RM (Stroke-based)
+  1 MT → C from FOR_REPROCESS (additional line in Process PO)
+    ↓
+Output: 10 MT of A SKU
+Costing: 9 MT A-formulation RM cost + 1 MT × C's WAR + Overhead
+AP billing: full 10 MT A rate → differential → Reco
+```
+
+**PM recovery on reprocess:**
+- If returned material was stored in barrels (PM consumed at return time)
+- When liquid is consumed into new Process PO → empty barrels freed → PM stock recovered
+- System records: barrel PM reversal movement at time of FOR_REPROCESS consumption
 
 **Design Rules:**
-- Material code retained (no new code created for reprocessing)
+- Material code retained — no new code for reprocessing
+- Batch traceability maintained: new batch records which batches were mixed in
 - Weighted average cost of reprocessed material flows into consuming Process PO costing
 - All FOR_REPROCESS movements: role-restricted, full audit trail
 
 ---
 
-### 83.7 — Batch Number
+### 83.7 — Batch Number and Batch-wise FG Tracking
 
-| Item | Decision |
+**Updated: 2026-06-10 — LOCKED**
+
+#### Batch Number Generation Rules (LOCKED — 2026-06-10)
+
+| Operation Type | Sequence Level | Generated by | Format |
+|---|---|---|---|
+| MTO (Admix) | **Company level** — all Prodshades share one series | System — at "Start Batch" click | SA-configured Prefix + sequential count |
+| HPS (Hypershot) | **Per Prodshade** — each Prodshade has own series | System — at "Start Batch" click | SA-configured Prefix + sequential count per Prodshade |
+| IWC | **Per Prodshade** — each Prodshade has own series | System — at "Start Batch" click | SA-configured Prefix + sequential count per Prodshade |
+| Powder | N/A | **Manual entry** — user enters at Final | No system generation |
+| MTEST | **Company level** | System — at PO save | SA-configured Custom Prefix + sequential count |
+
+**Batch number reset:** Per financial year — each series resets at year start.
+
+**SA Configuration Page — Batch Number Setup:**
+
+SA configures per company:
+- MTO: Prefix (text field) + Start Count *(one entry per company)*
+- HPS: Per Prodshade → Prefix (text field) + Start Count *(one row per Prodshade)*
+- IWC: Per Prodshade → Prefix (text field) + Start Count *(one row per Prodshade)*
+- MTEST: Prefix (text field) + Start Count *(one entry per company)*
+- Powder: no config — user manual entry
+
+Example:
+```
+MTO  (company level)   → Prefix: BM | Start: 1967  → BM1967, BM1968...
+HPS  Prodshade A       → Prefix: HA | Start: 001   → HA001, HA002...
+HPS  Prodshade B       → Prefix: HB | Start: 001   → HB001, HB002...
+IWC  Prodshade X       → Prefix: IX | Start: 001   → IX001, IX002...
+IWC  Prodshade Y       → Prefix: IY | Start: 001   → IY001, IY002...
+MTEST (company level)  → Prefix: MT | Start: 001   → MT001, MT002...
+Powder                 → no config — user manual entry
+```
+
+**When batch number is generated:**
+
+| Type | When |
 |---|---|
-| Format | Follows existing business batch number format (to be provided by business owner) |
-| PACE-ERP role | Continue existing format — does not generate new format |
-| Reset | Resets every financial year |
-| Generation | PACE-ERP generates sequential numbers per financial year following provided format |
+| MTO / HPS / IWC | Production clicks "Start Batch" button (post-QA approval) |
+| MTEST | At PO save (simplified one-step cycle, no QA approval) |
+| Powder | User enters manually at Final |
 
-> **Action Required:** Business owner to share existing batch number format before implementation.
+**Batch-wise FG Stock Tracking (LOCKED — 2026-06-08):**
+
+FG stock is tracked at batch level (lot-level) — same as RM GRN-level tracking.
+
+| Reason | Detail |
+|---|---|
+| Same SKU, different batch → different actual cost | Each batch has its own actual RM consumption (quantity variance exists) |
+| Traceability | Customer complaint → trace exact batch → exact RM used |
+| Dispatch accuracy | Dispatch records exactly which batch(es) were sent |
+| Return linkage | Returned material linked to original batch |
+| Reprocess traceability | New batch records which source batches were mixed in |
+
+**Batch-level stock record:**
+```
+Batch: BM1963 | SKU: 6763HC25599 | Qty: 6,440 KG (28 BRL) | Cost: X/barrel
+  → RM breakdown stored: Water 2626 KG, SR PCE 1932 KG, Caustic 85 KG...
+
+Batch: BM1966 | SKU: 6763PH94000 | Qty: 9,000 KG (1 TNK) | Cost: Y/KG
+  → RM breakdown stored: Water 3962 KG, SR PCE 900 KG, Caustic 142 KG...
+```
+
+**FG stock = one lot per batch** — multiple lots of same SKU can exist simultaneously.
 
 ---
 
@@ -6873,9 +8659,22 @@ User reviews → confirms → movement posted
 
 ### 83.10 — Under / Over Delivery Tolerance
 
+**Applicability by PO Type (UPDATED — 2026-07-04):**
+
+| PO Type | Delivery Tolerance | Reason |
+|---|---|---|
+| MTO | ❌ Not applicable | Liquid mass balance — actual output = actual RM total. No independent output target to check against. |
+| HPS | ❌ Not applicable | Same — liquid mass balance |
+| MTEST | ❌ Not applicable | Same — small test batch, mass balance applies |
+| MTS | 🔶 Deferred | May apply — design when MTS is implemented |
+| INT | ❌ Not applicable | Simple cycle, no output tolerance concept |
+
+> **MTO/HPS/MTEST principle:** Whatever RM qty goes in = SFG qty that comes out. Actual output is always the sum of actual RM inputs. A delivery tolerance hard block would be physically meaningless — the output IS the inputs. AP Approved qty handles recognition separately via the AP Reco model.
+
+**MTS (future — deferred):**
+
 | Item | Decision |
 |---|---|
-| Scope | All production orders — not Admix-specific |
 | Level | FG Material Master |
 | Enable / Disable | Per FG material — configured via UI by SA/authorized user |
 | Under Delivery Tolerance | % value — set per FG material when enabled |
@@ -6884,13 +8683,8 @@ User reviews → confirms → movement posted
 | Override | Authorized user opens specific PO → edits tolerance for that PO only |
 | Override scope | That PO only — material master tolerance unchanged |
 | Audit trail | Mandatory on every override (who, when, old value, new value) |
-| Override authority | Role-restricted — approved users only |
 
-**Design Rule:**
-- At Process PO creation: tolerance values copied from FG material master
-- Material master is the default source — PO holds its own copy (overridable)
-- Disabled tolerance = no check, goods movement proceeds freely
-- SA manages which materials have tolerance enabled via material master UI
+> Material master tolerance field exists in schema (future-ready). MTS implementation will activate the check. MTO/HPS/MTEST POs skip tolerance check entirely at Verify.
 
 ---
 
@@ -6941,6 +8735,493 @@ Pack Code examples: 599 = barrel/drum, 000 = tanker/bulk
 
 ---
 
+### 83.13 — FG Costing System
+
+> ⚠️ **MOVED TO SECTION 104** — This is a large, standalone chapter requiring a dedicated design session.
+> Initial concept notes preserved below for reference. Full design → see **Section 104**.
+
+**Initial concept (reference only — not locked):**
+- PACE WAR (Weighted Average Rate) vs AP Monthly Rate — two parallel cost systems
+- Reco account: Rate variance + Qty variance + Stroke mismatch variance
+- Bilateral monthly settlement
+- Costing gate at dispatch = SOFT
+
+**→ Full design: Section 104 — FG Costing System: Admix and Hypershot**
+
+---
+
+### 83.14 — Barrel Mechanics and Fill Quantity
+
+**Updated: 2026-06-09 — LOCKED**
+
+**Barrel PM Types:**
+
+| PM Item | Physical Capacity | Pack Code |
+|---|---|---|
+| 210 KG Barrel | 210 KG | 599 |
+| 230 KG Barrel | 230 KG | 599 |
+
+These are two separate PM material master items. Selection is made at Packing PO creation time. Both use pack code 599 — the physical barrel type is differentiated by PM item, not pack code.
+
+**Fill Quantity Rules:**
+
+| Rule | Detail |
+|---|---|
+| Fill per barrel | Variable — entered at Packing PO creation time (e.g. 230, 250 KG) |
+| Uniformity | All barrels in SAME Packing PO have the same fill quantity |
+| Physical barrel vs fill | Fill can differ from barrel stated capacity (e.g. 230 KG barrel filled to 250 KG) |
+| Fill qty field | Mandatory on every Packing PO with pack code 599 |
+
+**Total KG calculation:**
+```
+Total KG = Barrel Count × Fill Qty per Barrel
+PM consumed = Barrel Count (1 PM barrel per output barrel)
+```
+
+**Balance Barrel Handling (LOCKED — 2026-06-09):**
+
+When batch qty is not exactly divisible by fill qty, the remainder goes to a separate Packing PO:
+
+```
+Example:
+  Batch: 7,000 KG | Fill per barrel: 230 KG
+
+  Main Packing PO:    30 barrels × 230 KG = 6,900 KG  → FO linked ✅
+  Balance Packing PO:  1 barrel  × 100 KG =   100 KG  → FO linked ❌ (PACE internal stock)
+  PM consumed total:  31 barrels
+```
+
+- Balance Packing PO uses same pack code (599) — fill qty = actual remainder KG
+- Balance stock → FG Unrestricted, no FO link, available for future FO or reuse
+- No special system status needed — balance barrel is just another Packing PO with lower fill qty
+
+**Costing Unit by Pack Type:**
+
+| Pack Type | Costing Unit | PM Cost included |
+|---|---|---|
+| Barrel | Per barrel | Yes (barrel + labels) |
+| Tanker | Per KG | No (customer brings tanker) |
+| IBC | Per KG | Yes (IBC container is a PM item) |
+
+**Balance barrel** is handled via additional Packing PO (see 83.4 — balance qty tracking).
+
+---
+
+### 83.15 — Pack BOM Design (UPDATED — 2026-06-30)
+
+---
+
+#### OM08 — Pack Code Master (LOCKED — 2026-06-30)
+
+**Page structure: 2 tabs**
+
+| Field | Value |
+|---|---|
+| Page Name | Pack Code Master |
+| menu_code | `SA_OM_PACK_CODE_MASTER` |
+| tx_code | `OM08` |
+| Route | `/admin/sa/om/pack-code-master` |
+| Menu | SA → Operation Management → Pack Code Master |
+
+---
+
+**Tab 1 — Pack Code Catalog**
+
+**Who manages:** SA only
+**How seeded:** All 15 pack codes pre-populated via migration at go-live. SA can add new codes or edit existing.
+
+| Field | Notes |
+|---|---|
+| Pack Code | 050, 110, 120, etc. |
+| Description | Informational only |
+| BOM Required | Yes = Pack BOM must exist before Packing PO. No = PM entered manually at Packing PO time. |
+| Active | Yes / No |
+| Created by / Date | auto |
+
+**No fill qty or fill UOM on Tab 1** — detail belongs at SKU level.
+
+**Initial seed — 15 pack codes (migration):**
+
+| Pack Code | Description | BOM Required |
+|---|---|---|
+| 050 | 50 ml bottle | Yes |
+| 110 | 100 ml bottle | Yes |
+| 120 | 200 ml bottle | Yes |
+| 207 | 1 KG pouch | Yes |
+| 210 | ~1 Ltr / ~1 KG container | Yes |
+| 250 | 5 Ltr bottle | Yes |
+| 310 | 10 KG/Ltr jar or bag | Yes |
+| 320 | 20 KG/Ltr jar or bag | Yes |
+| 330 | 30 KG/Ltr jar or bag | Yes |
+| 340 | 40 KG/Ltr jar or bag | Yes |
+| 350 | 50 KG/Ltr jar or bag | Yes |
+| 450 | 250 KG barrel (fixed) | Yes |
+| 510 | 1 MT IBC (fixed) | Yes |
+| 599 | Barrel (flexible fill) | **No** |
+| 000 | Tanker (flexible fill) | **No** |
+| 001 | Sample pack | **No** |
+
+---
+
+**Tab 2 — Prodshade Pack Config (LOCKED — 2026-06-30)**
+
+**Who manages:** SA only
+**Scope:** Global per Prodshade — NOT company-specific (pack format is a product decision, not a factory decision)
+**Prerequisite:** Prodshade must have at least one ACTIVE Stroke (PR02 approved → SFG Material Master exists)
+
+**SA flow:**
+1. Select Prodshade (from globally approved prodshades)
+2. Link pack codes allowed for that prodshade (+ Variant if applicable, e.g. 310-JAR / 310-BAG)
+3. For fill-size pack codes (599, 000): also enter allowed fill sizes
+
+**On link → FG Material Master auto-created (LOCKED — 2026-06-30):**
+
+Material Master field mapping differs by production type (MTS vs MTO/HPS):
+
+| Field | MTS (IWC / Powder) | MTO / HPS (Admix / Hypershot) |
+|---|---|---|
+| `material_name` | Description (human-readable product name) | SKU (product identifier code) |
+| `document_name` | SKU | Description |
+| `external_code` | SKU | SKU |
+| `material_type` | FG | FG |
+| `shade_code` | Prodshade code | Prodshade code |
+| `pack_code` | Pack Code | Pack Code |
+| `pace_code` | Auto-generated (FG-00001...) | Auto-generated |
+| `base_uom_code` | KG (default for all liquid FG) | KG |
+
+UOM Alt1 / Alt2 / conversion factors → SA fills in Material Master separately after auto-creation.
+`production_mode` → not used at auto-creation time (deferred, not needed now).
+
+```
+Prodshade + Pack Code + Variant = unique SKU → FG Material Master (FG-00001...) created immediately
+Company plant extensions inherited from SFG material's existing plant extensions
+```
+
+**Tab 2 UI:**
+```
+Prodshade: [dropdown — globally approved prodshades]
+
+Pack Code | Variant   | Fill Size(s)     | BOM Required | Actions
+120       | —         | —                | Yes          | Delete
+207       | —         | —                | Yes          | Delete
+310       | JAR       | —                | Yes          | Delete
+310       | BAG       | —                | Yes          | Delete
+599       | —         | 230 KG, 250 KG   | No           | Edit / Delete
+000       | —         | — (full tanker)  | No           | Edit / Delete
+                                                          [+ Link Pack Code]
+```
+
+**Rules:**
+- SA cannot delete a linked pack code if a Pack BOM (PR06) or Packing PO already exists for that SKU
+- Stroke company-specific; Pack Config global — they are independent scopes
+
+---
+
+#### Pack BOM Pages (LOCKED — 2026-06-30)
+
+4 pages — same structure as Stroke Master but with key differences (no Stroke concept, no Dosage%, absolute Qty, row add/delete/edit allowed):
+
+| TX Code | Page Name | Who |
+|---|---|---|
+| `PR05` | Pack BOM — Create | Procurement |
+| `PR06` | Pack BOM — Approval | L1 Manager Procurement |
+| `PR07` | Change Pack BOM | Procurement |
+| `PR08` | Change Pack BOM Approval | L1 Manager Procurement |
+
+**Lifecycle:**
+```
+PR05 Create → DRAFT
+    ↓
+PR06 Approve → ACTIVE          (BOM Required = Yes only)
+    ↓
+PR07 Change (any time post-ACTIVE — add / delete / edit PM rows)
+    ↓
+PR08 Approve → BOM lines live update
+    (cycle repeats as consumables change over time)
+```
+
+**599 / 000 / 001:** Pack BOM created via PR05, but auto-ACTIVE immediately — no PR06 approval needed.
+
+---
+
+#### PR05 — Pack BOM Create (LOCKED — 2026-06-30)
+
+**Header:**
+
+| Field | Notes |
+|---|---|
+| FG SKU | Select from Material Master (material_type = FG, SA-linked only) |
+| Material Type | Auto = FG (display only — Pack BOM always for FG) |
+| PO Type | Auto-derived from SKU (display only — no separate field) |
+| UOM Conversions | Read-only from Material Master (Alt UOM 1, Alt UOM 2, conversion factors) — reference for Procurement entering line qty |
+| Created By / Date | System |
+
+No Stroke Number. No Dosage%. No Conversion UOM / Factor. No Prod+Shade manual entry.
+
+**Lines — SAP OUTPUT/INPUT model:**
+
+| Type | Material | Qty | UOM | Editable |
+|---|---|---|---|---|
+| OUTPUT | FG SKU | BOM Required=Yes → 1 / BOM Required=No → blank | Outer pack unit (CTN/BAG/BBL/IBC/TANKER) | ❌ auto |
+| INPUT | Prodshade (SFG liquid) | BOM Required=Yes → KG per outer pack (from UOM conversion) / BOM Required=No → blank (calculated at Packing PO time) | KG | ❌ auto |
+| INPUT | PM material | qty | PM base UOM | ✅ user adds rows |
+| INPUT | PM material | qty | PM base UOM | ✅ user adds rows |
+| … | … | … | … | ✅ unlimited rows |
+
+**PM Input line columns (same mechanism as Stroke Master RM lines):**
+
+| # | Column | Detail |
+|---|---|---|
+| 1 | Type | INPUT (fixed) |
+| 2 | PM Material | Dropdown, material_type = PM only |
+| 3 | Qty | Absolute qty per 1 outer pack unit |
+| 4 | UOM | From PM base_uom_code (auto, not editable) |
+| 5 | Has Alternate? | Yes / No |
+| 6 | Material Group | Searchable dropdown + inline Create Group — reuses `erp_master.material_category_group` (same as Stroke Master) |
+| 7 | Members | Alternate PM materials — unlimited, stored as `material_category_group_member` rows. Group membership is live (external reference, not BOM snapshot). |
+
+**BOM Required = No (599 / 000 / 001) qty calculation at Packing PO time:**
+
+| Pack Code | OUTPUT qty | Prodshade INPUT qty | Source |
+|---|---|---|---|
+| 599 | number_of_barrels (BBL) | barrels × fill_qty_per_barrel | Both from Packing PO header |
+| 000 | 1 (TANKER) | total_KG | Packing PO order qty |
+| 001 | batch_qty (KG) | batch_qty | Packing PO order qty |
+
+**Submit behaviour:**
+- BOM Required = Yes → DRAFT → enters PR06 queue
+- 599 / 000 / 001 → auto-ACTIVE (no approval step)
+
+**BOM Required = Yes — hard block:**
+Pack BOM must be ACTIVE before Packing PO can be created for that SKU. System blocks PO creation if no approved BOM exists.
+
+---
+
+#### PR06 — Pack BOM Approval (LOCKED — 2026-06-30)
+
+**Applies to:** BOM Required = Yes pack codes only (599/000/001 skip this step)
+
+**L1 Manager Procurement can:**
+- View all lines
+- Edit PM lines (qty, add row, delete row) before approving
+- Approve → BOM becomes ACTIVE
+- Reject → BOM back to DRAFT (Procurement revises and resubmits)
+
+---
+
+#### PR07 — Change Pack BOM (LOCKED — 2026-06-30)
+
+**Works on ACTIVE Pack BOM — used any time consumables change**
+
+**Procurement can:**
+- Add new PM rows
+- Delete existing PM rows
+- Edit PM qty
+- Substitute PM item (one PM replaced with another)
+- Edit Material Group membership (or go to PM04 to add member, return to PR07)
+
+Submit → Change Request created → enters PR08 queue
+
+**In-progress Packing POs:** Unaffected — they use the BOM snapshot taken at PO creation time. Change applies only to future Packing POs.
+
+---
+
+#### PR08 — Change Pack BOM Approval (LOCKED — 2026-06-30)
+
+**L1 Manager Procurement can:**
+- Review proposed changes
+- Edit the proposed changes before approving
+- Approve → Pack BOM lines updated live (ACTIVE BOM modified in place)
+- Reject → BOM unchanged, Change Request marked REJECTED (audit trail preserved)
+
+**599 / 000 / 001 post-ACTIVE edits:** Procurement can edit directly (no PR07/PR08 flow — same logic as auto-ACTIVE on creation).
+
+**Packing is NEVER part of Stroke/RM definition.**
+
+---
+
+### 83.16 — Procurement Planning Formula (Admix / Hypershot)
+
+**Added: 2026-06-08**
+
+**Planning Formula:**
+
+```
+Available Stock = (Current Unrestricted Stock − Reserved Stock) + In-Transit + QA
+```
+
+| Component | Included | Reason |
+|---|---|---|
+| Current Unrestricted Stock | ✅ Yes | Physically available, not committed |
+| Reserved Stock | ❌ Deducted | Hard-locked by active Process PO Standards |
+| In-Transit | ✅ Yes | Supplier dispatched — reliable incoming |
+| QA Stock | ✅ Yes | Physically received — expected to pass |
+| Pending PO | ❌ Excluded | Supplier not yet dispatched — uncertain |
+
+**Rules:**
+- Pending PO is excluded until goods physically dispatched by supplier (become In-Transit)
+- QA rejection: stock moves from QA → BLOCKED/RTV → QA balance automatically reduces → formula self-corrects
+- Reservation created at Standard phase (Process PO creation) = hard lock on UNRESTRICTED stock
+- This formula applies to all RM and PM items for Admix and Hypershot planning
+
+---
+
+### 83.17 — Pack Code Master and Prodshade Pack Configuration
+
+**LOCKED — 2026-06-09**
+
+---
+
+#### Pack Code Master (Global — SA Managed)
+
+Pack codes are global master data. SA defines all valid pack codes upfront. Cannot be created by plant users.
+
+| Pack Code | Type | Standard Capacity | Costing Unit | PM Included |
+|---|---|---|---|---|
+| 599 | Barrel | 210 / 230 KG physical barrel | Per barrel | ✅ Yes (barrel + labels) |
+| 510 | IBC | 1,000 KG (1 MT) | Per KG | ✅ Yes (IBC container = PM item) |
+| 000 | Tanker | Full tanker (variable) | Per KG | ❌ No (customer brings tanker) |
+
+**Pack Code rules:**
+- Pack code is the 3-char suffix of SKU: Product(4) + Shade(4) + **Pack(3)**
+- Pack code global master = SA only (create, edit, deactivate)
+- Available pack codes per company + per product type → SA defines
+
+---
+
+#### Pack Code → PM Item Mapping (Barrel specific)
+
+Same pack code (599) covers multiple physical barrel PM items — differentiated at PM material master level:
+
+| PM Material | Physical Capacity | Pack Code |
+|---|---|---|
+| Barrel 210 KG | 210 KG | 599 |
+| Barrel 230 KG | 230 KG | 599 |
+
+- PM item selection at Packing PO creation (user selects which barrel)
+- Fill qty per barrel = entered at Packing PO creation (mandatory for 599)
+- Fill qty can differ from physical capacity (e.g. 230 KG barrel filled to 250 KG)
+
+---
+
+#### Prodshade Pack Configuration (Company + Prodshade level)
+
+Defines which pack codes and fill sizes are allowed for a specific Prodshade at a specific Company. This is a prerequisite before Process PO can be created.
+
+**Governance:**
+
+| Operation Type | Who configures | When |
+|---|---|---|
+| Admix | Manager | After Stroke Master is approved — before first Process PO |
+| Hypershot / IWC / Powder | SA | Upfront — before production begins |
+
+**Configuration Page — Manager / SA:**
+
+```
+Company:   [CMP001]
+Prodshade: [6763HC25]
+
+Pack Code | Fill Size(s)       | Actions
+--------------------------------------------------
+599       | 230 KG             | [Edit] [Delete]
+599       | 250 KG             | [Edit] [Delete]
+000       | — (full tanker)    | [Edit] [Delete]
+                                 [+ Add New]
+```
+
+**Actions available:**
+- **Add** — new pack code + fill size entry
+- **Edit** — change fill size value
+- **Delete** — remove a pack size option
+
+**Rules:**
+- One Prodshade can have multiple pack codes and multiple fill sizes per pack code
+- For 000 (Tanker) and 510 (IBC): fill size = N/A (full tanker / fixed 1,000 KG)
+- For 599 (Barrel): fill size is mandatory — defines allowed fill options for that Prodshade
+- If no Prodshade Pack Config exists → Process PO cannot be created for that Prodshade
+- Config can be updated anytime — audit trail mandatory (who, when, old value, new value)
+- Config is per Company + Prodshade — same Prodshade at different companies may have different pack codes
+
+---
+
+### 83.18 — Plan Feed Page
+
+**LOCKED — 2026-06-11**
+
+---
+
+#### Overview
+
+Plan Feed is the entry point of the production flow. External Formulation Orders (FOs) from AP (the customer) are manually entered here by the user. This page has **3 tabs**.
+
+---
+
+#### Tab 1 — Plan Feed (Create Plan)
+
+User manually creates a new plan entry for each incoming FO.
+
+| Field | Type | Rules |
+|---|---|---|
+| FO Number | Text (manual entry) | User types or copies from AP document |
+| Party Name | Select or Create | Select from existing party list; if new → inline create with Name + Address |
+| Party Address | Auto / Text | Auto-populated if existing party selected; manually entered if new |
+| SKU | Text | 11-char FG SKU code |
+| Description | Text | FG description |
+| Quantity (KG) | Number | Total ordered quantity in KG |
+| Pack Qty | Number | Number of packs ordered |
+| Order Date | Date | Date FO was received from AP |
+| Scheduled Delivery Date | Date | Promised delivery date to AP |
+
+**Rules:**
+- All fields mandatory
+- Party created inline here is available across the system (global party master)
+- FO Number must be unique — system prevents duplicate entry
+- Plan entry saved → available for Process PO creation
+
+---
+
+#### Tab 2 — Plan Edit
+
+User searches by FO Number and edits the plan entry.
+
+| Feature | Detail |
+|---|---|
+| Search | By FO Number |
+| Editable fields | All fields from Tab 1 (FO Number, Party, SKU, Description, Qty, Pack Qty, Order Date, Scheduled Delivery Date) |
+| Cancel Order | Available from this tab — marks plan as cancelled |
+
+**Rules:**
+- Cannot edit if Process PO has already been created against this plan — edit-lock kicks in
+- Cancel → plan status = CANCELLED; linked Process POs must be handled separately
+- Audit trail mandatory on all edits (who, when, old value, new value)
+
+---
+
+#### Tab 3 — Total Table (Summary)
+
+Overview of all plan entries. Rows are sorted by Order Date and Scheduled Delivery Date.
+
+| # | Column | Detail |
+|---|---|---|
+| 1 | FO Number | — |
+| 2 | Party Name | — |
+| 3 | SKU | — |
+| 4 | Description | — |
+| 5 | Ordered Qty (KG) | Total KG as entered in Plan Feed |
+| 6 | Pack Qty | Total packs as entered in Plan Feed |
+| 7 | KG Linked (Packing PO) | Cumulative KG quantity linked to Packing POs so far |
+| 8 | Packing PO Count | Number of Packing POs created for this FO — **clickable → modal** showing: Packing PO list, Process POs, Batch Numbers, Qty per PO |
+| 9 | Dispatched Qty | Cumulative qty dispatched against this FO |
+| 10 | Pending Dispatch | Remaining qty yet to be dispatched |
+
+**Behaviour:**
+- All columns are separate — no combined columns
+- Data updates live as system progresses (Packing PO created, batch started, dispatch posted)
+- Pagination: standard page-based pagination
+- Smart Filters: by date range, SKU, Party, FO status (Active / Cancelled / Completed), dispatch status
+
+---
+
 ### Round-3 Summary — Admix/Liquid Decisions Locked
 
 | Decision | Locked Value |
@@ -6970,6 +9251,29 @@ Pack Code examples: 599 = barrel/drum, 000 = tanker/bulk
 **Round-3 Status: IN PROGRESS**
 **Pending:** Vessel master design, tolerance values, batch number format, Admix FG master creation model (SOD to decide at Process Order + Dispatch stage)
 **Next:** Complete Admix discovery → move to other Operation Types
+
+---
+
+### Session Decisions — 2026-06-02
+
+**Implementation Strategy (LOCKED):**
+
+| Decision | Value |
+|---|---|
+| Implementation order | Liquid (Admix + Hypershot + IWC) first → Powder separately later |
+| Liquid go-live | 1 July 2026 — RM + PM + FG opening stock entered on go-live day |
+| Powder go-live | Separate date (TBD) — Powder's own physical count at Powder go-live date used as opening stock |
+| Opening stock method | Phased by section — Liquid on 1 July, Powder when Powder goes live (both use P561/P563/P565) |
+| L1/L2 reform | Deferred — all layers implemented first, then unified UI polish pass for consistency |
+
+**L1/L2 Readiness for Liquid (verified 2026-06-02):**
+- Material master: ✅ shade_code, pack_code, external_sku, production_mode all exist (Gate-12)
+- L2 Procurement (RM/PM): ✅ 100% ready — no changes needed for Liquid RM/PM procurement
+- FOR_REPROCESS movements P901–P906: ✅ exist (Gate-11)
+- **Missing:** P231/P232 (FG Receipt/Reversal from Production), P267/P268 (FOR_REPROCESS → Production Issue/Reversal) — to be added in Gate-27
+
+**SAP Module mapping for PACE ERP (confirmed 2026-06-02):**
+MM + SD + PP + QM + WM + FI/CO + LE — adapted, not cloned. No PM, no PS, no full MRP in Phase-1.
 
 ---
 
@@ -7362,7 +9666,12 @@ One-step (confirmed):
 | Currency | Auto-populated based on vendor type (BDT for Domestic, Foreign for Import) |
 | Remarks | Free text optional |
 
-#### 85.2.3 PO Line Items
+#### 85.2.3 PO Line Items **[SUPERSEDED 2026-06-23 — see 87.12A]**
+
+> **One PO = one material now, not multi-line.** The table below describes what one PO's single
+> line carries. Raising several materials together still feels like "one order" to the user — see
+> 87.12A for the internal Order ID / batch-approval mechanism that ties multiple single-material
+> POs together without changing what the vendor sees.
 
 | Field | Rule |
 |---|---|
@@ -7591,16 +9900,21 @@ Only these two types exist in Phase-1.
 
 #### 85.6.2 Vendor Master Fields
 
+> **IMPLEMENTATION UPDATE (2026-06-19):** Address split into 4-column groups. Contacts/emails/banks are separate child tables. Only Vendor Name mandatory.
+
 | Field Group | Fields |
 |---|---|
-| Basic | Vendor Code (auto), Vendor Name, Vendor Type (Domestic/Import) |
-| Identity | BIN number (Domestic — API validated), TIN (optional), Trade License |
-| GST | GST Number — API auto-fill triggers: Name, Address, Category auto-populated |
-| Address | Registered address (auto from API for Domestic), correspondence address |
-| Contact | Primary contact person, Phone, Email, CC Email list (for PO auto-mail) |
-| Bank | Bank Name, Branch, Account Number, Routing Number — **Optional now, mandatory later** |
-| Status | Active / Blocked / Pending Approval |
-| Company Mapping | Active in one or multiple companies |
+| Basic | Vendor Code (auto, V-00001 format), Vendor Name (mandatory), Vendor Type (Domestic/Import), Country Code, Currency Code |
+| Identity | BIN number, TIN, Trade License |
+| GST | GST Number — API auto-fill: **always overwrites** Vendor Name + reg_address_line1/state/pin |
+| Registered Address | reg_address_line1, reg_address_city, reg_address_state, reg_address_pin |
+| Correspondence Address | corr_address_line1, corr_address_city, corr_address_state, corr_address_pin |
+| Import | IEC Code, Import License |
+| Contacts | vendor_contacts table — multi-row (contact_name, phone, designation, is_primary) |
+| Emails | vendor_emails table — multi-row (email, label, is_primary — used for PO auto-mail) |
+| Banks | vendor_banks table — multi-row (bank_name, branch, account_number, routing_number, is_primary, is_active) |
+| Status | SA creates directly as ACTIVE |
+| Company Mapping | Active in one or multiple companies via vendor_company_map |
 
 #### 85.6.3 Payment Terms — Dynamic Last Used
 
@@ -7617,13 +9931,15 @@ Only these two types exist in Phase-1.
 
 #### 85.6.4 Vendor Governance
 
+> **IMPLEMENTATION UPDATE (2026-06-19):** Phase-1 — SA manages vendors via OM07 screen. Approval flow deferred.
+
 | Action | Rule |
 |---|---|
-| Create vendor | Procurement team only |
-| Edit vendor | Procurement team |
-| Approve vendor | Required — any authorized approver (single level) |
-| Block/Deactivate vendor | Ledger must be balanced (no open payables) + approval required |
-| Multi-company | Vendor can be active in multiple companies simultaneously |
+| Create vendor | SA only — via OM07 screen. Created directly as ACTIVE (no approval step). |
+| Edit vendor | SA only |
+| Manage contacts / emails / banks | SA only — child records via OM07 |
+| Block/Deactivate vendor | SA only |
+| Multi-company | SA assigns via vendor_company_map |
 
 #### 85.6.5 PO Auto-Mail
 
@@ -7694,7 +10010,7 @@ On every GRN confirmation:
 | GRN | ✅ Locked | References Gate Entry. FIFO + expiry optional per material. 3-level location hierarchy. |
 | Receiving Location | ✅ Locked | Material Master default → PO line override → GRN time override. |
 | Invoice Verification | 🔶 Framework Locked | In-system (SAP-style). Domestic + Import differ. Detail at build time with actual invoices. |
-| Vendor Master | ✅ Locked | Domestic + Import. API integration. Dynamic payment terms. Bank optional. Approval required. |
+| Vendor Master | ✅ Locked | Domestic + Import. API integration. Dynamic payment terms. Bank optional. **No approval step** — created directly ACTIVE (corrected 2026-06-23; was inconsistent with 14.8). |
 | Approved Source List | ✅ Locked | Vendor-Material Info Record = Approved Source List. Hard block on PO. No priority. Procurement team manages directly. |
 
 ---
@@ -8107,6 +10423,32 @@ Gate-13: Full L2 Procurement Cycle (9 sub-gates — see Section 103 for complete
 
 ---
 
+### 87.12A — Gap #12A: Order ID — One PO Per Material, Batch Approval **[NEW — 2026-06-23]**
+
+**Decision: A PO has exactly one material (line item). Multiple materials raised together are
+grouped under an internal "Order ID" purely for batch approval — never exposed to the vendor.**
+
+**Why this supersedes 85.2.3's multi-line PO assumption:** With a multi-line PO, a vendor
+delivering several materials together can only reference the PO number on their invoice/delivery
+paperwork (not PACE's internal line-item number), and the same material appearing on two
+different open POs to the same vendor is disambiguated by PO number + material — but the **same
+material twice on the same multi-line PO** (e.g. two different delivery dates) cannot be
+disambiguated this way at all. One-PO-per-material removes the ambiguity at the root: every PO
+number is now unique to exactly one material, so CSN/GE/Invoice matching is never ambiguous
+regardless of how many times a material recurs across orders.
+
+| Rule | Detail |
+|---|---|
+| PO scope | One PO = one material = one line item. No multi-line POs. |
+| Order ID | Internal grouping key only — created automatically when a user raises multiple materials in one go. **Never shown to the vendor**, never printed on any vendor-facing document. |
+| Vendor-facing documents | Show only the individual PO number (e.g. `ASCPO2627-0201`) — exactly as before. The vendor never sees or needs the Order ID. |
+| PO numbering | Unaffected — each PO still gets its own number from the normal company+FY series (no suffix, no change to 99.2 format). |
+| Approval scope | **Batch, at the Order level** — Procurement Head sees pending Order IDs in a list (not individual POs). Opening one shows every PO under it with full detail; the Head can still view/edit any individual PO's fields before approving. Saving approves all child POs under that Order ID together. |
+| Why batch approval | Reduces approver workload — one click approves an entire multi-material order instead of clicking through each PO separately. Per-PO rejection within an Order is not separately modeled; if one line needs rejecting, the Head edits/removes it from that PO before approving the batch. |
+| CSN impact | Unaffected — each (now single-line) PO still auto-creates exactly one CSN on confirmation (88.2 unchanged, just simpler: PO → CSN is now always 1:1 instead of 1 PO → N CSNs). |
+
+---
+
 ### 87.15 — Global Document Number Series (11 May 2026)
 
 **Decision: Movement documents share a global number series across all same-group companies.**
@@ -8282,6 +10624,13 @@ GE Lines (multiple):
   Line 3: PO-001 → Line Item 5 → Invoice INV-001 → 100 KG
 ```
 
+> **Note (2026-06-23, per 87.12A):** "PO-001 → Line Item 3" above predates the one-PO-per-material
+> change. Since each PO now carries exactly one material, the matching key at GE/GRN time is
+> simply **PO number + material identity** (the vendor's invoice line states the material name,
+> not PACE's internal line-item id) — there is no longer a "which line item" ambiguity to resolve,
+> even when the same material appears across multiple POs to the same vendor, since each PO
+> number is now unique per material per order.
+
 | Rule | Detail |
 |---|---|
 | One GE | One truck arrival |
@@ -8360,6 +10709,20 @@ CSN-067 [LOCAL, CMP004, 5MT, STO-001]
 | Detachment | Sub CSN becomes independent after STO mapping |
 | Origin reference | Preserved — Mother CSN reference kept for traceability |
 | Document Flow | PO → CSN-055 (Mother) → [Sub: CSN-067] → STO-001 → GE → GRN |
+
+**Timing clarification (2026-06-23):** Sub CSN creation, Mother CSN's own GRN, and STO↔Sub-CSN
+mapping are **three independent events with no enforced sequence between them**:
+
+- A Sub CSN can be created the moment the Mother CSN exists (i.e. right after PO confirmation) —
+  this is the normal case, since Sub CSN's primary purpose is **distribution planning**, done well
+  before the shipment even sails (see 88.3).
+- Mapping an STO to a Sub CSN does **not** require the Mother CSN's GRN to have posted first. An
+  STO is just a stock movement and can be fulfilled from the destination/source company's
+  *existing* stock of that material (from an earlier, unrelated GRN) — it doesn't have to wait for
+  *this* shipment's GRN. The Mother CSN's full-quantity GRN (Scenario C below) still happens
+  regardless, on its own timeline.
+- The STO↔Sub-CSN link exists purely for **traceability** — so that later, anyone can trace which
+  consignment's planned allocation a given STO fulfilled. It is not a workflow gate.
 
 ---
 
@@ -8721,14 +11084,15 @@ Each Material is mapped to one Material Category.
 
 ---
 
-### 89.7 — Lead Time Master — Import
+### 89.7 — Lead Time Master — Import **[REVISED 2026-06-23 — Manager-managed, no Material Category]**
 
-**SA-managed. Drives Sail Time and Clearance Days for import ETA cascade.**
+**Manager-managed (L2_MANAGER+ via Gate-26), not SA-only. Drives Sail Time and Clearance Days for import ETA cascade.**
+
+Material Category was **dropped** from this master (2026-06-23) — there was no real use for it at this granularity, and the table was empty in dev so the column was removed outright rather than deprecated. If atomic, material-specific lead times are ever needed, this will be reconsidered then.
 
 | Field | Type | Rules |
 |---|---|---|
-| Vendor | Reference → Vendor Master | Supplying vendor |
-| Material Category | Reference → Material Category Master | Category of material |
+| Vendor | Reference → Vendor Master, dropdown **filtered to `vendor_type = IMPORT`** | Supplying vendor |
 | Port of Loading | Text / Reference | Vendor's dispatch port |
 | Port of Discharge | Reference → Port Master | Destination port in India |
 | Sail Time (Days) | Number | BV — vessel transit days |
@@ -8737,24 +11101,28 @@ Each Material is mapped to one Material Category.
 | Effective To | Date | Version control end; blank = current |
 | Active | Flag | |
 
+Full Edit support exists (PATCH `/api/procurement/lead-times/import/:id`) in addition to Create — earlier builds only had Create.
+
 **Usage in ETA cascade:**
 - Sail Time → used to auto-calculate ETD from Scheduled ETA to Port, and ETA at Port from BL Date
 - Clearance Days → used to calculate ETA to Plant from AH or AI
 
 ---
 
-### 89.8 — Lead Time Master — Domestic
+### 89.8 — Lead Time Master — Domestic **[REVISED 2026-06-23 — Manager-managed]**
 
-**SA-managed. Drives Transit Days for domestic ETA cascade.**
+**Manager-managed (L2_MANAGER+ via Gate-26), not SA-only. Drives Transit Days for domestic ETA cascade.**
 
 | Field | Type | Rules |
 |---|---|---|
-| Vendor | Reference → Vendor Master | Supplying vendor |
+| Vendor | Reference → Vendor Master, dropdown **filtered to `vendor_type = DOMESTIC`** | Supplying vendor |
 | Destination Company | Reference → Company | Receiving plant |
 | Transit Days | Number | Days from LR Date to plant arrival |
 | Effective From | Date | Version control start |
 | Effective To | Date | Version control end; blank = current |
 | Active | Flag | |
+
+Full Edit support exists (PATCH `/api/procurement/lead-times/domestic/:id`) in addition to Create.
 
 **Usage:** When LR Date entered → ETA to Plant = LR Date + Transit Days. When only PO exists → ETA to Plant = PO Date + Transit Days.
 
@@ -9523,38 +11891,48 @@ On GRN posting, system automatically:
 ## Section 94 — Transporter Master (11 May 2026)
 
 **Session Date:** 11 May 2026
-**Status:** ✅ FROZEN
+**Status:** 🔶 FROZEN design superseded for master fields/governance (see 2026-06-23 revision below); usage-point wiring (94.2/94.4) not yet built, kept as original design intent.
 **Scope:** Transporter Master fields, usage direction, context-filtered dropdowns, governance.
 
 ---
 
-### 94.1 — Transporter Master Fields
+### 94.1 — Transporter Master Fields **[REVISED 2026-06-23]**
+
+Manager-managed (L2_MANAGER+ via Gate-26), not SA-only. The Usage Direction values were changed from INBOUND/OUTBOUND to **IMPORT/DOMESTIC** to match the terminology used everywhere else in this codebase (Vendor `vendor_type`, Lead Time Master tabs). Flat `contact_person`/`phone`/`email` columns were replaced with multi-row Contacts and Emails (same pattern as Vendor), and Company Mapping was added (same `*_company_map` pattern as Vendor).
+
+There are two kinds of Transporter — **With GST** and **Without GST**:
+- **With GST:** entering the GST number and clicking "Check GST" auto-resolves legal name + address (cache-first, Applyflow on miss — same resolver used by Company/Vendor) and **overwrites** the name/address fields.
+- **Without GST:** every field is entered manually; no lookup.
+
+The GST lookup endpoint (`GET /api/procurement/gst-profile`) is deliberately **not** role-gated to Manager/SA — any authenticated ACL user can call it, since lower-tier roles (e.g. L1_USER) are expected to need it for future screens too.
 
 | Field | Type | Rules |
 |---|---|---|
 | Transporter Code | Auto | System-generated. Global |
-| Transporter Name | Text | Mandatory |
-| Usage Direction | Dropdown | INBOUND / OUTBOUND / BOTH. Mandatory |
+| Transporter Name | Text | Mandatory; auto-filled (overwritten) from GST if With-GST |
+| Usage Direction | Dropdown | **IMPORT / DOMESTIC / BOTH.** Mandatory |
 | Mode | Dropdown | ROAD / RAIL / COURIER / MULTI-MODAL |
-| Contact Person | Text | Optional |
-| Phone | Text | Optional |
-| Email | Text | Optional |
+| GST Number | Text + lookup button | Optional (toggle: With GST / Without GST) |
 | PAN Number | Text | Optional — for TDS applicability |
-| GST Number | Text | Optional |
-| Address | Text | Optional |
-| Active | Flag | Inactive transporters hidden from all dropdowns |
+| Address | Text | Auto-filled from GST if With-GST, else manual |
+| Contacts | Multi-row (`transporter_contacts`) | Name, phone, designation, one marked primary |
+| Emails | Multi-row (`transporter_emails`) | Email, label, one marked primary |
+| Company Mapping | Multi-row (`transporter_company_map`) | Which business companies use this transporter |
+| Active | Flag | Inactive transporters hidden from all dropdowns; list page supports `is_active=all/true/false` (previously the list endpoint ignored this and always showed only active rows, so a deactivated transporter could never be reactivated — fixed) |
 
 ---
 
-### 94.2 — Usage Direction Rules
+### 94.2 — Usage Direction Rules **[original design — usage-point wiring not yet built]**
 
-| Usage Direction | Meaning |
+> ⚠️ **Open question, not yet decided:** this subsection's INBOUND/OUTBOUND semantic was written before the master's Usage Direction values were changed to IMPORT/DOMESTIC (94.1). IMPORT and DOMESTIC don't map cleanly onto INBOUND/OUTBOUND — a DOMESTIC purchase is also "inbound" to the plant, just not from overseas. None of the usage points below (CSN, Gate Entry, Gate Exit, Sales/Dispatch) have been built with transporter-dropdown filtering yet, so this needs a fresh decision when that work starts, not a guess made here.
+
+| Usage Direction (original draft) | Meaning |
 |---|---|
 | INBOUND | Handles incoming deliveries (vendor → plant). Procurement side |
 | OUTBOUND | Handles outgoing dispatches (plant → customer / plant). Dispatch/Sales side |
 | BOTH | Works both ways — appears in both inbound and outbound dropdowns |
 
-**Context-filtered dropdown:** Dropdown list shown to user depends on the document context:
+**Context-filtered dropdown (original draft):**
 
 | Document Context | Dropdown Shows |
 |---|---|
@@ -9565,20 +11943,16 @@ This keeps each team's list short and relevant. No duplicate records needed for 
 
 ---
 
-### 94.3 — Governance
+### 94.3 — Governance **[REVISED 2026-06-23]**
 
 | Action | Authority |
 |---|---|
-| Create INBOUND transporter | Procurement team |
-| Create OUTBOUND transporter | Dispatch / Sales team |
-| Create BOTH transporter | Either team |
-| Edit | Creating team (or SA) |
-| Deactivate | Creating team (or SA) |
+| Create / Edit / Deactivate | L2_MANAGER+ (`assertManagerOrSARole`: SA, GA, DIRECTOR, L4_MANAGER, L3_MANAGER, L2_MANAGER) |
 | SA involvement | Not required for routine operations |
 
 ---
 
-### 94.4 — Usage Points in PACE
+### 94.4 — Usage Points in PACE **[original design — not yet built; see 94.2 caveat]**
 
 | Document | Direction | Field | Rule |
 |---|---|---|---|
@@ -9598,37 +11972,37 @@ Free text entry allowed at all usage points — if transporter is not in master,
 
 ## Section 95 — CHA Master (Clearing and Handling Agent) (11 May 2026)
 
-**Session Date:** 11 May 2026
-**Status:** ✅ FROZEN
+**Session Date:** 11 May 2026 — fields/governance **revised 2026-06-23**
+**Status:** 🔶 Usage points (95.3) unchanged design intent; master fields/governance superseded below.
 **Scope:** CHA Master fields, governance, usage points.
 
 ---
 
-### 95.1 — CHA Master Fields
+### 95.1 — CHA Master Fields **[REVISED 2026-06-23]**
+
+Manager-managed (L2_MANAGER+ via Gate-26), not SA-only. Same upgrade as Transporter Master (94.1) — GST autofill, multi-row Contacts/Emails, Company Mapping — **except every CHA is GST-registered**: there is no "Without GST" path. `gst_number` is `NOT NULL` at the DB level and required at create; entering it and clicking "Check GST" resolves legal name + address (same cache-first resolver as Transporter/Company) and overwrites the name/address fields.
 
 | Field | Type | Rules |
 |---|---|---|
 | CHA Code | Auto | System-generated. Global |
-| CHA Name | Text | Mandatory |
-| CHA License Number | Text | Mandatory — customs broker license number |
-| GST Number | Text | Optional |
+| CHA Name | Text | Mandatory; auto-filled (overwritten) from GST |
+| CHA License Number | Text | Optional (not mandatory as originally drafted) |
+| GST Number | Text + lookup button | **Mandatory — every CHA is GST-registered** |
 | PAN Number | Text | Optional — for TDS |
-| Contact Person | Text | Optional |
-| Phone | Text | Optional |
-| Email | Text | Optional |
-| Address | Text | Optional |
-| Ports | Multi-select → Port Master | Ports where this CHA operates. Optional — for reference/filter |
+| Address | Text | Auto-filled from GST, editable after |
+| Contacts | Multi-row (`cha_contacts`) | Name, phone, designation, one marked primary |
+| Emails | Multi-row (`cha_emails`) | Email, label, one marked primary |
+| Company Mapping | Multi-row (`cha_company_map`) | Which business companies use this CHA |
+| Ports | Multi-select → Port Master (`cha_port_map`) | Ports where this CHA operates. Optional — for reference/filter. **Unchanged from original design.** |
 | Active | Flag | Inactive CHA hidden from dropdowns |
 
 ---
 
-### 95.2 — Governance
+### 95.2 — Governance **[REVISED 2026-06-23]**
 
 | Action | Authority |
 |---|---|
-| Create | Procurement team |
-| Edit | Procurement team |
-| Deactivate | Procurement team |
+| Create / Edit / Deactivate | L2_MANAGER+ (`assertManagerOrSARole`: SA, GA, DIRECTOR, L4_MANAGER, L3_MANAGER, L2_MANAGER) |
 | SA involvement | Not required |
 
 ---
@@ -10943,3 +13317,238 @@ For each gate, Codex implements and verification confirms:
 *PACE_ERP Operation Management — SAP-Style Discovery and Feasibility*
 *Document Version: 1.0 | Date: 1 May 2026 | Status: DRAFT*
 *Constitution Reference: PACE_ERP_MASTER_CONSTITUTION.md (FINAL)*
+
+---
+
+## Section 104 — FG Costing System: Admix and Hypershot
+
+**Session Date:** Pending dedicated session
+**Status:** 🔴 DRAFT — Initial concept notes only. Full design pending dedicated discussion session.
+**Scope:** FG production costing for Admix (MTO) and Hypershot (HPS) operation types.
+
+---
+
+> **Note:** This is a large, standalone chapter. A dedicated design session is required before any implementation begins. The initial concept notes below were captured in the 2026-06-08 session and need formal discovery, edge-case handling, and locking.
+
+---
+
+### 104.1 — Context: Toll Manufacturing for Asian Paints
+
+PACE ERP operates as a toll manufacturer for Asian Paints (AP). Two parallel cost systems run simultaneously — PACE internal costing and AP billing costing. A reconciliation (Reco) account bridges the two.
+
+---
+
+### 104.2 — Layer 1: PACE Internal Cost (WAR)
+
+| Item | Detail |
+|---|---|
+| Method | Weighted Average Rate (WAR) per material item |
+| Basis | Landed cost = Item cost + Freight cost + Unloading cost |
+| Update trigger | Every GRN — WAR recalculated automatically |
+| Scope | All RM and PM items |
+
+---
+
+### 104.3 — Layer 2: AP Monthly Standard Rate
+
+| Item | Detail |
+|---|---|
+| Set by | Asian Paints — confirmed at start of every month |
+| Validity | Entire month (fixed, does not change mid-month) |
+| Entry | Accounts team enters into PACE system at month start |
+| Scope | Per RM/PM item, per month |
+
+---
+
+### 104.4 — Layer 3: Sales Order Costing (AP Billing Basis)
+
+```
+Sales Order Cost = AP Monthly Rate + Operational Cost
+```
+
+This is what AP will pay PACE. Captured on the Sales Order when it arrives at dispatch time.
+
+---
+
+### 104.5 — Reco Account: Three Variance Sources
+
+| Variance | Formula | Description |
+|---|---|---|
+| Rate Variance | (AP Monthly Rate − PACE WAR) × actual qty | Rate difference on same material |
+| Quantity Variance | (Stroke standard qty − Actual qty used) × rate | Actual usage differs from standard formulation |
+| Stroke Mismatch Variance | AP confirmed cost (wrong stroke) − Actual stroke cost | AP sends confirmation based on incorrect formulation |
+
+**Initial rules (not yet locked):**
+- Reco account = bilateral clearing account (either side can be net debtor)
+- Settlement: monthly — net payable side pays the other
+- Systematic variances are expected (e.g. caustic liquid is always over-consumed vs standard) — not treated as system error
+- Costing gate at dispatch = SOFT — if AP confirmation mismatches, dispatch proceeds, differential captured in Reco
+
+---
+
+### 104.6 — Pending Design Topics (Dedicated Session Required)
+
+The following topics need formal discovery and locking:
+
+- [ ] Exact WAR calculation formula and rounding rules
+- [ ] AP Monthly Rate entry workflow and UI
+- [ ] Reco account ledger design — how entries are created per batch
+- [ ] Monthly settlement workflow — who initiates, who approves, what gets posted
+- [ ] Costing for MTEST batches (test/sample — no AP billing?)
+- [ ] Costing for FOR_REPROCESS material consumption (blended cost calculation)
+- [ ] Costing for balance barrels (partial fill — cost per KG vs cost per barrel)
+- [ ] Hypershot costing — same as Admix or different?
+- [ ] IWC and Powder costing — same framework or separate?
+- [ ] Financial year close — WAR reset rules
+- [ ] AP rate disputes — system handling
+
+---
+
+### 104.7 — Production AP Reco Model (LOCKED — 2026-07-04)
+
+**Status:** ✅ LOCKED (core model). Scenario 3 settlement policy remains open — see end of section.
+
+---
+
+#### Core Principle (LOCKED — 2026-07-04)
+
+```
+Stock Layer  — always 100% physical actual. P261 consumes actual RM qty.
+               P231 receives actual FG/SFG qty. Never filtered or adjusted
+               based on AP approval status.
+
+Reco Layer   — entirely separate. Only AP-approved portion flows into Reco.
+               Stock postings are NEVER modified to make Reco balance.
+```
+
+---
+
+#### AP Approved Qty Model (LOCKED — 2026-07-04)
+
+AP approval is tracked as a **quantity field per RM INPUT line** — not a binary flag.
+
+- `AP Approved Qty` = the quantity Asian Paints recognizes for billing/reco purposes.
+- Entered by Production at Final phase via Yes/No/Partial toggle (see Section 83.4 Final/Verify Line Table).
+- `AP Approved Qty` is independent of formulation membership — a material not in the formulation can still have AP Approved Qty > 0 (e.g. Caramel added ad-hoc but AP approved it).
+
+**AP Approved Output (SFG):**
+- Not entered separately.
+- Auto-calculated = SUM(AP Approved Qty for all INPUT lines).
+- Denominator for all dispatch Reco calculations.
+
+---
+
+#### Dispatch Reco Calculation (LOCKED — 2026-07-04)
+
+```
+Dispatch Ratio    = Dispatch Qty ÷ AP Approved Output Qty
+Per-RM AP Reco    = RM AP Approved Qty × Dispatch Ratio
+```
+
+> Denominator is **AP Approved Output** — not Actual Output.
+> Excess/shortfall production that AP did not approve is excluded from the denominator.
+
+**Example (10,000 KG AP Approved Output, 5,000 KG dispatch):**
+
+| RM | AP Approved | AP Reco (50% dispatch) |
+|---|---|---|
+| Water | 2,540 | 1,270 |
+| Caustic | 420.25 | 210.13 |
+| SR PCE | 2,800 | 1,400 |
+| Ligno | 900 | 450 |
+| Caramel | 0.75 | 0.375 |
+
+---
+
+#### Three Reports (LOCKED — 2026-07-04)
+
+| Report | Data Source | Purpose |
+|---|---|---|
+| **Production Report** | Actual Qty (all lines) | Physical batch record — what was consumed/produced |
+| **AP Reco Report** | AP Approved Qty × Dispatch Ratio | AP billing basis — what PACE shows AP for recognition |
+| **Costing Report** | Actual vs Standard vs AP Approved variance | Internal variance tracking per batch/dispatch |
+
+---
+
+#### Reversal Basis (LOCKED — 2026-07-04)
+
+When a Process PO is partially or fully reversed:
+
+```
+Reversal Ratio = Reversal Qty ÷ Actual Total FG Output
+Per-RM Reversed = Actual RM Qty × Reversal Ratio
+```
+
+> Reversal always uses **Actual** proportions — not AP Approved proportions.
+> Stock was consumed at actual ratios; stock must be restored at actual ratios.
+
+Separate AP Reco reversal:
+```
+AP Reco Reversal per RM = AP Approved Qty × Reversal Ratio
+```
+
+These are two separate calculations. Stock reversal and Reco reversal happen together but are computed independently.
+
+---
+
+#### Return Receipt (LOCKED — 2026-07-04)
+
+Customer returns packed barrels with only SKU + Qty — no FO/SO reference on label.
+
+**Batch Number is printed on every barrel label.** Return receipt requires Batch Number as mandatory field.
+
+From Batch Number → source Process PO → actual RM ratios derivable.
+
+```
+RM content in returned qty = Actual RM Ratio × Returned Qty
+AP Reco reversal           = AP Reco Ratio  × Returned Qty
+```
+
+Two separate reversals, computed from the same source batch record.
+
+---
+
+#### has_unapproved_deviation Flag (LOCKED — 2026-07-04)
+
+- System auto-sets `has_unapproved_deviation = TRUE` at Final save when **any INPUT line Variance > 0** (Actual Qty > AP Approved Qty).
+- Production does not mark this manually.
+- Batches with this flag appear in an analysis queue for review.
+- Flag persists on the batch record permanently — not cleared even if later dispatched/closed.
+
+---
+
+#### Excess FG (FOR_REPROCESS) (LOCKED — 2026-07-04)
+
+When Actual Output > AP Approved Output (e.g. 10,000.75 KG actual vs 10,000 KG approved), the excess (0.75 KG) goes to FOR_REPROCESS stock.
+
+**The excess barrel contains proportional shares of ALL RMs** — it is physically impossible to isolate which "extra" RM caused the excess. RM content of excess barrel = proportional share of all actual inputs.
+
+AP cannot be shown proportional actuals for normally-consumed RMs (e.g. showing Gluconate at 292.946 KG instead of 300 KG standard would cause underpayment for correctly-used material).
+
+**Resolution:** Excess FG is held in FOR_REPROCESS stock with source batch reference. AP Reco for excess is deferred — recognized when the excess is blended into a future batch that gets dispatched (Scenario 4 mechanism, see below).
+
+---
+
+#### Scenario Status (2026-07-04)
+
+**Scenario 1 — RM substitution within AP-approved tolerance** ✅ RESOLVED
+Caustic/Water trade-off (Caustic +50 KG, Water −50 KG, output unchanged). Set Approved = Yes for both lines at Final. AP recognizes full actual. No Reco issue.
+
+**Scenario 1b — Split dispatch of single batch** ✅ RESOLVED
+Dispatch Ratio applied per dispatch event. Un-dispatched portion stays "Pending Recognition" in Reco Layer.
+
+**Scenario 2 — Batch larger than order qty** ✅ RESOLVED
+Balance goes to Balance Packing PO (83.14 mechanism). Same proportional allocation applies: Batch → Packing PO → Dispatch.
+
+**Scenario 3 — Unapproved non-separable deviation** 🔴 OPEN
+Mistake + ad-hoc correction inflates output (e.g. 9,890 KG planned → 11,000 KG actual). Deviation is mixed into FG — physically inseparable from dispatched stock. AP will not recognize. PACE cannot write off (rejected by business owner). Unresolved variance tagged to Batch Number. **Requires Accounts/Commercial policy decision + AP alignment before production go-live.**
+
+**Scenario 4 — Small separable excess (salvage)** 🔶 DIRECTIONAL
+Minor excess held in FOR_REPROCESS (not dispatched today). Deferred recognition — recognized when blended into a future batch of same Prodshade. Salvage stock mechanism (blending workflow, valuation) not yet designed.
+
+---
+
+**⚠️ Still requires decision before go-live:**
+- [ ] Scenario 3 — settlement/write-off policy for unapproved, non-separable variance
+- [ ] Salvage/Excess stock blending workflow and valuation (Scenario 4 mechanism)
+

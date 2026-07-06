@@ -27,6 +27,15 @@ const ROUTE_TO_SCREEN_CODE = new Map(
   Object.values(SCREEN_REGISTRY).map((screen) => [screen.route, screen.screen_code])
 );
 
+// Pre-compiled regex entries for routes that contain ":param" segments.
+// Used as a fallback when an exact ROUTE_TO_SCREEN_CODE lookup fails.
+const DYNAMIC_ROUTE_PATTERNS = Object.values(SCREEN_REGISTRY)
+  .filter((screen) => screen.route.includes(":"))
+  .map((screen) => ({
+    regex: new RegExp("^" + screen.route.replace(/:[^/]+/g, "[^/]+") + "$"),
+    screen_code: screen.screen_code,
+  }));
+
 function generateStackEntryId() {
   if (typeof globalThis?.crypto?.randomUUID === "function") {
     return globalThis.crypto.randomUUID();
@@ -135,7 +144,16 @@ export function hasActiveStack() {
 }
 
 export function getScreenCodeForRoute(route) {
-  return ROUTE_TO_SCREEN_CODE.get(route) ?? null;
+  // 1. Fast exact match
+  const exact = ROUTE_TO_SCREEN_CODE.get(route);
+  if (exact) return exact;
+
+  // 2. Pattern match for dynamic ":param" routes (e.g. "/procurement/pos/:id")
+  for (const { regex, screen_code } of DYNAMIC_ROUTE_PATTERNS) {
+    if (regex.test(route)) return screen_code;
+  }
+
+  return null;
 }
 
 export function getScreenForRoute(route) {

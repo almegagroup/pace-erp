@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listVendors } from "../../om/omApi.js";
 import { getGRN, listGRNs } from "../procurementApi.js";
 
 const LIMIT = 50;
@@ -27,8 +28,6 @@ function statusTone(status) {
 export default function GRNListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
-  const [vendors, setVendors] = useState([]);
   const [companyId, setCompanyId] = useState("");
   const [status, setStatus] = useState("");
   const [vendorId, setVendorId] = useState("");
@@ -37,8 +36,6 @@ export default function GRNListPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
 
   const companyOptions = useMemo(
     () =>
@@ -48,7 +45,6 @@ export default function GRNListPage() {
       })),
     [runtimeContext?.availableCompanies]
   );
-  const vendorMap = useMemo(() => new Map(vendors.map((entry) => [entry.id, entry])), [vendors]);
 
   useEffect(() => {
     if (!companyId) {
@@ -64,62 +60,54 @@ export default function GRNListPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!companyId) return;
-      setLoading(true);
-      setError("");
-      try {
-        const [grnData, vendorData] = await Promise.all([
-          listGRNs({
-            company_id: companyId,
-            status: status || undefined,
-            vendor_id: vendorId || undefined,
-            date_from: dateFrom || undefined,
-            date_to: dateTo || undefined,
-            limit: LIMIT,
-          }),
-          listVendors({ limit: 200, offset: 0 }),
-        ]);
-        const baseRows = Array.isArray(grnData?.items) ? grnData.items : [];
-        const hydrated = await Promise.all(
-          baseRows.map(async (row) => {
-            try {
-              const detail = await getGRN(row.id);
-              const lines = Array.isArray(detail?.lines) ? detail.lines : [];
-              const totalQty = lines.reduce((sum, line) => sum + Number(line.received_qty ?? 0), 0);
-              return {
-                ...row,
-                ge_number: detail?.gate_entry?.ge_number || row.gate_entry_id || "",
-                total_qty: Number(totalQty.toFixed(6)),
-              };
-            } catch {
-              return {
-                ...row,
-                ge_number: row.gate_entry_id || "",
-                total_qty: 0,
-              };
-            }
-          })
-        );
-        if (!active) return;
-        setRows(hydrated);
-        setVendors(Array.isArray(vendorData?.data) ? vendorData.data : []);
-      } catch (loadError) {
-        if (!active) return;
-        setRows([]);
-        setVendors([]);
-        setError(loadError instanceof Error ? loadError.message : "GRN_LIST_FAILED");
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companyId, dateFrom, dateTo, status, vendorId]);
+  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const grnParams = useMemo(
+    () => ({
+      company_id: companyId,
+      status: status || undefined,
+      vendor_id: vendorId || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      limit: LIMIT,
+    }),
+    [companyId, dateFrom, dateTo, status, vendorId]
+  );
+  const grnQuery = useQuery({
+    queryKey: ["procurement", "grns", grnParams],
+    enabled: Boolean(companyId),
+    queryFn: async () => {
+      const grnData = await listGRNs(grnParams);
+      const baseRows = Array.isArray(grnData?.items) ? grnData.items : [];
+      return Promise.all(
+        baseRows.map(async (row) => {
+          try {
+            const detail = await getGRN(row.id);
+            const lines = Array.isArray(detail?.lines) ? detail.lines : [];
+            const totalQty = lines.reduce((sum, line) => sum + Number(line.received_qty ?? 0), 0);
+            return {
+              ...row,
+              ge_number: detail?.gate_entry?.ge_number || row.gate_entry_id || "",
+              total_qty: Number(totalQty.toFixed(6)),
+            };
+          } catch {
+            return {
+              ...row,
+              ge_number: row.gate_entry_id || "",
+              total_qty: 0,
+            };
+          }
+        })
+      );
+    },
+  });
+  const rows = Array.isArray(grnQuery.data) ? grnQuery.data : [];
+  const vendors = vendorQuery.vendors;
+  const loading = grnQuery.isLoading || vendorQuery.isLoading;
+  const error =
+    grnQuery.error?.message ||
+    vendorQuery.error?.message ||
+    "";
+  const vendorMap = useMemo(() => new Map(vendors.map((entry) => [entry.id, entry])), [vendors]);
 
   const filteredRows = useMemo(() => {
     if (!debouncedSearch) return rows;
@@ -139,7 +127,7 @@ export default function GRNListPage() {
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
 
   function openDetail(row) {
-    openScreen(OPERATION_SCREENS.PROC_GRN_DETAIL.screen_code);
+    openScreen(OPERATION_SCREENS.PROC_GRN_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/grns/${encodeURIComponent(row.id)}`);
   }
 
@@ -147,7 +135,15 @@ export default function GRNListPage() {
     <ErpMasterListTemplate
       eyebrow="Procurement"
       title="Goods Receipts"
-      actions={[{ key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) }]}
+      actions={[{
+        key: "refresh",
+        label: loading ? "Refreshing..." : "Refresh",
+        tone: "neutral",
+        onClick: () => {
+          void grnQuery.refetch();
+          void vendorQuery.refetch();
+        },
+      }]}
       notices={error ? [{ key: "grn-list-error", tone: "error", message: error }] : []}
       filterSection={{
         eyebrow: "Search And Filter",

@@ -9,96 +9,115 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listVendorMaterialInfos } from "../omApi.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { listVendorMaterialInfos, unmapVendorMaterialInfo } from "../omApi.js";
 
 const LIMIT = 50;
 
 export default function AslListPage() {
-  const [rows, setRows] = useState([]);
-  const [vendorId, setVendorId] = useState("");
-  const [materialId, setMaterialId] = useState("");
+  const [vendorSearch, setVendorSearch] = useState("");
+  const [materialSearch, setMaterialSearch] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [unmappingId, setUnmappingId] = useState(null);
+
+  const aslParams = useMemo(
+    () => ({
+      vendor_search: vendorSearch || undefined,
+      material_search: materialSearch || undefined,
+      status: status || undefined,
+      limit: LIMIT,
+      offset: (page - 1) * LIMIT,
+    }),
+    [materialSearch, page, status, vendorSearch]
+  );
+  const aslQuery = useQuery({
+    queryKey: ["om", "asl-list", aslParams],
+    queryFn: () => listVendorMaterialInfos(aslParams),
+  });
+  const rows = Array.isArray(aslQuery.data?.data) ? aslQuery.data.data : [];
+  const total = Number(aslQuery.data?.total ?? 0);
+  const loading = aslQuery.isLoading;
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const result = await listVendorMaterialInfos({
-          vendor_id: vendorId || undefined,
-          material_id: materialId || undefined,
-          status: status || undefined,
-          limit: LIMIT,
-          offset: (page - 1) * LIMIT,
-        });
-        if (!active) {
-          return;
-        }
-        setRows(Array.isArray(result?.data) ? result.data : []);
-        setTotal(Number(result?.total ?? 0));
-      } catch (loadError) {
-        if (!active) {
-          return;
-        }
-        setRows([]);
-        setTotal(0);
-        setError(loadError instanceof Error ? loadError.message : "OM_VMI_LIST_FAILED");
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [materialId, page, status, vendorId]);
+    setError(aslQuery.error?.message || "");
+  }, [aslQuery.error]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / LIMIT)), [total]);
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
+
+  async function handleUnmap(row) {
+    const confirmed = await openActionConfirm({
+      eyebrow: "Approved Source List",
+      title: "Unmap this vendor-material pair?",
+      message: `${row.vendor_code} | ${row.vendor_name} — ${row.pace_code} | ${row.material_name} will no longer be an approved source. This cannot be undone.`,
+      confirmLabel: "Unmap",
+    });
+    if (!confirmed) return;
+
+    setUnmappingId(row.id);
+    setError("");
+    setNotice("");
+    try {
+      await unmapVendorMaterialInfo(row.id);
+      setNotice(`Unmapped ${row.vendor_code} | ${row.pace_code}.`);
+      await aslQuery.refetch();
+    } catch (unmapError) {
+      setError(unmapError instanceof Error ? unmapError.message : "OM_VMI_UNMAP_FAILED");
+    } finally {
+      setUnmappingId(null);
+    }
+  }
 
   return (
     <ErpMasterListTemplate
       eyebrow="Operation Management"
       title="Approved Source List"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
+        {
+          key: "refresh",
+          label: loading ? "Refreshing..." : "Refresh",
+          tone: "neutral",
+          onClick: () => void aslQuery.refetch(),
+        },
         { key: "create", label: "Create ASL Row", tone: "primary", onClick: () => openScreen(OPERATION_SCREENS.OM_ASL_CREATE.screen_code) },
       ]}
-      notices={error ? [{ key: "error", tone: "error", message: error }] : []}
+      notices={[
+        ...(error ? [{ key: "error", tone: "error", message: error }] : []),
+        ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
+      ]}
       filterSection={{
         eyebrow: "Lookup Filters",
         title: "Vendor-material pair filter",
         children: (
           <div className="grid gap-3 lg:grid-cols-3">
-            <ErpDenseFormRow label="Vendor ID">
+            <ErpDenseFormRow label="Vendor">
               <input
-                value={vendorId}
+                placeholder="Code or name..."
+                value={vendorSearch}
                 onChange={(event) => {
-                  setVendorId(event.target.value);
+                  setVendorSearch(event.target.value);
                   setPage(1);
                 }}
                 className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
             </ErpDenseFormRow>
-            <ErpDenseFormRow label="Material ID">
+            <ErpDenseFormRow label="Material">
               <input
-                value={materialId}
+                placeholder="PACE code or name..."
+                value={materialSearch}
                 onChange={(event) => {
-                  setMaterialId(event.target.value);
+                  setMaterialSearch(event.target.value);
                   setPage(1);
                 }}
                 className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
@@ -136,11 +155,31 @@ export default function AslListPage() {
             />
             <ErpDenseGrid
               columns={[
-                { key: "vendor_id", label: "Vendor ID" },
-                { key: "material_id", label: "Material ID" },
-                { key: "po_uom_code", label: "PO UOM" },
-                { key: "conversion_factor", label: "Factor" },
+                { key: "vendor_code", label: "Vendor Code" },
+                { key: "vendor_name", label: "Vendor Name" },
+                { key: "pace_code", label: "PACE Code" },
+                { key: "material_name", label: "Material Name" },
+                { key: "default_uom_code", label: "Default UOM" },
+                { key: "default_currency_code", label: "Default Currency" },
                 { key: "status", label: "Status" },
+                {
+                  key: "actions",
+                  label: "",
+                  width: "100px",
+                  render: (row) => (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleUnmap(row);
+                      }}
+                      disabled={unmappingId === row.id}
+                      className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {unmappingId === row.id ? "..." : "Unmap"}
+                    </button>
+                  ),
+                },
               ]}
               rows={rows}
               rowKey={(row) => row.id}

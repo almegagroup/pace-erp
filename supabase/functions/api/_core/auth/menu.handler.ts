@@ -950,7 +950,8 @@ console.log("🟡 PREVIEW_SNAPSHOT_CALL", {
       route_path,
       menu_type,
       parent_menu_code,
-      display_order
+      display_order,
+      tx_code
     `)
     .eq("user_id", targetUserId)
     .eq("universe", universe)

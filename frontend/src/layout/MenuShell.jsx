@@ -32,6 +32,7 @@ import {
   unsubscribeWorkspaceShell,
 } from "../store/workspaceShell.js";
 import { lockWorkspace } from "../store/workspaceLock.js";
+import { subscribeWideWorkspace } from "../store/wideWorkspace.js";
 import {
   getClusterAdmission,
   openPendingClusterWindow,
@@ -240,6 +241,7 @@ export default function MenuShell() {
   const [collapsed, setCollapsed] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [actionRailCollapsed, setActionRailCollapsed] = useState(false);
+  const [wideWorkspace, setWideWorkspace] = useState(false);
   const [activeZone, setActiveZone] = useState("content");
   const [menuFocusIndex, setMenuFocusIndex] = useState(0);
   const [drawerPath, setDrawerPath] = useState([]);
@@ -313,11 +315,26 @@ export default function MenuShell() {
       : 0;
 
   const activeTitle = useMemo(() => {
-    const menuMatch = menu.find((item) => item.route_path === location.pathname);
-    if (menuMatch?.title) {
-      return menuMatch.title;
+    // 1. Exact menu match (covers static routes)
+    const exactMenuMatch = menu.find((item) => item.route_path === location.pathname);
+    if (exactMenuMatch?.title) {
+      return exactMenuMatch.title;
     }
 
+    // 2. Pattern match for dynamic ":param" routes (e.g. PO Detail, GRN Detail)
+    //    Find a menu item whose route_path is a pattern that matches the current path.
+    const patternMenuMatch = menu.find((item) => {
+      if (!item.route_path?.includes(":")) return false;
+      const regex = new RegExp(
+        "^" + item.route_path.replace(/:[^/]+/g, "[^/]+") + "$"
+      );
+      return regex.test(location.pathname);
+    });
+    if (patternMenuMatch?.title) {
+      return patternMenuMatch.title;
+    }
+
+    // 3. Fall back to screen registry title (screen_code → human-readable label)
     const screenMatch = getScreenForRoute(location.pathname);
     if (screenMatch?.screen_code) {
       return formatScreenTitle(screenMatch.screen_code);
@@ -736,6 +753,8 @@ export default function MenuShell() {
     subscribeWorkspaceShell(listener);
     return () => unsubscribeWorkspaceShell(listener);
   }, []);
+
+  useEffect(() => subscribeWideWorkspace(setWideWorkspace), []);
 
   useEffect(() => {
     const listener = (snapshot) => {
@@ -1400,8 +1419,8 @@ export default function MenuShell() {
       id: `menu-${item.menu_code}`,
       group: "Navigation",
       label: `Open ${item.title}`,
-      hint: `${index + 1}`,
-      keywords: [item.title, item.route_path].filter(Boolean),
+      hint: item.tx_code ?? `${index + 1}`,
+      keywords: [item.title, item.route_path, item.tx_code].filter(Boolean),
       perform: () => handleMenuRoute(item.route_path),
       order: 200 + index,
     }));
@@ -1438,7 +1457,8 @@ export default function MenuShell() {
     <div className="erp-app-shell flex h-screen overflow-hidden text-slate-900">
       <aside
         aria-label="Workspace navigation"
-        className={`flex shrink-0 flex-col border-r bg-[#f4f7fa] ${workspaceMode ? "w-[92px]" : collapsed ? "w-[92px]" : aclWorkspace ? "w-[236px]" : "w-[272px]"} ${zoneBorder(activeZone, "menu")}`}
+        className={`flex shrink-0 flex-col border-r bg-[#f4f7fa] ${wideWorkspace ? "w-0 overflow-hidden border-none" : workspaceMode ? "w-[92px]" : collapsed ? "w-[92px]" : aclWorkspace ? "w-[236px]" : "w-[272px]"} ${zoneBorder(activeZone, "menu")}`}
+        aria-hidden={wideWorkspace}
       >
         <div className="border-b border-slate-500 bg-[linear-gradient(180deg,#0d4f90_0%,#13426f_100%)] px-3 py-3 text-white">
           <div className="flex items-center gap-2">
@@ -1572,6 +1592,7 @@ export default function MenuShell() {
                           menuButtonRefs.current[index] = element;
                         }}
                         type="button"
+                        title={node.item.title}
                         onFocus={() => {
                           setActiveZone("menu");
                           setMenuFocusIndex(index);
@@ -1590,7 +1611,16 @@ export default function MenuShell() {
                         <span className="font-mono text-[11px] text-slate-500">
                           {(index + 1).toString().padStart(2, "0")}
                         </span>
-                        {!collapsed ? <span className="truncate">{node.item.title}</span> : null}
+                        {!collapsed ? (
+                          <span className="min-w-0">
+                            <span className="block truncate">{node.item.title}</span>
+                            {node.item.tx_code ? (
+                              <span className="block font-mono text-[14px] text-slate-400 leading-tight">
+                                {node.item.tx_code}
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : null}
                         {!collapsed ? (
                           <span className="justify-self-end text-[11px] text-slate-400">
                             {hasChildren ? "+" : ""}
@@ -1654,6 +1684,7 @@ export default function MenuShell() {
                           drawerButtonRefs.current[index] = element;
                         }}
                         type="button"
+                        title={node.item.title}
                         onFocus={() => {
                           setActiveZone("menu");
                           setDrawerFocusIndex(index);
@@ -1670,7 +1701,14 @@ export default function MenuShell() {
                         <span className="font-mono text-[11px] text-slate-500">
                           {(index + 1).toString().padStart(2, "0")}
                         </span>
-                        <span className="truncate">{node.item.title}</span>
+                        <span className="min-w-0">
+                          <span className="block truncate">{node.item.title}</span>
+                          {node.item.tx_code ? (
+                            <span className="block font-mono text-[14px] text-slate-400 leading-tight">
+                              {node.item.tx_code}
+                            </span>
+                          ) : null}
+                        </span>
                         <span className="justify-self-end text-[11px] text-slate-400">
                           {hasChildren ? "+" : ""}
                         </span>

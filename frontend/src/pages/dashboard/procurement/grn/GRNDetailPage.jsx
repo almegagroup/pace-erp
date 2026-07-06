@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { listMaterials } from "../../om/omApi.js";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { getGRN, postGRN, reverseGRN, updateGRNDraft } from "../procurementApi.js";
+import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 function badgeTone(status) {
@@ -21,14 +25,23 @@ function badgeTone(status) {
 }
 
 export default function GRNDetailPage() {
-  const { id = "" } = useParams();
-  const [detail, setDetail] = useState(null);
-  const [materials, setMaterials] = useState([]);
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
+  const queryClient = useQueryClient();
   const [lines, setLines] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
+  const detailQuery = useQuery({
+    queryKey: ["procurement", "grn-detail", id],
+    enabled: Boolean(id),
+    queryFn: () => getGRN(id),
+  });
+  const detail = detailQuery.data ?? null;
+  const materials = materialQuery.materials;
+  const loading = detailQuery.isLoading || materialQuery.isLoading;
 
   const materialMap = useMemo(() => new Map(materials.map((entry) => [entry.id, entry])), [materials]);
   const weightedMode = useMemo(
@@ -48,31 +61,13 @@ export default function GRNDetailPage() {
     [lines]
   );
 
-  async function loadDetail() {
-    if (!id) return;
-    setLoading(true);
-    setError("");
-    try {
-      const [grnData, materialData] = await Promise.all([
-        getGRN(id),
-        listMaterials({ limit: 200, offset: 0 }),
-      ]);
-      setDetail(grnData);
-      setLines(Array.isArray(grnData?.lines) ? grnData.lines : []);
-      setMaterials(Array.isArray(materialData?.data) ? materialData.data : []);
-    } catch (loadError) {
-      setDetail(null);
-      setLines([]);
-      setMaterials([]);
-      setError(loadError instanceof Error ? loadError.message : "GRN_FETCH_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }
+  useEffect(() => {
+    setError(detailQuery.error?.message || materialQuery.error?.message || "");
+  }, [detailQuery.error?.message, materialQuery.error?.message]);
 
   useEffect(() => {
-    void loadDetail();
-  }, [id]);
+    setLines(Array.isArray(detail?.lines) ? detail.lines : []);
+  }, [detail]);
 
   function updateLine(lineId, patch) {
     setLines((current) =>
@@ -108,7 +103,7 @@ export default function GRNDetailPage() {
         })),
       };
       const updated = await updateGRNDraft(detail.id, payload);
-      setDetail(updated);
+      queryClient.setQueryData(["procurement", "grn-detail", id], updated);
       setLines(Array.isArray(updated?.lines) ? updated.lines : []);
       setNotice("GRN draft saved.");
     } catch (saveError) {
@@ -120,14 +115,14 @@ export default function GRNDetailPage() {
 
   async function handlePost() {
     if (!detail?.id) return;
-    const confirmed = window.confirm("This will post stock movement. Cannot be undone without reversal.");
+    const confirmed = await openActionConfirm({ eyebrow: "GRN", title: "Post this GRN?", message: "This will post stock movement. Cannot be undone without reversal.", confirmLabel: "Post GRN" });
     if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");
     try {
       const posted = await postGRN(detail.id);
-      setDetail(posted);
+      queryClient.setQueryData(["procurement", "grn-detail", id], posted);
       setLines(Array.isArray(posted?.lines) ? posted.lines : []);
       setNotice(`GRN posted. ${stockSummary.qaLines} QA line(s), total qty ${stockSummary.totalQty.toFixed(3)}.`);
     } catch (saveError) {
@@ -139,16 +134,14 @@ export default function GRNDetailPage() {
 
   async function handleReverse() {
     if (!detail?.id) return;
-    const reason = window.prompt("Reversal reason", "");
+    const reason = await openActionPrompt({ eyebrow: "GRN", title: "Reverse this GRN?", label: "Reversal reason", required: true });
     if (!reason) return;
-    const confirmed = window.confirm("Reverse this posted GRN?");
-    if (!confirmed) return;
     setSaving(true);
     setError("");
     setNotice("");
     try {
       const reversed = await reverseGRN(detail.id, { reversal_reason: reason });
-      setDetail(reversed);
+      queryClient.setQueryData(["procurement", "grn-detail", id], reversed);
       setLines(Array.isArray(reversed?.lines) ? reversed.lines : []);
       setNotice("GRN reversed.");
     } catch (saveError) {
@@ -242,10 +235,12 @@ export default function GRNDetailPage() {
                   width: "140px",
                   render: (row) =>
                     detail.status === "DRAFT" ? (
-                      <input
+                      <LocationSelect
+                        companyId={detail.company_id}
+                        projectCode="PRJ009"
                         value={row.storage_location_id ?? ""}
-                        onChange={(event) => updateLine(row.id, { storage_location_id: event.target.value })}
-                        className="h-7 w-full border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
+                        onChange={(id) => updateLine(row.id, { storage_location_id: id })}
+                        size="xs"
                       />
                     ) : (
                       row.storage_location_id || "—"

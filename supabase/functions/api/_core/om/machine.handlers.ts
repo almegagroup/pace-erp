@@ -43,7 +43,7 @@ export async function createMachineHandler(
     assertOmSaContext(ctx);
 
     const body = await parseBody(req);
-    const plantId = toTrimmedString(body.plant_id);
+    const companyId = toTrimmedString(body.company_id);
     const machineCode = toTrimmedString(body.machine_code).toUpperCase();
     const machineName = toTrimmedString(body.machine_name);
     const machineType = toTrimmedString(body.machine_type).toUpperCase();
@@ -51,7 +51,7 @@ export async function createMachineHandler(
       ? Number(body.capacity_per_batch)
       : null;
 
-    if (!plantId || !machineCode || !machineName || !MACHINE_TYPES.has(machineType)) {
+    if (!companyId || !machineCode || !machineName || !MACHINE_TYPES.has(machineType)) {
       return machineErrorResponse(req, ctx, "OM_MACHINE_CREATE_FAILED", 400, "Invalid machine input");
     }
     if (capacityPerBatch != null && (!Number.isFinite(capacityPerBatch) || capacityPerBatch <= 0)) {
@@ -62,12 +62,13 @@ export async function createMachineHandler(
       .schema("erp_master")
       .from("machine_master")
       .insert({
-        plant_id: plantId,
+        company_id: companyId,
         machine_code: machineCode,
         machine_name: machineName,
         machine_type: machineType,
         capacity_per_batch: capacityPerBatch,
         capacity_uom_code: toTrimmedString(body.capacity_uom_code).toUpperCase() || null,
+        cost_center_id: toTrimmedString(body.cost_center_id) || null,
         description: toTrimmedString(body.description) || null,
         active: true,
         created_by: ctx.auth_user_id,
@@ -98,18 +99,18 @@ export async function listMachinesHandler(
     assertOmAdminContext(ctx);
 
     const url = new URL(req.url);
-    const plantId = toTrimmedString(url.searchParams.get("plant_id"));
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const machineType = toTrimmedString(url.searchParams.get("machine_type")).toUpperCase();
     const active = url.searchParams.get("active");
 
     let query = serviceRoleClient
       .schema("erp_master")
       .from("machine_master")
-      .select("*")
+      .select("*, cost_center:cost_center_id(id, cost_center_code, cost_center_name)")
       .order("machine_code", { ascending: true });
 
-    if (plantId) {
-      query = query.eq("plant_id", plantId);
+    if (companyId) {
+      query = query.eq("company_id", companyId);
     }
     if (machineType) {
       query = query.eq("machine_type", machineType);
@@ -130,5 +131,81 @@ export async function listMachinesHandler(
     const code = (err as Error).message || "OM_MACHINE_LIST_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
     return machineErrorResponse(req, ctx, code, status, "Machine list failed");
+  }
+}
+
+export async function updateMachineHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmSaContext(ctx);
+
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    const machineName = toTrimmedString(body.machine_name);
+    const machineType = toTrimmedString(body.machine_type).toUpperCase();
+    const capacityPerBatch = body.capacity_per_batch != null && body.capacity_per_batch !== ""
+      ? Number(body.capacity_per_batch)
+      : null;
+
+    if (!id || !machineName || !MACHINE_TYPES.has(machineType)) {
+      return machineErrorResponse(req, ctx, "OM_MACHINE_UPDATE_FAILED", 400, "Invalid update input");
+    }
+    if (capacityPerBatch != null && (!Number.isFinite(capacityPerBatch) || capacityPerBatch <= 0)) {
+      return machineErrorResponse(req, ctx, "OM_MACHINE_UPDATE_FAILED", 400, "Invalid machine capacity");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("machine_master")
+      .update({
+        machine_name: machineName,
+        machine_type: machineType,
+        capacity_per_batch: capacityPerBatch,
+        capacity_uom_code: toTrimmedString(body.capacity_uom_code).toUpperCase() || null,
+        cost_center_id: toTrimmedString(body.cost_center_id) || null,
+        description: toTrimmedString(body.description) || null,
+      })
+      .eq("id", id);
+
+    if (error) throw new Error("OM_MACHINE_UPDATE_FAILED");
+
+    return okResponse({ ok: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_MACHINE_UPDATE_FAILED";
+    const status = code === "OM_SA_REQUIRED" ? 403 : 400;
+    return machineErrorResponse(req, ctx, code, status, "Machine update failed");
+  }
+}
+
+export async function toggleMachineHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    assertOmSaContext(ctx);
+
+    const body = await parseBody(req);
+    const id = toTrimmedString(body.id);
+    const active = body.active === true || body.active === "true";
+
+    if (!id) {
+      return machineErrorResponse(req, ctx, "OM_MACHINE_TOGGLE_FAILED", 400, "Machine ID required");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("machine_master")
+      .update({ active })
+      .eq("id", id);
+
+    if (error) throw new Error("OM_MACHINE_TOGGLE_FAILED");
+
+    return okResponse({ ok: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "OM_MACHINE_TOGGLE_FAILED";
+    const status = code === "OM_SA_REQUIRED" ? 403 : 400;
+    return machineErrorResponse(req, ctx, code, status, "Machine toggle failed");
   }
 }

@@ -22,7 +22,6 @@ type StockReportHandlerContext = {
 
 type ValuationRow = {
   material_id: string;
-  plant_id: string;
   company_id: string;
   base_uom_code: string;
   total_qty: number;
@@ -77,7 +76,6 @@ export async function getStockLedgerReportHandler(
 
     const url = new URL(req.url);
     const materialId = toTrimmedString(url.searchParams.get("material_id"));
-    const plantId = toTrimmedString(url.searchParams.get("plant_id"));
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
@@ -102,9 +100,6 @@ export async function getStockLedgerReportHandler(
       .order("ledger_seq", { ascending: true })
       .range(offset, offset + limit - 1);
 
-    if (plantId) {
-      query = query.eq("plant_id", plantId);
-    }
     if (companyId) {
       query = query.eq("company_id", companyId);
     }
@@ -157,7 +152,6 @@ export async function getCurrentStockHandler(
     assertProcurementReadRole(ctx);
 
     const url = new URL(req.url);
-    const plantId = toTrimmedString(url.searchParams.get("plant_id"));
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const materialId = toTrimmedString(url.searchParams.get("material_id"));
     const stockTypeCode = normalizeStockTypeFilter(
@@ -170,11 +164,8 @@ export async function getCurrentStockHandler(
       .from("stock_snapshot")
       .select("*")
       .order("material_id", { ascending: true })
-      .order("plant_id", { ascending: true });
+      .order("company_id", { ascending: true });
 
-    if (plantId) {
-      query = query.eq("plant_id", plantId);
-    }
     if (companyId) {
       query = query.eq("company_id", companyId);
     }
@@ -222,19 +213,15 @@ export async function getStockValuationHandler(
     assertProcurementReadRole(ctx);
 
     const url = new URL(req.url);
-    const plantId = toTrimmedString(url.searchParams.get("plant_id"));
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const materialId = toTrimmedString(url.searchParams.get("material_id"));
 
     let query = serviceRoleClient
       .schema("erp_inventory")
       .from("stock_snapshot")
-      .select("material_id, plant_id, company_id, base_uom_code, quantity, value")
+      .select("material_id, company_id, base_uom_code, quantity, value")
       .gt("quantity", 0);
 
-    if (plantId) {
-      query = query.eq("plant_id", plantId);
-    }
     if (companyId) {
       query = query.eq("company_id", companyId);
     }
@@ -257,13 +244,12 @@ export async function getStockValuationHandler(
     for (const rawRow of data ?? []) {
       const row = rawRow as JsonRecord;
       const rowMaterialId = String(row.material_id);
-      const rowPlantId = String(row.plant_id);
-      const key = `${rowMaterialId}__${rowPlantId}`;
+      const rowCompanyId = String(row.company_id);
+      const key = `${rowMaterialId}__${rowCompanyId}`;
       if (!aggMap.has(key)) {
         aggMap.set(key, {
           material_id: rowMaterialId,
-          plant_id: rowPlantId,
-          company_id: String(row.company_id),
+          company_id: rowCompanyId,
           base_uom_code: String(row.base_uom_code),
           total_qty: 0,
           total_value: 0,
@@ -289,7 +275,7 @@ export async function getStockValuationHandler(
     result.sort(
       (left, right) =>
         left.material_id.localeCompare(right.material_id)
-        || left.plant_id.localeCompare(right.plant_id),
+        || left.company_id.localeCompare(right.company_id),
     );
 
     const grandTotalValue = Math.round(
