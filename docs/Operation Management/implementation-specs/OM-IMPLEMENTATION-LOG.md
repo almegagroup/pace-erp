@@ -1279,8 +1279,8 @@ Non-gate bugfixes and UX improvements done directly by Claude (no Codex task).
 
 ---
 
-*Last Updated: 2026-06-19*
-*Next: Continue page-by-page review — OM03 onwards*
+*Last Updated: 2026-07-06*
+*Next: Apply migration 20260706070000 → verify Gate-27 Extension routes + pages → commit all untracked files*
 
 ---
 
@@ -1507,4 +1507,85 @@ Full L3 Production domain for Liquid first (Admix, HPS, IWC):
 ### Gate-27 Status: ✅ VERIFIED
 
 All DB, Backend, Frontend, ACL, and Snapshot steps complete. Production pages visible in sidebar for all ACL users across all 4 business companies.
+
+---
+
+## Gate-27 Extension — Pack BOM, Stroke Change Request, Production Workflow Pages
+
+**Started:** 2026-07-06
+**Completed:** 2026-07-06
+**Implemented by:** Claude (same session as Gate-27)
+**Status:** DONE — pending commit + verification
+
+### Scope
+
+Second implementation wave within Gate-27. Adds:
+- Pack BOM domain (create → approve → change request → approve change)
+- Stroke Change Request domain (material substitution on live strokes)
+- 17 dedicated production workflow pages (PR02–PR17) replacing inline actions in ProcessOrderPage/PackingOrderPage
+- SA Pack Code Master page
+
+### DB — Migration
+
+| Migration | Purpose | Status |
+|-----------|---------|--------|
+| `20260706070000_gate27_pack_bom_change_request.sql` | `erp_production.pack_bom`, `pack_bom_line`, `pack_bom_change_request`, `pack_bom_change_request_line` tables + `stroke_change_request`, `stroke_change_request_line` tables + `erp_master.fg_material_seq` sequence | ✅ Applied (MCP) |
+
+### Backend Files
+
+| File | File-ID | Handlers | Status |
+|------|---------|----------|--------|
+| `supabase/functions/api/_core/production/stroke_change_request.handlers.ts` | 27.3 | 5: list, get, create, approve, reject | DONE |
+| `supabase/functions/api/_core/production/pack_bom.handlers.ts` | 27.4 | 9: listPackBoms, getPackBom, createPackBom, approvePackBom, rejectPackBom, createPackBomChangeRequest, listPackBomChangeRequests, approvePackBomChangeRequest, rejectPackBomChangeRequest | DONE |
+| `supabase/functions/api/_core/production/pack_config.handlers.ts` | — | Modified: route additions for SAPackCodeMasterPage | DONE |
+| `supabase/functions/api/_routes/production.routes.ts` | — | ~20 new route cases added (stroke-change-requests, pack-boms, pack-bom-change-requests routes) | DONE |
+
+**Key business rules implemented:**
+- Pack BOM create: auto-ACTIVE if `bom_required = false` on pack_code_master (599/000/001); DRAFT otherwise
+- Pack BOM approve: Manager can edit PM lines before approving; atomically replaces lines
+- Pack BOM change request: one pending DRAFT allowed per BOM; approve applies ADD/REMOVE/EDIT changes atomically to live BOM lines
+- Stroke change request: one DRAFT per stroke; approve updates `stroke_line.material_id` directly
+
+### Frontend — SA Screen
+
+| File | File-ID | Purpose | Status |
+|------|---------|---------|--------|
+| `frontend/src/admin/sa/screens/SAPackCodeMasterPage.jsx` | 27.SA-02 | 2-tab SA admin: Tab 1 = Pack Code Catalog (toggle active/inactive), Tab 2 = Prodshade Pack Config (upsert + delete) | DONE |
+
+### Frontend — Production Pages (PR02–PR17)
+
+| File | File-ID | Purpose | Who Can Access | Status |
+|------|---------|---------|----------------|--------|
+| `frontend/src/pages/dashboard/production/StrokeApprovalPage.jsx` | 27.FE-PR02 | Manager reviews + approves/reverts DRAFT strokes | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ChangeBomItemPage.jsx` | 27.FE-PR03 | L1/L2 Manager creates material-substitution change request on ACTIVE stroke → DRAFT for L3 approval | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ChangeBomItemApprovalPage.jsx` | 27.FE-PR04 | L3 Manager approves/rejects stroke change requests; on approve live stroke lines updated | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/PackBomCreatePage.jsx` | 27.FE-PR05 | Create Pack BOM for FG SKU with PM lines; BOM status depends on pack_code bom_required flag | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/PackBomApprovalPage.jsx` | 27.FE-PR06 | L1 Manager reviews DRAFT Pack BOMs; can edit PM lines inline before approving | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ChangePackBomPage.jsx` | 27.FE-PR07 | Propose ADD/REMOVE/EDIT changes to ACTIVE Pack BOM → DRAFT change request for PR08 queue | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ChangePackBomApprovalPage.jsx` | 27.FE-PR08 | L1 Manager approves/rejects Pack BOM change requests; changes applied atomically on approval | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx` | 27.FE-PR09 | 2-tab create form: Tab 1 = Process PO (type, prodshade, stroke, qty, date), Tab 2 = Packing PO (linked to Process PO) | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ProductionPOEditPage.jsx` | 27.FE-PR10 | Edit Process PO qty adjustments + machine assignment when status = QA_APPROVED or BATCH_STARTED | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ProductionPOFinalPage.jsx` | 27.FE-PR11 | Enter actual quantities for Process PO or Packing PO (COR6-Final step) | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/ProductionPOVerifyPage.jsx` | 27.FE-PR12 | QA confirms actuals vs batch paper + posts stock movements (COR6-Verify); also handles Correction Mode for VERIFIED POs | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/OrderListPage.jsx` | 27.FE-PR13 | Combined Process PO + Packing PO list (COID equivalent); 2 tabs, status chip filters | All ACL | DONE |
+| `frontend/src/pages/dashboard/production/BatchVariancePage.jsx` | 27.FE-PR14 | Report: planned qty vs actual qty variance per Process PO batch; colour-coded delta | All ACL | DONE |
+| `frontend/src/pages/dashboard/production/ReversalPage.jsx` | 27.FE-PR15 | Step-by-step reversal for any Process PO or Packing PO stage; explains what each reversal does | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/QAQueuePage.jsx` | 27.FE-PR16 | QA Approval Queue — lists STANDARD status Process POs; QA approves or rejects with reason | Manager+ | DONE |
+| `frontend/src/pages/dashboard/production/BatchReleasePage.jsx` | 27.FE-PR17 | Manager releases batch numbers for QA_APPROVED Process POs (calls startBatch endpoint) | Manager+ | DONE |
+
+### Navigation Wiring
+
+| File | Change | Status |
+|------|--------|--------|
+| `frontend/src/navigation/screens/adminScreens.js` | SA_PROD_PACK_CODE_MASTER screen entry added | DONE |
+| `frontend/src/navigation/screens/projects/operationModule/operationScreens.js` | New PROD_* screen codes for PR02–PR17 + SA pack code master | DONE |
+| `frontend/src/router/AppRouter.jsx` | Imports + Routes for all 17 new production pages + SAPackCodeMasterPage | DONE |
+| `frontend/src/pages/dashboard/production/prodApi.js` | New API functions: createStrokeChangeRequest, listStrokeChangeRequests, getStrokeChangeRequest, approveStrokeChangeRequest, rejectStrokeChangeRequest, createPackBom, listPackBoms, getPackBom, approvePackBom, rejectPackBom, createPackBomChangeRequest, listPackBomChangeRequests, approvePackBomChangeRequest, rejectPackBomChangeRequest | DONE |
+
+### ⚠️ Pending Actions
+
+- [ ] `production.routes.ts` — new routes reference new handlers but not verified end-to-end
+- [ ] All 17 new frontend pages — navigation wiring in AppRouter.jsx not confirmed
+- [ ] All untracked files need git commit
+- [ ] Verification pass by Claude needed before marking VERIFIED
 
