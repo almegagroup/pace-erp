@@ -34,7 +34,12 @@ VALUES
   ('PROC_OPENING_STOCK_LIST', 'Opening Stock', 'Opening stock migration document list.', true)
 ON CONFLICT (menu_code) DO NOTHING;
 
--- ─── 3. Add capability_menu_actions (list page only) ─────────────────────────
+-- ─── 3. Ensure capability exists (was added via MCP on dev, needs to be idempotent for prod) ──
+INSERT INTO acl.capabilities (capability_code, capability_name, description, is_system)
+VALUES ('CAP_PROC_INVENTORY', 'Inventory & Reports', 'Stock reports and physical inventory', false)
+ON CONFLICT (capability_code) DO NOTHING;
+
+-- ─── 4. Add capability_menu_actions (list page only) ─────────────────────────
 INSERT INTO acl.capability_menu_actions (capability_code, menu_id, action, allowed)
 SELECT 'CAP_PROC_INVENTORY', am.id, 'VIEW', true
 FROM acl.menu_master am WHERE am.menu_code = 'PROC_OPENING_STOCK_LIST'
