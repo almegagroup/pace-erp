@@ -86,3 +86,21 @@ export const updatePackingOrderLines = (id, body) => fetchProd("PATCH", `/api/pr
 export const linkFo = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/link-fo`, body);
 export const finalizePackingOrder = (id, body) => fetchProd("POST", `/api/production/packing-orders/${id}/finalize`, body);
 export const reversePackingOrder = (id) => fetchProd("POST", `/api/production/packing-orders/${id}/reverse`);
+
+// ── Stroke Change Requests (PR03/PR04) ────────────────────────────────────────
+export const listStrokeChangeRequests = (p) => fetchProd("GET", "/api/production/stroke-change-requests", undefined, p);
+export const getStrokeChangeRequest = (id) => fetchProd("GET", `/api/production/stroke-change-requests/${id}`);
+export const createStrokeChangeRequest = (body) => fetchProd("POST", "/api/production/stroke-change-requests", body);
+export const approveStrokeChangeRequest = (id, body) => fetchProd("POST", `/api/production/stroke-change-requests/${id}/approve`, body ?? {});
+export const rejectStrokeChangeRequest = (id, body) => fetchProd("POST", `/api/production/stroke-change-requests/${id}/reject`, body);
+
+// ── Pack BOMs (PR05/PR06/PR07/PR08) ──────────────────────────────────────────
+export const listPackBoms = (p) => fetchProd("GET", "/api/production/pack-boms", undefined, p);
+export const getPackBom = (id) => fetchProd("GET", `/api/production/pack-boms/${id}`);
+export const createPackBom = (body) => fetchProd("POST", "/api/production/pack-boms", body);
+export const approvePackBom = (id, body) => fetchProd("POST", `/api/production/pack-boms/${id}/approve`, body ?? {});
+export const rejectPackBom = (id, body) => fetchProd("POST", `/api/production/pack-boms/${id}/reject`, body);
+export const createPackBomChangeRequest = (id, body) => fetchProd("POST", `/api/production/pack-boms/${id}/change-request`, body);
+export const listPackBomChangeRequests = (p) => fetchProd("GET", "/api/production/pack-bom-change-requests", undefined, p);
+export const approvePackBomChangeRequest = (id, body) => fetchProd("POST", `/api/production/pack-bom-change-requests/${id}/approve`, body ?? {});
+export const rejectPackBomChangeRequest = (id, body) => fetchProd("POST", `/api/production/pack-bom-change-requests/${id}/reject`, body);

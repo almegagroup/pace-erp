@@ -308,6 +308,30 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_OM_PACK_CODE_MASTER: {
+    screen_code: "SA_OM_PACK_CODE_MASTER",
+    route: "/sa/om/pack-code-master",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_PROD_BATCH_SERIES: {
+    screen_code: "SA_PROD_BATCH_SERIES",
+    route: "/sa/production/batch-series",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  SA_PROD_SEGMENT_LOCATIONS: {
+    screen_code: "SA_PROD_SEGMENT_LOCATIONS",
+    route: "/sa/production/segment-locations",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   GA_HOME: {
     screen_code: "GA_HOME",
     route: "/ga/home",

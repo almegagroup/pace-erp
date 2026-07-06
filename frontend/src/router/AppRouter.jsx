@@ -69,6 +69,7 @@ import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
 import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
 import SAProductionBatchSeriesPage from "../admin/sa/screens/SAProductionBatchSeriesPage.jsx";
 import SAProductionSegmentLocationPage from "../admin/sa/screens/SAProductionSegmentLocationPage.jsx";
+import SAPackCodeMasterPage from "../admin/sa/screens/SAPackCodeMasterPage.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
 import GAHome from "../admin/ga/screens/GAHome.jsx";
 import UserDashboardHome from "../pages/dashboard/UserDashboardHome.jsx";
@@ -167,10 +168,22 @@ import OpeningStockDetailPage from "../pages/dashboard/procurement/opening-stock
 // Gate-27: L3 Production pages
 import PlanFeedPage from "../pages/dashboard/production/PlanFeedPage.jsx";
 import StrokeMasterPage from "../pages/dashboard/production/StrokeMasterPage.jsx";
-import PackConfigPage from "../pages/dashboard/production/PackConfigPage.jsx";
-import ProcessOrderPage from "../pages/dashboard/production/ProcessOrderPage.jsx";
-import PackingOrderPage from "../pages/dashboard/production/PackingOrderPage.jsx";
-import OrderOverviewPage from "../pages/dashboard/production/OrderOverviewPage.jsx";
+import StrokeApprovalPage from "../pages/dashboard/production/StrokeApprovalPage.jsx";
+import ChangeBomItemPage from "../pages/dashboard/production/ChangeBomItemPage.jsx";
+import ChangeBomItemApprovalPage from "../pages/dashboard/production/ChangeBomItemApprovalPage.jsx";
+import PackBomCreatePage from "../pages/dashboard/production/PackBomCreatePage.jsx";
+import PackBomApprovalPage from "../pages/dashboard/production/PackBomApprovalPage.jsx";
+import ChangePackBomPage from "../pages/dashboard/production/ChangePackBomPage.jsx";
+import ChangePackBomApprovalPage from "../pages/dashboard/production/ChangePackBomApprovalPage.jsx";
+import ProductionPOCreatePage from "../pages/dashboard/production/ProductionPOCreatePage.jsx";
+import ProductionPOEditPage from "../pages/dashboard/production/ProductionPOEditPage.jsx";
+import ProductionPOFinalPage from "../pages/dashboard/production/ProductionPOFinalPage.jsx";
+import ProductionPOVerifyPage from "../pages/dashboard/production/ProductionPOVerifyPage.jsx";
+import OrderListPage from "../pages/dashboard/production/OrderListPage.jsx";
+import BatchVariancePage from "../pages/dashboard/production/BatchVariancePage.jsx";
+import ReversalPage from "../pages/dashboard/production/ReversalPage.jsx";
+import ProductionQAQueuePage from "../pages/dashboard/production/QAQueuePage.jsx";
+import BatchReleasePage from "../pages/dashboard/production/BatchReleasePage.jsx";
 
 export default function AppRouter() {
   return (
@@ -313,6 +326,10 @@ export default function AppRouter() {
                     <Route path="om/vendors" element={<SAVendorMaster />} />
 
                     {/* Gate-27: L3 Production SA config */}
+                    <Route
+                      path="om/pack-code-master"
+                      element={<SAPackCodeMasterPage />}
+                    />
                     <Route
                       path="production/batch-series"
                       element={<SAProductionBatchSeriesPage />}
@@ -703,31 +720,25 @@ export default function AppRouter() {
                     element={<PIDocumentDetailPage />}
                   />
 
-                  {/* ── Gate-27: L3 Production ───────────────────────── */}
-                  <Route
-                    path="production/plan-feed"
-                    element={<PlanFeedPage />}
-                  />
-                  <Route
-                    path="production/stroke-master"
-                    element={<StrokeMasterPage />}
-                  />
-                  <Route
-                    path="production/pack-config"
-                    element={<PackConfigPage />}
-                  />
-                  <Route
-                    path="production/process-orders"
-                    element={<ProcessOrderPage />}
-                  />
-                  <Route
-                    path="production/packing-orders"
-                    element={<PackingOrderPage />}
-                  />
-                  <Route
-                    path="production/order-overview"
-                    element={<OrderOverviewPage />}
-                  />
+                  {/* ── Gate-27: L3 Production (PR00–PR17) ──────────── */}
+                  <Route path="production/plan-feed" element={<PlanFeedPage />} />
+                  <Route path="production/stroke-master" element={<StrokeMasterPage />} />
+                  <Route path="production/stroke-approval" element={<StrokeApprovalPage />} />
+                  <Route path="production/change-bom-item" element={<ChangeBomItemPage />} />
+                  <Route path="production/change-bom-approval" element={<ChangeBomItemApprovalPage />} />
+                  <Route path="production/pack-bom-create" element={<PackBomCreatePage />} />
+                  <Route path="production/pack-bom-approval" element={<PackBomApprovalPage />} />
+                  <Route path="production/change-pack-bom" element={<ChangePackBomPage />} />
+                  <Route path="production/change-pack-bom-approval" element={<ChangePackBomApprovalPage />} />
+                  <Route path="production/po-create" element={<ProductionPOCreatePage />} />
+                  <Route path="production/po-edit" element={<ProductionPOEditPage />} />
+                  <Route path="production/po-final" element={<ProductionPOFinalPage />} />
+                  <Route path="production/po-verify" element={<ProductionPOVerifyPage />} />
+                  <Route path="production/order-list" element={<OrderListPage />} />
+                  <Route path="production/batch-variance" element={<BatchVariancePage />} />
+                  <Route path="production/reversal" element={<ReversalPage />} />
+                  <Route path="production/qa-queue" element={<ProductionQAQueuePage />} />
+                  <Route path="production/batch-release" element={<BatchReleasePage />} />
                 </Route>
               </Route>
 

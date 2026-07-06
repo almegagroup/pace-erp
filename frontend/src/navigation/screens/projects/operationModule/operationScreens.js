@@ -538,33 +538,129 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  PROD_PACK_CONFIG: {
-    screen_code: "PROD_PACK_CONFIG",
-    route: "/dashboard/production/pack-config",
+  PROD_STROKE_APPROVAL: {
+    screen_code: "PROD_STROKE_APPROVAL",
+    route: "/dashboard/production/stroke-approval",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
 
-  PROD_PROCESS_ORDER: {
-    screen_code: "PROD_PROCESS_ORDER",
-    route: "/dashboard/production/process-orders",
+  PROD_CHANGE_BOM_ITEM: {
+    screen_code: "PROD_CHANGE_BOM_ITEM",
+    route: "/dashboard/production/change-bom-item",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
 
-  PROD_PACKING_ORDER: {
-    screen_code: "PROD_PACKING_ORDER",
-    route: "/dashboard/production/packing-orders",
+  PROD_CHANGE_BOM_ITEM_APPROVAL: {
+    screen_code: "PROD_CHANGE_BOM_ITEM_APPROVAL",
+    route: "/dashboard/production/change-bom-approval",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,
   },
 
-  PROD_ORDER_OVERVIEW: {
-    screen_code: "PROD_ORDER_OVERVIEW",
-    route: "/dashboard/production/order-overview",
+  PROD_PACK_BOM_CREATE: {
+    screen_code: "PROD_PACK_BOM_CREATE",
+    route: "/dashboard/production/pack-bom-create",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_PACK_BOM_APPROVAL: {
+    screen_code: "PROD_PACK_BOM_APPROVAL",
+    route: "/dashboard/production/pack-bom-approval",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_CHANGE_PACK_BOM: {
+    screen_code: "PROD_CHANGE_PACK_BOM",
+    route: "/dashboard/production/change-pack-bom",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_CHANGE_PACK_BOM_APPROVAL: {
+    screen_code: "PROD_CHANGE_PACK_BOM_APPROVAL",
+    route: "/dashboard/production/change-pack-bom-approval",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_PO_CREATE: {
+    screen_code: "PROD_PO_CREATE",
+    route: "/dashboard/production/po-create",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_PO_EDIT: {
+    screen_code: "PROD_PO_EDIT",
+    route: "/dashboard/production/po-edit",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_PO_FINAL: {
+    screen_code: "PROD_PO_FINAL",
+    route: "/dashboard/production/po-final",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_PO_VERIFY: {
+    screen_code: "PROD_PO_VERIFY",
+    route: "/dashboard/production/po-verify",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_ORDER_LIST: {
+    screen_code: "PROD_ORDER_LIST",
+    route: "/dashboard/production/order-list",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_BATCH_VARIANCE: {
+    screen_code: "PROD_BATCH_VARIANCE",
+    route: "/dashboard/production/batch-variance",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_REVERSAL: {
+    screen_code: "PROD_REVERSAL",
+    route: "/dashboard/production/reversal",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_QA_QUEUE: {
+    screen_code: "PROD_QA_QUEUE",
+    route: "/dashboard/production/qa-queue",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROD_BATCH_RELEASE: {
+    screen_code: "PROD_BATCH_RELEASE",
+    route: "/dashboard/production/batch-release",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

@@ -63,6 +63,24 @@ import {
   finalizePackingOrderHandler,
   reversePackingOrderHandler,
 } from "../_core/production/packing_order.handlers.ts";
+import {
+  listStrokeChangeRequestsHandler,
+  getStrokeChangeRequestHandler,
+  createStrokeChangeRequestHandler,
+  approveStrokeChangeRequestHandler,
+  rejectStrokeChangeRequestHandler,
+} from "../_core/production/stroke_change_request.handlers.ts";
+import {
+  listPackBomsHandler,
+  getPackBomHandler,
+  createPackBomHandler,
+  approvePackBomHandler,
+  rejectPackBomHandler,
+  createPackBomChangeRequestHandler,
+  listPackBomChangeRequestsHandler,
+  approvePackBomChangeRequestHandler,
+  rejectPackBomChangeRequestHandler,
+} from "../_core/production/pack_bom.handlers.ts";
 
 export async function dispatchProductionRoutes(
   routeKey: string,
@@ -130,6 +148,22 @@ export async function dispatchProductionRoutes(
       return await listPackingOrdersHandler(req, ctx);
     case "POST:/api/production/packing-orders":
       return await createPackingOrderHandler(req, ctx);
+
+    // Stroke Change Requests (PR03/PR04)
+    case "GET:/api/production/stroke-change-requests":
+      return await listStrokeChangeRequestsHandler(req, ctx);
+    case "POST:/api/production/stroke-change-requests":
+      return await createStrokeChangeRequestHandler(req, ctx);
+
+    // Pack BOMs (PR05/PR06)
+    case "GET:/api/production/pack-boms":
+      return await listPackBomsHandler(req, ctx);
+    case "POST:/api/production/pack-boms":
+      return await createPackBomHandler(req, ctx);
+
+    // Pack BOM Change Requests (PR07/PR08)
+    case "GET:/api/production/pack-bom-change-requests":
+      return await listPackBomChangeRequestsHandler(req, ctx);
   }
 
   // ── PARAMETERIZED ROUTES ───────────────────────────────────────────────────
@@ -206,6 +240,39 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/packing-orders\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
     return await reversePackingOrderHandler(req, ctx);
+  }
+
+  // Stroke Change Requests /:id actions (PR03/PR04)
+  if (/^\/api\/production\/stroke-change-requests\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getStrokeChangeRequestHandler(req, ctx);
+  }
+  if (/^\/api\/production\/stroke-change-requests\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+    return await approveStrokeChangeRequestHandler(req, ctx);
+  }
+  if (/^\/api\/production\/stroke-change-requests\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
+    return await rejectStrokeChangeRequestHandler(req, ctx);
+  }
+
+  // Pack BOMs /:id actions (PR05/PR06)
+  if (/^\/api\/production\/pack-boms\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getPackBomHandler(req, ctx);
+  }
+  if (/^\/api\/production\/pack-boms\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+    return await approvePackBomHandler(req, ctx);
+  }
+  if (/^\/api\/production\/pack-boms\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
+    return await rejectPackBomHandler(req, ctx);
+  }
+  if (/^\/api\/production\/pack-boms\/[^/]+\/change-request$/.test(pathname) && req.method === "POST") {
+    return await createPackBomChangeRequestHandler(req, ctx);
+  }
+
+  // Pack BOM Change Requests /:id actions (PR07/PR08)
+  if (/^\/api\/production\/pack-bom-change-requests\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+    return await approvePackBomChangeRequestHandler(req, ctx);
+  }
+  if (/^\/api\/production\/pack-bom-change-requests\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
+    return await rejectPackBomChangeRequestHandler(req, ctx);
   }
 
   return null;
