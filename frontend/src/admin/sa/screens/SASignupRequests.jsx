@@ -74,6 +74,183 @@ function formatLifecycleState(value) {
   return String(value).replaceAll("_", " ");
 }
 
+// ---------------------------------------------------------------------------
+// Edit Panel — shown below the table when SA clicks "Edit" on a row
+// ---------------------------------------------------------------------------
+function EditPanel({ request, onSave, onCancel }) {
+  const [name, setName] = useState(request.name ?? "");
+  const [company, setCompany] = useState(request.parent_company_name ?? "");
+  const [designation, setDesignation] = useState(request.designation_hint ?? "");
+  const [phone, setPhone] = useState(request.phone_number ?? "");
+  const [saving, setSaving] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const nameRef = useRef(null);
+
+  useEffect(() => {
+    nameRef.current?.focus();
+  }, []);
+
+  async function handleSave(e) {
+    e.preventDefault();
+    if (!name.trim()) {
+      setLocalError("Name is required.");
+      nameRef.current?.focus();
+      return;
+    }
+    if (!company.trim()) {
+      setLocalError("Company name is required.");
+      return;
+    }
+
+    setSaving(true);
+    setLocalError("");
+
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_BASE}/api/admin/signup-requests/correct`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            auth_user_id: request.auth_user_id,
+            name: name.trim(),
+            parent_company_name: company.trim(),
+            designation_hint: designation.trim() || null,
+            phone_number: phone.trim() || null,
+          }),
+        }
+      );
+
+      const json = await readJsonSafe(response);
+
+      if (!response.ok || !json?.ok) {
+        throw new Error("SAVE_FAILED");
+      }
+
+      if (json?.data?.corrected !== true) {
+        const reason = json?.data?.reason ?? "UNKNOWN";
+        if (reason === "NOT_PENDING_OR_NOT_FOUND") {
+          throw new Error("This request is no longer pending and cannot be edited.");
+        }
+        throw new Error(`Save was rejected by server: ${reason}`);
+      }
+
+      onSave();
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : "Save failed. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full border border-slate-300 bg-white px-2 py-1.5 text-[12px] text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-200";
+
+  const labelClass =
+    "block text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500 mb-1";
+
+  return (
+    <form
+      onSubmit={handleSave}
+      className="border border-sky-200 bg-[#f8fbff] px-4 py-4"
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-sky-700">
+            Correct Signup Request
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            Auth {shortId(request.auth_user_id)} — Email cannot be changed (Supabase Auth)
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="border border-slate-300 bg-white px-2 py-[3px] text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600 hover:bg-slate-50"
+        >
+          Cancel
+        </button>
+      </div>
+
+      {localError ? (
+        <div className="mb-3 border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700">
+          {localError}
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div>
+          <label className={labelClass}>Full Name *</label>
+          <input
+            ref={nameRef}
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={saving}
+            className={inputClass}
+            placeholder="Full name"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Company *</label>
+          <input
+            type="text"
+            value={company}
+            onChange={(e) => setCompany(e.target.value)}
+            disabled={saving}
+            className={inputClass}
+            placeholder="Parent company name"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Designation</label>
+          <input
+            type="text"
+            value={designation}
+            onChange={(e) => setDesignation(e.target.value)}
+            disabled={saving}
+            className={inputClass}
+            placeholder="e.g. Plant Head"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Phone</label>
+          <input
+            type="text"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            disabled={saving}
+            className={inputClass}
+            placeholder="+91 98765 43210"
+          />
+        </div>
+      </div>
+
+      <div className="mt-3 flex gap-2">
+        <button
+          type="submit"
+          disabled={saving}
+          className={`border border-sky-600 bg-sky-50 px-3 py-[3px] text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-800 ${saving ? "cursor-not-allowed opacity-60" : "hover:bg-sky-100"}`}
+        >
+          {saving ? "Saving..." : "Save Changes"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="border border-slate-300 bg-white px-3 py-[3px] text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600 hover:bg-slate-50"
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main Screen
+// ---------------------------------------------------------------------------
 export default function SASignupRequests() {
   const FOCUS_FIRST_ROW = "__FIRST_ROW__";
   const [requests, setRequests] = useState([]);
@@ -82,6 +259,7 @@ export default function SASignupRequests() {
   const [notice, setNotice] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [actingUserId, setActingUserId] = useState("");
+  const [editingRequest, setEditingRequest] = useState(null);
   const [pendingFocusTarget, setPendingFocusTarget] = useState(null);
   const [focusedRowIndex, setFocusedRowIndex] = useState(-1);
   const actionBarRefs = useRef([]);
@@ -121,6 +299,7 @@ export default function SASignupRequests() {
   async function handleRefresh() {
     setLoading(true);
     setError("");
+    setEditingRequest(null);
 
     try {
       const data = await fetchSignupRequests();
@@ -140,6 +319,7 @@ export default function SASignupRequests() {
     setActingUserId(authUserId);
     setError("");
     setNotice("");
+    setEditingRequest(null);
 
     const endpoint =
       decision === "APPROVE"
@@ -212,6 +392,18 @@ export default function SASignupRequests() {
       }
     } finally {
       setActingUserId("");
+    }
+  }
+
+  async function handleEditSaved() {
+    setNotice("Signup request details corrected.");
+    setEditingRequest(null);
+    // Refresh list so the updated values appear
+    try {
+      const data = await fetchSignupRequests();
+      setRequests(data);
+    } catch {
+      // non-fatal — list will still show stale data until next refresh
     }
   }
 
@@ -429,6 +621,7 @@ export default function SASignupRequests() {
             <tbody>
               {signupPagination.pageItems.map((request, index) => {
                 const isActing = actingUserId === request.auth_user_id;
+                const isEditing = editingRequest?.auth_user_id === request.auth_user_id;
                 const rowProps = getRowProps(index);
                 const fallbackRequest =
                   signupPagination.pageItems[index + 1] ??
@@ -549,6 +742,31 @@ export default function SASignupRequests() {
                             >
                               {isActing ? "..." : "Reject"}
                             </button>
+                            <button
+                              ref={(element) => {
+                                rowActionRefs.current[index] ??= [];
+                                rowActionRefs.current[index][2] = element;
+                              }}
+                              type="button"
+                              disabled={isActing}
+                              onClick={() =>
+                                setEditingRequest(isEditing ? null : request)
+                              }
+                              onKeyDown={(event) =>
+                                handleGridNavigation(event, {
+                                  rowIndex: index,
+                                  columnIndex: 2,
+                                  gridRefs: rowActionRefs.current,
+                                })
+                              }
+                              className={`border px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                isEditing
+                                  ? "border-sky-400 bg-sky-100 text-sky-800"
+                                  : "border-slate-300 bg-slate-50 text-slate-600"
+                              } ${isActing ? "cursor-not-allowed opacity-60" : ""}`}
+                            >
+                              {isEditing ? "Close" : "Edit"}
+                            </button>
                           </div>
                         ),
                       },
@@ -559,6 +777,16 @@ export default function SASignupRequests() {
             </tbody>
           </table>
         </div>
+
+        {/* Edit panel — shown below the table when a row is in edit mode */}
+        {editingRequest ? (
+          <EditPanel
+            key={editingRequest.auth_user_id}
+            request={editingRequest}
+            onSave={() => void handleEditSaved()}
+            onCancel={() => setEditingRequest(null)}
+          />
+        ) : null}
       </>
     ),
   };

@@ -11,6 +11,7 @@ import { unlockHandler } from "../_core/auth/unlock.handler.ts";
 import { listPendingSignupHandler } from "../_core/admin/signup/list_pending.handler.ts";
 import { approveSignupHandler } from "../_core/admin/signup/approve.handler.ts";
 import { rejectSignupHandler } from "../_core/admin/signup/reject.handler.ts";
+import { correctSignupHandler } from "../_core/admin/signup/correct.handler.ts";
 
 import { createCompanyHandler } from "../_core/admin/company/create_company.handler.ts";
 import { getCompanyGstProfileHandler } from "../_core/admin/company/get_company_gst_profile.handler.ts";
@@ -163,6 +164,13 @@ export async function dispatchAdminRoutes(
         context,
         request_id: requestId,
         auth_user_id: session.authUserId,
+      });
+      break;
+
+    case "PATCH:/api/admin/signup-requests/correct":
+      response = await correctSignupHandler(req, {
+        context,
+        request_id: requestId,
       });
       break;
 
