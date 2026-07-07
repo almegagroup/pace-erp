@@ -18,21 +18,26 @@
 
 ---
 
-## Mandatory Frontend & Backend Rules (NON-NEGOTIABLE)
+## PACE ERP — Mandatory Rules (NON-NEGOTIABLE)
 
-These rules apply to every page, every gate, every screen. Violations must be fixed before the gate is marked VERIFIED.
+এই rules সব Gate, সব page, সব screen এ apply হয়। কোনো Gate VERIFIED হওয়ার আগে এই rules চেক করতে হবে। Violation থাকলে VERIFIED দেওয়া যাবে না।
 
-### R-01 — No UUID in UI (ZERO TOLERANCE)
-**Rule:** No UUID may appear anywhere in the UI. Every foreign key must be resolved to a human-readable value before sending to the frontend.
+---
 
-**How:**
-- Backend: join or fetch the display name in the same handler (use `Promise.all` for parallel fetches, never serial N+1)
-- Frontend: render `row.material_name`, `row.vendor_name`, `row.csn_number` — never `row.material_id`, `row.vendor_id`, `row.csn_id`
-- If a name is missing from the backend response, show `"—"` — never fall back to the raw ID
+### R-00 — Session শুরুতে Constitution পড়ো
+**Rule:** প্রতিটা নতুন Claude session শুরুতে `CLAUDE.md` পড়তে হবে। এটা PACE ERP এর Constitution — project architecture, ACL chain, current state, workflow rules সব এখানে আছে। না পড়লে wrong assumption এ কাজ হবে।
 
-**Fields that always need resolution:**
-| Raw field | Must show |
-|-----------|-----------|
+---
+
+### R-01 — কোনো Business Data UUID হিসেবে দেখাবে না
+**Rule:** UI তে কোথাও UUID দেখানো যাবে না। প্রতিটা foreign key এর human-readable value backend থেকে resolve করে পাঠাতে হবে।
+
+**Backend responsibility:** Handler এ সব FK resolve করতে হবে — bulk fetch করো (`.in()`), map বানাও, response এ name attach করো। Per-row serial call নয়।
+
+**Frontend responsibility:** `row.material_name` দেখাও, `row.material_id` নয়। Backend থেকে name না এলে `"—"` দেখাও — কখনো raw ID fallback করবে না।
+
+| Raw field | UI তে দেখাবে |
+|-----------|-------------|
 | `material_id` | `material_code — material_name` |
 | `vendor_id` | `vendor_code — vendor_name` |
 | `csn_id` | `csn_number` |
@@ -40,56 +45,43 @@ These rules apply to every page, every gate, every screen. Violations must be fi
 | `gate_entry_id` | `ge_number` |
 | `grn_id` | `grn_number` |
 | `storage_location_id` | `location_code — location_name` |
-| `user_id` / `*_by` / `*_staff_id` | `employee_code — full_name` or omit field |
-| Any other `*_id` FK | Corresponding code/number/name |
+| `*_by` / `*_staff_id` / `*_user_id` | `employee_code — full_name` অথবা field omit |
+| অন্য যেকোনো `*_id` FK | Corresponding code / number / name |
 
 ---
 
-### R-02 — No Reload on Back-Navigation (useQuery Mandatory)
-**Rule:** Every page that fetches data from the API **must** use `useQuery` (React Query). Manual `useEffect` + `useState` fetch patterns are forbidden for API calls.
+### R-02 — Back-and-forth Navigation এ Data Reload চলবে না
+**Rule:** API থেকে data fetch করে এমন প্রতিটা page অবশ্যই `useQuery` (React Query) use করবে। `useEffect` + `useState` দিয়ে API call করা forbidden।
 
-**Why:** `useEffect`-based fetching re-runs on every mount — navigating away and back triggers a full reload and the user waits again. `useQuery` caches the result for `staleTime` (default 60s) and returns instantly on re-mount.
+**কারণ:** `useEffect` প্রতিবার component mount হলে re-run করে। User অন্য page এ গিয়ে ফিরে আসলে আবার full fetch হয়, আবার wait করতে হয়। `useQuery` result cache করে রাখে — ফিরে আসলে instant দেখায়।
 
-**How:**
-```jsx
-// WRONG — refetches every time component mounts
-useEffect(() => { fetchData().then(setData); }, [id]);
+**Mutation এর পরে:**
+- `queryClient.setQueryData(key, result)` — server response দিয়ে cache update করো
+- `queryClient.invalidateQueries(...)` — শুধু তখন যখন list stale হওয়া দরকার (যেমন নতুন item create এর পরে)
 
-// CORRECT — cached, instant on back-navigation
-const { data, isLoading } = useQuery({
-  queryKey: ["domain", "entity", id],
-  enabled: Boolean(id),
-  queryFn: () => fetchData(id),
-});
-```
-
-**Query key conventions:**
-- List pages: `["procurement", "ge-list", companyId, status, dateFrom, dateTo]`
-- Detail pages: `["procurement", "ge-detail", id]`
-- After mutations: use `queryClient.setQueryData(key, result)` to update cache, or `queryClient.invalidateQueries({ queryKey: [...] })` to trigger refresh
-
-**Refresh button:** call `queryClient.invalidateQueries(...)` — never `setPage(p => p)` or `setTick(t => t+1)`
+**Refresh button:** `queryClient.invalidateQueries(...)` call করবে — never `setTick`, `setPage(p=>p)`, বা অন্য hack।
 
 ---
 
-### R-03 — No N+1 API Calls
-**Rule:** A list page must never call the detail endpoint once per row. All data needed for the list view — including resolved names, counts, and any display fields — must come from the list endpoint itself in a single request.
+### R-03 — List Endpoint এ Accurate Display Data থাকবে
+**Rule:** List page কখনো per-row detail endpoint call করবে না। List এ দেখানোর জন্য যা যা দরকার — names, numbers, status, quantities — সব list endpoint থেকেই আসবে।
 
-**How:** Backend list handler collects all foreign key IDs from the result set, fetches the needed tables in bulk (using `.in()`), builds lookup maps, and attaches resolved values to each row before returning.
+**Backend:** List handler এ সব rows এর FK IDs collect করো, একটা bulk query তে সব resolve করো, map বানাও, প্রতিটা row এ attach করে return করো।
 
-```typescript
-// WRONG — N+1, calls detail endpoint per row
-const hydrated = await Promise.all(rows.map(row => getDetail(row.id)));
+---
 
-// CORRECT — bulk fetch, resolve all at once
-const matIds = rows.map(r => r.material_id);
-const { data: mats } = await client.schema("erp_master").from("material_master")
-  .select("id, material_code, material_name").in("id", matIds);
-const matMap = new Map(mats.map(m => [m.id, m]));
-return rows.map(r => ({ ...r, material_name: matMap.get(r.material_id)?.material_name ?? null }));
-```
+### R-04 — MCP vs Migration — সঠিক পথে কাজ করো
+**Rule:**
+- **Migration file** → Schema change, DDL (table create/alter, constraint add/drop, index, function/trigger), system design config (document number ranges, enum values, seed data যা code এর অংশ)
+- **MCP direct SQL** → Business/operational data change (user setup, work context assign, ACL snapshot regenerate, test data fix) — dev ও prod দুটোতেই আলাদাভাবে run করতে হয়
 
-**This applies to names too** — vendor name, material name, PO number, CSN number must all be resolved in the list endpoint, not fetched per-row by the frontend.
+**কারণ:** Migration file PR এর সাথে travel করে — prod deploy হলে automatically apply হয়। MCP change শুধু যে DB তে run করা হয় সেখানেই যায়।
+
+**ভুলের pattern:**
+- Schema change MCP দিয়ে করলে prod এ miss হয় → prod broken
+- Business data migration এ ঢোকালে unnecessary migration history pollute হয়
+
+---
 
 ---
 
