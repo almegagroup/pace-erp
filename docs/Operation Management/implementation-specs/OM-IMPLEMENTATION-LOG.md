@@ -18,6 +18,77 @@
 
 ---
 
+## Mandatory Frontend & Backend Rules (NON-NEGOTIABLE)
+
+These rules apply to every page, every gate, every screen. Violations must be fixed before the gate is marked VERIFIED.
+
+### R-01 — No UUID in UI (ZERO TOLERANCE)
+**Rule:** No UUID may appear anywhere in the UI. Every foreign key must be resolved to a human-readable value before sending to the frontend.
+
+**How:**
+- Backend: join or fetch the display name in the same handler (use `Promise.all` for parallel fetches, never serial N+1)
+- Frontend: render `row.material_name`, `row.vendor_name`, `row.csn_number` — never `row.material_id`, `row.vendor_id`, `row.csn_id`
+- If a name is missing from the backend response, show `"—"` — never fall back to the raw ID
+
+**Fields that always need resolution:**
+| Raw field | Must show |
+|-----------|-----------|
+| `material_id` | `material_code — material_name` |
+| `vendor_id` | `vendor_code — vendor_name` |
+| `csn_id` | `csn_number` |
+| `po_id` | `po_number` |
+| `gate_entry_id` | `ge_number` |
+| `grn_id` | `grn_number` |
+| `storage_location_id` | `location_code — location_name` |
+| `user_id` / `*_by` / `*_staff_id` | `employee_code — full_name` or omit field |
+| Any other `*_id` FK | Corresponding code/number/name |
+
+---
+
+### R-02 — No Reload on Back-Navigation (useQuery Mandatory)
+**Rule:** Every page that fetches data from the API **must** use `useQuery` (React Query). Manual `useEffect` + `useState` fetch patterns are forbidden for API calls.
+
+**Why:** `useEffect`-based fetching re-runs on every mount — navigating away and back triggers a full reload and the user waits again. `useQuery` caches the result for `staleTime` (default 60s) and returns instantly on re-mount.
+
+**How:**
+```jsx
+// WRONG — refetches every time component mounts
+useEffect(() => { fetchData().then(setData); }, [id]);
+
+// CORRECT — cached, instant on back-navigation
+const { data, isLoading } = useQuery({
+  queryKey: ["domain", "entity", id],
+  enabled: Boolean(id),
+  queryFn: () => fetchData(id),
+});
+```
+
+**Query key conventions:**
+- List pages: `["procurement", "ge-list", companyId, status, dateFrom, dateTo]`
+- Detail pages: `["procurement", "ge-detail", id]`
+- After mutations: use `queryClient.setQueryData(key, result)` to update cache, or `queryClient.invalidateQueries({ queryKey: [...] })` to trigger refresh
+
+**Refresh button:** call `queryClient.invalidateQueries(...)` — never `setPage(p => p)` or `setTick(t => t+1)`
+
+---
+
+### R-03 — No N+1 API Calls
+**Rule:** A list page must never call the detail endpoint once per row to hydrate data. All data needed for the list view must come from the list endpoint.
+
+**How:** Backend list handler fetches aggregates in a single extra query (not per-row), attaches to each item before returning.
+
+```typescript
+// WRONG — N+1
+const hydrated = await Promise.all(rows.map(row => getDetail(row.id)));
+
+// CORRECT — one extra query for all rows
+const { data: lines } = await client.from("lines").select("parent_id, qty").in("parent_id", ids);
+const agg = buildAggMap(lines);
+return rows.map(r => ({ ...r, ...agg.get(r.id) }));
+```
+
+---
+
 ## Gate-11 - Foundation DB (erp_inventory schema)
 
 **Spec File:** OM-GATE-11-Foundation-DB-Spec.md
