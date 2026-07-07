@@ -408,14 +408,6 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { GET: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" } },
   },
   {
-    pattern: /^\/api\/procurement\/csns\/[^/]+\/mark-in-transit$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
-  },
-  {
-    pattern: /^\/api\/procurement\/csns\/[^/]+\/mark-arrived$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
-  },
-  {
     pattern: /^\/api\/procurement\/csns\/[^/]+\/transform-to-sto$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "WRITE" } },
   },

@@ -7,14 +7,11 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   getCSN,
   listCSNs,
   listPorts,
-  markCSNArrived,
-  markCSNInTransit,
   updateCSN,
 } from "../procurementApi.js";
 
@@ -197,52 +194,6 @@ export default function CSNDetailPage() {
     }
   }
 
-  async function handleMarkInTransit() {
-    if (!detail?.id || !detail?.company_id) {
-      return;
-    }
-    const actualEtd = await openActionPrompt({ eyebrow: "CSN", title: "Mark In Transit", label: "Actual ETD (YYYY-MM-DD)", defaultValue: form.etd || "", placeholder: "YYYY-MM-DD" });
-    if (actualEtd === null) return;
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      await markCSNInTransit(detail.id, {
-        company_id: detail.company_id,
-        actual_etd: actualEtd || undefined,
-      });
-      setNotice("CSN marked in transit.");
-      await loadDetail();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_CSN_MARK_IN_TRANSIT_FAILED");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleMarkArrived() {
-    if (!detail?.id || !detail?.company_id) {
-      return;
-    }
-    const arrivalDate = await openActionPrompt({ eyebrow: "CSN", title: "Mark Arrived", label: "Arrival date (YYYY-MM-DD)", placeholder: "YYYY-MM-DD" });
-    if (arrivalDate === null) return;
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      await markCSNArrived(detail.id, {
-        company_id: detail.company_id,
-        actual_arrival_date: arrivalDate || undefined,
-      });
-      setNotice("CSN marked arrived.");
-      await loadDetail();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "PROCUREMENT_CSN_MARK_ARRIVED_FAILED");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   return (
     <ErpScreenScaffold
       eyebrow="Procurement"
@@ -254,12 +205,6 @@ export default function CSNDetailPage() {
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         { key: "save", label: saving ? "Saving..." : "Save CSN", tone: "primary", onClick: () => void handleSave(), disabled: saving || loading || !detail },
-        ...(detail?.status === "ORD"
-          ? [{ key: "mark-transit", label: "Mark In Transit", tone: "neutral", onClick: () => void handleMarkInTransit(), disabled: saving }]
-          : []),
-        ...(detail?.status === "TRN"
-          ? [{ key: "mark-arrived", label: "Mark Arrived", tone: "neutral", onClick: () => void handleMarkArrived(), disabled: saving }]
-          : []),
       ]}
     >
       {loading || !detail ? (

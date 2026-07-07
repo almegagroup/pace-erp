@@ -28,8 +28,6 @@ import {
   listCsnFieldHistoryHandler,
   listCSNsHandler,
   listTrackerLayoutsHandler,
-  markCSNArrivedHandler,
-  markCSNInTransitHandler,
   previewDispatchQtyAdjustmentHandler,
   updateCSNHandler,
 } from "../_core/procurement/csn.handlers.ts";
@@ -500,14 +498,6 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/csns\/[^/]+\/history$/.test(pathname) && req.method === "GET") {
     return await listCsnFieldHistoryHandler(req, ctx);
-  }
-
-  if (/^\/api\/procurement\/csns\/[^/]+\/mark-in-transit$/.test(pathname) && req.method === "POST") {
-    return await markCSNInTransitHandler(req, ctx);
-  }
-
-  if (/^\/api\/procurement\/csns\/[^/]+\/mark-arrived$/.test(pathname) && req.method === "POST") {
-    return await markCSNArrivedHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/csns\/[^/]+\/transform-to-sto$/.test(pathname) && req.method === "POST") {

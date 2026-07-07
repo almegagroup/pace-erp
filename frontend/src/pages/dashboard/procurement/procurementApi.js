@@ -355,14 +355,6 @@ export function deleteSubCSN(id, subId) {
   );
 }
 
-export function markCSNInTransit(id, data) {
-  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/mark-in-transit`, data);
-}
-
-export function markCSNArrived(id, data) {
-  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/mark-arrived`, data);
-}
-
 export function getAllAlertCounts(params) {
   return fetchProcurement("GET", "/api/procurement/alerts/counts", undefined, params);
 }
