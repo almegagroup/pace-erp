@@ -257,7 +257,7 @@ export default function GateEntryCreatePage() {
           };
         }),
       });
-      setSuccessGE(created.ge_number || String(created.id));
+      setSuccessGE({ number: created.ge_number || "—", id: String(created.id) });
     } catch (e) {
       setError(e instanceof Error ? e.message : "GE_CREATE_FAILED");
     } finally {
@@ -780,7 +780,7 @@ export default function GateEntryCreatePage() {
             <div className="px-5 py-5">
               <p className="mb-1 text-xs text-slate-500">GE number</p>
               <p className="font-mono text-[28px] font-semibold tracking-wider text-slate-900">
-                {successGE}
+                {successGE.number}
               </p>
               <p className="mt-3 text-xs text-slate-500">
                 Note this number for the gate register, then close to create the next entry.
@@ -792,7 +792,7 @@ export default function GateEntryCreatePage() {
                 className="h-9 border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700"
                 onClick={() => {
                   openScreen(OPERATION_SCREENS.PROC_GATE_ENTRY_DETAIL.screen_code);
-                  navigate(`/dashboard/procurement/gate-entries/${encodeURIComponent(successGE)}`);
+                  navigate(`/dashboard/procurement/gate-entries/${successGE.id}`);
                 }}
               >
                 Open detail
