@@ -399,6 +399,35 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 
 ---
 
+## 8. Document Number Series — SAP-Style Range Design (LOCKED 2026-07-07)
+
+`erp_procurement.document_number_series` তে প্রতিটা doc type এর আলাদা number range — SAP এর মতো range দেখেই doc type বোঝা যায়। **Prefix নেই।**
+
+| doc_type | Range start | Range |
+|----------|------------|-------|
+| GE | 100001 | 1xxxxx |
+| GEX | 150001 | 15xxxx |
+| GXO | 160001 | 16xxxx |
+| GRN | 200001 | 2xxxxx |
+| CSN | 300001 | 3xxxxx |
+| IV | 400001 | 4xxxxx |
+| LC | 450001 | 45xxxx |
+| QA | 500001 | 5xxxxx |
+| OS | 600001 | 6xxxxx |
+| PI | 650001 | 65xxxx |
+| PT | 700001 | 7xxxxx |
+| RTV | 800001 | 8xxxxx |
+| DN | 810001 | 81xxxx |
+| EXR | 820001 | 82xxxx |
+| SO | 900001 | 9xxxxx |
+| DC | 910001 | 91xxxx |
+| SALES_INVOICE | 920001 | 92xxxx |
+
+> ⚠️ Prod deploy এর আগে prod DB তেও same MCP SQL চালাতে হবে (starting_number set)।
+> Schema/code change নেই — pure data config।
+
+---
+
 ## 8. Key Architecture Rules (Never Violate)
 
 - `acl.menu_master.menu_code` MUST = `erp_menu.menu_master.resource_code`
