@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
@@ -100,14 +101,12 @@ export default function GateEntryCreatePage() {
     [runtimeContext?.availableCompanies]
   );
 
-  // auto-select company
   useEffect(() => {
     if (!companyId && companyOptions.length > 0) {
       setCompanyId(runtimeContext?.selectedCompanyId || companyOptions[0].value);
     }
   }, [companyId, companyOptions, runtimeContext?.selectedCompanyId]);
 
-  // load POs + open CSNs when company changes
   useEffect(() => {
     if (!companyId) return;
     let active = true;
@@ -128,12 +127,9 @@ export default function GateEntryCreatePage() {
       .finally(() => {
         if (active) setDataLoading(false);
       });
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [companyId]);
 
-  // ── PO combobox
   function getPoSuggestions(query) {
     if (!query) return allPos.slice(0, 8);
     const q = query.toLowerCase();
@@ -151,14 +147,11 @@ export default function GateEntryCreatePage() {
   }
 
   function updateLine(i, patch) {
-    setLines((prev) =>
-      prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l))
-    );
+    setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   }
 
   function selectPO(rowIndex, po) {
     const isBulk = ["BULK", "TANKER"].includes((po.delivery_type || "").toUpperCase());
-    // PO comes with embedded lines from listOpenPOsForGE
     const firstOpenLine = isBulk
       ? (po.lines ?? []).find((l) =>
           ["OPEN", "PARTIALLY_RECEIVED"].includes((l.line_status || "").toUpperCase())
@@ -166,7 +159,6 @@ export default function GateEntryCreatePage() {
       : null;
     updateLine(rowIndex, { poQuery: po.po_number, po, csn: null, poLine: firstOpenLine });
     setPoDropRow(null);
-
     if (!isBulk) {
       const csns = getCsnsForPo(po.id);
       if (csns.length > 0) {
@@ -175,7 +167,6 @@ export default function GateEntryCreatePage() {
     }
   }
 
-  // ── drawer
   function openDrawer(rowIndex, po) {
     const resolvedPo = po ?? lines[rowIndex]?.po;
     if (!resolvedPo) return;
@@ -207,12 +198,10 @@ export default function GateEntryCreatePage() {
   }
 
   function setDrawerHi(idx) {
-    const csns = drawer.csns;
-    if (idx < 0 || idx >= csns.length) return;
-    setDrawer((d) => ({ ...d, hiIdx: idx, selected: csns[idx] }));
+    if (idx < 0 || idx >= drawer.csns.length) return;
+    setDrawer((d) => ({ ...d, hiIdx: idx, selected: d.csns[idx] }));
   }
 
-  // ── save
   async function handleSave() {
     setError("");
     if (!companyId || !entryDate || !vehicleNumber.trim()) {
@@ -253,23 +242,15 @@ export default function GateEntryCreatePage() {
         entry_date: entryDate,
         entry_time: time12to24(entryTime, ampm),
         vehicle_number: vehicleNumber.trim().toUpperCase(),
-
         gross_weight: gw,
         lines: activeLines.map((l) => {
           const isBulk = ["BULK", "TANKER"].includes((l.po.delivery_type || "").toUpperCase());
-          const poLineId = isBulk ? (l.poLine?.id || "") : (l.csn?.po_line_id || "");
-          const materialId = isBulk
-            ? (l.poLine?.material_id || "")
-            : (l.csn?.material_id || "");
-          const uomCode = isBulk
-            ? (l.poLine?.uom_code || l.poLine?.po_uom_code || "")
-            : (l.csn?.po_uom_code || "");
           return {
             csn_id: isBulk ? null : (l.csn?.id || null),
-            po_line_id: poLineId,
-            material_id: materialId,
+            po_line_id: isBulk ? (l.poLine?.id || "") : (l.csn?.po_line_id || ""),
+            material_id: isBulk ? (l.poLine?.material_id || "") : (l.csn?.material_id || ""),
             ge_qty: Number(l.rcvQty),
-            uom_code: uomCode,
+            uom_code: isBulk ? (l.poLine?.uom_code || l.poLine?.po_uom_code || "") : (l.csn?.po_uom_code || ""),
             challan_or_invoice_no: l.lrNumber.trim() || null,
             rst_number: l.lrDate || null,
             gross_weight: gw,
@@ -290,7 +271,6 @@ export default function GateEntryCreatePage() {
     setEntryTime(t.time);
     setAmpm(t.ampm);
     setVehicleNumber("");
-
     setGrossWeight("");
     setLines(Array.from({ length: 6 }, EMPTY_LINE));
     setError("");
@@ -302,10 +282,8 @@ export default function GateEntryCreatePage() {
     navigate("/dashboard/procurement/gate-entries/list");
   }
 
-  // ── global keyboard
   useEffect(() => {
     function onKey(e) {
-      // drawer open
       if (drawer.open) {
         if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); closeDrawer(); return; }
         if (e.key === "Enter") { e.preventDefault(); e.stopImmediatePropagation(); confirmDrawer(); return; }
@@ -314,7 +292,6 @@ export default function GateEntryCreatePage() {
         e.stopImmediatePropagation();
         return;
       }
-      // success modal
       if (successGE) {
         if (e.key === "Escape" || e.key === "Enter") { e.preventDefault(); resetForm(); }
         return;
@@ -322,13 +299,8 @@ export default function GateEntryCreatePage() {
       if (e.key === "F9") { e.preventDefault(); void handleSave(); return; }
       if (e.key === "F4") {
         const active = document.activeElement;
-        if (active && active.type === "date") {
-          active.showPicker?.();
-        } else {
-          const t = currentTime12();
-          setEntryTime(t.time);
-          setAmpm(t.ampm);
-        }
+        if (active && active.type === "date") { active.showPicker?.(); }
+        else { const t = currentTime12(); setEntryTime(t.time); setAmpm(t.ampm); }
         return;
       }
       if (e.altKey && e.key.toLowerCase() === "n") { e.preventDefault(); setLines((p) => [...p, EMPTY_LINE()]); return; }
@@ -336,53 +308,48 @@ export default function GateEntryCreatePage() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  // intentional broad dep — we need latest state in handler
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawer, successGE, lines, saving, companyId, entryDate, vehicleNumber, grossWeight, entryTime, ampm, vehicleType]);
+  }, [drawer, successGE, lines, saving, companyId, entryDate, vehicleNumber, grossWeight, entryTime, ampm]);
 
-  // ─── render helpers ─────────────────────────────────────────────────────
-
-  const drawerCsn = drawer.csns[drawer.hiIdx] ?? null;
+  // ─── render helpers ──────────────────────────────────────────────────────
 
   function renderCsnCard(csn, idx) {
     const isImport = (csn.csn_type || "").toUpperCase() === "IMPORT";
     const matDisplay = csn.material_name || csn.material_id || "—";
-    const poNumber = allPos.find((p) => p.id === csn.po_id)?.po_number || csn.po_number || "—";
+    const poNumber = allPos.find((p) => p.id === csn.po_id)?.po_number || "—";
     const isSelected = drawer.selected?.id === csn.id;
     const isHi = idx === drawer.hiIdx;
+
     return (
       <div
         key={csn.id}
         className={[
-          "cursor-pointer rounded-[var(--radius)] border p-3 transition-colors",
-          isSelected ? "border-[var(--border-accent)] bg-[var(--bg-accent)]" : "border-[var(--border)] hover:border-[var(--border-accent)] hover:bg-[var(--bg-accent)]",
-          isHi ? "outline outline-2 outline-[var(--border-accent)]" : "",
+          "cursor-pointer border p-3 transition-colors",
+          isSelected
+            ? "border-sky-500 bg-sky-50"
+            : isHi
+            ? "border-sky-300 bg-slate-50"
+            : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50",
         ].join(" ")}
         onMouseEnter={() => setDrawer((d) => ({ ...d, hiIdx: idx }))}
-        onClick={() =>
-          setDrawer((d) => ({
-            ...d,
-            hiIdx: idx,
-            selected: d.csns[idx],
-          }))
-        }
+        onClick={() => setDrawer((d) => ({ ...d, hiIdx: idx, selected: d.csns[idx] }))}
       >
         <div className="mb-2 flex items-center justify-between">
-          <span className="text-[11px] font-semibold text-[var(--text-primary)]">
+          <span className="text-xs font-semibold text-slate-900">
             {csn.csn_number || csn.id}
           </span>
           <span
             className={[
-              "rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase",
+              "rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
               csn.status === "TRN"
-                ? "bg-[var(--bg-success)] text-[var(--text-success)]"
-                : "bg-[var(--bg-accent)] text-[var(--text-accent)]",
+                ? "bg-emerald-100 text-emerald-800"
+                : "bg-sky-100 text-sky-800",
             ].join(" ")}
           >
             {csn.status}
           </span>
         </div>
-        <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
           {[
             ["PO number", poNumber],
             ["Material", matDisplay],
@@ -390,16 +357,11 @@ export default function GateEntryCreatePage() {
             [isImport ? "BOE number" : "Invoice number", csn.invoice_number || csn.boe_number || "—"],
             [isImport ? "BL date (ATD)" : "LR date (ATD)", csn.bl_date || csn.lr_date || "—"],
           ].map(([label, value]) => (
-            <div key={label} className="flex flex-col gap-0.5">
-              <span className="text-[9px] text-[var(--text-muted)]">{label}</span>
-              <span
-                className={[
-                  "text-[10px] font-medium",
-                  value === "—" ? "text-[var(--text-muted)]" : "text-[var(--text-primary)]",
-                ].join(" ")}
-              >
+            <div key={label}>
+              <div className="text-[9px] font-medium uppercase tracking-wide text-slate-400">{label}</div>
+              <div className={["text-[11px] font-medium", value === "—" ? "text-slate-400" : "text-slate-900"].join(" ")}>
                 {value}
-              </span>
+              </div>
             </div>
           ))}
         </div>
@@ -421,13 +383,13 @@ export default function GateEntryCreatePage() {
     const expQty = isBulk ? "" : (line.csn?.dispatch_qty ?? "");
 
     return (
-      <tr key={i} className="group">
-        <td className="w-6 text-center text-[10px] text-[var(--text-muted)]">{i + 1}</td>
+      <tr key={i} className="border-b border-slate-100 last:border-0">
+        <td className="w-6 py-1 text-center text-[10px] text-slate-400">{i + 1}</td>
 
         {/* PO combobox */}
-        <td className="relative w-[150px]">
+        <td className="relative w-[160px] py-1 pr-1">
           <input
-            className="h-6 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)] focus:bg-[var(--surface-2)]"
+            className="h-7 w-full border border-slate-200 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500 focus:bg-white"
             value={line.poQuery}
             placeholder="Type PO…"
             onChange={(e) => {
@@ -447,37 +409,32 @@ export default function GateEntryCreatePage() {
               }
               else if (e.key === "ArrowUp") { e.preventDefault(); setPoDropHi((h) => Math.max(h - 1, 0)); }
               else if (e.key === "Enter" && showDrop) { e.preventDefault(); selectPO(i, sugs[poDropHi]); }
-              else if (e.key === "Tab" && showDrop && sugs.length > 0) {
-                e.preventDefault();
-                selectPO(i, sugs[poDropHi]);
-              }
+              else if (e.key === "Tab" && showDrop && sugs.length > 0) { e.preventDefault(); selectPO(i, sugs[poDropHi]); }
               else if (e.key === "Escape") { setPoDropRow(null); }
             }}
           />
           {showDrop && (
-            <div className="absolute left-0 top-full z-50 min-w-[260px] rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] shadow-lg">
+            <div className="absolute left-0 top-full z-50 min-w-[280px] border border-slate-300 bg-white shadow-lg">
               {sugs.map((p, si) => (
                 <div
                   key={p.id}
                   className={[
-                    "cursor-pointer border-b border-[var(--border)] px-3 py-2 last:border-0",
-                    si === poDropHi ? "bg-[var(--bg-accent)]" : "hover:bg-[var(--surface-1)]",
+                    "cursor-pointer border-b border-slate-100 px-3 py-2 last:border-0",
+                    si === poDropHi ? "bg-sky-50" : "hover:bg-slate-50",
                   ].join(" ")}
-                  onMouseDown={() => void selectPO(i, p)}
+                  onMouseDown={() => selectPO(i, p)}
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-medium text-[var(--text-primary)]">
-                      {p.po_number}
-                    </span>
+                    <span className="text-[11px] font-medium text-slate-900">{p.po_number}</span>
                     {["BULK", "TANKER"].includes((p.delivery_type || "").toUpperCase()) && (
                       <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">
                         {p.delivery_type}
                       </span>
                     )}
                   </div>
-                  <div className="mt-0.5 text-[10px] text-[var(--text-muted)]">
-                    {p.vendor_name || ""}
-                  </div>
+                  {p.vendor_name && (
+                    <div className="mt-0.5 text-[10px] text-slate-500">{p.vendor_name}</div>
+                  )}
                 </div>
               ))}
             </div>
@@ -485,21 +442,20 @@ export default function GateEntryCreatePage() {
         </td>
 
         {/* CSN */}
-        <td className="w-[160px]">
+        <td className="w-[150px] py-1 pr-1">
           {!line.po ? (
-            <span className="px-1.5 text-[10px] text-[var(--text-muted)]">—</span>
+            <span className="text-[11px] text-slate-400">—</span>
           ) : isBulk ? (
-            <span className="px-1.5 text-[10px] italic text-amber-600">BULK — no CSN</span>
+            <span className="text-[11px] italic text-amber-600">BULK — no CSN</span>
           ) : (
             <div className="flex items-center gap-1">
-              <span className={["flex-1 truncate px-1 text-[10px]", line.csn ? "text-[var(--text-primary)]" : "text-[var(--text-muted)]"].join(" ")}>
+              <span className={["flex-1 truncate text-[11px]", line.csn ? "text-slate-900" : "text-slate-400"].join(" ")}>
                 {line.csn ? line.csn.csn_number : "—"}
               </span>
               <button
                 type="button"
-                className="h-5 flex-shrink-0 rounded-[3px] border border-[var(--border-accent)] bg-[var(--bg-accent)] px-1.5 text-[9px] font-medium text-[var(--text-accent)]"
+                className="h-6 flex-shrink-0 border border-sky-600 bg-sky-50 px-2 text-[9px] font-semibold text-sky-800"
                 onClick={() => openDrawer(i, null)}
-                title="Space to open"
               >
                 {line.csn ? "Change" : "Select"}
               </button>
@@ -508,32 +464,30 @@ export default function GateEntryCreatePage() {
         </td>
 
         {/* Material (readonly) */}
-        <td className="w-[150px]">
-          <span className="px-1.5 text-[10px] text-[var(--text-muted)]">
-            {matName || ""}
-          </span>
+        <td className="w-[160px] py-1 pr-1">
+          <span className="text-[11px] text-slate-700">{matName || ""}</span>
         </td>
 
         {/* UOM */}
-        <td className="w-[52px] text-center">
-          <span className="text-[10px] text-[var(--text-muted)]">{uom}</span>
+        <td className="w-[52px] py-1 text-center">
+          <span className="text-[11px] text-slate-500">{uom}</span>
         </td>
 
         {/* Exp qty */}
-        <td className="w-[80px] text-right">
-          <span className="pr-1.5 text-[10px] text-[var(--text-muted)]">
+        <td className="w-[80px] py-1 pr-1 text-right">
+          <span className="text-[11px] text-slate-500">
             {expQty !== "" ? Number(expQty).toLocaleString() : ""}
           </span>
         </td>
 
         {/* Rcv qty */}
-        <td className="w-[80px]">
+        <td className="w-[90px] py-1 pr-1">
           <input
             ref={(el) => { rcvQtyRefs.current[i] = el; }}
             type="number"
             min="0"
             step="0.001"
-            className="h-6 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-right text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)] focus:bg-[var(--surface-2)]"
+            className="h-7 w-full border border-slate-200 bg-white px-2 text-right text-[11px] text-slate-900 outline-none focus:border-sky-500"
             value={line.rcvQty}
             placeholder="0"
             onChange={(e) => updateLine(i, { rcvQty: e.target.value })}
@@ -541,9 +495,9 @@ export default function GateEntryCreatePage() {
         </td>
 
         {/* Invoice / BOE no */}
-        <td className="w-[110px]">
+        <td className="w-[120px] py-1 pr-1">
           <input
-            className="h-6 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)] focus:bg-[var(--surface-2)]"
+            className="h-7 w-full border border-slate-200 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
             value={line.lrNumber}
             placeholder={line.csn ? (isImportLine ? "BOE no" : "Invoice no") : "Optional"}
             onChange={(e) => updateLine(i, { lrNumber: e.target.value })}
@@ -551,23 +505,22 @@ export default function GateEntryCreatePage() {
         </td>
 
         {/* LR / BL date */}
-        <td className="w-[110px]">
+        <td className="w-[120px] py-1 pr-1">
           <input
             type="date"
-            className="h-6 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)] focus:bg-[var(--surface-2)]"
+            className="h-7 w-full border border-slate-200 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
             value={line.lrDate}
             onChange={(e) => updateLine(i, { lrDate: e.target.value })}
           />
         </td>
 
         {/* Delete */}
-        <td className="w-6 text-center">
+        <td className="w-6 py-1 text-center">
           {lines.length > 1 && (
             <button
               type="button"
-              className="h-5 w-5 rounded-[3px] border border-[var(--border-danger)] bg-[var(--bg-danger)] text-[11px] font-bold text-[var(--text-danger)]"
+              className="h-5 w-5 border border-red-300 bg-red-50 text-[11px] font-bold text-red-600"
               onClick={() => setLines((p) => p.filter((_, idx) => idx !== i))}
-              title="Alt+D"
             >
               ×
             </button>
@@ -586,12 +539,7 @@ export default function GateEntryCreatePage() {
         title="Gate Entry"
         notices={error ? [{ key: "ge-error", tone: "error", message: error }] : []}
         actions={[
-          {
-            key: "list",
-            label: "GE Register",
-            tone: "neutral",
-            onClick: openGEList,
-          },
+          { key: "list", label: "GE Register", tone: "neutral", onClick: openGEList },
           {
             key: "save",
             label: saving ? "Saving…" : "Save GE (F9)",
@@ -601,8 +549,8 @@ export default function GateEntryCreatePage() {
           },
         ]}
       >
-        {/* keyboard help strip */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-1)] px-3 py-1.5 text-[10px] text-[var(--text-secondary)]">
+        {/* keyboard help */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border border-slate-200 bg-slate-50 px-3 py-1.5 text-[10px] text-slate-500">
           {[
             ["Tab / Shift+Tab", "Next / prev field"],
             ["F4", "Calendar on date · Now on time"],
@@ -611,59 +559,50 @@ export default function GateEntryCreatePage() {
             ["Alt+N", "Add row"],
             ["F9", "Save"],
             ["Alt+L", "GE Register"],
-            ["Esc", "Close drawer"],
           ].map(([key, desc]) => (
             <span key={key} className="flex items-center gap-1">
-              <kbd className="rounded border border-[var(--border-strong)] bg-[var(--surface-2)] px-1 py-0.5 font-mono text-[9px] text-[var(--text-primary)]">
-                {key}
-              </kbd>
+              <kbd className="rounded border border-slate-300 bg-white px-1 py-0.5 font-mono text-[9px] text-slate-700">{key}</kbd>
               {desc}
             </span>
           ))}
         </div>
 
-        {/* ── Header card ── */}
+        {/* ── Header ── */}
         <ErpSectionCard eyebrow="Header" title="Vehicle arrival">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
             {/* Company */}
-            <div className="col-span-2 flex flex-col gap-1 lg:col-span-1">
-              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
-                Company <span className="text-[var(--text-danger)]">*</span>
+            <div className="col-span-2 lg:col-span-1">
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Company <span className="font-normal text-red-500">*</span>
+                <select
+                  className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  value={companyId}
+                  onChange={(e) => setCompanyId(e.target.value)}
+                >
+                  <option value="">Select company</option>
+                  {companyOptions.map((c) => (
+                    <option key={c.value} value={c.value}>{c.label}</option>
+                  ))}
+                </select>
               </label>
-              <select
-                className="erp-input h-7 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-2 text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)]"
-                value={companyId}
-                onChange={(e) => setCompanyId(e.target.value)}
-              >
-                <option value="">Select company</option>
-                {companyOptions.map((c) => (
-                  <option key={c.value} value={c.value}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
             </div>
 
             {/* GE Number */}
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
-                GE number
-              </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              GE number
               <input
                 readOnly
                 value="Auto-generated"
-                className="h-7 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-1)] px-2 text-[12px] text-[var(--text-muted)] outline-none"
+                className="h-9 border border-slate-200 bg-slate-50 px-3 text-sm text-slate-400 outline-none"
               />
-            </div>
+            </label>
 
             {/* Entry Date */}
-            <div className="flex flex-col gap-1">
-              <label className="flex items-center justify-between text-[10px] font-medium text-[var(--text-secondary)]">
-                Entry date <span className="text-[var(--text-danger)]">*</span>
-                <span className="rounded border border-[var(--border)] bg-[var(--surface-1)] px-1 py-0.5 font-mono text-[9px] text-[var(--text-muted)]">
-                  F4
-                </span>
-              </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              <span className="flex items-center justify-between">
+                Entry date <span className="font-normal text-red-500">*</span>
+                <kbd className="rounded border border-slate-300 bg-white px-1 py-0.5 font-mono text-[9px] font-normal text-slate-500">F4</kbd>
+              </span>
               <div className="flex gap-1">
                 <input
                   ref={dateRef}
@@ -671,49 +610,47 @@ export default function GateEntryCreatePage() {
                   value={entryDate}
                   max={todayIso()}
                   onChange={(e) => setEntryDate(e.target.value)}
-                  className="h-7 flex-1 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-2 text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)]"
+                  className="h-9 flex-1 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
                 />
                 <button
                   type="button"
-                  className="h-7 flex-shrink-0 rounded-[var(--radius)] border border-[var(--border-accent)] bg-[var(--bg-accent)] px-2 text-[10px] font-medium text-[var(--text-accent)]"
+                  className="h-9 border border-sky-600 bg-sky-50 px-3 text-xs font-semibold text-sky-800"
                   onClick={() => dateRef.current?.showPicker?.()}
                 >
                   F4
                 </button>
               </div>
-            </div>
+            </label>
 
             {/* Entry Time */}
-            <div className="flex flex-col gap-1">
-              <label className="flex items-center justify-between text-[10px] font-medium text-[var(--text-secondary)]">
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              <span className="flex items-center justify-between">
                 Entry time
-                <span className="rounded border border-[var(--border)] bg-[var(--surface-1)] px-1 py-0.5 font-mono text-[9px] text-[var(--text-muted)]">
-                  F4 = now
-                </span>
-              </label>
+                <kbd className="rounded border border-slate-300 bg-white px-1 py-0.5 font-mono text-[9px] font-normal text-slate-500">F4 = now</kbd>
+              </span>
               <div className="flex gap-1">
                 <input
                   type="text"
                   maxLength={5}
                   value={entryTime}
                   placeholder="HH:MM"
-                  className="h-7 flex-1 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-2 font-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)]"
+                  className="h-9 flex-1 border border-slate-300 bg-white px-3 font-mono text-sm text-slate-900 outline-none focus:border-sky-500"
                   onChange={(e) => {
                     let v = e.target.value.replace(/\D/g, "");
                     if (v.length > 2) v = `${v.slice(0, 2)}:${v.slice(2)}`;
                     setEntryTime(v.slice(0, 5));
                   }}
                 />
-                <div className="flex flex-shrink-0 overflow-hidden rounded-[var(--radius)] border border-[var(--border-strong)]">
+                <div className="flex overflow-hidden border border-slate-300">
                   {["AM", "PM"].map((ap) => (
                     <button
                       key={ap}
                       type="button"
                       className={[
-                        "h-7 px-2 text-[10px] font-semibold",
+                        "h-9 px-2 text-xs font-semibold",
                         ampm === ap
-                          ? "bg-[var(--fill-accent)] text-[var(--on-accent)]"
-                          : "bg-[var(--surface-2)] text-[var(--text-secondary)]",
+                          ? "bg-slate-700 text-white"
+                          : "bg-white text-slate-600",
                       ].join(" ")}
                       onClick={() => setAmpm(ap)}
                     >
@@ -723,58 +660,47 @@ export default function GateEntryCreatePage() {
                 </div>
                 <button
                   type="button"
-                  className="h-7 flex-shrink-0 rounded-[var(--radius)] border border-[var(--border-accent)] bg-[var(--bg-accent)] px-2 text-[10px] font-medium text-[var(--text-accent)]"
-                  onClick={() => {
-                    const t = currentTime12();
-                    setEntryTime(t.time);
-                    setAmpm(t.ampm);
-                  }}
+                  className="h-9 border border-sky-600 bg-sky-50 px-3 text-xs font-semibold text-sky-800"
+                  onClick={() => { const t = currentTime12(); setEntryTime(t.time); setAmpm(t.ampm); }}
                 >
                   F4
                 </button>
               </div>
-            </div>
+            </label>
 
             {/* Vehicle Number */}
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
-                Vehicle number <span className="text-[var(--text-danger)]">*</span>
-              </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              Vehicle number <span className="font-normal text-red-500">*</span>
               <input
                 type="text"
                 value={vehicleNumber}
                 placeholder="MH04 AB 1234"
-                className="h-7 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-2 text-[12px] uppercase text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)]"
+                className="h-9 border border-slate-300 bg-white px-3 text-sm uppercase text-slate-900 outline-none focus:border-sky-500"
                 onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
               />
-            </div>
-
+            </label>
 
             {/* Gross Weight */}
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
-                Gross weight (KG) <span className="text-[var(--text-danger)]">*</span>
-              </label>
+            <label className="grid gap-1 text-xs font-semibold text-slate-700">
+              Gross weight (KG) <span className="font-normal text-red-500">*</span>
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={grossWeight}
                 placeholder="0.00"
-                className="h-7 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-2 text-right text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)]"
+                className="h-9 border border-slate-300 bg-white px-3 text-right text-sm text-slate-900 outline-none focus:border-sky-500"
                 onChange={(e) => setGrossWeight(e.target.value)}
               />
-              <span className="text-[9px] text-[var(--text-muted)]">
-                Weighbridge slip reading
-              </span>
-            </div>
+              <span className="text-[10px] font-normal text-slate-400">Weighbridge slip reading</span>
+            </label>
           </div>
         </ErpSectionCard>
 
-        {/* ── Lines card ── */}
+        {/* ── Lines ── */}
         <ErpSectionCard eyebrow="Lines" title="PO items received on this vehicle">
           {dataLoading ? (
-            <div className="py-4 text-[11px] text-[var(--text-muted)]">
+            <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
               Loading POs and CSNs…
             </div>
           ) : (
@@ -782,22 +708,22 @@ export default function GateEntryCreatePage() {
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[860px] border-collapse text-[11px]">
                   <thead>
-                    <tr className="border-b border-[var(--border-strong)] bg-[var(--surface-1)]">
+                    <tr className="border-b border-slate-300 bg-slate-50">
                       {[
                         ["#", "w-6"],
-                        ["PO number *", "w-[150px]"],
-                        ["CSN", "w-[160px]"],
-                        ["Material", "w-[150px]"],
+                        ["PO number *", "w-[160px]"],
+                        ["CSN", "w-[150px]"],
+                        ["Material", "w-[160px]"],
                         ["UOM", "w-[52px] text-center"],
                         ["Exp qty", "w-[80px] text-right"],
-                        ["Rcv qty *", "w-[80px] text-right"],
-                        ["Invoice / BOE no", "w-[110px]"],
-                        ["LR / BL date", "w-[110px]"],
+                        ["Rcv qty *", "w-[90px] text-right"],
+                        ["Invoice / BOE no", "w-[120px]"],
+                        ["LR / BL date", "w-[120px]"],
                         ["", "w-6"],
                       ].map(([label, cls]) => (
                         <th
                           key={label}
-                          className={`px-1.5 py-1.5 text-left text-[9px] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)] ${cls}`}
+                          className={`px-1.5 py-2 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-500 ${cls}`}
                         >
                           {label}
                         </th>
@@ -811,13 +737,11 @@ export default function GateEntryCreatePage() {
               </div>
               <button
                 type="button"
-                className="mt-2 flex h-7 items-center gap-1.5 rounded-[var(--radius)] border border-dashed border-[var(--border-strong)] bg-transparent px-3 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-1)]"
+                className="mt-2 flex h-8 items-center gap-1.5 border border-dashed border-slate-300 bg-transparent px-3 text-xs font-medium text-slate-500 hover:bg-slate-50"
                 onClick={() => setLines((p) => [...p, EMPTY_LINE()])}
               >
                 + Add row
-                <kbd className="rounded border border-[var(--border)] bg-[var(--surface-1)] px-1 py-0.5 text-[9px] text-[var(--text-muted)]">
-                  Alt+N
-                </kbd>
+                <kbd className="rounded border border-slate-200 bg-slate-50 px-1 py-0.5 text-[9px] text-slate-400">Alt+N</kbd>
               </button>
             </>
           )}
@@ -825,98 +749,57 @@ export default function GateEntryCreatePage() {
       </ErpScreenScaffold>
 
       {/* ── CSN Drawer ── */}
-      {drawer.open && (
-        <div
-          className="fixed inset-0 z-40 flex justify-end"
-          style={{ background: "rgba(0,0,0,0.35)" }}
-          onClick={(e) => { if (e.target === e.currentTarget) closeDrawer(); }}
-        >
-          <div className="flex h-full w-[380px] flex-col border-l border-[var(--border-strong)]" style={{ background: "var(--surface-1, #f8f9fa)", opacity: 1 }}>
-            {/* drawer header */}
-            <div className="border-b border-[var(--border)] px-4 py-3" style={{ background: "var(--surface-2, #fff)" }}>
-              <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="text-[13px] font-medium text-[var(--text-primary)]">
-                    Select CSN
-                  </h3>
-                  <p className="mt-0.5 text-[10px] text-[var(--text-muted)]">
-                    {drawer.poNumber ?? ""}
-                    {" · "}
-                    {drawer.csns.length} open shipment{drawer.csns.length !== 1 ? "s" : ""}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="flex h-6 w-6 items-center justify-center rounded border border-[var(--border)] bg-transparent text-[15px] text-[var(--text-secondary)]"
-                  onClick={closeDrawer}
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-
-            {/* drawer body */}
-            <div className="flex-1 overflow-y-auto p-3">
-              {drawer.csns.length === 0 ? (
-                <p className="text-[11px] text-[var(--text-muted)]">
-                  No open CSNs for this PO.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {drawer.csns.map((csn, idx) => renderCsnCard(csn, idx))}
-                </div>
-              )}
-            </div>
-
-            {/* drawer footer — keyboard hints only */}
-            <div className="border-t border-[var(--border)] px-4 py-2.5" style={{ background: "var(--surface-2, #fff)" }}>
-              <p className="text-[9px] text-[var(--text-muted)]">
-                {[["↑↓", "Navigate"], ["Enter", "Select"], ["Esc", "Close"]].map(([k, d]) => (
-                  <span key={k} className="mr-3 inline-flex items-center gap-1">
-                    <kbd className="rounded border border-[var(--border-strong)] bg-[var(--surface-2)] px-1 py-0.5 font-mono text-[9px] text-[var(--text-primary)]">{k}</kbd>
-                    {d}
-                  </span>
-                ))}
-              </p>
-            </div>
+      <DrawerBase
+        visible={drawer.open}
+        title={drawer.poNumber ? `Select CSN — ${drawer.poNumber}` : "Select CSN"}
+        onEscape={closeDrawer}
+        onClose={closeDrawer}
+        width="min(420px, calc(100vw - 24px))"
+      >
+        {drawer.csns.length === 0 ? (
+          <p className="text-sm text-slate-500">No open CSNs for this PO.</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <p className="mb-1 text-xs text-slate-400">
+              {drawer.csns.length} open shipment{drawer.csns.length !== 1 ? "s" : ""} · ↑↓ navigate · Enter select · Esc close
+            </p>
+            {drawer.csns.map((csn, idx) => renderCsnCard(csn, idx))}
           </div>
-        </div>
-      )}
+        )}
+      </DrawerBase>
 
       {/* ── Success Modal ── */}
       {successGE && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-[340px] overflow-hidden rounded-xl border border-[var(--border-strong)] bg-[var(--surface-2)] shadow-xl">
-            <div className="border-b border-[var(--border)] bg-[var(--bg-success)] px-5 py-4">
-              <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--text-success)]">
+          <div className="w-[340px] overflow-hidden border border-slate-300 bg-white shadow-xl">
+            <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.1em] text-emerald-700">
                 Gate entry created
               </p>
             </div>
             <div className="px-5 py-5">
-              <p className="mb-1 text-[10px] text-[var(--text-muted)]">GE number</p>
-              <p className="font-mono text-[26px] font-semibold tracking-wider text-[var(--text-primary)]">
+              <p className="mb-1 text-xs text-slate-500">GE number</p>
+              <p className="font-mono text-[28px] font-semibold tracking-wider text-slate-900">
                 {successGE}
               </p>
-              <p className="mt-3 text-[10px] text-[var(--text-muted)]">
+              <p className="mt-3 text-xs text-slate-500">
                 Note this number for the gate register, then close to create the next entry.
               </p>
             </div>
-            <div className="flex justify-end gap-2 border-t border-[var(--border)] bg-[var(--surface-1)] px-5 py-3">
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3">
               <button
                 type="button"
-                className="h-8 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-4 text-[12px] font-medium text-[var(--text-secondary)]"
+                className="h-9 border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700"
                 onClick={() => {
                   openScreen(OPERATION_SCREENS.PROC_GATE_ENTRY_DETAIL.screen_code);
-                  navigate(
-                    `/dashboard/procurement/gate-entries/${encodeURIComponent(successGE)}`
-                  );
+                  navigate(`/dashboard/procurement/gate-entries/${encodeURIComponent(successGE)}`);
                 }}
               >
                 Open detail
               </button>
               <button
                 type="button"
-                className="h-8 rounded-[var(--radius)] border border-[var(--fill-accent)] bg-[var(--fill-accent)] px-4 text-[12px] font-medium text-[var(--on-accent)]"
+                className="h-9 border border-sky-700 bg-sky-600 px-4 text-sm font-semibold text-white"
                 onClick={resetForm}
                 autoFocus
               >
