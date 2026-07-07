@@ -25,7 +25,7 @@ type PurchaseOrderRow = Record<string, unknown>;
 type PurchaseOrderLineRow = Record<string, unknown>;
 type CsnRow = Record<string, unknown>;
 
-const GE_HEADER_STATUSES = new Set(["OPEN", "GRN_POSTED", "CANCELLED"]);
+const GE_HEADER_STATUSES = new Set(["OPEN", "GRN_POSTED", "CANCELLED", "PRUNED"]);
 const GE_TYPES = new Set(["INBOUND_PO", "INBOUND_STO"]);
 const OPEN_CSN_STATUSES = ["ORD", "TRN", "GED"];
 const OPEN_PO_LINE_STATUSES = new Set(["OPEN", "PARTIALLY_RECEIVED"]);
@@ -247,6 +247,7 @@ async function upsertCsnArrival(
     .from("consignment_note")
     .update({
       status: nextStatus,
+      pre_ge_status: currentStatus,
       gate_entry_date: geDate,
       gate_entry_id: gateEntryId,
       received_qty: qty,
@@ -457,7 +458,33 @@ export async function listGateEntriesHandler(
       return procurementErrorResponse(req, ctx, "GE_LIST_FAILED", 500, "Unable to list gate entries.");
     }
 
-    return okResponse({ items: data ?? [] }, ctx.request_id, req);
+    const rows = data ?? [];
+    let items = rows as JsonRecord[];
+
+    if (rows.length > 0) {
+      const geIds = rows.map((r) => String((r as JsonRecord).id));
+      const { data: lineAgg } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("gate_entry_line")
+        .select("gate_entry_id, ge_qty")
+        .in("gate_entry_id", geIds);
+
+      const aggMap = new Map<string, { num_lines: number; total_qty: number }>();
+      for (const line of (lineAgg ?? []) as JsonRecord[]) {
+        const geid = String(line.gate_entry_id);
+        const existing = aggMap.get(geid) ?? { num_lines: 0, total_qty: 0 };
+        existing.num_lines += 1;
+        existing.total_qty += Number(line.ge_qty ?? 0);
+        aggMap.set(geid, existing);
+      }
+
+      items = rows.map((r) => {
+        const agg = aggMap.get(String((r as JsonRecord).id)) ?? { num_lines: 0, total_qty: 0 };
+        return { ...(r as JsonRecord), num_lines: agg.num_lines, total_qty: Number(agg.total_qty.toFixed(6)) };
+      });
+    }
+
+    return okResponse({ items }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GE_LIST_FAILED";
     return procurementErrorResponse(req, ctx, message, 500, message);
@@ -805,6 +832,90 @@ export async function createGateExitInboundHandler(
     const message = error instanceof Error ? error.message : "GEX_CREATE_FAILED";
     const status = message.includes("REQUIRED") ? 400 : message.includes("NOT_FOUND") ? 404 : 500;
     return procurementErrorResponse(req, ctx, message, status, message);
+  }
+}
+
+export async function pruneGateEntryHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const gateEntryId = getPathSegments(req)[3] ?? "";
+    if (!gateEntryId) {
+      return procurementErrorResponse(req, ctx, "GE_ID_REQUIRED", 400, "Gate entry id is required.");
+    }
+
+    const { gateEntry, lines } = await fetchGateEntryBundle(gateEntryId);
+    const geStatus = toUpperTrimmedString(gateEntry.status);
+
+    if (geStatus === "PRUNED") {
+      return procurementErrorResponse(req, ctx, "GE_ALREADY_PRUNED", 400, "Gate entry is already pruned.");
+    }
+    if (geStatus === "CANCELLED") {
+      return procurementErrorResponse(req, ctx, "GE_CANCELLED", 400, "Cannot prune a cancelled gate entry.");
+    }
+
+    // Check all linked GRNs are reversed
+    const { data: grns, error: grnError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("goods_receipt_note")
+      .select("id, grn_number, status")
+      .eq("gate_entry_id", gateEntryId);
+
+    if (grnError) {
+      return procurementErrorResponse(req, ctx, "GE_PRUNE_GRN_CHECK_FAILED", 500, "Unable to check linked GRNs.");
+    }
+
+    const blockedGrns = (grns ?? []).filter((g) => toUpperTrimmedString((g as JsonRecord).status) !== "REVERSED");
+    if (blockedGrns.length > 0) {
+      const nums = blockedGrns.map((g) => (g as JsonRecord).grn_number).join(", ");
+      return procurementErrorResponse(
+        req, ctx, "GE_PRUNE_BLOCKED_BY_GRN", 400,
+        `Reverse all GRNs before pruning. Pending: ${nums}`
+      );
+    }
+
+    // Release linked CSNs back to open
+    const csnIds = Array.from(new Set(lines.map((l) => toTrimmedString(l.csn_id)).filter(Boolean)));
+    if (csnIds.length > 0) {
+      const { data: csnRows } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("consignment_note")
+        .select("id, pre_ge_status")
+        .in("id", csnIds);
+
+      for (const csn of (csnRows ?? []) as JsonRecord[]) {
+        const restoreStatus = toUpperTrimmedString(csn.pre_ge_status) || "ORD";
+        await serviceRoleClient
+          .schema("erp_procurement")
+          .from("consignment_note")
+          .update({
+            status: restoreStatus,
+            pre_ge_status: null,
+            gate_entry_id: null,
+            gate_entry_date: null,
+            last_updated_at: new Date().toISOString(),
+          })
+          .eq("id", String(csn.id));
+      }
+    }
+
+    // Mark GE as PRUNED
+    const { error: pruneError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("gate_entry")
+      .update({ status: "PRUNED", last_updated_at: new Date().toISOString() })
+      .eq("id", gateEntryId);
+
+    if (pruneError) {
+      return procurementErrorResponse(req, ctx, "GE_PRUNE_FAILED", 500, "Unable to prune gate entry.");
+    }
+
+    return okResponse(await hydrateGateEntry(gateEntryId), ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GE_PRUNE_FAILED";
+    return procurementErrorResponse(req, ctx, message, 500, message);
   }
 }
 

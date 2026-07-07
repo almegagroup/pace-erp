@@ -415,6 +415,10 @@ export function updateGateEntry(id, data) {
   return fetchProcurement("PUT", `/api/procurement/gate-entries/${encodeURIComponent(id)}`, data);
 }
 
+export function pruneGateEntry(id) {
+  return fetchProcurement("POST", `/api/procurement/gate-entries/${encodeURIComponent(id)}/prune`);
+}
+
 export function listOpenCSNsForGE(params) {
   return fetchProcurement("GET", "/api/procurement/gate-entries/open-csns", undefined, params);
 }

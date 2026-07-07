@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
@@ -7,7 +8,7 @@ import ErpMasterListTemplate from "../../../../components/templates/ErpMasterLis
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { getGateEntry, listGateEntries } from "../procurementApi.js";
+import { listGateEntries } from "../procurementApi.js";
 
 const LIMIT = 50;
 
@@ -27,8 +28,8 @@ function statusTone(status) {
 
 export default function GateEntryListPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
   const [companyId, setCompanyId] = useState("");
   const [status, setStatus] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -36,8 +37,6 @@ export default function GateEntryListPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
 
   const companyOptions = useMemo(
     () =>
@@ -62,56 +61,20 @@ export default function GateEntryListPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!companyId) return;
-      setLoading(true);
-      setError("");
-      try {
-        const listResult = await listGateEntries({
-          company_id: companyId,
-          status: status || undefined,
-          date_from: dateFrom || undefined,
-          date_to: dateTo || undefined,
-          limit: LIMIT,
-        });
-        const baseRows = Array.isArray(listResult?.items) ? listResult.items : [];
-        const hydrated = await Promise.all(
-          baseRows.map(async (row) => {
-            try {
-              const detail = await getGateEntry(row.id);
-              const lines = Array.isArray(detail?.lines) ? detail.lines : [];
-              const totalQty = lines.reduce((sum, line) => sum + Number(line.ge_qty ?? 0), 0);
-              return {
-                ...row,
-                num_lines: lines.length,
-                total_qty: Number(totalQty.toFixed(6)),
-              };
-            } catch {
-              return {
-                ...row,
-                num_lines: 0,
-                total_qty: 0,
-              };
-            }
-          })
-        );
-        if (!active) return;
-        setRows(hydrated);
-      } catch (loadError) {
-        if (!active) return;
-        setRows([]);
-        setError(loadError instanceof Error ? loadError.message : "GE_LIST_FAILED");
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-    void load();
-    return () => {
-      active = false;
-    };
-  }, [companyId, dateFrom, dateTo, status]);
+  const { data: listResult, isLoading: loading, error: queryError } = useQuery({
+    queryKey: ["procurement", "ge-list", companyId, status, dateFrom, dateTo],
+    enabled: Boolean(companyId),
+    queryFn: () => listGateEntries({
+      company_id: companyId,
+      status: status || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      limit: LIMIT,
+    }),
+  });
+
+  const rows = Array.isArray(listResult?.items) ? listResult.items : [];
+  const error = queryError instanceof Error ? queryError.message : (queryError ? "GE_LIST_FAILED" : "");
 
   const filteredRows = useMemo(() => {
     if (!debouncedSearch) return rows;
@@ -145,7 +108,7 @@ export default function GateEntryListPage() {
       eyebrow="Procurement"
       title="Gate Entries"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
+        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => queryClient.invalidateQueries({ queryKey: ["procurement", "ge-list"] }) },
         { key: "create", label: "Create GE", tone: "primary", onClick: openCreate },
       ]}
       notices={error ? [{ key: "ge-list-error", tone: "error", message: error }] : []}

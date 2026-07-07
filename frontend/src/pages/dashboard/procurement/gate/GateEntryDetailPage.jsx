@@ -7,12 +7,14 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   createGRNDraft,
   createGateExitInbound,
   getGateEntry,
+  pruneGateEntry,
 } from "../procurementApi.js";
 
 function statusTone(status) {
@@ -141,6 +143,29 @@ export default function GateEntryDetailPage() {
     }
   }
 
+  async function handlePrune() {
+    if (!detail?.id) return;
+    const confirmed = await openActionConfirm({
+      eyebrow: "GE Prune",
+      title: `Prune Gate Entry ${detail.ge_number}?`,
+      message: "GE will be marked PRUNED. All linked CSNs will be released back to their previous status. Serial number stays occupied. This cannot be undone.",
+      confirmLabel: "Prune GE",
+    });
+    if (!confirmed) return;
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const pruned = await pruneGateEntry(detail.id);
+      setDetail(pruned);
+      setNotice("Gate entry pruned. CSNs have been released.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "GE_PRUNE_FAILED");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function openGateExitDetail() {
     if (!detail?.gate_exit_inbound?.id) {
       return;
@@ -167,6 +192,9 @@ export default function GateEntryDetailPage() {
       ]}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
+        ...(!["PRUNED", "CANCELLED"].includes(String(detail?.status || "").toUpperCase())
+          ? [{ key: "prune", label: saving ? "Pruning..." : "Prune GE", tone: "danger", onClick: () => void handlePrune(), disabled: saving }]
+          : []),
       ]}
     >
       {loading || !detail ? (

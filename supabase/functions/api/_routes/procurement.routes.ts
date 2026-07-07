@@ -39,6 +39,7 @@ import {
   listGateEntriesHandler,
   listOpenCSNsForGEHandler,
   listOpenPOsForGEHandler,
+  pruneGateEntryHandler,
   updateGateEntryHandler,
 } from "../_core/procurement/gate_entry.handlers.ts";
 import {
@@ -665,6 +666,10 @@ export async function dispatchProcurementRoutes(
     if (req.method === "DELETE") {
       return await deleteCHAHandler(req, ctx);
     }
+  }
+
+  if (/^\/api\/procurement\/gate-entries\/[^/]+\/prune$/.test(pathname) && req.method === "POST") {
+    return await pruneGateEntryHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/gate-entries\/[^/]+$/.test(pathname)) {
