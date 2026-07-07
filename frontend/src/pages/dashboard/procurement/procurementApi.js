@@ -419,6 +419,10 @@ export function listOpenCSNsForGE(params) {
   return fetchProcurement("GET", "/api/procurement/gate-entries/open-csns", undefined, params);
 }
 
+export function listOpenPOsForGE(params) {
+  return fetchProcurement("GET", "/api/procurement/gate-entries/open-pos", undefined, params);
+}
+
 export function createGateExitInbound(data) {
   return fetchProcurement("POST", "/api/procurement/gate-exits/inbound", data);
 }

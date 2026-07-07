@@ -6,11 +6,9 @@ import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   createGateEntry,
-  getPurchaseOrder,
   listOpenCSNsForGE,
-  listPurchaseOrders,
+  listOpenPOsForGE,
 } from "../procurementApi.js";
-import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -42,12 +40,11 @@ function time12to24(time, ampm) {
 const EMPTY_LINE = () => ({
   poQuery: "",
   po: null,
-  poLine: null,         // first open PO line (for BULK, resolved on PO select)
+  poLine: null,
   csn: null,
   rcvQty: "",
   lrNumber: "",
   lrDate: "",
-  loadingPoLine: false,
 });
 
 // ─── component ──────────────────────────────────────────────────────────────
@@ -93,12 +90,6 @@ export default function GateEntryCreatePage() {
   const [error, setError] = useState("");
   const [successGE, setSuccessGE] = useState(null);
 
-  const materialQuery = useMaterialOptionsQuery({ limit: 500, offset: 0 });
-  const materialMap = useMemo(
-    () => new Map((materialQuery.materials ?? []).map((m) => [m.id, m])),
-    [materialQuery.materials]
-  );
-
   const companyOptions = useMemo(
     () =>
       (runtimeContext?.availableCompanies ?? []).map((c) => ({
@@ -121,12 +112,12 @@ export default function GateEntryCreatePage() {
     let active = true;
     setDataLoading(true);
     Promise.all([
-      listPurchaseOrders({ company_id: companyId, status: "CONFIRMED", limit: 500, offset: 0 }),
+      listOpenPOsForGE({ company_id: companyId }),
       listOpenCSNsForGE({ company_id: companyId }),
     ])
       .then(([poRes, csnRes]) => {
         if (!active) return;
-        setAllPos(Array.isArray(poRes?.data) ? poRes.data : []);
+        setAllPos(Array.isArray(poRes?.items) ? poRes.items : []);
         setAllCsns(Array.isArray(csnRes?.items) ? csnRes.items : []);
       })
       .catch((e) => {
@@ -164,22 +155,18 @@ export default function GateEntryCreatePage() {
     );
   }
 
-  async function selectPO(rowIndex, po) {
+  function selectPO(rowIndex, po) {
     const isBulk = ["BULK", "TANKER"].includes((po.delivery_type || "").toUpperCase());
-    updateLine(rowIndex, { poQuery: po.po_number, po, csn: null, poLine: null, loadingPoLine: isBulk });
+    // PO comes with embedded lines from listOpenPOsForGE
+    const firstOpenLine = isBulk
+      ? (po.lines ?? []).find((l) =>
+          ["OPEN", "PARTIALLY_RECEIVED"].includes((l.line_status || "").toUpperCase())
+        ) ?? null
+      : null;
+    updateLine(rowIndex, { poQuery: po.po_number, po, csn: null, poLine: firstOpenLine });
     setPoDropRow(null);
 
-    if (isBulk) {
-      try {
-        const detail = await getPurchaseOrder(po.id);
-        const firstOpenLine = (detail?.lines ?? []).find((l) =>
-          ["OPEN", "PARTIALLY_RECEIVED"].includes((l.line_status || "").toUpperCase())
-        );
-        updateLine(rowIndex, { poLine: firstOpenLine ?? null, loadingPoLine: false });
-      } catch {
-        updateLine(rowIndex, { loadingPoLine: false });
-      }
-    } else {
+    if (!isBulk) {
       const csns = getCsnsForPo(po.id);
       if (csns.length > 0) {
         setTimeout(() => openDrawer(rowIndex, po), 60);
@@ -347,7 +334,7 @@ export default function GateEntryCreatePage() {
 
   function renderCsnCard(csn, idx) {
     const isImport = (csn.csn_type || "").toUpperCase() === "IMPORT";
-    const mat = materialMap.get(csn.material_id);
+    const matDisplay = csn.material_name || csn.material_id || "—";
     const isSelected = drawer.selected?.id === csn.id;
     const isHi = idx === drawer.hiIdx;
     return (
@@ -385,7 +372,7 @@ export default function GateEntryCreatePage() {
         <div className="grid grid-cols-2 gap-x-3 gap-y-1">
           {[
             ["PO number", csn.po_number || "—"],
-            ["Material", mat?.material_name || csn.material_id || "—"],
+            ["Material", matDisplay],
             ["Quantity", csn.dispatch_qty ? `${Number(csn.dispatch_qty).toLocaleString()} ${csn.po_uom_code || ""}` : "—"],
             [isImport ? "BOE number" : "Invoice number", csn.invoice_number || csn.boe_number || "—"],
             [isImport ? "BL date (ATD)" : "LR date (ATD)", csn.bl_date || csn.lr_date || "—"],
@@ -411,9 +398,9 @@ export default function GateEntryCreatePage() {
     const isBulk = ["BULK", "TANKER"].includes((line.po?.delivery_type || "").toUpperCase());
     const sugs = line.po === null ? getPoSuggestions(line.poQuery) : [];
     const showDrop = poDropRow === i && sugs.length > 0;
-    const mat = materialMap.get(
-      isBulk ? line.poLine?.material_id : line.csn?.material_id
-    );
+    const matName = isBulk
+      ? (line.poLine?.material_name || line.poLine?.material_id || "")
+      : (line.csn?.material_name || line.csn?.material_id || "");
     const uom = isBulk
       ? (line.poLine?.uom_code || line.poLine?.po_uom_code || "")
       : (line.csn?.po_uom_code || "");
@@ -501,7 +488,7 @@ export default function GateEntryCreatePage() {
         {/* Material (readonly) */}
         <td className="w-[150px]">
           <span className="px-1.5 text-[10px] text-[var(--text-muted)]">
-            {line.loadingPoLine ? "Loading…" : (mat?.material_name || (line.csn?.material_id ? "—" : ""))}
+            {matName || ""}
           </span>
         </td>
 

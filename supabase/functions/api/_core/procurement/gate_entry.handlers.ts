@@ -613,7 +613,11 @@ export async function listOpenCSNsForGEHandler(
     const { data, error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
-      .select("id, csn_number, status, company_id, po_id, po_line_id, material_id, vendor_id, dispatch_qty, po_qty, po_uom_code")
+      .select(
+        "id, csn_number, csn_type, status, company_id, po_id, po_line_id, " +
+        "material_id, vendor_id, dispatch_qty, po_qty, po_uom_code, " +
+        "invoice_number, boe_number, bl_date, lr_date, lr_number, delivery_type"
+      )
       .eq("company_id", companyId)
       .in("status", OPEN_CSN_STATUSES)
       .order("created_at", { ascending: false });
@@ -625,6 +629,61 @@ export async function listOpenCSNsForGEHandler(
     return okResponse({ items: data ?? [] }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "CSN_OPEN_LIST_FAILED";
+    return procurementErrorResponse(req, ctx, message, 500, message);
+  }
+}
+
+export async function listOpenPOsForGEHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+
+    const { data: pos, error: posError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("purchase_order")
+      .select("id, po_number, delivery_type, vendor_id, status, company_id")
+      .eq("company_id", companyId)
+      .in("status", ["CONFIRMED", "PARTIALLY_RECEIVED"])
+      .order("created_at", { ascending: false });
+
+    if (posError) {
+      return procurementErrorResponse(req, ctx, "PO_OPEN_LIST_FAILED", 500, "Unable to list open POs.");
+    }
+
+    const poIds = (pos ?? []).map((p) => String(p.id));
+    let lines: JsonRecord[] = [];
+    if (poIds.length > 0) {
+      const { data: lineData, error: lineError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("purchase_order_line")
+        .select("id, po_id, material_id, po_uom_code, line_status")
+        .in("po_id", poIds)
+        .in("line_status", ["OPEN", "PARTIALLY_RECEIVED"]);
+
+      if (!lineError) {
+        lines = (lineData ?? []) as JsonRecord[];
+      }
+    }
+
+    const linesMap = new Map<string, JsonRecord[]>();
+    for (const line of lines) {
+      const poId = String(line.po_id);
+      if (!linesMap.has(poId)) linesMap.set(poId, []);
+      linesMap.get(poId)!.push(line);
+    }
+
+    const result = (pos ?? []).map((po) => ({
+      ...po,
+      lines: linesMap.get(String(po.id)) ?? [],
+    }));
+
+    return okResponse({ items: result }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "PO_OPEN_LIST_FAILED";
     return procurementErrorResponse(req, ctx, message, 500, message);
   }
 }
