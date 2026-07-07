@@ -62,7 +62,6 @@ export default function GateEntryCreatePage() {
   const [entryTime, setEntryTime] = useState(initTime);
   const [ampm, setAmpm] = useState(initAmpm);
   const [vehicleNumber, setVehicleNumber] = useState("");
-  const [vehicleType, setVehicleType] = useState("TRUCK");
   const [grossWeight, setGrossWeight] = useState("");
 
   // ── lines state
@@ -136,7 +135,7 @@ export default function GateEntryCreatePage() {
 
   // ── PO combobox
   function getPoSuggestions(query) {
-    if (!query || query.length < 2) return [];
+    if (!query) return allPos.slice(0, 8);
     const q = query.toLowerCase();
     return allPos
       .filter(
@@ -254,7 +253,7 @@ export default function GateEntryCreatePage() {
         entry_date: entryDate,
         entry_time: time12to24(entryTime, ampm),
         vehicle_number: vehicleNumber.trim().toUpperCase(),
-        vehicle_type: vehicleType,
+
         gross_weight: gw,
         lines: activeLines.map((l) => {
           const isBulk = ["BULK", "TANKER"].includes((l.po.delivery_type || "").toUpperCase());
@@ -291,7 +290,7 @@ export default function GateEntryCreatePage() {
     setEntryTime(t.time);
     setAmpm(t.ampm);
     setVehicleNumber("");
-    setVehicleType("TRUCK");
+
     setGrossWeight("");
     setLines(Array.from({ length: 6 }, EMPTY_LINE));
     setError("");
@@ -412,7 +411,7 @@ export default function GateEntryCreatePage() {
     const isBulk = ["BULK", "TANKER"].includes((line.po?.delivery_type || "").toUpperCase());
     const isImportLine = (line.csn?.csn_type || "").toUpperCase() === "IMPORT";
     const sugs = line.po === null ? getPoSuggestions(line.poQuery) : [];
-    const showDrop = poDropRow === i && sugs.length > 0;
+    const showDrop = poDropRow === i && sugs.length > 0 && allPos.length > 0;
     const matName = isBulk
       ? (line.poLine?.material_name || line.poLine?.material_id || "")
       : (line.csn?.material_name || line.csn?.material_id || "");
@@ -437,15 +436,18 @@ export default function GateEntryCreatePage() {
               setPoDropHi(0);
             }}
             onFocus={() => {
-              if (!line.po) setPoDropRow(i);
+              if (!line.po) { setPoDropRow(i); setPoDropHi(0); }
             }}
             onBlur={() => setTimeout(() => setPoDropRow(null), 200)}
             onKeyDown={(e) => {
-              if (e.key === "ArrowDown") { e.preventDefault(); setPoDropHi((h) => Math.min(h + 1, sugs.length - 1)); }
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                if (!showDrop) { setPoDropRow(i); setPoDropHi(0); }
+                else setPoDropHi((h) => Math.min(h + 1, sugs.length - 1));
+              }
               else if (e.key === "ArrowUp") { e.preventDefault(); setPoDropHi((h) => Math.max(h - 1, 0)); }
               else if (e.key === "Enter" && showDrop) { e.preventDefault(); selectPO(i, sugs[poDropHi]); }
               else if (e.key === "Tab" && showDrop && sugs.length > 0) {
-                // Tab with dropdown open: select highlighted suggestion, then drawer opens automatically
                 e.preventDefault();
                 selectPO(i, sugs[poDropHi]);
               }
@@ -747,29 +749,6 @@ export default function GateEntryCreatePage() {
               />
             </div>
 
-            {/* Vehicle Type */}
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
-                Vehicle type <span className="text-[var(--text-danger)]">*</span>
-              </label>
-              <div className="flex gap-1">
-                {["TRUCK", "TANKER"].map((vt) => (
-                  <button
-                    key={vt}
-                    type="button"
-                    className={[
-                      "h-7 flex-1 rounded-[var(--radius)] border text-[11px] font-medium",
-                      vehicleType === vt
-                        ? "border-[var(--border-accent)] bg-[var(--bg-accent)] text-[var(--text-accent)]"
-                        : "border-[var(--border-strong)] bg-[var(--surface-2)] text-[var(--text-secondary)]",
-                    ].join(" ")}
-                    onClick={() => setVehicleType(vt)}
-                  >
-                    {vt.charAt(0) + vt.slice(1).toLowerCase()}
-                  </button>
-                ))}
-              </div>
-            </div>
 
             {/* Gross Weight */}
             <div className="flex flex-col gap-1">
@@ -848,12 +827,13 @@ export default function GateEntryCreatePage() {
       {/* ── CSN Drawer ── */}
       {drawer.open && (
         <div
-          className="fixed inset-0 z-40 flex justify-end bg-black/30"
+          className="fixed inset-0 z-40 flex justify-end"
+          style={{ background: "rgba(0,0,0,0.35)" }}
           onClick={(e) => { if (e.target === e.currentTarget) closeDrawer(); }}
         >
-          <div className="flex h-full w-[380px] flex-col border-l border-[var(--border-strong)] bg-[var(--surface-2)]">
+          <div className="flex h-full w-[380px] flex-col border-l border-[var(--border-strong)]" style={{ background: "var(--surface-1, #f8f9fa)", opacity: 1 }}>
             {/* drawer header */}
-            <div className="border-b border-[var(--border)] bg-[var(--surface-1)] px-4 py-3">
+            <div className="border-b border-[var(--border)] px-4 py-3" style={{ background: "var(--surface-2, #fff)" }}>
               <div className="flex items-start justify-between">
                 <div>
                   <h3 className="text-[13px] font-medium text-[var(--text-primary)]">
@@ -889,7 +869,7 @@ export default function GateEntryCreatePage() {
             </div>
 
             {/* drawer footer — keyboard hints only */}
-            <div className="border-t border-[var(--border)] bg-[var(--surface-1)] px-4 py-2.5">
+            <div className="border-t border-[var(--border)] px-4 py-2.5" style={{ background: "var(--surface-2, #fff)" }}>
               <p className="text-[9px] text-[var(--text-muted)]">
                 {[["↑↓", "Navigate"], ["Enter", "Select"], ["Esc", "Close"]].map(([k, d]) => (
                   <span key={k} className="mr-3 inline-flex items-center gap-1">
