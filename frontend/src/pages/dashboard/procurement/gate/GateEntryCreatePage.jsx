@@ -81,6 +81,7 @@ export default function GateEntryCreatePage() {
   const [drawer, setDrawer] = useState({
     open: false,
     rowIndex: null,
+    poNumber: null,
     csns: [],
     hiIdx: 0,
     selected: null,
@@ -182,20 +183,25 @@ export default function GateEntryCreatePage() {
     const csns = getCsnsForPo(resolvedPo.id);
     const currentCsn = lines[rowIndex]?.csn;
     const hiIdx = csns.findIndex((c) => c.id === currentCsn?.id);
-    setDrawer({ open: true, rowIndex, csns, hiIdx: Math.max(0, hiIdx), selected: currentCsn });
+    setDrawer({ open: true, rowIndex, poNumber: resolvedPo.po_number ?? null, csns, hiIdx: Math.max(0, hiIdx), selected: currentCsn });
   }
 
   function closeDrawer() {
-    setDrawer({ open: false, rowIndex: null, csns: [], hiIdx: 0, selected: null });
+    setDrawer({ open: false, rowIndex: null, poNumber: null, csns: [], hiIdx: 0, selected: null });
   }
 
   function confirmDrawer() {
     const rowIndex = drawer.rowIndex;
     if (drawer.selected && rowIndex !== null) {
-      updateLine(rowIndex, { csn: drawer.selected });
+      const csn = drawer.selected;
+      const isImport = (csn.csn_type || "").toUpperCase() === "IMPORT";
+      updateLine(rowIndex, {
+        csn,
+        lrNumber: isImport ? (csn.boe_number || "") : (csn.invoice_number || ""),
+        lrDate: isImport ? (csn.bl_date || "") : (csn.lr_date || ""),
+      });
     }
     closeDrawer();
-    // After drawer closes, move focus to the Received Qty input for this row
     if (rowIndex !== null) {
       setTimeout(() => rcvQtyRefs.current[rowIndex]?.focus(), 60);
     }
@@ -302,10 +308,11 @@ export default function GateEntryCreatePage() {
     function onKey(e) {
       // drawer open
       if (drawer.open) {
-        if (e.key === "Escape") { e.preventDefault(); closeDrawer(); return; }
-        if (e.key === "Enter") { e.preventDefault(); confirmDrawer(); return; }
+        if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); closeDrawer(); return; }
+        if (e.key === "Enter") { e.preventDefault(); e.stopImmediatePropagation(); confirmDrawer(); return; }
         if (e.key === "ArrowDown") { e.preventDefault(); setDrawerHi(drawer.hiIdx + 1); return; }
         if (e.key === "ArrowUp") { e.preventDefault(); setDrawerHi(drawer.hiIdx - 1); return; }
+        e.stopImmediatePropagation();
         return;
       }
       // success modal
@@ -402,6 +409,7 @@ export default function GateEntryCreatePage() {
 
   function renderLineRow(line, i) {
     const isBulk = ["BULK", "TANKER"].includes((line.po?.delivery_type || "").toUpperCase());
+    const isImportLine = (line.csn?.csn_type || "").toUpperCase() === "IMPORT";
     const sugs = line.po === null ? getPoSuggestions(line.poQuery) : [];
     const showDrop = poDropRow === i && sugs.length > 0;
     const matName = isBulk
@@ -529,17 +537,17 @@ export default function GateEntryCreatePage() {
           />
         </td>
 
-        {/* LR / Invoice no */}
+        {/* Invoice / BOE no */}
         <td className="w-[110px]">
           <input
             className="h-6 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)] focus:bg-[var(--surface-2)]"
             value={line.lrNumber}
-            placeholder="Optional"
+            placeholder={line.csn ? (isImportLine ? "BOE no" : "Invoice no") : "Optional"}
             onChange={(e) => updateLine(i, { lrNumber: e.target.value })}
           />
         </td>
 
-        {/* LR / Invoice date */}
+        {/* LR / BL date */}
         <td className="w-[110px]">
           <input
             type="date"
@@ -803,8 +811,8 @@ export default function GateEntryCreatePage() {
                         ["UOM", "w-[52px] text-center"],
                         ["Exp qty", "w-[80px] text-right"],
                         ["Rcv qty *", "w-[80px] text-right"],
-                        ["LR / Invoice no", "w-[110px]"],
-                        ["LR / Invoice date", "w-[110px]"],
+                        ["Invoice / BOE no", "w-[110px]"],
+                        ["LR / BL date", "w-[110px]"],
                         ["", "w-6"],
                       ].map(([label, cls]) => (
                         <th
@@ -851,9 +859,7 @@ export default function GateEntryCreatePage() {
                     Select CSN
                   </h3>
                   <p className="mt-0.5 text-[10px] text-[var(--text-muted)]">
-                    {drawer.rowIndex !== null
-                      ? lines[drawer.rowIndex]?.po?.po_number ?? ""
-                      : ""}
+                    {drawer.poNumber ?? ""}
                     {" · "}
                     {drawer.csns.length} open shipment{drawer.csns.length !== 1 ? "s" : ""}
                   </p>
@@ -881,37 +887,16 @@ export default function GateEntryCreatePage() {
               )}
             </div>
 
-            {/* drawer footer */}
-            <div className="flex items-center gap-2 border-t border-[var(--border)] bg-[var(--surface-1)] px-4 py-2.5">
-              <p className="flex-1 text-[9px] text-[var(--text-muted)]">
-                <kbd className="rounded border border-[var(--border-strong)] bg-[var(--surface-2)] px-1 py-0.5 text-[9px] text-[var(--text-primary)]">
-                  ↑↓
-                </kbd>{" "}
-                Navigate{" "}
-                <kbd className="rounded border border-[var(--border-strong)] bg-[var(--surface-2)] px-1 py-0.5 text-[9px] text-[var(--text-primary)]">
-                  Enter
-                </kbd>{" "}
-                Select{" "}
-                <kbd className="rounded border border-[var(--border-strong)] bg-[var(--surface-2)] px-1 py-0.5 text-[9px] text-[var(--text-primary)]">
-                  Esc
-                </kbd>{" "}
-                Close
+            {/* drawer footer — keyboard hints only */}
+            <div className="border-t border-[var(--border)] bg-[var(--surface-1)] px-4 py-2.5">
+              <p className="text-[9px] text-[var(--text-muted)]">
+                {[["↑↓", "Navigate"], ["Enter", "Select"], ["Esc", "Close"]].map(([k, d]) => (
+                  <span key={k} className="mr-3 inline-flex items-center gap-1">
+                    <kbd className="rounded border border-[var(--border-strong)] bg-[var(--surface-2)] px-1 py-0.5 font-mono text-[9px] text-[var(--text-primary)]">{k}</kbd>
+                    {d}
+                  </span>
+                ))}
               </p>
-              <button
-                type="button"
-                className="h-7 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[11px] text-[var(--text-secondary)]"
-                onClick={closeDrawer}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={!drawer.selected}
-                className="h-7 rounded-[var(--radius)] border border-[var(--border-accent)] bg-[var(--fill-accent)] px-3 text-[11px] font-medium text-[var(--on-accent)] disabled:opacity-40"
-                onClick={confirmDrawer}
-              >
-                Select CSN
-              </button>
             </div>
           </div>
         </div>

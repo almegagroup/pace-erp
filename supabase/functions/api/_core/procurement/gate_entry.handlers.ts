@@ -626,7 +626,20 @@ export async function listOpenCSNsForGEHandler(
       return procurementErrorResponse(req, ctx, "CSN_OPEN_LIST_FAILED", 500, "Unable to list open CSNs.");
     }
 
-    return okResponse({ items: data ?? [] }, ctx.request_id, req);
+    const csns = data ?? [];
+    const matIds = [...new Set(csns.map((c) => c.material_id).filter(Boolean))] as string[];
+    const matMap = new Map<string, string>();
+    if (matIds.length > 0) {
+      const { data: mats } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id, material_name")
+        .in("id", matIds);
+      for (const m of mats ?? []) matMap.set(String(m.id), String(m.material_name ?? ""));
+    }
+    const items = csns.map((c) => ({ ...c, material_name: matMap.get(String(c.material_id)) ?? null }));
+
+    return okResponse({ items }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "CSN_OPEN_LIST_FAILED";
     return procurementErrorResponse(req, ctx, message, 500, message);
@@ -669,11 +682,22 @@ export async function listOpenPOsForGEHandler(
       }
     }
 
+    const lineMatIds = [...new Set(lines.map((l) => l.material_id).filter(Boolean))] as string[];
+    const lineMatMap = new Map<string, string>();
+    if (lineMatIds.length > 0) {
+      const { data: mats } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id, material_name")
+        .in("id", lineMatIds);
+      for (const m of mats ?? []) lineMatMap.set(String(m.id), String(m.material_name ?? ""));
+    }
+
     const linesMap = new Map<string, JsonRecord[]>();
     for (const line of lines) {
       const poId = String(line.po_id);
       if (!linesMap.has(poId)) linesMap.set(poId, []);
-      linesMap.get(poId)!.push(line);
+      linesMap.get(poId)!.push({ ...line, material_name: lineMatMap.get(String(line.material_id)) ?? null });
     }
 
     const result = (pos ?? []).map((po) => ({
