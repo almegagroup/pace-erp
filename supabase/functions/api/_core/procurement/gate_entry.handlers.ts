@@ -176,45 +176,41 @@ async function fetchGateEntryBundle(gateEntryId: string): Promise<{
 
 async function hydrateGateEntry(gateEntryId: string): Promise<JsonRecord> {
   const { gateEntry, lines } = await fetchGateEntryBundle(gateEntryId);
-  const csnIds = Array.from(
-    new Set(
-      lines
-        .map((line) => toTrimmedString(line.csn_id))
-        .filter(Boolean),
-    ),
-  );
 
-  let csns: CsnRow[] = [];
-  if (csnIds.length > 0) {
-    const { data, error } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .select("id, csn_number, status, grn_id, gate_entry_id, gate_entry_date, received_qty")
-      .in("id", csnIds);
+  const csnIds = Array.from(new Set(lines.map((l) => toTrimmedString(l.csn_id)).filter(Boolean)));
+  const matIds = Array.from(new Set(lines.map((l) => toTrimmedString(l.material_id)).filter(Boolean)));
 
-    if (error) {
-      throw new Error("CSN_FETCH_FAILED");
-    }
-    csns = (data ?? []) as CsnRow[];
-  }
+  const [csns, mats, gateExitResp] = await Promise.all([
+    csnIds.length > 0
+      ? serviceRoleClient.schema("erp_procurement").from("consignment_note")
+          .select("id, csn_number, status, grn_id, gate_entry_id, gate_entry_date, received_qty")
+          .in("id", csnIds)
+      : Promise.resolve({ data: [], error: null }),
+    matIds.length > 0
+      ? serviceRoleClient.schema("erp_master").from("material_master")
+          .select("id, material_code, material_name")
+          .in("id", matIds)
+      : Promise.resolve({ data: [], error: null }),
+    serviceRoleClient.schema("erp_procurement").from("gate_exit_inbound")
+      .select("*").eq("gate_entry_id", gateEntryId).maybeSingle(),
+  ]);
 
-  const gateExitResp = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("gate_exit_inbound")
-    .select("*")
-    .eq("gate_entry_id", gateEntryId)
-    .maybeSingle();
+  if (csns.error) throw new Error("CSN_FETCH_FAILED");
+  if (gateExitResp.error) throw new Error("GATE_EXIT_FETCH_FAILED");
 
-  if (gateExitResp.error) {
-    throw new Error("GATE_EXIT_FETCH_FAILED");
-  }
+  const matMap = new Map<string, JsonRecord>();
+  for (const m of (mats.data ?? []) as JsonRecord[]) matMap.set(String(m.id), m);
 
   return {
     ...gateEntry,
-    lines: lines.map((line) => ({
-      ...line,
-      linked_csn: csns.find((csn) => String(csn.id) === String(line.csn_id)) ?? null,
-    })),
+    lines: lines.map((line) => {
+      const mat = matMap.get(String(line.material_id));
+      return {
+        ...line,
+        material_name: mat ? `${mat.material_code} — ${mat.material_name}` : null,
+        linked_csn: (csns.data ?? []).find((csn: JsonRecord) => String(csn.id) === String(line.csn_id)) ?? null,
+      };
+    }),
     gate_exit_inbound: gateExitResp.data ?? null,
   };
 }

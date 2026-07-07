@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -38,7 +39,7 @@ export default function GateEntryDetailPage() {
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
-  const [detail, setDetail] = useState(null);
+  const queryClient = useQueryClient();
   const [gateExitForm, setGateExitForm] = useState({
     exit_date: new Date().toISOString().slice(0, 10),
     exit_time: "",
@@ -47,38 +48,24 @@ export default function GateEntryDetailPage() {
     rst_number_tare: "",
     remarks: "",
   });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   void runtimeContext;
 
+  const { data: detail, isLoading: loading, error: queryError } = useQuery({
+    queryKey: ["procurement", "ge-detail", id],
+    enabled: Boolean(id),
+    queryFn: () => getGateEntry(id),
+  });
+
+  const fetchError = queryError instanceof Error ? queryError.message : (queryError ? "GE_FETCH_FAILED" : "");
+
   const hasGateExit = Boolean(detail?.gate_exit_inbound?.id);
   const weightedInbound = useMemo(
-    () =>
-      Array.isArray(detail?.lines) &&
-      detail.lines.some((line) => Number(line.gross_weight ?? 0) > 0),
+    () => Array.isArray(detail?.lines) && detail.lines.some((line) => Number(line.gross_weight ?? 0) > 0),
     [detail?.lines]
   );
-
-  const loadDetail = useCallback(async () => {
-    if (!id) return;
-    setLoading(true);
-    setError("");
-    try {
-      const data = await getGateEntry(id);
-      setDetail(data);
-    } catch (loadError) {
-      setDetail(null);
-      setError(loadError instanceof Error ? loadError.message : "GE_FETCH_FAILED");
-    } finally {
-      setLoading(false);
-    }
-  }, [id]);
-
-  useEffect(() => {
-    void loadDetail();
-  }, [loadDetail]);
 
   async function handleCreateGateExit() {
     if (!detail?.id) return;
@@ -160,7 +147,7 @@ export default function GateEntryDetailPage() {
     setNotice("");
     try {
       const pruned = await pruneGateEntry(detail.id);
-      setDetail(pruned);
+      queryClient.setQueryData(["procurement", "ge-detail", id], pruned);
       setNotice("Gate entry pruned. CSNs have been released.");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "GE_PRUNE_FAILED");
@@ -186,8 +173,8 @@ export default function GateEntryDetailPage() {
       eyebrow="Procurement"
       title="Gate Entry Detail"
       notices={[
-        ...(error
-          ? [{ key: "ge-detail-error", tone: "error", message: error }]
+        ...(fetchError || error
+          ? [{ key: "ge-detail-error", tone: "error", message: fetchError || error }]
           : []),
         ...(notice
           ? [{ key: "ge-detail-notice", tone: "success", message: notice }]
@@ -218,7 +205,7 @@ export default function GateEntryDetailPage() {
                 value={detail.status || "—"}
                 tone={statusTone(detail.status)}
               />
-              <ErpFieldPreview label="Gate Staff" value={detail.gate_staff_id || "—"} />
+              <ErpFieldPreview label="Remarks" value={detail.remarks || "—"} />
               <ErpFieldPreview label="GE Type" value={detail.ge_type || "—"} />
             </div>
           </ErpSectionCard>
@@ -227,7 +214,7 @@ export default function GateEntryDetailPage() {
             <ErpDenseGrid
               columns={[
                 { key: "line_number", label: "Line", width: "70px" },
-                { key: "material_id", label: "Material", width: "180px" },
+                { key: "material_name", label: "Material", width: "220px", render: (row) => row.material_name || row.material_id || "—" },
                 {
                   key: "linked_csn",
                   label: "CSN",
