@@ -436,20 +436,21 @@ export async function listGateEntriesHandler(
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
+    const offset = parsePositiveInt(url.searchParams.get("offset"), 0);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("gate_entry")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("ge_date", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) query = query.eq("company_id", companyId);
     if (status && GE_HEADER_STATUSES.has(status)) query = query.eq("status", status);
     if (dateFrom) query = query.gte("ge_date", dateFrom);
     if (dateTo) query = query.lte("ge_date", dateTo);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       return procurementErrorResponse(req, ctx, "GE_LIST_FAILED", 500, "Unable to list gate entries.");
     }
@@ -480,7 +481,7 @@ export async function listGateEntriesHandler(
       });
     }
 
-    return okResponse({ items }, ctx.request_id, req);
+    return okResponse({ items, total: count ?? items.length, limit, offset }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GE_LIST_FAILED";
     return procurementErrorResponse(req, ctx, message, 500, message);

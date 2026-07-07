@@ -62,8 +62,10 @@ export default function GateEntryListPage() {
     return () => window.clearTimeout(timeoutId);
   }, [search]);
 
+  const offset = (page - 1) * LIMIT;
+
   const { data: listResult, isLoading: loading, error: queryError } = useQuery({
-    queryKey: ["procurement", "ge-list", companyId, status, dateFrom, dateTo],
+    queryKey: ["procurement", "ge-list", companyId, status, dateFrom, dateTo, page],
     enabled: Boolean(companyId),
     queryFn: () => listGateEntries({
       company_id: companyId,
@@ -71,28 +73,29 @@ export default function GateEntryListPage() {
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       limit: LIMIT,
+      offset,
     }),
   });
 
-  const rows = Array.isArray(listResult?.items) ? listResult.items : [];
+  const allRows = Array.isArray(listResult?.items) ? listResult.items : [];
+  const serverTotal = listResult?.total ?? 0;
   const error = queryError instanceof Error ? queryError.message : (queryError ? "GE_LIST_FAILED" : "");
 
-  const filteredRows = useMemo(() => {
-    if (!debouncedSearch) return rows;
-    return rows.filter((row) =>
+  const rows = useMemo(() => {
+    if (!debouncedSearch) return allRows;
+    return allRows.filter((row) =>
       [row.ge_number, row.vehicle_number, row.driver_name]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
         .includes(debouncedSearch)
     );
-  }, [debouncedSearch, rows]);
+  }, [debouncedSearch, allRows]);
 
-  const total = filteredRows.length;
+  const total = debouncedSearch ? rows.length : serverTotal;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
-  const pagedRows = filteredRows.slice((page - 1) * LIMIT, page * LIMIT);
-  const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
-  const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
+  const startIndex = total === 0 ? 0 : offset + 1;
+  const endIndex = total === 0 ? 0 : Math.min(offset + rows.length, total);
 
   function openCreate() {
     openScreen(OPERATION_SCREENS.PROC_GATE_ENTRY_CREATE.screen_code);
@@ -122,17 +125,12 @@ export default function GateEntryListPage() {
               Company
               <select
                 value={companyId}
-                onChange={(event) => {
-                  setCompanyId(event.target.value);
-                  setPage(1);
-                }}
+                onChange={(event) => { setCompanyId(event.target.value); setPage(1); }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">Select company</option>
                 {companyOptions.map((entry) => (
-                  <option key={entry.value} value={entry.value}>
-                    {entry.label}
-                  </option>
+                  <option key={entry.value} value={entry.value}>{entry.label}</option>
                 ))}
               </select>
             </label>
@@ -140,27 +138,22 @@ export default function GateEntryListPage() {
               Status
               <select
                 value={status}
-                onChange={(event) => {
-                  setStatus(event.target.value);
-                  setPage(1);
-                }}
+                onChange={(event) => { setStatus(event.target.value); setPage(1); }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
                 {["OPEN", "GRN_POSTED", "CANCELLED", "PRUNED"].map((entry) => (
-                  <option key={entry} value={entry}>
-                    {entry}
-                  </option>
+                  <option key={entry} value={entry}>{entry}</option>
                 ))}
               </select>
             </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Date From
-              <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+              <input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); setPage(1); }} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
             </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Date To
-              <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+              <input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); setPage(1); }} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
             </label>
             <QuickFilterInput label="Search" value={search} onChange={setSearch} placeholder="GE number or vehicle" />
           </div>
@@ -168,7 +161,7 @@ export default function GateEntryListPage() {
       }}
       listSection={{
         eyebrow: "GE Register",
-        title: loading ? "Loading gate entries" : `${total} gate entry row${total === 1 ? "" : "s"}`,
+        title: loading ? "Loading gate entries..." : `${total} gate entr${total === 1 ? "y" : "ies"}`,
         children: (
           <div className="grid gap-3">
             <ErpPaginationStrip page={page} setPage={setPage} totalPages={totalPages} startIndex={startIndex} endIndex={endIndex} totalItems={total} />
@@ -190,7 +183,7 @@ export default function GateEntryListPage() {
                 { key: "num_lines", label: "Lines", width: "90px" },
                 { key: "total_qty", label: "Total Qty", width: "110px" },
               ]}
-              rows={pagedRows}
+              rows={rows}
               rowKey={(row) => row.id}
               onRowActivate={openDetail}
               getRowProps={(row) => ({

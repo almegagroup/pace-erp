@@ -10,6 +10,7 @@
 
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import ScrollToTop from "./ScrollToTop.jsx";
 import { MenuProvider } from "../context/MenuProvider.jsx";
 import AuthBootstrap from "../auth/AuthBootstrap.jsx";
 import AuthResolver from "../admin/AuthResolver.jsx";
@@ -188,6 +189,7 @@ import BatchReleasePage from "../pages/dashboard/production/BatchReleasePage.jsx
 export default function AppRouter() {
   return (
     <BrowserRouter>
+      <ScrollToTop />
       <WorkspaceLockOverlay />
 
       <div id="app-shell">

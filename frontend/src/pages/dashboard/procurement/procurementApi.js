@@ -399,7 +399,9 @@ export function inlineUpdateCSN(id, data) {
   return fetchProcurement("PUT", `/api/procurement/tracker/${encodeURIComponent(id)}/inline`, data);
 }
 
-export function listGateEntries(params) {
+export function listGateEntries({ company_id, status, date_from, date_to, limit = 50, offset = 0 } = {}) {
+  const params = { company_id, status, date_from, date_to, limit, offset };
+  Object.keys(params).forEach((k) => params[k] === undefined && delete params[k]);
   return fetchProcurement("GET", "/api/procurement/gate-entries", undefined, params);
 }
 
