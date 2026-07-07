@@ -1,306 +1,966 @@
-import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
-import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
-import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormTemplate.jsx";
+import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { listPurchaseOrders } from "../procurementApi.js";
-import { createGateEntry, listOpenCSNsForGE } from "../procurementApi.js";
 import {
-  useMaterialOptionsQuery,
-  useVendorOptionsQuery,
-} from "../../../../hooks/queries/useOmMasterQueries.js";
+  createGateEntry,
+  getPurchaseOrder,
+  listOpenCSNsForGE,
+  listPurchaseOrders,
+} from "../procurementApi.js";
+import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
-function createEmptyLine() {
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function currentTime12() {
+  const d = new Date();
+  let h = d.getHours();
+  const ap = h >= 12 ? "PM" : "AM";
+  if (h > 12) h -= 12;
+  if (h === 0) h = 12;
   return {
-    csn_id: "",
-    po_line_id: "",
-    po_number: "",
-    material_id: "",
-    material_name: "",
-    vendor_name: "",
-    expected_qty: "",
-    uom_code: "",
-    invoice_number: "",
-    invoice_date: "",
-    received_qty: "",
-    gross_weight: "",
-    weighbridge_required: false,
-    delivery_type: "",
+    time: `${String(h).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`,
+    ampm: ap,
   };
 }
+
+function time12to24(time, ampm) {
+  if (!time) return null;
+  const [hh, mm] = time.split(":").map(Number);
+  let h24 = hh;
+  if (ampm === "PM" && hh !== 12) h24 = hh + 12;
+  if (ampm === "AM" && hh === 12) h24 = 0;
+  return `${String(h24).padStart(2, "0")}:${String(mm || 0).padStart(2, "0")}:00`;
+}
+
+const EMPTY_LINE = () => ({
+  poQuery: "",
+  po: null,
+  poLine: null,         // first open PO line (for BULK, resolved on PO select)
+  csn: null,
+  rcvQty: "",
+  lrNumber: "",
+  lrDate: "",
+  loadingPoLine: false,
+});
+
+// ─── component ──────────────────────────────────────────────────────────────
 
 export default function GateEntryCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [form, setForm] = useState({
-    company_id: "",
-    entry_date: new Date().toISOString().slice(0, 10),
-    vehicle_number: "",
-    driver_name: "",
-    gate_staff_id: "",
-    remarks: "",
+  const dateRef = useRef(null);
+
+  // ── header state
+  const [companyId, setCompanyId] = useState("");
+  const { time: initTime, ampm: initAmpm } = currentTime12();
+  const [entryDate, setEntryDate] = useState(todayIso());
+  const [entryTime, setEntryTime] = useState(initTime);
+  const [ampm, setAmpm] = useState(initAmpm);
+  const [vehicleNumber, setVehicleNumber] = useState("");
+  const [vehicleType, setVehicleType] = useState("TRUCK");
+  const [grossWeight, setGrossWeight] = useState("");
+
+  // ── lines state
+  const [lines, setLines] = useState(() => Array.from({ length: 6 }, EMPTY_LINE));
+
+  // ── PO / CSN data
+  const [allPos, setAllPos] = useState([]);
+  const [allCsns, setAllCsns] = useState([]);
+  const [dataLoading, setDataLoading] = useState(false);
+
+  // ── PO dropdown per-row
+  const [poDropRow, setPoDropRow] = useState(null);
+  const [poDropHi, setPoDropHi] = useState(0);
+
+  // ── CSN drawer
+  const [drawer, setDrawer] = useState({
+    open: false,
+    rowIndex: null,
+    csns: [],
+    hiIdx: 0,
+    selected: null,
   });
-  const [lines, setLines] = useState([createEmptyLine()]);
+
+  // ── save / success modal
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const materialQuery = useMaterialOptionsQuery({ limit: 200, offset: 0 });
-  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
-  const gateEntrySetupQuery = useQuery({
-    queryKey: ["procurement", "gate-entry-create-setup", form.company_id || null],
-    queryFn: async () => {
-      const [csnData, poData] = await Promise.all([
-        listOpenCSNsForGE({ company_id: form.company_id }),
-        listPurchaseOrders({ limit: 200, offset: 0 }),
-      ]);
-      return {
-        openCsns: Array.isArray(csnData?.items) ? csnData.items : [],
-        purchaseOrders: Array.isArray(poData?.data) ? poData.data : [],
-      };
-    },
-    enabled: Boolean(form.company_id),
-  });
-  const openCsns = gateEntrySetupQuery.data?.openCsns ?? [];
-  const materials = materialQuery.materials;
-  const vendors = vendorQuery.vendors;
-  const purchaseOrders = gateEntrySetupQuery.data?.purchaseOrders ?? [];
-  const loading =
-    gateEntrySetupQuery.isLoading ||
-    materialQuery.isLoading ||
-    vendorQuery.isLoading;
+  const [successGE, setSuccessGE] = useState(null);
+
+  const materialQuery = useMaterialOptionsQuery({ limit: 500, offset: 0 });
+  const materialMap = useMemo(
+    () => new Map((materialQuery.materials ?? []).map((m) => [m.id, m])),
+    [materialQuery.materials]
+  );
 
   const companyOptions = useMemo(
     () =>
-      (runtimeContext?.availableCompanies ?? []).map((entry) => ({
-        value: entry.id,
-        label: entry.company_name || entry.company_code || entry.id,
+      (runtimeContext?.availableCompanies ?? []).map((c) => ({
+        value: c.id,
+        label: c.company_name || c.company_code || c.id,
       })),
     [runtimeContext?.availableCompanies]
   );
-  const csnOptions = useMemo(
-    () =>
-      openCsns.map((entry) => ({
-        value: entry.id,
-        label: `${entry.csn_number || entry.id} | ${entry.status || "OPEN"}`,
-      })),
-    [openCsns]
-  );
-  const materialMap = useMemo(() => new Map(materials.map((entry) => [entry.id, entry])), [materials]);
-  const vendorMap = useMemo(() => new Map(vendors.map((entry) => [entry.id, entry])), [vendors]);
-  const poMap = useMemo(() => new Map(purchaseOrders.map((entry) => [entry.id, entry])), [purchaseOrders]);
-  const anyWeighbridgeRequired = useMemo(() => lines.some((line) => line.weighbridge_required), [lines]);
 
+  // auto-select company
   useEffect(() => {
-    if (!form.company_id) {
-      setForm((current) => ({
-        ...current,
-        company_id: current.company_id || runtimeContext?.selectedCompanyId || companyOptions[0]?.value || "",
-      }));
+    if (!companyId && companyOptions.length > 0) {
+      setCompanyId(runtimeContext?.selectedCompanyId || companyOptions[0].value);
     }
-  }, [companyOptions, form.company_id, runtimeContext?.selectedCompanyId]);
+  }, [companyId, companyOptions, runtimeContext?.selectedCompanyId]);
 
+  // load POs + open CSNs when company changes
   useEffect(() => {
-    const nextError =
-      gateEntrySetupQuery.error?.message ||
-      materialQuery.error?.message ||
-      vendorQuery.error?.message ||
-      "";
-    setError(nextError);
-  }, [gateEntrySetupQuery.error, materialQuery.error, vendorQuery.error]);
+    if (!companyId) return;
+    let active = true;
+    setDataLoading(true);
+    Promise.all([
+      listPurchaseOrders({ company_id: companyId, status: "CONFIRMED", limit: 500, offset: 0 }),
+      listOpenCSNsForGE({ company_id: companyId }),
+    ])
+      .then(([poRes, csnRes]) => {
+        if (!active) return;
+        setAllPos(Array.isArray(poRes?.data) ? poRes.data : []);
+        setAllCsns(Array.isArray(csnRes?.items) ? csnRes.items : []);
+      })
+      .catch((e) => {
+        if (!active) return;
+        setError(e instanceof Error ? e.message : "DATA_LOAD_FAILED");
+      })
+      .finally(() => {
+        if (active) setDataLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [companyId]);
 
-  function updateLine(index, patch) {
-    setLines((current) => current.map((line, lineIndex) => (lineIndex === index ? { ...line, ...patch } : line)));
+  // ── PO combobox
+  function getPoSuggestions(query) {
+    if (!query || query.length < 2) return [];
+    const q = query.toLowerCase();
+    return allPos
+      .filter(
+        (p) =>
+          (p.po_number || "").toLowerCase().includes(q) ||
+          (p.vendor_name || "").toLowerCase().includes(q)
+      )
+      .slice(0, 8);
   }
 
-  function applyCsnSelection(index, csnId) {
-    const selectedCsn = openCsns.find((entry) => entry.id === csnId);
-    const material = selectedCsn ? materialMap.get(selectedCsn.material_id) : null;
-    const vendor = selectedCsn ? vendorMap.get(selectedCsn.vendor_id) : null;
-    const po = selectedCsn ? poMap.get(selectedCsn.po_id) : null;
-    updateLine(index, {
-      csn_id: csnId,
-      po_line_id: selectedCsn?.po_line_id || "",
-      po_number: po?.po_number || "",
-      material_id: selectedCsn?.material_id || "",
-      material_name: material?.material_name || "",
-      vendor_name: vendor?.vendor_name || "",
-      expected_qty: selectedCsn?.dispatch_qty ?? selectedCsn?.po_qty ?? "",
-      uom_code: selectedCsn?.po_uom_code || material?.base_uom_code || "",
-      weighbridge_required: material?.weighbridge_required === true,
-      delivery_type: po?.delivery_type || "",
-      gross_weight: "",
-    });
+  function getCsnsForPo(poId) {
+    return allCsns.filter((c) => c.po_id === poId);
   }
 
-  function addLine() {
-    setLines((current) => [...current, createEmptyLine()]);
+  function updateLine(i, patch) {
+    setLines((prev) =>
+      prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l))
+    );
   }
 
-  function removeLine(index) {
-    setLines((current) => (current.length === 1 ? current : current.filter((_line, lineIndex) => lineIndex !== index)));
+  async function selectPO(rowIndex, po) {
+    const isBulk = ["BULK", "TANKER"].includes((po.delivery_type || "").toUpperCase());
+    updateLine(rowIndex, { poQuery: po.po_number, po, csn: null, poLine: null, loadingPoLine: isBulk });
+    setPoDropRow(null);
+
+    if (isBulk) {
+      try {
+        const detail = await getPurchaseOrder(po.id);
+        const firstOpenLine = (detail?.lines ?? []).find((l) =>
+          ["OPEN", "PARTIALLY_RECEIVED"].includes((l.line_status || "").toUpperCase())
+        );
+        updateLine(rowIndex, { poLine: firstOpenLine ?? null, loadingPoLine: false });
+      } catch {
+        updateLine(rowIndex, { loadingPoLine: false });
+      }
+    } else {
+      const csns = getCsnsForPo(po.id);
+      if (csns.length > 0) {
+        setTimeout(() => openDrawer(rowIndex, po), 60);
+      }
+    }
   }
 
-  async function handleSubmit() {
-    if (!form.company_id || !form.entry_date || !form.vehicle_number.trim() || !form.gate_staff_id.trim()) {
-      setError("Company, entry date, vehicle number, and gate staff are required.");
+  // ── drawer
+  function openDrawer(rowIndex, po) {
+    const resolvedPo = po ?? lines[rowIndex]?.po;
+    if (!resolvedPo) return;
+    const csns = getCsnsForPo(resolvedPo.id);
+    const currentCsn = lines[rowIndex]?.csn;
+    const hiIdx = csns.findIndex((c) => c.id === currentCsn?.id);
+    setDrawer({ open: true, rowIndex, csns, hiIdx: Math.max(0, hiIdx), selected: currentCsn });
+  }
+
+  function closeDrawer() {
+    setDrawer({ open: false, rowIndex: null, csns: [], hiIdx: 0, selected: null });
+  }
+
+  function confirmDrawer() {
+    if (drawer.selected && drawer.rowIndex !== null) {
+      updateLine(drawer.rowIndex, { csn: drawer.selected });
+    }
+    closeDrawer();
+  }
+
+  function setDrawerHi(idx) {
+    const csns = drawer.csns;
+    if (idx < 0 || idx >= csns.length) return;
+    setDrawer((d) => ({ ...d, hiIdx: idx, selected: csns[idx] }));
+  }
+
+  // ── save
+  async function handleSave() {
+    setError("");
+    if (!companyId || !entryDate || !vehicleNumber.trim()) {
+      setError("Company, entry date, and vehicle number are required.");
       return;
     }
-    if (lines.some((line) => !line.csn_id || !line.received_qty)) {
-      setError("Each gate entry line requires a CSN and received quantity.");
+    if (!grossWeight || Number(grossWeight) <= 0) {
+      setError("Gross weight (KG) is required.");
       return;
     }
-    if (anyWeighbridgeRequired && lines.some((line) => line.weighbridge_required && !line.gross_weight)) {
-      setError("Gross weight is mandatory for weighbridge-managed materials.");
+    const activeLines = lines.filter((l) => l.po !== null);
+    if (activeLines.length === 0) {
+      setError("At least one PO line must be added.");
       return;
+    }
+    for (let i = 0; i < activeLines.length; i++) {
+      const l = activeLines[i];
+      const isBulk = ["BULK", "TANKER"].includes((l.po.delivery_type || "").toUpperCase());
+      if (!isBulk && !l.csn) {
+        setError(`Line ${i + 1} (${l.po.po_number}): CSN must be selected.`);
+        return;
+      }
+      if (isBulk && !l.poLine) {
+        setError(`Line ${i + 1} (${l.po.po_number}): No open PO line found for this BULK PO.`);
+        return;
+      }
+      if (!l.rcvQty || Number(l.rcvQty) <= 0) {
+        setError(`Line ${i + 1} (${l.po.po_number}): Received quantity is required.`);
+        return;
+      }
     }
 
     setSaving(true);
-    setError("");
-    setNotice("");
     try {
+      const gw = Number(grossWeight);
       const created = await createGateEntry({
-        company_id: form.company_id,
-        entry_date: form.entry_date,
-        vehicle_number: form.vehicle_number.trim(),
-        driver_name: form.driver_name.trim() || null,
-        gate_staff_id: form.gate_staff_id.trim(),
-        remarks: form.remarks.trim() || null,
-        lines: lines.map((line) => ({
-          csn_id: line.csn_id,
-          po_line_id: line.po_line_id || null,
-          material_id: line.material_id,
-          ge_qty: Number(line.received_qty),
-          uom_code: line.uom_code,
-          challan_or_invoice_no: line.invoice_number || null,
-          rst_number: line.invoice_date || null,
-          gross_weight: line.gross_weight ? Number(line.gross_weight) : null,
-        })),
+        company_id: companyId,
+        entry_date: entryDate,
+        entry_time: time12to24(entryTime, ampm),
+        vehicle_number: vehicleNumber.trim().toUpperCase(),
+        vehicle_type: vehicleType,
+        gross_weight: gw,
+        lines: activeLines.map((l) => {
+          const isBulk = ["BULK", "TANKER"].includes((l.po.delivery_type || "").toUpperCase());
+          const poLineId = isBulk ? (l.poLine?.id || "") : (l.csn?.po_line_id || "");
+          const materialId = isBulk
+            ? (l.poLine?.material_id || "")
+            : (l.csn?.material_id || "");
+          const uomCode = isBulk
+            ? (l.poLine?.uom_code || l.poLine?.po_uom_code || "")
+            : (l.csn?.po_uom_code || "");
+          return {
+            csn_id: isBulk ? null : (l.csn?.id || null),
+            po_line_id: poLineId,
+            material_id: materialId,
+            ge_qty: Number(l.rcvQty),
+            uom_code: uomCode,
+            challan_or_invoice_no: l.lrNumber.trim() || null,
+            rst_number: l.lrDate || null,
+            gross_weight: gw,
+          };
+        }),
       });
-      setNotice("Gate entry created.");
-      openScreen(OPERATION_SCREENS.PROC_GATE_ENTRY_DETAIL.screen_code);
-      navigate(`/dashboard/procurement/gate-entries/${encodeURIComponent(created.id)}`);
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "GE_CREATE_FAILED");
+      setSuccessGE(created.ge_number || String(created.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "GE_CREATE_FAILED");
     } finally {
       setSaving(false);
     }
   }
 
-  return (
-    <ErpEntryFormTemplate
-      eyebrow="Procurement"
-      title="Create Gate Entry"
-      actions={[
-        { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
-        { key: "save", label: saving ? "Saving..." : "Create GE", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || loading },
-      ]}
-      notices={[
-        ...(error ? [{ key: "ge-create-error", tone: "error", message: error }] : []),
-        ...(notice ? [{ key: "ge-create-notice", tone: "success", message: notice }] : []),
-        {
-          key: "ge-backdate-note",
-          tone: "info",
-          message: "Entry date allows backdating. System audit timestamp is still captured automatically.",
-        },
-        ...(anyWeighbridgeRequired
-          ? [{ key: "ge-weighbridge-note", tone: "warning", message: "At least one selected material requires weighbridge gross weight." }]
-          : []),
-      ]}
-      formEyebrow="Gate Header"
-      formTitle="Capture inbound vehicle arrival"
-      formContent={
-        loading ? (
-          <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-            Loading open CSNs and master data...
-          </div>
-        ) : (
-          <div className="grid gap-4">
-            <div className="grid gap-3 lg:grid-cols-2">
-              <ErpDenseFormRow label="Company" required>
-                <select value={form.company_id} onChange={(event) => setForm((current) => ({ ...current, company_id: event.target.value }))} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500">
-                  <option value="">Select company</option>
-                  {companyOptions.map((entry) => (
-                    <option key={entry.value} value={entry.value}>
-                      {entry.label}
-                    </option>
-                  ))}
-                </select>
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Entry Date" required>
-                <input type="date" value={form.entry_date} onChange={(event) => setForm((current) => ({ ...current, entry_date: event.target.value }))} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Vehicle Number" required>
-                <input value={form.vehicle_number} onChange={(event) => setForm((current) => ({ ...current, vehicle_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Driver Name">
-                <input value={form.driver_name} onChange={(event) => setForm((current) => ({ ...current, driver_name: event.target.value }))} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Gate Staff" required>
-                <input value={form.gate_staff_id} onChange={(event) => setForm((current) => ({ ...current, gate_staff_id: event.target.value }))} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-              </ErpDenseFormRow>
-              <ErpDenseFormRow label="Remarks">
-                <input value={form.remarks} onChange={(event) => setForm((current) => ({ ...current, remarks: event.target.value }))} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-              </ErpDenseFormRow>
-            </div>
+  function resetForm() {
+    const t = currentTime12();
+    setEntryDate(todayIso());
+    setEntryTime(t.time);
+    setAmpm(t.ampm);
+    setVehicleNumber("");
+    setVehicleType("TRUCK");
+    setGrossWeight("");
+    setLines(Array.from({ length: 6 }, EMPTY_LINE));
+    setError("");
+    setSuccessGE(null);
+  }
 
-            <div className="grid gap-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-slate-900">GE Lines</h3>
-                <button type="button" onClick={addLine} className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900">
-                  Add Line
-                </button>
-              </div>
-              {lines.map((line, index) => (
-                <div key={`${index}-${line.csn_id || "new"}`} className="grid gap-3 border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Line {index + 1}</div>
-                    {lines.length > 1 ? (
-                      <button type="button" onClick={() => removeLine(index)} className="border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-900">
-                        Remove
-                      </button>
-                    ) : null}
+  function openGEList() {
+    openScreen(OPERATION_SCREENS.PROC_GATE_ENTRY_LIST.screen_code);
+    navigate("/dashboard/procurement/gate-entries/list");
+  }
+
+  // ── global keyboard
+  useEffect(() => {
+    function onKey(e) {
+      // drawer open
+      if (drawer.open) {
+        if (e.key === "Escape") { e.preventDefault(); closeDrawer(); return; }
+        if (e.key === "Enter") { e.preventDefault(); confirmDrawer(); return; }
+        if (e.key === "ArrowDown") { e.preventDefault(); setDrawerHi(drawer.hiIdx + 1); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); setDrawerHi(drawer.hiIdx - 1); return; }
+        return;
+      }
+      // success modal
+      if (successGE) {
+        if (e.key === "Escape" || e.key === "Enter") { e.preventDefault(); resetForm(); }
+        return;
+      }
+      if (e.key === "F9") { e.preventDefault(); void handleSave(); return; }
+      if (e.key === "F4") {
+        const active = document.activeElement;
+        if (active && active.type === "date") {
+          active.showPicker?.();
+        } else {
+          const t = currentTime12();
+          setEntryTime(t.time);
+          setAmpm(t.ampm);
+        }
+        return;
+      }
+      if (e.altKey && e.key.toLowerCase() === "n") { e.preventDefault(); setLines((p) => [...p, EMPTY_LINE()]); return; }
+      if (e.altKey && e.key.toLowerCase() === "l") { e.preventDefault(); openGEList(); return; }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  // intentional broad dep — we need latest state in handler
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawer, successGE, lines, saving, companyId, entryDate, vehicleNumber, grossWeight, entryTime, ampm, vehicleType]);
+
+  // ─── render helpers ─────────────────────────────────────────────────────
+
+  const drawerCsn = drawer.csns[drawer.hiIdx] ?? null;
+
+  function renderCsnCard(csn, idx) {
+    const isImport = (csn.csn_type || "").toUpperCase() === "IMPORT";
+    const mat = materialMap.get(csn.material_id);
+    const isSelected = drawer.selected?.id === csn.id;
+    const isHi = idx === drawer.hiIdx;
+    return (
+      <div
+        key={csn.id}
+        className={[
+          "cursor-pointer rounded-[var(--radius)] border p-3 transition-colors",
+          isSelected ? "border-[var(--border-accent)] bg-[var(--bg-accent)]" : "border-[var(--border)] hover:border-[var(--border-accent)] hover:bg-[var(--bg-accent)]",
+          isHi ? "outline outline-2 outline-[var(--border-accent)]" : "",
+        ].join(" ")}
+        onMouseEnter={() => setDrawer((d) => ({ ...d, hiIdx: idx }))}
+        onClick={() =>
+          setDrawer((d) => ({
+            ...d,
+            hiIdx: idx,
+            selected: d.csns[idx],
+          }))
+        }
+      >
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[11px] font-semibold text-[var(--text-primary)]">
+            {csn.csn_number || csn.id}
+          </span>
+          <span
+            className={[
+              "rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase",
+              csn.status === "TRN"
+                ? "bg-[var(--bg-success)] text-[var(--text-success)]"
+                : "bg-[var(--bg-accent)] text-[var(--text-accent)]",
+            ].join(" ")}
+          >
+            {csn.status}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+          {[
+            ["PO number", csn.po_number || "—"],
+            ["Material", mat?.material_name || csn.material_id || "—"],
+            ["Quantity", csn.dispatch_qty ? `${Number(csn.dispatch_qty).toLocaleString()} ${csn.po_uom_code || ""}` : "—"],
+            [isImport ? "BOE number" : "Invoice number", csn.invoice_number || csn.boe_number || "—"],
+            [isImport ? "BL date (ATD)" : "LR date (ATD)", csn.bl_date || csn.lr_date || "—"],
+          ].map(([label, value]) => (
+            <div key={label} className="flex flex-col gap-0.5">
+              <span className="text-[9px] text-[var(--text-muted)]">{label}</span>
+              <span
+                className={[
+                  "text-[10px] font-medium",
+                  value === "—" ? "text-[var(--text-muted)]" : "text-[var(--text-primary)]",
+                ].join(" ")}
+              >
+                {value}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function renderLineRow(line, i) {
+    const isBulk = ["BULK", "TANKER"].includes((line.po?.delivery_type || "").toUpperCase());
+    const sugs = line.po === null ? getPoSuggestions(line.poQuery) : [];
+    const showDrop = poDropRow === i && sugs.length > 0;
+    const mat = materialMap.get(
+      isBulk ? line.poLine?.material_id : line.csn?.material_id
+    );
+    const uom = isBulk
+      ? (line.poLine?.uom_code || line.poLine?.po_uom_code || "")
+      : (line.csn?.po_uom_code || "");
+    const expQty = isBulk ? "" : (line.csn?.dispatch_qty ?? "");
+
+    return (
+      <tr key={i} className="group">
+        <td className="w-6 text-center text-[10px] text-[var(--text-muted)]">{i + 1}</td>
+
+        {/* PO combobox */}
+        <td className="relative w-[150px]">
+          <input
+            className="h-6 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)] focus:bg-[var(--surface-2)]"
+            value={line.poQuery}
+            placeholder="Type PO…"
+            onChange={(e) => {
+              updateLine(i, { poQuery: e.target.value, po: null, csn: null, poLine: null });
+              setPoDropRow(i);
+              setPoDropHi(0);
+            }}
+            onFocus={() => {
+              if (!line.po) setPoDropRow(i);
+            }}
+            onBlur={() => setTimeout(() => setPoDropRow(null), 200)}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown") { e.preventDefault(); setPoDropHi((h) => Math.min(h + 1, sugs.length - 1)); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); setPoDropHi((h) => Math.max(h - 1, 0)); }
+              else if (e.key === "Enter" && showDrop) { e.preventDefault(); void selectPO(i, sugs[poDropHi]); }
+              else if (e.key === "Escape") { setPoDropRow(null); }
+            }}
+          />
+          {showDrop && (
+            <div className="absolute left-0 top-full z-50 min-w-[260px] rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] shadow-lg">
+              {sugs.map((p, si) => (
+                <div
+                  key={p.id}
+                  className={[
+                    "cursor-pointer border-b border-[var(--border)] px-3 py-2 last:border-0",
+                    si === poDropHi ? "bg-[var(--bg-accent)]" : "hover:bg-[var(--surface-1)]",
+                  ].join(" ")}
+                  onMouseDown={() => void selectPO(i, p)}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-medium text-[var(--text-primary)]">
+                      {p.po_number}
+                    </span>
+                    {["BULK", "TANKER"].includes((p.delivery_type || "").toUpperCase()) && (
+                      <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">
+                        {p.delivery_type}
+                      </span>
+                    )}
                   </div>
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    <ErpDenseFormRow label="CSN" required>
-                      <ErpComboboxField value={line.csn_id} onChange={(value) => applyCsnSelection(index, value)} options={csnOptions} blankLabel="Select open CSN" />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="PO Number">
-                      <input value={line.po_number} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-sm text-slate-700 outline-none" />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Material">
-                      <input value={line.material_name} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-sm text-slate-700 outline-none" />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Vendor">
-                      <input value={line.vendor_name} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-sm text-slate-700 outline-none" />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Expected Qty">
-                      <input value={line.expected_qty} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-sm text-slate-700 outline-none" />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Received Qty" required>
-                      <input type="number" min="0" step="0.0001" value={line.received_qty} onChange={(event) => updateLine(index, { received_qty: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Invoice Number">
-                      <input value={line.invoice_number} onChange={(event) => updateLine(index, { invoice_number: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                    </ErpDenseFormRow>
-                    <ErpDenseFormRow label="Invoice Date">
-                      <input type="date" value={line.invoice_date} onChange={(event) => updateLine(index, { invoice_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500" />
-                    </ErpDenseFormRow>
-                    {line.weighbridge_required || line.delivery_type === "BULK" || line.delivery_type === "TANKER" ? (
-                      <ErpDenseFormRow label="Gross Weight" required>
-                        <input type="number" min="0" step="0.0001" value={line.gross_weight} onChange={(event) => updateLine(index, { gross_weight: event.target.value })} className="h-8 w-full border border-amber-300 bg-amber-50 px-2 text-sm text-slate-900 outline-none focus:border-amber-500" />
-                      </ErpDenseFormRow>
-                    ) : null}
+                  <div className="mt-0.5 text-[10px] text-[var(--text-muted)]">
+                    {p.vendor_name || ""}
                   </div>
                 </div>
               ))}
             </div>
+          )}
+        </td>
+
+        {/* CSN */}
+        <td className="w-[160px]">
+          {!line.po ? (
+            <span className="px-1.5 text-[10px] text-[var(--text-muted)]">—</span>
+          ) : isBulk ? (
+            <span className="px-1.5 text-[10px] italic text-amber-600">BULK — no CSN</span>
+          ) : (
+            <div className="flex items-center gap-1">
+              <span className={["flex-1 truncate px-1 text-[10px]", line.csn ? "text-[var(--text-primary)]" : "text-[var(--text-muted)]"].join(" ")}>
+                {line.csn ? line.csn.csn_number : "—"}
+              </span>
+              <button
+                type="button"
+                className="h-5 flex-shrink-0 rounded-[3px] border border-[var(--border-accent)] bg-[var(--bg-accent)] px-1.5 text-[9px] font-medium text-[var(--text-accent)]"
+                onClick={() => openDrawer(i, null)}
+                title="Space to open"
+              >
+                {line.csn ? "Change" : "Select"}
+              </button>
+            </div>
+          )}
+        </td>
+
+        {/* Material (readonly) */}
+        <td className="w-[150px]">
+          <span className="px-1.5 text-[10px] text-[var(--text-muted)]">
+            {line.loadingPoLine ? "Loading…" : (mat?.material_name || (line.csn?.material_id ? "—" : ""))}
+          </span>
+        </td>
+
+        {/* UOM */}
+        <td className="w-[52px] text-center">
+          <span className="text-[10px] text-[var(--text-muted)]">{uom}</span>
+        </td>
+
+        {/* Exp qty */}
+        <td className="w-[80px] text-right">
+          <span className="pr-1.5 text-[10px] text-[var(--text-muted)]">
+            {expQty !== "" ? Number(expQty).toLocaleString() : ""}
+          </span>
+        </td>
+
+        {/* Rcv qty */}
+        <td className="w-[80px]">
+          <input
+            type="number"
+            min="0"
+            step="0.001"
+            className="h-6 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-right text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)] focus:bg-[var(--surface-2)]"
+            value={line.rcvQty}
+            placeholder="0"
+            onChange={(e) => updateLine(i, { rcvQty: e.target.value })}
+          />
+        </td>
+
+        {/* LR / Invoice no */}
+        <td className="w-[110px]">
+          <input
+            className="h-6 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)] focus:bg-[var(--surface-2)]"
+            value={line.lrNumber}
+            placeholder="Optional"
+            onChange={(e) => updateLine(i, { lrNumber: e.target.value })}
+          />
+        </td>
+
+        {/* LR / Invoice date */}
+        <td className="w-[110px]">
+          <input
+            type="date"
+            className="h-6 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)] focus:bg-[var(--surface-2)]"
+            value={line.lrDate}
+            onChange={(e) => updateLine(i, { lrDate: e.target.value })}
+          />
+        </td>
+
+        {/* Delete */}
+        <td className="w-6 text-center">
+          {lines.length > 1 && (
+            <button
+              type="button"
+              className="h-5 w-5 rounded-[3px] border border-[var(--border-danger)] bg-[var(--bg-danger)] text-[11px] font-bold text-[var(--text-danger)]"
+              onClick={() => setLines((p) => p.filter((_, idx) => idx !== i))}
+              title="Alt+D"
+            >
+              ×
+            </button>
+          )}
+        </td>
+      </tr>
+    );
+  }
+
+  // ─── JSX ────────────────────────────────────────────────────────────────
+
+  return (
+    <>
+      <ErpScreenScaffold
+        eyebrow="Procurement"
+        title="Gate Entry"
+        notices={error ? [{ key: "ge-error", tone: "error", message: error }] : []}
+        actions={[
+          {
+            key: "list",
+            label: "GE Register",
+            tone: "neutral",
+            onClick: openGEList,
+          },
+          {
+            key: "save",
+            label: saving ? "Saving…" : "Save GE (F9)",
+            tone: "primary",
+            onClick: () => void handleSave(),
+            disabled: saving || dataLoading,
+          },
+        ]}
+      >
+        {/* keyboard help strip */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-1)] px-3 py-1.5 text-[10px] text-[var(--text-secondary)]">
+          {[
+            ["Tab / Shift+Tab", "Next / prev field"],
+            ["F4", "Calendar on date · Now on time"],
+            ["↑ ↓ + Enter", "Dropdown / drawer navigate"],
+            ["Space", "Open CSN drawer (on CSN cell)"],
+            ["Alt+N", "Add row"],
+            ["F9", "Save"],
+            ["Alt+L", "GE Register"],
+            ["Esc", "Close drawer"],
+          ].map(([key, desc]) => (
+            <span key={key} className="flex items-center gap-1">
+              <kbd className="rounded border border-[var(--border-strong)] bg-[var(--surface-2)] px-1 py-0.5 font-mono text-[9px] text-[var(--text-primary)]">
+                {key}
+              </kbd>
+              {desc}
+            </span>
+          ))}
+        </div>
+
+        {/* ── Header card ── */}
+        <ErpSectionCard eyebrow="Header" title="Vehicle arrival">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
+            {/* Company */}
+            <div className="col-span-2 flex flex-col gap-1 lg:col-span-1">
+              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
+                Company <span className="text-[var(--text-danger)]">*</span>
+              </label>
+              <select
+                className="erp-input h-7 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-2 text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)]"
+                value={companyId}
+                onChange={(e) => setCompanyId(e.target.value)}
+              >
+                <option value="">Select company</option>
+                {companyOptions.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* GE Number */}
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
+                GE number
+              </label>
+              <input
+                readOnly
+                value="Auto-generated"
+                className="h-7 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-1)] px-2 text-[12px] text-[var(--text-muted)] outline-none"
+              />
+            </div>
+
+            {/* Entry Date */}
+            <div className="flex flex-col gap-1">
+              <label className="flex items-center justify-between text-[10px] font-medium text-[var(--text-secondary)]">
+                Entry date <span className="text-[var(--text-danger)]">*</span>
+                <span className="rounded border border-[var(--border)] bg-[var(--surface-1)] px-1 py-0.5 font-mono text-[9px] text-[var(--text-muted)]">
+                  F4
+                </span>
+              </label>
+              <div className="flex gap-1">
+                <input
+                  ref={dateRef}
+                  type="date"
+                  value={entryDate}
+                  max={todayIso()}
+                  onChange={(e) => setEntryDate(e.target.value)}
+                  className="h-7 flex-1 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-2 text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)]"
+                />
+                <button
+                  type="button"
+                  className="h-7 flex-shrink-0 rounded-[var(--radius)] border border-[var(--border-accent)] bg-[var(--bg-accent)] px-2 text-[10px] font-medium text-[var(--text-accent)]"
+                  onClick={() => dateRef.current?.showPicker?.()}
+                >
+                  F4
+                </button>
+              </div>
+            </div>
+
+            {/* Entry Time */}
+            <div className="flex flex-col gap-1">
+              <label className="flex items-center justify-between text-[10px] font-medium text-[var(--text-secondary)]">
+                Entry time
+                <span className="rounded border border-[var(--border)] bg-[var(--surface-1)] px-1 py-0.5 font-mono text-[9px] text-[var(--text-muted)]">
+                  F4 = now
+                </span>
+              </label>
+              <div className="flex gap-1">
+                <input
+                  type="text"
+                  maxLength={5}
+                  value={entryTime}
+                  placeholder="HH:MM"
+                  className="h-7 flex-1 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-2 font-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)]"
+                  onChange={(e) => {
+                    let v = e.target.value.replace(/\D/g, "");
+                    if (v.length > 2) v = `${v.slice(0, 2)}:${v.slice(2)}`;
+                    setEntryTime(v.slice(0, 5));
+                  }}
+                />
+                <div className="flex flex-shrink-0 overflow-hidden rounded-[var(--radius)] border border-[var(--border-strong)]">
+                  {["AM", "PM"].map((ap) => (
+                    <button
+                      key={ap}
+                      type="button"
+                      className={[
+                        "h-7 px-2 text-[10px] font-semibold",
+                        ampm === ap
+                          ? "bg-[var(--fill-accent)] text-[var(--on-accent)]"
+                          : "bg-[var(--surface-2)] text-[var(--text-secondary)]",
+                      ].join(" ")}
+                      onClick={() => setAmpm(ap)}
+                    >
+                      {ap}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="h-7 flex-shrink-0 rounded-[var(--radius)] border border-[var(--border-accent)] bg-[var(--bg-accent)] px-2 text-[10px] font-medium text-[var(--text-accent)]"
+                  onClick={() => {
+                    const t = currentTime12();
+                    setEntryTime(t.time);
+                    setAmpm(t.ampm);
+                  }}
+                >
+                  F4
+                </button>
+              </div>
+            </div>
+
+            {/* Vehicle Number */}
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
+                Vehicle number <span className="text-[var(--text-danger)]">*</span>
+              </label>
+              <input
+                type="text"
+                value={vehicleNumber}
+                placeholder="MH04 AB 1234"
+                className="h-7 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-2 text-[12px] uppercase text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)]"
+                onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
+              />
+            </div>
+
+            {/* Vehicle Type */}
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
+                Vehicle type <span className="text-[var(--text-danger)]">*</span>
+              </label>
+              <div className="flex gap-1">
+                {["TRUCK", "TANKER"].map((vt) => (
+                  <button
+                    key={vt}
+                    type="button"
+                    className={[
+                      "h-7 flex-1 rounded-[var(--radius)] border text-[11px] font-medium",
+                      vehicleType === vt
+                        ? "border-[var(--border-accent)] bg-[var(--bg-accent)] text-[var(--text-accent)]"
+                        : "border-[var(--border-strong)] bg-[var(--surface-2)] text-[var(--text-secondary)]",
+                    ].join(" ")}
+                    onClick={() => setVehicleType(vt)}
+                  >
+                    {vt.charAt(0) + vt.slice(1).toLowerCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Gross Weight */}
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-medium text-[var(--text-secondary)]">
+                Gross weight (KG) <span className="text-[var(--text-danger)]">*</span>
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={grossWeight}
+                placeholder="0.00"
+                className="h-7 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-2 text-right text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-accent)]"
+                onChange={(e) => setGrossWeight(e.target.value)}
+              />
+              <span className="text-[9px] text-[var(--text-muted)]">
+                Weighbridge slip reading
+              </span>
+            </div>
           </div>
-        )
-      }
-    />
+        </ErpSectionCard>
+
+        {/* ── Lines card ── */}
+        <ErpSectionCard eyebrow="Lines" title="PO items received on this vehicle">
+          {dataLoading ? (
+            <div className="py-4 text-[11px] text-[var(--text-muted)]">
+              Loading POs and CSNs…
+            </div>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[860px] border-collapse text-[11px]">
+                  <thead>
+                    <tr className="border-b border-[var(--border-strong)] bg-[var(--surface-1)]">
+                      {[
+                        ["#", "w-6"],
+                        ["PO number *", "w-[150px]"],
+                        ["CSN", "w-[160px]"],
+                        ["Material", "w-[150px]"],
+                        ["UOM", "w-[52px] text-center"],
+                        ["Exp qty", "w-[80px] text-right"],
+                        ["Rcv qty *", "w-[80px] text-right"],
+                        ["LR / Invoice no", "w-[110px]"],
+                        ["LR / Invoice date", "w-[110px]"],
+                        ["", "w-6"],
+                      ].map(([label, cls]) => (
+                        <th
+                          key={label}
+                          className={`px-1.5 py-1.5 text-left text-[9px] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)] ${cls}`}
+                        >
+                          {label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lines.map((line, i) => renderLineRow(line, i))}
+                  </tbody>
+                </table>
+              </div>
+              <button
+                type="button"
+                className="mt-2 flex h-7 items-center gap-1.5 rounded-[var(--radius)] border border-dashed border-[var(--border-strong)] bg-transparent px-3 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-1)]"
+                onClick={() => setLines((p) => [...p, EMPTY_LINE()])}
+              >
+                + Add row
+                <kbd className="rounded border border-[var(--border)] bg-[var(--surface-1)] px-1 py-0.5 text-[9px] text-[var(--text-muted)]">
+                  Alt+N
+                </kbd>
+              </button>
+            </>
+          )}
+        </ErpSectionCard>
+      </ErpScreenScaffold>
+
+      {/* ── CSN Drawer ── */}
+      {drawer.open && (
+        <div
+          className="fixed inset-0 z-40 flex justify-end bg-black/30"
+          onClick={(e) => { if (e.target === e.currentTarget) closeDrawer(); }}
+        >
+          <div className="flex h-full w-[380px] flex-col border-l border-[var(--border-strong)] bg-[var(--surface-2)]">
+            {/* drawer header */}
+            <div className="border-b border-[var(--border)] bg-[var(--surface-1)] px-4 py-3">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="text-[13px] font-medium text-[var(--text-primary)]">
+                    Select CSN
+                  </h3>
+                  <p className="mt-0.5 text-[10px] text-[var(--text-muted)]">
+                    {drawer.rowIndex !== null
+                      ? lines[drawer.rowIndex]?.po?.po_number ?? ""
+                      : ""}
+                    {" · "}
+                    {drawer.csns.length} open shipment{drawer.csns.length !== 1 ? "s" : ""}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="flex h-6 w-6 items-center justify-center rounded border border-[var(--border)] bg-transparent text-[15px] text-[var(--text-secondary)]"
+                  onClick={closeDrawer}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            {/* drawer body */}
+            <div className="flex-1 overflow-y-auto p-3">
+              {drawer.csns.length === 0 ? (
+                <p className="text-[11px] text-[var(--text-muted)]">
+                  No open CSNs for this PO.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {drawer.csns.map((csn, idx) => renderCsnCard(csn, idx))}
+                </div>
+              )}
+            </div>
+
+            {/* drawer footer */}
+            <div className="flex items-center gap-2 border-t border-[var(--border)] bg-[var(--surface-1)] px-4 py-2.5">
+              <p className="flex-1 text-[9px] text-[var(--text-muted)]">
+                <kbd className="rounded border border-[var(--border-strong)] bg-[var(--surface-2)] px-1 py-0.5 text-[9px] text-[var(--text-primary)]">
+                  ↑↓
+                </kbd>{" "}
+                Navigate{" "}
+                <kbd className="rounded border border-[var(--border-strong)] bg-[var(--surface-2)] px-1 py-0.5 text-[9px] text-[var(--text-primary)]">
+                  Enter
+                </kbd>{" "}
+                Select{" "}
+                <kbd className="rounded border border-[var(--border-strong)] bg-[var(--surface-2)] px-1 py-0.5 text-[9px] text-[var(--text-primary)]">
+                  Esc
+                </kbd>{" "}
+                Close
+              </p>
+              <button
+                type="button"
+                className="h-7 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[11px] text-[var(--text-secondary)]"
+                onClick={closeDrawer}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!drawer.selected}
+                className="h-7 rounded-[var(--radius)] border border-[var(--border-accent)] bg-[var(--fill-accent)] px-3 text-[11px] font-medium text-[var(--on-accent)] disabled:opacity-40"
+                onClick={confirmDrawer}
+              >
+                Select CSN
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Success Modal ── */}
+      {successGE && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-[340px] overflow-hidden rounded-xl border border-[var(--border-strong)] bg-[var(--surface-2)] shadow-xl">
+            <div className="border-b border-[var(--border)] bg-[var(--bg-success)] px-5 py-4">
+              <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--text-success)]">
+                Gate entry created
+              </p>
+            </div>
+            <div className="px-5 py-5">
+              <p className="mb-1 text-[10px] text-[var(--text-muted)]">GE number</p>
+              <p className="font-mono text-[26px] font-semibold tracking-wider text-[var(--text-primary)]">
+                {successGE}
+              </p>
+              <p className="mt-3 text-[10px] text-[var(--text-muted)]">
+                Note this number for the gate register, then close to create the next entry.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[var(--border)] bg-[var(--surface-1)] px-5 py-3">
+              <button
+                type="button"
+                className="h-8 rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-2)] px-4 text-[12px] font-medium text-[var(--text-secondary)]"
+                onClick={() => {
+                  openScreen(OPERATION_SCREENS.PROC_GATE_ENTRY_DETAIL.screen_code);
+                  navigate(
+                    `/dashboard/procurement/gate-entries/${encodeURIComponent(successGE)}`
+                  );
+                }}
+              >
+                Open detail
+              </button>
+              <button
+                type="button"
+                className="h-8 rounded-[var(--radius)] border border-[var(--fill-accent)] bg-[var(--fill-accent)] px-4 text-[12px] font-medium text-[var(--on-accent)]"
+                onClick={resetForm}
+                autoFocus
+              >
+                Close (Enter / Esc)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

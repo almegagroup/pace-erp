@@ -537,6 +537,10 @@ export default function AppRouter() {
                   />
                   <Route
                     path="procurement/gate-entries"
+                    element={<GateEntryCreatePage />}
+                  />
+                  <Route
+                    path="procurement/gate-entries/list"
                     element={<GateEntryListPage />}
                   />
                   <Route

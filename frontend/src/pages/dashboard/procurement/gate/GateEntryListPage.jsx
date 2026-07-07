@@ -132,7 +132,7 @@ export default function GateEntryListPage() {
 
   function openCreate() {
     openScreen(OPERATION_SCREENS.PROC_GATE_ENTRY_CREATE.screen_code);
-    navigate("/dashboard/procurement/gate-entries/create");
+    navigate("/dashboard/procurement/gate-entries");
   }
 
   function openDetail(row) {
