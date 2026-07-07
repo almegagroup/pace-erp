@@ -348,6 +348,7 @@ export default function GateEntryCreatePage() {
   function renderCsnCard(csn, idx) {
     const isImport = (csn.csn_type || "").toUpperCase() === "IMPORT";
     const matDisplay = csn.material_name || csn.material_id || "—";
+    const poNumber = allPos.find((p) => p.id === csn.po_id)?.po_number || csn.po_number || "—";
     const isSelected = drawer.selected?.id === csn.id;
     const isHi = idx === drawer.hiIdx;
     return (
@@ -384,7 +385,7 @@ export default function GateEntryCreatePage() {
         </div>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1">
           {[
-            ["PO number", csn.po_number || "—"],
+            ["PO number", poNumber],
             ["Material", matDisplay],
             ["Quantity", csn.dispatch_qty ? `${Number(csn.dispatch_qty).toLocaleString()} ${csn.po_uom_code || ""}` : "—"],
             [isImport ? "BOE number" : "Invoice number", csn.invoice_number || csn.boe_number || "—"],
