@@ -73,19 +73,23 @@ const { data, isLoading } = useQuery({
 ---
 
 ### R-03 — No N+1 API Calls
-**Rule:** A list page must never call the detail endpoint once per row to hydrate data. All data needed for the list view must come from the list endpoint.
+**Rule:** A list page must never call the detail endpoint once per row. All data needed for the list view — including resolved names, counts, and any display fields — must come from the list endpoint itself in a single request.
 
-**How:** Backend list handler fetches aggregates in a single extra query (not per-row), attaches to each item before returning.
+**How:** Backend list handler collects all foreign key IDs from the result set, fetches the needed tables in bulk (using `.in()`), builds lookup maps, and attaches resolved values to each row before returning.
 
 ```typescript
-// WRONG — N+1
+// WRONG — N+1, calls detail endpoint per row
 const hydrated = await Promise.all(rows.map(row => getDetail(row.id)));
 
-// CORRECT — one extra query for all rows
-const { data: lines } = await client.from("lines").select("parent_id, qty").in("parent_id", ids);
-const agg = buildAggMap(lines);
-return rows.map(r => ({ ...r, ...agg.get(r.id) }));
+// CORRECT — bulk fetch, resolve all at once
+const matIds = rows.map(r => r.material_id);
+const { data: mats } = await client.schema("erp_master").from("material_master")
+  .select("id, material_code, material_name").in("id", matIds);
+const matMap = new Map(mats.map(m => [m.id, m]));
+return rows.map(r => ({ ...r, material_name: matMap.get(r.material_id)?.material_name ?? null }));
 ```
+
+**This applies to names too** — vendor name, material name, PO number, CSN number must all be resolved in the list endpoint, not fetched per-row by the frontend.
 
 ---
 
