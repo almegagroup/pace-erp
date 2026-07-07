@@ -1656,3 +1656,100 @@ Second implementation wave within Gate-27. Adds:
 - [ ] All untracked files need git commit
 - [ ] Verification pass by Claude needed before marking VERIFIED
 
+---
+
+## Session Polish — 2026-07-07/08 (Gate Entry Fixes + GE Prune)
+
+**Date:** 2026-07-07 → 2026-07-08
+**Implemented by:** Claude
+**Commits:** `cd5aa85` → `ecbb4dd`
+
+### Scope
+Gate Entry (GE) Register ও Detail page এর সব critical bugs fix। GE Prune feature নতুন implement। ErpDenseGrid keyboard navigation। Mandatory rules Constitution ও CLAUDE.md তে document।
+
+---
+
+### Bug Fixes
+
+| # | Bug | Root Cause | Fix | Files |
+|---|-----|-----------|-----|-------|
+| B-01 | GE Register এ row click কাজ করছিল না | `getRowProps` এ `onDoubleClick` ছিল, single click handler ছিল না | `onClick` দিয়ে replace | `GateEntryListPage.jsx` |
+| B-02 | Create GE button page refresh করত | `openCreate` navigate করত `/gate-entries` (same page) এ | `/gate-entries/create` এ navigate | `GateEntryListPage.jsx` |
+| B-03 | GE Register sidebar থেকে খুললে Create page দেখাত | AppRouter এ `/gate-entries` → `GateEntryCreatePage` ছিল (ভুল) | `/gate-entries` → `GateEntryListPage` | `AppRouter.jsx` |
+| B-04 | GE Detail এ Material UUID দেখাচ্ছিল | `hydrateGateEntry` material join করত না | `Promise.all` দিয়ে parallel material fetch, `material_code — material_name` attach | `gate_entry.handlers.ts` |
+| B-05 | GE Detail এ Gate Staff UUID দেখাচ্ছিল | UUID directly render হচ্ছিল | Field সরিয়ে Remarks দিয়ে replace | `GateEntryDetailPage.jsx` |
+| B-06 | GE List N+1 API call | প্রতি row এর জন্য `getGateEntry()` call হচ্ছিল | List handler এ bulk aggregate query | `gate_entry.handlers.ts` |
+| B-07 | Back-and-forth এ data reload | `useEffect` + `setState` pattern | `useQuery` তে convert (list ও detail দুটোই) | `GateEntryListPage.jsx`, `GateEntryDetailPage.jsx` |
+| B-08 | GE List status filter এ PRUNED ছিল না | New status যোগ হয়েছিল কিন্তু UI update হয়নি | PRUNED filter option ও badge যোগ | `GateEntryListPage.jsx` |
+
+---
+
+### New Feature — GE Prune
+
+**Design (Locked 2026-07-07):**
+- GE edit করা যাবে না — শুধু PRUNE করা যাবে
+- Prune করতে হলে সব linked GRN আগে REVERSED হতে হবে (system check)
+- Prune হলে: GE status → `PRUNED`, CSNs → `pre_ge_status` (ORD/TRN যেটা ছিল) এ restore
+- Serial number reuse হবে না
+
+**DB Migrations:**
+
+| Migration | Purpose |
+|-----------|---------|
+| `20260707200000_ge_pruned_status.sql` | `gate_entry.status` CHECK constraint এ `PRUNED` add |
+| `20260707200001_csn_pre_ge_status.sql` | `consignment_note.pre_ge_status` column — GE attach এর আগের status store করে |
+
+**Backend:**
+
+| Change | File |
+|--------|------|
+| `pruneGateEntryHandler` — POST `/:id/prune` | `gate_entry.handlers.ts` |
+| `upsertCsnArrival` — `pre_ge_status` save on GE create | `gate_entry.handlers.ts` |
+| `GE_HEADER_STATUSES` set এ `PRUNED` add | `gate_entry.handlers.ts` |
+| Prune route + ACL registry entry (WRITE) | `procurement.routes.ts`, `route-acl-registry.ts` |
+| `pruneGateEntry()` API function | `procurementApi.js` |
+
+**Frontend:**
+
+| Change | File |
+|--------|------|
+| "Prune GE" danger button (OPEN/GRN_POSTED status এ দেখায়) + confirmation modal | `GateEntryDetailPage.jsx` |
+| PRUNED → rose status tone | `GateEntryDetailPage.jsx`, `GateEntryListPage.jsx` |
+
+---
+
+### Infrastructure — ErpDenseGrid Keyboard Navigation
+
+**Change:** `ErpDenseGrid` তে proper keyboard navigation যোগ — সব list page এ automatically কাজ করবে।
+
+| Key | Action |
+|-----|--------|
+| ↑ Arrow | Previous row focus |
+| ↓ Arrow | Next row focus |
+| Enter | Row activate (`onRowActivate`) |
+
+**Implementation:** `tabIndex={0}` on `<tr>`, `useRef` array দিয়ে row refs track, ArrowUp/Down এ `el.focus()`, focused row `focus:bg-sky-50 focus:ring-sky-400` highlight।
+
+**File:** `frontend/src/components/data/ErpDenseGrid.jsx`
+
+---
+
+### Document Number Series — SAP-Style Ranges (Locked 2026-07-07)
+
+Migration: `20260707170858_document_number_series_ranges.sql`
+
+প্রতিটা doc type এর আলাদা number range — range দেখেই doc type বোঝা যায়, prefix দরকার নেই (SAP pattern)। Idempotent — existing correct range থাকলে update করে না।
+
+See CLAUDE.md Section 8 for full range table.
+
+---
+
+### Constitution & Rules Update
+
+| Document | Change |
+|----------|--------|
+| `docs/PACE_ERP_MASTER_CONSTITUTION.md` | PART 1B: Mandatory Development Rules যোগ (No UUID, useQuery, accurate list data, MCP vs Migration) |
+| `CLAUDE.md` | Section 8A: same rules SSOT হিসেবে |
+| `OM-IMPLEMENTATION-LOG.md` | R-00 to R-04 mandatory rules section (এই file এর শুরুতে) |
+
+
