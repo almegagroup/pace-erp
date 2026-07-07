@@ -132,7 +132,7 @@ export default function GateEntryListPage() {
 
   function openCreate() {
     openScreen(OPERATION_SCREENS.PROC_GATE_ENTRY_CREATE.screen_code);
-    navigate("/dashboard/procurement/gate-entries");
+    navigate("/dashboard/procurement/gate-entries/create");
   }
 
   function openDetail(row) {
@@ -230,7 +230,7 @@ export default function GateEntryListPage() {
               rowKey={(row) => row.id}
               onRowActivate={openDetail}
               getRowProps={(row) => ({
-                onDoubleClick: () => openDetail(row),
+                onClick: () => openDetail(row),
                 className: "cursor-pointer hover:bg-sky-50",
               })}
               emptyMessage={loading ? "Loading gate entries..." : "No gate entry matched the current filter."}
