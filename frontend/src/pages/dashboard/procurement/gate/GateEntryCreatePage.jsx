@@ -53,6 +53,7 @@ export default function GateEntryCreatePage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const dateRef = useRef(null);
+  const rcvQtyRefs = useRef({});
 
   // ── header state
   const [companyId, setCompanyId] = useState("");
@@ -189,10 +190,15 @@ export default function GateEntryCreatePage() {
   }
 
   function confirmDrawer() {
-    if (drawer.selected && drawer.rowIndex !== null) {
-      updateLine(drawer.rowIndex, { csn: drawer.selected });
+    const rowIndex = drawer.rowIndex;
+    if (drawer.selected && rowIndex !== null) {
+      updateLine(rowIndex, { csn: drawer.selected });
     }
     closeDrawer();
+    // After drawer closes, move focus to the Received Qty input for this row
+    if (rowIndex !== null) {
+      setTimeout(() => rcvQtyRefs.current[rowIndex]?.focus(), 60);
+    }
   }
 
   function setDrawerHi(idx) {
@@ -428,7 +434,12 @@ export default function GateEntryCreatePage() {
             onKeyDown={(e) => {
               if (e.key === "ArrowDown") { e.preventDefault(); setPoDropHi((h) => Math.min(h + 1, sugs.length - 1)); }
               else if (e.key === "ArrowUp") { e.preventDefault(); setPoDropHi((h) => Math.max(h - 1, 0)); }
-              else if (e.key === "Enter" && showDrop) { e.preventDefault(); void selectPO(i, sugs[poDropHi]); }
+              else if (e.key === "Enter" && showDrop) { e.preventDefault(); selectPO(i, sugs[poDropHi]); }
+              else if (e.key === "Tab" && showDrop && sugs.length > 0) {
+                // Tab with dropdown open: select highlighted suggestion, then drawer opens automatically
+                e.preventDefault();
+                selectPO(i, sugs[poDropHi]);
+              }
               else if (e.key === "Escape") { setPoDropRow(null); }
             }}
           />
@@ -507,6 +518,7 @@ export default function GateEntryCreatePage() {
         {/* Rcv qty */}
         <td className="w-[80px]">
           <input
+            ref={(el) => { rcvQtyRefs.current[i] = el; }}
             type="number"
             min="0"
             step="0.001"
