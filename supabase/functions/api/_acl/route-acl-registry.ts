@@ -433,7 +433,7 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/gate-entries\/[^/]+\/prune$/,
     methods: {
-      POST: { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "WRITE" },
+      POST: { skipAcl: false, resourceCode: "PROC_GRN_DETAIL", action: "WRITE" },
     },
   },
   {

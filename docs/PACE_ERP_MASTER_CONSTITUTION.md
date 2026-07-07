@@ -592,6 +592,34 @@ MCP change শুধু যে DB তে run করা হয় সেখান
 
 ---
 
+### Rule 5 — Report ও Heavy Query Pages এ SAP Selection Screen Pattern Mandatory
+
+**কোন pages এ এই pattern লাগবে:**
+
+যেসব page এ criteria ছাড়া data load করলে potentially বড় result set আসতে পারে, বা user কে আগে context দিতে হয় — সেসব page এ criteria-first pattern mandatory।
+
+| Page type | উদাহরণ | Pattern |
+|-----------|--------|---------|
+| Stock reports | Stock Ledger, MMBE, Valuation | Criteria → Execute → Results |
+| Movement reports | Stock movement history, Document flow | Criteria → Execute → Results |
+| Planning views | Procurement Planning, Production Planning | Criteria → Execute → Results |
+| Production PO create/edit | ZCoR1 equivalent | Criteria screen → PO form |
+| Physical Inventory | PID create, PID document list | Criteria → Execute → Results |
+| Financial reports | Costing report, Period valuation | Criteria → Execute → Results |
+
+**Simple registers (auto-load ঠিক আছে):** GE Register, PO Register, GRN Register, CSN Register — এগুলোতে company filter আছে, server-side paginated, তাই criteria screen দরকার নেই।
+
+**Pattern rules:**
+1. Page খুলবে criteria form নিয়ে — data load হবে না
+2. User criteria fill করবে → F8 বা "Execute" button চাপবে → তখন data fetch হবে
+3. Results screen এ "Change Criteria" বা ESC চাপলে criteria form এ ফিরে যাবে
+4. Criteria reusable component: `ErpSelectionScreen` (criteria state + results state)
+5. F8 = Execute keyboard shortcut সব selection screen এ থাকবে
+
+**Implementation:** `ErpSelectionScreen` component — `docs/PACE_ERP_UI_PATTERNS.md` তে full spec।
+
+---
+
 ## PART 2 — COST CONTROL & BACKEND RULEBOOK
 
 # ERP MASTER GUIDE

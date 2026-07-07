@@ -83,6 +83,33 @@
 
 ---
 
+### R-05 — Report ও Heavy Query Pages এ SAP Selection Screen Pattern
+
+**Rule:** যেসব page এ user criteria না দিলে data load করা উচিত নয় — সেসব page এ criteria-first (SAP selection screen) pattern mandatory।
+
+**Pattern:**
+1. Page open হবে criteria form নিয়ে — কোনো data fetch হবে না
+2. User criteria fill করবে → **F8 / "Execute" button** চাপবে → তখনই data fetch হবে
+3. Results screen এ "Change Criteria" বা ESC চাপলে criteria form এ ফিরে যাবে
+4. State machine: `CRITERIA` → `RESULTS` → `CRITERIA`
+
+**কোন page এ লাগবে:**
+
+| Page type | উদাহরণ |
+|-----------|--------|
+| Stock reports | Stock Ledger, MMBE, Valuation |
+| Movement reports | Stock movement history |
+| Planning views | Procurement Planning, Production Planning |
+| Production PO lookup | ZCoR1/COID equivalent |
+| Physical Inventory list | PID document list |
+| Financial reports | Costing report, Period valuation |
+
+**Auto-load ঠিক আছে (criteria screen দরকার নেই):** GE Register, PO Register, GRN Register, CSN Register — এগুলো company-scoped + server-side paginated।
+
+**Implementation:** `ErpSelectionScreen` reusable component — full spec: `docs/PACE_ERP_UI_PATTERNS.md`
+
+---
+
 ---
 
 ## Gate-11 - Foundation DB (erp_inventory schema)

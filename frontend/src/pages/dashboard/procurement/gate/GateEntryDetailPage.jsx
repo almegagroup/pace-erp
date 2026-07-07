@@ -9,6 +9,7 @@ import ErpScreenScaffold, {
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
+import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
@@ -38,7 +39,8 @@ export default function GateEntryDetailPage() {
   const { id: routeId = "" } = useParams();
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
-  const { runtimeContext } = useMenu();
+  const { runtimeContext, allowedRoutes } = useMenu();
+  const canPruneGe = isRouteAllowed(allowedRoutes ?? new Set(), "/dashboard/procurement/grns/:id");
   const queryClient = useQueryClient();
   const [gateExitForm, setGateExitForm] = useState({
     exit_date: new Date().toISOString().slice(0, 10),
@@ -135,6 +137,19 @@ export default function GateEntryDetailPage() {
 
   async function handlePrune() {
     if (!detail?.id) return;
+    const linkedGrns = Array.isArray(detail.linked_grns) ? detail.linked_grns : [];
+    const blockedGrns = linkedGrns.filter((g) => String(g.status || "").toUpperCase() !== "REVERSED");
+    if (blockedGrns.length > 0) {
+      const blockedList = blockedGrns.map((g) => g.grn_number).join(", ");
+      await openActionConfirm({
+        eyebrow: "Cannot Prune",
+        title: "Linked GRNs must be reversed first",
+        message: `The following GRN(s) are linked to this Gate Entry and have not been reversed yet. Reverse them before pruning.\n\nPending: ${blockedList}`,
+        confirmLabel: "OK",
+        cancelLabel: null,
+      });
+      return;
+    }
     const confirmed = await openActionConfirm({
       eyebrow: "GE Prune",
       title: `Prune Gate Entry ${detail.ge_number}?`,
@@ -182,7 +197,7 @@ export default function GateEntryDetailPage() {
       ]}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
-        ...(!["PRUNED", "CANCELLED"].includes(String(detail?.status || "").toUpperCase())
+        ...(canPruneGe && !["PRUNED", "CANCELLED"].includes(String(detail?.status || "").toUpperCase())
           ? [{ key: "prune", label: saving ? "Pruning..." : "Prune GE", tone: "danger", onClick: () => void handlePrune(), disabled: saving }]
           : []),
       ]}
@@ -376,6 +391,45 @@ export default function GateEntryDetailPage() {
               </div>
             )}
           </ErpSectionCard>
+
+          {Array.isArray(detail.linked_grns) && detail.linked_grns.length > 0 && (
+            <ErpSectionCard eyebrow="Linked GRNs" title="Goods receipts linked to this gate entry">
+              <ErpDenseGrid
+                columns={[
+                  { key: "grn_number", label: "GRN Number", width: "160px" },
+                  {
+                    key: "status",
+                    label: "Status",
+                    width: "140px",
+                    render: (row) => {
+                      const s = String(row.status || "").toUpperCase();
+                      const tone =
+                        s === "REVERSED" ? "bg-rose-100 text-rose-800" :
+                        s === "POSTED" ? "bg-emerald-100 text-emerald-800" :
+                        "bg-amber-100 text-amber-800";
+                      return (
+                        <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${tone}`}>
+                          {row.status}
+                        </span>
+                      );
+                    },
+                  },
+                  {
+                    key: "prune_block",
+                    label: "",
+                    width: "200px",
+                    render: (row) =>
+                      String(row.status || "").toUpperCase() !== "REVERSED" ? (
+                        <span className="text-[11px] text-rose-600 font-medium">Must reverse before prune</span>
+                      ) : null,
+                  },
+                ]}
+                rows={detail.linked_grns}
+                rowKey={(row) => row.id}
+                emptyMessage="No GRNs linked."
+              />
+            </ErpSectionCard>
+          )}
 
           <ErpSectionCard eyebrow="GRN" title="Goods receipt">
             {hasGateExit ? (

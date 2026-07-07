@@ -180,7 +180,7 @@ async function hydrateGateEntry(gateEntryId: string): Promise<JsonRecord> {
   const csnIds = Array.from(new Set(lines.map((l) => toTrimmedString(l.csn_id)).filter(Boolean)));
   const matIds = Array.from(new Set(lines.map((l) => toTrimmedString(l.material_id)).filter(Boolean)));
 
-  const [csns, mats, gateExitResp] = await Promise.all([
+  const [csns, mats, gateExitResp, grnsResp] = await Promise.all([
     csnIds.length > 0
       ? serviceRoleClient.schema("erp_procurement").from("consignment_note")
           .select("id, csn_number, status, grn_id, gate_entry_id, gate_entry_date, received_qty")
@@ -193,6 +193,8 @@ async function hydrateGateEntry(gateEntryId: string): Promise<JsonRecord> {
       : Promise.resolve({ data: [], error: null }),
     serviceRoleClient.schema("erp_procurement").from("gate_exit_inbound")
       .select("*").eq("gate_entry_id", gateEntryId).maybeSingle(),
+    serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+      .select("id, grn_number, status").eq("gate_entry_id", gateEntryId),
   ]);
 
   if (csns.error) throw new Error("CSN_FETCH_FAILED");
@@ -200,6 +202,8 @@ async function hydrateGateEntry(gateEntryId: string): Promise<JsonRecord> {
 
   const matMap = new Map<string, JsonRecord>();
   for (const m of (mats.data ?? []) as JsonRecord[]) matMap.set(String(m.id), m);
+
+  const linkedGrns = (grnsResp.data ?? []) as JsonRecord[];
 
   return {
     ...gateEntry,
@@ -212,6 +216,7 @@ async function hydrateGateEntry(gateEntryId: string): Promise<JsonRecord> {
       };
     }),
     gate_exit_inbound: gateExitResp.data ?? null,
+    linked_grns: linkedGrns,
   };
 }
 
