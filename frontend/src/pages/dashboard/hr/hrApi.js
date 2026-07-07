@@ -1,3 +1,8 @@
+import {
+  GENERIC_IT_MESSAGE,
+  resolveErrorMessage,
+} from "../../../utils/errorMessages.js";
+
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -70,13 +75,15 @@ async function readJsonSafe(response) {
 }
 
 function createDebugError(json, fallbackCode, fallbackMessage) {
+  const code = json?.code ?? fallbackCode;
   return {
-    code: json?.code ?? fallbackCode,
+    code,
     requestId: json?.request_id ?? null,
     gateId: json?.gate_id ?? null,
     routeKey: json?.route_key ?? null,
     decisionTrace: json?.decision_trace ?? null,
-    message: json?.message ?? fallbackMessage,
+    backendMessage: json?.message ?? fallbackMessage,
+    message: resolveErrorMessage(code, json?.message ?? fallbackMessage, json?.status ?? null),
   };
 }
 
@@ -87,7 +94,8 @@ function createNetworkError(error, fallbackCode, fallbackMessage) {
     gateId: null,
     routeKey: null,
     decisionTrace: fallbackCode,
-    message: error instanceof Error ? error.message : fallbackMessage,
+    backendMessage: error instanceof Error ? error.message : fallbackMessage,
+    message: GENERIC_IT_MESSAGE,
   };
 }
 
@@ -119,7 +127,11 @@ async function apiJson(
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    throw createDebugError(json, fallbackCode, fallbackMessage);
+    throw createDebugError(
+      { ...json, status: response.status },
+      fallbackCode,
+      fallbackMessage,
+    );
   }
 
   return json.data;
@@ -147,7 +159,11 @@ async function apiWorkflowDecision(payload, companyId = null) {
   const json = await readJsonSafe(response);
 
   if (!response.ok) {
-    throw createDebugError(json, "WORKFLOW_DECISION_FAILED", "Workflow decision failed");
+    throw createDebugError(
+      { ...json, status: response.status },
+      "WORKFLOW_DECISION_FAILED",
+      "Workflow decision failed",
+    );
   }
 
   return json;

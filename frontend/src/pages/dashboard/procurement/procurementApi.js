@@ -1,3 +1,5 @@
+import { resolveErrorMessage } from "../../../utils/errorMessages.js";
+
 async function readJsonSafe(response) {
   try {
     return await response.clone().json();
@@ -25,7 +27,12 @@ async function fetchProcurement(method, path, body, params) {
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
-    throw new Error(json?.code ?? "PROCUREMENT_REQUEST_FAILED");
+    const code = json?.code ?? "PROCUREMENT_REQUEST_FAILED";
+    const error = new Error(resolveErrorMessage(code, json?.message, response.status));
+    error.code = code;
+    error.status = response.status;
+    error.backendMessage = json?.message ?? null;
+    throw error;
   }
 
   const payload = json.data;

@@ -1,3 +1,5 @@
+import { resolveErrorMessage } from "../../../utils/errorMessages.js";
+
 /*
  * File-ID: 27.FE-API
  * File-Path: frontend/src/pages/dashboard/production/prodApi.js
@@ -23,7 +25,14 @@ async function fetchProd(method, path, body, params) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const json = await readJsonSafe(res);
-  if (!res.ok || !json?.ok) throw new Error(json?.code ?? "PROD_REQUEST_FAILED");
+  if (!res.ok || !json?.ok) {
+    const code = json?.code ?? "PROD_REQUEST_FAILED";
+    const error = new Error(resolveErrorMessage(code, json?.message, res.status));
+    error.code = code;
+    error.status = res.status;
+    error.backendMessage = json?.message ?? null;
+    throw error;
+  }
   const payload = json.data;
   if (payload && typeof payload === "object" && "data" in payload) {
     if ("pagination" in payload) return payload;

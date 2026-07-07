@@ -1,3 +1,5 @@
+import { resolveErrorMessage } from "../../../utils/errorMessages.js";
+
 /*
  * File-ID: 15.1
  * File-Path: frontend/src/pages/dashboard/om/omApi.js
@@ -19,7 +21,9 @@ async function readJsonSafe(response) {
 }
 
 function createError(json, response, fallbackCode) {
-  const error = new Error(json?.code ?? fallbackCode);
+  const code = json?.code ?? fallbackCode;
+  const error = new Error(resolveErrorMessage(code, json?.message, response.status));
+  error.code = code;
   error.status = response.status;
   throw error;
 }
@@ -913,7 +917,9 @@ async function fetchAdminJsonSafe(path, fallbackCode) {
   const response = await fetch(`${BASE}${path}`, { credentials: "include" });
   const json = await readJsonSafe(response);
   if (!response.ok || !json?.ok) {
-    const error = new Error(json?.code ?? fallbackCode);
+    const code = json?.code ?? fallbackCode;
+    const error = new Error(resolveErrorMessage(code, json?.message, response.status));
+    error.code = code;
     error.status = response.status;
     throw error;
   }
