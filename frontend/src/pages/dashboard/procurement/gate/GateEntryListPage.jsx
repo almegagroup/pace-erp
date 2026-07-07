@@ -146,6 +146,7 @@ export default function GateEntryListPage() {
       title="Gate Entries"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
+        { key: "create", label: "Create GE", tone: "primary", onClick: openCreate },
       ]}
       notices={error ? [{ key: "ge-list-error", tone: "error", message: error }] : []}
       filterSection={{
