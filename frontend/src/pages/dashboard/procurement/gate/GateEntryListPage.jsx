@@ -20,6 +20,7 @@ function statusTone(status) {
     case "OPEN":
       return "bg-sky-100 text-sky-800";
     case "CANCELLED":
+    case "PRUNED":
       return "bg-rose-100 text-rose-800";
     default:
       return "bg-slate-100 text-slate-700";
@@ -146,7 +147,7 @@ export default function GateEntryListPage() {
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
-                {["OPEN", "GRN_POSTED", "CANCELLED"].map((entry) => (
+                {["OPEN", "GRN_POSTED", "CANCELLED", "PRUNED"].map((entry) => (
                   <option key={entry} value={entry}>
                     {entry}
                   </option>

@@ -859,7 +859,7 @@ export async function pruneGateEntryHandler(
     // Check all linked GRNs are reversed
     const { data: grns, error: grnError } = await serviceRoleClient
       .schema("erp_procurement")
-      .from("goods_receipt_note")
+      .from("goods_receipt")
       .select("id, grn_number, status")
       .eq("gate_entry_id", gateEntryId);
 

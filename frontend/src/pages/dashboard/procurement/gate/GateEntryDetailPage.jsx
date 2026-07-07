@@ -24,6 +24,9 @@ function statusTone(status) {
       return "emerald";
     case "OPEN":
       return "sky";
+    case "PRUNED":
+    case "CANCELLED":
+      return "rose";
     default:
       return "slate";
   }
