@@ -712,6 +712,13 @@ export async function createAndPostGRNFromLineHandler(
       return procurementErrorResponse(req, ctx, "GRN_CREATE_FAILED", 500, "Unable to create GRN.");
     }
 
+    // All steps after this point must succeed. If anything fails, delete the DRAFT GRN so
+    // there is no half-created record — the caller can safely retry from scratch.
+    async function rollbackGrn() {
+      await serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+        .delete().eq("id", String(grn.id));
+    }
+
     // Post stock movement
     const postingResp = await serviceRoleClient.schema("erp_inventory")
       .rpc("post_stock_movement", {
@@ -732,6 +739,8 @@ export async function createAndPostGRNFromLineHandler(
       });
 
     if (postingResp.error || !Array.isArray(postingResp.data) || postingResp.data.length === 0) {
+      console.error("[GRN_FROM_LINE] stock posting failed, rolling back GRN:", postingResp.error);
+      await rollbackGrn();
       return procurementErrorResponse(req, ctx, "GRN_POST_RPC_FAILED", 500, "Stock posting failed.");
     }
 
