@@ -521,6 +521,7 @@ export async function createAndPostGRNFromLineHandler(
   try {
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
+    console.log("[GRN_FROM_LINE] body:", JSON.stringify(body));
     const gateEntryLineId = toTrimmedString(body.gate_entry_line_id);
     if (!gateEntryLineId) {
       return procurementErrorResponse(req, ctx, "GRN_GATE_ENTRY_LINE_REQUIRED", 400, "gate_entry_line_id is required.");
@@ -783,6 +784,7 @@ export async function createAndPostGRNFromLineHandler(
     return okResponse(await hydrateGrn(String(grn.id)), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GRN_CREATE_FAILED";
+    console.error("[GRN_FROM_LINE] error:", message, error);
     const status = message.includes("REQUIRED") ? 400 : message.includes("NOT_FOUND") ? 404 : 500;
     return procurementErrorResponse(req, ctx, message, status, message);
   }
