@@ -43,17 +43,6 @@ function statusTone(status) {
   }
 }
 
-function passFailTone(value) {
-  switch (String(value || "").toUpperCase()) {
-    case "PASS":
-      return "bg-emerald-100 text-emerald-800";
-    case "FAIL":
-      return "bg-rose-100 text-rose-800";
-    default:
-      return "bg-slate-100 text-slate-600";
-  }
-}
-
 function normalizeSearch(text) {
   return String(text || "").trim().toLowerCase();
 }
@@ -438,7 +427,8 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged, onColl
     return testLines.find((line) => line.test_method_id === methodId);
   }
 
-  const anyMctFail = mctConfigs.some((cfg) => testLineForMethod(cfg.test_method_id)?.pass_fail === "FAIL");
+  const failedMctMethods = mctConfigs.filter((cfg) => testLineForMethod(cfg.test_method_id)?.pass_fail === "FAIL");
+  const anyMctFail = failedMctMethods.length > 0;
   const allMctFilled = mctConfigs.every((cfg) => {
     const line = testLineForMethod(cfg.test_method_id);
     return line && String(line.test_result ?? "").trim() !== "";
@@ -598,6 +588,19 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged, onColl
 
   async function handleSubmitDecision() {
     if (decisionSubmitDisabled) return;
+
+    if (failedMctMethods.length > 0) {
+      const names = failedMctMethods.map((cfg) => cfg.qa_test_method?.method_name).filter(Boolean).join(", ");
+      const proceedDespiteFailure = await openActionConfirm({
+        eyebrow: "QA Decision",
+        title: `${failedMctMethods.length} mandatory test${failedMctMethods.length === 1 ? "" : "s"} failed`,
+        message: `Failed: ${names}. Choose "Change Result" to go back and correct the value(s), or "Continue Anyway" to proceed with the decision as entered.`,
+        confirmLabel: "Continue Anyway",
+        cancelLabel: "Change Result",
+      });
+      if (!proceedDespiteFailure) return;
+    }
+
     const confirmed = await openActionConfirm({
       eyebrow: "QA Decision",
       title: "Submit usage decision?",
@@ -677,7 +680,6 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged, onColl
                 <th className="py-1">LSL</th>
                 <th className="py-1">USL</th>
                 <th className="py-1">Result</th>
-                <th className="py-1">Pass/Fail</th>
                 {canManage ? <th className="py-1"></th> : null}
               </tr>
             </thead>
@@ -727,11 +729,6 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged, onColl
                         onBlur={() => void handleResultSave(cfg)}
                         className="h-7 w-24 border border-slate-300 bg-white px-1.5 text-[12px] text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100"
                       />
-                    </td>
-                    <td className="py-1 pr-2">
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${passFailTone(line?.pass_fail)}`}>
-                        {line?.pass_fail || "PENDING"}
-                      </span>
                     </td>
                     {canManage ? (
                       <td className="py-1">
