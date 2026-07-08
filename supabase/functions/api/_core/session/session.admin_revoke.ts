@@ -34,18 +34,23 @@ export async function adminForceRevokeSessions(
     throw new Error("ADMIN_SESSION_CLUSTER_READ_FAILED");
   }
 
-  for (const row of activeClusters ?? []) {
-    if (!row.cluster_id) continue;
-
-    await terminateSessionCluster({
-      clusterId: row.cluster_id,
-      clusterStatus: SESSION_CLUSTER_STATE.REVOKED,
-      windowStatus: SESSION_CLUSTER_WINDOW_STATE.REVOKED,
-      sessionStatus: "REVOKED",
-      reason: "ADMIN_FORCE_REVOKE",
-      actedByAuthUserId: revokedByAuthUserId,
-    });
-  }
+  // Each cluster's termination only touches rows scoped to its own cluster_id
+  // (session_clusters/session_cluster_windows/sessions all filtered by that
+  // id) — independent across clusters, so safe to run in parallel.
+  await Promise.all(
+    (activeClusters ?? [])
+      .filter((row) => Boolean(row.cluster_id))
+      .map((row) =>
+        terminateSessionCluster({
+          clusterId: row.cluster_id,
+          clusterStatus: SESSION_CLUSTER_STATE.REVOKED,
+          windowStatus: SESSION_CLUSTER_WINDOW_STATE.REVOKED,
+          sessionStatus: "REVOKED",
+          reason: "ADMIN_FORCE_REVOKE",
+          actedByAuthUserId: revokedByAuthUserId,
+        })
+      ),
+  );
 
   const { error } = await serviceRoleClient
     .schema("erp_core")

@@ -256,7 +256,11 @@ export async function approveStrokeChangeRequestHandler(
       linesToApply = (dbLines ?? []) as JsonRecord[];
     }
 
-    // Apply changes to stroke_line rows
+    // Apply changes to stroke_line rows. Each target stroke_line_id is
+    // independent, so the actual writes can run in parallel — but if the same
+    // stroke_line_id appeared twice in linesToApply, the original sequential
+    // loop would apply the LAST one; dedupe here first to preserve that.
+    const updateByStrokeLineId = new Map<string, JsonRecord>();
     for (const line of linesToApply) {
       const strokeLineId = toTrimmedString(line.stroke_line_id);
       if (!strokeLineId) continue;
@@ -266,13 +270,19 @@ export async function approveStrokeChangeRequestHandler(
         update.alternate_material_id = (line.new_has_alternate === true || line.new_has_alternate === "true") ? line.alt_material_id ?? null : null;
       }
       if (Object.keys(update).length > 0) {
-        await serviceRoleClient
+        updateByStrokeLineId.set(strokeLineId, update);
+      }
+    }
+
+    await Promise.all(
+      [...updateByStrokeLineId.entries()].map(([strokeLineId, update]) =>
+        serviceRoleClient
           .schema("erp_production")
           .from("stroke_line")
           .update(update)
-          .eq("id", strokeLineId);
-      }
-    }
+          .eq("id", strokeLineId)
+      ),
+    );
 
     // Update change request status
     const now = new Date().toISOString();

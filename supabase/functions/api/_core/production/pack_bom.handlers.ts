@@ -488,13 +488,37 @@ export async function approvePackBomChangeRequestHandler(
       changesToApply = (dbLines ?? []) as JsonRecord[];
     }
 
-    // Apply each change to pack_bom_line
+    // ADD/REMOVE/EDIT each target a distinct bom_line_id (ADD creates a new
+    // row nothing else in this batch references), so each is independent —
+    // but dedupe EDITs by bom_line_id first (keep last, matching the original
+    // sequential last-write-wins) in case the same line appears twice, then
+    // batch REMOVE as one delete and run ADD/EDIT writes in parallel.
+    const adds = changesToApply.filter((change) => toTrimmedString(change.action) === "ADD");
+    const removeIds = [...new Set(
+      changesToApply
+        .filter((change) => toTrimmedString(change.action) === "REMOVE")
+        .map((change) => toTrimmedString(change.bom_line_id))
+        .filter(Boolean),
+    )];
+    const editByBomLineId = new Map<string, JsonRecord>();
     for (const change of changesToApply) {
-      const action = toTrimmedString(change.action);
+      if (toTrimmedString(change.action) !== "EDIT") continue;
       const bomLineId = toTrimmedString(change.bom_line_id);
+      if (!bomLineId) continue;
+      const update: JsonRecord = {};
+      if (change.material_id != null) update.material_id = toTrimmedString(change.material_id) || null;
+      if (change.qty != null) update.qty = parsePositiveNumber(change.qty) ?? 0;
+      if (change.uom_code != null) update.uom_code = toTrimmedString(change.uom_code) || null;
+      if (change.has_alternate != null) update.has_alternate = change.has_alternate === true || change.has_alternate === "true";
+      if (change.material_group_id != null) update.material_group_id = toTrimmedString(change.material_group_id) || null;
+      if (Object.keys(update).length > 0) {
+        editByBomLineId.set(bomLineId, update);
+      }
+    }
 
-      if (action === "ADD") {
-        await serviceRoleClient
+    await Promise.all([
+      ...adds.map((change) =>
+        serviceRoleClient
           .schema("erp_production")
           .from("pack_bom_line")
           .insert({
@@ -506,29 +530,19 @@ export async function approvePackBomChangeRequestHandler(
             has_alternate: change.has_alternate === true || change.has_alternate === "true",
             material_group_id: toTrimmedString(change.material_group_id) || null,
             display_order: Number(change.display_order) || 999,
-          });
-      } else if (action === "REMOVE" && bomLineId) {
-        await serviceRoleClient
+          })
+      ),
+      removeIds.length > 0
+        ? serviceRoleClient.schema("erp_production").from("pack_bom_line").delete().in("id", removeIds)
+        : Promise.resolve(),
+      ...[...editByBomLineId.entries()].map(([bomLineId, update]) =>
+        serviceRoleClient
           .schema("erp_production")
           .from("pack_bom_line")
-          .delete()
-          .eq("id", bomLineId);
-      } else if (action === "EDIT" && bomLineId) {
-        const update: JsonRecord = {};
-        if (change.material_id != null) update.material_id = toTrimmedString(change.material_id) || null;
-        if (change.qty != null) update.qty = parsePositiveNumber(change.qty) ?? 0;
-        if (change.uom_code != null) update.uom_code = toTrimmedString(change.uom_code) || null;
-        if (change.has_alternate != null) update.has_alternate = change.has_alternate === true || change.has_alternate === "true";
-        if (change.material_group_id != null) update.material_group_id = toTrimmedString(change.material_group_id) || null;
-        if (Object.keys(update).length > 0) {
-          await serviceRoleClient
-            .schema("erp_production")
-            .from("pack_bom_line")
-            .update(update)
-            .eq("id", bomLineId);
-        }
-      }
-    }
+          .update(update)
+          .eq("id", bomLineId)
+      ),
+    ]);
 
     const now = new Date().toISOString();
     const { error: updateErr } = await serviceRoleClient

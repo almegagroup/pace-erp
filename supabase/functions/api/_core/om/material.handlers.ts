@@ -199,6 +199,44 @@ export async function createMaterialHandler(
 
 // ── Bulk Save (create + update in one call) ───────────────────────────────────
 
+// material_name has no DB-level unique constraint, so intra-batch duplicate
+// detection only works if names are reserved in commit order. We keep that
+// order-sensitivity but do it against one in-memory index (built from a
+// single query) instead of one DB round-trip per row.
+async function fetchMaterialNameIndex(): Promise<Map<string, string>> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("id, material_name");
+  if (error) {
+    throw new Error("OM_MATERIAL_NAME_LOOKUP_FAILED");
+  }
+  const index = new Map<string, string>();
+  for (const row of ((data as Array<{ id: string; material_name: string }> | null) ?? [])) {
+    const name = toTrimmedString(row.material_name).toLowerCase();
+    if (name) index.set(name, toTrimmedString(row.id));
+  }
+  return index;
+}
+
+async function getMaterialsByIds(ids: string[]): Promise<Map<string, Record<string, unknown>>> {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, Record<string, unknown>>();
+  if (uniqueIds.length === 0) return map;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("*")
+    .in("id", uniqueIds);
+  if (error) throw new Error("OM_MATERIAL_LOOKUP_FAILED");
+
+  for (const row of ((data as Array<Record<string, unknown>> | null) ?? [])) {
+    map.set(toTrimmedString(row.id), row);
+  }
+  return map;
+}
+
 export async function bulkSaveMaterialsHandler(
   req: Request,
   ctx: OmHandlerContext,
@@ -213,151 +251,182 @@ export async function bulkSaveMaterialsHandler(
     const updated: unknown[] = [];
     const errors: { index: number; context: string; error: string }[] = [];
 
-    // Process creates
+    const nameIndex = await fetchMaterialNameIndex();
+
+    // Validate + reserve names synchronously (order-sensitive, no awaits) so two
+    // creates in the same batch can never race for the same name; only the
+    // actual code-gen + insert work (independent per row) runs in parallel.
+    type PendingCreate = { index: number; row: JsonRecord; materialType: string; materialName: string; baseUomCode: string };
+    const pendingCreates: PendingCreate[] = [];
     for (let i = 0; i < creates.length; i++) {
       const row = creates[i];
-      try {
-        const materialType = toTrimmedString(row.material_type).toUpperCase();
-        const materialName = toTrimmedString(row.material_name);
-        const baseUomCode = toTrimmedString(row.base_uom_code).toUpperCase();
+      const materialType = toTrimmedString(row.material_type).toUpperCase();
+      const materialName = toTrimmedString(row.material_name);
+      const baseUomCode = toTrimmedString(row.base_uom_code).toUpperCase();
 
-        if (!ALLOWED_MATERIAL_TYPES.has(materialType)) {
-          errors.push({ index: i, context: "create", error: "OM_INVALID_MATERIAL_TYPE" });
-          continue;
+      if (!ALLOWED_MATERIAL_TYPES.has(materialType)) {
+        errors.push({ index: i, context: "create", error: "OM_INVALID_MATERIAL_TYPE" });
+        continue;
+      }
+      if (!materialName || !baseUomCode) {
+        errors.push({ index: i, context: "create", error: "OM_INVALID_MATERIAL_INPUT" });
+        continue;
+      }
+
+      const nameKey = materialName.toLowerCase();
+      if (nameIndex.has(nameKey)) {
+        errors.push({ index: i, context: "create", error: "OM_MATERIAL_NAME_DUPLICATE" });
+        continue;
+      }
+      nameIndex.set(nameKey, "PENDING");
+      pendingCreates.push({ index: i, row, materialType, materialName, baseUomCode });
+    }
+
+    // Return outcomes rather than pushing into shared arrays from concurrent
+    // closures, then merge in pendingCreates (original row) order below —
+    // otherwise created/errors order would depend on network completion timing.
+    const createOutcomes = await Promise.all(
+      pendingCreates.map(async ({ index, row, materialType, materialName, baseUomCode }) => {
+        try {
+          const { data: materialCode, error: codeError } = await serviceRoleClient
+            .rpc("generate_material_pace_code", { p_material_type: materialType });
+          if (codeError || !materialCode) {
+            return { index, error: "OM_PACE_CODE_FAILED" as string | null, data: null as Record<string, unknown> | null };
+          }
+
+          const purchaseUomCode = toTrimmedString(row.purchase_uom_code).toUpperCase() || null;
+          const issueUomCode = toTrimmedString(row.issue_uom_code).toUpperCase() || null;
+
+          const { data, error } = await serviceRoleClient
+            .schema("erp_master")
+            .from("material_master")
+            .insert({
+              pace_code: String(materialCode),
+              external_code: toTrimmedString(row.external_code) || null,
+              material_name: materialName,
+              document_name: toTrimmedString(row.document_name) || null,
+              short_name: deriveShortName(materialName, row.short_name),
+              material_type: materialType,
+              material_category: toTrimmedString(row.material_category) || null,
+              description: toTrimmedString(row.description) || null,
+              specification: toTrimmedString(row.specification) || null,
+              base_uom_code: baseUomCode,
+              purchase_uom_code: purchaseUomCode,
+              issue_uom_code: issueUomCode,
+              hsn_code: toTrimmedString(row.hsn_code) || null,
+              qa_required_on_inward: row.qa_required_on_inward !== false,
+              valuation_method: toTrimmedString(row.valuation_method).toUpperCase() || "WEIGHTED_AVERAGE",
+              status: "ACTIVE",
+              approved_by: ctx.auth_user_id,
+              approved_at: new Date().toISOString(),
+              created_by: ctx.auth_user_id,
+            })
+            .select("*")
+            .single();
+
+          if (error || !data) {
+            return { index, error: "OM_MATERIAL_CREATE_FAILED", data: null as Record<string, unknown> | null };
+          }
+          return { index, error: null as string | null, data: data as Record<string, unknown> };
+        } catch {
+          return { index, error: "OM_MATERIAL_CREATE_FAILED", data: null as Record<string, unknown> | null };
         }
-        if (!materialName || !baseUomCode) {
-          errors.push({ index: i, context: "create", error: "OM_INVALID_MATERIAL_INPUT" });
-          continue;
-        }
-
-        // Check duplicate name
-        const { count } = await serviceRoleClient
-          .schema("erp_master")
-          .from("material_master")
-          .select("id", { count: "exact", head: true })
-          .ilike("material_name", materialName);
-        if ((count ?? 0) > 0) {
-          errors.push({ index: i, context: "create", error: "OM_MATERIAL_NAME_DUPLICATE" });
-          continue;
-        }
-
-        const { data: materialCode, error: codeError } = await serviceRoleClient
-          .rpc("generate_material_pace_code", { p_material_type: materialType });
-        if (codeError || !materialCode) {
-          errors.push({ index: i, context: "create", error: "OM_PACE_CODE_FAILED" });
-          continue;
-        }
-
-        const purchaseUomCode = toTrimmedString(row.purchase_uom_code).toUpperCase() || null;
-        const issueUomCode = toTrimmedString(row.issue_uom_code).toUpperCase() || null;
-
-        const { data, error } = await serviceRoleClient
-          .schema("erp_master")
-          .from("material_master")
-          .insert({
-            pace_code: String(materialCode),
-            external_code: toTrimmedString(row.external_code) || null,
-            material_name: materialName,
-            document_name: toTrimmedString(row.document_name) || null,
-            short_name: deriveShortName(materialName, row.short_name),
-            material_type: materialType,
-            material_category: toTrimmedString(row.material_category) || null,
-            description: toTrimmedString(row.description) || null,
-            specification: toTrimmedString(row.specification) || null,
-            base_uom_code: baseUomCode,
-            purchase_uom_code: purchaseUomCode,
-            issue_uom_code: issueUomCode,
-            hsn_code: toTrimmedString(row.hsn_code) || null,
-            qa_required_on_inward: row.qa_required_on_inward !== false,
-            valuation_method: toTrimmedString(row.valuation_method).toUpperCase() || "WEIGHTED_AVERAGE",
-            status: "ACTIVE",
-            approved_by: ctx.auth_user_id,
-            approved_at: new Date().toISOString(),
-            created_by: ctx.auth_user_id,
-          })
-          .select("*")
-          .single();
-
-        if (error || !data) {
-          errors.push({ index: i, context: "create", error: "OM_MATERIAL_CREATE_FAILED" });
-        } else {
-          created.push(data);
-        }
-      } catch {
-        errors.push({ index: i, context: "create", error: "OM_MATERIAL_CREATE_FAILED" });
+      }),
+    );
+    for (const outcome of createOutcomes) {
+      if (outcome.data) {
+        created.push(outcome.data);
+      } else {
+        errors.push({ index: outcome.index, context: "create", error: outcome.error ?? "OM_MATERIAL_CREATE_FAILED" });
       }
     }
 
     // Process updates
+    const updateIds = updates.map((row) => toTrimmedString(row.id)).filter(Boolean);
+    const existingById = await getMaterialsByIds(updateIds);
+
+    const mutableFields = [
+      "material_name", "document_name", "short_name", "material_category",
+      "external_code", "hsn_code", "description", "specification",
+      "shade_code", "pack_code", "external_sku",
+      "procurement_type", "import_domestic_flag",
+      "batch_tracking_required", "fifo_tracking_enabled", "expiry_tracking_enabled",
+      "shelf_life_days", "min_shelf_life_at_grn_days",
+      "qa_required_on_inward", "qa_required_on_fg",
+      "valuation_method", "valuation_class", "production_mode",
+      "bom_exists", "delivery_tolerance_enabled",
+      "under_delivery_tolerance_pct", "over_delivery_tolerance_pct",
+    ];
+
+    type PendingUpdate = { index: number; id: string; patch: JsonRecord };
+    const pendingUpdates: PendingUpdate[] = [];
     for (let i = 0; i < updates.length; i++) {
       const row = updates[i];
-      try {
-        const id = toTrimmedString(row.id);
-        if (!id) {
-          errors.push({ index: i, context: "update", error: "OM_MATERIAL_ID_MISSING" });
-          continue;
-        }
+      const id = toTrimmedString(row.id);
+      if (!id) {
+        errors.push({ index: i, context: "update", error: "OM_MATERIAL_ID_MISSING" });
+        continue;
+      }
 
-        const existing = await getMaterialById(id);
-        if (!existing) {
-          errors.push({ index: i, context: "update", error: "OM_MATERIAL_NOT_FOUND" });
-          continue;
-        }
+      const existing = existingById.get(id);
+      if (!existing) {
+        errors.push({ index: i, context: "update", error: "OM_MATERIAL_NOT_FOUND" });
+        continue;
+      }
 
-        const patch: JsonRecord = {
-          last_updated_at: new Date().toISOString(),
-          last_updated_by: ctx.auth_user_id,
-        };
+      const patch: JsonRecord = {
+        last_updated_at: new Date().toISOString(),
+        last_updated_by: ctx.auth_user_id,
+      };
 
-        const mutableFields = [
-          "material_name", "document_name", "short_name", "material_category",
-          "external_code", "hsn_code", "description", "specification",
-          "shade_code", "pack_code", "external_sku",
-          "procurement_type", "import_domestic_flag",
-          "batch_tracking_required", "fifo_tracking_enabled", "expiry_tracking_enabled",
-          "shelf_life_days", "min_shelf_life_at_grn_days",
-          "qa_required_on_inward", "qa_required_on_fg",
-          "valuation_method", "valuation_class", "production_mode",
-          "bom_exists", "delivery_tolerance_enabled",
-          "under_delivery_tolerance_pct", "over_delivery_tolerance_pct",
-        ];
+      for (const field of mutableFields) {
+        if (row[field] !== undefined) patch[field] = row[field];
+      }
 
-        for (const field of mutableFields) {
-          if (row[field] !== undefined) patch[field] = row[field];
-        }
-
-        // Check duplicate name if name is changing
-        if (row.material_name !== undefined) {
-          const newName = toTrimmedString(row.material_name);
-          if (newName !== String(existing.material_name ?? "")) {
-            const { count } = await serviceRoleClient
-              .schema("erp_master")
-              .from("material_master")
-              .select("id", { count: "exact", head: true })
-              .ilike("material_name", newName)
-              .neq("id", id);
-            if ((count ?? 0) > 0) {
-              errors.push({ index: i, context: "update", error: "OM_MATERIAL_NAME_DUPLICATE" });
-              continue;
-            }
+      // Check duplicate name if name is changing (same order-sensitive reservation as creates)
+      if (row.material_name !== undefined) {
+        const newName = toTrimmedString(row.material_name);
+        const oldName = String(existing.material_name ?? "");
+        if (newName !== oldName) {
+          const nameKey = newName.toLowerCase();
+          const holderId = nameIndex.get(nameKey);
+          if (holderId && holderId !== id) {
+            errors.push({ index: i, context: "update", error: "OM_MATERIAL_NAME_DUPLICATE" });
+            continue;
           }
+          nameIndex.delete(oldName.toLowerCase());
+          nameIndex.set(nameKey, id);
         }
+      }
 
-        const { data, error } = await serviceRoleClient
-          .schema("erp_master")
-          .from("material_master")
-          .update(patch)
-          .eq("id", id)
-          .select("*")
-          .single();
+      pendingUpdates.push({ index: i, id, patch });
+    }
 
-        if (error || !data) {
-          errors.push({ index: i, context: "update", error: "OM_MATERIAL_UPDATE_FAILED" });
-        } else {
-          updated.push(data);
+    const updateOutcomes = await Promise.all(
+      pendingUpdates.map(async ({ index, id, patch }) => {
+        try {
+          const { data, error } = await serviceRoleClient
+            .schema("erp_master")
+            .from("material_master")
+            .update(patch)
+            .eq("id", id)
+            .select("*")
+            .single();
+
+          if (error || !data) {
+            return { index, error: "OM_MATERIAL_UPDATE_FAILED", data: null as Record<string, unknown> | null };
+          }
+          return { index, error: null as string | null, data: data as Record<string, unknown> };
+        } catch {
+          return { index, error: "OM_MATERIAL_UPDATE_FAILED", data: null as Record<string, unknown> | null };
         }
-      } catch {
-        errors.push({ index: i, context: "update", error: "OM_MATERIAL_UPDATE_FAILED" });
+      }),
+    );
+    for (const outcome of updateOutcomes) {
+      if (outcome.data) {
+        updated.push(outcome.data);
+      } else {
+        errors.push({ index: outcome.index, context: "update", error: outcome.error ?? "OM_MATERIAL_UPDATE_FAILED" });
       }
     }
 
@@ -390,7 +459,22 @@ export async function importMaterialsCsvHandler(
 
     // Parse header
     const headers = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/["\s]/g, ""));
-    const results: { row: number; material_name: string; pace_code: string | null; status: string; error: string | null }[] = [];
+    type ImportResult = { row: number; material_name: string; pace_code: string | null; status: string; error: string | null };
+    const results: ImportResult[] = [];
+
+    // Same order-sensitive name reservation as bulkSaveMaterialsHandler — no DB
+    // unique constraint backs material_name, so two CSV rows with the same name
+    // must be resolved in row order before any insert fires.
+    const nameIndex = await fetchMaterialNameIndex();
+
+    type PendingImportRow = {
+      row: number;
+      materialName: string;
+      materialType: string;
+      baseUomCode: string;
+      cols: Record<string, string>;
+    };
+    const pendingRows: PendingImportRow[] = [];
 
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
@@ -414,55 +498,57 @@ export async function importMaterialsCsvHandler(
         continue;
       }
 
-      // Check duplicate
-      const { count } = await serviceRoleClient
-        .schema("erp_master")
-        .from("material_master")
-        .select("id", { count: "exact", head: true })
-        .ilike("material_name", materialName);
-      if ((count ?? 0) > 0) {
+      const nameKey = materialName.toLowerCase();
+      if (nameIndex.has(nameKey)) {
         results.push({ row: i, material_name: materialName, pace_code: null, status: "DUPLICATE", error: "Material name already exists" });
         continue;
       }
-
-      const { data: materialCode, error: codeError } = await serviceRoleClient
-        .rpc("generate_material_pace_code", { p_material_type: materialType });
-      if (codeError || !materialCode) {
-        results.push({ row: i, material_name: materialName, pace_code: null, status: "ERROR", error: "Failed to generate PACE code" });
-        continue;
-      }
-
-      const { data, error } = await serviceRoleClient
-        .schema("erp_master")
-        .from("material_master")
-        .insert({
-          pace_code: String(materialCode),
-          material_name: materialName,
-          document_name: (row["document_name"] ?? "").trim() || null,
-          short_name: materialName,
-          material_type: materialType,
-          material_category: (row["material_category"] ?? "").trim() || null,
-          external_code: (row["external_code"] ?? "").trim() || null,
-          base_uom_code: baseUomCode,
-          purchase_uom_code: (row["purchase_uom_code"] ?? "").trim().toUpperCase() || null,
-          issue_uom_code: (row["issue_uom_code"] ?? "").trim().toUpperCase() || null,
-          hsn_code: (row["hsn_code"] ?? "").trim() || null,
-          qa_required_on_inward: true,
-          valuation_method: "WEIGHTED_AVERAGE",
-          status: "ACTIVE",
-          approved_by: ctx.auth_user_id,
-          approved_at: new Date().toISOString(),
-          created_by: ctx.auth_user_id,
-        })
-        .select("pace_code")
-        .single();
-
-      if (error || !data) {
-        results.push({ row: i, material_name: materialName, pace_code: null, status: "ERROR", error: "Insert failed" });
-      } else {
-        results.push({ row: i, material_name: materialName, pace_code: String((data as Record<string, unknown>).pace_code ?? ""), status: "CREATED", error: null });
-      }
+      nameIndex.set(nameKey, "PENDING");
+      pendingRows.push({ row: i, materialName, materialType, baseUomCode, cols: row });
     }
+
+    const outcomes = await Promise.all(
+      pendingRows.map(async ({ row, materialName, materialType, baseUomCode, cols }): Promise<ImportResult> => {
+        const { data: materialCode, error: codeError } = await serviceRoleClient
+          .rpc("generate_material_pace_code", { p_material_type: materialType });
+        if (codeError || !materialCode) {
+          return { row, material_name: materialName, pace_code: null, status: "ERROR", error: "Failed to generate PACE code" };
+        }
+
+        const { data, error } = await serviceRoleClient
+          .schema("erp_master")
+          .from("material_master")
+          .insert({
+            pace_code: String(materialCode),
+            material_name: materialName,
+            document_name: (cols["document_name"] ?? "").trim() || null,
+            short_name: materialName,
+            material_type: materialType,
+            material_category: (cols["material_category"] ?? "").trim() || null,
+            external_code: (cols["external_code"] ?? "").trim() || null,
+            base_uom_code: baseUomCode,
+            purchase_uom_code: (cols["purchase_uom_code"] ?? "").trim().toUpperCase() || null,
+            issue_uom_code: (cols["issue_uom_code"] ?? "").trim().toUpperCase() || null,
+            hsn_code: (cols["hsn_code"] ?? "").trim() || null,
+            qa_required_on_inward: true,
+            valuation_method: "WEIGHTED_AVERAGE",
+            status: "ACTIVE",
+            approved_by: ctx.auth_user_id,
+            approved_at: new Date().toISOString(),
+            created_by: ctx.auth_user_id,
+          })
+          .select("pace_code")
+          .single();
+
+        if (error || !data) {
+          return { row, material_name: materialName, pace_code: null, status: "ERROR", error: "Insert failed" };
+        }
+        return { row, material_name: materialName, pace_code: String((data as Record<string, unknown>).pace_code ?? ""), status: "CREATED", error: null };
+      }),
+    );
+
+    results.push(...outcomes);
+    results.sort((a, b) => a.row - b.row);
 
     return okResponse({ results }, ctx.request_id, req);
   } catch (err) {

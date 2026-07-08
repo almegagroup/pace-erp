@@ -1166,12 +1166,11 @@ export async function postSalesInvoiceHandler(
       return salesErrorResponse(req, ctx, "SALES_INVOICE_EMPTY", 400, "Sales invoice has no lines.");
     }
 
-    let totalTaxableValue = 0;
-    let totalCgstAmount = 0;
-    let totalSgstAmount = 0;
-    let totalIgstAmount = 0;
-
-    for (const line of lines) {
+    // Per-line recompute is independent (each line's totals only depend on its own
+    // quantity/rate/gst_rate, already fetched) — compute all lines synchronously
+    // first, then fire the per-line updates in parallel, then sum in-memory
+    // (addition is order-independent, unlike a DB-read running balance).
+    const lineComputations = lines.map((line) => {
       const quantity = parsePositiveNumber(line.quantity) ?? 0;
       const rate = parsePositiveNumber(line.rate) ?? 0;
       const taxableValue = Number((quantity * rate).toFixed(4));
@@ -1181,23 +1180,36 @@ export async function postSalesInvoiceHandler(
       const sgstAmount = toUpperTrimmedString(invoice.gst_type) === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : null;
       const igstAmount = toUpperTrimmedString(invoice.gst_type) === "IGST" ? gstAmount : null;
       const lineTotal = Number((taxableValue + gstAmount).toFixed(4));
+      return { line, taxableValue, cgstAmount, sgstAmount, igstAmount, lineTotal };
+    });
 
-      const { error: lineUpdateError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("sales_invoice_line")
-        .update({
-          taxable_value: taxableValue,
-          cgst_amount: cgstAmount,
-          sgst_amount: sgstAmount,
-          igst_amount: igstAmount,
-          line_total: lineTotal,
-        })
-        .eq("id", String(line.id));
+    const lineUpdateErrors = await Promise.all(
+      lineComputations.map(async ({ line, taxableValue, cgstAmount, sgstAmount, igstAmount, lineTotal }) => {
+        const { error } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("sales_invoice_line")
+          .update({
+            taxable_value: taxableValue,
+            cgst_amount: cgstAmount,
+            sgst_amount: sgstAmount,
+            igst_amount: igstAmount,
+            line_total: lineTotal,
+          })
+          .eq("id", String(line.id));
+        return error;
+      }),
+    );
 
-      if (lineUpdateError) {
-        return salesErrorResponse(req, ctx, "SALES_INVOICE_LINE_UPDATE_FAILED", 500, "Unable to recompute sales invoice line totals.");
-      }
+    if (lineUpdateErrors.some(Boolean)) {
+      return salesErrorResponse(req, ctx, "SALES_INVOICE_LINE_UPDATE_FAILED", 500, "Unable to recompute sales invoice line totals.");
+    }
 
+    let totalTaxableValue = 0;
+    let totalCgstAmount = 0;
+    let totalSgstAmount = 0;
+    let totalIgstAmount = 0;
+
+    for (const { taxableValue, cgstAmount, sgstAmount, igstAmount } of lineComputations) {
       totalTaxableValue += taxableValue;
       totalCgstAmount += cgstAmount ?? 0;
       totalSgstAmount += sgstAmount ?? 0;
