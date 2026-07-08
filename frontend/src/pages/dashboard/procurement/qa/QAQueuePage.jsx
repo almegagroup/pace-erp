@@ -6,6 +6,7 @@ import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import {
   addQATestLine,
   createQaCategoryTestConfig,
@@ -23,10 +24,7 @@ import {
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
-import {
-  useMaterialOptionsQuery,
-  useStorageLocationOptionsQuery,
-} from "../../../../hooks/queries/useOmMasterQueries.js";
+import { useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const LIMIT = 50;
 const QA_MANAGER_ROLE_CODES = new Set(["SA", "DIRECTOR", "PROCUREMENT_HEAD", "STORE_MANAGER"]);
@@ -118,6 +116,13 @@ export default function QAQueuePage() {
   );
   const materials = materialQuery.materials;
   const loading = queueQuery.isLoading || grnsQuery.isLoading || materialQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void Promise.all([queueQuery.refetch(), grnsQuery.refetch(), materialQuery.refetch()]),
+    },
+  });
 
   useEffect(() => {
     setPage(1);
@@ -387,7 +392,6 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged, onColl
     queryFn: () => getGRN(row.grn_id),
     enabled: Boolean(row.grn_id),
   });
-  const storageLocationQuery = useStorageLocationOptionsQuery({ company_id: companyId }, { enabled: Boolean(companyId) });
   const categoryConfigQuery = useQuery({
     queryKey: ["procurement", "qa-category-config", companyId, materialCategory],
     queryFn: () => listQaCategoryTestConfig({ company_id: companyId, material_category: materialCategory }),
@@ -406,7 +410,6 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged, onColl
 
   const detail = detailQuery.data ?? null;
   const grn = grnQuery.data ?? null;
-  const storageLocations = storageLocationQuery.storageLocations;
   const categoryConfigs = useMemo(
     () => (Array.isArray(categoryConfigQuery.data) ? categoryConfigQuery.data : []),
     [categoryConfigQuery.data],
@@ -421,11 +424,10 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged, onColl
   );
 
   const loading = detailQuery.isLoading || grnQuery.isLoading;
-  const grnLine = (grn?.lines ?? []).find((line) => line.id === row.grn_line_id) || grn?.lines?.[0] || null;
-  const storageLocationLabel = useMemo(() => {
-    const loc = storageLocations.find((entry) => entry.id === grnLine?.storage_location_id);
-    return loc?.storage_location_name || loc?.storage_location_code || grnLine?.storage_location_id || "—";
-  }, [grnLine?.storage_location_id, storageLocations]);
+  // hydrateGrn (grn.handlers.ts) already resolves this server-side for both the old
+  // (goods_receipt_line-based) and new (flat goods_receipt row) GRN shapes — no client
+  // lookup needed.
+  const storageLocationLabel = grn?.location_name || grn?.location_code || grn?.storage_location_id || "—";
 
   const testLines = Array.isArray(detail?.test_lines) ? detail.test_lines : [];
   const decisionLines = Array.isArray(detail?.decision_lines) ? detail.decision_lines : [];

@@ -210,32 +210,25 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
   };
 }
 
-async function fetchGrnContextForQa(qaDocument: QaDocumentRow): Promise<{ grn: Record<string, unknown>; grnLine: Record<string, unknown> }> {
-  const [grnResp, grnLineResp] = await Promise.all([
-    serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
-      .select("*")
-      .eq("id", String(qaDocument.grn_id))
-      .single(),
-    serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt_line")
-      .select("*")
-      .eq("id", String(qaDocument.grn_line_id))
-      .single(),
-  ]);
+// goods_receipt is a flat one-row-per-line table (material_id, uom_code, grn_rate,
+// storage_location_id all live on the header row itself) — there is no separate
+// goods_receipt_line row to join against for GRNs created via the from-line flow, so
+// inward_qa_document.grn_line_id is legitimately NULL for those. Read everything QA needs
+// straight off goods_receipt instead of depending on a line record that may not exist.
+async function fetchGrnContextForQa(qaDocument: QaDocumentRow): Promise<{ grn: Record<string, unknown> }> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("goods_receipt")
+    .select("*")
+    .eq("id", String(qaDocument.grn_id))
+    .single();
 
-  if (grnResp.error || !grnResp.data) {
-    logDbError("fetchGrnContextForQa grn", grnResp.error);
-    throw new ApiError(500, grnResp.error?.message || "Unable to fetch linked GRN");
-  }
-  if (grnLineResp.error || !grnLineResp.data) {
-    logDbError("fetchGrnContextForQa grnLine", grnLineResp.error);
-    throw new ApiError(500, grnLineResp.error?.message || "Unable to fetch linked GRN line");
+  if (error || !data) {
+    logDbError("fetchGrnContextForQa grn", error);
+    throw new ApiError(500, error?.message || "Unable to fetch linked GRN");
   }
 
-  return { grn: grnResp.data, grnLine: grnLineResp.data };
+  return { grn: data };
 }
 
 async function getNextTestLineNumber(qaDocumentId: string): Promise<number> {
@@ -713,14 +706,14 @@ export async function submitUsageDecisionHandler(
       );
     }
 
-    const { grnLine } = await fetchGrnContextForQa(qaDocument);
-    const storageLocationId = toTrimmedString(grnLine.storage_location_id);
+    const { grn } = await fetchGrnContextForQa(qaDocument);
+    const storageLocationId = toTrimmedString(grn.storage_location_id);
     if (!storageLocationId) {
-      throw new ApiError(500, "GRN line has no storage location — cannot post QA decision");
+      throw new ApiError(500, "GRN has no storage location — cannot post QA decision");
     }
 
-    const baseUom = toTrimmedString(qaDocument.uom_code || grnLine.uom_code);
-    const unitValue = Number(grnLine.grn_rate ?? 0);
+    const baseUom = toTrimmedString(qaDocument.uom_code || grn.uom_code);
+    const unitValue = Number(grn.grn_rate ?? 0);
     const companyId = String(qaDocument.company_id);
     let nextLineNumber = await getNextDecisionLineNumber(qaDocumentId);
     const createdDecisionLines: JsonRecord[] = [];
