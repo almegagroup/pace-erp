@@ -131,7 +131,7 @@ async function fetchMaterial(materialId: string): Promise<MaterialRow> {
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, material_code, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, fifo_tracking_enabled, expiry_tracking_enabled")
+    .select("id, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled")
     .eq("id", materialId)
     .single();
   if (error || !data) throw new Error("MATERIAL_NOT_FOUND");
@@ -580,6 +580,15 @@ export async function createAndPostGRNFromLineHandler(
       return procurementErrorResponse(req, ctx, "GRN_DISCREPANCY_REMARKS_REQUIRED", 400, "Remarks are required when received qty differs from invoice qty.");
     }
 
+    // UOM conversion: if PO UOM ≠ base UOM, stock qty = received_qty × per_pack_qty
+    const baseUomCode = toTrimmedString(material.base_uom_code) || toTrimmedString(geLine.uom_code);
+    const poUomCode = toTrimmedString(geLine.uom_code) || baseUomCode;
+    const uomMismatch = baseUomCode && poUomCode && baseUomCode !== poUomCode;
+    const perPackQty = parseNullableNumber(body.per_pack_qty);
+    const stockQty = uomMismatch && perPackQty && perPackQty > 0
+      ? Number((receivedQty * perPackQty).toFixed(6))
+      : receivedQty;
+
     const targetStockType: string = material.qa_required_on_inward ? "QA_STOCK" : "UNRESTRICTED";
 
     // Storage location
@@ -680,8 +689,8 @@ export async function createAndPostGRNFromLineHandler(
         p_company_id: gateEntry.company_id,
         p_storage_location_id: storageLocationId,
         p_material_id: geLine.material_id,
-        p_quantity: receivedQty,
-        p_base_uom_code: material.base_uom_code ?? geLine.uom_code,
+        p_quantity: stockQty,
+        p_base_uom_code: baseUomCode,
         p_unit_value: effectiveGrnRate,
         p_stock_type_code: targetStockType,
         p_direction: "IN",
@@ -726,8 +735,8 @@ export async function createAndPostGRNFromLineHandler(
       await createQaDocumentForGrn(
         ctx, grn as GrnRow,
         String(geLine.material_id),
-        receivedQty,
-        String(grn.uom_code ?? material.base_uom_code),
+        stockQty,
+        baseUomCode,
         targetStockType,
         toTrimmedString(grn.batch_lot_number) || null,
         geLine.po_line_id ? String(geLine.po_line_id) : null,

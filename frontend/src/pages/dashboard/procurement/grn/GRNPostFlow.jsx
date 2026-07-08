@@ -215,6 +215,9 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
   const geQty = Number(geLine.ge_qty ?? 0);
   const receivedQtyNum = Number(receivedQty) || 0;
   const discrepancy = Number((geQty - receivedQtyNum).toFixed(6));
+  const uomMismatch = geLine.base_uom_code && geLine.uom_code && geLine.base_uom_code !== geLine.uom_code;
+  const perPackQtyNum = Number(perPackQty) || 0;
+  const stockQtyPreview = uomMismatch && perPackQtyNum > 0 ? Number((receivedQtyNum * perPackQtyNum).toFixed(6)) : null;
 
   // Doc name suggestions
   const docNamesQuery = useQuery({
@@ -352,7 +355,25 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
                   onChange={setStorageLocationId}
                 />
               </ErpDenseFormRow>
+              {uomMismatch && (
+                <ErpDenseFormRow label={<>Per-pack qty <span className="text-[10px] text-slate-400">({geLine.uom_code} → {geLine.base_uom_code})</span></>}>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.001"
+                    placeholder={`How many ${geLine.base_uom_code} per ${geLine.uom_code}?`}
+                    value={perPackQty}
+                    onChange={(e) => setPerPackQty(e.target.value)}
+                    className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
+                  />
+                </ErpDenseFormRow>
+              )}
             </div>
+            {uomMismatch && stockQtyPreview != null && (
+              <div className="mt-3 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                Stock qty: <strong>{receivedQtyNum} {geLine.uom_code} × {perPackQtyNum} = {stockQtyPreview} {geLine.base_uom_code}</strong>
+              </div>
+            )}
             {discrepancy !== 0 && (
               <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3">
                 <p className="text-xs font-medium text-amber-800 mb-1">Discrepancy detected — remarks required</p>
@@ -548,7 +569,7 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
                               No match found.
                               {canManageTransporters ? (
                                 <button
-                                  onClick={() => navigate("/dashboard/procurement/masters/transporters")}
+                                  onClick={() => window.open("/dashboard/procurement/masters/transporters", "_blank")}
                                   className="ml-2 text-sky-600 underline text-sm"
                                 >
                                   Add to Transporter Master →
@@ -589,10 +610,6 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
         {activeTab === 6 && (
           <ErpSectionCard eyebrow="Pack & shelf life" title="Packaging & expiry">
             <div className="grid gap-3 md:grid-cols-3">
-              <ErpDenseFormRow label="Per-pack qty">
-                <input type="number" min="0" step="0.001" value={perPackQty} onChange={(e) => setPerPackQty(e.target.value)}
-                  className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-              </ErpDenseFormRow>
               <ErpDenseFormRow label={geLine.batch_tracking_required ? <>Batch / lot number <span className="text-red-500">*</span></> : "Batch / lot number"}>
                 <input type="text" value={batchLotNumber} onChange={(e) => setBatchLotNumber(e.target.value)}
                   className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
@@ -643,12 +660,14 @@ export default function GRNPostFlow() {
     setGeData(data);
     setSuccessNotice("");
     setScreen("ge-lines");
+    window.scrollTo(0, 0);
   }
 
   function handleLineSelected(line) {
     setSelectedLine(line);
     setSuccessNotice("");
     setScreen("grn-form");
+    window.scrollTo(0, 0);
   }
 
   function handlePosted(postedGrn) {
@@ -660,13 +679,16 @@ export default function GRNPostFlow() {
         setGeData(freshData);
         setSuccessNotice(`${postedGrn.grn_number} posted successfully.`);
         setScreen("ge-lines");
+        window.scrollTo(0, 0);
       }).catch(() => {
         setSuccessNotice(`${postedGrn.grn_number} posted successfully.`);
         setScreen("ge-lines");
+        window.scrollTo(0, 0);
       });
     } else {
       setSuccessNotice("GRN posted successfully.");
       setScreen("ge-lines");
+      window.scrollTo(0, 0);
     }
   }
 
@@ -679,7 +701,7 @@ export default function GRNPostFlow() {
       <GELinesScreen
         geData={geData}
         onSelectLine={handleLineSelected}
-        onBack={() => setScreen("ge-entry")}
+        onBack={() => { setScreen("ge-entry"); window.scrollTo(0, 0); }}
         successNotice={successNotice}
         onDismissNotice={() => setSuccessNotice("")}
       />
@@ -692,7 +714,7 @@ export default function GRNPostFlow() {
         geLine={selectedLine}
         geHeader={geData.gate_entry}
         onPosted={handlePosted}
-        onCancel={() => setScreen("ge-lines")}
+        onCancel={() => { setScreen("ge-lines"); window.scrollTo(0, 0); }}
       />
     );
   }
