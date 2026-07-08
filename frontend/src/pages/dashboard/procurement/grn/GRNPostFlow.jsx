@@ -68,7 +68,7 @@ function GENumberEntryScreen({ onLoad }) {
               <button
                 onClick={() => void handleLoad()}
                 disabled={loading}
-                className="h-9 px-4 bg-sky-50 text-sky-700 border border-sky-300 text-sm font-medium rounded hover:bg-sky-100 disabled:opacity-50"
+                className="h-9 px-4 min-w-[90px] whitespace-nowrap bg-sky-50 text-sky-700 border border-sky-300 text-sm font-medium rounded hover:bg-sky-100 disabled:opacity-50"
               >
                 {loading ? "Loading…" : "Load (F8)"}
               </button>
