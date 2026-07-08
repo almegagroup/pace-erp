@@ -497,10 +497,6 @@ export function getQADocument(id) {
   return fetchProcurement("GET", `/api/procurement/qa-documents/${encodeURIComponent(id)}`);
 }
 
-export function assignQAOfficer(id, data) {
-  return fetchProcurement("POST", `/api/procurement/qa-documents/${encodeURIComponent(id)}/assign`, data);
-}
-
 export function addQATestLine(id, data) {
   return fetchProcurement("POST", `/api/procurement/qa-documents/${encodeURIComponent(id)}/test-lines`, data);
 }

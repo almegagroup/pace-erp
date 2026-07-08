@@ -87,7 +87,6 @@ import {
   addTestLineHandler,
   deleteTestLineHandler,
   getQADocumentHandler,
-  assignQAOfficerHandler,
   listQADocumentsHandler,
   submitUsageDecisionHandler,
   updateTestLineHandler,
@@ -916,10 +915,6 @@ export async function dispatchProcurementRoutes(
     if (req.method === "GET") {
       return await getQADocumentHandler(req, ctx);
     }
-  }
-
-  if (/^\/api\/procurement\/qa-documents\/[^/]+\/assign$/.test(pathname) && req.method === "POST") {
-    return await assignQAOfficerHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/qa-documents\/[^/]+\/test-lines$/.test(pathname) && req.method === "POST") {

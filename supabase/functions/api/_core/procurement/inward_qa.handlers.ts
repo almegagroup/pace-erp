@@ -330,7 +330,7 @@ export async function listQADocumentsHandler(
       .schema("erp_procurement")
       .from("inward_qa_document")
       .select(
-        "id, qa_number, grn_id, grn_line_id, material_id, vendor_id, qa_stock_qty, uom_code, status, assigned_to, qa_created_at, company_id",
+        "id, qa_number, grn_id, grn_line_id, material_id, vendor_id, qa_stock_qty, uom_code, status, qa_created_at, company_id",
       )
       .order("qa_created_at", { ascending: false })
       .limit(limit);
@@ -422,63 +422,6 @@ export async function getQADocumentHandler(
     const message = error instanceof Error ? error.message : "Unable to fetch QA document";
     const status = error instanceof ApiError ? error.status : 500;
     return qaErrorResponse(req, ctx, "QA_FETCH_FAILED", status, message);
-  }
-}
-
-export async function assignQAOfficerHandler(
-  req: Request,
-  ctx: QAHandlerContext,
-): Promise<Response> {
-  try {
-    assertQARole(ctx);
-    const qaDocumentId = getQaIdFromPath(req);
-    if (!qaDocumentId) {
-      throw new ApiError(400, "QA document id is required");
-    }
-
-    const qaDocument = await fetchQaDocument(qaDocumentId);
-    assertQaCompanyScope(ctx, qaDocument);
-    if (!QA_DOC_MUTABLE_STATUSES.has(toUpperTrimmedString(qaDocument.status))) {
-      throw new ApiError(409, "QA document is not assignable");
-    }
-
-    const body = await parseBody(req);
-    const assignedTo = toTrimmedString(body.assigned_to);
-    if (!assignedTo) {
-      throw new ApiError(400, "assigned_to is required");
-    }
-
-    const { data, error } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("inward_qa_document")
-      .update({
-        assigned_to: assignedTo,
-        status: "IN_PROGRESS",
-        last_updated_at: new Date().toISOString(),
-        last_updated_by: ctx.auth_user_id,
-      })
-      .eq("id", qaDocumentId)
-      .select("*")
-      .single();
-
-    if (error || !data) {
-      throw new ApiError(500, "Unable to assign QA officer");
-    }
-
-    return okResponse(
-      {
-        ...data,
-        qa_doc_number: data.qa_number,
-        total_qty: data.qa_stock_qty,
-        public_status: mapQaStatusForResponse(data.status),
-      },
-      ctx.request_id,
-      req,
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to assign QA officer";
-    const status = error instanceof ApiError ? error.status : 500;
-    return qaErrorResponse(req, ctx, "QA_ASSIGN_FAILED", status, message);
   }
 }
 

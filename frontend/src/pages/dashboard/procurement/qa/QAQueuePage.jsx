@@ -8,7 +8,6 @@ import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import {
   addQATestLine,
-  assignQAOfficer,
   createQaCategoryTestConfig,
   createQaTestMethod,
   deleteQaCategoryTestConfig,
@@ -84,15 +83,11 @@ export default function QAQueuePage() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
-  const [assignmentFilter, setAssignmentFilter] = useState("ALL");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
   const [expandedRowId, setExpandedRowId] = useState("");
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-
-  const myAssignee = shellProfile?.userCode || "";
 
   const queueQuery = useQuery({
     queryKey: ["procurement", "qa-queue", companyId || null, statusFilter, dateFrom, dateTo],
@@ -123,7 +118,7 @@ export default function QAQueuePage() {
 
   useEffect(() => {
     setPage(1);
-  }, [assignmentFilter, search, statusFilter, dateFrom, dateTo]);
+  }, [search, statusFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     const nextError = queueQuery.error?.message || grnsQuery.error?.message || materialQuery.error?.message || "";
@@ -149,28 +144,20 @@ export default function QAQueuePage() {
 
   const filteredRows = useMemo(() => {
     const needle = normalizeSearch(search);
-    let nextRows = rows;
-
-    if (assignmentFilter === "MINE" && myAssignee) {
-      nextRows = nextRows.filter((row) => String(row.assigned_to || "") === myAssignee);
-    }
-    if (assignmentFilter === "UNASSIGNED") {
-      nextRows = nextRows.filter((row) => !String(row.assigned_to || "").trim());
-    }
     if (!needle) {
-      return nextRows;
+      return rows;
     }
 
-    return nextRows.filter((row) => {
+    return rows.filter((row) => {
       const grn = grnMap.get(row.grn_id);
       const material = materialMap.get(row.material_id);
-      const haystack = [row.qa_doc_number, grn?.grn_number, material?.material_name, material?.material_code, row.assigned_to]
+      const haystack = [row.qa_doc_number, grn?.grn_number, material?.material_name, material?.material_code]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       return haystack.includes(needle);
     });
-  }, [assignmentFilter, grnMap, materialMap, myAssignee, rows, search]);
+  }, [grnMap, materialMap, rows, search]);
 
   const total = filteredRows.length;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
@@ -182,22 +169,6 @@ export default function QAQueuePage() {
   const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
 
-  async function handleAssignToMe(row) {
-    if (!myAssignee) {
-      setError("Current user identity is unavailable for assignment.");
-      return;
-    }
-    setError("");
-    setNotice("");
-    try {
-      await assignQAOfficer(row.id, { assigned_to: myAssignee });
-      setNotice(`${row.qa_doc_number || "QA document"} assigned to you.`);
-      await queueQuery.refetch();
-    } catch (assignError) {
-      setError(assignError instanceof Error ? assignError.message : "PROCUREMENT_QA_ASSIGN_FAILED");
-    }
-  }
-
   function toggleExpand(rowId) {
     setExpandedRowId((current) => (current === rowId ? "" : rowId));
   }
@@ -207,7 +178,6 @@ export default function QAQueuePage() {
     { key: "material", label: "Material" },
     { key: "category", label: "Category", width: "140px" },
     { key: "qty", label: "Quantity", width: "170px" },
-    { key: "assigned_to", label: "Assigned To", width: "150px" },
     { key: "status", label: "Status", width: "130px" },
     { key: "expand", label: "", width: "40px" },
   ];
@@ -226,7 +196,6 @@ export default function QAQueuePage() {
       ]}
       notices={[
         ...(error ? [{ key: "qa-queue-error", tone: "error", message: error }] : []),
-        ...(notice ? [{ key: "qa-queue-notice", tone: "success", message: notice }] : []),
       ]}
       filterSection={{
         eyebrow: "Queue Filters",
@@ -269,18 +238,6 @@ export default function QAQueuePage() {
                 <option value="PENDING">PENDING</option>
                 <option value="IN_PROGRESS">IN_PROGRESS</option>
                 <option value="DECISION_MADE">DECISION_MADE</option>
-              </select>
-            </label>
-            <label className="grid w-40 gap-1 text-[11px] font-medium text-slate-600">
-              Assignment
-              <select
-                value={assignmentFilter}
-                onChange={(event) => setAssignmentFilter(event.target.value)}
-                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-              >
-                <option value="ALL">ALL</option>
-                <option value="MINE">MY WORK</option>
-                <option value="UNASSIGNED">UNASSIGNED</option>
               </select>
             </label>
             <label className="grid w-36 gap-1 text-[11px] font-medium text-slate-600">
@@ -365,24 +322,6 @@ export default function QAQueuePage() {
                                   {remaining} pending
                                 </span>
                               ) : null}
-                            </td>
-                            <td className="px-2 py-1.5">
-                              {row.assigned_to ? (
-                                row.assigned_to
-                              ) : ["PENDING", "IN_PROGRESS"].includes(String(row.public_status || "").toUpperCase()) ? (
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    void handleAssignToMe(row);
-                                  }}
-                                  className="border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900"
-                                >
-                                  Assign To Me
-                                </button>
-                              ) : (
-                                "—"
-                              )}
                             </td>
                             <td className="px-2 py-1.5">
                               <span
