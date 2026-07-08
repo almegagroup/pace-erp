@@ -868,7 +868,7 @@ export async function listGRNsHandler(
 
     let query = serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
-      .select("id, grn_number, grn_date, status, company_id, vendor_id, gate_entry_id, gate_entry_line_id, material_id, received_qty, uom_code, po_id")
+      .select("id, grn_number, grn_date, status, company_id, vendor_id, gate_entry_id, gate_entry_line_id, material_id, received_qty, uom_code, po_id, invoice_number, invoice_date, transporter_id, lr_number, lr_date")
       .order("grn_date", { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -890,8 +890,9 @@ export async function listGRNsHandler(
     const vendorIds = [...new Set(rows.map((r) => String(r.vendor_id ?? "")).filter(Boolean))];
     const materialIds = [...new Set(rows.map((r) => String(r.material_id ?? "")).filter(Boolean))];
     const geIds = [...new Set(rows.map((r) => String(r.gate_entry_id ?? "")).filter(Boolean))];
+    const transporterIds = [...new Set(rows.map((r) => String(r.transporter_id ?? "")).filter(Boolean))];
 
-    const [vendorResp, matResp, geResp] = await Promise.all([
+    const [vendorResp, matResp, geResp, transporterResp] = await Promise.all([
       vendorIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("vendor_master")
             .select("id, vendor_code, vendor_name").in("id", vendorIds)
@@ -903,6 +904,10 @@ export async function listGRNsHandler(
       geIds.length > 0
         ? serviceRoleClient.schema("erp_procurement").from("gate_entry")
             .select("id, ge_number").in("id", geIds)
+        : { data: [], error: null },
+      transporterIds.length > 0
+        ? serviceRoleClient.schema("erp_master").from("transporter_master")
+            .select("id, transporter_code, transporter_name").in("id", transporterIds)
         : { data: [], error: null },
     ]);
 
@@ -922,11 +927,13 @@ export async function listGRNsHandler(
     const vendorMap = new Map((vendorResp.data ?? []).map((v: JsonRecord) => [v.id, v]));
     const matMap = new Map((matResp.data ?? []).map((m: JsonRecord) => [m.id, m]));
     const geMap = new Map((geResp.data ?? []).map((g: JsonRecord) => [g.id, g]));
+    const transporterMap = new Map((transporterResp.data ?? []).map((t: JsonRecord) => [t.id, t]));
 
     const enriched = rows.map((r) => {
       const vendor = vendorMap.get(String(r.vendor_id));
       const mat = matMap.get(String(r.material_id));
       const ge = geMap.get(String(r.gate_entry_id));
+      const transporter = transporterMap.get(String(r.transporter_id));
       const isNewStyle = Boolean(r.gate_entry_line_id);
       const totalQty = isNewStyle
         ? (parseNullableNumber(r.received_qty) ?? 0)
@@ -938,11 +945,17 @@ export async function listGRNsHandler(
         status: r.status,
         vendor_code: vendor?.vendor_code ?? null,
         vendor_name: vendor?.vendor_name ?? null,
-        pace_code: mat?.pace_code ?? null,
+        material_code: mat?.pace_code ?? null,
         material_name: mat?.material_name ?? null,
         ge_number: ge?.ge_number ?? null,
         received_qty: Number(totalQty.toFixed(6)),
         uom_code: r.uom_code ?? null,
+        invoice_number: r.invoice_number ?? null,
+        invoice_date: r.invoice_date ?? null,
+        transporter_code: transporter?.transporter_code ?? null,
+        transporter_name: transporter?.transporter_name ?? null,
+        lr_number: r.lr_number ?? null,
+        lr_date: r.lr_date ?? null,
       };
     });
 

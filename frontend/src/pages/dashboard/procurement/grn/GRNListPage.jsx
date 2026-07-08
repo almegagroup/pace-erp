@@ -168,44 +168,45 @@ export default function GRNListPage() {
             />
             <ErpDenseGrid
               columns={[
-                { key: "grn_number", label: "GRN Number", width: "140px" },
-                { key: "grn_date", label: "GRN Date", width: "110px" },
-                { key: "ge_number", label: "GE Number", width: "120px", render: (row) => row.ge_number || "—" },
+                { key: "grn_number", label: "GRN Number", width: "120px" },
+                { key: "material_code", label: "Material Code", width: "130px", render: (row) => row.material_code || "—" },
+                { key: "material_name", label: "Material Name", render: (row) => row.material_name || "—" },
                 {
                   key: "vendor",
                   label: "Vendor",
-                  width: "200px",
+                  width: "180px",
                   render: (row) =>
                     row.vendor_name
                       ? `${row.vendor_code || ""} — ${row.vendor_name}`.replace(/^( — )/, "")
                       : "—",
                 },
                 {
-                  key: "material",
-                  label: "Material",
-                  render: (row) =>
-                    row.material_name
-                      ? (
-                        <span>
-                          <span className="font-medium">{row.material_code}</span>
-                          <span className="text-slate-500"> — {row.material_name}</span>
-                        </span>
-                      )
-                      : "—",
-                },
-                {
                   key: "received_qty",
-                  label: "Received qty",
-                  width: "120px",
+                  label: "Received Qty",
+                  width: "110px",
                   render: (row) =>
                     row.received_qty != null
                       ? `${Number(row.received_qty).toFixed(3)} ${row.uom_code || ""}`.trim()
                       : "—",
                 },
+                { key: "invoice_number", label: "Invoice No.", width: "120px", render: (row) => row.invoice_number || "—" },
+                { key: "grn_date", label: "GRN Date", width: "100px" },
+                { key: "invoice_date", label: "Invoice Date", width: "100px", render: (row) => row.invoice_date || "—" },
+                {
+                  key: "transporter",
+                  label: "Transporter",
+                  width: "160px",
+                  render: (row) =>
+                    row.transporter_name
+                      ? `${row.transporter_code || ""} — ${row.transporter_name}`.replace(/^( — )/, "")
+                      : "—",
+                },
+                { key: "lr_number", label: "LR Number", width: "110px", render: (row) => row.lr_number || "—" },
+                { key: "lr_date", label: "LR Date", width: "100px", render: (row) => row.lr_date || "—" },
                 {
                   key: "status",
                   label: "Status",
-                  width: "100px",
+                  width: "90px",
                   render: (row) => (
                     <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusTone(row.status)}`}>
                       {row.status}
