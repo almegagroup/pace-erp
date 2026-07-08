@@ -94,6 +94,7 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/gate-entries/create",     "/dashboard/procurement/gate-entries/:id"],
     ["/dashboard/procurement/gate-entries",            "/dashboard/procurement/gate-exits/inbound/:id"],
     ["/dashboard/procurement/grns",                    "/dashboard/procurement/grns/:id"],
+    ["/dashboard/procurement/grns",                    "/dashboard/procurement/grns/post"],
     ["/dashboard/procurement/qa-queue",                "/dashboard/procurement/qa-documents/:id"],
     ["/dashboard/procurement/stos",                    "/dashboard/procurement/stos/:id"],
     ["/dashboard/procurement/stos/create",             "/dashboard/procurement/stos/:id"],
