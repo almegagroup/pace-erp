@@ -429,6 +429,27 @@ export async function getGELinesForGRNHandler(
     const csnMap = new Map((csnResp.data ?? []).map((c: JsonRecord) => [c.id, c]));
     const grnByLineId = new Map((existingGrnResp.data ?? []).map((g: JsonRecord) => [g.gate_entry_line_id, g]));
 
+    // Bulk fetch UOM conversions for lines where PO UOM ≠ base UOM
+    const uomMismatchMatIds = [...new Set(linesList
+      .filter((l) => {
+        const mat = matMap.get(String(l.material_id));
+        return mat && mat.base_uom_code && l.uom_code && mat.base_uom_code !== l.uom_code;
+      })
+      .map((l) => String(l.material_id))
+    )];
+    const uomConvResp = uomMismatchMatIds.length > 0
+      ? await serviceRoleClient.schema("erp_master").from("material_uom_conversion")
+          .select("material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion")
+          .in("material_id", uomMismatchMatIds)
+          .eq("active", true)
+      : { data: [] };
+    // Key: `materialId|fromUom|toUom`
+    const uomConvMap = new Map(
+      (uomConvResp.data ?? []).map((c: JsonRecord) =>
+        [`${c.material_id}|${c.from_uom_code}|${c.to_uom_code}`, c]
+      )
+    );
+
     const resolvedLines = linesList.map((l) => {
       const mat = matMap.get(String(l.material_id));
       const poLine = l.po_line_id ? poLineMap.get(String(l.po_line_id)) : null;
@@ -441,11 +462,17 @@ export async function getGELinesForGRNHandler(
         : existingGrn && existingGrn.status === "DRAFT"
         ? "DRAFT"
         : "PENDING";
+      const baseUomCode = mat?.base_uom_code ?? null;
+      const poUomCode = toTrimmedString(l.uom_code) || null;
+      const convKey = `${l.material_id}|${poUomCode}|${baseUomCode}`;
+      const conv = (baseUomCode && poUomCode && baseUomCode !== poUomCode)
+        ? uomConvMap.get(convKey) ?? null
+        : null;
       return {
         ...l,
         material_name: mat?.material_name ?? null,
         external_sku: mat?.external_sku ?? null,
-        base_uom_code: mat?.base_uom_code ?? null,
+        base_uom_code: baseUomCode,
         qa_required_on_inward: mat?.qa_required_on_inward ?? false,
         batch_tracking_required: mat?.batch_tracking_required ?? false,
         expiry_tracking_enabled: mat?.expiry_tracking_enabled ?? false,
@@ -462,6 +489,8 @@ export async function getGELinesForGRNHandler(
         line_grn_status: lineGrnStatus,
         existing_grn_number: existingGrn?.grn_number ?? null,
         existing_grn_id: existingGrn?.id ?? null,
+        uom_conversion_factor: conv ? Number(conv.conversion_factor) : null,
+        uom_variable_conversion: conv ? Boolean(conv.variable_conversion) : null,
       };
     });
 

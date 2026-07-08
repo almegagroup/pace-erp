@@ -205,7 +205,9 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
   const [lrNumber, setLrNumber] = useState(geLine.csn_lr_number ?? "");
   const [lrDate, setLrDate] = useState(geLine.csn_lr_date ?? "");
   const [batchLotNumber, setBatchLotNumber] = useState("");
-  const [perPackQty, setPerPackQty] = useState("");
+  const conversionFactor = geLine.uom_conversion_factor ?? null;
+  const variableConversion = geLine.uom_variable_conversion ?? null;
+  const [perPackQty, setPerPackQty] = useState(conversionFactor != null ? String(conversionFactor) : "");
   const [expiryType, setExpiryType] = useState("N_A");
   const [expiryDate, setExpiryDate] = useState("");
   const [shelfLifeMonths, setShelfLifeMonths] = useState("");
@@ -354,7 +356,18 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
                 />
               </ErpDenseFormRow>
               {uomMismatch && (
-                <ErpDenseFormRow label={<>Per-pack qty <span className="text-[10px] text-slate-400">({geLine.uom_code} → {geLine.base_uom_code})</span></>}>
+                <ErpDenseFormRow label={
+                  <span className="flex items-center gap-1">
+                    Per-pack qty
+                    <span className="text-[10px] text-slate-400">({geLine.uom_code} → {geLine.base_uom_code})</span>
+                    {conversionFactor != null && !variableConversion && (
+                      <span className="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">Material master</span>
+                    )}
+                    {conversionFactor != null && variableConversion && (
+                      <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">Suggested</span>
+                    )}
+                  </span>
+                }>
                   <input
                     type="number"
                     min="0"
@@ -362,7 +375,12 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
                     placeholder={`How many ${geLine.base_uom_code} per ${geLine.uom_code}?`}
                     value={perPackQty}
                     onChange={(e) => setPerPackQty(e.target.value)}
-                    className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
+                    readOnly={conversionFactor != null && !variableConversion}
+                    className={`h-9 w-full border px-3 text-sm outline-none ${
+                      conversionFactor != null && !variableConversion
+                        ? "border-slate-200 bg-slate-100 text-slate-600 cursor-not-allowed"
+                        : "border-slate-300 bg-white focus:border-sky-500"
+                    }`}
                   />
                 </ErpDenseFormRow>
               )}
