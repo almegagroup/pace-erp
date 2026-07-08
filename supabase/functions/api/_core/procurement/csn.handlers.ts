@@ -1027,6 +1027,7 @@ async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       currency_code: toTrimmedString(poLine?.currency_code) || toTrimmedString(stoLine?.currency_code) || toTrimmedString(stoLine?.transfer_price_currency) || null,
       balance_qty: balanceQty,
       transporter_name: transporter?.transporter_name ?? row.transporter_name_freetext ?? row.domestic_transporter_freetext ?? null,
+      transporter_code: transporter?.transporter_code ?? null,
       cha_name: cha?.cha_name ?? row.cha_name_freetext ?? null,
       payment_term_name: paymentTerm?.name ?? null,
       payment_term_reference_type_code: referenceType?.code ?? null,
