@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -58,6 +58,9 @@ export default function RTVCreatePage() {
     queryKey: ["procurement", "rtv-create-grn-detail", selectedGrnId || null],
     queryFn: () => getGRN(selectedGrnId),
     enabled: Boolean(selectedGrnId),
+    // Switching the selected GRN shouldn't blank the whole step-2 form back to
+    // the loading placeholder — keep the previous GRN on screen meanwhile.
+    placeholderData: keepPreviousData,
   });
   const grnRows = Array.isArray(grnQuery.data?.items) ? grnQuery.data.items : [];
   const vendors = vendorQuery.vendors;
@@ -67,7 +70,7 @@ export default function RTVCreatePage() {
     grnQuery.isLoading ||
     vendorQuery.isLoading ||
     materialQuery.isLoading ||
-    selectedGrnQuery.isLoading;
+    (selectedGrnQuery.isLoading && !selectedGrnQuery.data);
 
   useEffect(() => {
     const nextError =
