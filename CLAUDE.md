@@ -480,6 +480,34 @@ MCP change শুধু যে DB তে run করা হয় সেখান
 
 ---
 
+## 8B. Batch vs Sequential Loop Rule (Mandatory — LOCKED 2026-07-08)
+
+**কেন:** PO confirm, vendor-material list ইত্যাদি page slow হওয়ার root cause খুঁজতে গিয়ে ধরা পড়ে — অনেক handler এ `for`/`for...of` loop এর ভিতরে `await` দিয়ে row-by-row DB/RPC call হয়। Codex দিয়ে পুরো ERP audit করানো হয়েছে (`docs/Codex-Audit-Sequential-Loops.md`, 2026-07-08) — ~50টা এই ধরনের loop পাওয়া গেছে। Blanket "সব batch করো" rule লেখা হয়নি, কারণ কিছু loop এ row-order আসলেই matter করে (stock posting) — সেগুলো batch করলে data corruption হতে পারে।
+
+### প্রতিটা loop লেখার/দেখার সময় আগে classify করো
+
+**INDEPENDENT** — এক iteration এর DB কাজ অন্য iteration এর result/commit এর উপর নির্ভর করে না (আলাদা row, আলাদা material, আলাদা vendor ইত্যাদি validate/insert/update করছে)।
+→ **MUST batch।** Sequential `for...of` + `await` ভিতরে **forbidden**।
+- Read: `.in("id", ids)` দিয়ে একবারে সব fetch করো, তারপর in-memory Map বানাও।
+- Independent write (insert/update/delete, একটার সাথে আরেকটার সম্পর্ক নেই): `Promise.all([...])` দিয়ে parallel করো।
+
+**DEPENDENT** — stock/balance posting, running total, বা iteration N এর correctness iteration N-1 এর committed state এর উপর নির্ভর করে (উদাহরণ: RM/PM issue movement, GRN reversal, RTV/STO dispatch posting, opening stock posting, PI difference posting, QA usage-decision posting)।
+→ Sequential রাখো, কিন্তু loop এর ঠিক উপরে একটা comment দাও: `// DEPENDENT: <কেন order matter করে, এক লাইনে>`। এই comment ছাড়া কোনো DEPENDENT loop merge হবে না — নাহলে পরে কেউ "optimize" করতে গিয়ে race condition/negative stock ঢুকিয়ে দেবে।
+
+### Doc-number / counter function rule
+নতুন কোনো number-series বা counter function বানালে অবশ্যই single atomic `UPDATE ... RETURNING` pattern ব্যবহার করো (যেমন `erp_procurement.generate_doc_number`) — কখনো `SELECT MAX(...)` করে পরে আলাদা `INSERT`/`UPDATE` করবে না। এটাই parallel call কে race-condition-free রাখে।
+
+### Truly atomic multi-step write দরকার হলে
+যদি একটা operation সত্যিই multi-step এবং all-or-nothing হতে হয় (যেমন PO confirm এ N লাইনের CSN create), সেটা TypeScript এ `Promise.all` দিয়ে hand-roll না করে একটা Postgres function (plpgsql) এ পুরো কাজ লিখে একটাই RPC call দিয়ে চালানো ভালো — তাতে network round-trip ও কমে, transaction-level atomicity ও পাওয়া যায়।
+
+### Reference
+`docs/Codex-Audit-Sequential-Loops.md` — existing ~50 loop এর file:line, round-trip count, INDEPENDENT/DEPENDENT classification, severity সহ baseline checklist। নতুন করে re-audit না করে এখান থেকে ধরে ধরে fix করো।
+
+### Enforcement
+Code review এ নতুন `for`/`for...of` loop এ `await` দেখলে সাথে সাথে জিজ্ঞেস করো — এটা INDEPENDENT (batch করতে হবে) না DEPENDENT (comment আছে কিনা চেক করো)। শুধু prose rule যথেষ্ট না, review এ actively গ্রেপ করে ধরতে হবে।
+
+---
+
 ## 9. PACE ERP Build Layers — SAP Equivalent (Design Status)
 
 PACE ERP টা SAP এর equivalent হিসেবে build হচ্ছে। মোট **10টা Layer (L1–L10)**। প্রতিটার design completeness:
