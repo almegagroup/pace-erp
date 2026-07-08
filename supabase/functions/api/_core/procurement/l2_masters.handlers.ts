@@ -1102,7 +1102,7 @@ export async function listTransportersHandler(req: Request, ctx: ProcurementHand
     let query = serviceRoleClient
       .schema("erp_master")
       .from("transporter_master")
-      .select("id, transporter_name, usage_direction, active")
+      .select("id, transporter_code, transporter_name, usage_direction, gst_number, active")
       .order("transporter_name", { ascending: true });
     if (search) {
       query = query.ilike("transporter_name", `%${search}%`);

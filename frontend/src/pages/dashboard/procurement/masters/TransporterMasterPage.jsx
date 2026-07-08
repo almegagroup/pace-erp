@@ -179,7 +179,7 @@ export default function TransporterMasterPage() {
         address: form.address.trim() || null,
       });
       setForm({ ...EMPTY_CREATE });
-      flash(`Transporter created: ${saved?.transporter_code ?? "TRN-generated"}`);
+      flash(`Transporter created: ${saved?.data?.transporter_code ?? saved?.transporter_code ?? "—"}`);
       await Promise.all([transporterQuery.refetch(), companiesQuery.refetch()]);
     } catch (err) {
       flash(friendlyError(err instanceof Error ? err.message : "PROCUREMENT_TRANSPORTER_SAVE_FAILED"), true);
