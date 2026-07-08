@@ -1,36 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
-import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { getGRN, listGRNs } from "../procurementApi.js";
+import { listGRNs } from "../procurementApi.js";
 
 const LIMIT = 50;
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
-    case "POSTED":
-      return "bg-emerald-100 text-emerald-800";
-    case "REVERSED":
-      return "bg-rose-100 text-rose-800";
-    case "DRAFT":
-    default:
-      return "bg-sky-100 text-sky-800";
+    case "POSTED": return "bg-emerald-100 text-emerald-800";
+    case "REVERSED": return "bg-rose-100 text-rose-800";
+    case "DRAFT": default: return "bg-sky-100 text-sky-800";
   }
 }
 
 export default function GRNListPage() {
-  const navigate = useNavigate();
   const { runtimeContext } = useMenu();
+  const queryClient = useQueryClient();
   const [companyId, setCompanyId] = useState("");
   const [status, setStatus] = useState("");
-  const [vendorId, setVendorId] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [search, setSearch] = useState("");
@@ -53,185 +46,178 @@ export default function GRNListPage() {
   }, [companyId, companyOptions, runtimeContext?.selectedCompanyId]);
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      setDebouncedSearch(search.trim().toLowerCase());
+    const id = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
       setPage(1);
     }, 300);
-    return () => window.clearTimeout(timeoutId);
+    return () => window.clearTimeout(id);
   }, [search]);
 
-  const vendorQuery = useVendorOptionsQuery({ limit: 200, offset: 0 });
+  const offset = (page - 1) * LIMIT;
   const grnParams = useMemo(
     () => ({
       company_id: companyId,
       status: status || undefined,
-      vendor_id: vendorId || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
+      search: debouncedSearch || undefined,
       limit: LIMIT,
+      offset,
     }),
-    [companyId, dateFrom, dateTo, status, vendorId]
+    [companyId, dateFrom, dateTo, status, debouncedSearch, offset]
   );
+
   const grnQuery = useQuery({
     queryKey: ["procurement", "grns", grnParams],
     enabled: Boolean(companyId),
-    queryFn: async () => {
-      const grnData = await listGRNs(grnParams);
-      const baseRows = Array.isArray(grnData?.items) ? grnData.items : [];
-      return Promise.all(
-        baseRows.map(async (row) => {
-          try {
-            const detail = await getGRN(row.id);
-            const lines = Array.isArray(detail?.lines) ? detail.lines : [];
-            const totalQty = lines.reduce((sum, line) => sum + Number(line.received_qty ?? 0), 0);
-            return {
-              ...row,
-              ge_number: detail?.gate_entry?.ge_number || row.gate_entry_id || "",
-              total_qty: Number(totalQty.toFixed(6)),
-            };
-          } catch {
-            return {
-              ...row,
-              ge_number: row.gate_entry_id || "",
-              total_qty: 0,
-            };
-          }
-        })
-      );
-    },
+    queryFn: () => listGRNs(grnParams),
   });
-  const rows = Array.isArray(grnQuery.data) ? grnQuery.data : [];
-  const vendors = vendorQuery.vendors;
-  const loading = grnQuery.isLoading || vendorQuery.isLoading;
-  const error =
-    grnQuery.error?.message ||
-    vendorQuery.error?.message ||
-    "";
-  const vendorMap = useMemo(() => new Map(vendors.map((entry) => [entry.id, entry])), [vendors]);
 
-  const filteredRows = useMemo(() => {
-    if (!debouncedSearch) return rows;
-    return rows.filter((row) =>
-      [row.grn_number, row.ge_number, vendorMap.get(row.vendor_id)?.vendor_name]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(debouncedSearch)
-    );
-  }, [debouncedSearch, rows, vendorMap]);
-
-  const total = filteredRows.length;
+  const rows = Array.isArray(grnQuery.data?.items) ? grnQuery.data.items : [];
+  const total = grnQuery.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
-  const pagedRows = filteredRows.slice((page - 1) * LIMIT, page * LIMIT);
-  const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
-  const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
+  const startIndex = total === 0 ? 0 : offset + 1;
+  const endIndex = total === 0 ? 0 : Math.min(offset + LIMIT, total);
+  const loading = grnQuery.isLoading;
+  const error = grnQuery.error?.message ?? "";
 
   function openDetail(row) {
     openScreen(OPERATION_SCREENS.PROC_GRN_DETAIL.screen_code, { context: { id: row.id } });
-    navigate(`/dashboard/procurement/grns/${encodeURIComponent(row.id)}`);
+  }
+
+  function openPostFlow() {
+    openScreen(OPERATION_SCREENS.PROC_GRN_POST_FLOW.screen_code, {});
   }
 
   return (
     <ErpMasterListTemplate
       eyebrow="Procurement"
       title="Goods Receipts"
-      actions={[{
-        key: "refresh",
-        label: loading ? "Refreshing..." : "Refresh",
-        tone: "neutral",
-        onClick: () => {
-          void grnQuery.refetch();
-          void vendorQuery.refetch();
+      actions={[
+        {
+          key: "post-grn",
+          label: "Post GRN (F6)",
+          tone: "primary",
+          onClick: openPostFlow,
         },
-      }]}
+        {
+          key: "refresh",
+          label: loading ? "Refreshing…" : "Refresh",
+          tone: "neutral",
+          onClick: () => queryClient.invalidateQueries({ queryKey: ["procurement", "grns"] }),
+        },
+      ]}
       notices={error ? [{ key: "grn-list-error", tone: "error", message: error }] : []}
       filterSection={{
-        eyebrow: "Search And Filter",
+        eyebrow: "Search and filter",
         title: "GRN register lookup",
         children: (
-          <div className="grid gap-3 lg:grid-cols-[220px_180px_220px_180px_180px_minmax(0,1fr)]">
+          <div className="grid gap-3 lg:grid-cols-[220px_180px_180px_180px_minmax(0,1fr)]">
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Company
-              <select value={companyId} onChange={(event) => setCompanyId(event.target.value)} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
+              <select
+                value={companyId}
+                onChange={(e) => { setCompanyId(e.target.value); setPage(1); }}
+                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+              >
                 <option value="">Select company</option>
-                {companyOptions.map((entry) => (
-                  <option key={entry.value} value={entry.value}>
-                    {entry.label}
-                  </option>
+                {companyOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>
             </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
               Status
-              <select value={status} onChange={(event) => setStatus(event.target.value)} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
+              <select
+                value={status}
+                onChange={(e) => { setStatus(e.target.value); setPage(1); }}
+                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+              >
                 <option value="">ALL</option>
-                {["DRAFT", "POSTED", "REVERSED"].map((entry) => (
-                  <option key={entry} value={entry}>
-                    {entry}
-                  </option>
+                {["DRAFT", "POSTED", "REVERSED"].map((s) => (
+                  <option key={s} value={s}>{s}</option>
                 ))}
               </select>
             </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Vendor
-              <select value={vendorId} onChange={(event) => setVendorId(event.target.value)} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
-                <option value="">ALL</option>
-                {vendors.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.vendor_name || entry.vendor_code || entry.id}
-                  </option>
-                ))}
-              </select>
+              Date from
+              <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
             </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Date From
-              <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+              Date to
+              <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+                className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
             </label>
-            <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              Date To
-              <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
-            </label>
-            <QuickFilterInput label="Search" value={search} onChange={setSearch} placeholder="GRN number, GE, vendor" />
+            <QuickFilterInput label="Search" value={search} onChange={setSearch} placeholder="GRN number, GE, vendor, material…" />
           </div>
         ),
       }}
       listSection={{
         eyebrow: "GRN Register",
-        title: loading ? "Loading goods receipts" : `${total} GRN row${total === 1 ? "" : "s"}`,
+        title: loading ? "Loading goods receipts…" : `${total} GRN${total === 1 ? "" : "s"}`,
         children: (
           <div className="grid gap-3">
-            <ErpPaginationStrip page={page} setPage={setPage} totalPages={totalPages} startIndex={startIndex} endIndex={endIndex} totalItems={total} />
+            <ErpPaginationStrip
+              page={page}
+              setPage={setPage}
+              totalPages={totalPages}
+              startIndex={startIndex}
+              endIndex={endIndex}
+              totalItems={total}
+            />
             <ErpDenseGrid
               columns={[
                 { key: "grn_number", label: "GRN Number", width: "140px" },
                 { key: "grn_date", label: "GRN Date", width: "110px" },
+                { key: "ge_number", label: "GE Number", width: "120px", render: (row) => row.ge_number || "—" },
                 {
-                  key: "vendor_name",
+                  key: "vendor",
                   label: "Vendor",
-                  width: "180px",
-                  render: (row) => vendorMap.get(row.vendor_id)?.vendor_name || row.vendor_id || "—",
+                  width: "200px",
+                  render: (row) =>
+                    row.vendor_name
+                      ? `${row.vendor_code || ""} — ${row.vendor_name}`.replace(/^( — )/, "")
+                      : "—",
                 },
-                { key: "ge_number", label: "GE Number", width: "120px" },
+                {
+                  key: "material",
+                  label: "Material",
+                  render: (row) =>
+                    row.material_name
+                      ? (
+                        <span>
+                          <span className="font-medium">{row.material_code}</span>
+                          <span className="text-slate-500"> — {row.material_name}</span>
+                        </span>
+                      )
+                      : "—",
+                },
+                {
+                  key: "received_qty",
+                  label: "Received qty",
+                  width: "120px",
+                  render: (row) =>
+                    row.received_qty != null
+                      ? `${Number(row.received_qty).toFixed(3)} ${row.uom_code || ""}`.trim()
+                      : "—",
+                },
                 {
                   key: "status",
                   label: "Status",
-                  width: "120px",
+                  width: "100px",
                   render: (row) => (
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${statusTone(row.status)}`}>
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusTone(row.status)}`}>
                       {row.status}
                     </span>
                   ),
                 },
-                { key: "total_qty", label: "Total Qty", width: "110px" },
               ]}
-              rows={pagedRows}
+              rows={rows}
               rowKey={(row) => row.id}
               onRowActivate={openDetail}
-              getRowProps={(row) => ({
-                onDoubleClick: () => openDetail(row),
-                className: "cursor-pointer hover:bg-sky-50",
-              })}
-              emptyMessage={loading ? "Loading goods receipts..." : "No GRN matched the current filter."}
+              getRowProps={() => ({ className: "cursor-pointer hover:bg-sky-50" })}
+              emptyMessage={loading ? "Loading…" : "No GRNs matched the current filter."}
             />
           </div>
         ),

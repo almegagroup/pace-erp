@@ -43,8 +43,11 @@ import {
   updateGateEntryHandler,
 } from "../_core/procurement/gate_entry.handlers.ts";
 import {
+  createAndPostGRNFromLineHandler,
   createGRNDraftHandler,
+  getGELinesForGRNHandler,
   getGRNHandler,
+  getMaterialVendorDocNamesHandler,
   listGRNsHandler,
   postGRNHandler,
   reverseGRNHandler,
@@ -389,8 +392,14 @@ export async function dispatchProcurementRoutes(
       return await listQADocumentsHandler(req, ctx);
     case "POST:/api/procurement/grns":
       return await createGRNDraftHandler(req, ctx);
+    case "POST:/api/procurement/grns/from-line":
+      return await createAndPostGRNFromLineHandler(req, ctx);
     case "GET:/api/procurement/grns":
       return await listGRNsHandler(req, ctx);
+    case "GET:/api/procurement/grns/ge-lines":
+      return await getGELinesForGRNHandler(req, ctx);
+    case "GET:/api/procurement/grns/material-vendor-doc-names":
+      return await getMaterialVendorDocNamesHandler(req, ctx);
     case "POST:/api/procurement/invoice-verifications":
       return await createIVDraftHandler(req, ctx);
     case "GET:/api/procurement/invoice-verifications":

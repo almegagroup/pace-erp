@@ -125,6 +125,7 @@ import GateEntryDetailPage from "../pages/dashboard/procurement/gate/GateEntryDe
 import GateExitInboundDetailPage from "../pages/dashboard/procurement/gate/GateExitInboundDetailPage.jsx";
 import GRNListPage from "../pages/dashboard/procurement/grn/GRNListPage.jsx";
 import GRNDetailPage from "../pages/dashboard/procurement/grn/GRNDetailPage.jsx";
+import GRNPostFlow from "../pages/dashboard/procurement/grn/GRNPostFlow.jsx";
 import QAQueuePage from "../pages/dashboard/procurement/qa/QAQueuePage.jsx";
 import QADocumentPage from "../pages/dashboard/procurement/qa/QADocumentPage.jsx";
 import STOListPage from "../pages/dashboard/procurement/sto/STOListPage.jsx";
@@ -556,6 +557,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/grns"
                     element={<GRNListPage />}
+                  />
+                  <Route
+                    path="procurement/grns/post"
+                    element={<GRNPostFlow />}
                   />
                   <Route
                     path="procurement/grns/:id"

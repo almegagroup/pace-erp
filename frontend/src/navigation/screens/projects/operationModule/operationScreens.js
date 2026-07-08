@@ -201,6 +201,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_GRN_POST_FLOW: {
+    screen_code: "PROC_GRN_POST_FLOW",
+    route: "/dashboard/procurement/grns/post",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_QA_QUEUE: {
     screen_code: "PROC_QA_QUEUE",
     route: "/dashboard/procurement/qa-queue",

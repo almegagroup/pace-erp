@@ -1,10 +1,10 @@
 /*
  * File-ID: 16.4.2
  * File-Path: supabase/functions/api/_core/procurement/grn.handlers.ts
- * Gate: 16.4
- * Phase: 16
+ * Gate: 16.4 / GRN-REDESIGN
  * Domain: PROCUREMENT
- * Purpose: Implement GRN draft, posting, reversal, and listing handlers.
+ * Purpose: GRN handlers — new design: 1 GE line → 1 GRN.
+ *          All FK names resolved in backend. No UUIDs in API responses.
  * Authority: Backend
  */
 
@@ -26,10 +26,10 @@ type GateEntryLineRow = Record<string, unknown>;
 type PurchaseOrderRow = Record<string, unknown>;
 type PurchaseOrderLineRow = Record<string, unknown>;
 type MaterialRow = Record<string, unknown>;
-type CsnRow = Record<string, unknown>;
 
 const GRN_STATUSES = new Set(["DRAFT", "POSTED", "REVERSED"]);
 const STOCK_TYPES = new Set(["UNRESTRICTED", "QA_STOCK", "BLOCKED"]);
+const EXPIRY_TYPES = new Set(["DATE", "SPAN", "N_A"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -48,15 +48,18 @@ function parsePositiveInt(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
+function parseNonNegativeInt(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
 function parsePositiveNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function parseNullableNumber(value: unknown): number | null {
-  if (value === undefined || value === null || value === "") {
-    return null;
-  }
+  if (value === undefined || value === null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -97,41 +100,8 @@ async function generateProcurementDocNumber(docType: string): Promise<string> {
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
     .rpc("generate_doc_number", { p_doc_type: docType });
-
-  if (error || !data) {
-    throw new Error("PROCUREMENT_DOC_NUMBER_FAILED");
-  }
-
+  if (error || !data) throw new Error("PROCUREMENT_DOC_NUMBER_FAILED");
   return String(data);
-}
-
-async function fetchGateEntryBundle(gateEntryId: string): Promise<{
-  gateEntry: GateEntryRow;
-  lines: GateEntryLineRow[];
-}> {
-  const { data: gateEntry, error: gateEntryError } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("gate_entry")
-    .select("*")
-    .eq("id", gateEntryId)
-    .single();
-
-  if (gateEntryError || !gateEntry) {
-    throw new Error("GATE_ENTRY_NOT_FOUND");
-  }
-
-  const { data: lines, error: linesError } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("gate_entry_line")
-    .select("*")
-    .eq("gate_entry_id", gateEntryId)
-    .order("line_number", { ascending: true });
-
-  if (linesError) {
-    throw new Error("GATE_ENTRY_LINE_FETCH_FAILED");
-  }
-
-  return { gateEntry, lines: (lines ?? []) as GateEntryLineRow[] };
 }
 
 async function fetchPoLineBundle(poLineId: string): Promise<{
@@ -144,10 +114,7 @@ async function fetchPoLineBundle(poLineId: string): Promise<{
     .select("*")
     .eq("id", poLineId)
     .single();
-
-  if (poLineError || !poLine) {
-    throw new Error("PO_LINE_NOT_FOUND");
-  }
+  if (poLineError || !poLine) throw new Error("PO_LINE_NOT_FOUND");
 
   const { data: po, error: poError } = await serviceRoleClient
     .schema("erp_procurement")
@@ -155,10 +122,7 @@ async function fetchPoLineBundle(poLineId: string): Promise<{
     .select("*")
     .eq("id", String(poLine.po_id))
     .single();
-
-  if (poError || !po) {
-    throw new Error("PO_NOT_FOUND");
-  }
+  if (poError || !po) throw new Error("PO_NOT_FOUND");
 
   return { poLine, po };
 }
@@ -167,14 +131,10 @@ async function fetchMaterial(materialId: string): Promise<MaterialRow> {
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, base_uom_code, qa_required_on_inward, batch_tracking_required, fifo_tracking_enabled, expiry_tracking_enabled")
+    .select("id, material_code, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, fifo_tracking_enabled, expiry_tracking_enabled")
     .eq("id", materialId)
     .single();
-
-  if (error || !data) {
-    throw new Error("MATERIAL_NOT_FOUND");
-  }
-
+  if (error || !data) throw new Error("MATERIAL_NOT_FOUND");
   return data as MaterialRow;
 }
 
@@ -188,10 +148,7 @@ async function verifyLocationMapped(companyId: string, storageLocationId: string
     .eq("active", true)
     .limit(1)
     .maybeSingle();
-
-  if (error || !data) {
-    throw new Error("GRN_LOCATION_MAP_NOT_FOUND");
-  }
+  if (error || !data) throw new Error("GRN_LOCATION_MAP_NOT_FOUND");
 }
 
 async function hasPhysicalInventoryBlock(
@@ -205,113 +162,20 @@ async function hasPhysicalInventoryBlock(
     .eq("material_id", materialId)
     .eq("storage_location_id", storageLocationId)
     .maybeSingle();
-
-  if (error) {
-    throw new Error("MATERIAL_POSTING_BLOCK_LOOKUP_FAILED");
-  }
-
+  if (error) throw new Error("MATERIAL_POSTING_BLOCK_LOOKUP_FAILED");
   return Boolean(data?.id);
 }
 
-async function fetchGateExit(gateEntryId: string): Promise<JsonRecord> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("gate_exit_inbound")
-    .select("*")
-    .eq("gate_entry_id", gateEntryId)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error("GATE_EXIT_FETCH_FAILED");
-  }
-  if (!data) {
-    throw new Error("GATE_EXIT_REQUIRED");
-  }
-  return data as JsonRecord;
-}
-
-function effectiveNetWeight(exitRow: JsonRecord): number | null {
-  const override = parseNullableNumber(exitRow.net_weight_override);
-  if (override !== null) return override;
-  return parseNullableNumber(exitRow.net_weight_calculated);
-}
-
-async function hydrateGrn(grnId: string): Promise<JsonRecord> {
-  const { data: grn, error: grnError } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("goods_receipt")
-    .select("*")
-    .eq("id", grnId)
-    .single();
-
-  if (grnError || !grn) {
-    throw new Error("GRN_NOT_FOUND");
-  }
-
-  const { data: lines, error: linesError } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("goods_receipt_line")
-    .select("*")
-    .eq("grn_id", grnId)
-    .order("line_number", { ascending: true });
-
-  if (linesError) {
-    throw new Error("GRN_LINE_FETCH_FAILED");
-  }
-
-  const gateEntryResp = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("gate_entry")
-    .select("*")
-    .eq("id", String(grn.gate_entry_id))
-    .maybeSingle();
-
-  if (gateEntryResp.error) {
-    throw new Error("GRN_GATE_ENTRY_FETCH_FAILED");
-  }
-
-  return {
-    ...grn,
-    lines: lines ?? [],
-    gate_entry: gateEntryResp.data ?? null,
-  };
-}
-
-async function inferGrnLineDefaults(
-  gateEntry: GateEntryRow,
-  geLine: GateEntryLineRow,
-  gateExit: JsonRecord,
-): Promise<JsonRecord> {
-  const material = await fetchMaterial(String(geLine.material_id));
-  const netWeight = parseNullableNumber(geLine.net_weight) ?? effectiveNetWeight(gateExit);
-  const defaultReceivedQty = netWeight ?? (parsePositiveNumber(geLine.ge_qty) ?? 0);
-  const { poLine } = geLine.po_line_id
-    ? await fetchPoLineBundle(String(geLine.po_line_id))
-    : { poLine: null as PurchaseOrderLineRow | null, po: null as PurchaseOrderRow | null };
-
-  return {
-    gate_entry_line_id: geLine.id,
-    po_line_id: geLine.po_line_id ?? null,
-    sto_line_id: geLine.sto_line_id ?? null,
-    material_id: geLine.material_id,
-    storage_location_id: poLine?.receiving_location_id ?? null,
-    ge_qty: geLine.ge_qty,
-    net_weight_from_weighbridge: netWeight,
-    received_qty: Number(defaultReceivedQty.toFixed(6)),
-    uom_code: geLine.uom_code ?? material.base_uom_code,
-    discrepancy_qty: Number(((parsePositiveNumber(geLine.ge_qty) ?? 0) - defaultReceivedQty).toFixed(6)),
-    target_stock_type: material.qa_required_on_inward ? "QA_STOCK" : "UNRESTRICTED",
-    batch_lot_number: null,
-    expiry_date: null,
-    invoice_number: geLine.challan_or_invoice_no ?? null,
-    grn_rate: poLine ? parseNullableNumber(poLine.unit_rate) : null,
-  };
-}
-
-async function createQaDocumentForLine(
+async function createQaDocumentForGrn(
   ctx: ProcurementHandlerContext,
   grn: GrnRow,
-  line: GrnLineRow,
+  materialId: string,
+  receivedQty: number,
+  uomCode: string,
+  stockTypeCode: string,
+  batchLotNumber: string | null,
+  poLineId: string | null,
+  grnLineId: string | null,
 ): Promise<void> {
   const qaNumber = await generateProcurementDocNumber("QA");
   const { error } = await serviceRoleClient
@@ -321,22 +185,19 @@ async function createQaDocumentForLine(
       qa_number: qaNumber,
       company_id: grn.company_id,
       grn_id: grn.id,
-      grn_line_id: line.id,
-      po_id: line.po_line_id ? grn.po_id : null,
-      material_id: line.material_id,
+      grn_line_id: grnLineId,
+      po_id: poLineId ? grn.po_id : null,
+      material_id: materialId,
       vendor_id: grn.vendor_id,
-      batch_lot_number: line.batch_lot_number,
-      qa_stock_qty: line.received_qty,
-      uom_code: line.uom_code,
+      batch_lot_number: batchLotNumber,
+      qa_stock_qty: receivedQty,
+      uom_code: uomCode,
       status: "PENDING",
       remarks: "Auto-created from GRN posting",
       last_updated_at: new Date().toISOString(),
       last_updated_by: ctx.auth_user_id,
     });
-
-  if (error) {
-    throw new Error("QA_CREATE_FAILED");
-  }
+  if (error) throw new Error("QA_CREATE_FAILED");
 }
 
 async function updatePoLineReceipt(poLineId: string, deltaQty: number): Promise<void> {
@@ -353,16 +214,9 @@ async function updatePoLineReceipt(poLineId: string, deltaQty: number): Promise<
   const { error } = await serviceRoleClient
     .schema("erp_procurement")
     .from("purchase_order_line")
-    .update({
-      open_qty: nextOpenQty,
-      line_status: lineStatus,
-      last_updated_at: new Date().toISOString(),
-    })
+    .update({ open_qty: nextOpenQty, line_status: lineStatus, last_updated_at: new Date().toISOString() })
     .eq("id", poLineId);
-
-  if (error) {
-    throw new Error("PO_LINE_RECEIPT_UPDATE_FAILED");
-  }
+  if (error) throw new Error("PO_LINE_RECEIPT_UPDATE_FAILED");
 }
 
 async function reversePoLineReceipt(poLineId: string, deltaQty: number): Promise<void> {
@@ -379,107 +233,543 @@ async function reversePoLineReceipt(poLineId: string, deltaQty: number): Promise
   const { error } = await serviceRoleClient
     .schema("erp_procurement")
     .from("purchase_order_line")
-    .update({
-      open_qty: nextOpenQty,
-      line_status: lineStatus,
-      last_updated_at: new Date().toISOString(),
-    })
+    .update({ open_qty: nextOpenQty, line_status: lineStatus, last_updated_at: new Date().toISOString() })
     .eq("id", poLineId);
+  if (error) throw new Error("PO_LINE_RECEIPT_REVERSE_FAILED");
+}
 
-  if (error) {
-    throw new Error("PO_LINE_RECEIPT_REVERSE_FAILED");
+async function resolveVendorName(vendorId: string | null): Promise<{ vendor_code: string | null; vendor_name: string | null }> {
+  if (!vendorId) return { vendor_code: null, vendor_name: null };
+  const { data } = await serviceRoleClient
+    .schema("erp_master").from("vendor_master")
+    .select("vendor_code, vendor_name")
+    .eq("id", vendorId).maybeSingle();
+  return { vendor_code: data?.vendor_code ?? null, vendor_name: data?.vendor_name ?? null };
+}
+
+async function resolveStorageLocationName(slocId: string | null): Promise<{ location_code: string | null; location_name: string | null }> {
+  if (!slocId) return { location_code: null, location_name: null };
+  const { data } = await serviceRoleClient
+    .schema("erp_inventory").from("storage_location_master")
+    .select("location_code, location_name")
+    .eq("id", slocId).maybeSingle();
+  return { location_code: data?.location_code ?? null, location_name: data?.location_name ?? null };
+}
+
+async function resolveTransporterName(transporterId: string | null): Promise<string | null> {
+  if (!transporterId) return null;
+  const { data } = await serviceRoleClient
+    .schema("erp_master").from("transporter_master")
+    .select("transporter_name")
+    .eq("id", transporterId).maybeSingle();
+  return data?.transporter_name ?? null;
+}
+
+async function hydrateGrn(grnId: string): Promise<JsonRecord> {
+  const { data: grn, error: grnError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("goods_receipt")
+    .select("*")
+    .eq("id", grnId)
+    .single();
+  if (grnError || !grn) throw new Error("GRN_NOT_FOUND");
+
+  const isNewStyle = Boolean(grn.gate_entry_line_id);
+
+  const [geResp, vendorResult, slocResult, transporterName] = await Promise.all([
+    serviceRoleClient.schema("erp_procurement").from("gate_entry")
+      .select("id, ge_number, ge_date, vehicle_number")
+      .eq("id", String(grn.gate_entry_id)).maybeSingle(),
+    resolveVendorName(toTrimmedString(grn.vendor_id) || null),
+    resolveStorageLocationName(toTrimmedString(grn.storage_location_id) || null),
+    resolveTransporterName(toTrimmedString(grn.transporter_id) || null),
+  ]);
+
+  if (geResp.error) throw new Error("GRN_GATE_ENTRY_FETCH_FAILED");
+
+  let materialData: JsonRecord | null = null;
+  if (isNewStyle && grn.material_id) {
+    const { data } = await serviceRoleClient.schema("erp_master").from("material_master")
+      .select("id, material_code, material_name, external_sku, batch_tracking_required, expiry_tracking_enabled, qa_required_on_inward")
+      .eq("id", String(grn.material_id)).maybeSingle();
+    materialData = data;
+  }
+
+  // Old-style: resolve lines with names
+  const { data: lines, error: linesError } = await serviceRoleClient
+    .schema("erp_procurement").from("goods_receipt_line")
+    .select("*").eq("grn_id", grnId).order("line_number", { ascending: true });
+  if (linesError) throw new Error("GRN_LINE_FETCH_FAILED");
+
+  const linesList = (lines ?? []) as GrnLineRow[];
+  let resolvedLines: JsonRecord[] = linesList;
+
+  if (linesList.length > 0) {
+    const matIds = [...new Set(linesList.map((l) => String(l.material_id ?? "")).filter(Boolean))];
+    const slocIds = [...new Set(linesList.map((l) => String(l.storage_location_id ?? "")).filter(Boolean))];
+    const [matResp, slocResp] = await Promise.all([
+      matIds.length > 0
+        ? serviceRoleClient.schema("erp_master").from("material_master")
+            .select("id, material_code, material_name").in("id", matIds)
+        : { data: [], error: null },
+      slocIds.length > 0
+        ? serviceRoleClient.schema("erp_inventory").from("storage_location_master")
+            .select("id, location_code, location_name").in("id", slocIds)
+        : { data: [], error: null },
+    ]);
+    const matMap = new Map((matResp.data ?? []).map((m: JsonRecord) => [m.id, m]));
+    const slocMap = new Map((slocResp.data ?? []).map((s: JsonRecord) => [s.id, s]));
+    resolvedLines = linesList.map((l) => {
+      const mat = matMap.get(l.material_id as string);
+      const sloc = slocMap.get(l.storage_location_id as string);
+      return {
+        ...l,
+        material_code: mat?.material_code ?? null,
+        material_name: mat?.material_name ?? null,
+        location_code: sloc?.location_code ?? null,
+        location_name: sloc?.location_name ?? null,
+      };
+    });
+  }
+
+  return {
+    ...grn,
+    vendor_code: vendorResult.vendor_code,
+    vendor_name: vendorResult.vendor_name,
+    material_code: materialData?.material_code ?? null,
+    material_name: materialData?.material_name ?? null,
+    external_sku: materialData?.external_sku ?? null,
+    batch_tracking_required: materialData?.batch_tracking_required ?? false,
+    expiry_tracking_enabled: materialData?.expiry_tracking_enabled ?? false,
+    location_code: slocResult.location_code,
+    location_name: slocResult.location_name,
+    transporter_name: transporterName,
+    ge_number: geResp.data?.ge_number ?? null,
+    ge_date: geResp.data?.ge_date ?? null,
+    lines: resolvedLines,
+    gate_entry: geResp.data ?? null,
+  };
+}
+
+// ── GET /api/procurement/grns/ge-lines?ge_number=GE-100051 ──────────────────
+export async function getGELinesForGRNHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const geNumber = toTrimmedString(url.searchParams.get("ge_number"));
+    if (!geNumber) {
+      return procurementErrorResponse(req, ctx, "GRN_GATE_ENTRY_REQUIRED", 400, "ge_number is required.");
+    }
+
+    const { data: gateEntry, error: geError } = await serviceRoleClient
+      .schema("erp_procurement").from("gate_entry")
+      .select("*").eq("ge_number", geNumber).maybeSingle();
+    if (geError || !gateEntry) {
+      return procurementErrorResponse(req, ctx, "GE_NOT_FOUND", 404, "Gate entry not found.");
+    }
+
+    const { data: lines, error: linesError } = await serviceRoleClient
+      .schema("erp_procurement").from("gate_entry_line")
+      .select("*").eq("gate_entry_id", String(gateEntry.id))
+      .order("line_number", { ascending: true });
+    if (linesError) {
+      return procurementErrorResponse(req, ctx, "GE_LINE_FETCH_FAILED", 500, "Unable to fetch GE lines.");
+    }
+
+    const linesList = (lines ?? []) as JsonRecord[];
+    const matIds = [...new Set(linesList.map((l) => String(l.material_id ?? "")).filter(Boolean))];
+    const poLineIds = [...new Set(linesList.map((l) => String(l.po_line_id ?? "")).filter(Boolean))];
+
+    const [matResp, poLineResp, existingGrnResp, vendorResult] = await Promise.all([
+      matIds.length > 0
+        ? serviceRoleClient.schema("erp_master").from("material_master")
+            .select("id, material_code, material_name, external_sku, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled")
+            .in("id", matIds)
+        : { data: [], error: null },
+      poLineIds.length > 0
+        ? serviceRoleClient.schema("erp_procurement").from("purchase_order_line")
+            .select("id, po_id, ordered_qty, unit_rate, receiving_location_id")
+            .in("id", poLineIds)
+        : { data: [], error: null },
+      serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+        .select("gate_entry_line_id, grn_number, status, id")
+        .eq("gate_entry_id", String(gateEntry.id))
+        .not("gate_entry_line_id", "is", null),
+      resolveVendorName(toTrimmedString(gateEntry.vendor_id) || null),
+    ]);
+
+    const poIds = [...new Set((poLineResp.data ?? []).map((pl: JsonRecord) => String(pl.po_id ?? "")).filter(Boolean))];
+    const poResp = poIds.length > 0
+      ? await serviceRoleClient.schema("erp_procurement").from("purchase_order")
+          .select("id, po_number, vendor_type").in("id", poIds)
+      : { data: [] };
+
+    // Fetch default CSN data for pre-filling (1 CSN per GE line)
+    const csnIds = [...new Set(linesList.map((l) => String(l.csn_id ?? "")).filter(Boolean))];
+    const csnResp = csnIds.length > 0
+      ? await serviceRoleClient.schema("erp_procurement").from("consignment_note")
+          .select("id, invoice_number, bl_number, domestic_transporter_id, transporter_id, lr_number, lr_date")
+          .in("id", csnIds)
+      : { data: [] };
+
+    const matMap = new Map((matResp.data ?? []).map((m: JsonRecord) => [m.id, m]));
+    const poLineMap = new Map((poLineResp.data ?? []).map((pl: JsonRecord) => [pl.id, pl]));
+    const poMap = new Map((poResp.data ?? []).map((p: JsonRecord) => [p.id, p]));
+    const csnMap = new Map((csnResp.data ?? []).map((c: JsonRecord) => [c.id, c]));
+    const grnByLineId = new Map((existingGrnResp.data ?? []).map((g: JsonRecord) => [g.gate_entry_line_id, g]));
+
+    const resolvedLines = linesList.map((l) => {
+      const mat = matMap.get(String(l.material_id));
+      const poLine = l.po_line_id ? poLineMap.get(String(l.po_line_id)) : null;
+      const po = poLine ? poMap.get(String(poLine.po_id)) : null;
+      const csn = l.csn_id ? csnMap.get(String(l.csn_id)) : null;
+      const existingGrn = grnByLineId.get(String(l.id));
+      const lineGrnStatus = existingGrn && existingGrn.status === "POSTED"
+        ? "DONE"
+        : existingGrn && existingGrn.status === "DRAFT"
+        ? "DRAFT"
+        : "PENDING";
+      return {
+        ...l,
+        material_code: mat?.material_code ?? null,
+        material_name: mat?.material_name ?? null,
+        external_sku: mat?.external_sku ?? null,
+        qa_required_on_inward: mat?.qa_required_on_inward ?? false,
+        batch_tracking_required: mat?.batch_tracking_required ?? false,
+        expiry_tracking_enabled: mat?.expiry_tracking_enabled ?? false,
+        po_number: po?.po_number ?? null,
+        po_rate: poLine?.unit_rate ?? null,
+        vendor_type: po?.vendor_type ?? "DOMESTIC",
+        csn_invoice_number: csn?.invoice_number ?? null,
+        csn_bl_number: csn?.bl_number ?? null,
+        csn_transporter_id: csn?.domestic_transporter_id ?? csn?.transporter_id ?? null,
+        csn_lr_number: csn?.lr_number ?? null,
+        csn_lr_date: csn?.lr_date ?? null,
+        line_grn_status: lineGrnStatus,
+        existing_grn_number: existingGrn?.grn_number ?? null,
+        existing_grn_id: existingGrn?.id ?? null,
+      };
+    });
+
+    // Resolve vendor details for header display
+    let vendorDetails: JsonRecord | null = null;
+    if (gateEntry.vendor_id) {
+      const { data } = await serviceRoleClient.schema("erp_master").from("vendor_master")
+        .select("vendor_code, vendor_name, vendor_type, gst_number, address")
+        .eq("id", String(gateEntry.vendor_id)).maybeSingle();
+      vendorDetails = data;
+    }
+
+    return okResponse({
+      gate_entry: {
+        ...gateEntry,
+        vendor_code: vendorResult.vendor_code,
+        vendor_name: vendorResult.vendor_name,
+        vendor_type: vendorDetails?.vendor_type ?? null,
+        vendor_gst: vendorDetails?.gst_number ?? null,
+        vendor_address: vendorDetails?.address ?? null,
+      },
+      lines: resolvedLines,
+    }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GE_LINE_GRN_LIST_FAILED";
+    const status = message.includes("NOT_FOUND") ? 404 : 500;
+    return procurementErrorResponse(req, ctx, message, status, message);
   }
 }
 
-export async function createGRNDraftHandler(
+// ── GET /api/procurement/grns/material-vendor-doc-names ─────────────────────
+export async function getMaterialVendorDocNamesHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const materialId = toTrimmedString(url.searchParams.get("material_id"));
+    const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
+    if (!materialId || !vendorId) {
+      return procurementErrorResponse(req, ctx, "GRN_ID_REQUIRED", 400, "material_id and vendor_id are required.");
+    }
+    const { data } = await serviceRoleClient
+      .schema("erp_master").from("material_vendor_doc_name")
+      .select("doc_name").eq("material_id", materialId).eq("vendor_id", vendorId)
+      .order("created_at", { ascending: false });
+    return okResponse({ items: (data ?? []).map((r: JsonRecord) => r.doc_name) }, ctx.request_id, req);
+  } catch {
+    return procurementErrorResponse(req, ctx, "GRN_LIST_FAILED", 500, "Unable to fetch doc names.");
+  }
+}
+
+// ── POST /api/procurement/grns/from-line ────────────────────────────────────
+// New-style: create + post GRN for a single GE line in one call.
+export async function createAndPostGRNFromLineHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   try {
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
-    const gateEntryId = toTrimmedString(body.gate_entry_id);
-    if (!gateEntryId) {
-      return procurementErrorResponse(req, ctx, "GRN_GATE_ENTRY_REQUIRED", 400, "gate_entry_id is required.");
+    const gateEntryLineId = toTrimmedString(body.gate_entry_line_id);
+    if (!gateEntryLineId) {
+      return procurementErrorResponse(req, ctx, "GRN_GATE_ENTRY_LINE_REQUIRED", 400, "gate_entry_line_id is required.");
     }
 
-    const { gateEntry, lines } = await fetchGateEntryBundle(gateEntryId);
-    await fetchGateExit(gateEntryId);
-
-    const existingResp = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
-      .select("id")
-      .eq("gate_entry_id", gateEntryId)
-      .maybeSingle();
-
-    if (existingResp.error) {
-      return procurementErrorResponse(req, ctx, "GRN_EXISTING_CHECK_FAILED", 500, "Unable to validate existing GRN.");
-    }
-    if (existingResp.data) {
-      return procurementErrorResponse(req, ctx, "GRN_ALREADY_EXISTS", 400, "A GRN already exists for this gate entry.");
+    // Fetch GE line
+    const { data: geLine, error: geLineError } = await serviceRoleClient
+      .schema("erp_procurement").from("gate_entry_line")
+      .select("*").eq("id", gateEntryLineId).single();
+    if (geLineError || !geLine) {
+      return procurementErrorResponse(req, ctx, "GRN_GATE_ENTRY_LINE_NOT_FOUND", 404, "Gate entry line not found.");
     }
 
-    const gateExit = await fetchGateExit(gateEntryId);
+    // Check no active GRN for this line
+    const { data: existing } = await serviceRoleClient
+      .schema("erp_procurement").from("goods_receipt")
+      .select("id, status").eq("gate_entry_line_id", gateEntryLineId)
+      .in("status", ["DRAFT", "POSTED"]).maybeSingle();
+    if (existing) {
+      return procurementErrorResponse(req, ctx, "GRN_ALREADY_EXISTS", 400, "A GRN already exists for this gate entry line.");
+    }
+
+    // Fetch GE header
+    const { data: gateEntry, error: geError } = await serviceRoleClient
+      .schema("erp_procurement").from("gate_entry")
+      .select("*").eq("id", String(geLine.gate_entry_id)).single();
+    if (geError || !gateEntry) {
+      return procurementErrorResponse(req, ctx, "GE_NOT_FOUND", 404, "Gate entry not found.");
+    }
+
+    // Fetch material
+    const material = await fetchMaterial(String(geLine.material_id));
+
+    // Resolve PO data
     let poId: string | null = null;
+    let poLineData: PurchaseOrderLineRow | null = null;
+    let poData: PurchaseOrderRow | null = null;
     let vendorId: string | null = null;
-    let stoId: string | null = null;
-    let movementTypeCode = "P101";
-
-    if (lines.length > 0 && lines[0].po_line_id) {
-      const { po } = await fetchPoLineBundle(String(lines[0].po_line_id));
-      poId = String(po.id);
-      vendorId = toTrimmedString(po.vendor_id) || null;
-    }
-    if (lines.length > 0 && lines[0].sto_id) {
-      stoId = toTrimmedString(lines[0].sto_id) || null;
-      movementTypeCode = "STO_RECEIPT";
+    if (geLine.po_line_id) {
+      const bundle = await fetchPoLineBundle(String(geLine.po_line_id));
+      poLineData = bundle.poLine;
+      poData = bundle.po;
+      poId = String(poData.id);
+      vendorId = toTrimmedString(poData.vendor_id) || null;
     }
 
-    const grnNumber = await generateProcurementDocNumber("GRN");
+    // Receipt calculations
+    const geQty = parsePositiveNumber(geLine.ge_qty) ?? 0;
+    const receivedQty = parseNullableNumber(body.received_qty) ?? geQty;
+    if (receivedQty < 0) {
+      return procurementErrorResponse(req, ctx, "GRN_RECEIVED_QTY_INVALID", 400, "Received qty cannot be negative.");
+    }
+    const discrepancyQty = Number((geQty - receivedQty).toFixed(6));
+    const discrepancyRemarks = toTrimmedString(body.discrepancy_remarks) || null;
+    if (discrepancyQty !== 0 && !discrepancyRemarks) {
+      return procurementErrorResponse(req, ctx, "GRN_DISCREPANCY_REMARKS_REQUIRED", 400, "Remarks are required when received qty differs from invoice qty.");
+    }
+
+    const targetStockType: string = material.qa_required_on_inward ? "QA_STOCK" : "UNRESTRICTED";
+
+    // Storage location
+    const storageLocationId = toTrimmedString(body.storage_location_id) || null;
+    if (!storageLocationId) {
+      return procurementErrorResponse(req, ctx, "GRN_STORAGE_REQUIRED", 400, "Storage location is required.");
+    }
+    await verifyLocationMapped(String(gateEntry.company_id), storageLocationId);
+    const pidBlocked = await hasPhysicalInventoryBlock(String(geLine.material_id), storageLocationId);
+    if (pidBlocked) {
+      return procurementErrorResponse(req, ctx, "MATERIAL_POSTING_BLOCKED", 409, "Material has an active physical inventory count in progress.");
+    }
+
+    // Accounts
+    const rateConfirmed = body.rate_confirmed === true;
+    const poRate = parseNullableNumber(body.po_rate) ?? parseNullableNumber(poLineData?.unit_rate);
+    const invoiceRate = parseNullableNumber(body.invoice_rate);
+    const effectiveGrnRate = rateConfirmed ? (poRate ?? 0) : 0;
+
+    // Expiry
+    const expiryTypeRaw = toUpperTrimmedString(body.expiry_type);
+    const expiryType = EXPIRY_TYPES.has(expiryTypeRaw) ? expiryTypeRaw : "N_A";
+    let expiryDate: string | null = null;
+    if (expiryType === "DATE") {
+      expiryDate = toTrimmedString(body.expiry_date) || null;
+    } else if (expiryType === "SPAN" && body.shelf_life_months) {
+      const geDate = new Date(String(gateEntry.ge_date ?? todayIsoDate()));
+      geDate.setMonth(geDate.getMonth() + Number(body.shelf_life_months));
+      expiryDate = geDate.toISOString().slice(0, 10);
+    }
+
     const grnDate = toTrimmedString(body.grn_date) || todayIsoDate();
-    const postingDate = toTrimmedString(body.posting_date) || grnDate;
+
+    // Create GRN
+    const grnNumber = await generateProcurementDocNumber("GRN");
     const { data: grn, error: grnError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
+      .schema("erp_procurement").from("goods_receipt")
       .insert({
         grn_number: grnNumber,
         grn_date: grnDate,
-        posting_date: postingDate,
+        posting_date: grnDate,
         company_id: gateEntry.company_id,
         vendor_id: vendorId,
-        gate_entry_id: gateEntryId,
+        gate_entry_id: String(geLine.gate_entry_id),
+        gate_entry_line_id: gateEntryLineId,
         po_id: poId,
-        sto_id: stoId,
-        movement_type_code: movementTypeCode,
+        po_line_id: geLine.po_line_id ?? null,
+        material_id: geLine.material_id,
+        storage_location_id: storageLocationId,
+        movement_type_code: "P101",
         status: "DRAFT",
-        remarks: toTrimmedString(body.remarks) || null,
+        // Receipt
+        ge_qty: geQty,
+        received_qty: receivedQty,
+        uom_code: geLine.uom_code ?? material.base_uom_code,
+        discrepancy_qty: discrepancyQty,
+        discrepancy_remarks: discrepancyRemarks,
+        target_stock_type: targetStockType,
+        batch_lot_number: toTrimmedString(body.batch_lot_number) || null,
+        expiry_type: expiryType,
+        expiry_date: expiryDate,
+        shelf_life_months: body.shelf_life_months ? Number(body.shelf_life_months) : null,
+        per_pack_qty: parseNullableNumber(body.per_pack_qty),
+        // Documents
+        invoice_number: toTrimmedString(body.invoice_number) || null,
+        invoice_date: toTrimmedString(body.invoice_date) || null,
+        bl_number: toTrimmedString(body.bl_number) || null,
+        bl_date: toTrimmedString(body.bl_date) || null,
+        boe_number: toTrimmedString(body.boe_number) || null,
+        boe_date: toTrimmedString(body.boe_date) || null,
+        // Transporter
+        transporter_id: toTrimmedString(body.transporter_id) || null,
+        lr_number: toTrimmedString(body.lr_number) || null,
+        lr_date: toTrimmedString(body.lr_date) || null,
+        // Material
+        invoice_name: toTrimmedString(body.invoice_name) || null,
+        // Accounts
+        po_rate: poRate,
+        invoice_rate: invoiceRate,
+        rate_confirmed: rateConfirmed,
+        gst_pct: parseNullableNumber(body.gst_pct),
+        grn_rate: effectiveGrnRate,
         created_by: ctx.auth_user_id,
       })
-      .select("*")
-      .single();
+      .select("*").single();
 
     if (grnError || !grn) {
-      return procurementErrorResponse(req, ctx, "GRN_CREATE_FAILED", 500, "Unable to create GRN draft.");
+      return procurementErrorResponse(req, ctx, "GRN_CREATE_FAILED", 500, "Unable to create GRN.");
     }
 
-    const linePayload: JsonRecord[] = [];
-    for (let index = 0; index < lines.length; index += 1) {
-      linePayload.push({
-        grn_id: grn.id,
-        line_number: index + 1,
-        ...(await inferGrnLineDefaults(gateEntry, lines[index], gateExit)),
+    // Post stock movement
+    const postingResp = await serviceRoleClient.schema("erp_inventory")
+      .rpc("post_stock_movement", {
+        p_document_number: grnNumber,
+        p_document_date: grnDate,
+        p_posting_date: grnDate,
+        p_movement_type_code: "P101",
+        p_company_id: gateEntry.company_id,
+        p_storage_location_id: storageLocationId,
+        p_material_id: geLine.material_id,
+        p_quantity: receivedQty,
+        p_base_uom_code: material.base_uom_code ?? geLine.uom_code,
+        p_unit_value: effectiveGrnRate,
+        p_stock_type_code: targetStockType,
+        p_direction: "IN",
+        p_posted_by: ctx.auth_user_id,
+        p_reversal_of_id: null,
       });
+
+    if (postingResp.error || !Array.isArray(postingResp.data) || postingResp.data.length === 0) {
+      return procurementErrorResponse(req, ctx, "GRN_POST_RPC_FAILED", 500, "Stock posting failed.");
     }
 
-    if (linePayload.length > 0) {
-      const { error: lineError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("goods_receipt_line")
-        .insert(linePayload);
-      if (lineError) {
-        return procurementErrorResponse(req, ctx, "GRN_LINE_CREATE_FAILED", 500, "Unable to create GRN lines.");
+    const postingRow = postingResp.data[0] as JsonRecord;
+
+    // Mark GRN as POSTED
+    await serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+      .update({
+        status: "POSTED",
+        stock_document_id: postingRow.stock_document_id ?? null,
+        stock_ledger_id: postingRow.stock_ledger_id ?? null,
+        posted_by: ctx.auth_user_id,
+        posted_at: new Date().toISOString(),
+        last_updated_at: new Date().toISOString(),
+      })
+      .eq("id", String(grn.id));
+
+    // Mark GE line as done
+    await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
+      .update({ grn_posted: true }).eq("id", gateEntryLineId);
+
+    // PO line update
+    if (geLine.po_line_id) {
+      await updatePoLineReceipt(String(geLine.po_line_id), receivedQty);
+      if (poLineData?.vendor_material_info_id) {
+        await serviceRoleClient.schema("erp_master").from("vendor_material_info")
+          .update({ last_purchase_price: effectiveGrnRate, last_grn_date: grnDate })
+          .eq("id", String(poLineData.vendor_material_info_id));
       }
+    }
+
+    // QA document
+    if (targetStockType === "QA_STOCK" || Boolean(material.qa_required_on_inward)) {
+      await createQaDocumentForGrn(
+        ctx, grn as GrnRow,
+        String(geLine.material_id),
+        receivedQty,
+        String(grn.uom_code ?? material.base_uom_code),
+        targetStockType,
+        toTrimmedString(grn.batch_lot_number) || null,
+        geLine.po_line_id ? String(geLine.po_line_id) : null,
+        null,
+      );
+    }
+
+    // CSN sync-back
+    const csnId = toTrimmedString(geLine.csn_id);
+    if (csnId) {
+      const vendorType = toUpperTrimmedString(poData?.vendor_type) || "DOMESTIC";
+      const csnPatch: JsonRecord = {
+        status: "GRD",
+        grn_id: grn.id,
+        grn_date: grnDate,
+        received_qty: receivedQty,
+        total_received_qty: receivedQty,
+        invoice_number: grn.invoice_number ?? null,
+        last_updated_at: new Date().toISOString(),
+      };
+      if (vendorType === "DOMESTIC") {
+        csnPatch.domestic_transporter_id = grn.transporter_id ?? null;
+        csnPatch.lr_number = grn.lr_number ?? null;
+        csnPatch.lr_date = grn.lr_date ?? null;
+      } else {
+        csnPatch.transporter_id = grn.transporter_id ?? null;
+        csnPatch.bl_number = grn.bl_number ?? null;
+        csnPatch.bl_date = grn.bl_date ?? null;
+      }
+      await serviceRoleClient.schema("erp_procurement").from("consignment_note")
+        .update(csnPatch).eq("id", csnId);
+    }
+
+    // Save material_vendor_doc_name if new invoice_name given
+    const invoiceName = toTrimmedString(grn.invoice_name);
+    if (invoiceName && vendorId && grn.material_id) {
+      await serviceRoleClient.schema("erp_master").from("material_vendor_doc_name")
+        .upsert(
+          { material_id: String(grn.material_id), vendor_id: vendorId, doc_name: invoiceName },
+          { onConflict: "material_id,vendor_id,doc_name", ignoreDuplicates: true },
+        );
+    }
+
+    // Check if all GE lines posted → update GE status
+    const { data: geLines } = await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
+      .select("grn_posted").eq("gate_entry_id", String(geLine.gate_entry_id));
+    const allPosted = (geLines ?? []).every((l: JsonRecord) => l.grn_posted === true);
+    if (allPosted) {
+      await serviceRoleClient.schema("erp_procurement").from("gate_entry")
+        .update({ status: "GRN_POSTED", last_updated_at: new Date().toISOString() })
+        .eq("id", String(geLine.gate_entry_id));
     }
 
     return okResponse(await hydrateGrn(String(grn.id)), ctx.request_id, req);
@@ -490,6 +780,7 @@ export async function createGRNDraftHandler(
   }
 }
 
+// ── GET /api/procurement/grns ────────────────────────────────────────────────
 export async function listGRNsHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -503,13 +794,13 @@ export async function listGRNsHandler(
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
+    const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
 
     let query = serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
-      .select("*")
+      .schema("erp_procurement").from("goods_receipt")
+      .select("id, grn_number, grn_date, status, company_id, vendor_id, gate_entry_id, gate_entry_line_id, material_id, received_qty, uom_code, po_id")
       .order("grn_date", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) query = query.eq("company_id", companyId);
     if (status && GRN_STATUSES.has(status)) query = query.eq("status", status);
@@ -522,13 +813,77 @@ export async function listGRNsHandler(
       return procurementErrorResponse(req, ctx, "GRN_LIST_FAILED", 500, "Unable to list GRNs.");
     }
 
-    return okResponse({ items: data ?? [] }, ctx.request_id, req);
+    const rows = (data ?? []) as JsonRecord[];
+    if (rows.length === 0) return okResponse({ items: [] }, ctx.request_id, req);
+
+    // Bulk resolve FKs
+    const vendorIds = [...new Set(rows.map((r) => String(r.vendor_id ?? "")).filter(Boolean))];
+    const materialIds = [...new Set(rows.map((r) => String(r.material_id ?? "")).filter(Boolean))];
+    const geIds = [...new Set(rows.map((r) => String(r.gate_entry_id ?? "")).filter(Boolean))];
+
+    const [vendorResp, matResp, geResp] = await Promise.all([
+      vendorIds.length > 0
+        ? serviceRoleClient.schema("erp_master").from("vendor_master")
+            .select("id, vendor_code, vendor_name").in("id", vendorIds)
+        : { data: [], error: null },
+      materialIds.length > 0
+        ? serviceRoleClient.schema("erp_master").from("material_master")
+            .select("id, material_code, material_name").in("id", materialIds)
+        : { data: [], error: null },
+      geIds.length > 0
+        ? serviceRoleClient.schema("erp_procurement").from("gate_entry")
+            .select("id, ge_number").in("id", geIds)
+        : { data: [], error: null },
+    ]);
+
+    // For old-style GRNs, fetch total_qty from lines
+    const oldStyleIds = rows.filter((r) => !r.gate_entry_line_id).map((r) => String(r.id));
+    let lineQtyMap = new Map<string, number>();
+    if (oldStyleIds.length > 0) {
+      const { data: lineQtyRows } = await serviceRoleClient
+        .schema("erp_procurement").from("goods_receipt_line")
+        .select("grn_id, received_qty").in("grn_id", oldStyleIds);
+      for (const lr of (lineQtyRows ?? []) as JsonRecord[]) {
+        const prev = lineQtyMap.get(String(lr.grn_id)) ?? 0;
+        lineQtyMap.set(String(lr.grn_id), prev + (parseNullableNumber(lr.received_qty) ?? 0));
+      }
+    }
+
+    const vendorMap = new Map((vendorResp.data ?? []).map((v: JsonRecord) => [v.id, v]));
+    const matMap = new Map((matResp.data ?? []).map((m: JsonRecord) => [m.id, m]));
+    const geMap = new Map((geResp.data ?? []).map((g: JsonRecord) => [g.id, g]));
+
+    const enriched = rows.map((r) => {
+      const vendor = vendorMap.get(String(r.vendor_id));
+      const mat = matMap.get(String(r.material_id));
+      const ge = geMap.get(String(r.gate_entry_id));
+      const isNewStyle = Boolean(r.gate_entry_line_id);
+      const totalQty = isNewStyle
+        ? (parseNullableNumber(r.received_qty) ?? 0)
+        : (lineQtyMap.get(String(r.id)) ?? 0);
+      return {
+        id: r.id,
+        grn_number: r.grn_number,
+        grn_date: r.grn_date,
+        status: r.status,
+        vendor_code: vendor?.vendor_code ?? null,
+        vendor_name: vendor?.vendor_name ?? null,
+        material_code: mat?.material_code ?? null,
+        material_name: mat?.material_name ?? null,
+        ge_number: ge?.ge_number ?? null,
+        received_qty: Number(totalQty.toFixed(6)),
+        uom_code: r.uom_code ?? null,
+      };
+    });
+
+    return okResponse({ items: enriched }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GRN_LIST_FAILED";
     return procurementErrorResponse(req, ctx, message, 500, message);
   }
 }
 
+// ── GET /api/procurement/grns/:id ────────────────────────────────────────────
 export async function getGRNHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -547,294 +902,7 @@ export async function getGRNHandler(
   }
 }
 
-export async function updateGRNDraftHandler(
-  req: Request,
-  ctx: ProcurementHandlerContext,
-): Promise<Response> {
-  try {
-    assertProcurementReadRole(ctx);
-    const grnId = getIdFromPath(req);
-    const body = await parseBody(req);
-    const { data: grn, error: grnError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
-      .select("*")
-      .eq("id", grnId)
-      .single();
-
-    if (grnError || !grn) {
-      return procurementErrorResponse(req, ctx, "GRN_NOT_FOUND", 404, "GRN not found.");
-    }
-    if (toUpperTrimmedString(grn.status) !== "DRAFT") {
-      return procurementErrorResponse(req, ctx, "GRN_NOT_DRAFT", 400, "Only DRAFT GRNs can be updated.");
-    }
-
-    if (Array.isArray(body.lines)) {
-      for (const line of body.lines as JsonRecord[]) {
-        const lineId = toTrimmedString(line.id);
-        if (!lineId) continue;
-        const targetStockType = toUpperTrimmedString(line.target_stock_type);
-        if (targetStockType && !STOCK_TYPES.has(targetStockType)) {
-          return procurementErrorResponse(req, ctx, "GRN_STOCK_TYPE_INVALID", 400, "Invalid target stock type.");
-        }
-        const patch = {
-          received_qty: parsePositiveNumber(line.received_qty),
-          storage_location_id: toTrimmedString(line.storage_location_id) || null,
-          batch_lot_number: toTrimmedString(line.batch_lot_number) || null,
-          expiry_date: toTrimmedString(line.expiry_date) || null,
-          target_stock_type: targetStockType || undefined,
-          discrepancy_qty: parseNullableNumber(line.ge_qty) !== null && parsePositiveNumber(line.received_qty) !== null
-            ? Number(((parseNullableNumber(line.ge_qty) ?? 0) - (parsePositiveNumber(line.received_qty) ?? 0)).toFixed(6))
-            : undefined,
-        };
-
-        const { error: lineError } = await serviceRoleClient
-          .schema("erp_procurement")
-          .from("goods_receipt_line")
-          .update(patch)
-          .eq("id", lineId)
-          .eq("grn_id", grnId);
-
-        if (lineError) {
-          return procurementErrorResponse(req, ctx, "GRN_LINE_UPDATE_FAILED", 500, "Unable to update GRN line.");
-        }
-      }
-    }
-
-    const headerPatch: JsonRecord = {
-      last_updated_at: new Date().toISOString(),
-    };
-    const grnDate = toTrimmedString(body.grn_date);
-    const postingDate = toTrimmedString(body.posting_date);
-    const remarks = toTrimmedString(body.remarks);
-    if (grnDate) headerPatch.grn_date = grnDate;
-    if (postingDate) headerPatch.posting_date = postingDate;
-    if (remarks || body.remarks === null) headerPatch.remarks = remarks || null;
-
-    const { error: headerError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
-      .update(headerPatch)
-      .eq("id", grnId);
-
-    if (headerError) {
-      return procurementErrorResponse(req, ctx, "GRN_UPDATE_FAILED", 500, "Unable to update GRN.");
-    }
-
-    return okResponse(await hydrateGrn(grnId), ctx.request_id, req);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "GRN_UPDATE_FAILED";
-    const status = message.includes("DRAFT") ? 400 : message.includes("NOT_FOUND") ? 404 : 500;
-    return procurementErrorResponse(req, ctx, message, status, message);
-  }
-}
-
-export async function postGRNHandler(
-  req: Request,
-  ctx: ProcurementHandlerContext,
-): Promise<Response> {
-  try {
-    assertProcurementReadRole(ctx);
-    const grnId = getIdFromPath(req);
-    const { data: grn, error: grnError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
-      .select("*")
-      .eq("id", grnId)
-      .single();
-
-    if (grnError || !grn) {
-      return procurementErrorResponse(req, ctx, "GRN_NOT_FOUND", 404, "GRN not found.");
-    }
-    if (toUpperTrimmedString(grn.status) !== "DRAFT") {
-      return procurementErrorResponse(req, ctx, "GRN_NOT_DRAFT", 400, "Only DRAFT GRNs can be posted.");
-    }
-
-    const { data: lines, error: linesError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt_line")
-      .select("*")
-      .eq("grn_id", grnId)
-      .order("line_number", { ascending: true });
-
-    if (linesError) {
-      return procurementErrorResponse(req, ctx, "GRN_LINE_FETCH_FAILED", 500, "Unable to fetch GRN lines.");
-    }
-
-    const typedLines = (lines ?? []) as GrnLineRow[];
-    for (const line of typedLines) {
-      if (!toTrimmedString(line.storage_location_id)) {
-        return procurementErrorResponse(req, ctx, "GRN_STORAGE_REQUIRED", 400, "Every GRN line must have storage_location_id before posting.");
-      }
-
-      await verifyLocationMapped(String(grn.company_id), String(line.storage_location_id));
-      const postingBlocked = await hasPhysicalInventoryBlock(
-        String(line.material_id),
-        String(line.storage_location_id),
-      );
-      if (postingBlocked) {
-        return procurementErrorResponse(
-          req,
-          ctx,
-          "MATERIAL_POSTING_BLOCKED",
-          409,
-          "Material has an active physical inventory count in progress.",
-        );
-      }
-
-      const material = await fetchMaterial(String(line.material_id));
-      const movementTypeCode = toTrimmedString(grn.sto_id) ? "STO_RECEIPT" : "P101";
-      const unitValue = parseNullableNumber(line.grn_rate) ?? 0;
-      const receivedQty = parsePositiveNumber(line.received_qty) ?? 0;
-      const stockTypeCode = toUpperTrimmedString(line.target_stock_type) || (material.qa_required_on_inward ? "QA_STOCK" : "UNRESTRICTED");
-      const postingResp = await serviceRoleClient
-        .schema("erp_inventory")
-        .rpc("post_stock_movement", {
-          p_document_number: grn.grn_number,
-          p_document_date: grn.grn_date,
-          p_posting_date: grn.posting_date,
-          p_movement_type_code: movementTypeCode,
-          p_company_id: grn.company_id,
-          p_storage_location_id: line.storage_location_id,
-          p_material_id: line.material_id,
-          p_quantity: receivedQty,
-          p_base_uom_code: material.base_uom_code ?? line.uom_code,
-          p_unit_value: unitValue,
-          p_stock_type_code: stockTypeCode,
-          p_direction: "IN",
-          p_posted_by: ctx.auth_user_id,
-          p_reversal_of_id: null,
-        });
-
-      if (postingResp.error || !Array.isArray(postingResp.data) || postingResp.data.length === 0) {
-        return procurementErrorResponse(req, ctx, "GRN_POST_RPC_FAILED", 500, "Stock posting RPC failed.");
-      }
-
-      const postingRow = postingResp.data[0] as JsonRecord;
-      const discrepancyQty = Number(((parseNullableNumber(line.ge_qty) ?? 0) - receivedQty).toFixed(6));
-      const { error: lineUpdateError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("goods_receipt_line")
-        .update({
-          stock_document_id: postingRow.stock_document_id ?? null,
-          stock_ledger_id: postingRow.stock_ledger_id ?? null,
-          discrepancy_qty: discrepancyQty,
-          target_stock_type: stockTypeCode,
-        })
-        .eq("id", String(line.id));
-
-      if (lineUpdateError) {
-        return procurementErrorResponse(req, ctx, "GRN_LINE_POST_UPDATE_FAILED", 500, "Unable to update posted GRN line.");
-      }
-
-      const { error: geLineUpdateError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("gate_entry_line")
-        .update({
-          grn_posted: true,
-        })
-        .eq("id", String(line.gate_entry_line_id));
-
-      if (geLineUpdateError) {
-        return procurementErrorResponse(req, ctx, "GRN_GATE_ENTRY_LINE_UPDATE_FAILED", 500, "Unable to update gate entry line posting state.");
-      }
-
-      if (line.po_line_id) {
-        await updatePoLineReceipt(String(line.po_line_id), receivedQty);
-        const { poLine } = await fetchPoLineBundle(String(line.po_line_id));
-        const { error: vmiError } = await serviceRoleClient
-          .schema("erp_master")
-          .from("vendor_material_info")
-          .update({
-            last_purchase_price: unitValue,
-            last_grn_date: grn.grn_date,
-          })
-          .eq("id", String(poLine.vendor_material_info_id));
-        if (vmiError) {
-          return procurementErrorResponse(req, ctx, "GRN_VENDOR_PRICE_UPDATE_FAILED", 500, "Unable to update vendor material info.");
-        }
-      }
-
-      const materialQaRequired = Boolean(material.qa_required_on_inward);
-      if (materialQaRequired || stockTypeCode === "QA_STOCK") {
-        await createQaDocumentForLine(ctx, grn as GrnRow, {
-          ...line,
-          target_stock_type: stockTypeCode,
-          received_qty: receivedQty,
-        });
-      }
-
-      const geLineResp = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("gate_entry_line")
-        .select("csn_id")
-        .eq("id", String(line.gate_entry_line_id))
-        .maybeSingle();
-      if (geLineResp.error) {
-        return procurementErrorResponse(req, ctx, "GRN_CSN_LINK_FETCH_FAILED", 500, "Unable to fetch CSN link.");
-      }
-      const csnId = toTrimmedString(geLineResp.data?.csn_id);
-      if (csnId) {
-        const { data: csn, error: csnFetchError } = await serviceRoleClient
-          .schema("erp_procurement")
-          .from("consignment_note")
-          .select("id, total_received_qty")
-          .eq("id", csnId)
-          .single();
-        if (csnFetchError || !csn) {
-          return procurementErrorResponse(req, ctx, "GRN_CSN_FETCH_FAILED", 500, "Unable to fetch CSN.");
-        }
-        const totalReceivedQty = parseNullableNumber(csn.total_received_qty) ?? 0;
-        const { error: csnUpdateError } = await serviceRoleClient
-          .schema("erp_procurement")
-          .from("consignment_note")
-          .update({
-            status: "GRD",
-            grn_id: grnId,
-            grn_date: grn.grn_date,
-            received_qty: receivedQty,
-            total_received_qty: Number((totalReceivedQty + receivedQty).toFixed(6)),
-            last_updated_at: new Date().toISOString(),
-          })
-          .eq("id", csnId);
-        if (csnUpdateError) {
-          return procurementErrorResponse(req, ctx, "GRN_CSN_UPDATE_FAILED", 500, "Unable to update CSN.");
-        }
-      }
-    }
-
-    const { error: headerUpdateError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
-      .update({
-        status: "POSTED",
-        posted_by: ctx.auth_user_id,
-        posted_at: new Date().toISOString(),
-        last_updated_at: new Date().toISOString(),
-      })
-      .eq("id", grnId);
-
-    if (headerUpdateError) {
-      return procurementErrorResponse(req, ctx, "GRN_HEADER_POST_FAILED", 500, "Unable to update GRN posting status.");
-    }
-
-    await serviceRoleClient
-      .schema("erp_procurement")
-      .from("gate_entry")
-      .update({
-        status: "GRN_POSTED",
-        last_updated_at: new Date().toISOString(),
-      })
-      .eq("id", String(grn.gate_entry_id));
-
-    return okResponse(await hydrateGrn(grnId), ctx.request_id, req);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "GRN_POST_FAILED";
-    const status = message.includes("REQUIRED") ? 400 : message.includes("NOT_FOUND") ? 404 : 500;
-    return procurementErrorResponse(req, ctx, message, status, message);
-  }
-}
-
+// ── POST /api/procurement/grns/:id/reverse ───────────────────────────────────
 export async function reverseGRNHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -844,18 +912,13 @@ export async function reverseGRNHandler(
     const grnId = getIdFromPath(req);
     const body = await parseBody(req);
     const reversalReason = toTrimmedString(body.reversal_reason);
-
     if (!reversalReason) {
       return procurementErrorResponse(req, ctx, "GRN_REVERSAL_REASON_REQUIRED", 400, "reversal_reason is required.");
     }
 
     const { data: grn, error: grnError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
-      .select("*")
-      .eq("id", grnId)
-      .single();
-
+      .schema("erp_procurement").from("goods_receipt")
+      .select("*").eq("id", grnId).single();
     if (grnError || !grn) {
       return procurementErrorResponse(req, ctx, "GRN_NOT_FOUND", 404, "GRN not found.");
     }
@@ -863,100 +926,109 @@ export async function reverseGRNHandler(
       return procurementErrorResponse(req, ctx, "GRN_NOT_POSTED", 400, "Only POSTED GRNs can be reversed.");
     }
 
-    const { data: lines, error: linesError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt_line")
-      .select("*")
-      .eq("grn_id", grnId)
-      .order("line_number", { ascending: true });
+    const isNewStyle = Boolean(grn.gate_entry_line_id);
 
-    if (linesError) {
-      return procurementErrorResponse(req, ctx, "GRN_LINE_FETCH_FAILED", 500, "Unable to fetch GRN lines.");
-    }
+    if (isNewStyle) {
+      // New-style: data on header
+      const material = await fetchMaterial(String(grn.material_id));
+      const receivedQty = parsePositiveNumber(grn.received_qty) ?? 0;
+      const stockTypeCode = toUpperTrimmedString(grn.target_stock_type) || "UNRESTRICTED";
 
-    for (const line of (lines ?? []) as GrnLineRow[]) {
-      const material = await fetchMaterial(String(line.material_id));
-      const receivedQty = parsePositiveNumber(line.received_qty) ?? 0;
-      const stockTypeCode = toUpperTrimmedString(line.target_stock_type) || "UNRESTRICTED";
-      const reversalResp = await serviceRoleClient
-        .schema("erp_inventory")
+      const reversalResp = await serviceRoleClient.schema("erp_inventory")
         .rpc("post_stock_movement", {
           p_document_number: `${grn.grn_number}-REV`,
           p_document_date: todayIsoDate(),
           p_posting_date: todayIsoDate(),
           p_movement_type_code: "P102",
           p_company_id: grn.company_id,
-          p_storage_location_id: line.storage_location_id,
-          p_material_id: line.material_id,
+          p_storage_location_id: grn.storage_location_id,
+          p_material_id: grn.material_id,
           p_quantity: receivedQty,
-          p_base_uom_code: material.base_uom_code ?? line.uom_code,
-          p_unit_value: parseNullableNumber(line.grn_rate) ?? 0,
+          p_base_uom_code: material.base_uom_code ?? grn.uom_code,
+          p_unit_value: parseNullableNumber(grn.grn_rate) ?? 0,
           p_stock_type_code: stockTypeCode,
           p_direction: "OUT",
           p_posted_by: ctx.auth_user_id,
-          p_reversal_of_id: line.stock_document_id,
+          p_reversal_of_id: grn.stock_document_id,
         });
-
       if (reversalResp.error) {
-        return procurementErrorResponse(req, ctx, "GRN_REVERSE_RPC_FAILED", 500, "Stock reversal RPC failed.");
+        return procurementErrorResponse(req, ctx, "GRN_REVERSE_RPC_FAILED", 500, "Stock reversal failed.");
       }
 
-      if (line.po_line_id) {
-        await reversePoLineReceipt(String(line.po_line_id), receivedQty);
-      }
+      if (grn.po_line_id) await reversePoLineReceipt(String(grn.po_line_id), receivedQty);
 
-      const { error: geLineError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("gate_entry_line")
-        .update({
-          grn_posted: false,
-        })
-        .eq("id", String(line.gate_entry_line_id));
-      if (geLineError) {
-        return procurementErrorResponse(req, ctx, "GRN_REVERSE_GATE_LINE_FAILED", 500, "Unable to reset gate entry line.");
-      }
+      await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
+        .update({ grn_posted: false }).eq("id", String(grn.gate_entry_line_id));
 
-      const geLineResp = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("gate_entry_line")
-        .select("csn_id")
-        .eq("id", String(line.gate_entry_line_id))
-        .maybeSingle();
-      if (geLineResp.error) {
-        return procurementErrorResponse(req, ctx, "GRN_REVERSE_CSN_LINK_FAILED", 500, "Unable to fetch CSN link for reversal.");
-      }
-      const csnId = toTrimmedString(geLineResp.data?.csn_id);
+      // Void QA documents for this GRN
+      await serviceRoleClient.schema("erp_procurement").from("inward_qa_document")
+        .delete().eq("grn_id", grnId);
+
+      // Reset CSN
+      const { data: geLine } = await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
+        .select("csn_id").eq("id", String(grn.gate_entry_line_id)).maybeSingle();
+      const csnId = toTrimmedString(geLine?.csn_id);
       if (csnId) {
-        const { error: csnUpdateError } = await serviceRoleClient
-          .schema("erp_procurement")
-          .from("consignment_note")
-          .update({
-            status: "GED",
-            grn_id: null,
-            grn_date: null,
-            received_qty: null,
-            last_updated_at: new Date().toISOString(),
-          })
+        await serviceRoleClient.schema("erp_procurement").from("consignment_note")
+          .update({ status: "GED", grn_id: null, grn_date: null, received_qty: null, last_updated_at: new Date().toISOString() })
           .eq("id", csnId);
-        if (csnUpdateError) {
-          return procurementErrorResponse(req, ctx, "GRN_REVERSE_CSN_UPDATE_FAILED", 500, "Unable to reset CSN.");
-        }
+      }
+    } else {
+      // Old-style: iterate goods_receipt_line
+      const { data: lines, error: linesError } = await serviceRoleClient
+        .schema("erp_procurement").from("goods_receipt_line")
+        .select("*").eq("grn_id", grnId).order("line_number", { ascending: true });
+      if (linesError) {
+        return procurementErrorResponse(req, ctx, "GRN_LINE_FETCH_FAILED", 500, "Unable to fetch GRN lines.");
       }
 
-      const { error: qaDeleteError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("inward_qa_document")
-        .delete()
-        .eq("grn_id", grnId)
-        .eq("grn_line_id", String(line.id));
-      if (qaDeleteError) {
-        return procurementErrorResponse(req, ctx, "GRN_REVERSE_QA_VOID_FAILED", 500, "Unable to void QA documents.");
+      for (const line of (lines ?? []) as GrnLineRow[]) {
+        const material = await fetchMaterial(String(line.material_id));
+        const receivedQty = parsePositiveNumber(line.received_qty) ?? 0;
+        const stockTypeCode = toUpperTrimmedString(line.target_stock_type) || "UNRESTRICTED";
+
+        const reversalResp = await serviceRoleClient.schema("erp_inventory")
+          .rpc("post_stock_movement", {
+            p_document_number: `${grn.grn_number}-REV`,
+            p_document_date: todayIsoDate(),
+            p_posting_date: todayIsoDate(),
+            p_movement_type_code: "P102",
+            p_company_id: grn.company_id,
+            p_storage_location_id: line.storage_location_id,
+            p_material_id: line.material_id,
+            p_quantity: receivedQty,
+            p_base_uom_code: material.base_uom_code ?? line.uom_code,
+            p_unit_value: parseNullableNumber(line.grn_rate) ?? 0,
+            p_stock_type_code: stockTypeCode,
+            p_direction: "OUT",
+            p_posted_by: ctx.auth_user_id,
+            p_reversal_of_id: line.stock_document_id,
+          });
+        if (reversalResp.error) {
+          return procurementErrorResponse(req, ctx, "GRN_REVERSE_RPC_FAILED", 500, "Stock reversal failed.");
+        }
+
+        if (line.po_line_id) await reversePoLineReceipt(String(line.po_line_id), receivedQty);
+
+        await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
+          .update({ grn_posted: false }).eq("id", String(line.gate_entry_line_id));
+
+        const geLineResp = await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
+          .select("csn_id").eq("id", String(line.gate_entry_line_id)).maybeSingle();
+        const csnId = toTrimmedString(geLineResp.data?.csn_id);
+        if (csnId) {
+          await serviceRoleClient.schema("erp_procurement").from("consignment_note")
+            .update({ status: "GED", grn_id: null, grn_date: null, received_qty: null, last_updated_at: new Date().toISOString() })
+            .eq("id", csnId);
+        }
+
+        await serviceRoleClient.schema("erp_procurement").from("inward_qa_document")
+          .delete().eq("grn_id", grnId).eq("grn_line_id", String(line.id));
       }
     }
 
-    const { error: headerUpdateError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
+    // Update GRN header
+    await serviceRoleClient.schema("erp_procurement").from("goods_receipt")
       .update({
         status: "REVERSED",
         movement_type_code: "P102",
@@ -968,17 +1040,9 @@ export async function reverseGRNHandler(
       })
       .eq("id", grnId);
 
-    if (headerUpdateError) {
-      return procurementErrorResponse(req, ctx, "GRN_REVERSE_UPDATE_FAILED", 500, "Unable to update GRN reversal status.");
-    }
-
-    await serviceRoleClient
-      .schema("erp_procurement")
-      .from("gate_entry")
-      .update({
-        status: "OPEN",
-        last_updated_at: new Date().toISOString(),
-      })
+    // Revert GE status to OPEN
+    await serviceRoleClient.schema("erp_procurement").from("gate_entry")
+      .update({ status: "OPEN", last_updated_at: new Date().toISOString() })
       .eq("id", String(grn.gate_entry_id));
 
     return okResponse(await hydrateGrn(grnId), ctx.request_id, req);
@@ -987,4 +1051,27 @@ export async function reverseGRNHandler(
     const status = message.includes("REQUIRED") ? 400 : message.includes("NOT_FOUND") ? 404 : 500;
     return procurementErrorResponse(req, ctx, message, status, message);
   }
+}
+
+// ── Legacy handlers (kept for backward compat with existing DRAFT GRNs) ──────
+
+export async function createGRNDraftHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  return procurementErrorResponse(req, ctx, "GRN_USE_FROM_LINE_ENDPOINT", 400, "Use POST /api/procurement/grns/from-line to create a GRN.");
+}
+
+export async function updateGRNDraftHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  return procurementErrorResponse(req, ctx, "GRN_UPDATE_NOT_SUPPORTED", 400, "New-style GRNs are created and posted in one step.");
+}
+
+export async function postGRNHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  return procurementErrorResponse(req, ctx, "GRN_USE_FROM_LINE_ENDPOINT", 400, "Use POST /api/procurement/grns/from-line to create and post a GRN.");
 }

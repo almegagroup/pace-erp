@@ -452,16 +452,19 @@ export function getGRN(id) {
   return fetchProcurement("GET", `/api/procurement/grns/${encodeURIComponent(id)}`);
 }
 
-export function createGRNDraft(data) {
-  return fetchProcurement("POST", "/api/procurement/grns", data);
+export function getGELinesForGRN(geNumber) {
+  return fetchProcurement("GET", "/api/procurement/grns/ge-lines", undefined, { ge_number: geNumber });
 }
 
-export function updateGRNDraft(id, data) {
-  return fetchProcurement("PUT", `/api/procurement/grns/${encodeURIComponent(id)}`, data);
+export function createAndPostGRNFromLine(data) {
+  return fetchProcurement("POST", "/api/procurement/grns/from-line", data);
 }
 
-export function postGRN(id) {
-  return fetchProcurement("POST", `/api/procurement/grns/${encodeURIComponent(id)}/post`);
+export function getMaterialVendorDocNames(materialId, vendorId) {
+  return fetchProcurement("GET", "/api/procurement/grns/material-vendor-doc-names", undefined, {
+    material_id: materialId,
+    vendor_id: vendorId,
+  });
 }
 
 export function reverseGRN(id, data) {
