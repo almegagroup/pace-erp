@@ -551,7 +551,7 @@ export async function createAndPostGRNFromLineHandler(
   try {
     assertProcurementReadRole(ctx);
     const body = await parseBody(req);
-    console.log("[GRN_FROM_LINE] body:", JSON.stringify(body));
+    console.log("[GRN_FROM_LINE] START user:", ctx.auth_user_id, "body:", JSON.stringify(body));
     const gateEntryLineId = toTrimmedString(body.gate_entry_line_id);
     if (!gateEntryLineId) {
       return procurementErrorResponse(req, ctx, "GRN_GATE_ENTRY_LINE_REQUIRED", 400, "gate_entry_line_id is required.");
@@ -562,6 +562,7 @@ export async function createAndPostGRNFromLineHandler(
       .schema("erp_procurement").from("gate_entry_line")
       .select("*").eq("id", gateEntryLineId).single();
     if (geLineError || !geLine) {
+      console.error("[GRN_FROM_LINE] GE line not found:", gateEntryLineId, geLineError?.message);
       return procurementErrorResponse(req, ctx, "GRN_GATE_ENTRY_LINE_NOT_FOUND", 404, "Gate entry line not found.");
     }
 
@@ -709,8 +710,10 @@ export async function createAndPostGRNFromLineHandler(
       .select("*").single();
 
     if (grnError || !grn) {
+      console.error("[GRN_FROM_LINE] GRN INSERT failed:", grnError?.message);
       return procurementErrorResponse(req, ctx, "GRN_CREATE_FAILED", 500, "Unable to create GRN.");
     }
+    console.log("[GRN_FROM_LINE] GRN created DRAFT:", grn.id, "grn_number:", grnNumber);
 
     // All steps after this point must succeed. If anything fails, delete the DRAFT GRN so
     // there is no half-created record — the caller can safely retry from scratch.
@@ -739,10 +742,15 @@ export async function createAndPostGRNFromLineHandler(
       });
 
     if (postingResp.error || !Array.isArray(postingResp.data) || postingResp.data.length === 0) {
-      console.error("[GRN_FROM_LINE] stock posting failed, rolling back GRN:", postingResp.error);
+      console.error("[GRN_FROM_LINE] stock posting RPC failed. grn_number:", grnNumber,
+        "material_id:", geLine.material_id, "storage_location_id:", storageLocationId,
+        "company_id:", gateEntry.company_id, "stockQty:", stockQty, "baseUomCode:", baseUomCode,
+        "targetStockType:", targetStockType, "rpc_error:", JSON.stringify(postingResp.error),
+        "rpc_data:", JSON.stringify(postingResp.data));
       await rollbackGrn();
       return procurementErrorResponse(req, ctx, "GRN_POST_RPC_FAILED", 500, "Stock posting failed.");
     }
+    console.log("[GRN_FROM_LINE] stock posted OK. grn_number:", grnNumber, "stock_doc:", postingResp.data[0]);
 
     const postingRow = postingResp.data[0] as JsonRecord;
 
@@ -832,10 +840,11 @@ export async function createAndPostGRNFromLineHandler(
         .eq("id", String(geLine.gate_entry_id));
     }
 
+    console.log("[GRN_FROM_LINE] SUCCESS grn_number:", grnNumber, "status: POSTED");
     return okResponse(await hydrateGrn(String(grn.id)), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GRN_CREATE_FAILED";
-    console.error("[GRN_FROM_LINE] error:", message, error);
+    console.error("[GRN_FROM_LINE] UNHANDLED ERROR:", message, error instanceof Error ? error.stack : JSON.stringify(error));
     const status = message.includes("REQUIRED") ? 400 : message.includes("NOT_FOUND") ? 404 : 500;
     return procurementErrorResponse(req, ctx, message, status, message);
   }
