@@ -103,8 +103,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/physical-inventory":         { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "WRITE" },
 
   // ── Procurement: Opening Stock ────────────────────────────────────────────
-  "GET:/api/procurement/opening-stock":               { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "VIEW"  },
-  "POST:/api/procurement/opening-stock":              { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "WRITE" },
+  "GET:/api/procurement/opening-stock":               { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW"  },
+  "POST:/api/procurement/opening-stock":              { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "WRITE" },
 
   // ── Procurement: Reports ──────────────────────────────────────────────────
   "GET:/api/procurement/planning":                    { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
@@ -714,30 +714,30 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   // ── Opening Stock ──────────────────────────────────────────────────────────
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+$/,
-    methods: { GET: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "VIEW" } },
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "VIEW" } },
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/lines$/,
-    methods: { POST: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "WRITE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/lines\/[^/]+$/,
     methods: {
-      PUT:    { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "EDIT"   },
-      DELETE: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "DELETE" },
+      PUT:    { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "EDIT"   },
+      DELETE: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "DELETE" },
     },
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/submit$/,
-    methods: { POST: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "WRITE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/approve$/,
-    methods: { POST: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "APPROVE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "APPROVE" } },
   },
   {
     pattern: /^\/api\/procurement\/opening-stock\/[^/]+\/post$/,
-    methods: { POST: { skipAcl: false, resourceCode: "SA_OPENING_STOCK_LIST", action: "APPROVE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "APPROVE" } },
   },
 
   // ── L2 Masters (parametric) ────────────────────────────────────────────────

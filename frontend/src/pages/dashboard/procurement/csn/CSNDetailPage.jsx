@@ -7,7 +7,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   getCSN,
   listCSNs,
@@ -195,7 +195,9 @@ function getCsnDisplayLabel(row) {
 }
 
 export default function CSNDetailPage() {
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
   const [detail, setDetail] = useState(null);
   const [relatedCsns, setRelatedCsns] = useState([]);

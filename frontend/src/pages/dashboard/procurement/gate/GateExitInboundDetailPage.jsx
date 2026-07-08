@@ -8,14 +8,14 @@
  * Authority: Frontend
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { getGateExitInbound } from "../procurementApi.js";
 
@@ -25,7 +25,9 @@ function formatNullable(value) {
 
 export default function GateExitInboundDetailPage() {
   const navigate = useNavigate();
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const menu = useMenu();
   void menu;
   const [detail, setDetail] = useState(null);

@@ -5,7 +5,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openScreen, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
@@ -31,7 +31,9 @@ function getStatusTone(status) {
 }
 
 export default function POOrderGroupDetailPage() {
-  const { id = "" } = useParams();
+  const { id: routeId = "" } = useParams();
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const id = routeId && routeId !== ":id" ? routeId : (screenContext.id || "");
   const navigate = useNavigate();
   const { shellProfile } = useMenu();
   const [saving, setSaving] = useState(false);
