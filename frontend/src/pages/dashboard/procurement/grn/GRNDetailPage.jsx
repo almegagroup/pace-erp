@@ -115,6 +115,7 @@ export default function GRNDetailPage() {
             <>
               <ErpSectionCard eyebrow="Receipt" title="Material & quantity">
                 <Fields items={[
+                  ["PACE code", detail.pace_code || "—"],
                   ["Material", detail.material_name || "—"],
                   ["External code", detail.external_sku || "—"],
                   ["GE qty", detail.ge_qty != null ? `${detail.ge_qty} ${detail.uom_code || ""}` : "—"],
@@ -179,8 +180,8 @@ export default function GRNDetailPage() {
                     label: "Material",
                     render: (row) =>
                       row.material_name
-                        ? <span><span className="font-medium">{row.material_code}</span><span className="text-slate-500"> — {row.material_name}</span></span>
-                        : row.material_code || "—",
+                        ? <span><span className="font-medium">{row.pace_code}</span><span className="text-slate-500"> — {row.material_name}</span></span>
+                        : row.pace_code || "—",
                   },
                   { key: "ge_qty", label: "GE qty", width: "90px" },
                   { key: "received_qty", label: "Received", width: "90px" },

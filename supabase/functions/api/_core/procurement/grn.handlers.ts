@@ -131,7 +131,7 @@ async function fetchMaterial(materialId: string): Promise<MaterialRow> {
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled")
+    .select("id, pace_code, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled")
     .eq("id", materialId)
     .single();
   if (error || !data) throw new Error("MATERIAL_NOT_FOUND");
@@ -290,7 +290,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
   let materialData: JsonRecord | null = null;
   if (isNewStyle && grn.material_id) {
     const { data } = await serviceRoleClient.schema("erp_master").from("material_master")
-      .select("id, material_code, material_name, external_sku, batch_tracking_required, expiry_tracking_enabled, qa_required_on_inward")
+      .select("id, pace_code, material_name, external_sku, batch_tracking_required, expiry_tracking_enabled, qa_required_on_inward")
       .eq("id", String(grn.material_id)).maybeSingle();
     materialData = data;
   }
@@ -310,7 +310,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
     const [matResp, slocResp] = await Promise.all([
       matIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, material_code, material_name").in("id", matIds)
+            .select("id, pace_code, material_name").in("id", matIds)
         : { data: [], error: null },
       slocIds.length > 0
         ? serviceRoleClient.schema("erp_inventory").from("storage_location_master")
@@ -324,7 +324,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
       const sloc = slocMap.get(l.storage_location_id as string);
       return {
         ...l,
-        material_code: mat?.material_code ?? null,
+        pace_code: mat?.pace_code ?? null,
         material_name: mat?.material_name ?? null,
         location_code: sloc?.location_code ?? null,
         location_name: sloc?.location_name ?? null,
@@ -336,7 +336,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
     ...grn,
     vendor_code: vendorResult.vendor_code,
     vendor_name: vendorResult.vendor_name,
-    material_code: materialData?.material_code ?? null,
+    pace_code: materialData?.pace_code ?? null,
     material_name: materialData?.material_name ?? null,
     external_sku: materialData?.external_sku ?? null,
     batch_tracking_required: materialData?.batch_tracking_required ?? false,
@@ -386,7 +386,7 @@ export async function getGELinesForGRNHandler(
     const [matResp, poLineResp, existingGrnResp] = await Promise.all([
       matIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled")
+            .select("id, pace_code, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled")
             .in("id", matIds)
         : { data: [], error: null },
       poLineIds.length > 0
@@ -876,7 +876,7 @@ export async function listGRNsHandler(
         : { data: [], error: null },
       materialIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, material_code, material_name").in("id", materialIds)
+            .select("id, pace_code, material_name").in("id", materialIds)
         : { data: [], error: null },
       geIds.length > 0
         ? serviceRoleClient.schema("erp_procurement").from("gate_entry")
@@ -916,7 +916,7 @@ export async function listGRNsHandler(
         status: r.status,
         vendor_code: vendor?.vendor_code ?? null,
         vendor_name: vendor?.vendor_name ?? null,
-        material_code: mat?.material_code ?? null,
+        pace_code: mat?.pace_code ?? null,
         material_name: mat?.material_name ?? null,
         ge_number: ge?.ge_number ?? null,
         received_qty: Number(totalQty.toFixed(6)),

@@ -474,6 +474,7 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
           <ErpSectionCard eyebrow="Material" title="Material identity">
             <div className="grid grid-cols-2 gap-3 mb-4 md:grid-cols-3">
               {[
+                ["PACE code", geLine.pace_code ?? "—"],
                 ["Material name", geLine.material_name ?? "—"],
                 ["External code", geLine.external_sku ?? "—"],
                 ["Base UOM", geLine.base_uom_code ?? "—"],
