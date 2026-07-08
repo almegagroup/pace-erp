@@ -8,6 +8,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
@@ -61,6 +62,13 @@ export default function GateEntryDetailPage() {
   });
 
   const fetchError = queryError instanceof Error ? queryError.message : (queryError ? "GE_FETCH_FAILED" : "");
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void queryClient.invalidateQueries({ queryKey: ["procurement", "ge-detail", id] }),
+    },
+  });
 
   const hasGateExit = Boolean(detail?.gate_exit_inbound?.id);
   const weightedInbound = useMemo(

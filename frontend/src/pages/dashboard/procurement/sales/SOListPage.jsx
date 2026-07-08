@@ -5,6 +5,7 @@ import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listCustomers } from "../../om/omApi.js";
@@ -49,6 +50,14 @@ export default function SOListPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [reloadTick, setReloadTick] = useState(0);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => setReloadTick((tick) => tick + 1),
+    },
+  });
 
   useEffect(() => {
     setCompanyId(runtimeContext?.selectedCompanyId || "");
@@ -104,7 +113,7 @@ export default function SOListPage() {
     return () => {
       active = false;
     };
-  }, [companyId, customerId, dateFrom, dateTo, page, status]);
+  }, [companyId, customerId, dateFrom, dateTo, page, status, reloadTick]);
 
   const customerMap = useMemo(
     () => new Map(customers.map((entry) => [entry.id, entry])),
@@ -160,7 +169,7 @@ export default function SOListPage() {
       eyebrow="Procurement"
       title="Sales Orders"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setPage((current) => current) },
+        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setReloadTick((tick) => tick + 1) },
         { key: "create", label: "Create SO", tone: "primary", onClick: openCreate },
       ]}
       notices={error ? [{ key: "so-list-error", tone: "error", message: error }] : []}

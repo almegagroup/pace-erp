@@ -15,6 +15,7 @@ import ErpSelectionSection from "../../../../components/forms/ErpSelectionSectio
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import {
   listDomesticLeadTimes,
   upsertDomesticLeadTime,
@@ -44,6 +45,13 @@ export default function DomesticLeadTimeMasterPage() {
   const rows = rowQuery.data ?? [];
   const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
   const loading = rowQuery.isLoading || companiesQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void Promise.all([rowQuery.refetch(), companiesQuery.refetch()]),
+    },
+  });
 
   useEffect(() => {
     setError(rowQuery.error?.message || companiesQuery.error?.message || "");

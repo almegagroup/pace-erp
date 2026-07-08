@@ -4,6 +4,7 @@ import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getGateReport } from "../procurementApi.js";
 
 const GE_TYPE_OPTIONS = ["INBOUND_PO", "INBOUND_STO"];
@@ -67,6 +68,13 @@ export default function GateReportPage() {
 
   const loading = reportQuery.isLoading;
   const error = reportQuery.error?.message ?? "";
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void queryClient.invalidateQueries({ queryKey: ["procurement", "gate-report"] }),
+    },
+  });
 
   return (
     <ErpMasterListTemplate

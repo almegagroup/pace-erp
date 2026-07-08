@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -43,6 +44,16 @@ export default function POOrderGroupListPage() {
     groupQuery.error?.message ||
     vendorQuery.error?.message ||
     "";
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => {
+        void groupQuery.refetch();
+        void vendorQuery.refetch();
+      },
+    },
+  });
 
   const vendorMap = useMemo(() => new Map(vendors.map((entry) => [entry.id, entry])), [vendors]);
   const companyMap = useMemo(

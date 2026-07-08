@@ -10,6 +10,7 @@
 import React, { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import {
   addMaterialCategoryMember,
@@ -52,6 +53,14 @@ export default function MaterialCategoryMasterPage() {
   const groups = groupQuery.data ?? [];
   const materials = materialQuery.materials;
   const loading = groupQuery.isLoading || materialQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void Promise.all([groupQuery.refetch(), materialQuery.refetch()]),
+    },
+  });
+
   const queryError =
     groupQuery.error?.message ||
     materialQuery.error?.message ||

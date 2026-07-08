@@ -11,6 +11,7 @@ import {
   useMaterialOptionsQuery,
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   acknowledgeDebitNote,
@@ -95,6 +96,16 @@ export default function RTVDetailPage() {
     grnQuery.isLoading ||
     vendorQuery.isLoading ||
     materialQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => {
+        void detailQuery.refetch();
+        void grnQuery.refetch();
+      },
+    },
+  });
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),

@@ -5,6 +5,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listGRNs } from "../procurementApi.js";
@@ -80,6 +81,13 @@ export default function GRNListPage() {
   const endIndex = total === 0 ? 0 : Math.min(offset + LIMIT, total);
   const loading = grnQuery.isLoading;
   const error = grnQuery.error?.message ?? "";
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void grnQuery.refetch(),
+    },
+  });
 
   function openDetail(row) {
     openScreen(OPERATION_SCREENS.PROC_GRN_DETAIL.screen_code, { context: { id: row.id } });

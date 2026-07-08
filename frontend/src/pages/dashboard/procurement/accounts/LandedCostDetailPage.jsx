@@ -7,6 +7,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { listCHAs } from "../procurementApi.js";
 import {
@@ -115,6 +116,13 @@ export default function LandedCostDetailPage() {
   useEffect(() => {
     void loadDetail();
   }, [id]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void loadDetail(),
+    },
+  });
 
   async function handleCreateHeader() {
     if (!headerForm.vendor_id || (!headerForm.grn_id && !headerForm.csn_id)) {

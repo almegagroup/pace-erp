@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, openScreen, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -45,6 +46,13 @@ export default function POOrderGroupDetailPage() {
   });
   const group = groupQuery.data ?? null;
   const loading = groupQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: groupQuery.isFetching,
+      perform: () => void groupQuery.refetch(),
+    },
+  });
 
   const canApprove = PO_APPROVER_ROLES.has(shellProfile?.roleCode);
   useEffect(() => {

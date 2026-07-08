@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { getGRN, reverseGRN } from "../procurementApi.js";
@@ -45,6 +46,13 @@ export default function GRNDetailPage() {
   const detail = detailQuery.data ?? null;
   const loading = detailQuery.isLoading;
   const isNewStyle = Boolean(detail?.gate_entry_line_id);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void detailQuery.refetch(),
+    },
+  });
 
   async function handleReverse() {
     if (!detail?.id) return;

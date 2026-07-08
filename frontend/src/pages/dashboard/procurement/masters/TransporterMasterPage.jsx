@@ -11,6 +11,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import {
   createTransporter,
   deleteTransporter,
@@ -72,6 +73,13 @@ export default function TransporterMasterPage() {
   const rows = transporterQuery.data ?? [];
   const companies = Array.isArray(companiesQuery.data) ? companiesQuery.data : [];
   const loading = transporterQuery.isLoading || companiesQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void Promise.all([transporterQuery.refetch(), companiesQuery.refetch()]),
+    },
+  });
 
   function flash(msg, isError = false) {
     clearTimeout(noticeTimer.current);

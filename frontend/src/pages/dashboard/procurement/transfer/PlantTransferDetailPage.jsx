@@ -15,6 +15,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
@@ -94,6 +95,13 @@ export default function PlantTransferDetailPage() {
   useEffect(() => {
     void loadDetail();
   }, [loadDetail]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void loadDetail(),
+    },
+  });
 
   async function runAction(action, successMessage) {
     setSaving(true);

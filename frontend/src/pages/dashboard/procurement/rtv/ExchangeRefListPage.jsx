@@ -16,6 +16,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { linkReplacementGRN, listExchangeRefs } from "../procurementApi.js";
@@ -67,6 +68,13 @@ export default function ExchangeRefListPage() {
     : [];
   const vendors = vendorQuery.vendors;
   const loading = exchangeRefQuery.isLoading || vendorQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void Promise.all([exchangeRefQuery.refetch(), vendorQuery.refetch()]),
+    },
+  });
 
   useEffect(() => {
     setPage(1);

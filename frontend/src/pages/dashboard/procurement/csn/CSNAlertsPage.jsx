@@ -5,6 +5,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { getLCAlertList, getVesselBookingAlertList } from "../procurementApi.js";
 
@@ -21,6 +22,7 @@ export default function CSNAlertsPage() {
   const [loadingLc, setLoadingLc] = useState(false);
   const [loadingVessel, setLoadingVessel] = useState(false);
   const [error, setError] = useState("");
+  const [reloadTick, setReloadTick] = useState(0);
 
   const activeTab = resolveInitialTab(searchParams.get("tab"));
   const companyOptions = useMemo(
@@ -65,7 +67,7 @@ export default function CSNAlertsPage() {
     return () => {
       active = false;
     };
-  }, [activeTab, companyId, lcRows.length]);
+  }, [activeTab, companyId, lcRows.length, reloadTick]);
 
   useEffect(() => {
     if (!companyId || activeTab !== "vessel" || vesselRows.length > 0) {
@@ -94,7 +96,7 @@ export default function CSNAlertsPage() {
     return () => {
       active = false;
     };
-  }, [activeTab, companyId, vesselRows.length]);
+  }, [activeTab, companyId, vesselRows.length, reloadTick]);
 
   function switchTab(nextTab) {
     setSearchParams({ tab: nextTab });
@@ -104,6 +106,20 @@ export default function CSNAlertsPage() {
   const notices = error ? [{ key: "csn-alerts-error", tone: "error", message: error }] : [];
   const activeRows = activeTab === "lc" ? lcRows : vesselRows;
   const loading = activeTab === "lc" ? loadingLc : loadingVessel;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => {
+        if (activeTab === "lc") {
+          setLcRows([]);
+        } else {
+          setVesselRows([]);
+        }
+        setReloadTick((tick) => tick + 1);
+      },
+    },
+  });
 
   return (
     <ErpScreenScaffold

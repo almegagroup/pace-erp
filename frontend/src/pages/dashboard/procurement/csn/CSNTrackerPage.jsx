@@ -6,6 +6,7 @@ import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx"
 import ModalBase from "../../../../components/layer/ModalBase.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen, openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import { requestWideWorkspace } from "../../../../store/wideWorkspace.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -537,6 +538,16 @@ export default function CSNTrackerPage() {
   const alertsQuery = useQuery({
     queryKey: ["csn-alert-counts", companyId],
     queryFn: () => getAllAlertCounts({ company_id: companyId || undefined }),
+  });
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: trackerQuery.isLoading,
+      perform: () => {
+        void trackerQuery.refetch();
+        void alertsQuery.refetch();
+      },
+    },
   });
 
   const layoutsQuery = useQuery({

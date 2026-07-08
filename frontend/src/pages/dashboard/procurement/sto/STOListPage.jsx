@@ -5,6 +5,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listSTOs } from "../procurementApi.js";
@@ -134,6 +135,13 @@ export default function STOListPage() {
   const pageRows = filteredRows.slice((safePage - 1) * LIMIT, safePage * LIMIT);
   const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => setRefreshToken((value) => value + 1),
+    },
+  });
 
   function openDetail(row) {
     openScreen(OPERATION_SCREENS.PROC_STO_DETAIL.screen_code, { context: { id: row.id } });

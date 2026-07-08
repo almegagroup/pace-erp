@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, {
@@ -56,6 +57,13 @@ export default function OpeningStockListPage() {
     ? documentQuery.data
     : [];
   const loading = documentQuery.isLoading || companiesQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void Promise.all([documentQuery.refetch(), companiesQuery.refetch()]),
+    },
+  });
 
   const companyOptions = useMemo(
     () =>

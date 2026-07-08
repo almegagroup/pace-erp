@@ -6,6 +6,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useVendorOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -83,6 +84,17 @@ export default function IVListPage() {
     ivQuery.error?.message ||
     vendorQuery.error?.message ||
     "";
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => {
+        void ivQuery.refetch();
+        void vendorQuery.refetch();
+      },
+    },
+  });
+
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]

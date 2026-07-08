@@ -6,6 +6,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listGateEntries } from "../procurementApi.js";
@@ -75,6 +76,13 @@ export default function GateEntryListPage() {
       limit: LIMIT,
       offset,
     }),
+  });
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void queryClient.invalidateQueries({ queryKey: ["procurement", "ge-list"] }),
+    },
   });
 
   const allRows = Array.isArray(listResult?.items) ? listResult.items : [];

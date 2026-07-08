@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -133,6 +134,19 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     materialQuery.isLoading ||
     locationQuery.isLoading ||
     companiesQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () =>
+        void Promise.all([
+          detailQuery.refetch(),
+          materialQuery.refetch(),
+          locationQuery.refetch(),
+          companiesQuery.refetch(),
+        ]),
+    },
+  });
 
   const materialOptions = useMemo(
     () =>

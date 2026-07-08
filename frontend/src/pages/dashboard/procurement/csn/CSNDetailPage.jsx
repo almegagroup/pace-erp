@@ -7,6 +7,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   getCSN,
@@ -265,6 +266,13 @@ export default function CSNDetailPage() {
       setDischargePorts(Array.isArray(data) ? data : []);
     }).catch(() => {});
   }, [loadDetail]);
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void loadDetail(),
+    },
+  });
 
   function patchField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));

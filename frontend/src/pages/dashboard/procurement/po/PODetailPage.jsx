@@ -8,6 +8,7 @@ import {
   useVendorOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
@@ -177,6 +178,13 @@ export default function PODetailPage() {
     paymentTermQuery.isLoading ||
     csnQuery.isLoading ||
     costCenterQuery.isLoading;
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void refreshDetailQueries(),
+    },
+  });
 
   const vendorMap = useMemo(
     () => new Map(vendors.map((entry) => [entry.id, entry])),

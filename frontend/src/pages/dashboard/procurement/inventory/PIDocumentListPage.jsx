@@ -4,6 +4,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listStorageLocations } from "../../om/omApi.js";
@@ -56,6 +57,13 @@ export default function PIDocumentListPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  useErpScreenHotkeys({
+    refresh: {
+      disabled: loading,
+      perform: () => void loadDocuments(filters),
+    },
+  });
 
   useEffect(() => {
     setForm((current) => ({
