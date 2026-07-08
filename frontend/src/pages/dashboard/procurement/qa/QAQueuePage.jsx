@@ -47,6 +47,20 @@ function normalizeSearch(text) {
   return String(text || "").trim().toLowerCase();
 }
 
+// Mirrors the backend's comparison exactly (see inward_qa.handlers.ts addTestLineHandler) —
+// pure arithmetic against LSL/USL that's already on the client, so the submit-time check
+// doesn't need to wait on a save round-trip to know pass/fail.
+function computePassFail(resultValue, lsl, usl) {
+  const numericResult = Number(resultValue);
+  const hasLimits = lsl !== null && lsl !== undefined || usl !== null && usl !== undefined;
+  if (!String(resultValue ?? "").trim() || !Number.isFinite(numericResult) || !hasLimits) {
+    return "PENDING";
+  }
+  const belowLsl = lsl !== null && lsl !== undefined && numericResult < Number(lsl);
+  const aboveUsl = usl !== null && usl !== undefined && numericResult > Number(usl);
+  return belowLsl || aboveUsl ? "FAIL" : "PASS";
+}
+
 function newDecisionRow(defaultDecision) {
   return {
     key:
@@ -427,12 +441,21 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged, onColl
     return testLines.find((line) => line.test_method_id === methodId);
   }
 
-  const failedMctMethods = mctConfigs.filter((cfg) => testLineForMethod(cfg.test_method_id)?.pass_fail === "FAIL");
+  // Current known value for a method — whatever's freshest: an unsaved edit in progress,
+  // else the last saved result. Used to evaluate pass/fail instantly, without waiting on
+  // a save round-trip (see computePassFail — it's the same simple LSL/USL comparison the
+  // backend does, no reason the UI should have to ask the server for the answer).
+  function currentResultValue(methodId) {
+    const draft = resultDrafts[methodId];
+    if (draft !== undefined) return draft;
+    return testLineForMethod(methodId)?.test_result ?? "";
+  }
+
+  const failedMctMethods = mctConfigs.filter(
+    (cfg) => computePassFail(currentResultValue(cfg.test_method_id), cfg.lsl, cfg.usl) === "FAIL",
+  );
   const anyMctFail = failedMctMethods.length > 0;
-  const allMctFilled = mctConfigs.every((cfg) => {
-    const line = testLineForMethod(cfg.test_method_id);
-    return line && String(line.test_result ?? "").trim() !== "";
-  });
+  const allMctFilled = mctConfigs.every((cfg) => String(currentResultValue(cfg.test_method_id)).trim() !== "");
 
   useEffect(() => {
     if (decisionRows.length === 0 && isMutable) {
