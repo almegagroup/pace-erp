@@ -13,7 +13,6 @@ import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
-  createGRNDraft,
   createGateExitInbound,
   getGateEntry,
   pruneGateEntry,
@@ -118,21 +117,8 @@ export default function GateEntryDetailPage() {
       navigate(`/dashboard/procurement/grns/${encodeURIComponent(existingGrnId)}`);
       return;
     }
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      const created = await createGRNDraft({ gate_entry_id: detail.id });
-      setNotice("GRN draft created.");
-      openScreen(OPERATION_SCREENS.PROC_GRN_DETAIL.screen_code);
-      navigate(`/dashboard/procurement/grns/${encodeURIComponent(created.id)}`);
-    } catch (saveError) {
-      setError(
-        saveError instanceof Error ? saveError.message : "GRN_CREATE_FAILED"
-      );
-    } finally {
-      setSaving(false);
-    }
+    openScreen(OPERATION_SCREENS.PROC_GRN_POST_FLOW.screen_code);
+    navigate("/dashboard/procurement/grns/post");
   }
 
   async function handlePrune() {
