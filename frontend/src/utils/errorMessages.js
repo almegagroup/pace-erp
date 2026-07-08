@@ -171,9 +171,8 @@ export const ERROR_MESSAGES = {
   INSUFFICIENT_STOCK: "Insufficient stock available for this transaction.",
 };
 
-export const GENERIC_PERMISSION_MESSAGE = "আপনার এই কাজের অনুমতি নেই।";
-export const GENERIC_IT_MESSAGE =
-  "একটি সিস্টেম সমস্যা হয়েছে। অনুগ্রহ করে Administrator এর সাথে যোগাযোগ করুন।";
+export const GENERIC_PERMISSION_MESSAGE = "You do not have permission to perform this action.";
+export const GENERIC_IT_MESSAGE = "A system error occurred. Please contact your Administrator.";
 
 function looksSafeForUsers(message) {
   if (typeof message !== "string") {
