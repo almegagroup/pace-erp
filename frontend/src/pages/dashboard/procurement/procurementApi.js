@@ -416,6 +416,10 @@ export function getGateEntry(id) {
   return fetchProcurement("GET", `/api/procurement/gate-entries/${encodeURIComponent(id)}`);
 }
 
+export function getGateEntryByNumber(geNumber) {
+  return fetchProcurement("GET", "/api/procurement/gate-entries/by-number", undefined, { ge_number: geNumber });
+}
+
 export function createGateEntry(data) {
   return fetchProcurement("POST", "/api/procurement/gate-entries", data);
 }

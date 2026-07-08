@@ -511,6 +511,37 @@ export async function getGateEntryHandler(
   }
 }
 
+export async function getGateEntryByNumberHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const geNumber = toTrimmedString(url.searchParams.get("ge_number"));
+    if (!geNumber) {
+      return procurementErrorResponse(req, ctx, "GE_NUMBER_REQUIRED", 400, "ge_number is required.");
+    }
+
+    const { data: gateEntry, error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("gate_entry")
+      .select("id")
+      .eq("ge_number", geNumber)
+      .maybeSingle();
+
+    if (error || !gateEntry) {
+      return procurementErrorResponse(req, ctx, "GE_NOT_FOUND", 404, "Gate entry not found.");
+    }
+
+    return okResponse(await hydrateGateEntry(String(gateEntry.id)), ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GE_FETCH_FAILED";
+    const status = message.includes("NOT_FOUND") ? 404 : 500;
+    return procurementErrorResponse(req, ctx, message, status, message);
+  }
+}
+
 export async function updateGateEntryHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
