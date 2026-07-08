@@ -382,6 +382,12 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
                   <p className="mt-0.5 text-sm font-medium text-slate-900">{value}</p>
                 </div>
               ))}
+              {geHeader.vendor_address && (
+                <div className="col-span-full">
+                  <p className="text-[11px] text-slate-500">Registered address</p>
+                  <p className="mt-0.5 text-sm text-slate-900">{geHeader.vendor_address}</p>
+                </div>
+              )}
             </div>
           </ErpSectionCard>
         )}

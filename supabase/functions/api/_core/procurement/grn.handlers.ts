@@ -418,7 +418,7 @@ export async function getGELinesForGRNHandler(
     const vendorIds = [...new Set((poResp.data ?? []).map((p: JsonRecord) => String(p.vendor_id ?? "")).filter(Boolean))];
     const vendorResp = vendorIds.length > 0
       ? await serviceRoleClient.schema("erp_master").from("vendor_master")
-          .select("id, vendor_code, vendor_name, vendor_type, gst_number")
+          .select("id, vendor_code, vendor_name, vendor_type, gst_number, reg_address_line1, reg_address_city, reg_address_state, reg_address_pin")
           .in("id", vendorIds)
       : { data: [] };
 
@@ -478,6 +478,7 @@ export async function getGELinesForGRNHandler(
         vendor_name: firstVendor?.vendor_name ?? null,
         vendor_type: firstPo?.vendor_type ?? null,
         vendor_gst: firstVendor?.gst_number ?? null,
+        vendor_address: [firstVendor?.reg_address_line1, firstVendor?.reg_address_city, firstVendor?.reg_address_state, firstVendor?.reg_address_pin].filter(Boolean).join(", ") || null,
       },
       lines: resolvedLines,
     }, ctx.request_id, req);
