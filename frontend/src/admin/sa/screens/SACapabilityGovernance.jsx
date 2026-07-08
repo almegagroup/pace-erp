@@ -13,7 +13,6 @@ import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.j
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../components/forms/ErpDenseFormRow.jsx";
 import {
-  formatCompanyAddress,
   formatCompanyLabel,
 } from "../../../shared/companyDisplay.js";
 
@@ -281,16 +280,16 @@ export default function SACapabilityGovernance(){
     if(!rows.length){setError("Selected project/module-er niche kono mapped business resource nei."); return;}
     setSaving(true); setError(""); setNotice("");
     try{
-      for(const row of rows){
+      await Promise.all(rows.map(async (row)=>{
         const included=includedResources.has(row.resource.resource_code);
         const payload=row.draft, hadExisting=Boolean(row.savedRow), explicit=hasRule(payload);
         // Not included → clear existing rule if any, skip otherwise
-        if(!included){ if(hadExisting){ await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capCode,resource_code:row.resource.resource_code})}); } continue; }
+        if(!included){ if(hadExisting){ await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capCode,resource_code:row.resource.resource_code})}); } return; }
         // Included but no flags → clear if had rule, skip otherwise
-        if(!explicit){ if(hadExisting){ await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capCode,resource_code:row.resource.resource_code})}); } continue; }
+        if(!explicit){ if(hadExisting){ await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capCode,resource_code:row.resource.resource_code})}); } return; }
         // Included with flags → save
         await fetchApi("/api/admin/acl/capability-actions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:capCode,resource_code:row.resource.resource_code,can_view:payload.can_view,can_write:payload.can_write,can_edit:payload.can_edit,can_delete:payload.can_delete,can_approve:payload.can_approve,can_export:payload.can_export,denied_actions:payload.denied_actions})});
-      }
+      }));
       console.info("CAPABILITY_MATRIX_SAVE_RESULT",{capability_code:capCode,module_code:moduleCode,project_code:projectCode||null});
       // loadCapRows re-initializes capRows + includedResources from DB truth.
       // Clear drafts so UI reflects persisted state cleanly — no stale local edits remain.
@@ -1020,16 +1019,17 @@ export default function SACapabilityGovernance(){
                   if(!ok) return;
                   setSaving(true); setError(""); setNotice("");
                   try{
-                    for(const rc of contentsSelected){
-                      await fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:packContentsCode,resource_code:rc})});
-                    }
+                    const selectedResourceCodes=Array.from(contentsSelected);
+                    await Promise.all(selectedResourceCodes.map((rc)=>
+                      fetchApi("/api/admin/acl/capability-actions/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({capability_code:packContentsCode,resource_code:rc})})
+                    ));
                     const data=await fetchApi(`/api/admin/acl/capability-actions?capability_code=${encodeURIComponent(packContentsCode)}`);
                     const updatedRows=data.permissions??[];
                     setPackContentsRows(updatedRows);
                     setCapRowCountMap((prev)=>({...prev,[packContentsCode]:updatedRows.length}));
                     setContentsSelected(new Set());
                     if(packContentsCode===capCode) await loadCapRows(packContentsCode);
-                    setNotice(`${contentsSelected.size} rules removed from ${packContentsCode}.`);
+                    setNotice(`${selectedResourceCodes.length} rules removed from ${packContentsCode}.`);
                   }catch(err){setError(`Bulk remove failed. ${err.message??"REQUEST_FAILED"}`);}
                   finally{setSaving(false);}
                 }}

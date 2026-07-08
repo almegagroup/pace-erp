@@ -291,13 +291,13 @@ function MaterialMasterTab({ uoms }) {
     setSaving(true);
     setError("");
     let failed = 0;
-    for (const id of selectedIds) {
+    await Promise.all(Array.from(selectedIds).map(async (id) => {
       try {
         await changeMaterialStatus({ id, new_status: "ACTIVE" });
       } catch {
         failed++;
       }
-    }
+    }));
     setSaving(false);
     setSelectedIds(new Set());
     if (failed > 0) setError(`${failed} row(s) could not be activated.`);
@@ -310,13 +310,13 @@ function MaterialMasterTab({ uoms }) {
     setSaving(true);
     setError("");
     let failed = 0;
-    for (const id of selectedIds) {
+    await Promise.all(Array.from(selectedIds).map(async (id) => {
       try {
         await changeMaterialStatus({ id, new_status: "INACTIVE" });
       } catch {
         failed++;
       }
-    }
+    }));
     setSaving(false);
     setSelectedIds(new Set());
     if (failed > 0) setError(`${failed} row(s) could not be deactivated.`);

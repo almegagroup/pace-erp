@@ -501,7 +501,7 @@ function VendorGridTab({ vendorType }) {
     if (!selectedIds.size) return;
     setSaving(true); setError("");
     let failed = 0;
-    for (const id of selectedIds) { try { await changeVendorStatus({ id, new_status: "ACTIVE" }); } catch { failed++; } }
+    await Promise.all(Array.from(selectedIds).map(async (id) => { try { await changeVendorStatus({ id, new_status: "ACTIVE" }); } catch { failed++; } }));
     setSaving(false); setSelectedIds(new Set());
     failed > 0 ? setError(`${failed} vendor(s) could not be activated.`) : setNotice("Selected vendors activated.");
     await queryClient.invalidateQueries({ queryKey: ["admin", "vendors"] });
@@ -512,7 +512,7 @@ function VendorGridTab({ vendorType }) {
     if (!selectedIds.size) return;
     setSaving(true); setError("");
     let failed = 0;
-    for (const id of selectedIds) { try { await changeVendorStatus({ id, new_status: "INACTIVE" }); } catch { failed++; } }
+    await Promise.all(Array.from(selectedIds).map(async (id) => { try { await changeVendorStatus({ id, new_status: "INACTIVE" }); } catch { failed++; } }));
     setSaving(false); setSelectedIds(new Set());
     failed > 0 ? setError(`${failed} vendor(s) could not be deactivated.`) : setNotice("Selected vendors deactivated.");
     await queryClient.invalidateQueries({ queryKey: ["admin", "vendors"] });
