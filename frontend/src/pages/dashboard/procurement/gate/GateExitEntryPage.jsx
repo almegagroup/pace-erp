@@ -34,6 +34,13 @@ function time12to24(time, ampm) {
   return `${String(h24).padStart(2, "0")}:${String(mm || 0).padStart(2, "0")}:00`;
 }
 
+function daysBetween(dateA, dateB) {
+  if (!dateA || !dateB) return 0;
+  const a = new Date(dateA);
+  const b = new Date(dateB);
+  return Math.round(Math.abs(b - a) / (1000 * 60 * 60 * 24));
+}
+
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
     case "GRN_POSTED":
@@ -65,10 +72,14 @@ export default function GateExitEntryPage() {
   const [exitTime, setExitTime] = useState(initTimeState.time);
   const [ampm, setAmpm] = useState(initTimeState.ampm);
   const [tareWeight, setTareWeight] = useState("");
+  const [remarks, setRemarks] = useState("");
 
   const hasGateExit = Boolean(detail?.gate_exit_inbound?.id);
   const geStatus = String(detail?.status || "").toUpperCase();
   const canGateExit = Boolean(detail) && !hasGateExit && !["PRUNED", "CANCELLED"].includes(geStatus);
+
+  const detentionDays = detail ? daysBetween(detail.ge_date, exitDate) : 0;
+  const isDetention = detentionDays > 2;
 
   async function handleLoad() {
     const trimmed = geNumber.trim().toUpperCase();
@@ -100,11 +111,16 @@ export default function GateExitEntryPage() {
     setExitTime(t.time);
     setAmpm(t.ampm);
     setTareWeight("");
+    setRemarks("");
     geInputRef.current?.focus();
   }
 
   async function handleSave() {
     if (!detail?.id) return;
+    if (isDetention && !remarks.trim()) {
+      setError(`Exit is ${detentionDays} days after entry. Detention remarks are mandatory.`);
+      return;
+    }
     setSaving(true);
     setError("");
     setNotice("");
@@ -114,6 +130,7 @@ export default function GateExitEntryPage() {
         exit_date: exitDate,
         exit_time: time12to24(exitTime, ampm),
         tare_weight: tareWeight ? Number(tareWeight) : null,
+        remarks: remarks.trim() || null,
       });
       setNotice(`Gate Exit ${result.exit_number} created. ${detail.ge_number} is now gate exited.`);
       setDetail((current) => ({ ...current, gate_exit_inbound: result }));
@@ -163,6 +180,7 @@ export default function GateExitEntryPage() {
       ]}
     >
       <div className="grid gap-4">
+        {/* GE number lookup */}
         <ErpSectionCard eyebrow="Criteria" title="Enter GE number">
           <div className="flex max-w-md gap-2">
             <input
@@ -189,6 +207,7 @@ export default function GateExitEntryPage() {
 
         {detail && (
           <>
+            {/* GE Header */}
             <ErpSectionCard eyebrow="Header" title={detail.ge_number || "Gate Entry"}>
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
                 <ErpFieldPreview label="Entry Date" value={detail.ge_date || "—"} />
@@ -200,38 +219,35 @@ export default function GateExitEntryPage() {
               </div>
             </ErpSectionCard>
 
-            <ErpSectionCard eyebrow="Lines" title="Gate entry lines">
-              <ErpDenseGrid
-                columns={[
-                  { key: "line_number", label: "Line", width: "70px" },
-                  { key: "material_name", label: "Material", width: "220px", render: (row) => row.material_name || row.material_id || "—" },
-                  { key: "linked_csn", label: "CSN", width: "140px", render: (row) => row.linked_csn?.csn_number || row.csn_id || "—" },
-                  { key: "ge_qty", label: "Received Qty", width: "110px" },
-                  { key: "uom_code", label: "UOM", width: "90px" },
-                  { key: "gross_weight", label: "Gross Wt", width: "110px" },
-                  { key: "net_weight", label: "Net Wt", width: "110px" },
-                ]}
-                rows={detail.lines ?? []}
-                rowKey={(row) => row.id}
-                emptyMessage="No gate entry lines found."
-              />
-            </ErpSectionCard>
-
-            <ErpSectionCard eyebrow="Gate Exit" title="Record exit weighment">
+            {/* Gate Exit — shown ABOVE lines table in both read-only and editable state */}
+            <ErpSectionCard eyebrow="Gate Exit" title="Exit weighment">
               {hasGateExit ? (
                 <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-                  <ErpFieldPreview label="Exit Number" value={detail.gate_exit_inbound.exit_number || "—"} />
+                  <ErpFieldPreview label="Exit Number" value={detail.gate_exit_inbound.exit_number || "—"} tone="emerald" />
                   <ErpFieldPreview label="Exit Date" value={detail.gate_exit_inbound.exit_date || "—"} />
+                  <ErpFieldPreview label="Exit Time" value={detail.gate_exit_inbound.exit_time || "—"} />
                   <ErpFieldPreview label="Tare Weight" value={detail.gate_exit_inbound.tare_weight ?? "—"} />
                   <ErpFieldPreview label="Net Calculated" value={detail.gate_exit_inbound.net_weight_calculated ?? "—"} />
                   <ErpFieldPreview label="Effective Net" value={detail.gate_exit_inbound.effective_net_weight ?? "—"} tone="sky" />
+                  {detail.gate_exit_inbound.remarks ? (
+                    <div className="md:col-span-3 xl:col-span-6">
+                      <ErpFieldPreview label="Remarks" value={detail.gate_exit_inbound.remarks} />
+                    </div>
+                  ) : null}
                 </div>
               ) : !canGateExit ? (
                 <div className="text-sm text-slate-500">
                   This gate entry is {geStatus} — gate exit cannot be recorded.
                 </div>
               ) : (
-                <div className="grid gap-3">
+                <div className="grid gap-4">
+                  {/* Detention warning */}
+                  {isDetention && (
+                    <div className="border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-900">
+                      ⚠ Vehicle detained — {detentionDays} days since entry ({detail.ge_date}). Detention remarks are mandatory.
+                    </div>
+                  )}
+
                   <div className="grid gap-3 md:grid-cols-3">
                     <label className="grid gap-1 text-xs font-semibold text-slate-700">
                       <span className="flex items-center justify-between">
@@ -315,6 +331,18 @@ export default function GateExitEntryPage() {
                       />
                     </ErpDenseFormRow>
                   </div>
+
+                  <label className={`grid gap-1 text-xs font-semibold ${isDetention ? "text-amber-800" : "text-slate-700"}`}>
+                    Remarks {isDetention && <span className="font-normal text-red-500">* (required — detention)</span>}
+                    <textarea
+                      rows={2}
+                      value={remarks}
+                      onChange={(e) => setRemarks(e.target.value)}
+                      placeholder={isDetention ? "State reason for detention…" : "Optional remarks"}
+                      className={`border px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 ${isDetention ? "border-amber-400 bg-amber-50" : "border-slate-300 bg-white"}`}
+                    />
+                  </label>
+
                   <div className="flex justify-end">
                     <button
                       type="button"
@@ -327,6 +355,24 @@ export default function GateExitEntryPage() {
                   </div>
                 </div>
               )}
+            </ErpSectionCard>
+
+            {/* Lines table — always below Gate Exit section */}
+            <ErpSectionCard eyebrow="Lines" title="Gate entry lines">
+              <ErpDenseGrid
+                columns={[
+                  { key: "line_number", label: "Line", width: "70px" },
+                  { key: "material_name", label: "Material", width: "220px", render: (row) => row.material_name || row.material_id || "—" },
+                  { key: "linked_csn", label: "CSN", width: "140px", render: (row) => row.linked_csn?.csn_number || row.csn_id || "—" },
+                  { key: "ge_qty", label: "Received Qty", width: "110px" },
+                  { key: "uom_code", label: "UOM", width: "90px" },
+                  { key: "gross_weight", label: "Gross Wt", width: "110px" },
+                  { key: "net_weight", label: "Net Wt", width: "110px" },
+                ]}
+                rows={detail.lines ?? []}
+                rowKey={(row) => row.id}
+                emptyMessage="No gate entry lines found."
+              />
             </ErpSectionCard>
           </>
         )}
