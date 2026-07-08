@@ -1,11 +1,10 @@
 import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { popScreen, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getGELinesForGRN, createAndPostGRNFromLine, getMaterialVendorDocNames, listTransporters } from "../procurementApi.js";
@@ -172,7 +171,6 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const { allowedRoutes } = useMenu();
-  const navigate = useNavigate();
   const canManageTransporters = isRouteAllowed(allowedRoutes ?? new Set(), "/dashboard/procurement/masters/transporters");
   const tabCount = TABS.length;
   useEffect(() => {
@@ -569,7 +567,7 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
                               No match found.
                               {canManageTransporters ? (
                                 <button
-                                  onClick={() => window.open("/dashboard/procurement/masters/transporters", "_blank")}
+                                  onClick={() => openScreen("PROC_TRANSPORTER_MASTER")}
                                   className="ml-2 text-sky-600 underline text-sm"
                                 >
                                   Add to Transporter Master →
