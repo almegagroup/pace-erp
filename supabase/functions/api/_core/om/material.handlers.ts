@@ -798,10 +798,7 @@ export async function deleteMaterialsHandler(
       return materialErrorResponse(req, ctx, "OM_NO_MATERIALS", 400, "No material IDs provided");
     }
 
-    const deleted: string[] = [];
-    const errors: { id: string; error: string; detail?: string }[] = [];
-
-    for (const id of ids) {
+    const outcomes = await Promise.all(ids.map(async (id) => {
       // .select() after delete so we can tell "deleted a row" apart from
       // "matched zero rows" — without it, deleting a non-matching id returns
       // no error at all and was being reported as a successful delete.
@@ -814,16 +811,21 @@ export async function deleteMaterialsHandler(
 
       if (error) {
         if (error.code === "23503") {
-          errors.push({ id, error: "OM_MATERIAL_HAS_DEPENDENCIES", detail: await describeMaterialDependencies(id) });
+          return { id, deleted: false, error: "OM_MATERIAL_HAS_DEPENDENCIES", detail: await describeMaterialDependencies(id) };
         } else {
-          errors.push({ id, error: "OM_MATERIAL_DELETE_FAILED", detail: error.message });
+          return { id, deleted: false, error: "OM_MATERIAL_DELETE_FAILED", detail: error.message };
         }
       } else if (!data || data.length === 0) {
-        errors.push({ id, error: "OM_MATERIAL_NOT_FOUND" });
+        return { id, deleted: false, error: "OM_MATERIAL_NOT_FOUND" };
       } else {
-        deleted.push(id);
+        return { id, deleted: true };
       }
-    }
+    }));
+
+    const deleted = outcomes.filter((outcome) => outcome.deleted).map((outcome) => outcome.id);
+    const errors = outcomes
+      .filter((outcome) => !outcome.deleted)
+      .map((outcome) => ({ id: outcome.id, error: outcome.error!, detail: outcome.detail }));
 
     return okResponse({ deleted, errors }, ctx.request_id, req);
   } catch (err) {
@@ -974,15 +976,6 @@ export async function importCompanyMappingHandler(
     if (lines.length < 2) return materialErrorResponse(req, ctx, "OM_CSV_NO_DATA", 400, "CSV has no data rows");
 
     const headers = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/["\s]/g, ""));
-    const results: {
-      row: number;
-      material_name: string;
-      company_code: string;
-      company_name: string | null;
-      status: string;
-      error: string | null;
-    }[] = [];
-
     // Pre-load all companies for lookup
     const { data: companies } = await serviceRoleClient
       .schema("erp_master")
@@ -1009,8 +1002,9 @@ export async function importCompanyMappingHandler(
       ])
     );
 
-    for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+    const preparedRows = lines.slice(1).map((line, index) => {
+      const rowNumber = index + 1;
+      const cols = line.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
       const row: Record<string, string> = {};
       headers.forEach((h, idx) => { row[h] = cols[idx] ?? ""; });
 
@@ -1018,39 +1012,51 @@ export async function importCompanyMappingHandler(
       const companyCode = (row["company_code"] ?? "").trim().toUpperCase();
 
       if (!materialName || !companyCode) {
-        results.push({ row: i, material_name: materialName, company_code: companyCode, company_name: null, status: "SKIPPED", error: "material_name or company_code is empty" });
-        continue;
+        return { row: rowNumber, material_name: materialName, company_code: companyCode, company_name: null, status: "SKIPPED", error: "material_name or company_code is empty" };
       }
 
       const company = companyByCode.get(companyCode) as Record<string, unknown> | undefined;
       if (!company) {
-        results.push({ row: i, material_name: materialName, company_code: companyCode, company_name: null, status: "ERROR", error: `Company not found: ${companyCode}` });
-        continue;
+        return { row: rowNumber, material_name: materialName, company_code: companyCode, company_name: null, status: "ERROR", error: `Company not found: ${companyCode}` };
       }
 
       const material = materialByName.get(materialName.toLowerCase()) as Record<string, unknown> | undefined;
       if (!material) {
-        results.push({ row: i, material_name: materialName, company_code: companyCode, company_name: String(company.company_name ?? ""), status: "ERROR", error: `Material not found: ${materialName}` });
-        continue;
+        return { row: rowNumber, material_name: materialName, company_code: companyCode, company_name: String(company.company_name ?? ""), status: "ERROR", error: `Material not found: ${materialName}` };
+      }
+
+      return {
+        row: rowNumber,
+        material_name: materialName,
+        company_code: companyCode,
+        company_name: String(company.company_name ?? ""),
+        material_id: String(material.id),
+        company_id: String(company.id),
+      };
+    });
+
+    const results = await Promise.all(preparedRows.map(async (row) => {
+      if ("status" in row) {
+        return row;
       }
 
       const { error } = await serviceRoleClient
         .schema("erp_master")
         .from("material_company_ext")
         .upsert({
-          material_id: String(material.id),
-          company_id: String(company.id),
+          material_id: row.material_id,
+          company_id: row.company_id,
           procurement_allowed: true,
           status: "ACTIVE",
           created_by: ctx.auth_user_id,
         }, { onConflict: "material_id,company_id", ignoreDuplicates: true });
 
       if (error) {
-        results.push({ row: i, material_name: materialName, company_code: companyCode, company_name: String(company.company_name ?? ""), status: "ERROR", error: "Insert failed" });
-      } else {
-        results.push({ row: i, material_name: materialName, company_code: companyCode, company_name: String(company.company_name ?? ""), status: "MAPPED", error: null });
+        return { row: row.row, material_name: row.material_name, company_code: row.company_code, company_name: row.company_name, status: "ERROR", error: "Insert failed" };
       }
-    }
+
+      return { row: row.row, material_name: row.material_name, company_code: row.company_code, company_name: row.company_name, status: "MAPPED", error: null };
+    }));
 
     return okResponse({ results }, ctx.request_id, req);
   } catch (err) {
