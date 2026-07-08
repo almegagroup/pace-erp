@@ -83,6 +83,7 @@ function procurementErrorResponse(
   status: number,
   message: string,
 ): Response {
+  console.warn(`[GRN_ERROR] ${req.method} ${new URL(req.url).pathname} → ${status} ${code}: ${message}`);
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
 

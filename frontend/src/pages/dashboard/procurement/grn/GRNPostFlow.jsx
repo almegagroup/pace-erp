@@ -167,7 +167,9 @@ function GELinesScreen({ geData, onSelectLine, onBack, successNotice, onDismissN
 
 // ── Screen 3: 7-tab GRN entry form ──────────────────────────────────────────
 function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
-  const [activeTab, setActiveTab] = useState(0);
+  // Restore form state from screen context (survives openScreen navigation to transporter master)
+  const _saved = getActiveScreenContext()?.grnFormValues ?? {};
+  const [activeTab, setActiveTab] = useState(_saved.activeTab ?? 0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const { allowedRoutes } = useMenu();
@@ -185,32 +187,32 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const vendorType = geLine.vendor_type ?? "DOMESTIC";
   const isImport = vendorType === "IMPORT";
 
-  // Form state
-  const [receivedQty, setReceivedQty] = useState(String(geLine.ge_qty ?? ""));
-  const [discrepancyRemarks, setDiscrepancyRemarks] = useState("");
-  const [storageLocationId, setStorageLocationId] = useState("");
-  const [invoiceNumber, setInvoiceNumber] = useState(geLine.csn_invoice_number ?? "");
-  const [invoiceDate, setInvoiceDate] = useState(geLine.csn_invoice_date ?? "");
-  const [blNumber, setBlNumber] = useState(geLine.csn_bl_number ?? "");
-  const [blDate, setBlDate] = useState("");
-  const [boeNumber, setBoeNumber] = useState("");
-  const [boeDate, setBoeDate] = useState("");
-  const [invoiceName, setInvoiceName] = useState("");
-  const [rateConfirmed, setRateConfirmed] = useState(true);
-  const [invoiceRate, setInvoiceRate] = useState("");
-  const [gstPct, setGstPct] = useState("");
-  const [transporterId, setTransporterId] = useState(geLine.csn_transporter_id ?? "");
-  const [transporterSearch, setTransporterSearch] = useState("");
-  const [transporterName, setTransporterName] = useState("");
-  const [lrNumber, setLrNumber] = useState(geLine.csn_lr_number ?? "");
-  const [lrDate, setLrDate] = useState(geLine.csn_lr_date ?? "");
-  const [batchLotNumber, setBatchLotNumber] = useState("");
+  // Form state — restored from screen context if returning from PROC_TRANSPORTER_MASTER
   const conversionFactor = geLine.uom_conversion_factor ?? null;
   const variableConversion = geLine.uom_variable_conversion ?? null;
-  const [perPackQty, setPerPackQty] = useState(conversionFactor != null ? String(conversionFactor) : "");
-  const [expiryType, setExpiryType] = useState("N_A");
-  const [expiryDate, setExpiryDate] = useState("");
-  const [shelfLifeMonths, setShelfLifeMonths] = useState("");
+  const [receivedQty, setReceivedQty] = useState(_saved.receivedQty ?? String(geLine.ge_qty ?? ""));
+  const [discrepancyRemarks, setDiscrepancyRemarks] = useState(_saved.discrepancyRemarks ?? "");
+  const [storageLocationId, setStorageLocationId] = useState(_saved.storageLocationId ?? "");
+  const [invoiceNumber, setInvoiceNumber] = useState(_saved.invoiceNumber ?? (geLine.csn_invoice_number ?? ""));
+  const [invoiceDate, setInvoiceDate] = useState(_saved.invoiceDate ?? (geLine.csn_invoice_date ?? ""));
+  const [blNumber, setBlNumber] = useState(_saved.blNumber ?? (geLine.csn_bl_number ?? ""));
+  const [blDate, setBlDate] = useState(_saved.blDate ?? "");
+  const [boeNumber, setBoeNumber] = useState(_saved.boeNumber ?? "");
+  const [boeDate, setBoeDate] = useState(_saved.boeDate ?? "");
+  const [invoiceName, setInvoiceName] = useState(_saved.invoiceName ?? "");
+  const [rateConfirmed, setRateConfirmed] = useState(_saved.rateConfirmed ?? true);
+  const [invoiceRate, setInvoiceRate] = useState(_saved.invoiceRate ?? "");
+  const [gstPct, setGstPct] = useState(_saved.gstPct ?? "");
+  const [transporterId, setTransporterId] = useState(_saved.transporterId ?? (geLine.csn_transporter_id ?? ""));
+  const [transporterSearch, setTransporterSearch] = useState("");
+  const [transporterName, setTransporterName] = useState(_saved.transporterName ?? "");
+  const [lrNumber, setLrNumber] = useState(_saved.lrNumber ?? (geLine.csn_lr_number ?? ""));
+  const [lrDate, setLrDate] = useState(_saved.lrDate ?? (geLine.csn_lr_date ?? ""));
+  const [batchLotNumber, setBatchLotNumber] = useState(_saved.batchLotNumber ?? "");
+  const [perPackQty, setPerPackQty] = useState(_saved.perPackQty ?? (conversionFactor != null ? String(conversionFactor) : ""));
+  const [expiryType, setExpiryType] = useState(_saved.expiryType ?? "N_A");
+  const [expiryDate, setExpiryDate] = useState(_saved.expiryDate ?? "");
+  const [shelfLifeMonths, setShelfLifeMonths] = useState(_saved.shelfLifeMonths ?? "");
 
   const geQty = Number(geLine.ge_qty ?? 0);
   const receivedQtyNum = Number(receivedQty) || 0;
@@ -242,7 +244,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
     staleTime: 30_000,
     queryFn: () => listTransporters({ search: transporterSearchTrimmed, company_id: geHeader.company_id, limit: 20 }),
   });
-  const transporterResults = transporterQuery.data?.data ?? [];
+  const transporterResults = Array.isArray(transporterQuery.data) ? transporterQuery.data : (transporterQuery.data?.data ?? []);
 
   // Expiry calculation preview
   const expiryCalculated = (() => {
@@ -595,7 +597,25 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                               No match found.
                               {canManageTransporters ? (
                                 <button
-                                  onClick={() => { updateActiveScreenContext({ grnScreen: "grn-form", grnGeData: geData, grnSelectedLine: geLine }); openScreen("PROC_TRANSPORTER_MASTER"); }}
+                                  onClick={() => {
+                    updateActiveScreenContext({
+                      grnScreen: "grn-form",
+                      grnGeData: geData,
+                      grnSelectedLine: geLine,
+                      grnFormValues: {
+                        activeTab,
+                        receivedQty, discrepancyRemarks, storageLocationId,
+                        invoiceNumber, invoiceDate, blNumber, blDate,
+                        boeNumber, boeDate, invoiceName,
+                        rateConfirmed, invoiceRate, gstPct,
+                        transporterId, transporterName,
+                        lrNumber, lrDate,
+                        batchLotNumber, perPackQty,
+                        expiryType, expiryDate, shelfLifeMonths,
+                      },
+                    });
+                    openScreen("PROC_TRANSPORTER_MASTER");
+                  }}
                                   className="ml-2 text-sky-600 underline text-sm"
                                 >
                                   Add to Transporter Master →
