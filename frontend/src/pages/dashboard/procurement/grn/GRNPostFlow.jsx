@@ -1,11 +1,14 @@
 import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { getGELinesForGRN, createAndPostGRNFromLine, getMaterialVendorDocNames } from "../procurementApi.js";
+import { popScreen, openScreen } from "../../../../navigation/screenStackEngine.js";
+import { isRouteAllowed } from "../../../../router/routeIndex.js";
+import { useMenu } from "../../../../context/useMenu.js";
+import { getGELinesForGRN, createAndPostGRNFromLine, getMaterialVendorDocNames, listTransporters } from "../procurementApi.js";
 
 const TABS = ["Receipt", "Vendor", "Documents", "Material", "Accounts", "Transporter", "Pack & shelf life"];
 
@@ -99,10 +102,15 @@ function GELinesScreen({ geData, onSelectLine, onBack, successNotice, onDismissN
         <ErpSectionCard eyebrow="Gate entry header" title="">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {[
+              ["GE number", ge.ge_number],
               ["GE date", ge.ge_date],
+              ["Status", ge.status],
+              ["GE type", ge.ge_type],
               ["Vehicle", ge.vehicle_number],
+              ["Driver", ge.driver_name],
               ["Vendor", ge.vendor_name ? `${ge.vendor_code} — ${ge.vendor_name}` : "—"],
-              ["Entry type", ge.vendor_type ?? "—"],
+              ["Entry type", ge.vendor_type],
+              ...(ge.remarks ? [["Remarks", ge.remarks]] : []),
             ].map(([label, value]) => (
               <div key={label}>
                 <p className="text-[11px] text-slate-500 uppercase tracking-wide">{label}</p>
@@ -163,6 +171,9 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
   const [activeTab, setActiveTab] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const { allowedRoutes } = useMenu();
+  const navigate = useNavigate();
+  const canManageTransporters = isRouteAllowed(allowedRoutes ?? new Set(), "/dashboard/procurement/masters/transporters");
   const tabCount = TABS.length;
   useEffect(() => {
     function handleKey(e) {
@@ -192,6 +203,7 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
   const [gstPct, setGstPct] = useState("");
   const [transporterId, setTransporterId] = useState(geLine.csn_transporter_id ?? "");
   const [transporterSearch, setTransporterSearch] = useState("");
+  const [transporterName, setTransporterName] = useState("");
   const [lrNumber, setLrNumber] = useState(geLine.csn_lr_number ?? "");
   const [lrDate, setLrDate] = useState(geLine.csn_lr_date ?? "");
   const [batchLotNumber, setBatchLotNumber] = useState("");
@@ -211,6 +223,14 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
     queryFn: () => getMaterialVendorDocNames(geLine.material_id, geLine.vendor_id),
   });
   const docNameSuggestions = docNamesQuery.data?.items ?? [];
+
+  const transporterSearchTrimmed = transporterSearch.trim();
+  const transporterQuery = useQuery({
+    queryKey: ["transporters-search", transporterSearchTrimmed, geHeader.company_id],
+    enabled: transporterSearchTrimmed.length >= 2,
+    queryFn: () => listTransporters({ search: transporterSearchTrimmed, company_id: geHeader.company_id, limit: 20 }),
+  });
+  const transporterResults = transporterQuery.data?.data ?? [];
 
   // Expiry calculation preview
   const expiryCalculated = (() => {
@@ -491,18 +511,69 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
         {/* Tab 5 — Transporter */}
         {activeTab === 5 && (
           <ErpSectionCard eyebrow="Transporter" title="Logistics">
-            <p className="mb-3 text-xs text-slate-500">Pre-filled from CSN. Changes here sync back to CSN.</p>
+            <p className="mb-3 text-xs text-slate-500">Pre-filled from CSN. Changes here sync back to CSN on post.</p>
             <div className="grid gap-3 md:grid-cols-3">
-              <ErpDenseFormRow label="Transporter name">
-                <input
-                  type="text"
-                  placeholder="Type to search…"
-                  value={transporterSearch}
-                  onChange={(e) => setTransporterSearch(e.target.value)}
-                  className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
-                />
-                <p className="text-[11px] text-slate-400 mt-1">Suggestions from transporter master (inbound).</p>
-              </ErpDenseFormRow>
+              <div className="md:col-span-3">
+                <ErpDenseFormRow label="Transporter">
+                  {transporterId && transporterName ? (
+                    <div className="flex items-center gap-2">
+                      <span className="flex-1 h-9 flex items-center px-3 border border-emerald-300 bg-emerald-50 text-sm text-emerald-900 rounded">
+                        {transporterName}
+                      </span>
+                      <button
+                        onClick={() => { setTransporterId(""); setTransporterName(""); setTransporterSearch(""); }}
+                        className="h-9 px-3 text-sm border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 rounded"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Type 2+ characters to search transporter master…"
+                        value={transporterSearch}
+                        onChange={(e) => setTransporterSearch(e.target.value)}
+                        className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
+                      />
+                      {transporterSearchTrimmed.length >= 2 && (
+                        <div className="absolute z-20 left-0 right-0 top-full mt-0.5 border border-slate-200 bg-white shadow-md max-h-52 overflow-y-auto">
+                          {transporterQuery.isLoading && (
+                            <div className="px-3 py-2 text-sm text-slate-400">Searching…</div>
+                          )}
+                          {!transporterQuery.isLoading && transporterResults.length === 0 && (
+                            <div className="px-3 py-2 text-sm text-slate-500">
+                              No match found.
+                              {canManageTransporters ? (
+                                <button
+                                  onClick={() => {
+                                    openScreen({ screen_code: "PROC_TRANSPORTER_MASTER", route: "/dashboard/procurement/masters/transporters" });
+                                    navigate("/dashboard/procurement/masters/transporters");
+                                  }}
+                                  className="ml-2 text-sky-600 underline text-sm"
+                                >
+                                  Add to Transporter Master →
+                                </button>
+                              ) : (
+                                <span className="ml-2 text-slate-400 text-xs">(Contact manager to add)</span>
+                              )}
+                            </div>
+                          )}
+                          {transporterResults.map((t) => (
+                            <button
+                              key={t.id}
+                              onClick={() => { setTransporterId(t.id); setTransporterName(t.transporter_name); setTransporterSearch(""); }}
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-sky-50 border-b border-slate-100 last:border-0"
+                            >
+                              <span className="font-medium">{t.transporter_name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </ErpDenseFormRow>
+              </div>
               <ErpDenseFormRow label="LR number">
                 <input type="text" value={lrNumber} onChange={(e) => setLrNumber(e.target.value)}
                   className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />

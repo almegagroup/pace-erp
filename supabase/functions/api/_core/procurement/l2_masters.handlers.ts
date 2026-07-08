@@ -1098,11 +1098,15 @@ export async function listTransportersHandler(req: Request, ctx: ProcurementHand
     const url = new URL(req.url);
     const direction = toUpperTrimmedString(url.searchParams.get("direction"));
     const activeParam = url.searchParams.get("is_active");
+    const search = toTrimmedString(url.searchParams.get("search"));
     let query = serviceRoleClient
       .schema("erp_master")
       .from("transporter_master")
-      .select("*")
+      .select("id, transporter_name, usage_direction, active")
       .order("transporter_name", { ascending: true });
+    if (search) {
+      query = query.ilike("transporter_name", `%${search}%`);
+    }
     if (activeParam === "all") {
       // no filter
     } else if (activeParam === "false") {
