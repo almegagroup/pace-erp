@@ -880,18 +880,21 @@ export async function createGateExitInboundHandler(
 
     if (effectiveNet !== null) {
       const distributedLines = distributeNetWeight(lines, effectiveNet);
-      for (const line of distributedLines) {
-        const { error: lineUpdateError } = await serviceRoleClient
-          .schema("erp_procurement")
-          .from("gate_entry_line")
-          .update({
-            net_weight: line.net_weight,
-            net_weight_is_manual: true,
-          })
-          .eq("id", String(line.id));
-        if (lineUpdateError) {
-          return procurementErrorResponse(req, ctx, "GEX_LINE_UPDATE_FAILED", 500, "Unable to write back net weight to gate entry lines.");
-        }
+      const lineUpdateErrors = await Promise.all(
+        distributedLines.map(async (line) => {
+          const { error: lineUpdateError } = await serviceRoleClient
+            .schema("erp_procurement")
+            .from("gate_entry_line")
+            .update({
+              net_weight: line.net_weight,
+              net_weight_is_manual: true,
+            })
+            .eq("id", String(line.id));
+          return lineUpdateError;
+        }),
+      );
+      if (lineUpdateErrors.some(Boolean)) {
+        return procurementErrorResponse(req, ctx, "GEX_LINE_UPDATE_FAILED", 500, "Unable to write back net weight to gate entry lines.");
       }
     }
 
@@ -954,25 +957,41 @@ export async function pruneGateEntryHandler(
     // Release linked CSNs back to open
     const csnIds = Array.from(new Set(lines.map((l) => toTrimmedString(l.csn_id)).filter(Boolean)));
     if (csnIds.length > 0) {
-      const { data: csnRows } = await serviceRoleClient
+      const { data: csnRows, error: csnLookupError } = await serviceRoleClient
         .schema("erp_procurement")
         .from("consignment_note")
         .select("id, pre_ge_status")
         .in("id", csnIds);
+      if (csnLookupError) {
+        return procurementErrorResponse(req, ctx, "GE_PRUNE_FAILED", 500, "Unable to restore linked CSN status.");
+      }
 
+      const nowIso = new Date().toISOString();
+      const csnIdsByStatus = new Map<string, string[]>();
       for (const csn of (csnRows ?? []) as JsonRecord[]) {
         const restoreStatus = toUpperTrimmedString(csn.pre_ge_status) || "ORD";
-        await serviceRoleClient
-          .schema("erp_procurement")
-          .from("consignment_note")
-          .update({
-            status: restoreStatus,
-            pre_ge_status: null,
-            gate_entry_id: null,
-            gate_entry_date: null,
-            last_updated_at: new Date().toISOString(),
-          })
-          .eq("id", String(csn.id));
+        const groupedIds = csnIdsByStatus.get(restoreStatus) ?? [];
+        groupedIds.push(String(csn.id));
+        csnIdsByStatus.set(restoreStatus, groupedIds);
+      }
+      const restoreErrors = await Promise.all(
+        Array.from(csnIdsByStatus.entries()).map(async ([restoreStatus, groupedIds]) => {
+          const { error: restoreError } = await serviceRoleClient
+            .schema("erp_procurement")
+            .from("consignment_note")
+            .update({
+              status: restoreStatus,
+              pre_ge_status: null,
+              gate_entry_id: null,
+              gate_entry_date: null,
+              last_updated_at: nowIso,
+            })
+            .in("id", groupedIds);
+          return restoreError;
+        }),
+      );
+      if (restoreErrors.some(Boolean)) {
+        return procurementErrorResponse(req, ctx, "GE_PRUNE_FAILED", 500, "Unable to restore linked CSN status.");
       }
     }
 

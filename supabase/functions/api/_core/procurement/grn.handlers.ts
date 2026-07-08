@@ -1065,6 +1065,7 @@ export async function reverseGRNHandler(
         return procurementErrorResponse(req, ctx, "GRN_LINE_FETCH_FAILED", 500, "Unable to fetch GRN lines.");
       }
 
+      // DEPENDENT: each reversal mutates stock, PO, GE, and CSN state that later line checks must see in committed order.
       for (const line of (lines ?? []) as GrnLineRow[]) {
         const material = await fetchMaterial(String(line.material_id));
         const receivedQty = parsePositiveNumber(line.received_qty) ?? 0;

@@ -257,6 +257,21 @@ GRN inward (unchanged): **P101** → QUALITY_INSPECTION if `qa_required_on_inwar
 - Extending Test Group beyond MCT/OTHR
 - OTHR method deletion rule (deferred — add later if needed)
 
+### 10.1 Mandatory constraint for the future Stock Reclassification page (2026-07-08 note)
+
+`remaining_qty` on this page is **not** a live stock-ledger check — it is purely
+`qa_stock_qty − SUM(decision_qty across this qa_document's inward_qa_decision_line rows)`.
+The *only* thing that can currently move material out of QUALITY_INSPECTION is this page's
+Usage Decision (`submitUsageDecisionHandler`), which always inserts a matching decision line.
+
+**When the future Stock Reclassification page is built, it MUST also insert a corresponding
+`inward_qa_decision_line` row** (with an appropriate `usage_decision`) whenever it moves
+QUALITY_INSPECTION stock that originated from an inward QA document — not just post the P32x
+movement directly. If it doesn't, this queue will show a permanently orphaned "remaining qty
+pending" row that no longer matches physical/ledger reality (the QA document would never reach
+`DECIDED`, and the discrepancy would be invisible until someone reconciles GRN qty against the
+stock ledger by hand). This is a hard design requirement for that future gate, not a nice-to-have.
+
 ---
 
 ## 11. Verification Checklist (for future Claude verification pass)

@@ -735,6 +735,7 @@ export async function postDifferencesHandler(
     const items = await fetchPIItems(documentId);
     const locationScope = await getStorageLocationScope(String(document.storage_location_id));
 
+    // DEPENDENT: each PI item posts a stock difference and releases its block row, so later iterations rely on prior committed inventory state.
     for (const item of items) {
       const physicalQty = parseNullableNumber(item.physical_qty);
       if (physicalQty === null) {

@@ -719,6 +719,7 @@ export async function submitUsageDecisionHandler(
     const createdDecisionLines: JsonRecord[] = [];
     let hasReject = false;
 
+    // DEPENDENT: each usage decision posts stock movements whose sequence must stay ordered to avoid ledger/state drift.
     for (const decisionLine of decisionLines) {
       const config = QA_DECISION_MOVEMENT_MAP[decisionLine.usage_decision];
       if (!config) {

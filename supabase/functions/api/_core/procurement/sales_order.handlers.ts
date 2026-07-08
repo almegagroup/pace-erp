@@ -693,6 +693,7 @@ export async function issueSOStockHandler(
     const dispatchResults: Array<{ soLine: SoLineRow; issueQty: number; stockDocumentId: string; netRate: number }> = [];
     let totalDispatchQty = 0;
 
+    // DEPENDENT: each issue line posts stock and updates remaining SO balances, so later lines must see the committed prior reductions.
     for (const requestLine of requestedLines) {
       const soLineId = toTrimmedString(requestLine.so_line_id);
       const issueQty = parsePositiveNumber(requestLine.qty ?? requestLine.quantity);
@@ -1035,16 +1036,24 @@ export async function createSalesInvoiceHandler(
       return salesErrorResponse(req, ctx, "SALES_INVOICE_CREATE_FAILED", 500, "Unable to create sales invoice.");
     }
 
+    const soLineIds = Array.from(new Set(dcLines.map((dcLine) => toTrimmedString(dcLine.so_line_id)).filter(Boolean)));
+    const { data: soLineRows, error: soLineError } = soLineIds.length > 0
+      ? await serviceRoleClient
+        .schema("erp_procurement")
+        .from("sales_order_line")
+        .select("*")
+        .in("id", soLineIds)
+      : { data: [], error: null };
+    if (soLineError) {
+      return salesErrorResponse(req, ctx, "SALES_INVOICE_CREATE_FAILED", 500, "Unable to load source sales order lines.");
+    }
+    const soLineMap = new Map(
+      ((soLineRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]),
+    );
+
     const linePayload: JsonRecord[] = [];
     for (const dcLine of dcLines) {
-      const soLine = dcLine.so_line_id
-        ? (await serviceRoleClient
-            .schema("erp_procurement")
-            .from("sales_order_line")
-            .select("*")
-            .eq("id", String(dcLine.so_line_id))
-            .maybeSingle()).data ?? null
-        : null;
+      const soLine = dcLine.so_line_id ? soLineMap.get(String(dcLine.so_line_id)) ?? null : null;
       const rate = parseNullableNumber(soLine?.net_rate) ?? parseNullableNumber(dcLine.unit_value) ?? 0;
       const quantity = parsePositiveNumber(dcLine.quantity) ?? 0;
       const taxableValue = Number((quantity * rate).toFixed(4));

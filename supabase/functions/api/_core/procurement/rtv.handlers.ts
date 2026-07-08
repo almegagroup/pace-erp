@@ -505,6 +505,7 @@ export async function postRTVHandler(
 
     let totalDispatchQty = 0;
     let totalLineValue = 0;
+    // DEPENDENT: each RTV line consumes blocked/unrestricted stock and updates posting state that subsequent lines must read in order.
     for (const line of lines) {
       const companyId = String(rtv.company_id);
       const storageLocationId = toTrimmedString(line.storage_location_id);

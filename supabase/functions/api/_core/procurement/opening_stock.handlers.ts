@@ -710,6 +710,7 @@ export async function postOpeningStockDocumentHandler(
       );
     }
 
+    // DEPENDENT: each line posts opening stock and writes back its posting reference, so stock ledger order must remain stable.
     for (const line of lines) {
       if (line.posted_stock_document_id) {
         continue;

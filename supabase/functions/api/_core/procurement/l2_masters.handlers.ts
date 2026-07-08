@@ -1540,10 +1540,20 @@ export async function mapCHAToPortHandler(req: Request, ctx: ProcurementHandlerC
     if (portIds.length === 0) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PORT_REQUIRED", 400, "At least one port is required");
     }
-    for (const portId of portIds) {
-      if (!(await ensurePortExists(portId))) {
-        return procurementErrorResponse(req, ctx, "PROCUREMENT_PORT_NOT_FOUND", 404, "Port not found");
-      }
+    const uniquePortIds = Array.from(new Set(portIds));
+    const { data: existingPorts, error: portLookupError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("port_master")
+      .select("id")
+      .in("id", uniquePortIds);
+    if (portLookupError) {
+      throw new Error("PROCUREMENT_CHA_PORT_MAP_FAILED");
+    }
+    const existingPortIds = new Set(
+      ((existingPorts ?? []) as Array<Record<string, unknown>>).map((row) => toTrimmedString(row.id)).filter(Boolean),
+    );
+    if (uniquePortIds.some((portId) => !existingPortIds.has(portId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PORT_NOT_FOUND", 404, "Port not found");
     }
     const rows = portIds.map((portId) => ({ cha_id: chaId, port_id: portId }));
     const { data, error } = await serviceRoleClient

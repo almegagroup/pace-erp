@@ -515,6 +515,17 @@ export async function runMatchHandler(
     let anyBlocked = false;
     let totalTaxableValue = 0;
     let totalGstAmount = 0;
+    const lineComputations: Array<{
+      id: string;
+      taxableValue: number;
+      rateVariancePct: number;
+      matchStatus: string;
+      gstType: string;
+      cgstAmount: number;
+      sgstAmount: number;
+      igstAmount: number;
+      gstMatchFlag: boolean;
+    }> = [];
 
     for (const line of lines) {
       const poRate = parsePositiveNumber(line.po_rate) ?? 0;
@@ -546,28 +557,42 @@ export async function runMatchHandler(
       if (matchStatus === "BLOCKED") {
         anyBlocked = true;
       }
-
-      const { error: lineUpdateError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("invoice_verification_line")
-        .update({
-          taxable_value: taxableValue,
-          rate_variance_pct: rateVariancePct,
-          match_status: matchStatus,
-          gst_type: gstType,
-          cgst_amount: cgstAmount,
-          sgst_amount: sgstAmount,
-          igst_amount: igstAmount,
-          gst_match_flag: gstMatchFlag,
-        })
-        .eq("id", String(line.id));
-
-      if (lineUpdateError) {
-        return ivErrorResponse(req, ctx, "IV_MATCH_LINE_UPDATE_FAILED", 500, "Unable to update IV match results.");
-      }
-
+      lineComputations.push({
+        id: String(line.id),
+        taxableValue,
+        rateVariancePct,
+        matchStatus,
+        gstType,
+        cgstAmount,
+        sgstAmount,
+        igstAmount,
+        gstMatchFlag,
+      });
       totalTaxableValue += taxableValue;
       totalGstAmount += cgstAmount + sgstAmount + igstAmount;
+    }
+
+    const lineUpdateErrors = await Promise.all(
+      lineComputations.map(async (lineComputation) => {
+        const { error: lineUpdateError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("invoice_verification_line")
+          .update({
+            taxable_value: lineComputation.taxableValue,
+            rate_variance_pct: lineComputation.rateVariancePct,
+            match_status: lineComputation.matchStatus,
+            gst_type: lineComputation.gstType,
+            cgst_amount: lineComputation.cgstAmount,
+            sgst_amount: lineComputation.sgstAmount,
+            igst_amount: lineComputation.igstAmount,
+            gst_match_flag: lineComputation.gstMatchFlag,
+          })
+          .eq("id", lineComputation.id);
+        return lineUpdateError;
+      }),
+    );
+    if (lineUpdateErrors.some(Boolean)) {
+      return ivErrorResponse(req, ctx, "IV_MATCH_LINE_UPDATE_FAILED", 500, "Unable to update IV match results.");
     }
 
     const headerStatus = anyBlocked ? "BLOCKED" : "MATCHED";

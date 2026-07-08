@@ -479,6 +479,27 @@ async function getPaymentTermRow(paymentTermId: string): Promise<JsonRecord | nu
   return (data as JsonRecord | null) ?? null;
 }
 
+async function getPaymentTermRowsByIds(paymentTermIds: string[]): Promise<Map<string, JsonRecord>> {
+  const uniqueIds = [...new Set(paymentTermIds.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (uniqueIds.length === 0) return map;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("payment_terms_master")
+    .select("*")
+    .in("id", uniqueIds);
+
+  if (error) {
+    throw new Error("PROCUREMENT_PAYMENT_TERM_LOOKUP_FAILED");
+  }
+
+  for (const row of ((data as JsonRecord[] | null) ?? [])) {
+    map.set(toTrimmedString(row.id), row);
+  }
+  return map;
+}
+
 async function getCostCenterRow(costCenterId: string): Promise<JsonRecord | null> {
   if (!costCenterId) return null;
   const { data, error } = await serviceRoleClient
@@ -627,19 +648,18 @@ async function insertStoApprovalLog(input: {
   }
 }
 
-async function buildCsnForInterPlantStoLine(input: {
+function buildCsnForInterPlantStoLine(input: {
   sto: StoRow;
   line: StoLineRow;
+  csnNumber: string;
   actionedBy: string;
   deliveryType: string;
   sendingCompanyHasGst: boolean;
-}): Promise<JsonRecord> {
+  lcRequired: boolean;
+}): JsonRecord {
   const paymentTermId = toTrimmedString(input.line.payment_term_id);
-  const paymentTerm = paymentTermId ? await getPaymentTermRow(paymentTermId) : null;
-  const lcRequired = toUpperTrimmedString(paymentTerm?.payment_method) === "LC";
-
   return {
-    csn_number: await generateProcurementDocNumber("CSN"),
+    csn_number: input.csnNumber,
     csn_type: input.sendingCompanyHasGst ? "DOMESTIC" : "IMPORT",
     delivery_type: DELIVERY_TYPES.has(input.deliveryType) ? input.deliveryType : "STANDARD",
     status: "ORD",
@@ -654,7 +674,7 @@ async function buildCsnForInterPlantStoLine(input: {
     dispatch_qty: 0,
     po_uom_code: input.line.uom_code,
     payment_term_id: paymentTermId || null,
-    lc_required: lcRequired,
+    lc_required: input.lcRequired,
     has_rebate: input.line.has_rebate === true,
     rebate_remarks: input.line.rebate_remarks ?? null,
     created_by: input.actionedBy,
@@ -676,43 +696,62 @@ async function createCsnForSto(
   const sendingCompany = await getCompanyRow(toTrimmedString(sto.sending_company_id));
   const sendingCompanyHasGst = Boolean(toTrimmedString(sendingCompany?.gst_number));
   const deliveryType = toUpperTrimmedString(deliveryTypeInput || sto.delivery_type || "STANDARD") || "STANDARD";
-
-  for (const line of stoLines) {
-    const orderedQty = Number(line.quantity ?? 0);
-    const existingCsnQuery = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .select("id")
-      .eq("sto_id", toTrimmedString(sto.id))
-      .eq("material_id", toTrimmedString(line.material_id))
-      .eq("po_uom_code", toTrimmedString(line.uom_code))
-      .eq("po_qty", orderedQty)
-      .maybeSingle();
-
-    if (existingCsnQuery.error) {
-      throw new Error("PROCUREMENT_CSN_LOOKUP_FAILED");
-    }
-    if (existingCsnQuery.data?.id) {
-      continue;
-    }
-
-    const payload = await buildCsnForInterPlantStoLine({
-      sto,
-      line,
-      actionedBy,
-      deliveryType,
-      sendingCompanyHasGst,
-    });
-
-    const { error } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .insert(payload);
-
-    if (error) {
-      throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
-    }
+  const stoId = toTrimmedString(sto.id);
+  const paymentTermById = await getPaymentTermRowsByIds(
+    stoLines.map((line) => toTrimmedString(line.payment_term_id)),
+  );
+  const lineKeys = stoLines.map((line) => ({
+    line,
+    key: JSON.stringify([
+      toTrimmedString(line.material_id),
+      toTrimmedString(line.uom_code),
+      Number(line.quantity ?? 0),
+    ]),
+  }));
+  const { data: existingRows, error: existingError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .select("material_id, po_uom_code, po_qty")
+    .eq("sto_id", stoId);
+  if (existingError) {
+    throw new Error("PROCUREMENT_CSN_LOOKUP_FAILED");
   }
+  const existingKeys = new Set(
+    ((existingRows as JsonRecord[] | null) ?? []).map((row) =>
+      JSON.stringify([
+        toTrimmedString(row.material_id),
+        toTrimmedString(row.po_uom_code),
+        Number(row.po_qty ?? 0),
+      ])
+    ),
+  );
+
+  await Promise.all(
+    lineKeys
+      .filter(({ key }) => !existingKeys.has(key))
+      .map(async ({ line }) => {
+        const paymentTermId = toTrimmedString(line.payment_term_id);
+        const paymentTerm = paymentTermId ? paymentTermById.get(paymentTermId) ?? null : null;
+        const payload = buildCsnForInterPlantStoLine({
+          sto,
+          line,
+          csnNumber: await generateProcurementDocNumber("CSN"),
+          actionedBy,
+          deliveryType,
+          sendingCompanyHasGst,
+          lcRequired: toUpperTrimmedString(paymentTerm?.payment_method) === "LC",
+        });
+
+        const { error } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("consignment_note")
+          .insert(payload);
+
+        if (error) {
+          throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
+        }
+      }),
+  );
 }
 
 async function inactivateLinkedCsnsForSto(input: {
@@ -777,6 +816,7 @@ async function buildConsignmentStoFromSubCsns(input: {
   let sto: StoRow | null = null;
   let nextLineNumber = 1;
 
+  // DEPENDENT: this transform incrementally creates one STO header and line ordering from prior CSN-linked state, so iteration order is significant.
   for (const csnId of input.csnIds) {
     const subCsn = await getSubCsnById(csnId, input.sendingCompanyId);
     const motherCsnId = toTrimmedString(subCsn.mother_csn_id);
@@ -1174,9 +1214,10 @@ export async function updateSTOHandler(
 
     if (Array.isArray(body.lines)) {
       const lines = body.lines as JsonRecord[];
-      for (const line of lines) {
+      const nowIso = new Date().toISOString();
+      const lineUpdateErrors = await Promise.all(lines.map(async (line) => {
         const lineId = toTrimmedString(line.id);
-        if (!lineId) continue;
+        if (!lineId) return null;
         const quantity = parsePositiveNumber(line.quantity);
         const receivedQty = parseNullableNumber(line.received_qty) ?? 0;
         const balanceQty = quantity !== null ? Number((quantity - receivedQty).toFixed(6)) : undefined;
@@ -1208,7 +1249,7 @@ export async function updateSTOHandler(
           rebate_remarks: line.rebate_remarks !== undefined ? (toTrimmedString(line.rebate_remarks) || null) : undefined,
           expected_delivery_date: line.expected_delivery_date !== undefined ? (toTrimmedString(line.expected_delivery_date) || null) : undefined,
           balance_qty: balanceQty,
-          last_updated_at: new Date().toISOString(),
+          last_updated_at: nowIso,
         };
         const { error: lineError } = await serviceRoleClient
           .schema("erp_procurement")
@@ -1216,9 +1257,10 @@ export async function updateSTOHandler(
           .update(linePatch)
           .eq("id", lineId)
           .eq("sto_id", stoId);
-        if (lineError) {
-          return stoErrorResponse(req, ctx, "STO_LINE_UPDATE_FAILED", 500, "Unable to update STO line.");
-        }
+        return lineError;
+      }));
+      if (lineUpdateErrors.some(Boolean)) {
+        return stoErrorResponse(req, ctx, "STO_LINE_UPDATE_FAILED", 500, "Unable to update STO line.");
       }
     }
 
@@ -1806,6 +1848,7 @@ export async function dispatchSTOHandler(
     const dispatchedLineResults: Array<{ line: StoLineRow; stockDocumentId: string }> = [];
     let totalDispatchQty = 0;
 
+    // DEPENDENT: each STO dispatch line posts stock and updates dispatch totals that the following lines must observe in sequence.
     for (const line of lines) {
       const snapshot = await getSnapshotForLine(String(sto.sending_company_id), line);
       const requiredQty = parsePositiveNumber(line.quantity) ?? 0;
@@ -2065,6 +2108,7 @@ export async function confirmSTOReceiptHandler(
       return stoErrorResponse(req, ctx, "STO_RECEIPT_LINE_FETCH_FAILED", 500, "Unable to fetch STO GRN lines.");
     }
 
+    // DEPENDENT: each linked GRN line rolls received quantity into STO balances, so later iterations must read prior committed totals.
     for (const grnLine of grnLines ?? []) {
       const stoLineId = toTrimmedString((grnLine as JsonRecord).sto_line_id);
       if (!stoLineId) continue;
