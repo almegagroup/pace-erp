@@ -608,10 +608,11 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                           {transporterResults.map((t) => (
                             <button
                               key={t.id}
-                              onClick={() => { setTransporterId(t.id); setTransporterName(t.transporter_name); setTransporterSearch(""); }}
+                              onClick={() => { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); setTransporterSearch(""); }}
                               className="w-full text-left px-3 py-2 text-sm hover:bg-sky-50 border-b border-slate-100 last:border-0"
                             >
-                              <span className="font-medium">{t.transporter_name}</span>
+                              <span className="font-mono text-xs text-slate-500">{t.transporter_code}</span>
+                              <span className="ml-2 font-medium">{t.transporter_name}</span>
                             </button>
                           ))}
                         </div>
