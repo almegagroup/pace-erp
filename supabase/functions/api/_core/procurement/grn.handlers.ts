@@ -610,13 +610,16 @@ export async function createAndPostGRNFromLineHandler(
     }
 
     // UOM conversion: if PO UOM ≠ base UOM, stock qty = received_qty × per_pack_qty
-    const baseUomCode = toTrimmedString(material.base_uom_code) || toTrimmedString(geLine.uom_code);
+    const baseUomCode = toTrimmedString(material.base_uom_code) || toTrimmedString(geLine.uom_code) || "PCS";
     const poUomCode = toTrimmedString(geLine.uom_code) || baseUomCode;
-    const uomMismatch = baseUomCode && poUomCode && baseUomCode !== poUomCode;
+    const uomMismatch = baseUomCode !== poUomCode;
     const perPackQty = parseNullableNumber(body.per_pack_qty);
     const stockQty = uomMismatch && perPackQty && perPackQty > 0
       ? Number((receivedQty * perPackQty).toFixed(6))
       : receivedQty;
+    if (!baseUomCode) {
+      return procurementErrorResponse(req, ctx, "GRN_UOM_REQUIRED", 400, "Material base UOM is not configured.");
+    }
 
     const targetStockType: string = material.qa_required_on_inward ? "QA_STOCK" : "UNRESTRICTED";
 

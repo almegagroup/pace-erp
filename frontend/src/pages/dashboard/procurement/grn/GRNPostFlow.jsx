@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
-import { popScreen, openScreen } from "../../../../navigation/screenStackEngine.js";
+import { popScreen, openScreen, getActiveScreenContext, updateActiveScreenContext } from "../../../../navigation/screenStackEngine.js";
 import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getGELinesForGRN, createAndPostGRNFromLine, getMaterialVendorDocNames, listTransporters } from "../procurementApi.js";
@@ -166,7 +166,7 @@ function GELinesScreen({ geData, onSelectLine, onBack, successNotice, onDismissN
 }
 
 // ── Screen 3: 7-tab GRN entry form ──────────────────────────────────────────
-function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
+function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const [activeTab, setActiveTab] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -227,10 +227,19 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
   });
   const docNameSuggestions = docNamesQuery.data?.items ?? [];
 
-  const transporterSearchTrimmed = transporterSearch.trim();
+  const [debouncedTransporterSearch, setDebouncedTransporterSearch] = useState("");
+  const debounceRef = useRef(null);
+  useEffect(() => {
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedTransporterSearch(transporterSearch.trim()), 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [transporterSearch]);
+
+  const transporterSearchTrimmed = debouncedTransporterSearch;
   const transporterQuery = useQuery({
     queryKey: ["transporters-search", transporterSearchTrimmed, geHeader.company_id],
     enabled: transporterSearchTrimmed.length >= 2,
+    staleTime: 30_000,
     queryFn: () => listTransporters({ search: transporterSearchTrimmed, company_id: geHeader.company_id, limit: 20 }),
   });
   const transporterResults = transporterQuery.data?.data ?? [];
@@ -586,7 +595,7 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
                               No match found.
                               {canManageTransporters ? (
                                 <button
-                                  onClick={() => openScreen("PROC_TRANSPORTER_MASTER")}
+                                  onClick={() => { updateActiveScreenContext({ grnScreen: "grn-form", grnGeData: geData, grnSelectedLine: geLine }); openScreen("PROC_TRANSPORTER_MASTER"); }}
                                   className="ml-2 text-sky-600 underline text-sm"
                                 >
                                   Add to Transporter Master →
@@ -667,24 +676,32 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
 
 // ── Main flow controller ──────────────────────────────────────────────────────
 export default function GRNPostFlow() {
-  const [screen, setScreen] = useState("ge-entry"); // ge-entry | ge-lines | grn-form
-  const [geData, setGeData] = useState(null);
-  const [selectedLine, setSelectedLine] = useState(null);
+  // Restore state from screen context (survives openScreen navigation away + back)
+  const savedCtx = getActiveScreenContext() ?? {};
+  const [screen, setScreen] = useState(savedCtx.grnScreen ?? "ge-entry");
+  const [geData, setGeData] = useState(savedCtx.grnGeData ?? null);
+  const [selectedLine, setSelectedLine] = useState(savedCtx.grnSelectedLine ?? null);
   const [successNotice, setSuccessNotice] = useState("");
   const queryClient = useQueryClient();
+
+  function scrollTop() {
+    (document.getElementById("erp-content-scroll") ?? window).scrollTo(0, 0);
+  }
 
   function handleGELoaded(data) {
     setGeData(data);
     setSuccessNotice("");
     setScreen("ge-lines");
-    window.scrollTo(0, 0);
+    updateActiveScreenContext({ grnScreen: "ge-lines", grnGeData: data, grnSelectedLine: null });
+    scrollTop();
   }
 
   function handleLineSelected(line) {
     setSelectedLine(line);
     setSuccessNotice("");
     setScreen("grn-form");
-    window.scrollTo(0, 0);
+    updateActiveScreenContext({ grnScreen: "grn-form", grnGeData: geData, grnSelectedLine: line });
+    scrollTop();
   }
 
   function handlePosted(postedGrn) {
@@ -696,16 +713,19 @@ export default function GRNPostFlow() {
         setGeData(freshData);
         setSuccessNotice(`${postedGrn.grn_number} posted successfully.`);
         setScreen("ge-lines");
-        window.scrollTo(0, 0);
+        updateActiveScreenContext({ grnScreen: "ge-lines", grnGeData: freshData, grnSelectedLine: null });
+        scrollTop();
       }).catch(() => {
         setSuccessNotice(`${postedGrn.grn_number} posted successfully.`);
         setScreen("ge-lines");
-        window.scrollTo(0, 0);
+        updateActiveScreenContext({ grnScreen: "ge-lines", grnGeData: geData, grnSelectedLine: null });
+        scrollTop();
       });
     } else {
       setSuccessNotice("GRN posted successfully.");
       setScreen("ge-lines");
-      window.scrollTo(0, 0);
+      updateActiveScreenContext({ grnScreen: "ge-lines", grnGeData: geData, grnSelectedLine: null });
+      scrollTop();
     }
   }
 
@@ -718,7 +738,7 @@ export default function GRNPostFlow() {
       <GELinesScreen
         geData={geData}
         onSelectLine={handleLineSelected}
-        onBack={() => { setScreen("ge-entry"); window.scrollTo(0, 0); }}
+        onBack={() => { setScreen("ge-entry"); updateActiveScreenContext({ grnScreen: "ge-entry", grnGeData: null, grnSelectedLine: null }); scrollTop(); }}
         successNotice={successNotice}
         onDismissNotice={() => setSuccessNotice("")}
       />
@@ -730,8 +750,9 @@ export default function GRNPostFlow() {
       <GRNEntryForm
         geLine={selectedLine}
         geHeader={geData.gate_entry}
+        geData={geData}
         onPosted={handlePosted}
-        onCancel={() => { setScreen("ge-lines"); window.scrollTo(0, 0); }}
+        onCancel={() => { setScreen("ge-lines"); updateActiveScreenContext({ grnScreen: "ge-lines", grnGeData: geData, grnSelectedLine: null }); scrollTop(); }}
       />
     );
   }

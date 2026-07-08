@@ -168,7 +168,7 @@ export default function TransporterMasterPage() {
 
   async function handleCreate() {
     if (!form.transporter_name.trim()) { flash("Transporter name is required.", true); return; }
-    if (form.gstMode === "WITH_GST" && !form.gst_number.trim()) { flash("GST number is required for a GST-registered transporter.", true); return; }
+    if (form.gstMode === "WITH_GST" && !form.gst_number.trim()) { flash("GST number is required. If this transporter has no GST, click 'Without GST' above.", true); return; }
     setSaving(true);
     try {
       const saved = await createTransporter({
