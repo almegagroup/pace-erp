@@ -64,6 +64,10 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
 
   // ── Procurement: Inward QA ────────────────────────────────────────────────
   "GET:/api/procurement/qa-documents":                { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "VIEW"  },
+  "GET:/api/procurement/qa-test-methods":             { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "VIEW"  },
+  "POST:/api/procurement/qa-test-methods":            { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "WRITE" },
+  "GET:/api/procurement/qa-category-test-config":     { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "VIEW"  },
+  "POST:/api/procurement/qa-category-test-config":    { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "WRITE" },
 
   // ── Procurement: Invoice Verification ────────────────────────────────────
   "GET:/api/procurement/invoice-verifications":         { skipAcl: false, resourceCode: "PROC_IV_LIST",   action: "VIEW"  },
@@ -476,10 +480,6 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { GET: { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "VIEW" } },
   },
   {
-    pattern: /^\/api\/procurement\/qa-documents\/[^/]+\/assign-officer$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "EDIT" } },
-  },
-  {
     pattern: /^\/api\/procurement\/qa-documents\/[^/]+\/test-lines$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "WRITE" } },
   },
@@ -491,8 +491,18 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     },
   },
   {
-    pattern: /^\/api\/procurement\/qa-documents\/[^/]+\/usage-decision$/,
+    // NOTE: actual handler route is /decision (see procurement.routes.ts) — this was
+    // previously registered as /usage-decision, a path that has never existed, which
+    // silently blocked every QA usage-decision submission with ROUTE_ACL_NOT_REGISTERED.
+    pattern: /^\/api\/procurement\/qa-documents\/[^/]+\/decision$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/qa-category-test-config\/[^/]+$/,
+    methods: {
+      PATCH:  { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "EDIT"   },
+      DELETE: { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "DELETE" },
+    },
   },
 
   // ── Invoice Verification ──────────────────────────────────────────────────
