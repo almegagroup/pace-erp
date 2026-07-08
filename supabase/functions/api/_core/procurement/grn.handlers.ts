@@ -383,10 +383,10 @@ export async function getGELinesForGRNHandler(
     const matIds = [...new Set(linesList.map((l) => String(l.material_id ?? "")).filter(Boolean))];
     const poLineIds = [...new Set(linesList.map((l) => String(l.po_line_id ?? "")).filter(Boolean))];
 
-    const [matResp, poLineResp, existingGrnResp, vendorResult] = await Promise.all([
+    const [matResp, poLineResp, existingGrnResp] = await Promise.all([
       matIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, material_code, material_name, external_sku, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled")
+            .select("id, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled")
             .in("id", matIds)
         : { data: [], error: null },
       poLineIds.length > 0
@@ -398,26 +398,34 @@ export async function getGELinesForGRNHandler(
         .select("gate_entry_line_id, grn_number, status, id")
         .eq("gate_entry_id", String(gateEntry.id))
         .not("gate_entry_line_id", "is", null),
-      resolveVendorName(toTrimmedString(gateEntry.vendor_id) || null),
     ]);
 
     const poIds = [...new Set((poLineResp.data ?? []).map((pl: JsonRecord) => String(pl.po_id ?? "")).filter(Boolean))];
     const poResp = poIds.length > 0
       ? await serviceRoleClient.schema("erp_procurement").from("purchase_order")
-          .select("id, po_number, vendor_type").in("id", poIds)
+          .select("id, po_number, vendor_id, vendor_type").in("id", poIds)
       : { data: [] };
 
-    // Fetch default CSN data for pre-filling (1 CSN per GE line)
+    // Fetch CSN data for pre-filling (1 CSN per GE line)
     const csnIds = [...new Set(linesList.map((l) => String(l.csn_id ?? "")).filter(Boolean))];
     const csnResp = csnIds.length > 0
       ? await serviceRoleClient.schema("erp_procurement").from("consignment_note")
-          .select("id, invoice_number, bl_number, domestic_transporter_id, transporter_id, lr_number, lr_date")
+          .select("id, invoice_number, invoice_date, bl_number, domestic_transporter_id, transporter_id, lr_number, lr_date")
           .in("id", csnIds)
+      : { data: [] };
+
+    // Bulk fetch vendors via PO chain (gate_entry has no vendor_id column)
+    const vendorIds = [...new Set((poResp.data ?? []).map((p: JsonRecord) => String(p.vendor_id ?? "")).filter(Boolean))];
+    const vendorResp = vendorIds.length > 0
+      ? await serviceRoleClient.schema("erp_master").from("vendor_master")
+          .select("id, vendor_code, vendor_name, vendor_type, gst_number, address")
+          .in("id", vendorIds)
       : { data: [] };
 
     const matMap = new Map((matResp.data ?? []).map((m: JsonRecord) => [m.id, m]));
     const poLineMap = new Map((poLineResp.data ?? []).map((pl: JsonRecord) => [pl.id, pl]));
     const poMap = new Map((poResp.data ?? []).map((p: JsonRecord) => [p.id, p]));
+    const vendorMap = new Map((vendorResp.data ?? []).map((v: JsonRecord) => [v.id, v]));
     const csnMap = new Map((csnResp.data ?? []).map((c: JsonRecord) => [c.id, c]));
     const grnByLineId = new Map((existingGrnResp.data ?? []).map((g: JsonRecord) => [g.gate_entry_line_id, g]));
 
@@ -425,6 +433,7 @@ export async function getGELinesForGRNHandler(
       const mat = matMap.get(String(l.material_id));
       const poLine = l.po_line_id ? poLineMap.get(String(l.po_line_id)) : null;
       const po = poLine ? poMap.get(String(poLine.po_id)) : null;
+      const vendor = po ? vendorMap.get(String(po.vendor_id)) : null;
       const csn = l.csn_id ? csnMap.get(String(l.csn_id)) : null;
       const existingGrn = grnByLineId.get(String(l.id));
       const lineGrnStatus = existingGrn && existingGrn.status === "POSTED"
@@ -434,16 +443,18 @@ export async function getGELinesForGRNHandler(
         : "PENDING";
       return {
         ...l,
-        material_code: mat?.material_code ?? null,
         material_name: mat?.material_name ?? null,
         external_sku: mat?.external_sku ?? null,
+        base_uom_code: mat?.base_uom_code ?? null,
         qa_required_on_inward: mat?.qa_required_on_inward ?? false,
         batch_tracking_required: mat?.batch_tracking_required ?? false,
         expiry_tracking_enabled: mat?.expiry_tracking_enabled ?? false,
         po_number: po?.po_number ?? null,
         po_rate: poLine?.unit_rate ?? null,
+        vendor_id: po?.vendor_id ?? null,
         vendor_type: po?.vendor_type ?? "DOMESTIC",
         csn_invoice_number: csn?.invoice_number ?? null,
+        csn_invoice_date: csn?.invoice_date ?? null,
         csn_bl_number: csn?.bl_number ?? null,
         csn_transporter_id: csn?.domestic_transporter_id ?? csn?.transporter_id ?? null,
         csn_lr_number: csn?.lr_number ?? null,
@@ -454,23 +465,20 @@ export async function getGELinesForGRNHandler(
       };
     });
 
-    // Resolve vendor details for header display
-    let vendorDetails: JsonRecord | null = null;
-    if (gateEntry.vendor_id) {
-      const { data } = await serviceRoleClient.schema("erp_master").from("vendor_master")
-        .select("vendor_code, vendor_name, vendor_type, gst_number, address")
-        .eq("id", String(gateEntry.vendor_id)).maybeSingle();
-      vendorDetails = data;
-    }
+    // Derive vendor for GE header from first line's PO chain
+    const firstPoLine = linesList[0] ? poLineMap.get(String(linesList[0].po_line_id)) : null;
+    const firstPo = firstPoLine ? poMap.get(String(firstPoLine.po_id)) : null;
+    const firstVendor = firstPo ? vendorMap.get(String(firstPo.vendor_id)) : null;
 
     return okResponse({
       gate_entry: {
         ...gateEntry,
-        vendor_code: vendorResult.vendor_code,
-        vendor_name: vendorResult.vendor_name,
-        vendor_type: vendorDetails?.vendor_type ?? null,
-        vendor_gst: vendorDetails?.gst_number ?? null,
-        vendor_address: vendorDetails?.address ?? null,
+        vendor_id: firstVendor?.id ?? null,
+        vendor_code: firstVendor?.vendor_code ?? null,
+        vendor_name: firstVendor?.vendor_name ?? null,
+        vendor_type: firstPo?.vendor_type ?? null,
+        vendor_gst: firstVendor?.gst_number ?? null,
+        vendor_address: firstVendor?.address ?? null,
       },
       lines: resolvedLines,
     }, ctx.request_id, req);

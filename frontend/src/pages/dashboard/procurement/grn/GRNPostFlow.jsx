@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -124,8 +124,8 @@ function GELinesScreen({ geData, onSelectLine, onBack, successNotice, onDismissN
                 label: "Material",
                 render: (row) => (
                   <span>
-                    <span className="font-medium text-slate-900">{row.material_code}</span>
-                    <span className="text-slate-500"> — {row.material_name}</span>
+                    {row.external_sku && <span className="font-medium text-slate-900">{row.external_sku} — </span>}
+                    <span className={row.external_sku ? "text-slate-700" : "font-medium text-slate-900"}>{row.material_name || "—"}</span>
                   </span>
                 ),
               },
@@ -163,6 +163,15 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
   const [activeTab, setActiveTab] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const tabCount = TABS.length;
+  useEffect(() => {
+    function handleKey(e) {
+      if (e.altKey && e.key === "]") { e.preventDefault(); setActiveTab((t) => (t + 1) % tabCount); }
+      if (e.altKey && e.key === "[") { e.preventDefault(); setActiveTab((t) => (t - 1 + tabCount) % tabCount); }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [tabCount]);
 
   const vendorType = geLine.vendor_type ?? "DOMESTIC";
   const isImport = vendorType === "IMPORT";
@@ -172,7 +181,7 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
   const [discrepancyRemarks, setDiscrepancyRemarks] = useState("");
   const [storageLocationId, setStorageLocationId] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState(geLine.csn_invoice_number ?? "");
-  const [invoiceDate, setInvoiceDate] = useState("");
+  const [invoiceDate, setInvoiceDate] = useState(geLine.csn_invoice_date ?? "");
   const [blNumber, setBlNumber] = useState(geLine.csn_bl_number ?? "");
   const [blDate, setBlDate] = useState("");
   const [boeNumber, setBoeNumber] = useState("");
@@ -197,9 +206,9 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
 
   // Doc name suggestions
   const docNamesQuery = useQuery({
-    queryKey: ["grn-doc-names", geLine.material_id, geHeader.vendor_id],
-    enabled: Boolean(geLine.material_id && geHeader.vendor_id),
-    queryFn: () => getMaterialVendorDocNames(geLine.material_id, geHeader.vendor_id),
+    queryKey: ["grn-doc-names", geLine.material_id, geLine.vendor_id],
+    enabled: Boolean(geLine.material_id && geLine.vendor_id),
+    queryFn: () => getMaterialVendorDocNames(geLine.material_id, geLine.vendor_id),
   });
   const docNameSuggestions = docNamesQuery.data?.items ?? [];
 
@@ -256,7 +265,7 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
   return (
     <ErpScreenScaffold
       eyebrow={`Post GRN → ${geHeader.ge_number} → Line ${geLine.line_number}`}
-      title={`${geLine.material_code} — ${geLine.material_name}`}
+      title={geLine.material_name || `Line ${geLine.line_number}`}
       notices={error ? [{ key: "grn-form-err", tone: "error", message: error }] : []}
       actions={[
         { key: "cancel", label: "Cancel", tone: "neutral", onClick: onCancel },
@@ -264,7 +273,7 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
       ]}
     >
       {/* Tab bar */}
-      <div className="flex border-b border-slate-200 overflow-x-auto gap-0 mb-4">
+      <div className="flex border-b border-slate-200 overflow-x-auto gap-0 mb-4" title="Alt+[ / Alt+] to switch tabs">
         {TABS.map((tab, i) => (
           <button
             key={tab}
@@ -290,8 +299,13 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
                 <p className="mt-1 text-base font-medium text-slate-900">{geQty} {geLine.uom_code}</p>
               </div>
               <div className="rounded border border-slate-200 bg-slate-50 p-3">
-                <p className="text-[11px] text-slate-500">PO UOM</p>
-                <p className="mt-1 text-base font-medium text-slate-900">{geLine.uom_code || "—"}</p>
+                <p className="text-[11px] text-slate-500">PO UOM / Base UOM</p>
+                <p className="mt-1 text-base font-medium text-slate-900">
+                  {geLine.uom_code || "—"}
+                  {geLine.base_uom_code && geLine.base_uom_code !== geLine.uom_code && (
+                    <span className="ml-1 text-sm text-slate-500">/ {geLine.base_uom_code}</span>
+                  )}
+                </p>
               </div>
               <div className={`rounded border p-3 ${discrepancy !== 0 ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50"}`}>
                 <p className="text-[11px] text-slate-500">Discrepancy</p>
@@ -399,11 +413,11 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
         {/* Tab 3 — Material */}
         {activeTab === 3 && (
           <ErpSectionCard eyebrow="Material" title="Material identity">
-            <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="grid grid-cols-2 gap-3 mb-4 md:grid-cols-3">
               {[
-                ["Material code", geLine.material_code ?? "—"],
                 ["Material name", geLine.material_name ?? "—"],
                 ["External code", geLine.external_sku ?? "—"],
+                ["Base UOM", geLine.base_uom_code ?? "—"],
               ].map(([label, value]) => (
                 <div key={label}>
                   <p className="text-[11px] text-slate-500">{label}</p>

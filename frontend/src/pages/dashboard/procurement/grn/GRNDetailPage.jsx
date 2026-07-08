@@ -115,9 +115,7 @@ export default function GRNDetailPage() {
             <>
               <ErpSectionCard eyebrow="Receipt" title="Material & quantity">
                 <Fields items={[
-                  ["Material", detail.material_code
-                    ? `${detail.material_code} — ${detail.material_name || ""}`
-                    : "—"],
+                  ["Material", detail.material_name || "—"],
                   ["External code", detail.external_sku || "—"],
                   ["GE qty", detail.ge_qty != null ? `${detail.ge_qty} ${detail.uom_code || ""}` : "—"],
                   ["Received qty", detail.received_qty != null ? `${detail.received_qty} ${detail.uom_code || ""}` : "—"],
