@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useEffectEvent, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
@@ -343,6 +343,7 @@ export default function QAQueuePage() {
                                   onChanged={() => {
                                     void queueQuery.refetch();
                                   }}
+                                  onCollapse={() => setExpandedRowId("")}
                                 />
                               </td>
                             </tr>
@@ -361,7 +362,7 @@ export default function QAQueuePage() {
   );
 }
 
-function QaExpandedPanel({ row, material, companyId, roleCode, onChanged }) {
+function QaExpandedPanel({ row, material, companyId, roleCode, onChanged, onCollapse }) {
   const queryClient = useQueryClient();
   const canManage = QA_MANAGER_ROLE_CODES.has(roleCode);
   const materialCategory = material?.material_category || "";
@@ -625,6 +626,30 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged }) {
     }
   }
 
+  const canSaveMethodNow = Boolean(addMethodForm.group) && !saving;
+
+  const handleExpandedPanelKeyDown = useEffectEvent((event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onCollapse?.();
+      return;
+    }
+    if (event.ctrlKey && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      if (canSaveMethodNow) {
+        void handleAddMethod(addMethodForm.group);
+      } else if (!decisionSubmitDisabled) {
+        void handleSubmitDecision();
+      }
+    }
+  });
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleExpandedPanelKeyDown);
+    return () => window.removeEventListener("keydown", handleExpandedPanelKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function renderMethodGroup(group, configs, methodPool) {
     const isAddingThisGroup = addMethodForm.group === group;
     return (
@@ -785,7 +810,7 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged }) {
                 className="h-7 border border-slate-300 bg-white px-1.5 text-[12px]"
               />
             </label>
-            <div className="flex items-end">
+            <div className="flex items-end gap-2">
               <button
                 type="button"
                 disabled={saving}
@@ -794,6 +819,7 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged }) {
               >
                 Save Method
               </button>
+              <span className="text-[10px] uppercase tracking-[0.08em] text-slate-400">Ctrl+S</span>
             </div>
           </div>
         ) : null}
@@ -807,6 +833,7 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged }) {
         <p className="p-4 text-center text-sm text-slate-400">Loading QA detail...</p>
       ) : (
         <>
+          <div className="text-[10px] uppercase tracking-[0.08em] text-slate-400">Ctrl+S Save | Esc Collapse</div>
           {error ? <div className="border border-rose-300 bg-rose-50 px-3 py-1.5 text-[12px] text-rose-800">{error}</div> : null}
           {notice ? <div className="border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-[12px] text-emerald-800">{notice}</div> : null}
 
@@ -906,6 +933,7 @@ function QaExpandedPanel({ row, material, companyId, roleCode, onChanged }) {
                   >
                     Submit Decision
                   </button>
+                  <span className="text-[10px] uppercase tracking-[0.08em] text-slate-400">Ctrl+S</span>
                 </div>
                 <span className="text-[11px] text-slate-500">
                   Allocating {allocatedQty || 0} of {remainingQty} remaining
