@@ -28,7 +28,7 @@ type PurchaseOrderLineRow = Record<string, unknown>;
 type MaterialRow = Record<string, unknown>;
 
 const GRN_STATUSES = new Set(["DRAFT", "POSTED", "REVERSED"]);
-const STOCK_TYPES = new Set(["UNRESTRICTED", "QA_STOCK", "BLOCKED"]);
+const STOCK_TYPES = new Set(["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"]);
 const EXPIRY_TYPES = new Set(["DATE", "SPAN", "N_A"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
@@ -623,7 +623,7 @@ export async function createAndPostGRNFromLineHandler(
       return procurementErrorResponse(req, ctx, "GRN_UOM_REQUIRED", 400, "Material base UOM is not configured.");
     }
 
-    const targetStockType: string = material.qa_required_on_inward ? "QA_STOCK" : "UNRESTRICTED";
+    const targetStockType: string = material.qa_required_on_inward ? "QUALITY_INSPECTION" : "UNRESTRICTED";
 
     // Storage location
     const storageLocationId = toTrimmedString(body.storage_location_id) || null;
@@ -781,7 +781,7 @@ export async function createAndPostGRNFromLineHandler(
     }
 
     // QA document
-    if (targetStockType === "QA_STOCK" || Boolean(material.qa_required_on_inward)) {
+    if (targetStockType === "QUALITY_INSPECTION" || Boolean(material.qa_required_on_inward)) {
       await createQaDocumentForGrn(
         ctx, grn as GrnRow,
         String(geLine.material_id),
