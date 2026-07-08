@@ -2457,8 +2457,35 @@ export async function getPOOrderGroupHandler(
       pos.map(async (po) => ({ ...po, lines: await getPOLines(toTrimmedString(po.id)) })),
     );
 
+    // Bulk-resolve material/cost-center/payment-term display names across
+    // every line in every PO in this group — never show raw UUIDs.
+    const allLines = posWithLines.flatMap((po) => po.lines);
+    const { lines: enrichedLines } = await enrichPoReferenceDisplays({ lines: allLines });
+    const enrichedLineById = new Map(
+      (enrichedLines ?? []).map((line) => [toTrimmedString(line.id), line]),
+    );
+    const posWithEnrichedLines = posWithLines.map((po) => ({
+      ...po,
+      lines: po.lines.map((line) => enrichedLineById.get(toTrimmedString(line.id)) ?? line),
+    }));
+
+    const groupVendorId = toTrimmedString(group.vendor_id);
+    const { data: vendorRow } = groupVendorId
+      ? await serviceRoleClient
+        .schema("erp_master")
+        .from("vendor_master")
+        .select("vendor_code, vendor_name")
+        .eq("id", groupVendorId)
+        .maybeSingle()
+      : { data: null };
+    const vendorDisplay = vendorRow ? formatCodeNameDisplay(vendorRow.vendor_code, vendorRow.vendor_name) : null;
+
     return okResponse({
-      data: await enrichProcurementUserDisplays({ ...group, purchase_orders: posWithLines }),
+      data: await enrichProcurementUserDisplays({
+        ...group,
+        vendor_display: vendorDisplay,
+        purchase_orders: posWithEnrichedLines,
+      }),
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_ORDER_GROUP_DETAIL_FAILED";
