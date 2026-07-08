@@ -86,6 +86,45 @@ export async function loadActiveCompanyWorkContexts(
   return (data ?? []) as WorkflowScopeContextRow[];
 }
 
+export async function loadActiveCompanyWorkContextsByCompany(
+  db: DbClient,
+  companyIds: string[],
+): Promise<Map<string, WorkflowScopeContextRow[]>> {
+  const dedupedCompanyIds = [...new Set(companyIds.filter(Boolean))];
+  if (dedupedCompanyIds.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await db
+    .schema("erp_acl")
+    .from("work_contexts")
+    .select("work_context_id, company_id, work_context_code, work_context_name, department_id, is_active")
+    .in("company_id", dedupedCompanyIds)
+    .eq("is_active", true);
+
+  if (error) {
+    throw new Error("WORKFLOW_SCOPE_CONTEXT_LOOKUP_FAILED");
+  }
+
+  const rows = (data ?? []) as WorkflowScopeContextRow[];
+  const byCompany = new Map<string, WorkflowScopeContextRow[]>();
+
+  for (const row of rows) {
+    if (!row.company_id) {
+      continue;
+    }
+
+    const existing = byCompany.get(row.company_id);
+    if (existing) {
+      existing.push(row);
+    } else {
+      byCompany.set(row.company_id, [row]);
+    }
+  }
+
+  return byCompany;
+}
+
 export function createWorkflowScopeContextMap(
   rows: WorkflowScopeContextRow[],
 ): Map<string, WorkflowScopeContextRow> {

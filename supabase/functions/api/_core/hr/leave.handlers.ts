@@ -4,6 +4,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import {
   createWorkflowScopeContextMap,
   loadActiveCompanyWorkContexts,
+  loadActiveCompanyWorkContextsByCompany,
   resolveDepartmentWorkflowScopeId,
 } from "../../_shared/workflow_scope.ts";
 import {
@@ -251,14 +252,16 @@ async function buildLeaveCases(rows: LeaveRequestRow[]) {
     rows.map((row) => row.parent_company_id),
   );
   const companyIds = [...new Set(rows.map((row) => row.parent_company_id).filter(Boolean))];
+  const companyWorkContextsByCompany = await loadActiveCompanyWorkContextsByCompany(
+    serviceRoleClient,
+    companyIds,
+  );
   const companyWorkContextMaps = new Map<string, ReturnType<typeof createWorkflowScopeContextMap>>();
 
   for (const companyId of companyIds) {
     companyWorkContextMaps.set(
       companyId,
-      createWorkflowScopeContextMap(
-        await loadActiveCompanyWorkContexts(serviceRoleClient, companyId),
-      ),
+      createWorkflowScopeContextMap(companyWorkContextsByCompany.get(companyId) ?? []),
     );
   }
 
@@ -1383,8 +1386,8 @@ export async function expandLeaveToDateRecords(
 
   const dates = generateDateRange(lr.from_date, lr.to_date);
 
-  for (const date of dates) {
-    await serviceRoleClient
+  await Promise.all(dates.map((date) =>
+    serviceRoleClient
       .schema("erp_hr")
       .rpc("upsert_day_record_leave", {
         p_company_id: lr.parent_company_id,
@@ -1392,8 +1395,8 @@ export async function expandLeaveToDateRecords(
         p_record_date: date,
         p_leave_request_id: lr.leave_request_id,
         p_leave_type_id: lr.leave_type_id,
-      });
-  }
+      })
+  ));
 }
 
 // ---------------------------------------------------------------------------
