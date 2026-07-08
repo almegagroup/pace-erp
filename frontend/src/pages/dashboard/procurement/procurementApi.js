@@ -420,6 +420,12 @@ export function getGateEntryByNumber(geNumber) {
   return fetchProcurement("GET", "/api/procurement/gate-entries/by-number", undefined, { ge_number: geNumber });
 }
 
+export function getGateReport(params) {
+  const p = { ...params };
+  Object.keys(p).forEach((k) => (p[k] === undefined || p[k] === "") && delete p[k]);
+  return fetchProcurement("GET", "/api/procurement/gate-report", undefined, p);
+}
+
 export function createGateEntry(data) {
   return fetchProcurement("POST", "/api/procurement/gate-entries", data);
 }

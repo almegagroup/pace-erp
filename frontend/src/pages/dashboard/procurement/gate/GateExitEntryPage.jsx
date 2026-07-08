@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpScreenScaffold, {
@@ -81,6 +81,17 @@ export default function GateExitEntryPage() {
   const detentionDays = detail ? daysBetween(detail.ge_date, exitDate) : 0;
   const isDetention = detentionDays > 2;
 
+  const totalGrossWeight = useMemo(() => {
+    if (!detail?.lines?.length) return null;
+    const sum = detail.lines.reduce((acc, l) => acc + (Number(l.gross_weight) || 0), 0);
+    return sum > 0 ? sum : null;
+  }, [detail]);
+
+  const tareExceedsGross =
+    totalGrossWeight !== null &&
+    tareWeight !== "" &&
+    Number(tareWeight) > totalGrossWeight;
+
   async function handleLoad() {
     const trimmed = geNumber.trim().toUpperCase();
     if (!trimmed) {
@@ -117,6 +128,10 @@ export default function GateExitEntryPage() {
 
   async function handleSave() {
     if (!detail?.id) return;
+    if (tareExceedsGross) {
+      setError(`Tare weight (${tareWeight}) cannot exceed gross weight (${totalGrossWeight}). Please correct.`);
+      return;
+    }
     if (isDetention && !remarks.trim()) {
       setError(`Exit is ${detentionDays} days after entry. Detention remarks are mandatory.`);
       return;
@@ -320,15 +335,35 @@ export default function GateExitEntryPage() {
                       </div>
                     </label>
 
-                    <ErpDenseFormRow label="Tare Weight">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.0001"
-                        value={tareWeight}
-                        onChange={(e) => setTareWeight(e.target.value)}
-                        className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
-                      />
+                    <ErpDenseFormRow label={
+                      <span className={tareExceedsGross ? "text-rose-700" : ""}>
+                        Tare Weight
+                        {totalGrossWeight != null && (
+                          <span className="ml-1 font-normal text-slate-500">
+                            (Gross: {totalGrossWeight})
+                          </span>
+                        )}
+                      </span>
+                    }>
+                      <div>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.0001"
+                          value={tareWeight}
+                          onChange={(e) => setTareWeight(e.target.value)}
+                          className={`h-9 w-full border px-3 text-sm outline-none ${
+                            tareExceedsGross
+                              ? "border-rose-500 bg-rose-50 focus:border-rose-600"
+                              : "border-slate-300 bg-white focus:border-sky-500"
+                          }`}
+                        />
+                        {tareExceedsGross && (
+                          <p className="mt-1 text-[11px] text-rose-700">
+                            Tare cannot exceed gross weight ({totalGrossWeight})
+                          </p>
+                        )}
+                      </div>
                     </ErpDenseFormRow>
                   </div>
 

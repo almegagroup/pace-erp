@@ -34,6 +34,7 @@ import {
 import {
   createGateEntryHandler,
   createGateExitInboundHandler,
+  gateReportHandler,
   getGateEntryByNumberHandler,
   getGateEntryHandler,
   getGateExitInboundHandler,
@@ -383,6 +384,8 @@ export async function dispatchProcurementRoutes(
       return await createGateEntryHandler(req, ctx);
     case "GET:/api/procurement/gate-entries":
       return await listGateEntriesHandler(req, ctx);
+    case "GET:/api/procurement/gate-report":
+      return await gateReportHandler(req, ctx);
     case "GET:/api/procurement/gate-entries/open-csns":
       return await listOpenCSNsForGEHandler(req, ctx);
     case "GET:/api/procurement/gate-entries/open-pos":

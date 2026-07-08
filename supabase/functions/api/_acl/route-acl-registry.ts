@@ -53,6 +53,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/gate-entries/open-pos":       { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "VIEW"  },
   "GET:/api/procurement/gate-entries/by-number":      { skipAcl: false, resourceCode: "PROC_GATE_EXIT",         action: "VIEW"  },
   "POST:/api/procurement/gate-exits/inbound":         { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "WRITE" },
+  "GET:/api/procurement/gate-report":                 { skipAcl: false, resourceCode: "PROC_GATE_REPORT",       action: "VIEW"  },
 
   // ── Procurement: GRN ─────────────────────────────────────────────────────
   "GET:/api/procurement/grns":                              { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
@@ -437,7 +438,7 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/gate-entries\/[^/]+\/prune$/,
     methods: {
-      POST: { skipAcl: false, resourceCode: "PROC_GRN_DETAIL", action: "WRITE" },
+      POST: { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "WRITE" },
     },
   },
   {

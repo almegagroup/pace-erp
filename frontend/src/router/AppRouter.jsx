@@ -124,6 +124,7 @@ import GateEntryCreatePage from "../pages/dashboard/procurement/gate/GateEntryCr
 import GateEntryDetailPage from "../pages/dashboard/procurement/gate/GateEntryDetailPage.jsx";
 import GateExitInboundDetailPage from "../pages/dashboard/procurement/gate/GateExitInboundDetailPage.jsx";
 import GateExitEntryPage from "../pages/dashboard/procurement/gate/GateExitEntryPage.jsx";
+import GateReportPage from "../pages/dashboard/procurement/gate/GateReportPage.jsx";
 import GRNListPage from "../pages/dashboard/procurement/grn/GRNListPage.jsx";
 import GRNDetailPage from "../pages/dashboard/procurement/grn/GRNDetailPage.jsx";
 import GRNPostFlow from "../pages/dashboard/procurement/grn/GRNPostFlow.jsx";
@@ -558,6 +559,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/gate-exit"
                     element={<GateExitEntryPage />}
+                  />
+                  <Route
+                    path="procurement/gate-report"
+                    element={<GateReportPage />}
                   />
                   <Route
                     path="procurement/grns"

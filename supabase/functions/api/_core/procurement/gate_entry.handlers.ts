@@ -93,6 +93,12 @@ function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: st
   return companyId || scopedCompanyId;
 }
 
+function daysBetween(a: string | null, b: string | null): number | null {
+  if (!a || !b) return null;
+  const diff = Math.abs(new Date(b).getTime() - new Date(a).getTime());
+  return Math.round(diff / (1000 * 60 * 60 * 24));
+}
+
 async function generateProcurementDocNumber(docType: string): Promise<string> {
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
@@ -377,6 +383,42 @@ export async function createGateEntryHandler(
 
     if (!GE_TYPES.has(geType)) {
       return procurementErrorResponse(req, ctx, "GE_TYPE_INVALID", 400, "Invalid gate entry type.");
+    }
+
+    // A vehicle cannot open a new gate entry while an earlier gate entry for
+    // the same vehicle is still on-site (i.e. has not been gate-exited yet).
+    const { data: vehicleGEs, error: vehicleGEsError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("gate_entry")
+      .select("id, ge_number")
+      .eq("vehicle_number", vehicleNumber)
+      .not("status", "in", '("PRUNED","CANCELLED")');
+
+    if (vehicleGEsError) {
+      return procurementErrorResponse(req, ctx, "GE_VEHICLE_CHECK_FAILED", 500, "Unable to validate vehicle gate status.");
+    }
+
+    if ((vehicleGEs ?? []).length > 0) {
+      const geIds = vehicleGEs.map((g) => String((g as JsonRecord).id));
+      const { data: exits, error: exitsError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("gate_exit_inbound")
+        .select("gate_entry_id")
+        .in("gate_entry_id", geIds);
+
+      if (exitsError) {
+        return procurementErrorResponse(req, ctx, "GE_VEHICLE_CHECK_FAILED", 500, "Unable to validate vehicle gate status.");
+      }
+
+      const exitedIds = new Set((exits ?? []).map((e) => String((e as JsonRecord).gate_entry_id)));
+      const pendingGE = (vehicleGEs as JsonRecord[]).find((g) => !exitedIds.has(String(g.id)));
+
+      if (pendingGE) {
+        return procurementErrorResponse(
+          req, ctx, "GE_VEHICLE_NOT_EXITED", 400,
+          `Vehicle ${vehicleNumber} already has an open gate entry (${pendingGE.ge_number}) that has not been gate-exited yet.`,
+        );
+      }
     }
 
     const geNumber = await generateProcurementDocNumber("GE");
@@ -984,6 +1026,161 @@ export async function getGateExitInboundHandler(
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "GEX_FETCH_FAILED";
+    return procurementErrorResponse(req, ctx, message, 500, message);
+  }
+}
+
+export async function gateReportHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
+    const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+    const geType = toUpperTrimmedString(url.searchParams.get("ge_type"));
+    const status = toUpperTrimmedString(url.searchParams.get("status"));
+    const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
+    const limit = parsePositiveInt(url.searchParams.get("limit"), 200);
+    const offset = Math.max(0, Number(url.searchParams.get("offset") ?? 0));
+
+    // 1. Gate entry lines with GE header
+    let lineQuery = serviceRoleClient
+      .schema("erp_procurement")
+      .from("gate_entry_line")
+      .select("id, gate_entry_id, line_number, material_id, ge_qty, uom_code, gross_weight, net_weight, csn_id, po_id")
+      .range(offset, offset + limit - 1);
+
+    // Subfilter via gate_entry using inner join approach
+    // We'll fetch gate_entries first, then filter lines
+    let geQuery = serviceRoleClient
+      .schema("erp_procurement")
+      .from("gate_entry")
+      .select("id, ge_number, ge_date, company_id, ge_type, status, remarks")
+      .order("ge_date", { ascending: false });
+
+    if (companyId) geQuery = geQuery.eq("company_id", companyId);
+    if (dateFrom) geQuery = geQuery.gte("ge_date", dateFrom);
+    if (dateTo) geQuery = geQuery.lte("ge_date", dateTo);
+    if (geType) geQuery = geQuery.eq("ge_type", geType);
+    if (status) geQuery = geQuery.eq("status", status);
+
+    const { data: geRows, error: geError } = await geQuery;
+    if (geError) return procurementErrorResponse(req, ctx, "GATE_REPORT_GE_FAILED", 500, "Unable to fetch gate entries.");
+
+    const geList = (geRows ?? []) as JsonRecord[];
+    if (geList.length === 0) return okResponse({ items: [], total: 0 }, ctx.request_id, req);
+
+    const geIds = geList.map((g) => String(g.id));
+    const geMap = new Map(geList.map((g) => [String(g.id), g]));
+
+    // 2. Lines for these GEs
+    const { data: lineRows, error: lineError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("gate_entry_line")
+      .select("id, gate_entry_id, line_number, material_id, ge_qty, uom_code, gross_weight, net_weight")
+      .in("gate_entry_id", geIds);
+
+    if (lineError) return procurementErrorResponse(req, ctx, "GATE_REPORT_LINE_FAILED", 500, "Unable to fetch gate entry lines.");
+    const lines = (lineRows ?? []) as JsonRecord[];
+    const lineIds = lines.map((l) => String(l.id));
+
+    // 3. Gate exits (one per GE)
+    const { data: gexRows } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("gate_exit_inbound")
+      .select("id, gate_entry_id, exit_number, exit_date, tare_weight, net_weight_calculated, remarks")
+      .in("gate_entry_id", geIds);
+    const gexMap = new Map(
+      ((gexRows ?? []) as JsonRecord[]).map((g) => [String(g.gate_entry_id), g])
+    );
+
+    // 4. GRNs per line
+    const { data: grnRows } = lineIds.length > 0
+      ? await serviceRoleClient
+          .schema("erp_procurement")
+          .from("goods_receipt")
+          .select("id, gate_entry_line_id, grn_number, grn_date, vendor_id")
+          .in("gate_entry_line_id", lineIds)
+      : { data: [] };
+    const grnByLineMap = new Map(
+      ((grnRows ?? []) as JsonRecord[]).map((g) => [String(g.gate_entry_line_id), g])
+    );
+
+    // 5. Bulk resolve
+    const materialIds = [...new Set(lines.map((l) => String(l.material_id ?? "")).filter(Boolean))];
+    const vendorIds = [...new Set(((grnRows ?? []) as JsonRecord[]).map((g) => String(g.vendor_id ?? "")).filter(Boolean))];
+    const companyIds = [...new Set(geList.map((g) => String(g.company_id ?? "")).filter(Boolean))];
+
+    const [matResp, vendorResp, companyResp] = await Promise.all([
+      materialIds.length > 0
+        ? serviceRoleClient.schema("erp_master").from("material_master")
+            .select("id, pace_code, material_name").in("id", materialIds)
+        : { data: [] },
+      vendorIds.length > 0
+        ? serviceRoleClient.schema("erp_master").from("vendor_master")
+            .select("id, vendor_code, vendor_name").in("id", vendorIds)
+        : { data: [] },
+      companyIds.length > 0
+        ? serviceRoleClient.schema("erp_master").from("companies")
+            .select("id, company_code, company_name").in("id", companyIds)
+        : { data: [] },
+    ]);
+
+    const matMap = new Map(((matResp.data ?? []) as JsonRecord[]).map((m) => [String(m.id), m]));
+    const vendorMap = new Map(((vendorResp.data ?? []) as JsonRecord[]).map((v) => [String(v.id), v]));
+    const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((c) => [String(c.id), c]));
+
+    // 6. Vendor filter (post-resolve, since vendor comes from GRN)
+    const items: JsonRecord[] = [];
+    for (const line of lines) {
+      const ge = geMap.get(String(line.gate_entry_id));
+      if (!ge) continue;
+      const gex = gexMap.get(String(line.gate_entry_id)) ?? null;
+      const grn = grnByLineMap.get(String(line.id)) ?? null;
+      const mat = matMap.get(String(line.material_id));
+      const vendor = grn ? vendorMap.get(String((grn as JsonRecord).vendor_id)) : null;
+      const company = companyMap.get(String(ge.company_id));
+
+      if (vendorId && String((grn as JsonRecord | null)?.vendor_id) !== vendorId) continue;
+
+      const geDate = String(ge.ge_date ?? "");
+      const grnDate = grn ? String((grn as JsonRecord).grn_date ?? "") : null;
+      const gexDate = gex ? String((gex as JsonRecord).exit_date ?? "") : null;
+
+      items.push({
+        ge_number: ge.ge_number,
+        company_code: company?.company_code ?? null,
+        ge_date: geDate,
+        ge_type: ge.ge_type,
+        ge_status: ge.status,
+        ge_remarks: ge.remarks ?? null,
+        line_number: line.line_number,
+        material_code: mat?.pace_code ?? null,
+        material_name: mat?.material_name ?? null,
+        ge_qty: line.ge_qty,
+        uom_code: line.uom_code,
+        gross_weight: line.gross_weight ?? null,
+        net_weight: line.net_weight ?? null,
+        vendor_code: vendor?.vendor_code ?? null,
+        vendor_name: vendor?.vendor_name ?? null,
+        grn_number: grn ? (grn as JsonRecord).grn_number : null,
+        grn_date: grnDate,
+        gex_number: gex ? (gex as JsonRecord).exit_number : null,
+        gex_date: gexDate,
+        tare_weight: gex ? (gex as JsonRecord).tare_weight : null,
+        net_weight_calculated: gex ? (gex as JsonRecord).net_weight_calculated : null,
+        gex_remarks: gex ? (gex as JsonRecord).remarks : null,
+        days_ge_to_gex: daysBetween(geDate, gexDate),
+        days_ge_to_grn: daysBetween(geDate, grnDate),
+      });
+    }
+
+    return okResponse({ items, total: items.length }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GATE_REPORT_FAILED";
     return procurementErrorResponse(req, ctx, message, 500, message);
   }
 }

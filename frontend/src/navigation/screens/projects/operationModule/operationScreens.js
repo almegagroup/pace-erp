@@ -193,6 +193,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_GATE_REPORT: {
+    screen_code: "PROC_GATE_REPORT",
+    route: "/dashboard/procurement/gate-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_GRN_LIST: {
     screen_code: "PROC_GRN_LIST",
     route: "/dashboard/procurement/grns",
