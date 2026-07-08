@@ -5,7 +5,7 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templa
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
-import { popScreen, openScreen } from "../../../../navigation/screenStackEngine.js";
+import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getGELinesForGRN, createAndPostGRNFromLine, getMaterialVendorDocNames, listTransporters } from "../procurementApi.js";
@@ -382,10 +382,6 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
                   <p className="mt-0.5 text-sm font-medium text-slate-900">{value}</p>
                 </div>
               ))}
-              <div className="col-span-full">
-                <p className="text-[11px] text-slate-500">Address</p>
-                <p className="mt-0.5 text-sm text-slate-900">{geHeader.vendor_address ?? "—"}</p>
-              </div>
             </div>
           </ErpSectionCard>
         )}
@@ -546,10 +542,7 @@ function GRNEntryForm({ geLine, geHeader, onPosted, onCancel }) {
                               No match found.
                               {canManageTransporters ? (
                                 <button
-                                  onClick={() => {
-                                    openScreen({ screen_code: "PROC_TRANSPORTER_MASTER", route: "/dashboard/procurement/masters/transporters" });
-                                    navigate("/dashboard/procurement/masters/transporters");
-                                  }}
+                                  onClick={() => navigate("/dashboard/procurement/masters/transporters")}
                                   className="ml-2 text-sky-600 underline text-sm"
                                 >
                                   Add to Transporter Master →
