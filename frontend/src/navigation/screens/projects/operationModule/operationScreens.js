@@ -233,14 +233,6 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  PROC_QA_DOCUMENT: {
-    screen_code: "PROC_QA_DOCUMENT",
-    route: "/dashboard/procurement/qa-documents/:id",
-    universe: "ACL",
-    type: SCREEN_TYPE.FULL,
-    keepAlive: false,
-  },
-
   PROC_STO_LIST: {
     screen_code: "PROC_STO_LIST",
     route: "/dashboard/procurement/stos",

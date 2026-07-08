@@ -93,6 +93,14 @@ import {
   updateTestLineHandler,
 } from "../_core/procurement/inward_qa.handlers.ts";
 import {
+  createCategoryTestConfigHandler,
+  createTestMethodHandler,
+  deleteCategoryTestConfigHandler,
+  listCategoryTestConfigHandler,
+  listTestMethodsHandler,
+  updateCategoryTestConfigHandler,
+} from "../_core/procurement/qa_test_method.handlers.ts";
+import {
   addLCLineHandler,
   createLandedCostHandler,
   deleteLCLineHandler,
@@ -396,6 +404,14 @@ export async function dispatchProcurementRoutes(
       return await createGateExitInboundHandler(req, ctx);
     case "GET:/api/procurement/qa-documents":
       return await listQADocumentsHandler(req, ctx);
+    case "GET:/api/procurement/qa-test-methods":
+      return await listTestMethodsHandler(req, ctx);
+    case "POST:/api/procurement/qa-test-methods":
+      return await createTestMethodHandler(req, ctx);
+    case "GET:/api/procurement/qa-category-test-config":
+      return await listCategoryTestConfigHandler(req, ctx);
+    case "POST:/api/procurement/qa-category-test-config":
+      return await createCategoryTestConfigHandler(req, ctx);
     case "POST:/api/procurement/grns":
       return await createGRNDraftHandler(req, ctx);
     case "POST:/api/procurement/grns/from-line":
@@ -921,6 +937,15 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/qa-documents\/[^/]+\/decision$/.test(pathname) && req.method === "POST") {
     return await submitUsageDecisionHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/qa-category-test-config\/[^/]+$/.test(pathname)) {
+    if (req.method === "PATCH") {
+      return await updateCategoryTestConfigHandler(req, ctx);
+    }
+    if (req.method === "DELETE") {
+      return await deleteCategoryTestConfigHandler(req, ctx);
+    }
   }
 
   if (/^\/api\/procurement\/purchase-orders\/[^/]+\/confirm$/.test(pathname) && req.method === "POST") {

@@ -129,7 +129,6 @@ import GRNListPage from "../pages/dashboard/procurement/grn/GRNListPage.jsx";
 import GRNDetailPage from "../pages/dashboard/procurement/grn/GRNDetailPage.jsx";
 import GRNPostFlow from "../pages/dashboard/procurement/grn/GRNPostFlow.jsx";
 import QAQueuePage from "../pages/dashboard/procurement/qa/QAQueuePage.jsx";
-import QADocumentPage from "../pages/dashboard/procurement/qa/QADocumentPage.jsx";
 import STOListPage from "../pages/dashboard/procurement/sto/STOListPage.jsx";
 import STOCreatePage from "../pages/dashboard/procurement/sto/STOCreatePage.jsx";
 import STOCreateOpeningPage from "../pages/dashboard/procurement/sto/STOCreateOpeningPage.jsx";
@@ -579,10 +578,6 @@ export default function AppRouter() {
                   <Route
                     path="procurement/qa-queue"
                     element={<QAQueuePage />}
-                  />
-                  <Route
-                    path="procurement/qa-documents/:id"
-                    element={<QADocumentPage />}
                   />
                   <Route
                     path="procurement/stos"

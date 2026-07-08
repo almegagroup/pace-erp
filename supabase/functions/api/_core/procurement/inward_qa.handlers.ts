@@ -1,10 +1,10 @@
 /*
- * File-ID: 16.5.1
  * File-Path: supabase/functions/api/_core/procurement/inward_qa.handlers.ts
- * Gate: 16.5
- * Phase: 16
  * Domain: PROCUREMENT
  * Purpose: Inward QA lifecycle — test entry, usage decision, stock reclassification.
+ *          Redesigned 2026-07-08: partial usage decisions, auto-inherited storage location,
+ *          DIRECTOR full authority. See docs/Operation Management/implementation-specs/
+ *          OM-GATE-InwardQA-Redesign-Spec.md
  * Authority: Backend
  */
 
@@ -23,7 +23,6 @@ type QaDocumentRow = Record<string, unknown>;
 type QaDecisionLineInput = {
   quantity: number;
   usage_decision: string;
-  storage_location_id: string;
   remarks?: string;
 };
 
@@ -36,8 +35,8 @@ class ApiError extends Error {
   }
 }
 
-const QA_ALLOWED_ROLES = ["SA", "PROCUREMENT_HEAD", "QA_OFFICER", "STORE_MANAGER"];
-const QA_MANAGER_ROLES = ["SA", "PROCUREMENT_HEAD", "STORE_MANAGER"];
+const QA_ALLOWED_ROLES = ["SA", "DIRECTOR", "PROCUREMENT_HEAD", "QA_OFFICER", "STORE_MANAGER"];
+const QA_MANAGER_ROLES = ["SA", "DIRECTOR", "PROCUREMENT_HEAD", "STORE_MANAGER"];
 const QA_DOC_MUTABLE_STATUSES = new Set(["PENDING", "IN_PROGRESS"]);
 const QA_PUBLIC_STATUS_MAP: Record<string, string> = {
   PENDING: "PENDING",
@@ -51,6 +50,8 @@ const QA_DECISION_MOVEMENT_MAP: Record<string, { dbDecision: string; movementTyp
   SCRAP: { dbDecision: "SCRAP", movementType: "P553", targetStockType: null },
   FOR_REPROCESS: { dbDecision: "FOR_REPROCESS", movementType: "P905", targetStockType: "FOR_REPROCESS" },
 };
+// Tolerance for float qty comparisons (matches numeric(20,6) column precision).
+const QTY_EPSILON = 0.000001;
 
 function assertQARole(ctx: QAHandlerContext): void {
   if (!QA_ALLOWED_ROLES.includes(ctx.roleCode)) {
@@ -84,6 +85,10 @@ function parsePositiveInt(value: unknown, fallback: number): number {
 function parsePositiveNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function roundQty(value: number): number {
+  return Number(value.toFixed(6));
 }
 
 function todayIsoDate(): string {
@@ -143,40 +148,56 @@ function assertQaCompanyScope(ctx: QAHandlerContext, qaDocument: QaDocumentRow):
   }
 }
 
+async function fetchDecisionLines(qaDocumentId: string): Promise<JsonRecord[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("inward_qa_decision_line")
+    .select("*")
+    .eq("qa_document_id", qaDocumentId)
+    .order("decision_line_number", { ascending: true });
+
+  if (error) {
+    throw new ApiError(500, "Unable to fetch QA decision lines");
+  }
+
+  return data ?? [];
+}
+
+function sumDecidedQty(decisionLines: JsonRecord[]): number {
+  return roundQty(decisionLines.reduce((sum, line) => sum + (Number(line.decision_qty) || 0), 0));
+}
+
 async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContext): Promise<JsonRecord> {
   const qaDocument = await fetchQaDocument(qaDocumentId);
   assertQaCompanyScope(ctx, qaDocument);
 
-  const [testLinesResp, decisionLinesResp] = await Promise.all([
+  const [testLinesResp, decisionLines] = await Promise.all([
     serviceRoleClient
       .schema("erp_procurement")
       .from("inward_qa_test_line")
       .select("*")
       .eq("qa_document_id", qaDocumentId)
       .order("line_number", { ascending: true }),
-    serviceRoleClient
-      .schema("erp_procurement")
-      .from("inward_qa_decision_line")
-      .select("*")
-      .eq("qa_document_id", qaDocumentId)
-      .order("decision_line_number", { ascending: true }),
+    fetchDecisionLines(qaDocumentId),
   ]);
 
   if (testLinesResp.error) {
     throw new ApiError(500, "Unable to fetch QA test lines");
   }
-  if (decisionLinesResp.error) {
-    throw new ApiError(500, "Unable to fetch QA decision lines");
-  }
+
+  const totalQty = roundQty(Number(qaDocument.qa_stock_qty) || 0);
+  const decidedQty = sumDecidedQty(decisionLines);
 
   return {
     ...qaDocument,
     qa_doc_number: qaDocument.qa_number,
-    total_qty: qaDocument.qa_stock_qty,
+    total_qty: totalQty,
+    decided_qty: decidedQty,
+    remaining_qty: roundQty(totalQty - decidedQty),
     created_at: qaDocument.qa_created_at,
     public_status: mapQaStatusForResponse(qaDocument.status),
     test_lines: testLinesResp.data ?? [],
-    decision_lines: decisionLinesResp.data ?? [],
+    decision_lines: decisionLines,
   };
 }
 
@@ -287,7 +308,6 @@ function parseDecisionLines(body: JsonRecord): QaDecisionLineInput[] {
   return lines.map((line) => ({
     quantity: Number((line as JsonRecord).quantity),
     usage_decision: toUpperTrimmedString((line as JsonRecord).usage_decision),
-    storage_location_id: toTrimmedString((line as JsonRecord).storage_location_id),
     remarks: toTrimmedString((line as JsonRecord).remarks) || undefined,
   }));
 }
@@ -302,12 +322,16 @@ export async function listQADocumentsHandler(
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const grnId = toTrimmedString(url.searchParams.get("grn_id"));
     const companyId = toTrimmedString(url.searchParams.get("company_id")) || getCompanyScope(ctx);
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 100);
+    const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
+    const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+    const limit = parsePositiveInt(url.searchParams.get("limit"), 200);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("inward_qa_document")
-      .select("id, qa_number, grn_id, material_id, vendor_id, status, qa_created_at, company_id")
+      .select(
+        "id, qa_number, grn_id, grn_line_id, material_id, vendor_id, qa_stock_qty, uom_code, status, assigned_to, qa_created_at, company_id",
+      )
       .order("qa_created_at", { ascending: false })
       .limit(limit);
 
@@ -324,18 +348,55 @@ export async function listQADocumentsHandler(
     if (grnId) {
       query = query.eq("grn_id", grnId);
     }
+    if (dateFrom) {
+      query = query.gte("qa_created_at", dateFrom);
+    }
+    if (dateTo) {
+      query = query.lte("qa_created_at", `${dateTo}T23:59:59.999Z`);
+    }
 
     const { data, error } = await query;
     if (error) {
       throw new ApiError(500, "Unable to list QA documents");
     }
 
-    const items = (data ?? []).map((row) => ({
-      ...row,
-      qa_doc_number: row.qa_number,
-      created_at: row.qa_created_at,
-      public_status: mapQaStatusForResponse(row.status),
-    }));
+    const rows = data ?? [];
+    const docIds = rows.map((row) => row.id);
+
+    // Bulk-fetch decision lines for all listed docs in one query (no per-row N+1)
+    // so the queue can show an accurate "remaining qty" without a detail fetch per row.
+    let decidedByDoc = new Map<string, number>();
+    if (docIds.length > 0) {
+      const { data: decisionRows, error: decisionError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("inward_qa_decision_line")
+        .select("qa_document_id, decision_qty")
+        .in("qa_document_id", docIds);
+
+      if (decisionError) {
+        throw new ApiError(500, "Unable to resolve QA decision totals");
+      }
+
+      decidedByDoc = (decisionRows ?? []).reduce((map, row) => {
+        const key = String(row.qa_document_id);
+        map.set(key, roundQty((map.get(key) ?? 0) + (Number(row.decision_qty) || 0)));
+        return map;
+      }, new Map<string, number>());
+    }
+
+    const items = rows.map((row) => {
+      const totalQty = roundQty(Number(row.qa_stock_qty) || 0);
+      const decidedQty = decidedByDoc.get(String(row.id)) ?? 0;
+      return {
+        ...row,
+        qa_doc_number: row.qa_number,
+        created_at: row.qa_created_at,
+        total_qty: totalQty,
+        decided_qty: decidedQty,
+        remaining_qty: roundQty(totalQty - decidedQty),
+        public_status: mapQaStatusForResponse(row.status),
+      };
+    });
 
     return okResponse(items, ctx.request_id, req);
   } catch (error) {
@@ -442,15 +503,31 @@ export async function addTestLineHandler(
     const testType = toUpperTrimmedString(body.test_type) || "OTHER";
     const testParameter = toTrimmedString(body.test_parameter);
     const resultValue = toTrimmedString(body.result_value);
-    const passFail = toUpperTrimmedString(body.pass_fail) || "PENDING";
     const remarks = toTrimmedString(body.remarks) || null;
+    const testMethodId = toTrimmedString(body.test_method_id) || null;
+    const lsl = body.lsl !== undefined && body.lsl !== null && body.lsl !== "" ? Number(body.lsl) : null;
+    const usl = body.usl !== undefined && body.usl !== null && body.usl !== "" ? Number(body.usl) : null;
 
     if (!["VISUAL", "MCT", "LAB", "OTHER"].includes(testType) || !testParameter) {
       throw new ApiError(400, "test_type and test_parameter are required");
     }
+
+    // Auto pass/fail from LSL/USL when both the result and limits are numeric.
+    // OTHR (test_type OTHER) results are optional and default to PENDING when blank.
+    let passFail = toUpperTrimmedString(body.pass_fail) || "PENDING";
+    const numericResult = Number(resultValue);
+    if (resultValue && Number.isFinite(numericResult) && (lsl !== null || usl !== null)) {
+      const belowLsl = lsl !== null && numericResult < lsl;
+      const aboveUsl = usl !== null && numericResult > usl;
+      passFail = belowLsl || aboveUsl ? "FAIL" : "PASS";
+    } else if (!resultValue) {
+      passFail = "PENDING";
+    }
     if (!["PASS", "FAIL", "PENDING"].includes(passFail)) {
       throw new ApiError(400, "pass_fail is invalid");
     }
+    // MCT rows may be saved without a result (PENDING placeholder) — the mandatory
+    // check happens at Usage Decision submit time, not at test-line save time.
 
     const { data, error } = await serviceRoleClient
       .schema("erp_procurement")
@@ -463,6 +540,9 @@ export async function addTestLineHandler(
         test_result: resultValue || null,
         pass_fail: passFail,
         remarks,
+        test_method_id: testMethodId,
+        lsl,
+        usl,
         tested_by: ctx.auth_user_id,
         test_date: todayIsoDate(),
       })
@@ -517,16 +597,40 @@ export async function updateTestLineHandler(
       test_date: todayIsoDate(),
     };
 
+    let nextResult: string | null | undefined;
     if (body.result_value !== undefined) {
-      patch.test_result = toTrimmedString(body.result_value) || null;
+      nextResult = toTrimmedString(body.result_value) || null;
+      patch.test_result = nextResult;
     }
+
     if (body.pass_fail !== undefined) {
       const passFail = toUpperTrimmedString(body.pass_fail);
       if (!["PASS", "FAIL", "PENDING"].includes(passFail)) {
         throw new ApiError(400, "pass_fail is invalid");
       }
       patch.pass_fail = passFail;
+    } else if (nextResult !== undefined) {
+      // Re-derive pass/fail from stored LSL/USL when only the result changed.
+      const { data: existingLine } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("inward_qa_test_line")
+        .select("lsl, usl")
+        .eq("id", lineId)
+        .eq("qa_document_id", qaDocumentId)
+        .maybeSingle();
+
+      const lsl = existingLine?.lsl !== null && existingLine?.lsl !== undefined ? Number(existingLine.lsl) : null;
+      const usl = existingLine?.usl !== null && existingLine?.usl !== undefined ? Number(existingLine.usl) : null;
+      const numericResult = Number(nextResult);
+      if (nextResult && Number.isFinite(numericResult) && (lsl !== null || usl !== null)) {
+        const belowLsl = lsl !== null && numericResult < lsl;
+        const aboveUsl = usl !== null && numericResult > usl;
+        patch.pass_fail = belowLsl || aboveUsl ? "FAIL" : "PASS";
+      } else if (!nextResult) {
+        patch.pass_fail = "PENDING";
+      }
     }
+
     if (body.remarks !== undefined) {
       patch.remarks = toTrimmedString(body.remarks) || null;
     }
@@ -570,17 +674,9 @@ export async function deleteTestLineHandler(
       throw new ApiError(409, "Cannot delete test line after decision is made");
     }
 
-    const { data: decisionLines, error: decisionLinesError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("inward_qa_decision_line")
-      .select("id")
-      .eq("qa_document_id", qaDocumentId);
-
-    if (decisionLinesError) {
-      throw new ApiError(500, "Unable to validate QA decision state");
-    }
-    if ((decisionLines ?? []).length > 0) {
-      throw new ApiError(409, "Cannot delete test line after decision is made");
+    const decisionLines = await fetchDecisionLines(qaDocumentId);
+    if (decisionLines.length > 0) {
+      throw new ApiError(409, "Cannot delete test line after a decision has been posted");
     }
 
     const { error } = await serviceRoleClient
@@ -602,6 +698,14 @@ export async function deleteTestLineHandler(
   }
 }
 
+/**
+ * Submits a batch of usage decisions for a QA document. Partial decisions are allowed —
+ * the batch only needs to cover <= the remaining (undecided) quantity. Storage location is
+ * never taken from the client; it is always the GRN line's storage location (QA only
+ * reclassifies stock type, it never moves material to a different physical location).
+ * Document status becomes DECIDED only once the full qa_stock_qty has been decided across
+ * all batches; otherwise it stays IN_PROGRESS and the row remains open in the queue.
+ */
 export async function submitUsageDecisionHandler(
   req: Request,
   ctx: QAHandlerContext,
@@ -619,17 +723,13 @@ export async function submitUsageDecisionHandler(
       throw new ApiError(400, "QA document is not eligible for decision");
     }
 
-    const { data: existingDecisionLines, error: existingDecisionError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("inward_qa_decision_line")
-      .select("id")
-      .eq("qa_document_id", qaDocumentId);
+    const existingDecisionLines = await fetchDecisionLines(qaDocumentId);
+    const totalQty = roundQty(Number(qaDocument.qa_stock_qty) || 0);
+    const alreadyDecidedQty = sumDecidedQty(existingDecisionLines);
+    const remainingBeforeSubmit = roundQty(totalQty - alreadyDecidedQty);
 
-    if (existingDecisionError) {
-      throw new ApiError(500, "Unable to validate existing QA decisions");
-    }
-    if ((existingDecisionLines ?? []).length > 0) {
-      throw new ApiError(409, "QA decision already submitted");
+    if (remainingBeforeSubmit <= QTY_EPSILON) {
+      throw new ApiError(409, "QA document has already been fully decided");
     }
 
     const body = await parseBody(req);
@@ -638,13 +738,25 @@ export async function submitUsageDecisionHandler(
       throw new ApiError(400, "decision_lines is required");
     }
 
-    const totalQty = parsePositiveNumber(qaDocument.qa_stock_qty) ?? 0;
-    const sumQty = Number(decisionLines.reduce((sum, line) => sum + (Number.isFinite(line.quantity) ? line.quantity : 0), 0).toFixed(6));
-    if (Number(sumQty.toFixed(6)) !== Number(totalQty.toFixed(6))) {
-      throw new ApiError(400, "Sum of decision line quantities must equal QA total quantity");
+    const sumQty = roundQty(
+      decisionLines.reduce((sum, line) => sum + (Number.isFinite(line.quantity) ? line.quantity : 0), 0),
+    );
+    if (sumQty <= QTY_EPSILON) {
+      throw new ApiError(400, "Sum of decision line quantities must be greater than zero");
+    }
+    if (sumQty - remainingBeforeSubmit > QTY_EPSILON) {
+      throw new ApiError(
+        400,
+        `Sum of decision line quantities (${sumQty}) exceeds remaining undecided quantity (${remainingBeforeSubmit})`,
+      );
     }
 
     const { grnLine } = await fetchGrnContextForQa(qaDocument);
+    const storageLocationId = toTrimmedString(grnLine.storage_location_id);
+    if (!storageLocationId) {
+      throw new ApiError(500, "GRN line has no storage location — cannot post QA decision");
+    }
+
     const baseUom = toTrimmedString(qaDocument.uom_code || grnLine.uom_code);
     const unitValue = Number(grnLine.grn_rate ?? 0);
     const companyId = String(qaDocument.company_id);
@@ -657,9 +769,6 @@ export async function submitUsageDecisionHandler(
       if (!config) {
         throw new ApiError(400, `Invalid usage_decision: ${decisionLine.usage_decision}`);
       }
-      if (!decisionLine.storage_location_id) {
-        throw new ApiError(400, "storage_location_id is required on every decision line");
-      }
       if (!Number.isFinite(decisionLine.quantity) || decisionLine.quantity <= 0) {
         throw new ApiError(400, "decision_lines.quantity must be greater than zero");
       }
@@ -671,7 +780,7 @@ export async function submitUsageDecisionHandler(
         documentNumber: String(qaDocument.qa_number),
         movementTypeCode: config.movementType,
         companyId,
-        storageLocationId: decisionLine.storage_location_id,
+        storageLocationId,
         materialId: String(qaDocument.material_id),
         quantity: decisionLine.quantity,
         uomCode: baseUom,
@@ -687,8 +796,7 @@ export async function submitUsageDecisionHandler(
           documentNumber: String(qaDocument.qa_number),
           movementTypeCode: config.movementType,
           companyId,
-          plantId,
-          storageLocationId: decisionLine.storage_location_id,
+          storageLocationId,
           materialId: String(qaDocument.material_id),
           quantity: decisionLine.quantity,
           uomCode: baseUom,
@@ -709,6 +817,7 @@ export async function submitUsageDecisionHandler(
           decision_qty: decisionLine.quantity,
           movement_type_code: config.dbDecision === "FOR_REPROCESS" ? "FOR_REPROCESS" : config.movementType,
           posting_status: "POSTED",
+          storage_location_id: storageLocationId,
           stock_document_id: finalPosting.stock_document_id,
           stock_ledger_id: finalPosting.stock_ledger_id,
           decided_by: ctx.auth_user_id,
@@ -729,6 +838,9 @@ export async function submitUsageDecisionHandler(
       }
     }
 
+    const remainingAfterSubmit = roundQty(remainingBeforeSubmit - sumQty);
+    const nextStatus = remainingAfterSubmit <= QTY_EPSILON ? "DECIDED" : "IN_PROGRESS";
+
     const currentRemarks = toTrimmedString(qaDocument.remarks);
     const nextRemarks = hasReject
       ? [currentRemarks, "RTV_PENDING"].filter(Boolean).join(" | ")
@@ -738,7 +850,7 @@ export async function submitUsageDecisionHandler(
       .schema("erp_procurement")
       .from("inward_qa_document")
       .update({
-        status: "DECIDED",
+        status: nextStatus,
         remarks: nextRemarks,
         last_updated_at: new Date().toISOString(),
         last_updated_by: ctx.auth_user_id,
@@ -755,8 +867,10 @@ export async function submitUsageDecisionHandler(
       {
         qa_document: {
           ...updatedQaDocument,
-          total_qty: updatedQaDocument.qa_stock_qty,
-          public_status: "DECISION_MADE",
+          total_qty: totalQty,
+          decided_qty: roundQty(alreadyDecidedQty + sumQty),
+          remaining_qty: remainingAfterSubmit,
+          public_status: mapQaStatusForResponse(nextStatus),
         },
         decision_lines: createdDecisionLines,
       },

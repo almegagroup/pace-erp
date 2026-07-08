@@ -24,6 +24,14 @@ async function fetchProcurement(method, path, body, params) {
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
+
+  if (response.status === 204) {
+    if (!response.ok) {
+      throw new Error("PROCUREMENT_REQUEST_FAILED");
+    }
+    return null;
+  }
+
   const json = await readJsonSafe(response);
 
   if (!response.ok || !json?.ok) {
@@ -514,6 +522,30 @@ export function deleteQATestLine(id, lineId) {
 
 export function submitUsageDecision(id, data) {
   return fetchProcurement("POST", `/api/procurement/qa-documents/${encodeURIComponent(id)}/decision`, data);
+}
+
+export function listQaTestMethods(params) {
+  return fetchProcurement("GET", "/api/procurement/qa-test-methods", undefined, params);
+}
+
+export function createQaTestMethod(payload) {
+  return fetchProcurement("POST", "/api/procurement/qa-test-methods", payload);
+}
+
+export function listQaCategoryTestConfig(params) {
+  return fetchProcurement("GET", "/api/procurement/qa-category-test-config", undefined, params);
+}
+
+export function createQaCategoryTestConfig(payload) {
+  return fetchProcurement("POST", "/api/procurement/qa-category-test-config", payload);
+}
+
+export function updateQaCategoryTestConfig(id, payload) {
+  return fetchProcurement("PATCH", `/api/procurement/qa-category-test-config/${encodeURIComponent(id)}`, payload);
+}
+
+export function deleteQaCategoryTestConfig(id) {
+  return fetchProcurement("DELETE", `/api/procurement/qa-category-test-config/${encodeURIComponent(id)}`);
 }
 
 export function listSTOs(params) {

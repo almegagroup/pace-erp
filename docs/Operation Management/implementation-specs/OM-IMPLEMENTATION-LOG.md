@@ -1779,4 +1779,45 @@ See CLAUDE.md Section 8 for full range table.
 | `CLAUDE.md` | Section 8A: same rules SSOT হিসেবে |
 | `OM-IMPLEMENTATION-LOG.md` | R-00 to R-04 mandatory rules section (এই file এর শুরুতে) |
 
+---
+
+## Inward QA Page — Redesign Spec (Locked 2026-07-08, IMPLEMENTED by Claude same session)
+
+**Spec File:** `OM-GATE-InwardQA-Redesign-Spec.md` ✅ Created 2026-07-08
+**Supersedes/Extends:** Gate-13.6 (DB), Gate-16.5 (Backend), Gate-17.5 (Frontend) — all previously VERIFIED
+**Status:** Implemented by Claude directly (not Codex, per explicit user instruction this session). DB applied to dev via MCP. Frontend build clean. Awaiting live browser smoke-test + prod migration deploy.
+
+**Files touched:**
+- `supabase/migrations/20260708151037_qa_test_method_master.sql` (new, applied to dev)
+- `supabase/migrations/20260708151049_qa_category_test_config.sql` (new, applied to dev)
+- `supabase/migrations/20260708151105_inward_qa_redesign_alters.sql` (new, applied to dev)
+- `supabase/functions/api/_core/procurement/inward_qa.handlers.ts` (rewritten)
+- `supabase/functions/api/_core/procurement/qa_test_method.handlers.ts` (new)
+- `supabase/functions/api/_routes/procurement.routes.ts` (routes added)
+- `frontend/src/pages/dashboard/procurement/procurementApi.js` (new QA fns + 204-response fix)
+- `frontend/src/pages/dashboard/procurement/qa/QAQueuePage.jsx` (rewritten, expandable-row)
+- `frontend/src/pages/dashboard/procurement/qa/QADocumentPage.jsx` (deleted — merged into queue)
+- `frontend/src/pages/dashboard/procurement/DocumentFlowSection.jsx` (QA node → queue deep-link)
+- `frontend/src/navigation/screens/projects/operationModule/operationScreens.js` (PROC_QA_DOCUMENT removed)
+- `frontend/src/router/AppRouter.jsx` (route removed)
+
+**Bonus bugs found + fixed while implementing (pre-existing, not introduced this session):**
+1. `submitUsageDecisionHandler` referenced an undefined `plantId` variable on every RELEASE/BLOCK/REJECT/FOR_REPROCESS decision — would have crashed at runtime (only SCRAP ever worked). Removed the erroneous parameter.
+2. `procurementApi.js`'s `fetchProcurement` treated any 204 No Content response as a failure (`!json?.ok` on `null` json) — every existing DELETE call (e.g. `deleteQATestLine`) surfaced a false error toast despite succeeding. Fixed to short-circuit on `response.status === 204`.
+3. Old QAQueuePage read `listGRNs()` result as `.data` — the handler actually returns `{items, total}` (confirmed against working `GRNListPage.jsx`), so the GRN Number column was silently always falling back to raw `grn_id`. Fixed to `.items`.
+
+**Verification done:** dev DB migrations applied cleanly (`qa_test_method`, `qa_category_test_config` tables + `inward_qa_test_line`/`inward_qa_decision_line` columns confirmed via MCP query). `npm run build` clean. `deno check` on touched files shows only the same pre-existing type-modeling gaps (`DbQueryBuilder` missing `.gte`/`.lte`/`.ilike` typings, implicit-any in shared modules) already present across every other VERIFIED handler in this codebase — no new errors. Supabase security advisor shows new tables at the same INFO-level RLS-no-policy status as every other `erp_master`/`erp_procurement` table (consistent, not a regression).
+
+**Not done (needs user or next session):** live browser click-through smoke test (no running dev server in this session); prod migration deploy (dev-only per workflow until user confirms).
+
+**কী বদলাচ্ছে (summary):**
+1. **Test Method Master (নতুন)** — Company + Test Group (MCT/OTHR) level global reusable method pool + Company + Material Category + Method level LSL/USL config (`erp_master.qa_test_method`, `erp_master.qa_category_test_config`)। MCT result mandatory, OTHR optional। Method নতুন category-তেও dropdown থেকে reuse করা যাবে।
+2. **Storage location fix** — QA আর manual storage location দেবে না; GRN line থেকে auto-inherit, read-only। কারণ QA decision শুধু stock-type reclassification, physical location move না।
+3. **Partial Usage Decision restore** — original Gate-13.6 DB design partial decision allow করতো (`PENDING → IN_PROGRESS → DECIDED`), কিন্তু Gate-17.5 frontend ভুলভাবে exact-sum আবশ্যক করে দিয়েছিল। এই redesign সেটা ঠিক করে remaining qty QUALITY_INSPECTION-এ রেখে দিয়ে row open রাখবে, পুরোপুরি decide হলে DECIDED status হবে।
+4. **DIRECTOR role — full authority যোগ** (এই phase-এর জন্য) — QA_ALLOWED_ROLES ও QA_MANAGER_ROLES দুটোতেই।
+5. **UI — CSN Tracker pattern** — expandable per-row panel, আলাদা detail-page navigation (`PROC_QA_DOCUMENT`) বাদ।
+6. Decision dropdown mandatory থাকবে (auto-suggest test result অনুযায়ী, কিন্তু hard-block নেই)। Post হয়ে যাওয়া decision line immutable — future re-routing আলাদা page (out of scope, movement types P322-350 series reserved)।
+
+**Next step:** Codex task brief বানিয়ে implementation শুরু করা।
+
 
