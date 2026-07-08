@@ -36,6 +36,10 @@ async function fetchProcurement(method, path, body, params) {
 
   if (!response.ok || !json?.ok) {
     const code = json?.code ?? "PROCUREMENT_REQUEST_FAILED";
+    // The UI-facing message is deliberately generic for 5xx/unmapped codes (see
+    // resolveErrorMessage) so end users don't see raw backend errors. Log the real
+    // response here so it's still visible in the browser console during development.
+    console.error(`[PROCUREMENT_API_ERROR] ${method} ${path} -> ${response.status} ${code}: ${json?.message ?? "(no message body)"}`, json);
     const error = new Error(resolveErrorMessage(code, json?.message, response.status));
     error.code = code;
     error.status = response.status;

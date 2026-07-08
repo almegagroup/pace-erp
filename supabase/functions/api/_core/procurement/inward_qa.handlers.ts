@@ -35,6 +35,11 @@ class ApiError extends Error {
   }
 }
 
+/** Logs the real Supabase/Postgres error server-side so root causes aren't lost behind a generic message. */
+function logDbError(context: string, error: unknown): void {
+  console.error(`[INWARD_QA_DB_ERROR] ${context}:`, JSON.stringify(error));
+}
+
 const QA_ALLOWED_ROLES = ["SA", "DIRECTOR", "PROCUREMENT_HEAD", "QA_OFFICER", "STORE_MANAGER"];
 const QA_MANAGER_ROLES = ["SA", "DIRECTOR", "PROCUREMENT_HEAD", "STORE_MANAGER"];
 const QA_DOC_MUTABLE_STATUSES = new Set(["PENDING", "IN_PROGRESS"]);
@@ -102,6 +107,7 @@ function qaErrorResponse(
   status: number,
   message: string,
 ): Response {
+  console.warn(`[QA_ERROR] ${req.method} ${new URL(req.url).pathname} -> ${status} ${code}: ${message}`);
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
 
@@ -135,6 +141,7 @@ async function fetchQaDocument(qaDocumentId: string): Promise<QaDocumentRow> {
     .single();
 
   if (error || !data) {
+    if (error) logDbError("fetchQaDocument", error);
     throw new ApiError(404, "QA document not found");
   }
 
@@ -157,7 +164,8 @@ async function fetchDecisionLines(qaDocumentId: string): Promise<JsonRecord[]> {
     .order("decision_line_number", { ascending: true });
 
   if (error) {
-    throw new ApiError(500, "Unable to fetch QA decision lines");
+    logDbError("fetchDecisionLines", error);
+    throw new ApiError(500, error.message || "Unable to fetch QA decision lines");
   }
 
   return data ?? [];
@@ -182,7 +190,8 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
   ]);
 
   if (testLinesResp.error) {
-    throw new ApiError(500, "Unable to fetch QA test lines");
+    logDbError("fetchQaDocumentDetails test-lines", testLinesResp.error);
+    throw new ApiError(500, testLinesResp.error.message || "Unable to fetch QA test lines");
   }
 
   const totalQty = roundQty(Number(qaDocument.qa_stock_qty) || 0);
@@ -218,10 +227,12 @@ async function fetchGrnContextForQa(qaDocument: QaDocumentRow): Promise<{ grn: R
   ]);
 
   if (grnResp.error || !grnResp.data) {
-    throw new ApiError(500, "Unable to fetch linked GRN");
+    logDbError("fetchGrnContextForQa grn", grnResp.error);
+    throw new ApiError(500, grnResp.error?.message || "Unable to fetch linked GRN");
   }
   if (grnLineResp.error || !grnLineResp.data) {
-    throw new ApiError(500, "Unable to fetch linked GRN line");
+    logDbError("fetchGrnContextForQa grnLine", grnLineResp.error);
+    throw new ApiError(500, grnLineResp.error?.message || "Unable to fetch linked GRN line");
   }
 
   return { grn: grnResp.data, grnLine: grnLineResp.data };
@@ -238,7 +249,8 @@ async function getNextTestLineNumber(qaDocumentId: string): Promise<number> {
     .maybeSingle();
 
   if (error) {
-    throw new ApiError(500, "Unable to determine QA test line number");
+    logDbError("getNextTestLineNumber", error);
+    throw new ApiError(500, error.message || "Unable to determine QA test line number");
   }
 
   return (Number(data?.line_number) || 0) + 1;
@@ -255,7 +267,8 @@ async function getNextDecisionLineNumber(qaDocumentId: string): Promise<number> 
     .maybeSingle();
 
   if (error) {
-    throw new ApiError(500, "Unable to determine QA decision line number");
+    logDbError("getNextDecisionLineNumber", error);
+    throw new ApiError(500, error.message || "Unable to determine QA decision line number");
   }
 
   return (Number(data?.decision_line_number) || 0) + 1;
@@ -294,7 +307,8 @@ async function postStockMovement(args: {
     });
 
   if (error || !Array.isArray(data) || data.length === 0) {
-    throw new ApiError(500, "QA stock movement posting failed");
+    logDbError("postStockMovement rpc", error ?? { note: "empty/invalid data returned", data });
+    throw new ApiError(500, error?.message || "QA stock movement posting failed");
   }
 
   return {
@@ -357,7 +371,8 @@ export async function listQADocumentsHandler(
 
     const { data, error } = await query;
     if (error) {
-      throw new ApiError(500, "Unable to list QA documents");
+      logDbError("listQADocumentsHandler query", error);
+      throw new ApiError(500, error.message || "Unable to list QA documents");
     }
 
     const rows = data ?? [];
@@ -374,7 +389,8 @@ export async function listQADocumentsHandler(
         .in("qa_document_id", docIds);
 
       if (decisionError) {
-        throw new ApiError(500, "Unable to resolve QA decision totals");
+        logDbError("listQADocumentsHandler decision totals", decisionError);
+        throw new ApiError(500, decisionError.message || "Unable to resolve QA decision totals");
       }
 
       decidedByDoc = (decisionRows ?? []).reduce((map, row) => {
@@ -493,7 +509,8 @@ export async function addTestLineHandler(
       .single();
 
     if (error || !data) {
-      throw new ApiError(500, "Unable to add QA test line");
+      logDbError("addTestLineHandler insert", error);
+      throw new ApiError(500, error?.message || "Unable to add QA test line");
     }
 
     if (toUpperTrimmedString(qaDocument.status) === "PENDING") {
@@ -588,6 +605,7 @@ export async function updateTestLineHandler(
       .single();
 
     if (error || !data) {
+      if (error) logDbError("updateTestLineHandler update", error);
       throw new ApiError(404, "QA test line not found");
     }
 
@@ -630,7 +648,8 @@ export async function deleteTestLineHandler(
       .eq("qa_document_id", qaDocumentId);
 
     if (error) {
-      throw new ApiError(500, "Unable to delete QA test line");
+      logDbError("deleteTestLineHandler delete", error);
+      throw new ApiError(500, error.message || "Unable to delete QA test line");
     }
 
     return new Response(null, { status: 204 });
@@ -771,7 +790,8 @@ export async function submitUsageDecisionHandler(
         .single();
 
       if (insertError || !insertedDecision) {
-        throw new ApiError(500, "Unable to create QA decision line");
+        logDbError("submitUsageDecisionHandler decision-line insert", insertError);
+        throw new ApiError(500, insertError?.message || "Unable to create QA decision line");
       }
 
       createdDecisionLines.push(insertedDecision);
@@ -803,7 +823,8 @@ export async function submitUsageDecisionHandler(
       .single();
 
     if (updateError || !updatedQaDocument) {
-      throw new ApiError(500, "Unable to update QA document status");
+      logDbError("submitUsageDecisionHandler qa-document status update", updateError);
+      throw new ApiError(500, updateError?.message || "Unable to update QA document status");
     }
 
     return okResponse(

@@ -34,6 +34,11 @@ class ApiError extends Error {
   }
 }
 
+/** Logs the real Supabase/Postgres error server-side so root causes aren't lost behind a generic message. */
+function logDbError(context: string, error: unknown): void {
+  console.error(`[QA_TEST_METHOD_DB_ERROR] ${context}:`, JSON.stringify(error));
+}
+
 function assertQARole(ctx: QATestMethodHandlerContext): void {
   if (!QA_ALLOWED_ROLES.includes(ctx.roleCode)) {
     throw new ApiError(403, "QA access required");
@@ -71,6 +76,7 @@ function qaErrorResponse(
   status: number,
   message: string,
 ): Response {
+  console.warn(`[QA_TEST_METHOD_ERROR] ${req.method} ${new URL(req.url).pathname} -> ${status} ${code}: ${message}`);
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
 
@@ -112,7 +118,8 @@ export async function listTestMethodsHandler(
 
     const { data, error } = await query;
     if (error) {
-      throw new ApiError(500, "Unable to list QA test methods");
+      logDbError("listTestMethodsHandler query", error);
+      throw new ApiError(500, error.message || "Unable to list QA test methods");
     }
 
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
@@ -153,7 +160,8 @@ export async function createTestMethodHandler(
       .maybeSingle();
 
     if (existingError) {
-      throw new ApiError(500, "Unable to check existing QA test methods");
+      logDbError("createTestMethodHandler existing-lookup", existingError);
+      throw new ApiError(500, existingError.message || "Unable to check existing QA test methods");
     }
     if (existing) {
       return okResponse({ data: existing }, ctx.request_id, req);
@@ -175,7 +183,8 @@ export async function createTestMethodHandler(
       if (error?.code === "23505") {
         throw new ApiError(409, "Test method already exists for this company and group");
       }
-      throw new ApiError(500, "Unable to create QA test method");
+      logDbError("createTestMethodHandler insert", error);
+      throw new ApiError(500, error?.message || "Unable to create QA test method");
     }
 
     return okResponse({ data }, ctx.request_id, req);
@@ -209,7 +218,8 @@ export async function listCategoryTestConfigHandler(
       .order("created_at", { ascending: true });
 
     if (error) {
-      throw new ApiError(500, "Unable to list category test config");
+      logDbError("listCategoryTestConfigHandler query", error);
+      throw new ApiError(500, error.message || "Unable to list category test config");
     }
 
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
@@ -259,7 +269,8 @@ export async function createCategoryTestConfigHandler(
       if (error?.code === "23505") {
         throw new ApiError(409, "This method is already configured for this category");
       }
-      throw new ApiError(500, "Unable to create category test config");
+      logDbError("createCategoryTestConfigHandler insert", error);
+      throw new ApiError(500, error?.message || "Unable to create category test config");
     }
 
     return okResponse({ data }, ctx.request_id, req);
@@ -297,7 +308,8 @@ export async function updateCategoryTestConfigHandler(
       .single();
 
     if (error || !data) {
-      throw new ApiError(404, "Category test config not found");
+      logDbError("updateCategoryTestConfigHandler update", error);
+      throw new ApiError(404, error?.message || "Category test config not found");
     }
 
     return okResponse({ data }, ctx.request_id, req);
@@ -329,7 +341,8 @@ export async function deleteCategoryTestConfigHandler(
       .single();
 
     if (configError || !config) {
-      throw new ApiError(404, "Category test config not found");
+      logDbError("deleteCategoryTestConfigHandler config-lookup", configError);
+      throw new ApiError(404, configError?.message || "Category test config not found");
     }
 
     const testGroup = String((config.qa_test_method as JsonRecord | null)?.test_group ?? "");
@@ -347,7 +360,8 @@ export async function deleteCategoryTestConfigHandler(
       .not("test_result", "is", null);
 
     if (testLineError) {
-      throw new ApiError(500, "Unable to verify prior test usage");
+      logDbError("deleteCategoryTestConfigHandler test-line lookup", testLineError);
+      throw new ApiError(500, testLineError.message || "Unable to verify prior test usage");
     }
 
     const candidateDocIds = Array.from(
@@ -362,7 +376,8 @@ export async function deleteCategoryTestConfigHandler(
         .in("id", candidateDocIds);
 
       if (docsError) {
-        throw new ApiError(500, "Unable to verify prior test usage");
+        logDbError("deleteCategoryTestConfigHandler docs lookup", docsError);
+        throw new ApiError(500, docsError.message || "Unable to verify prior test usage");
       }
 
       const materialIds = Array.from(new Set((docs ?? []).map((row) => String(row.material_id))));
@@ -374,7 +389,8 @@ export async function deleteCategoryTestConfigHandler(
           .in("id", materialIds);
 
         if (materialsError) {
-          throw new ApiError(500, "Unable to verify prior test usage");
+          logDbError("deleteCategoryTestConfigHandler materials lookup", materialsError);
+          throw new ApiError(500, materialsError.message || "Unable to verify prior test usage");
         }
 
         const hasResultInThisCategory = (materials ?? []).some(
@@ -393,7 +409,8 @@ export async function deleteCategoryTestConfigHandler(
       .eq("id", configId);
 
     if (deleteError) {
-      throw new ApiError(500, "Unable to delete category test config");
+      logDbError("deleteCategoryTestConfigHandler delete", deleteError);
+      throw new ApiError(500, deleteError.message || "Unable to delete category test config");
     }
 
     return new Response(null, { status: 204 });
