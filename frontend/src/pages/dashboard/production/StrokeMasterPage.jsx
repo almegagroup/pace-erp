@@ -7,10 +7,10 @@
  *          Deactivate an APPROVED stroke (terminal) or Revert to DRAFT.
  *          See feasibility doc Section 83.3 (revised 2026-06-30).
  *
- * Known deviations from the 83.3 lock (deferred, not built in this pass):
- *  - Prod/Shade must be picked from an EXISTING SFG/INT material — the
- *    "type a brand-new Prod+Shade and auto-create Material Master on Approve"
- *    flow is not implemented yet.
+ * Prodshade can be an existing SFG/INT material or a brand-new Prod+Shade
+ * (Material Master is created on Approve, not on Save Draft — 83.3 rule).
+ *
+ * Known deviation from the 83.3 lock (deferred, not built in this pass):
  *  - OUTPUT line is shown as a computed header summary, not a literal
  *    stroke_line row.
  */
@@ -232,7 +232,8 @@ export default function StrokeMasterPage() {
   const [detailEditLines, setDetailEditLines] = useState(null);
 
   const [form, setForm] = useState({
-    company_id: "", material_type: "SFG", po_type: "", prodshade_material_id: "",
+    company_id: "", material_type: "SFG", po_type: "", prodshade_mode: "existing",
+    prodshade_material_id: "", prod_code: "", shade_code: "",
     stroke_number: "", description: "", base_uom_code: "", conversion_uom_code: "", conversion_factor: "",
   });
   const [lines, setLines] = useState([{ ...EMPTY_LINE }]);
@@ -277,7 +278,11 @@ export default function StrokeMasterPage() {
 
   function openCreate() {
     setDrawerMode("create");
-    setForm({ company_id: "", material_type: "SFG", po_type: "", prodshade_material_id: "", stroke_number: "", description: "", base_uom_code: "", conversion_uom_code: "", conversion_factor: "" });
+    setForm({
+      company_id: "", material_type: "SFG", po_type: "", prodshade_mode: "existing",
+      prodshade_material_id: "", prod_code: "", shade_code: "",
+      stroke_number: "", description: "", base_uom_code: "", conversion_uom_code: "", conversion_factor: "",
+    });
     setLines([{ ...EMPTY_LINE }]);
     setDrawerOpen(true);
   }
@@ -333,8 +338,16 @@ export default function StrokeMasterPage() {
   }
 
   function validateHeader(f) {
-    if (!f.company_id || !f.prodshade_material_id || !f.stroke_number || !f.po_type || !f.base_uom_code) {
-      toast("Company, Material Type, PO Type, Prodshade, Stroke number, and Base UOM are required.", "error");
+    if (!f.company_id || !f.stroke_number || !f.po_type || !f.base_uom_code) {
+      toast("Company, Material Type, PO Type, Stroke number, and Base UOM are required.", "error");
+      return false;
+    }
+    if (f.prodshade_mode === "existing" && !f.prodshade_material_id) {
+      toast("Select an existing Prodshade, or switch to \"Create new Prodshade\".", "error");
+      return false;
+    }
+    if (f.prodshade_mode === "new" && (!f.prod_code.trim() || !f.shade_code.trim())) {
+      toast("Prod Code and Shade Code are required for a new Prodshade.", "error");
       return false;
     }
     return true;
@@ -349,8 +362,12 @@ export default function StrokeMasterPage() {
     }
     setSaving(true);
     try {
+      const isNewProdshade = form.prodshade_mode === "new";
       await createStrokeMaster({
         ...form,
+        prodshade_material_id: isNewProdshade ? "" : form.prodshade_material_id,
+        prod_code: isNewProdshade ? form.prod_code.trim().toUpperCase() : "",
+        shade_code: isNewProdshade ? form.shade_code.trim().toUpperCase() : "",
         lines: lines.filter((l) => l.material_id).map((l) => ({
           material_id: l.material_id,
           line_material_type: l.line_material_type,
@@ -450,7 +467,9 @@ export default function StrokeMasterPage() {
               {strokes.map((s) => (
                 <tr key={s.id} className="hover:bg-sky-50 cursor-pointer border-b border-slate-100 transition-colors" onClick={() => openDetail(s.id)}>
                   <td className="py-2 px-3 font-mono font-semibold">{s.stroke_number}</td>
-                  <td className="py-2 px-3 text-slate-600">{s.material?.pace_code ?? "—"} — {s.material?.material_name ?? "—"}</td>
+                  <td className="py-2 px-3 text-slate-600">
+                    {s.material ? `${s.material.pace_code ?? "—"} — ${s.material.material_name ?? "—"}` : `${s.prod_code ?? "—"}${s.shade_code ?? ""} (new, pending Approve)`}
+                  </td>
                   <td className="py-2 px-3 text-slate-500">{s.material_type}</td>
                   <td className="py-2 px-3 text-slate-500">{s.po_type}</td>
                   <td className="py-2 px-3 text-slate-500">{s.description ?? "—"}</td>
@@ -491,8 +510,30 @@ export default function StrokeMasterPage() {
             <Field label="PO Type" required hint={PO_TYPE_OPTIONS_BY_MATERIAL_TYPE[form.material_type]?.find((o) => o.value === form.po_type)?.desc}>
               <ErpComboboxField value={form.po_type} onChange={(v) => setForm((f) => ({ ...f, po_type: v }))} options={PO_TYPE_OPTIONS_BY_MATERIAL_TYPE[form.material_type] ?? []} />
             </Field>
-            <Field label="Prodshade (existing SFG/INT material)" required>
-              <ErpComboboxField value={form.prodshade_material_id} onChange={(v) => setForm((f) => ({ ...f, prodshade_material_id: v }))} options={prodshadeOptions} emptyStateLabel="No materials of this type yet" />
+            <Field label="Prodshade" required>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex gap-3 text-xs text-slate-600">
+                  <label className="flex items-center gap-1">
+                    <input type="radio" name="prodshade_mode" checked={form.prodshade_mode === "existing"} onChange={() => setForm((f) => ({ ...f, prodshade_mode: "existing", prod_code: "", shade_code: "" }))} />
+                    Existing
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input type="radio" name="prodshade_mode" checked={form.prodshade_mode === "new"} onChange={() => setForm((f) => ({ ...f, prodshade_mode: "new", prodshade_material_id: "" }))} />
+                    Create new
+                  </label>
+                </div>
+                {form.prodshade_mode === "existing" ? (
+                  <ErpComboboxField value={form.prodshade_material_id} onChange={(v) => setForm((f) => ({ ...f, prodshade_material_id: v }))} options={prodshadeOptions} emptyStateLabel="No materials of this type yet" />
+                ) : (
+                  <div className="flex gap-2">
+                    <input className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-1/2 font-mono uppercase" value={form.prod_code} onChange={(e) => setForm((f) => ({ ...f, prod_code: e.target.value }))} placeholder="Prod code" />
+                    <input className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-1/2 font-mono uppercase" value={form.shade_code} onChange={(e) => setForm((f) => ({ ...f, shade_code: e.target.value }))} placeholder="Shade code" />
+                  </div>
+                )}
+                {form.prodshade_mode === "new" && (
+                  <p className="text-[11px] text-slate-400">Material Master ({form.material_type}) will be created automatically when this stroke is Approved — not on Save Draft.</p>
+                )}
+              </div>
             </Field>
             <Field label="Stroke Number" required>
               <input ref={firstInputRef} className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono h-7 w-full" value={form.stroke_number} onChange={(e) => setForm((f) => ({ ...f, stroke_number: e.target.value }))} placeholder="Numeric only" required />
@@ -546,7 +587,14 @@ export default function StrokeMasterPage() {
         ) : detail ? (
           <div className="p-4 flex flex-col gap-4">
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <div><span className="text-slate-400 text-xs">Prodshade</span><p className="font-medium">{detail.material?.pace_code ?? "—"} — {detail.material?.material_name ?? "—"}</p></div>
+              <div>
+                <span className="text-slate-400 text-xs">Prodshade</span>
+                <p className="font-medium">
+                  {detail.material
+                    ? `${detail.material.pace_code ?? "—"} — ${detail.material.material_name ?? "—"}`
+                    : `${detail.prod_code ?? "—"}${detail.shade_code ?? ""} (new — created on Approve)`}
+                </p>
+              </div>
               <div><span className="text-slate-400 text-xs">Status</span><p><span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_BADGE[detail.status]}`}>{detail.status}</span></p></div>
               <div><span className="text-slate-400 text-xs">Material Type</span><p>{detail.material_type}</p></div>
               <div><span className="text-slate-400 text-xs">PO Type</span><p>{detail.po_type}</p></div>

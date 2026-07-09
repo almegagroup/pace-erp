@@ -77,6 +77,93 @@ function buildLineRows(strokeMasterId: string, lines: JsonRecord[]) {
   }));
 }
 
+// Find-or-create the SFG/INT Material Master for a Prod+Shade combo.
+// Per 83.3: one Material Master per Prodshade, global across companies —
+// only the plant/company extension is created per-company. Triggered at
+// PR02 Approve (never at DRAFT create) so rejected Strokes leave no stale
+// Material Master behind.
+async function ensureProdshadeMaterial(params: {
+  materialType: string;
+  prodCode: string;
+  shadeCode: string;
+  baseUomCode: string;
+  description: string;
+  companyId: string;
+  authUserId: string;
+}): Promise<string> {
+  const externalCode = `${params.prodCode}${params.shadeCode}`;
+
+  const { data: existing, error: lookupErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("id")
+    .eq("material_type", params.materialType)
+    .eq("external_code", externalCode)
+    .maybeSingle();
+  if (lookupErr) throw new Error("PROD_PRODSHADE_MATERIAL_LOOKUP_FAILED");
+
+  let materialId: string;
+  if (existing) {
+    materialId = String((existing as JsonRecord).id);
+  } else {
+    const { data: paceCode, error: paceErr } = await serviceRoleClient.rpc(
+      "generate_material_pace_code",
+      { p_material_type: params.materialType },
+    );
+    if (paceErr || !paceCode) throw new Error("PROD_PRODSHADE_PACE_CODE_FAILED");
+
+    const shortName = externalCode.length > 50 ? externalCode.slice(0, 50) : externalCode;
+    const { data: newMat, error: insertErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .insert({
+        pace_code: paceCode,
+        external_code: externalCode,
+        material_name: externalCode,
+        short_name: shortName,
+        material_type: params.materialType,
+        shade_code: params.shadeCode,
+        base_uom_code: params.baseUomCode,
+        document_name: params.description || null,
+        procurement_type: "IN_HOUSE",
+        import_domestic_flag: "DOMESTIC",
+        batch_tracking_required: true,
+        fifo_tracking_enabled: true,
+        expiry_tracking_enabled: false,
+        qa_required_on_inward: false,
+        qa_required_on_fg: true,
+        valuation_method: "WEIGHTED_AVERAGE",
+        bom_exists: true,
+        delivery_tolerance_enabled: false,
+        status: "ACTIVE",
+        created_by: params.authUserId,
+      })
+      .select("id")
+      .single();
+    if (insertErr || !newMat) throw new Error("PROD_PRODSHADE_MATERIAL_CREATE_FAILED");
+    materialId = String((newMat as JsonRecord).id);
+  }
+
+  const { data: ext } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_company_ext")
+    .select("id")
+    .eq("material_id", materialId)
+    .eq("company_id", params.companyId)
+    .maybeSingle();
+  if (!ext) {
+    await serviceRoleClient.schema("erp_master").from("material_company_ext").insert({
+      material_id: materialId,
+      company_id: params.companyId,
+      procurement_allowed: false,
+      status: "ACTIVE",
+      created_by: params.authUserId,
+    });
+  }
+
+  return materialId;
+}
+
 // GET /api/production/stroke-masters
 export async function listStrokeMastersHandler(
   req: Request,
@@ -93,7 +180,7 @@ export async function listStrokeMastersHandler(
       .schema("erp_production")
       .from("stroke_master")
       .select(`
-        id, company_id, prodshade_material_id, stroke_number, description,
+        id, company_id, prodshade_material_id, prod_code, shade_code, stroke_number, description,
         material_type, po_type, base_uom_code, conversion_uom_code, conversion_factor,
         status, created_by, created_at, approved_by, approved_at,
         deactivated_by, deactivated_at, last_updated_at, last_updated_by,
@@ -130,7 +217,7 @@ export async function getStrokeMasterHandler(
       .schema("erp_production")
       .from("stroke_master")
       .select(`
-        id, company_id, prodshade_material_id, stroke_number, description,
+        id, company_id, prodshade_material_id, prod_code, shade_code, stroke_number, description,
         material_type, po_type, base_uom_code, conversion_uom_code, conversion_factor,
         status, created_by, created_at, approved_by, approved_at,
         deactivated_by, deactivated_at,
@@ -165,7 +252,9 @@ export async function createStrokeMasterHandler(
     assertProdReadRole(ctx); // Any user can create (QA role creates)
     const body = await parseBody(req);
     const companyId = toTrimmedString(body.company_id);
-    const materialId = toTrimmedString(body.prodshade_material_id);
+    const materialId = toTrimmedString(body.prodshade_material_id) || null;
+    const prodCode = toUpperTrimmedString(body.prod_code);
+    const shadeCode = toUpperTrimmedString(body.shade_code);
     const strokeNumber = toTrimmedString(body.stroke_number);
     const description = toTrimmedString(body.description);
     const materialType = toUpperTrimmedString(body.material_type || "SFG");
@@ -177,8 +266,11 @@ export async function createStrokeMasterHandler(
       : Number(body.conversion_factor);
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
 
-    if (!companyId || !materialId || !strokeNumber) {
-      return strokeError(req, ctx, "PROD_STROKE_INVALID", 400, "company_id, prodshade_material_id, stroke_number required");
+    if (!companyId || !strokeNumber) {
+      return strokeError(req, ctx, "PROD_STROKE_INVALID", 400, "company_id, stroke_number required");
+    }
+    if (!materialId && (!prodCode || !shadeCode)) {
+      return strokeError(req, ctx, "PROD_STROKE_INVALID", 400, "prodshade_material_id required, or prod_code + shade_code for a new Prodshade");
     }
     if (!/^\d+$/.test(strokeNumber)) {
       return strokeError(req, ctx, "PROD_STROKE_NUMBER_NUMERIC", 400, "Stroke number must be numeric");
@@ -201,12 +293,32 @@ export async function createStrokeMasterHandler(
       return strokeError(req, ctx, lineErrorCode, 400, "Stroke lines are invalid");
     }
 
+    // New-Prodshade strokes have prodshade_material_id = NULL until Approve, so the
+    // (company_id, prodshade_material_id, stroke_number) UNIQUE constraint can't catch
+    // duplicates here — check Prod+Shade+Stroke Number directly.
+    if (!materialId) {
+      const { data: dupe } = await serviceRoleClient
+        .schema("erp_production")
+        .from("stroke_master")
+        .select("id")
+        .eq("company_id", companyId)
+        .eq("prod_code", prodCode)
+        .eq("shade_code", shadeCode)
+        .eq("stroke_number", strokeNumber)
+        .maybeSingle();
+      if (dupe) {
+        return strokeError(req, ctx, "PROD_STROKE_EXISTS", 409, "Stroke number already exists for this prodshade");
+      }
+    }
+
     const { data: sm, error: smErr } = await serviceRoleClient
       .schema("erp_production")
       .from("stroke_master")
       .insert({
         company_id: companyId,
         prodshade_material_id: materialId,
+        prod_code: prodCode,
+        shade_code: shadeCode,
         stroke_number: strokeNumber,
         description: description || null,
         material_type: materialType,
@@ -277,15 +389,23 @@ export async function updateStrokeMasterHandler(
       return strokeError(req, ctx, lineErrorCode, 400, "Stroke lines are invalid");
     }
 
+    const patch: JsonRecord = {
+      description: description || null,
+      base_uom_code: baseUomCode || null,
+      conversion_uom_code: conversionUomCode || null,
+      conversion_factor: conversionFactor,
+      last_updated_at: new Date().toISOString(),
+      last_updated_by: ctx.auth_user_id,
+    };
+    // Prod/Shade code can still be corrected while the Material Master hasn't
+    // been created yet (new-Prodshade strokes, prodshade_material_id still null).
+    if (!existing.prodshade_material_id) {
+      if (body.prod_code !== undefined) patch.prod_code = toUpperTrimmedString(body.prod_code) || null;
+      if (body.shade_code !== undefined) patch.shade_code = toUpperTrimmedString(body.shade_code) || null;
+    }
+
     await serviceRoleClient.schema("erp_production").from("stroke_master")
-      .update({
-        description: description || null,
-        base_uom_code: baseUomCode || null,
-        conversion_uom_code: conversionUomCode || null,
-        conversion_factor: conversionFactor,
-        last_updated_at: new Date().toISOString(),
-        last_updated_by: ctx.auth_user_id,
-      })
+      .update(patch)
       .eq("id", id);
 
     // Replace all lines
@@ -332,13 +452,40 @@ export async function approveStrokeMasterHandler(
       return strokeError(req, ctx, "PROD_STROKE_DOSAGE_SUM", 422, `Dosage sum must be 100 (currently ${total.toFixed(2)})`);
     }
 
+    // New-Prodshade strokes resolve/create their Material Master only now, on Approve —
+    // rejected DRAFTs must never create a stale Material Master (per 83.3).
+    let materialId = existing.prodshade_material_id as string | null;
+    if (!materialId) {
+      materialId = await ensureProdshadeMaterial({
+        materialType: existing.material_type as string,
+        prodCode: existing.prod_code as string,
+        shadeCode: existing.shade_code as string,
+        baseUomCode: existing.base_uom_code as string,
+        description: (existing.description as string) ?? "",
+        companyId: existing.company_id as string,
+        authUserId: ctx.auth_user_id,
+      });
+    }
+
     const now = new Date().toISOString();
     const { error } = await serviceRoleClient.schema("erp_production").from("stroke_master")
-      .update({ status: "APPROVED", approved_by: ctx.auth_user_id, approved_at: now, last_updated_at: now, last_updated_by: ctx.auth_user_id })
+      .update({
+        status: "APPROVED",
+        prodshade_material_id: materialId,
+        approved_by: ctx.auth_user_id,
+        approved_at: now,
+        last_updated_at: now,
+        last_updated_by: ctx.auth_user_id,
+      })
       .eq("id", id);
-    if (error) throw new Error("PROD_STROKE_APPROVE_FAILED");
+    if (error) {
+      if ((error as { code?: string }).code === "23505") {
+        return strokeError(req, ctx, "PROD_STROKE_EXISTS", 409, "Stroke number already exists for this prodshade");
+      }
+      throw new Error("PROD_STROKE_APPROVE_FAILED");
+    }
 
-    return okResponse({ id, status: "APPROVED" }, ctx.request_id, req);
+    return okResponse({ id, status: "APPROVED", prodshade_material_id: materialId }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_STROKE_APPROVE_FAILED";
     return strokeError(req, ctx, code, 500, "Stroke approve failed");
