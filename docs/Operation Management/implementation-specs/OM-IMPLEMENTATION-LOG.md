@@ -2240,3 +2240,18 @@ Even after the route-ACL fix, every `/api/production/*` call 500'd. Direct Postg
 
 ### F — Diagnostic logging added
 Added `console.error` at every DB-error throw site in `pack_config.handlers.ts` (matches the `vendor.handlers.ts` convention) so future `erp_production` failures surface the real Postgres error in Render logs instead of a bare 500.
+
+### G — 🔴 SYSTEMIC: PostgREST cannot embed across schemas — all 26 production cross-schema embeds broken
+Once `erp_production` was exposed, `GET /api/production/prodshades` still 500'd even with zero strokes (should be empty `[]`). Direct PostgREST probe pinned it: the handlers embed `material:erp_master.material_master!<fk>(...)` — a **cross-schema** embed (query table in `erp_production`, embedded table in `erp_master`). Both spellings fail:
+- `erp_master.material_master!fk` → `PGRST100` (parse error — schema-qualified embed target not allowed)
+- `material_master!fk` → `PGRST200` ("no relationship … in schema erp_production" — PostgREST embedding is schema-local; it won't follow a FK into another schema)
+
+Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id` resolves — same `erp_production` schema).
+
+**Scope (grep):** **26 cross-schema embeds across 8 files** — `stroke_master.handlers.ts` (4), `process_order.handlers.ts` (3), `packing_order.handlers.ts` (5), `pack_bom.handlers.ts` (4), `plan_feed.handlers.ts` (2), `stroke_change_request.handlers.ts` (3), `batch_series.handlers.ts` (1), `segment_location.handlers.ts` (4, embeds `erp_inventory.storage_location_master`). Every one 500s the moment its endpoint is hit. None were ever exercised because the schema was unexposed until 2026-07-10.
+
+**Fix pattern (CLAUDE.md §8A):** replace each cross-schema embed with a **two-query batch join** — query the `erp_production` table for the FK ids, then `.schema("erp_master").from(...).in("id", ids)` and join in-memory. (Single-table cross-schema reads via explicit `.schema("erp_master")` already work fine — it's only *embeds* that PostgREST can't do.)
+
+**Done in this pass (unblocks Pack Code Master):** rewrote `listApprovedProdshadesHandler` and `listPackConfigsHandler` in `pack_config.handlers.ts` to two-query batch joins (material embed removed, intra-schema `pack_code` embed kept).
+
+**Remaining (follow-up — Codex brief):** the other 24 embeds across 7 files. `stroke_master.handlers.ts` is being actively expanded by a concurrent session — coordinate / let that session fix its own file's embeds.

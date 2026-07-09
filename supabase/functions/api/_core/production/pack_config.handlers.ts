@@ -328,35 +328,43 @@ export async function togglePackCodeHandler(req: Request, ctx: ProdHandlerContex
 export async function listApprovedProdshadesHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
-    const { data, error } = await serviceRoleClient
+    // PostgREST cannot embed across schemas — stroke_master is in erp_production,
+    // material_master is in erp_master — so resolve in two queries + in-memory join.
+    const { data: strokes, error } = await serviceRoleClient
       .schema("erp_production")
       .from("stroke_master")
-      .select(`
-        prodshade_material_id,
-        material:erp_master.material_master!prodshade_material_id(
-          id, shade_code, material_name, external_code
-        )
-      `)
+      .select("prodshade_material_id")
       .in("status", ["ACTIVE", "APPROVED"]);
-
-    if (error) throw new Error("PROD_PRODSHADE_LIST_FAILED");
-
-    const dedup = new Map<string, JsonRecord>();
-    for (const row of (data ?? []) as JsonRecord[]) {
-      const material = row.material as JsonRecord | null;
-      const materialId = material ? String(material.id ?? "") : "";
-      if (!materialId || dedup.has(materialId)) continue;
-      dedup.set(materialId, {
-        material_id: materialId,
-        shade_code: normalizeNullableString(material?.shade_code),
-        material_name: normalizeNullableString(material?.material_name),
-        external_code: normalizeNullableString(material?.external_code),
-      });
+    if (error) {
+      console.error("[pack_config.listApprovedProdshades] stroke query failed:", JSON.stringify(error));
+      throw new Error("PROD_PRODSHADE_LIST_FAILED");
     }
 
-    const items = [...dedup.values()].sort((a, b) =>
-      normalizeNullableString(a.shade_code).localeCompare(normalizeNullableString(b.shade_code))
-    );
+    const materialIds = [...new Set(
+      ((strokes ?? []) as JsonRecord[])
+        .map((r) => String(r.prodshade_material_id ?? ""))
+        .filter(Boolean),
+    )];
+    if (materialIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const { data: materials, error: matErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .select("id, shade_code, material_name, external_code")
+      .in("id", materialIds);
+    if (matErr) {
+      console.error("[pack_config.listApprovedProdshades] material query failed:", JSON.stringify(matErr));
+      throw new Error("PROD_PRODSHADE_LIST_FAILED");
+    }
+
+    const items = ((materials ?? []) as JsonRecord[])
+      .map((m) => ({
+        material_id: String(m.id),
+        shade_code: normalizeNullableString(m.shade_code),
+        material_name: normalizeNullableString(m.material_name),
+        external_code: normalizeNullableString(m.external_code),
+      }))
+      .sort((a, b) => a.shade_code.localeCompare(b.shade_code));
 
     return okResponse({ data: items }, ctx.request_id, req);
   } catch (err) {
@@ -373,12 +381,14 @@ export async function listPackConfigsHandler(req: Request, ctx: ProdHandlerConte
     const url = new URL(req.url);
     const materialId = toTrimmedString(url.searchParams.get("material_id") ?? "");
 
+    // pack_code_master is intra-schema (erp_production) so that embed is fine;
+    // material_master is in erp_master (cross-schema) — PostgREST can't embed it,
+    // so batch-fetch materials separately below.
     let query = serviceRoleClient
       .schema("erp_production")
       .from("prodshade_pack_config")
       .select(`
         id, material_id, pack_code_id, fill_qty, variant, active, created_at,
-        material:erp_master.material_master!material_id(id, shade_code, material_name, external_code),
         pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type, billing_uom, bom_required, description)
       `)
       .order("created_at");
@@ -386,10 +396,29 @@ export async function listPackConfigsHandler(req: Request, ctx: ProdHandlerConte
     if (materialId) query = query.eq("material_id", materialId);
 
     const { data, error } = await query;
-    if (error) throw new Error("PROD_PACK_CONFIG_LIST_FAILED");
+    if (error) {
+      console.error("[pack_config.listPackConfigs] query failed:", JSON.stringify(error));
+      throw new Error("PROD_PACK_CONFIG_LIST_FAILED");
+    }
 
-    const items = ((data ?? []) as JsonRecord[]).map((row) => {
-      const material = (row.material ?? {}) as JsonRecord;
+    const rows = (data ?? []) as JsonRecord[];
+    const matIds = [...new Set(rows.map((r) => String(r.material_id ?? "")).filter(Boolean))];
+    const matMap = new Map<string, JsonRecord>();
+    if (matIds.length > 0) {
+      const { data: mats, error: matErr } = await serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id, shade_code, material_name, external_code")
+        .in("id", matIds);
+      if (matErr) {
+        console.error("[pack_config.listPackConfigs] material query failed:", JSON.stringify(matErr));
+        throw new Error("PROD_PACK_CONFIG_LIST_FAILED");
+      }
+      for (const m of (mats ?? []) as JsonRecord[]) matMap.set(String(m.id), m);
+    }
+
+    const items = rows.map((row) => {
+      const material = (matMap.get(String(row.material_id ?? "")) ?? {}) as JsonRecord;
       const packCode = (row.pack_code ?? {}) as JsonRecord;
       const skuString = buildFgSku(
         normalizeNullableString(material.shade_code),
@@ -398,6 +427,7 @@ export async function listPackConfigsHandler(req: Request, ctx: ProdHandlerConte
       );
       return {
         ...row,
+        prodshade_display: normalizeNullableString(material.shade_code) || null,
         fg_sku: skuString || null,
       };
     });
