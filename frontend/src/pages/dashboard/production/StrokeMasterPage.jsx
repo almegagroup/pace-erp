@@ -25,7 +25,7 @@ import {
   updateStrokeMaster, approveStrokeMaster, revertStrokeMaster,
   rejectStrokeMaster, deactivateStrokeMaster,
 } from "./prodApi.js";
-import { listCompaniesForOm, listMaterials, listUoms, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember } from "../om/omApi.js";
+import { listCompaniesForOm, listMaterials, listUoms, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
 
 const STATUS_BADGE = {
   DRAFT:       "bg-amber-100 text-amber-800",
@@ -50,7 +50,7 @@ const PO_TYPE_OPTIONS_BY_MATERIAL_TYPE = {
   ],
 };
 
-const EMPTY_LINE = { line_material_type: "RM", material_id: "", dosage_pct: "", has_alternate: false, material_group_id: "" };
+const EMPTY_LINE = { line_material_type: "RM", material_id: "", dosage_pct: "", has_alternate: false, material_group_id: "", default_storage_location_id: "" };
 
 const ERRORS = {
   PROD_STROKE_DOSAGE_SUM: "Dosage total must equal 100%.",
@@ -99,7 +99,7 @@ function dosageSumOf(lines) {
 }
 
 // ── Shared RM Lines editor — used by both Create drawer and DRAFT detail edit ──
-function StrokeLinesEditor({ lines, setLines, materialsByType, groups, onCreateGroup, onAddMember, disabled }) {
+function StrokeLinesEditor({ lines, setLines, materialsByType, groups, storageLocationOptions, onCreateGroup, onAddMember, disabled }) {
   function addLine() { setLines((l) => [...l, { ...EMPTY_LINE }]); }
   function removeLine(i) { setLines((l) => l.filter((_, idx) => idx !== i)); }
   function updateLine(i, patch) {
@@ -155,6 +155,20 @@ function StrokeLinesEditor({ lines, setLines, materialsByType, groups, onCreateG
               {!disabled && (
                 <button type="button" onClick={() => removeLine(i)} className="text-rose-400 hover:text-rose-600 text-sm px-1">✕</button>
               )}
+            </div>
+
+            <div className="flex items-center gap-2 mb-1.5 pl-1">
+              <span className="text-xs text-slate-500 whitespace-nowrap">Default Storage Location</span>
+              <div className="flex-1 max-w-xs">
+                <ErpComboboxField
+                  value={line.default_storage_location_id}
+                  onChange={(v) => updateLine(i, { default_storage_location_id: v })}
+                  options={storageLocationOptions}
+                  placeholder="-- Select company first --"
+                  emptyStateLabel="No storage locations mapped to this company"
+                  disabled={disabled}
+                />
+              </div>
             </div>
 
             <div className="flex items-center gap-2 pl-1">
@@ -235,6 +249,7 @@ export default function StrokeMasterPage() {
     company_id: "", material_type: "SFG", po_type: "", prodshade_mode: "existing",
     prodshade_material_id: "", prod_code: "", shade_code: "",
     stroke_number: "", description: "", base_uom_code: "", conversion_uom_code: "", conversion_factor: "",
+    default_storage_location_id: "",
   });
   const [lines, setLines] = useState([{ ...EMPTY_LINE }]);
 
@@ -259,14 +274,27 @@ export default function StrokeMasterPage() {
   const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 200 }), select: (d) => d?.data ?? [] });
   const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 200 }), select: (d) => d?.data ?? [] });
 
+  // Storage locations are scoped to whichever company is in play: the create
+  // form's company while creating, or the stroke's own (immutable) company
+  // while viewing/editing an existing DRAFT.
+  const activeCompanyId = drawerMode === "create" ? form.company_id : (detail?.company_id ?? "");
+  const storageLocationsQ = useQuery({
+    queryKey: ["om-storage-locations", activeCompanyId],
+    queryFn: () => listStorageLocations({ company_id: activeCompanyId, is_active: true }),
+    select: (d) => d?.data ?? [],
+    enabled: Boolean(activeCompanyId),
+  });
+
   const companies = companiesQ.data ?? [];
   const uoms = uomsQ.data ?? [];
   const groups = groupsQ.data ?? [];
+  const storageLocations = storageLocationsQ.data ?? [];
   const prodshadeMaterialsByType = { SFG: sfgMaterialsQ.data ?? [], INT: intMaterialsQ.data ?? [] };
   const lineMaterialsByType = { RM: rmMaterialsQ.data ?? [], INT: intMaterialsQ.data ?? [] };
 
   const companyOptions = companies.map((c) => ({ value: c.id, label: `${c.company_code} — ${c.company_name}` }));
   const uomOptions = uoms.map((u) => ({ value: u.code, label: `${u.code} — ${u.name}` }));
+  const storageLocationOptions = storageLocations.map((s) => ({ value: s.id, label: `${s.code} — ${s.name}` }));
   const prodshadeOptions = (prodshadeMaterialsByType[form.material_type] ?? []).map((m) => ({
     value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
   }));
@@ -282,6 +310,7 @@ export default function StrokeMasterPage() {
       company_id: "", material_type: "SFG", po_type: "", prodshade_mode: "existing",
       prodshade_material_id: "", prod_code: "", shade_code: "",
       stroke_number: "", description: "", base_uom_code: "", conversion_uom_code: "", conversion_factor: "",
+      default_storage_location_id: "",
     });
     setLines([{ ...EMPTY_LINE }]);
     setDrawerOpen(true);
@@ -303,6 +332,7 @@ export default function StrokeMasterPage() {
           dosage_pct: String(l.dosage_pct),
           has_alternate: Boolean(l.material_group_id),
           material_group_id: l.material_group_id ?? "",
+          default_storage_location_id: l.default_storage_location_id ?? "",
         })));
       }
     } catch { toast("Failed to load stroke detail.", "error"); setDrawerOpen(false); }
@@ -373,6 +403,7 @@ export default function StrokeMasterPage() {
           line_material_type: l.line_material_type,
           dosage_pct: parseFloat(l.dosage_pct),
           material_group_id: l.has_alternate ? (l.material_group_id || null) : null,
+          default_storage_location_id: l.default_storage_location_id || null,
         })),
       });
       toast("Stroke master created (DRAFT).");
@@ -392,11 +423,13 @@ export default function StrokeMasterPage() {
         base_uom_code: detail.base_uom_code,
         conversion_uom_code: detail.conversion_uom_code,
         conversion_factor: detail.conversion_factor,
+        default_storage_location_id: detail.default_storage_location_id,
         lines: detailEditLines.map((l) => ({
           material_id: l.material_id,
           line_material_type: l.line_material_type,
           dosage_pct: parseFloat(l.dosage_pct),
           material_group_id: l.has_alternate ? (l.material_group_id || null) : null,
+          default_storage_location_id: l.default_storage_location_id || null,
         })),
       });
       toast("Draft saved.");
@@ -550,6 +583,16 @@ export default function StrokeMasterPage() {
             <Field label="Conversion Factor" hint="e.g. KG per Litre (density-based).">
               <input className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-full" type="number" step="0.0001" min="0" value={form.conversion_factor} onChange={(e) => setForm((f) => ({ ...f, conversion_factor: e.target.value }))} placeholder="Optional" />
             </Field>
+            <Field label="Default Storage Location (Output)" hint="Company-mapped locations only. Process PO Verify posts SFG/INT output here.">
+              <ErpComboboxField
+                value={form.default_storage_location_id}
+                onChange={(v) => setForm((f) => ({ ...f, default_storage_location_id: v }))}
+                options={storageLocationOptions}
+                placeholder={form.company_id ? "-- Select --" : "-- Select Company first --"}
+                emptyStateLabel="No storage locations mapped to this company"
+                disabled={!form.company_id}
+              />
+            </Field>
           </div>
 
           <StrokeLinesEditor
@@ -557,6 +600,7 @@ export default function StrokeMasterPage() {
             setLines={setLines}
             materialsByType={lineMaterialsByType}
             groups={groups}
+            storageLocationOptions={storageLocationOptions}
             onCreateGroup={openCreateGroupModal}
             onAddMember={(groupId) => setMemberModal(groupId)}
           />
@@ -599,6 +643,7 @@ export default function StrokeMasterPage() {
               <div><span className="text-slate-400 text-xs">Material Type</span><p>{detail.material_type}</p></div>
               <div><span className="text-slate-400 text-xs">PO Type</span><p>{detail.po_type}</p></div>
               <div><span className="text-slate-400 text-xs">Base UOM / Conversion</span><p>{detail.base_uom_code ?? "—"}{detail.conversion_uom_code ? ` → ${detail.conversion_uom_code} (× ${detail.conversion_factor})` : ""}</p></div>
+              <div><span className="text-slate-400 text-xs">Default Storage Location (Output)</span><p>{detail.default_storage_location ? `${detail.default_storage_location.code} — ${detail.default_storage_location.name}` : "—"}</p></div>
               <div><span className="text-slate-400 text-xs">Description</span><p>{detail.description ?? "—"}</p></div>
               {detail.approved_by && <div><span className="text-slate-400 text-xs">Approved</span><p>{detail.approved_at?.slice(0, 10)}</p></div>}
               {detail.deactivated_by && <div><span className="text-slate-400 text-xs">Deactivated</span><p>{detail.deactivated_at?.slice(0, 10)}</p></div>}
@@ -610,6 +655,7 @@ export default function StrokeMasterPage() {
                 setLines={setDetailEditLines}
                 materialsByType={lineMaterialsByType}
                 groups={groups}
+                storageLocationOptions={storageLocationOptions}
                 onCreateGroup={openCreateGroupModal}
                 onAddMember={(groupId) => setMemberModal(groupId)}
               />
@@ -626,6 +672,7 @@ export default function StrokeMasterPage() {
                         <th className="text-left py-1.5 px-2 border-b">Type</th>
                         <th className="text-left py-1.5 px-2 border-b">Material</th>
                         <th className="text-left py-1.5 px-2 border-b">Group</th>
+                        <th className="text-left py-1.5 px-2 border-b">Storage Loc.</th>
                         <th className="text-right py-1.5 px-2 border-b">Dosage %</th>
                       </tr>
                     </thead>
@@ -636,11 +683,12 @@ export default function StrokeMasterPage() {
                           <td className="py-1.5 px-2 text-slate-500">{l.line_material_type}</td>
                           <td className="py-1.5 px-2">{l.material?.pace_code ?? "—"} — {l.material?.material_name ?? ""}</td>
                           <td className="py-1.5 px-2 text-slate-500">{l.material_group?.group_name ?? "—"}</td>
+                          <td className="py-1.5 px-2 text-slate-500">{l.default_storage_location ? l.default_storage_location.code : "—"}</td>
                           <td className="py-1.5 px-2 text-right font-mono">{Number(l.dosage_pct).toFixed(2)}%</td>
                         </tr>
                       ))}
                       <tr className="bg-slate-50 font-semibold">
-                        <td colSpan={4} className="py-1.5 px-2 text-right text-slate-500 text-xs">Total</td>
+                        <td colSpan={5} className="py-1.5 px-2 text-right text-slate-500 text-xs">Total</td>
                         <td className="py-1.5 px-2 text-right font-mono">
                           {detail.lines.reduce((s, l) => s + Number(l.dosage_pct), 0).toFixed(2)}%
                         </td>

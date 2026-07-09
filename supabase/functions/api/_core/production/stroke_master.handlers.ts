@@ -72,6 +72,7 @@ function buildLineRows(strokeMasterId: string, lines: JsonRecord[]) {
     material_id: toTrimmedString(l.material_id),
     line_material_type: toUpperTrimmedString(l.line_material_type || "RM"),
     material_group_id: toTrimmedString(l.material_group_id) || null,
+    default_storage_location_id: toTrimmedString(l.default_storage_location_id) || null,
     dosage_pct: Number(l.dosage_pct),
     display_order: idx,
   }));
@@ -182,10 +183,14 @@ export async function listStrokeMastersHandler(
       .select(`
         id, company_id, prodshade_material_id, prod_code, shade_code, stroke_number, description,
         material_type, po_type, base_uom_code, conversion_uom_code, conversion_factor,
+        default_storage_location_id,
         status, created_by, created_at, approved_by, approved_at,
         deactivated_by, deactivated_at, last_updated_at, last_updated_by,
         material:erp_master.material_master!prodshade_material_id(
           id, pace_code, material_name, shade_code, pack_code
+        ),
+        default_storage_location:erp_inventory.storage_location_master!default_storage_location_id(
+          id, code, name
         )
       `)
       .order("created_at", { ascending: false });
@@ -219,15 +224,20 @@ export async function getStrokeMasterHandler(
       .select(`
         id, company_id, prodshade_material_id, prod_code, shade_code, stroke_number, description,
         material_type, po_type, base_uom_code, conversion_uom_code, conversion_factor,
+        default_storage_location_id,
         status, created_by, created_at, approved_by, approved_at,
         deactivated_by, deactivated_at,
         material:erp_master.material_master!prodshade_material_id(
           id, pace_code, material_name, shade_code, pack_code
         ),
+        default_storage_location:erp_inventory.storage_location_master!default_storage_location_id(
+          id, code, name
+        ),
         lines:stroke_line(
-          id, material_id, line_material_type, material_group_id, dosage_pct, display_order,
+          id, material_id, line_material_type, material_group_id, default_storage_location_id, dosage_pct, display_order,
           material:erp_master.material_master!material_id(id, pace_code, material_name, base_uom_code),
-          material_group:erp_master.material_category_group!material_group_id(id, group_code, group_name)
+          material_group:erp_master.material_category_group!material_group_id(id, group_code, group_name),
+          default_storage_location:erp_inventory.storage_location_master!default_storage_location_id(id, code, name)
         )
       `)
       .eq("id", id)
@@ -264,6 +274,7 @@ export async function createStrokeMasterHandler(
     const conversionFactor = body.conversion_factor === "" || body.conversion_factor == null
       ? null
       : Number(body.conversion_factor);
+    const defaultStorageLocationId = toTrimmedString(body.default_storage_location_id) || null;
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
 
     if (!companyId || !strokeNumber) {
@@ -326,6 +337,7 @@ export async function createStrokeMasterHandler(
         base_uom_code: baseUomCode,
         conversion_uom_code: conversionUomCode || null,
         conversion_factor: conversionFactor,
+        default_storage_location_id: defaultStorageLocationId,
         status: "DRAFT",
         created_by: ctx.auth_user_id,
       })
@@ -397,6 +409,9 @@ export async function updateStrokeMasterHandler(
       last_updated_at: new Date().toISOString(),
       last_updated_by: ctx.auth_user_id,
     };
+    if (body.default_storage_location_id !== undefined) {
+      patch.default_storage_location_id = toTrimmedString(body.default_storage_location_id) || null;
+    }
     // Prod/Shade code can still be corrected while the Material Master hasn't
     // been created yet (new-Prodshade strokes, prodshade_material_id still null).
     if (!existing.prodshade_material_id) {
