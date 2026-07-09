@@ -4,8 +4,11 @@
  * Gate: 27
  * Phase: 27
  * Domain: PRODUCTION
- * Purpose: Stroke Master CRUD and approve handlers.
- *          QA/Operator creates (DRAFT), Manager/Auditor approves (APPROVED).
+ * Purpose: Stroke Master CRUD, approve, deactivate and reject handlers.
+ *          QA/Operator creates (DRAFT), Manager/Auditor approves (APPROVED) or
+ *          rejects (hard delete). APPROVED strokes can be deactivated (terminal,
+ *          hidden from Process PO dropdown) or reverted to DRAFT for correction.
+ *          See feasibility doc Section 83.3 (revised 2026-06-30).
  * Authority: Backend
  */
 
@@ -18,12 +21,17 @@ import {
   parseBody,
   toTrimmedString,
   toUpperTrimmedString,
-  parsePositiveNumber,
-  parseNonNegativeNumber,
   getIdFromPath,
 } from "./production.shared.ts";
 
 type JsonRecord = Record<string, unknown>;
+
+const MATERIAL_TYPES = new Set(["SFG", "INT"]);
+const PO_TYPES_BY_MATERIAL_TYPE: Record<string, Set<string>> = {
+  SFG: new Set(["MTO", "HPS", "MTS", "MTEST"]),
+  INT: new Set(["INT"]),
+};
+const LINE_MATERIAL_TYPES = new Set(["RM", "INT"]);
 
 function strokeError(
   req: Request,
@@ -46,6 +54,29 @@ async function getStrokeMaster(id: string): Promise<JsonRecord | null> {
   return (data as JsonRecord | null) ?? null;
 }
 
+function validateLines(lines: JsonRecord[]): string | null {
+  if (lines.length === 0) return null;
+  for (const l of lines) {
+    const lineType = toUpperTrimmedString(l.line_material_type || "RM");
+    if (!LINE_MATERIAL_TYPES.has(lineType)) return "PROD_STROKE_LINE_TYPE_INVALID";
+    if (!toTrimmedString(l.material_id)) return "PROD_STROKE_LINE_MATERIAL_REQUIRED";
+  }
+  const totalDosage = lines.reduce((sum, l) => sum + (Number(l.dosage_pct) || 0), 0);
+  if (Math.abs(totalDosage - 100) > 0.01) return "PROD_STROKE_DOSAGE_SUM";
+  return null;
+}
+
+function buildLineRows(strokeMasterId: string, lines: JsonRecord[]) {
+  return lines.map((l, idx) => ({
+    stroke_master_id: strokeMasterId,
+    material_id: toTrimmedString(l.material_id),
+    line_material_type: toUpperTrimmedString(l.line_material_type || "RM"),
+    material_group_id: toTrimmedString(l.material_group_id) || null,
+    dosage_pct: Number(l.dosage_pct),
+    display_order: idx,
+  }));
+}
+
 // GET /api/production/stroke-masters
 export async function listStrokeMastersHandler(
   req: Request,
@@ -63,8 +94,9 @@ export async function listStrokeMastersHandler(
       .from("stroke_master")
       .select(`
         id, company_id, prodshade_material_id, stroke_number, description,
+        material_type, po_type, base_uom_code, conversion_uom_code, conversion_factor,
         status, created_by, created_at, approved_by, approved_at,
-        last_updated_at, last_updated_by,
+        deactivated_by, deactivated_at, last_updated_at, last_updated_by,
         material:erp_master.material_master!prodshade_material_id(
           id, pace_code, material_name, shade_code, pack_code
         )
@@ -99,14 +131,16 @@ export async function getStrokeMasterHandler(
       .from("stroke_master")
       .select(`
         id, company_id, prodshade_material_id, stroke_number, description,
+        material_type, po_type, base_uom_code, conversion_uom_code, conversion_factor,
         status, created_by, created_at, approved_by, approved_at,
+        deactivated_by, deactivated_at,
         material:erp_master.material_master!prodshade_material_id(
           id, pace_code, material_name, shade_code, pack_code
         ),
         lines:stroke_line(
-          id, material_id, alternate_material_id, dosage_pct, display_order,
+          id, material_id, line_material_type, material_group_id, dosage_pct, display_order,
           material:erp_master.material_master!material_id(id, pace_code, material_name, base_uom_code),
-          alternate:erp_master.material_master!alternate_material_id(id, pace_code, material_name)
+          material_group:erp_master.material_category_group!material_group_id(id, group_code, group_name)
         )
       `)
       .eq("id", id)
@@ -134,7 +168,14 @@ export async function createStrokeMasterHandler(
     const materialId = toTrimmedString(body.prodshade_material_id);
     const strokeNumber = toTrimmedString(body.stroke_number);
     const description = toTrimmedString(body.description);
-    const lines = Array.isArray(body.lines) ? body.lines : [];
+    const materialType = toUpperTrimmedString(body.material_type || "SFG");
+    const poType = toUpperTrimmedString(body.po_type);
+    const baseUomCode = toTrimmedString(body.base_uom_code);
+    const conversionUomCode = toTrimmedString(body.conversion_uom_code);
+    const conversionFactor = body.conversion_factor === "" || body.conversion_factor == null
+      ? null
+      : Number(body.conversion_factor);
+    const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
 
     if (!companyId || !materialId || !strokeNumber) {
       return strokeError(req, ctx, "PROD_STROKE_INVALID", 400, "company_id, prodshade_material_id, stroke_number required");
@@ -142,13 +183,22 @@ export async function createStrokeMasterHandler(
     if (!/^\d+$/.test(strokeNumber)) {
       return strokeError(req, ctx, "PROD_STROKE_NUMBER_NUMERIC", 400, "Stroke number must be numeric");
     }
+    if (!MATERIAL_TYPES.has(materialType)) {
+      return strokeError(req, ctx, "PROD_STROKE_MATERIAL_TYPE_INVALID", 400, "material_type must be SFG or INT");
+    }
+    if (!poType || !PO_TYPES_BY_MATERIAL_TYPE[materialType].has(poType)) {
+      return strokeError(req, ctx, "PROD_STROKE_PO_TYPE_INVALID", 400, `po_type must be one of ${[...PO_TYPES_BY_MATERIAL_TYPE[materialType]].join(", ")} for material_type ${materialType}`);
+    }
+    if (!baseUomCode) {
+      return strokeError(req, ctx, "PROD_STROKE_BASE_UOM_REQUIRED", 400, "base_uom_code required");
+    }
+    if (conversionFactor != null && !(conversionFactor > 0)) {
+      return strokeError(req, ctx, "PROD_STROKE_CONVERSION_FACTOR_INVALID", 400, "conversion_factor must be > 0 when provided");
+    }
 
-    // Validate lines dosage sum = 100
-    if (lines.length > 0) {
-      const totalDosage = lines.reduce((sum: number, l: JsonRecord) => sum + (Number(l.dosage_pct) || 0), 0);
-      if (Math.abs(totalDosage - 100) > 0.01) {
-        return strokeError(req, ctx, "PROD_STROKE_DOSAGE_SUM", 400, `Dosage total must be 100 (got ${totalDosage.toFixed(2)})`);
-      }
+    const lineErrorCode = validateLines(lines);
+    if (lineErrorCode) {
+      return strokeError(req, ctx, lineErrorCode, 400, "Stroke lines are invalid");
     }
 
     const { data: sm, error: smErr } = await serviceRoleClient
@@ -159,6 +209,11 @@ export async function createStrokeMasterHandler(
         prodshade_material_id: materialId,
         stroke_number: strokeNumber,
         description: description || null,
+        material_type: materialType,
+        po_type: poType,
+        base_uom_code: baseUomCode,
+        conversion_uom_code: conversionUomCode || null,
+        conversion_factor: conversionFactor,
         status: "DRAFT",
         created_by: ctx.auth_user_id,
       })
@@ -173,17 +228,10 @@ export async function createStrokeMasterHandler(
     }
 
     if (lines.length > 0) {
-      const lineRows = lines.map((l: JsonRecord, idx: number) => ({
-        stroke_master_id: sm.id,
-        material_id: toTrimmedString(l.material_id),
-        alternate_material_id: toTrimmedString(l.alternate_material_id) || null,
-        dosage_pct: Number(l.dosage_pct),
-        display_order: idx,
-      }));
       const { error: lErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
-        .insert(lineRows);
+        .insert(buildLineRows(sm.id as string, lines));
       if (lErr) throw new Error("PROD_STROKE_LINE_INSERT_FAILED");
     }
 
@@ -195,7 +243,8 @@ export async function createStrokeMasterHandler(
 }
 
 // PATCH /api/production/stroke-masters/:id
-// Update header + replace all lines. Only allowed while DRAFT.
+// Update header + replace all lines. Only allowed while DRAFT (Manager edits
+// here before Approve; Material Type / PO Type are immutable once created).
 export async function updateStrokeMasterHandler(
   req: Request,
   ctx: ProdHandlerContext,
@@ -207,36 +256,43 @@ export async function updateStrokeMasterHandler(
 
     const existing = await getStrokeMaster(id);
     if (!existing) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Stroke master not found");
-    if (existing.status === "APPROVED") {
-      return strokeError(req, ctx, "PROD_STROKE_APPROVED_LOCKED", 422, "Approved stroke cannot be edited");
+    if (existing.status !== "DRAFT") {
+      return strokeError(req, ctx, "PROD_STROKE_APPROVED_LOCKED", 422, "Only DRAFT strokes can be edited");
     }
 
     const body = await parseBody(req);
     const description = toTrimmedString(body.description);
-    const lines = Array.isArray(body.lines) ? body.lines : [];
+    const baseUomCode = toTrimmedString(body.base_uom_code) || (existing.base_uom_code as string);
+    const conversionUomCode = toTrimmedString(body.conversion_uom_code);
+    const conversionFactor = body.conversion_factor === "" || body.conversion_factor == null
+      ? null
+      : Number(body.conversion_factor);
+    const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
 
-    if (lines.length > 0) {
-      const totalDosage = lines.reduce((sum: number, l: JsonRecord) => sum + (Number(l.dosage_pct) || 0), 0);
-      if (Math.abs(totalDosage - 100) > 0.01) {
-        return strokeError(req, ctx, "PROD_STROKE_DOSAGE_SUM", 400, `Dosage total must be 100 (got ${totalDosage.toFixed(2)})`);
-      }
+    if (conversionFactor != null && !(conversionFactor > 0)) {
+      return strokeError(req, ctx, "PROD_STROKE_CONVERSION_FACTOR_INVALID", 400, "conversion_factor must be > 0 when provided");
+    }
+    const lineErrorCode = validateLines(lines);
+    if (lineErrorCode) {
+      return strokeError(req, ctx, lineErrorCode, 400, "Stroke lines are invalid");
     }
 
     await serviceRoleClient.schema("erp_production").from("stroke_master")
-      .update({ description: description || null, last_updated_at: new Date().toISOString(), last_updated_by: ctx.auth_user_id })
+      .update({
+        description: description || null,
+        base_uom_code: baseUomCode || null,
+        conversion_uom_code: conversionUomCode || null,
+        conversion_factor: conversionFactor,
+        last_updated_at: new Date().toISOString(),
+        last_updated_by: ctx.auth_user_id,
+      })
       .eq("id", id);
 
     // Replace all lines
     await serviceRoleClient.schema("erp_production").from("stroke_line").delete().eq("stroke_master_id", id);
     if (lines.length > 0) {
-      const lineRows = lines.map((l: JsonRecord, idx: number) => ({
-        stroke_master_id: id,
-        material_id: toTrimmedString(l.material_id),
-        alternate_material_id: toTrimmedString(l.alternate_material_id) || null,
-        dosage_pct: Number(l.dosage_pct),
-        display_order: idx,
-      }));
-      const { error: lErr } = await serviceRoleClient.schema("erp_production").from("stroke_line").insert(lineRows);
+      const { error: lErr } = await serviceRoleClient.schema("erp_production").from("stroke_line")
+        .insert(buildLineRows(id, lines));
       if (lErr) throw new Error("PROD_STROKE_LINE_UPDATE_FAILED");
     }
 
@@ -248,7 +304,7 @@ export async function updateStrokeMasterHandler(
 }
 
 // POST /api/production/stroke-masters/:id/approve
-// Manager/Auditor saves → status = APPROVED.
+// Manager/Auditor saves → status = APPROVED (= ACTIVE per 83.3 — visible in Process PO dropdown).
 export async function approveStrokeMasterHandler(
   req: Request,
   ctx: ProdHandlerContext,
@@ -260,8 +316,8 @@ export async function approveStrokeMasterHandler(
 
     const existing = await getStrokeMaster(id);
     if (!existing) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Stroke master not found");
-    if (existing.status === "APPROVED") {
-      return strokeError(req, ctx, "PROD_STROKE_ALREADY_APPROVED", 409, "Already approved");
+    if (existing.status !== "DRAFT") {
+      return strokeError(req, ctx, "PROD_STROKE_ALREADY_APPROVED", 409, "Only DRAFT strokes can be approved");
     }
 
     // Check lines exist and dosage sums to 100
@@ -286,6 +342,65 @@ export async function approveStrokeMasterHandler(
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_STROKE_APPROVE_FAILED";
     return strokeError(req, ctx, code, 500, "Stroke approve failed");
+  }
+}
+
+// POST /api/production/stroke-masters/:id/reject
+// Manager rejects a DRAFT stroke — hard delete (never reached ACTIVE, no PRUNE trail needed).
+export async function rejectStrokeMasterHandler(
+  req: Request,
+  ctx: ProdHandlerContext,
+): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const id = getIdFromPath(req);
+    if (!id) return strokeError(req, ctx, "PROD_STROKE_ID_MISSING", 400, "ID required");
+
+    const existing = await getStrokeMaster(id);
+    if (!existing) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Not found");
+    if (existing.status !== "DRAFT") {
+      return strokeError(req, ctx, "PROD_STROKE_NOT_DRAFT", 422, "Only DRAFT strokes can be rejected");
+    }
+
+    await serviceRoleClient.schema("erp_production").from("stroke_line").delete().eq("stroke_master_id", id);
+    const { error } = await serviceRoleClient.schema("erp_production").from("stroke_master").delete().eq("id", id);
+    if (error) throw new Error("PROD_STROKE_REJECT_FAILED");
+
+    return okResponse({ id, deleted: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_STROKE_REJECT_FAILED";
+    return strokeError(req, ctx, code, 500, "Stroke reject failed");
+  }
+}
+
+// POST /api/production/stroke-masters/:id/deactivate
+// QA or Manager deactivates an APPROVED stroke — terminal, hidden from Process PO
+// dropdown, existing Process Orders referencing it are unaffected.
+export async function deactivateStrokeMasterHandler(
+  req: Request,
+  ctx: ProdHandlerContext,
+): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const id = getIdFromPath(req);
+    if (!id) return strokeError(req, ctx, "PROD_STROKE_ID_MISSING", 400, "ID required");
+
+    const existing = await getStrokeMaster(id);
+    if (!existing) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Not found");
+    if (existing.status !== "APPROVED") {
+      return strokeError(req, ctx, "PROD_STROKE_NOT_APPROVED", 422, "Only APPROVED strokes can be deactivated");
+    }
+
+    const now = new Date().toISOString();
+    const { error } = await serviceRoleClient.schema("erp_production").from("stroke_master")
+      .update({ status: "DEACTIVATED", deactivated_by: ctx.auth_user_id, deactivated_at: now, last_updated_at: now, last_updated_by: ctx.auth_user_id })
+      .eq("id", id);
+    if (error) throw new Error("PROD_STROKE_DEACTIVATE_FAILED");
+
+    return okResponse({ id, status: "DEACTIVATED" }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_STROKE_DEACTIVATE_FAILED";
+    return strokeError(req, ctx, code, 500, "Stroke deactivate failed");
   }
 }
 

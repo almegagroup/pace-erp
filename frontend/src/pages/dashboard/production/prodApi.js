@@ -69,6 +69,8 @@ export const createStrokeMaster = (body) => fetchProd("POST", "/api/production/s
 export const updateStrokeMaster = (id, body) => fetchProd("PATCH", `/api/production/stroke-masters/${id}`, body);
 export const approveStrokeMaster = (id) => fetchProd("POST", `/api/production/stroke-masters/${id}/approve`);
 export const revertStrokeMaster = (id) => fetchProd("POST", `/api/production/stroke-masters/${id}/revert`);
+export const rejectStrokeMaster = (id) => fetchProd("POST", `/api/production/stroke-masters/${id}/reject`);
+export const deactivateStrokeMaster = (id) => fetchProd("POST", `/api/production/stroke-masters/${id}/deactivate`);
 
 // ── Plan Feed (FO) ────────────────────────────────────────────────────────────
 export const listPlanFeed = (p) => fetchProd("GET", "/api/production/plan-feed", undefined, p);
