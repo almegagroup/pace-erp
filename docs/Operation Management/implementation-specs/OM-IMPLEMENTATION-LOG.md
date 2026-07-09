@@ -2173,4 +2173,39 @@ User walkthrough of GE/Gate Exit/GRN/QA pages surfaced the following. Logged as-
 
 ---
 
+## Gate-27.1 - Pack Code Master / Production ACL Gap
+
+**Task Brief:** `docs/Operation Management/implementation-specs/CODEX-GATE27.1-PACKCODE-TASK-BRIEF.md`
+**Status:** DONE
+**Date:** 2026-07-10
+
+**Implemented:**
+- Registered the current `/api/production/*` route surface in `supabase/functions/api/_acl/route-acl-registry.ts`, including the new Pack Code create/edit and approved-prodshade endpoints.
+- Extended `supabase/functions/api/_routes/production.routes.ts` with `POST /api/production/pack-codes`, `PATCH /api/production/pack-codes/:id`, and `GET /api/production/prodshades` without changing the `dispatchProductionRoutes` signature.
+- Reworked `supabase/functions/api/_core/production/pack_config.handlers.ts` to add Pack Code create/edit, replace the broken config upsert with explicit check-then-write logic, add delete guards for existing Pack BOM / Packing PO usage, add approved-prodshade listing, and enrich config list rows with FG SKU strings.
+- Redesigned `frontend/src/admin/sa/screens/SAPackCodeMasterPage.jsx` to match the locked Tab 1 / Tab 2 brief: Pack Code add/edit drawer, prodshade combobox filtering, no raw UUID rendering on the screen, FG SKU column, selected-prodshade banner, and explicit query error states.
+- Added `createPackCode`, `updatePackCode`, and `listApprovedProdshades` to `frontend/src/pages/dashboard/production/prodApi.js`.
+- Extended `frontend/src/components/forms/ErpComboboxField.jsx` with a configurable empty-state message so Tab 2 can show the required "No approved prodshades yet..." guidance.
+- Added migration `supabase/migrations/20260710110000_gate27_production_acl_gap_fill.sql` for production ACL resource backfill plus the `prodshade_pack_config_dedup_idx` safety index.
+
+**Files touched:**
+- `supabase/functions/api/_acl/route-acl-registry.ts`
+- `supabase/functions/api/_routes/production.routes.ts`
+- `supabase/functions/api/_core/production/pack_config.handlers.ts`
+- `frontend/src/admin/sa/screens/SAPackCodeMasterPage.jsx`
+- `frontend/src/pages/dashboard/production/prodApi.js`
+- `frontend/src/components/forms/ErpComboboxField.jsx`
+- `supabase/migrations/20260710110000_gate27_production_acl_gap_fill.sql`
+
+**Verification run:**
+- Exact-route duplicate check on `route-acl-registry.ts`: passed (`277` exact route keys, no duplicates).
+- Raw UUID rendering grep on `SAPackCodeMasterPage.jsx`: passed (no remaining `material_id?.slice(...)` style UUID rendering).
+- Migration file read-back: completed; syntax visually checked, not applied.
+- `deno check` was run against the touched backend entrypoints, but the repo currently has pre-existing production-domain type errors outside this brief (for example in `batch_series.handlers.ts`, `pack_bom.handlers.ts`, `plan_feed.handlers.ts`, `process_order.handlers.ts`, `packing_order.handlers.ts`, and pipeline/shared typing files). The type/signature issues introduced in `pack_config.handlers.ts` were corrected; remaining `deno check` failures are pre-existing.
+- Frontend lint execution could not be completed in this sandbox because `npm` was not executable and direct `node` module resolution hit environment permission errors outside the workspace root.
+
+**Deviations / constraints:**
+- `listApprovedProdshadesHandler` accepts both `ACTIVE` and `APPROVED` stroke statuses. The brief says `ACTIVE`, but the checked-in production schema/handlers still use `DRAFT/APPROVED` for `stroke_master.status`; restricting to `ACTIVE` in this repo state would return an always-empty list.
+- The brief requested a live dev-DB query to enumerate missing `acl.menu_master` rows. No callable DB/MCP SQL tool was available in this session, so the migration was made idempotent and broad enough to safely backfill the referenced production resources when Claude applies it to dev.
+
 

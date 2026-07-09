@@ -20,7 +20,10 @@ import {
 } from "../_core/production/stroke_master.handlers.ts";
 import {
   listPackCodesHandler,
+  createPackCodeHandler,
+  updatePackCodeHandler,
   togglePackCodeHandler,
+  listApprovedProdshadesHandler,
   listPackConfigsHandler,
   upsertPackConfigHandler,
   deletePackConfigHandler,
@@ -102,8 +105,14 @@ export async function dispatchProductionRoutes(
     // Pack Codes (SA config)
     case "GET:/api/production/pack-codes":
       return await listPackCodesHandler(req, ctx);
+    case "POST:/api/production/pack-codes":
+      return await createPackCodeHandler(req, ctx);
     case "POST:/api/production/pack-codes/toggle":
       return await togglePackCodeHandler(req, ctx);
+
+    // Approved Prodshades
+    case "GET:/api/production/prodshades":
+      return await listApprovedProdshadesHandler(req, ctx);
 
     // Pack Configs (per prodshade)
     case "GET:/api/production/pack-configs":
@@ -171,6 +180,11 @@ export async function dispatchProductionRoutes(
   // Pack Configs /:id
   if (/^\/api\/production\/pack-configs\/[^/]+$/.test(pathname) && req.method === "DELETE") {
     return await deletePackConfigHandler(req, ctx);
+  }
+
+  // Pack Codes /:id
+  if (/^\/api\/production\/pack-codes\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updatePackCodeHandler(req, ctx);
   }
 
   // Batch Series /:id

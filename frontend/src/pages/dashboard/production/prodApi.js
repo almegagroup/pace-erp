@@ -43,7 +43,10 @@ async function fetchProd(method, path, body, params) {
 
 // ── Pack Codes ────────────────────────────────────────────────────────────────
 export const listPackCodes = (p) => fetchProd("GET", "/api/production/pack-codes", undefined, p);
+export const createPackCode = (body) => fetchProd("POST", "/api/production/pack-codes", body);
+export const updatePackCode = (id, body) => fetchProd("PATCH", `/api/production/pack-codes/${id}`, body);
 export const togglePackCode = (body) => fetchProd("POST", "/api/production/pack-codes/toggle", body);
+export const listApprovedProdshades = (p) => fetchProd("GET", "/api/production/prodshades", undefined, p);
 
 // ── Pack Configs ──────────────────────────────────────────────────────────────
 export const listPackConfigs = (p) => fetchProd("GET", "/api/production/pack-configs", undefined, p);

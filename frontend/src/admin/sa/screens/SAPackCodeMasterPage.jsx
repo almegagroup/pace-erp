@@ -2,30 +2,59 @@
  * File-ID: 27.SA-02
  * File-Path: frontend/src/admin/sa/screens/SAPackCodeMasterPage.jsx
  * Gate: 27 | Domain: PRODUCTION
- * Purpose: SA-only Pack Code Master — Tab 1: Pack Code Catalog (toggle active), Tab 2: Prodshade Pack Config (upsert/delete).
+ * Purpose: SA-only Pack Code Master — Tab 1: Pack Code Catalog, Tab 2: Prodshade Pack Config.
  */
 
-import React, { useState, useRef } from "react";
+import React, { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import {
   listPackCodes,
+  createPackCode,
+  updatePackCode,
   togglePackCode,
+  listApprovedProdshades,
   listPackConfigs,
   upsertPackConfig,
   deletePackConfig,
 } from "../../../pages/dashboard/production/prodApi.js";
 
 const TABS = ["Pack Code Catalog", "Prodshade Pack Config"];
+const PACK_TYPE_OPTIONS = ["CONSUMER", "DRUM", "BARREL", "IBC", "TANKER", "MTEST"];
+const BILLING_UOM_OPTIONS = ["PER_UNIT", "PER_KG"];
 
 const ERRORS = {
-  PROD_PACK_CODE_NOT_FOUND:    "Pack code not found.",
-  PROD_PACK_CONFIG_NOT_FOUND:  "Pack config not found.",
-  PROD_PACK_CONFIG_EXISTS:     "A config for this prodshade + pack code already exists.",
-  PROD_SA_REQUIRED:            "Super Admin access required.",
+  PROD_PACK_CODE_NOT_FOUND: "Pack code not found.",
+  PROD_PACK_CODE_EXISTS: "Pack code already exists.",
+  PROD_PACK_CODE_INVALID: "Pack code, description, pack type, and billing UOM are required.",
+  PROD_PACK_CONFIG_NOT_FOUND: "Pack config not found.",
+  PROD_PACK_CONFIG_EXISTS: "A config for this prodshade + pack code already exists.",
+  PROD_PACK_CONFIG_DELETE_BLOCKED_BOM_EXISTS: "Delete blocked: a Pack BOM already exists for this FG SKU.",
+  PROD_PACK_CONFIG_DELETE_BLOCKED_PO_EXISTS: "Delete blocked: a Packing PO already exists for this FG SKU.",
+  PROD_PRODSHADE_LIST_FAILED: "Approved prodshade list failed.",
+  PROD_SA_REQUIRED: "Super Admin access required.",
 };
-function friendly(code) { return ERRORS[code] ?? code; }
+
+function friendly(value) {
+  return ERRORS[value] ?? value ?? "Request failed.";
+}
+
+function getErrorMessage(error) {
+  if (!error) return "";
+  return friendly(error.message ?? String(error));
+}
+
+function prodshadeLabel(prodshade) {
+  if (!prodshade) return "";
+  const shadeCode = String(prodshade.shade_code ?? "").trim();
+  const materialName = String(prodshade.material_name ?? "").trim();
+  if (shadeCode && materialName) return `${shadeCode} — ${materialName}`;
+  if (shadeCode) return shadeCode;
+  if (materialName) return materialName;
+  return String(prodshade.external_code ?? prodshade.material_id ?? "").trim();
+}
 
 const EMPTY_CONFIG_FORM = {
   material_id: "",
@@ -34,49 +63,116 @@ const EMPTY_CONFIG_FORM = {
   fill_qty: "",
 };
 
+const EMPTY_PACK_CODE_FORM = {
+  pack_code: "",
+  pack_name: "",
+  description: "",
+  pack_type: PACK_TYPE_OPTIONS[0],
+  billing_uom: BILLING_UOM_OPTIONS[0],
+  bom_required: true,
+};
+
 export default function SAPackCodeMasterPage() {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState(0);
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
 
-  // Tab 2 state
   const [filterMaterialId, setFilterMaterialId] = useState("");
   const [configDrawerOpen, setConfigDrawerOpen] = useState(false);
   const [configForm, setConfigForm] = useState({ ...EMPTY_CONFIG_FORM });
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
-  const firstInputRef = useRef(null);
+
+  const [packCodeDrawerOpen, setPackCodeDrawerOpen] = useState(false);
+  const [editingPackCode, setEditingPackCode] = useState(null);
+  const [packCodeForm, setPackCodeForm] = useState({ ...EMPTY_PACK_CODE_FORM });
+
+  const packCodeInputRef = useRef(null);
+  const prodshadeInputRef = useRef(null);
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
   }
 
-  // ── Pack Codes Query ─────────────────────────────────────────────────────────
   const codesQ = useQuery({
     queryKey: ["pack-codes"],
     queryFn: () => listPackCodes({}),
-    select: (d) => Array.isArray(d) ? d : d?.data ?? [],
+    select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
 
-  // ── Pack Configs Query ───────────────────────────────────────────────────────
+  const prodshadesQ = useQuery({
+    queryKey: ["approved-prodshades"],
+    queryFn: () => listApprovedProdshades({}),
+    select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
+    enabled: activeTab === 1 || configDrawerOpen,
+  });
+
   const configsQ = useQuery({
     queryKey: ["pack-configs", filterMaterialId],
     queryFn: () => listPackConfigs({ material_id: filterMaterialId || undefined }),
-    select: (d) => Array.isArray(d) ? d : d?.data ?? [],
-    enabled: activeTab === 1,
+    select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
+    enabled: activeTab === 1 && Boolean(filterMaterialId),
   });
 
   const codes = codesQ.data ?? [];
+  const prodshades = prodshadesQ.data ?? [];
   const configs = configsQ.data ?? [];
+  const selectedProdshade = prodshades.find((entry) => entry.material_id === filterMaterialId) ?? null;
 
-  // ── Pack Code Toggle ─────────────────────────────────────────────────────────
+  const packTypeOptions = [...new Set([...PACK_TYPE_OPTIONS, ...codes.map((code) => code.pack_type).filter(Boolean)])];
+  const prodshadeOptions = prodshades.map((entry) => ({
+    value: entry.material_id,
+    label: prodshadeLabel(entry),
+  }));
+  const packCodeOptions = codes
+    .filter((code) => code.active)
+    .map((code) => ({
+      value: code.id,
+      label: `${code.pack_code} — ${code.description || code.pack_name || code.pack_type || ""}`.trim(),
+    }));
+
+  function resetPackCodeDrawer() {
+    setPackCodeDrawerOpen(false);
+    setEditingPackCode(null);
+    setPackCodeForm({ ...EMPTY_PACK_CODE_FORM });
+  }
+
+  function resetConfigDrawer() {
+    setConfigDrawerOpen(false);
+    setConfigForm({ ...EMPTY_CONFIG_FORM });
+  }
+
+  function openCreatePackCode() {
+    setEditingPackCode(null);
+    setPackCodeForm({ ...EMPTY_PACK_CODE_FORM });
+    setPackCodeDrawerOpen(true);
+  }
+
+  function openEditPackCode(code) {
+    setEditingPackCode(code);
+    setPackCodeForm({
+      pack_code: code.pack_code ?? "",
+      pack_name: code.pack_name ?? code.description ?? "",
+      description: code.description ?? code.pack_name ?? "",
+      pack_type: code.pack_type ?? PACK_TYPE_OPTIONS[0],
+      billing_uom: code.billing_uom ?? BILLING_UOM_OPTIONS[0],
+      bom_required: code.bom_required !== false,
+    });
+    setPackCodeDrawerOpen(true);
+  }
+
+  function openAddConfig() {
+    setConfigForm({ ...EMPTY_CONFIG_FORM, material_id: filterMaterialId || "" });
+    setConfigDrawerOpen(true);
+  }
+
   async function handleToggle(code) {
     setSaving(true);
     try {
       await togglePackCode({ id: code.id, active: !code.active });
-      toast(`Pack code ${code.pack_code} ${!code.active ? "activated" : "deactivated"}.`);
-      qc.invalidateQueries({ queryKey: ["pack-codes"] });
+      toast(`Pack code ${code.pack_code} ${code.active ? "deactivated" : "activated"}.`);
+      await qc.invalidateQueries({ queryKey: ["pack-codes"] });
     } catch (err) {
       toast(friendly(err.message), "error");
     } finally {
@@ -84,30 +180,62 @@ export default function SAPackCodeMasterPage() {
     }
   }
 
-  // ── Pack Config Upsert ───────────────────────────────────────────────────────
-  function openAddConfig() {
-    setConfigForm({ ...EMPTY_CONFIG_FORM, material_id: filterMaterialId });
-    setConfigDrawerOpen(true);
-  }
-
-  async function handleUpsertConfig(e) {
-    e.preventDefault();
-    if (!configForm.material_id || !configForm.pack_code_id) {
-      toast("Prodshade (Material ID) and Pack Code are required.", "error");
+  async function handleSavePackCode() {
+    if (!packCodeForm.pack_code.trim() && !editingPackCode) {
+      toast("Pack Code is required.", "error");
       return;
     }
+    if (!packCodeForm.description.trim()) {
+      toast("Description is required.", "error");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const payload = {
+        pack_code: packCodeForm.pack_code.trim().toUpperCase(),
+        pack_name: packCodeForm.pack_name.trim() || packCodeForm.description.trim(),
+        description: packCodeForm.description.trim(),
+        pack_type: packCodeForm.pack_type,
+        billing_uom: packCodeForm.billing_uom,
+        bom_required: packCodeForm.bom_required,
+      };
+
+      if (editingPackCode) {
+        await updatePackCode(editingPackCode.id, payload);
+        toast(`Pack code ${editingPackCode.pack_code} updated.`);
+      } else {
+        await createPackCode(payload);
+        toast(`Pack code ${payload.pack_code} created.`);
+      }
+
+      resetPackCodeDrawer();
+      await qc.invalidateQueries({ queryKey: ["pack-codes"] });
+    } catch (err) {
+      toast(friendly(err.message), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSaveConfig() {
+    if (!configForm.material_id || !configForm.pack_code_id) {
+      toast("Prodshade and Pack Code are required.", "error");
+      return;
+    }
+
     setSaving(true);
     try {
       await upsertPackConfig({
         material_id: configForm.material_id,
         pack_code_id: configForm.pack_code_id,
-        variant: configForm.variant || undefined,
+        variant: configForm.variant.trim() || undefined,
         fill_qty: configForm.fill_qty ? parseFloat(configForm.fill_qty) : undefined,
       });
       toast("Pack config saved.");
-      setConfigDrawerOpen(false);
-      setConfigForm({ ...EMPTY_CONFIG_FORM });
-      qc.invalidateQueries({ queryKey: ["pack-configs"] });
+      resetConfigDrawer();
+      if (!filterMaterialId) setFilterMaterialId(configForm.material_id);
+      await qc.invalidateQueries({ queryKey: ["pack-configs"] });
     } catch (err) {
       toast(friendly(err.message), "error");
     } finally {
@@ -115,14 +243,13 @@ export default function SAPackCodeMasterPage() {
     }
   }
 
-  // ── Pack Config Delete ───────────────────────────────────────────────────────
   async function handleDelete(id) {
     setSaving(true);
     try {
       await deletePackConfig(id);
       toast("Pack config deleted.");
       setConfirmDeleteId(null);
-      qc.invalidateQueries({ queryKey: ["pack-configs"] });
+      await qc.invalidateQueries({ queryKey: ["pack-configs"] });
     } catch (err) {
       toast(friendly(err.message), "error");
     } finally {
@@ -133,18 +260,17 @@ export default function SAPackCodeMasterPage() {
   return (
     <ErpScreenScaffold
       title="Pack Code Master — OM08"
-      subtitle="SA-only: manage pack code catalog and prodshade pack configurations"
+      subtitle="SA-only: maintain the pack code catalog and global prodshade pack configuration."
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard>
-        {/* Tab Bar */}
-        <div className="flex gap-0 border-b border-slate-200 mb-6">
-          {TABS.map((tab, i) => (
+        <div className="mb-6 flex gap-0 border-b border-slate-200">
+          {TABS.map((tab, index) => (
             <button
               key={tab}
-              onClick={() => setActiveTab(i)}
+              onClick={() => setActiveTab(index)}
               className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === i
+                activeTab === index
                   ? "border-sky-600 text-sky-700"
                   : "border-transparent text-slate-500 hover:text-slate-700"
               }`}
@@ -154,58 +280,82 @@ export default function SAPackCodeMasterPage() {
           ))}
         </div>
 
-        {/* ── Tab 1: Pack Code Catalog ────────────────────────────────────────── */}
         {activeTab === 0 && (
           <>
-            <p className="text-xs text-slate-500 mb-4">
-              Pack codes are seeded at system level. SA can toggle active/inactive. No add/edit for now.
-            </p>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <p className="text-xs text-slate-500">
+                SA can add new pack codes, edit existing codes, and activate or deactivate them.
+              </p>
+              <button
+                onClick={openCreatePackCode}
+                className="rounded bg-sky-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-700"
+              >
+                Add pack code
+              </button>
+            </div>
+
             {codesQ.isLoading ? (
-              <p className="text-slate-500 text-sm py-4 text-center">Loading…</p>
+              <p className="py-4 text-center text-sm text-slate-500">Loading…</p>
+            ) : codesQ.isError ? (
+              <p className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {getErrorMessage(codesQ.error)}
+              </p>
             ) : codes.length === 0 ? (
-              <p className="text-slate-400 text-sm py-4 text-center">No pack codes found.</p>
+              <p className="py-4 text-center text-sm text-slate-400">No pack codes found.</p>
             ) : (
-              <table className="w-full text-sm border-collapse">
+              <table className="w-full border-collapse text-sm">
                 <thead>
-                  <tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
-                    <th className="text-left py-2 px-3 border-b">Pack Code</th>
-                    <th className="text-left py-2 px-3 border-b">Description</th>
-                    <th className="text-left py-2 px-3 border-b">BOM Required</th>
-                    <th className="text-left py-2 px-3 border-b">Billing UOM</th>
-                    <th className="text-left py-2 px-3 border-b">Type</th>
-                    <th className="text-left py-2 px-3 border-b">Status</th>
-                    <th className="text-center py-2 px-3 border-b">Toggle</th>
+                  <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+                    <th className="border-b px-3 py-2 text-left">Pack Code</th>
+                    <th className="border-b px-3 py-2 text-left">Description</th>
+                    <th className="border-b px-3 py-2 text-left">Pack Type</th>
+                    <th className="border-b px-3 py-2 text-left">Billing UOM</th>
+                    <th className="border-b px-3 py-2 text-left">BOM Required</th>
+                    <th className="border-b px-3 py-2 text-left">Status</th>
+                    <th className="border-b px-3 py-2 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {codes.map((c) => (
-                    <tr key={c.id} className="border-b border-slate-100 hover:bg-slate-50">
-                      <td className="py-2 px-3 font-mono font-bold text-slate-800">{c.pack_code}</td>
-                      <td className="py-2 px-3 text-slate-600">{c.description ?? "—"}</td>
-                      <td className="py-2 px-3">
-                        {c.bom_required
-                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">BOM Required</span>
-                          : <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">No BOM</span>}
+                  {codes.map((code) => (
+                    <tr key={code.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-3 py-2 font-mono font-semibold text-slate-800">{code.pack_code}</td>
+                      <td className="px-3 py-2 text-slate-700">{code.description || code.pack_name || "—"}</td>
+                      <td className="px-3 py-2 text-slate-600">{code.pack_type || "—"}</td>
+                      <td className="px-3 py-2 text-slate-600">{code.billing_uom || "—"}</td>
+                      <td className="px-3 py-2">
+                        {code.bom_required ? (
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">Yes</span>
+                        ) : (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">No</span>
+                        )}
                       </td>
-                      <td className="py-2 px-3 text-slate-500">{c.billing_uom ?? "—"}</td>
-                      <td className="py-2 px-3 text-slate-500">{c.pack_type ?? "—"}</td>
-                      <td className="py-2 px-3">
-                        {c.active
-                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-medium">Active</span>
-                          : <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Inactive</span>}
+                      <td className="px-3 py-2">
+                        {code.active ? (
+                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Active</span>
+                        ) : (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">Inactive</span>
+                        )}
                       </td>
-                      <td className="py-2 px-3 text-center">
-                        <button
-                          onClick={() => handleToggle(c)}
-                          disabled={saving}
-                          className={`text-xs px-3 py-1 rounded border font-medium transition-colors disabled:opacity-50 ${
-                            c.active
-                              ? "border-rose-300 text-rose-600 hover:bg-rose-50"
-                              : "border-emerald-300 text-emerald-600 hover:bg-emerald-50"
-                          }`}
-                        >
-                          {c.active ? "Deactivate" : "Activate"}
-                        </button>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => openEditPackCode(code)}
+                            className="rounded border border-sky-200 px-3 py-1 text-xs text-sky-700 transition-colors hover:bg-sky-50"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleToggle(code)}
+                            disabled={saving}
+                            className={`rounded border px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                              code.active
+                                ? "border-rose-300 text-rose-600 hover:bg-rose-50"
+                                : "border-emerald-300 text-emerald-600 hover:bg-emerald-50"
+                            }`}
+                          >
+                            {code.active ? "Deactivate" : "Activate"}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -215,72 +365,107 @@ export default function SAPackCodeMasterPage() {
           </>
         )}
 
-        {/* ── Tab 2: Prodshade Pack Config ────────────────────────────────────── */}
         {activeTab === 1 && (
           <>
-            <div className="flex gap-3 flex-wrap items-end mb-4">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-500">Filter by Prodshade (Material ID)</label>
-                <input
-                  className="border border-slate-300 rounded px-2 py-1 text-sm font-mono w-72"
-                  placeholder="Material UUID to filter…"
+            <div className="mb-4 flex flex-wrap items-end gap-3">
+              <div className="min-w-[320px] flex-1">
+                <label className="mb-1 block text-xs text-slate-500">Prodshade</label>
+                <ErpComboboxField
                   value={filterMaterialId}
-                  onChange={(e) => setFilterMaterialId(e.target.value)}
+                  onChange={(value) => setFilterMaterialId(value)}
+                  options={prodshadeOptions}
+                  placeholder="Select an approved prodshade"
+                  blankLabel="— Select prodshade —"
+                  inputRef={prodshadeInputRef}
+                  emptyStateLabel={
+                    prodshades.length === 0
+                      ? "No approved prodshades yet — a stroke must be approved first (see Stroke Master)."
+                      : "No matches"
+                  }
+                  inputClassName="rounded px-2 py-2 text-sm"
                 />
               </div>
               <button
                 onClick={openAddConfig}
-                className="bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium px-4 py-1.5 rounded transition-colors"
+                className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700"
               >
-                + Add Config
+                + Link Pack Code
               </button>
             </div>
 
-            {configsQ.isLoading ? (
-              <p className="text-slate-500 text-sm py-4 text-center">Loading…</p>
-            ) : configs.length === 0 ? (
-              <p className="text-slate-400 text-sm py-4 text-center">
-                {filterMaterialId ? "No configs found for this prodshade." : "Enter a Material ID to filter, or click + Add Config."}
+            {prodshadesQ.isError && (
+              <p className="mb-4 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {getErrorMessage(prodshadesQ.error)}
               </p>
+            )}
+
+            {selectedProdshade && (
+              <div className="mb-4 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                Showing pack config for <span className="font-medium">{prodshadeLabel(selectedProdshade)}</span>
+              </div>
+            )}
+
+            {configsQ.isLoading ? (
+              <p className="py-4 text-center text-sm text-slate-500">Loading…</p>
+            ) : configsQ.isError ? (
+              <p className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {getErrorMessage(configsQ.error)}
+              </p>
+            ) : !filterMaterialId ? (
+              <p className="py-4 text-center text-sm text-slate-400">Select an approved prodshade to view linked pack codes.</p>
+            ) : configs.length === 0 ? (
+              <p className="py-4 text-center text-sm text-slate-400">No pack codes linked for this prodshade yet.</p>
             ) : (
-              <table className="w-full text-sm border-collapse">
+              <table className="w-full border-collapse text-sm">
                 <thead>
-                  <tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
-                    <th className="text-left py-2 px-3 border-b">Prodshade (Material ID)</th>
-                    <th className="text-left py-2 px-3 border-b">Pack Code</th>
-                    <th className="text-left py-2 px-3 border-b">Variant</th>
-                    <th className="text-right py-2 px-3 border-b">Fill Qty</th>
-                    <th className="text-left py-2 px-3 border-b">Status</th>
-                    <th className="text-center py-2 px-3 border-b">Delete</th>
+                  <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+                    <th className="border-b px-3 py-2 text-left">Pack Code</th>
+                    <th className="border-b px-3 py-2 text-left">Variant</th>
+                    <th className="border-b px-3 py-2 text-right">Fill Qty</th>
+                    <th className="border-b px-3 py-2 text-left">BOM Required</th>
+                    <th className="border-b px-3 py-2 text-left">FG SKU</th>
+                    <th className="border-b px-3 py-2 text-left">Status</th>
+                    <th className="border-b px-3 py-2 text-center">Delete</th>
                   </tr>
                 </thead>
                 <tbody>
                   {configs.map((cfg) => (
                     <tr key={cfg.id} className="border-b border-slate-100 hover:bg-slate-50">
-                      <td className="py-2 px-3 font-mono text-slate-600 text-xs">{cfg.material_id?.slice(0, 12)}…</td>
-                      <td className="py-2 px-3">
-                        <span className="font-mono font-semibold text-slate-800">{cfg.pack_code?.pack_code ?? cfg.pack_code_id?.slice(0, 8)}</span>
+                      <td className="px-3 py-2">
+                        <span className="font-mono font-semibold text-slate-800">{cfg.pack_code?.pack_code || "—"}</span>
                       </td>
-                      <td className="py-2 px-3 text-slate-500">{cfg.variant ?? "—"}</td>
-                      <td className="py-2 px-3 text-right font-mono text-slate-600">{cfg.fill_qty != null ? Number(cfg.fill_qty).toLocaleString() : "—"}</td>
-                      <td className="py-2 px-3">
-                        {cfg.active !== false
-                          ? <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-medium">Active</span>
-                          : <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Inactive</span>}
+                      <td className="px-3 py-2 text-slate-600">{cfg.variant || "—"}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-700">
+                        {cfg.fill_qty != null ? Number(cfg.fill_qty).toLocaleString() : "—"}
                       </td>
-                      <td className="py-2 px-3 text-center">
+                      <td className="px-3 py-2">
+                        {cfg.pack_code?.bom_required ? (
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">Yes</span>
+                        ) : (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">No</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-slate-700">{cfg.fg_sku || "—"}</td>
+                      <td className="px-3 py-2">
+                        {cfg.active !== false ? (
+                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Active</span>
+                        ) : (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">Inactive</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-center">
                         {confirmDeleteId === cfg.id ? (
-                          <div className="flex gap-1 justify-center">
+                          <div className="flex justify-center gap-1">
                             <button
                               onClick={() => handleDelete(cfg.id)}
                               disabled={saving}
-                              className="text-xs px-2 py-0.5 rounded bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50"
+                              className="rounded bg-rose-600 px-2 py-0.5 text-xs text-white hover:bg-rose-700 disabled:opacity-50"
                             >
                               {saving ? "…" : "Confirm"}
                             </button>
                             <button
                               onClick={() => setConfirmDeleteId(null)}
-                              className="text-xs px-2 py-0.5 rounded border border-slate-300 text-slate-500 hover:bg-slate-50"
+                              className="rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-50"
                             >
                               Cancel
                             </button>
@@ -288,7 +473,7 @@ export default function SAPackCodeMasterPage() {
                         ) : (
                           <button
                             onClick={() => setConfirmDeleteId(cfg.id)}
-                            className="text-xs px-3 py-1 rounded border border-rose-200 text-rose-500 hover:bg-rose-50 transition-colors"
+                            className="rounded border border-rose-200 px-3 py-1 text-xs text-rose-500 transition-colors hover:bg-rose-50"
                           >
                             Delete
                           </button>
@@ -303,71 +488,190 @@ export default function SAPackCodeMasterPage() {
         )}
       </ErpSectionCard>
 
-      {/* Add Config Drawer */}
       <DrawerBase
-        visible={configDrawerOpen}
-        title="Add Prodshade Pack Config"
-        onClose={() => setConfigDrawerOpen(false)}
-        initialFocusRef={firstInputRef}
-        width="min(480px, calc(100vw - 24px))"
+        visible={packCodeDrawerOpen}
+        title={editingPackCode ? `Edit Pack Code ${editingPackCode.pack_code}` : "Add Pack Code"}
+        onClose={resetPackCodeDrawer}
+        initialFocusRef={packCodeInputRef}
+        width="min(520px, calc(100vw - 24px))"
         actions={[
-          { label: "Save Config", tone: "primary", onClick: handleUpsertConfig, disabled: saving },
-          { label: "Cancel", tone: "neutral", onClick: () => setConfigDrawerOpen(false) },
+          { label: editingPackCode ? "Save Changes" : "Create Pack Code", tone: "primary", onClick: handleSavePackCode, disabled: saving },
+          { label: "Cancel", tone: "neutral", onClick: resetPackCodeDrawer },
         ]}
       >
-        <form onSubmit={handleUpsertConfig} className="flex flex-col gap-4 p-4">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            handleSavePackCode();
+          }}
+          className="flex flex-col gap-4 p-4"
+        >
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-600 font-medium">Prodshade Material ID <span className="text-rose-500">*</span></label>
+            <label className="text-xs font-medium text-slate-600">
+              Pack Code <span className="text-rose-500">*</span>
+            </label>
             <input
-              ref={firstInputRef}
-              className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-              placeholder="UUID"
-              value={configForm.material_id}
-              onChange={(e) => setConfigForm((f) => ({ ...f, material_id: e.target.value }))}
+              ref={packCodeInputRef}
+              className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
+              value={packCodeForm.pack_code}
+              onChange={(event) => setPackCodeForm((current) => ({ ...current, pack_code: event.target.value }))}
+              onBlur={() => setPackCodeForm((current) => ({ ...current, pack_code: current.pack_code.trim().toUpperCase() }))}
+              placeholder="e.g. 599"
+              disabled={Boolean(editingPackCode)}
               required
             />
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-600 font-medium">Pack Code <span className="text-rose-500">*</span></label>
+            <label className="text-xs font-medium text-slate-600">
+              Description <span className="text-rose-500">*</span>
+            </label>
+            <input
+              className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+              value={packCodeForm.description}
+              onChange={(event) =>
+                setPackCodeForm((current) => ({
+                  ...current,
+                  description: event.target.value,
+                  pack_name: current.pack_name || event.target.value,
+                }))
+              }
+              placeholder="Informational display text"
+              required
+            />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-600">
+                Pack Type <span className="text-rose-500">*</span>
+              </label>
+              <select
+                className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                value={packCodeForm.pack_type}
+                onChange={(event) => setPackCodeForm((current) => ({ ...current, pack_type: event.target.value }))}
+              >
+                {packTypeOptions.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-600">
+                Billing UOM <span className="text-rose-500">*</span>
+              </label>
+              <select
+                className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                value={packCodeForm.billing_uom}
+                onChange={(event) => setPackCodeForm((current) => ({ ...current, billing_uom: event.target.value }))}
+              >
+                {BILLING_UOM_OPTIONS.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={packCodeForm.bom_required}
+              onChange={(event) => setPackCodeForm((current) => ({ ...current, bom_required: event.target.checked }))}
+            />
+            BOM Required
+          </label>
+        </form>
+      </DrawerBase>
+
+      <DrawerBase
+        visible={configDrawerOpen}
+        title="Link Prodshade Pack Code"
+        onClose={resetConfigDrawer}
+        initialFocusRef={prodshadeInputRef}
+        width="min(520px, calc(100vw - 24px))"
+        actions={[
+          { label: "Save Config", tone: "primary", onClick: handleSaveConfig, disabled: saving },
+          { label: "Cancel", tone: "neutral", onClick: resetConfigDrawer },
+        ]}
+      >
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            handleSaveConfig();
+          }}
+          className="flex flex-col gap-4 p-4"
+        >
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-slate-600">
+              Prodshade <span className="text-rose-500">*</span>
+            </label>
+            <ErpComboboxField
+              value={configForm.material_id}
+              onChange={(value) => setConfigForm((current) => ({ ...current, material_id: value }))}
+              options={prodshadeOptions}
+              placeholder="Select an approved prodshade"
+              blankLabel="— Select prodshade —"
+              inputRef={prodshadeInputRef}
+              emptyStateLabel={
+                prodshades.length === 0
+                  ? "No approved prodshades yet — a stroke must be approved first (see Stroke Master)."
+                  : "No matches"
+              }
+              inputClassName="rounded px-2 py-2 text-sm"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-slate-600">
+              Pack Code <span className="text-rose-500">*</span>
+            </label>
             <select
-              className="border border-slate-300 rounded px-2 py-1.5 text-sm"
+              className="rounded border border-slate-300 px-2 py-1.5 text-sm"
               value={configForm.pack_code_id}
-              onChange={(e) => setConfigForm((f) => ({ ...f, pack_code_id: e.target.value }))}
+              onChange={(event) => setConfigForm((current) => ({ ...current, pack_code_id: event.target.value }))}
               required
             >
               <option value="">— Select pack code —</option>
-              {codes.filter((c) => c.active).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.pack_code}{c.description ? ` — ${c.description}` : ""}
+              {packCodeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
-            {codes.filter((c) => c.active).length === 0 && (
-              <p className="text-xs text-amber-600">No active pack codes. Please activate some in Tab 1 first.</p>
+            {packCodeOptions.length === 0 && (
+              <p className="text-xs text-amber-600">No active pack codes available. Activate or create one in Tab 1 first.</p>
             )}
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-600 font-medium">Variant <span className="text-slate-400 font-normal">(optional)</span></label>
+            <label className="text-xs font-medium text-slate-600">
+              Variant <span className="font-normal text-slate-400">(optional)</span>
+            </label>
             <input
-              className="border border-slate-300 rounded px-2 py-1.5 text-sm"
-              placeholder="e.g. SMALL, LARGE, EXPORT"
+              className="rounded border border-slate-300 px-2 py-1.5 text-sm"
               value={configForm.variant}
-              onChange={(e) => setConfigForm((f) => ({ ...f, variant: e.target.value }))}
+              onChange={(event) => setConfigForm((current) => ({ ...current, variant: event.target.value }))}
+              placeholder="e.g. JAR, BAG"
             />
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-600 font-medium">Fill Qty <span className="text-slate-400 font-normal">(optional — for barrel/IBC)</span></label>
+            <label className="text-xs font-medium text-slate-600">
+              Fill Qty <span className="font-normal text-slate-400">(optional — for fill-size pack codes)</span>
+            </label>
             <input
               type="number"
               min="0.01"
               step="0.01"
-              className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-              placeholder="e.g. 225 for 225 kg barrel"
+              className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
               value={configForm.fill_qty}
-              onChange={(e) => setConfigForm((f) => ({ ...f, fill_qty: e.target.value }))}
+              onChange={(event) => setConfigForm((current) => ({ ...current, fill_qty: event.target.value }))}
+              placeholder="e.g. 230"
             />
           </div>
         </form>

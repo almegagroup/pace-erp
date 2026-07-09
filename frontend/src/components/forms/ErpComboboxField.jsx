@@ -53,6 +53,7 @@ export default function ErpComboboxField({
   options = [],
   placeholder = "-- Select --",
   blankLabel = "-- Select --",
+  emptyStateLabel = "No matches",
   inputRef,
   className = "",
   inputClassName = "",
@@ -285,7 +286,7 @@ export default function ErpComboboxField({
             style={{ position: "fixed", top: panelRect.top, left: panelRect.left, width: panelRect.width, zIndex: 1000050 }}
             className="border border-slate-400 bg-white px-2 py-2 text-xs text-slate-400 shadow-md"
           >
-            No matches
+            {emptyStateLabel}
           </div>,
           document.body,
         )}
