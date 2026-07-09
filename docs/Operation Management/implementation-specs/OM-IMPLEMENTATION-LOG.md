@@ -2150,4 +2150,27 @@ None — all 9 audit-derived tasks complete, verified (independent `deno check`/
 *Last Updated: 2026-07-09*
 *Next: Assign `CAP_PROC_GATE_SECURITY` to a real work context; resolve PROC_GATE_REPORT sidebar visibility; continue QA Redesign (Codex task brief); Gate-27 design*
 
+---
+
+## Known Issues — Reported 2026-07-09 (PENDING, NOT YET INVESTIGATED/FIXED)
+
+User walkthrough of GE/Gate Exit/GRN/QA pages surfaced the following. Logged as-reported — root cause not yet traced for any of these. Fix later, in order or as convenient.
+
+| # | Issue | Page/Area | Notes |
+|---|-------|-----------|-------|
+| 1 | Material দেখাচ্ছে raw UUID হিসেবে | GE Detail page | No-raw-UUID rule (R-01) violation — likely same class of bug as earlier GE Detail UUID fixes (2026-07-07/08 session), but recurring/still present somewhere in this page |
+| 2 | Material দেখাচ্ছে raw UUID হিসেবে | Gate Exit page | Same R-01 violation, on the new Gate Exit page (`GateExitEntryPage.jsx`) |
+| 3 | Gate Exit করার পর Gate Exit Number-এর popup আসা উচিত (GE Number popup-এর মতো) | Gate Exit page | GE creation shows a confirmation popup with the new GE number — Gate Exit save should show the same pattern with the new Gate Exit number |
+| 4 | CSN-এ Transporter দেওয়া সত্ত্বেও GRN-এর Transporter tab-এ Transporter name আসছে না | CSN → GRN | Transporter set at CSN level not flowing through / not resolving on the GRN side |
+| 5 | Vehicle Number ও Invoice Number ZGATE report-এ নেই — যোগ করতে হবে | Gate Report (PROC_GATE_REPORT / ZGATE, PO18) | Column addition — `gate_entry`/`goods_receipt` already carry these fields per earlier gates, just not selected into the report |
+| 6 | Storage Location দেখাচ্ছে raw UUID হিসেবে | QA page (Inward QA) | R-01 violation |
+| 7 | GRN Detail page-এ সব details আসছে না (invoice number ইত্যাদি) | GRN Detail page | Missing fields — separate from the GRN List (PO05) column fix already done 2026-07-09; this is the Detail page |
+| 8 | GE, Gate Exit, GRN page — সব details আসতে হবে, pick হচ্ছে না | GE / Gate Exit / GRN pages (general) | Broader version of #7 — fields exist in DB but aren't being picked up/displayed on these pages |
+| 9 | প্রতি page-এর নিচে History card (GE, GRN, Gate Exit, QA) — card-এ click করলে সেই card-এর প্রতিটা field-এর data আসা উচিত, আসছে না | Document Flow / History tab (all detail pages, Gate-25) | Click-through on a history card should hydrate full field-level detail for that specific document; currently incomplete |
+| 10 | **Multi-PO/multi-material GE weight-split bug:** একটা GE-তে দুইটা PO-র material এসেছে (এক material 1000, আরেক material 500) — Gross Weight 3000 দিলে দুটো row-ই 3000 দেখায় (should split by received-qty proportion per row, not repeat the header total). Gate Exit-এর Net Weight-ও একই সমস্যা — প্রতি row-এর জন্য same value দেখায়, per-row split হচ্ছে না। **User question: SAP এটা কীভাবে handle করে?** — needs a design session before fixing | GE + Gate Exit, multi-line/multi-PO case | Design gap, not just a display bug — needs a proportional-split rule (by received qty or by line count) decided before implementing |
+
+**SAP reference for #10 (to research before designing):** SAP's standard gate-in/gate-out (ZGATE-equivalent) processes typically capture gross/tare/net weight **once per vehicle/GE header**, not per line — line-level weight is then derived as a proportional split (usually by planned/received quantity ratio) only for costing/reporting purposes, never re-editable per line. Needs confirmation against actual SAP config before locking a design here.
+
+---
+
 
