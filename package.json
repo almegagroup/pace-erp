@@ -1,11 +1,11 @@
 {
   "dependencies": {
     "@supabase/supabase-js": "^2.99.0",
-    "fastify": "^5.8.2"
+    "fastify": "^5.8.2",
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
-    "dependency-cruiser": "^17.3.10",
-    "tsx": "^4.21.0"
+    "dependency-cruiser": "^17.3.10"
   },
   "name": "pace-erp",
   "version": "1.0.0",
@@ -16,6 +16,7 @@
     "test": "tests"
   },
   "scripts": {
+    "start": "tsx src/server.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
     "context:refresh": "powershell -ExecutionPolicy Bypass -Command \"Get-Content -Raw .\\repo-context\\scripts\\generate-context.cjs | node -\"",
     "context:deps": "powershell -ExecutionPolicy Bypass -File repo-context/scripts/export-dep-map.ps1",
