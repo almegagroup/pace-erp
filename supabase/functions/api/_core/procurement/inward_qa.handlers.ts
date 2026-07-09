@@ -732,14 +732,11 @@ export async function submitUsageDecisionHandler(
         assertQAManagerRole(ctx);
       }
 
-      // stock_document.document_number is UNIQUE — the bare qa_number can't be reused across
-      // the OUT+IN pair of a single decision, nor across separate partial-decision batches
-      // over time. Suffix with the (always-incrementing, never-reused) decision line number
-      // and direction so every post_stock_movement call gets its own document number.
-      const decisionDocNumberBase = `${String(qaDocument.qa_number)}-${nextLineNumber}`;
-
+      // post_stock_movement() now auto-assigns item_number (SAP MKPF/MSEG style) per
+      // document_number, so every call under the same qa_number gets its own item —
+      // no client-side suffixing needed anymore.
       const outPosting = await postStockMovement({
-        documentNumber: `${decisionDocNumberBase}-OUT`,
+        documentNumber: String(qaDocument.qa_number),
         movementTypeCode: config.movementType,
         companyId,
         storageLocationId,
@@ -755,7 +752,7 @@ export async function submitUsageDecisionHandler(
       let finalPosting = outPosting;
       if (config.targetStockType) {
         finalPosting = await postStockMovement({
-          documentNumber: `${decisionDocNumberBase}-IN`,
+          documentNumber: String(qaDocument.qa_number),
           movementTypeCode: config.movementType,
           companyId,
           storageLocationId,
