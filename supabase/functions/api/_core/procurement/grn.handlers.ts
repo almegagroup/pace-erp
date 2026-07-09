@@ -641,6 +641,13 @@ export async function createAndPostGRNFromLineHandler(
     const poRate = parseNullableNumber(body.po_rate) ?? parseNullableNumber(poLineData?.unit_rate);
     const invoiceRate = parseNullableNumber(body.invoice_rate);
     const effectiveGrnRate = rateConfirmed ? (poRate ?? 0) : 0;
+    // grn_rate is quoted per the PO/transaction UOM (e.g. per PKT) — stock is
+    // valued per base UOM (e.g. per NOS), so divide by the same pack factor
+    // used to convert stockQty above, or the value posted to stock is wrong
+    // by a factor of perPackQty.
+    const baseUomRate = uomMismatch && perPackQty && perPackQty > 0
+      ? Number((effectiveGrnRate / perPackQty).toFixed(6))
+      : effectiveGrnRate;
 
     // Expiry
     const expiryTypeRaw = toUpperTrimmedString(body.expiry_type);
@@ -734,7 +741,7 @@ export async function createAndPostGRNFromLineHandler(
         p_material_id: geLine.material_id,
         p_quantity: stockQty,
         p_base_uom_code: baseUomCode,
-        p_unit_value: effectiveGrnRate,
+        p_unit_value: baseUomRate,
         p_stock_type_code: targetStockType,
         p_direction: "IN",
         p_posted_by: ctx.auth_user_id,
@@ -1017,6 +1024,20 @@ export async function reverseGRNHandler(
       const receivedQty = parsePositiveNumber(grn.received_qty) ?? 0;
       const stockTypeCode = toUpperTrimmedString(grn.target_stock_type) || "UNRESTRICTED";
 
+      // Mirror the same PO-UOM -> base-UOM conversion used at posting time
+      // (createAndPostGRNFromLineHandler) — otherwise the reversal moves the
+      // wrong quantity/value when the GRN was received in a pack UOM
+      // (e.g. PKT) that differs from the material's base UOM (e.g. NOS).
+      const baseUomCode = toTrimmedString(material.base_uom_code) || toTrimmedString(grn.uom_code) || "PCS";
+      const grnUomMismatch = toTrimmedString(grn.uom_code) !== baseUomCode;
+      const grnPerPackQty = parseNullableNumber(grn.per_pack_qty);
+      const reversalStockQty = grnUomMismatch && grnPerPackQty && grnPerPackQty > 0
+        ? Number((receivedQty * grnPerPackQty).toFixed(6))
+        : receivedQty;
+      const reversalBaseUomRate = grnUomMismatch && grnPerPackQty && grnPerPackQty > 0
+        ? Number(((parseNullableNumber(grn.grn_rate) ?? 0) / grnPerPackQty).toFixed(6))
+        : (parseNullableNumber(grn.grn_rate) ?? 0);
+
       const reversalResp = await serviceRoleClient.schema("erp_inventory")
         .rpc("post_stock_movement", {
           p_document_number: `${grn.grn_number}-REV`,
@@ -1026,9 +1047,9 @@ export async function reverseGRNHandler(
           p_company_id: grn.company_id,
           p_storage_location_id: grn.storage_location_id,
           p_material_id: grn.material_id,
-          p_quantity: receivedQty,
-          p_base_uom_code: material.base_uom_code ?? grn.uom_code,
-          p_unit_value: parseNullableNumber(grn.grn_rate) ?? 0,
+          p_quantity: reversalStockQty,
+          p_base_uom_code: baseUomCode,
+          p_unit_value: reversalBaseUomRate,
           p_stock_type_code: stockTypeCode,
           p_direction: "OUT",
           p_posted_by: ctx.auth_user_id,
