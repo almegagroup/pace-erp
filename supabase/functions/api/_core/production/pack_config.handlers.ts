@@ -49,7 +49,10 @@ async function resolvePackCodeRow(packCodeId: string): Promise<JsonRecord | null
     .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, description, active")
     .eq("id", packCodeId)
     .maybeSingle();
-  if (error) throw new Error("PROD_PACK_CODE_LOOKUP_FAILED");
+  if (error) {
+    console.error("[pack_config.resolvePackCodeRow] lookup failed:", JSON.stringify(error));
+    throw new Error("PROD_PACK_CODE_LOOKUP_FAILED");
+  }
   return (data as JsonRecord | null) ?? null;
 }
 
@@ -60,7 +63,10 @@ async function resolveProdshadeRow(materialId: string): Promise<JsonRecord | nul
     .select("id, shade_code, material_name, production_mode, external_code")
     .eq("id", materialId)
     .maybeSingle();
-  if (error) throw new Error("PROD_PACK_CONFIG_MATERIAL_LOOKUP_FAILED");
+  if (error) {
+    console.error("[pack_config.resolveProdshadeRow] lookup failed:", JSON.stringify(error));
+    throw new Error("PROD_PACK_CONFIG_MATERIAL_LOOKUP_FAILED");
+  }
   return (data as JsonRecord | null) ?? null;
 }
 
@@ -95,7 +101,10 @@ async function resolveFgMaterial(materialId: string, packCodeId: string, variant
     .eq("external_code", skuString)
     .maybeSingle();
 
-  if (error) throw new Error("PROD_PACK_CONFIG_FG_LOOKUP_FAILED");
+  if (error) {
+    console.error("[pack_config.resolveFgMaterial] FG lookup failed:", JSON.stringify(error));
+    throw new Error("PROD_PACK_CONFIG_FG_LOOKUP_FAILED");
+  }
 
   return {
     fgMaterialId: existingFg ? String((existingFg as JsonRecord).id) : null,
@@ -191,10 +200,14 @@ export async function listPackCodesHandler(req: Request, ctx: ProdHandlerContext
       .from("pack_code_master")
       .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, description, active, created_at")
       .order("pack_code");
-    if (error) throw new Error("PROD_PACK_CODE_LIST_FAILED");
+    if (error) {
+      console.error("[pack_config.listPackCodes] query failed:", JSON.stringify(error));
+      throw new Error("PROD_PACK_CODE_LIST_FAILED");
+    }
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CODE_LIST_FAILED";
+    console.error("[pack_config.listPackCodes] request_id:", ctx.request_id, "error:", err);
     return packError(req, ctx, code, 500, "Pack code list failed");
   }
 }
@@ -245,6 +258,7 @@ export async function createPackCodeHandler(req: Request, ctx: ProdHandlerContex
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CODE_CREATE_FAILED";
+    console.error("[pack_config.createPackCode] request_id:", ctx.request_id, "error:", err);
     return packError(req, ctx, code, 500, "Pack code create failed");
   }
 }
@@ -282,6 +296,7 @@ export async function updatePackCodeHandler(req: Request, ctx: ProdHandlerContex
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CODE_UPDATE_FAILED";
+    console.error("[pack_config.updatePackCode] request_id:", ctx.request_id, "error:", err);
     return packError(req, ctx, code, 500, "Pack code update failed");
   }
 }
@@ -304,6 +319,7 @@ export async function togglePackCodeHandler(req: Request, ctx: ProdHandlerContex
     return okResponse({ id, active }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CODE_TOGGLE_FAILED";
+    console.error("[pack_config.togglePackCode] request_id:", ctx.request_id, "error:", err);
     return packError(req, ctx, code, 500, "Pack code toggle failed");
   }
 }
@@ -345,6 +361,7 @@ export async function listApprovedProdshadesHandler(req: Request, ctx: ProdHandl
     return okResponse({ data: items }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PRODSHADE_LIST_FAILED";
+    console.error("[pack_config.listApprovedProdshades] request_id:", ctx.request_id, "error:", err);
     return packError(req, ctx, code, 500, "Prodshade list failed");
   }
 }
@@ -388,6 +405,7 @@ export async function listPackConfigsHandler(req: Request, ctx: ProdHandlerConte
     return okResponse({ data: items }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CONFIG_LIST_FAILED";
+    console.error("[pack_config.listPackConfigs] request_id:", ctx.request_id, "error:", err);
     return packError(req, ctx, code, 500, "Pack config list failed");
   }
 }
@@ -462,6 +480,7 @@ export async function upsertPackConfigHandler(req: Request, ctx: ProdHandlerCont
     return okResponse({ id: configId, fg_material_id: fgMaterialId, fg_pace_code: fgPaceCode }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CONFIG_UPSERT_FAILED";
+    console.error("[pack_config.upsertPackConfig] request_id:", ctx.request_id, "error:", err);
     return packError(req, ctx, code, 500, "Pack config upsert failed");
   }
 }
@@ -520,6 +539,7 @@ export async function deletePackConfigHandler(req: Request, ctx: ProdHandlerCont
     return okResponse({ id }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_CONFIG_DELETE_FAILED";
+    console.error("[pack_config.deletePackConfig] request_id:", ctx.request_id, "error:", err);
     return packError(req, ctx, code, 500, "Pack config delete failed");
   }
 }

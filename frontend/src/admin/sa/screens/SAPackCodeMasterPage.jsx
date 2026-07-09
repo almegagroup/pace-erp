@@ -260,8 +260,7 @@ export default function SAPackCodeMasterPage() {
   return (
     <ErpScreenScaffold
       title="Pack Code Master — OM08"
-      subtitle="SA-only: maintain the pack code catalog and global prodshade pack configuration."
-      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
+      notices={notice.msg ? [{ key: "pack-code-master-notice", tone: notice.tone, message: notice.msg }] : []}
     >
       <ErpSectionCard>
         <div className="mb-6 flex gap-0 border-b border-slate-200">
@@ -494,10 +493,25 @@ export default function SAPackCodeMasterPage() {
         onClose={resetPackCodeDrawer}
         initialFocusRef={packCodeInputRef}
         width="min(520px, calc(100vw - 24px))"
-        actions={[
-          { label: editingPackCode ? "Save Changes" : "Create Pack Code", tone: "primary", onClick: handleSavePackCode, disabled: saving },
-          { label: "Cancel", tone: "neutral", onClick: resetPackCodeDrawer },
-        ]}
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={handleSavePackCode}
+              disabled={saving}
+              className="rounded bg-sky-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+            >
+              {editingPackCode ? "Save Changes" : "Create Pack Code"}
+            </button>
+            <button
+              type="button"
+              onClick={resetPackCodeDrawer}
+              className="rounded border border-slate-300 px-4 py-1.5 text-sm text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+          </>
+        }
       >
         <form
           onSubmit={(event) => {
@@ -594,10 +608,25 @@ export default function SAPackCodeMasterPage() {
         onClose={resetConfigDrawer}
         initialFocusRef={prodshadeInputRef}
         width="min(520px, calc(100vw - 24px))"
-        actions={[
-          { label: "Save Config", tone: "primary", onClick: handleSaveConfig, disabled: saving },
-          { label: "Cancel", tone: "neutral", onClick: resetConfigDrawer },
-        ]}
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={handleSaveConfig}
+              disabled={saving}
+              className="rounded bg-sky-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+            >
+              Save Config
+            </button>
+            <button
+              type="button"
+              onClick={resetConfigDrawer}
+              className="rounded border border-slate-300 px-4 py-1.5 text-sm text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+          </>
+        }
       >
         <form
           onSubmit={(event) => {

@@ -2209,3 +2209,34 @@ User walkthrough of GE/Gate Exit/GRN/QA pages surfaced the following. Logged as-
 - The brief requested a live dev-DB query to enumerate missing `acl.menu_master` rows. No callable DB/MCP SQL tool was available in this session, so the migration was made idempotent and broad enough to safely backfill the referenced production resources when Claude applies it to dev.
 
 
+
+---
+
+## Gate-27.1 — Claude Verification Pass + Live Walkthrough Fixes (2026-07-10)
+
+**Verifier:** Claude (MCP dev DB + local deno/eslint + live preview)
+**Follows:** Codex commit `aade0f9`, Claude fix commits on `dev`
+
+Verified Codex's Gate-27.1 implementation and drove the page live. Found and fixed several issues Codex could not catch in its sandbox (no DB/MCP, no working `npm`/`deno`):
+
+### A — Migration ACL backfill bug (fixed before applying)
+Codex's migration re-inserted 20 production resources into `erp_menu.menu_master` with `ON CONFLICT (menu_code)` and fresh tx_codes (PR17/PR18). But all 20 were **already registered** there (real tx_codes OM08/OM09/OM10/PR00–PR17), `erp_menu.menu_master` has **no unique constraint on `menu_code`** (only on `tx_code`), and the reused PR17 would collide. Removed that whole block — only `acl.menu_master` had the real 20-row gap. Applied the corrected migration to dev via MCP, regenerated ACL + menu snapshots for all 9 DIRECTOR users × 4 companies.
+
+### B — `deno check` type error (fixed)
+Delete-safety-check cast an un-awaited query builder to `Promise<{count}>`. Removed the cast so it resolves like the rest of the codebase's `count`-via-`Promise.all` calls. (Remaining `deno check` failures are pre-existing codebase-wide `DbClient` typing gaps, not from this change.)
+
+### C — Migration filename ↔ remote timestamp mismatch (fixed)
+`apply_migration` recorded the migration remotely as `20260709191704`; local file was `20260710110000`. Renamed local to match so `supabase db push` won't complain (same class as CLAUDE.md's earlier "Migration Naming Fix").
+
+### D — React error #31 crash on drawers + notice (fixed)
+`SAPackCodeMasterPage.jsx` passed `DrawerBase`'s `actions` as an array of `{label, tone, onClick}` objects and `ErpScreenScaffold`'s `notice` as an object — both get rendered as raw React children → "Objects are not valid as a React child" (#31). `DrawerBase` renders `{actions}` directly (expects JSX), and `ErpScreenScaffold` expects `notice` to be a string / `notices` to be an array. Rewrote both drawer `actions` as JSX fragments (matching the working `POCreatePage.jsx` pattern) and switched `notice={obj}` → `notices={[{key,tone,message}]}`.
+
+### E — 🔴 ROOT CAUSE of the page-load 500: `erp_production` schema not exposed to PostgREST
+Even after the route-ACL fix, every `/api/production/*` call 500'd. Direct PostgREST probe returned `PGRST106: Invalid schema: erp_production` — **`erp_production` was missing from the project's Data-API "Exposed schemas" list**. Same class as the `erp_menu` PostgREST quirk already noted in CLAUDE.md §4A. `serviceRoleClient.schema("erp_production")` can't even route until the schema is exposed, regardless of grants.
+
+**Fix (dev):** added `erp_production` to Supabase Dashboard → Settings → API → Exposed schemas. Confirmed after: PGRST106 → 42501 (schema now routes; `anon` denied as expected), and `service_role` has USAGE + full table CRUD on all 17 `erp_production` tables.
+
+> ⚠️ **PROD DEPLOY CHECKLIST (must not forget):** `erp_production` schema exposure is a **Dashboard/platform config, NOT a migration** — it will NOT travel with `supabase db push`. Before/at prod go-live, add `erp_production` to the **prod** project's Exposed schemas list, or the entire production module (Pack Code, Stroke Master, Process PO, Packing PO, Batch Series, Segment Location) will 500 on every call.
+
+### F — Diagnostic logging added
+Added `console.error` at every DB-error throw site in `pack_config.handlers.ts` (matches the `vendor.handlers.ts` convention) so future `erp_production` failures surface the real Postgres error in Render logs instead of a bare 500.

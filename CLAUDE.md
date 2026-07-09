@@ -438,6 +438,7 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - Default Deny — permission না থাকলে access নেই
 - Companion screens menu_master এ নেই — route-only
 - `stock_document.document_number` = business document (SAP MKPF header), UNIQUE শুধু `(document_number, item_number)` জোড়ায় — `post_stock_movement()` নিজে item_number বসায়, caller কখনো suffix বানাবে না (দেখো Section 8C)
+- **নতুন schema বানালে PostgREST-এ expose করতে হবে (platform config, migration নয়):** `serviceRoleClient.schema("X")` কাজ করবে না যদি `X` Supabase Dashboard → Settings → API → **Exposed schemas** list-এ না থাকে — না থাকলে `PGRST106: Invalid schema` → সব call 500 (grants ঠিক থাকলেও, কারণ PostgREST route-ই করে না)। এটা migration-এর সাথে travel করে না — **dev ও prod দুই Dashboard-এ আলাদাভাবে add করতে হবে**। ইতিহাস: `erp_menu` (Session 2026-06-12), `erp_production` (Gate-27.1, 2026-07-10)। নতুন কোনো `erp_*` schema-র প্রথম page live করার আগে এই list চেক করো।
 
 ---
 
