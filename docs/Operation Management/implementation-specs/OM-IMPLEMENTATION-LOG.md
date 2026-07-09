@@ -1964,7 +1964,112 @@ After all ACL chain steps + session cache clear + logout/login, PROC_GATE_REPORT
 
 ---
 
+## Session Polish — 2026-07-08/09 (Gate Exit Build, PO Create Bug Chain, Refresh Hotkey Rollout, GRN Rate Conversion Fix)
+
+**Date:** 2026-07-08 → 2026-07-09
+**Implemented by:** Claude
+**Commits:** `7bc5f32` → `5ffab2e` → `8a520e7` → `f8be332` → `d2e0aa4` → `b9064ad` → `c62836c`
+
+### Scope
+Gate Exit page built from scratch + ACL split (GRN-capable vs Gate-only/Security roles). PO Create page bug chain (403, cross-filter flicker, UOM latency, save-redirect, raw UUID) traced and fixed. ALT+R/F4 refresh hotkey wired across all 40 remaining Procurement pages. GRN pack-UOM → base-UOM rate conversion bug found and fixed (both posting and reversal paths), plus one live bad-data correction.
+
+---
+
+### A — Gate Exit Entry Page (Tx Code PO17) ✅ DONE
+
+**Tx Code:** PO17
+**Screen Code:** `PROC_GATE_EXIT`
+**Group:** GRP_ACL_RECEIVING
+
+**What it does:** GE Number lookup → readonly header/lines (reusing `hydrateGateEntry`) → Exit Date/Time entry (F4 shortcuts) + Tare Weight per line → Save.
+
+| File | Change |
+|------|--------|
+| `frontend/src/pages/dashboard/procurement/gate/GateExitEntryPage.jsx` | New file — GE lookup + exit entry form |
+| `supabase/functions/api/_core/procurement/gate_entry.handlers.ts` | +`getGateEntryByNumberHandler`; +vehicle-not-exited validation in `createGateEntryHandler` (blocks a new GE for a vehicle whose earlier GE hasn't been gate-exited yet) |
+| `supabase/functions/api/_routes/procurement.routes.ts` | +route wiring |
+| `supabase/functions/api/_acl/route-acl-registry.ts` | +`GET /api/procurement/gate-entries/by-number` → `PROC_GATE_EXIT`:VIEW |
+| `frontend/src/pages/dashboard/procurement/procurementApi.js` | +API functions |
+| `frontend/src/navigation/screens/projects/operationModule/operationScreens.js` | +`PROC_GATE_EXIT` screen code |
+| `frontend/src/router/AppRouter.jsx` | +import + route |
+| `supabase/migrations/20260708110000_gate_exit_entry_menu.sql` | New — `erp_menu.menu_master`/`menu_tree`, `acl.menu_master`, `CAP_PROC_RECEIVING` grant |
+
+**Commit:** `7bc5f32`
+
+---
+
+### B — ACL Capability Split: GRN-capable vs Gate-only/Security ✅ DONE
+
+**Design decision:** GRN-capable users (`CAP_PROC_RECEIVING`) can do everything — GE, Gate Exit, GRN, GE Prune. A narrower `CAP_PROC_GATE_SECURITY` capability was added for gate/security-only work contexts — Gate Entry List/Create + Gate Exit only, no GRN, no GE Prune.
+
+| Migration | Purpose |
+|-----------|---------|
+| `20260708150000_gate_security_capability_split.sql` | Creates `CAP_PROC_GATE_SECURITY`, grants it to all 11 roles (mirrors `CAP_PROC_RECEIVING`'s role list) |
+
+**Commit:** `5ffab2e`
+
+**⚠️ Pending:** which department/work-context actually gets `CAP_PROC_GATE_SECURITY` assigned was left open (user said "wait" on this sub-topic) — not yet assigned to any real work context.
+
+---
+
+### C — PO Create Bug Chain (5 bugs, 1 root-cause chain + 1 unrelated) ✅ ALL FIXED
+
+Reported via screenshots: PO Create 403, page reload/flicker on every field selection, UOM not appearing after Material+Vendor select, Save redirecting to home instead of the created record, raw UUID shown instead of Material name in PO Order Group Detail.
+
+| # | Bug | Root Cause | Fix | Commit |
+|---|-----|-----------|-----|--------|
+| C-01 | PO Create 403 for everyone (SA/GA excepted) | `acl.menu_master` never had a row for `PROC_PO_CREATE` — no role/capability could ever grant create/edit/delete/approve | Registered `PROC_PO_CREATE`, granted `CAP_PROC_BUYER` VIEW/WRITE/EDIT/DELETE/APPROVE | `5ffab2e` |
+| C-02 | Cross-filter dropdowns (vendor/material/company) blanked the whole form to a full-page loader on every selection | `filterOptionsQuery` re-keys on every selection; `isLoading` unconditionally gated render | `placeholderData: keepPreviousData` (React Query v5) + `loading` only blocks on first load — rolled out to `POCreatePage`, `POCreateOpeningPage`, `StoCreateFormPage`, `RTVCreatePage`, `IVCreatePage` | `5ffab2e` |
+| C-03 | Material UOM felt late/inconsistent | Combobox kept focus after selection (by design, for keyboard flow) but UOM lookup only ran on `onBlur` | Also fires immediately `onChange`, in addition to the existing blur fallback | `8a520e7` |
+| C-04 | Save redirected to home page instead of showing the created PO | `/dashboard/procurement/po-order-groups/:id` had no companion-route pairing in `routeIndex.js` → `RouteGuard` bounced it to `/` | Added companion route pairs for PO Order Group detail + PO Create/Create-Opening | `8a520e7` |
+| C-05 | PO Order Group Detail 500'd / failed to load when opened via the screen-stack | `useParams().id` came through as the literal string `":id"` (screen-stack window quirk) — missing the `routeId !== ":id"` + `getActiveScreenContext()` fallback guard already used elsewhere (`PODetailPage`, `STODetailPage`, `GRNDetailPage`) | Added the same guard to `POOrderGroupDetailPage.jsx`, `CSNDetailPage.jsx`, `GateExitInboundDetailPage.jsx` | `f8be332` |
+| C-06 | PO Order Group Detail showed raw Material UUID + fragile client-side Vendor lookup | Material column rendered `l.material_id` directly; Vendor title fell back to `group.vendor_id` when the 200-vendor client-side lookup missed | Backend bulk-resolves material/cost-center/payment-term via `enrichPoReferenceDisplays` + resolves `vendor_display` server-side; frontend renders `l.material_display`/`group.vendor_display`. Also added a Refresh action (page had none) | `d2e0aa4` |
+
+**Unrelated find during the C-05 audit (same class of bug, full registry sweep):** 6 more companion `*_CREATE` resources referenced by `route-acl-registry.ts` but never registered in `acl.menu_master` — `OM_CUSTOMER_CREATE`, `OM_MATERIAL_CREATE`, `PROC_IV_CREATE`, `PROC_RTV_CREATE`, `PROC_SO_CREATE`, `PROC_STO_CREATE` (this is why STO Approve 403'd even for DIRECTOR). Also `SA_OPENING_STOCK_LIST` was renamed to `PROC_OPENING_STOCK_LIST` by an earlier migration (`20260619000001`) but `route-acl-registry.ts` was never updated, and only VIEW/WRITE were ever granted (EDIT/DELETE/APPROVE missing). All fixed in `supabase/migrations/20260708160000_register_missing_create_resources.sql`, commit `f8be332`.
+
+---
+
+### D — ALT+R/F4 Refresh Hotkey — Procurement Module Rollout ✅ DONE
+
+**Root cause:** `useErpScreenHotkeys({ refresh: {...} })` registers a page into the global hotkey map consumed by ALT+R/F4; pages that never call it silently no-op the shortcut even though the UI hints "ALT+R OR F4 REFRESH" everywhere. Zero Procurement pages had it wired (42 non-Procurement pages already did).
+
+**Fix:** Wired into all 40 Procurement pages — PO, Gate, GRN, STO, RTV/Debit Note/Exchange Ref, Accounts (IV/Landed Cost/Blocked IV), Sales, CSN, QA Queue, PID, Opening Stock, Plant Transfer, and 7 Masters pages.
+
+**Bonus fix:** `SOListPage.jsx` and `SalesInvoiceListPage.jsx` had a Refresh button that was already broken before this — `onClick: () => setPage((current) => current)` is a same-value setState React bails out of, so it did nothing. Replaced with a `reloadTick` counter shared by both the button and the new hotkey.
+
+**Commit:** `b9064ad` (42 files changed)
+
+---
+
+### E — GRN Pack-UOM → Base-UOM Rate Conversion Bug ✅ FIXED (code + data)
+
+**How found:** User asked to pull Cable Tie's GRN from DB and verify the posted stock value by hand (1 packet = 100 NOS, packet price ₹34.5) — the posted value was 100× too high.
+
+**Root cause:** `goods_receipt.per_pack_qty` correctly converts `received_qty` (PO/transaction UOM, e.g. PKT) into `stockQty` (base UOM, e.g. NOS) for the **quantity** posted to `post_stock_movement`, but the **rate** (`grn_rate`, quoted per PKT) was posted as-is — not divided by the same `per_pack_qty` factor — inflating posted stock value by exactly that factor whenever a GRN's UOM differs from the material's base UOM.
+
+**Codebase-wide audit (user explicitly asked "why only GRN — don't all my modules need this same conversion?"):** confirmed `per_pack_qty`/`material_uom_conversion` is referenced ONLY in `grn.handlers.ts`. RTV, STO, Sales Order, PID, and Opening Stock all either work natively in base UOM or consume the existing weighted-average `valuation_rate` from `stock_snapshot` rather than deriving a fresh rate from a different UOM — so the bug is isolated to GRN's inbound receipt path, though its wrong output does propagate into the shared weighted average once posted.
+
+**Second bug found in the same audit:** GRN reversal used raw `received_qty` (PKT-denominated) and raw `grn_rate` directly, uncorrected — reversing an affected GRN would have moved the wrong (much smaller) quantity out of stock.
+
+**Code fix (`grn.handlers.ts`):**
+- `createAndPostGRNFromLineHandler` — new `baseUomRate = effectiveGrnRate / perPackQty` (when UOM mismatch), posted as `p_unit_value` instead of the raw `effectiveGrnRate`. `goods_receipt.grn_rate` column itself is left unchanged (still correctly shows the per-PKT rate for display/audit).
+- `reverseGRNHandler` (new-style branch) — mirrors the same conversion: `reversalStockQty = receivedQty * perPackQty`, `reversalBaseUomRate = grn.grn_rate / perPackQty`, both posted to the reversal `post_stock_movement` call.
+
+**Data correction (GRN 200006, Cable Tie, material `d498e4cd-0c3f-437a-8ad4-692981f54514`):**
+- `stock_ledger` is append-only (`stock_ledger_no_update`/`stock_ledger_no_delete` Postgres RULEs — confirmed via `pg_rules`) — historical wrong-value rows cannot be edited, left as-is.
+- `stock_snapshot` (mutable current-balance cache) corrected via direct MCP SQL: UNRESTRICTED row → quantity 5000 NOS (unchanged), `valuation_rate` 34.5 → **0.345**, `value` → **₹1,725** (was ~₹1,72,433).
+- **Side finding during correction:** 3 unrelated junk ledger entries (`P561`×2 IN, `P562` OUT — all wrongly posted in **KG** against this NOS-based material, net qty effect zero) had drifted the snapshot's weighted-average rate to `34.486605` before the fix, complicating the first correction attempt. Confirmed junk by user, left in the ledger (immutable history) but no longer affects current valuation now that `stock_snapshot` is corrected directly.
+- No dedicated "valuation adjustment" movement type exists in `movement_type_master` — this correction was a direct snapshot UPDATE, not a posted movement. Gap noted, not yet built (not requested).
+
+**Commit:** `c62836c`
+
+| File | Change |
+|------|--------|
+| `supabase/functions/api/_core/procurement/grn.handlers.ts` | +`baseUomRate` (creation path), +`baseUomCode`/`grnUomMismatch`/`grnPerPackQty`/`reversalStockQty`/`reversalBaseUomRate` (reversal path) |
+
+---
+
 *Last Updated: 2026-07-09*
-*Next: Resolve PROC_GATE_REPORT sidebar visibility; continue QA Redesign (Codex task brief); Gate-27 design*
+*Next: Assign `CAP_PROC_GATE_SECURITY` to a real work context; resolve PROC_GATE_REPORT sidebar visibility; continue QA Redesign (Codex task brief); Gate-27 design*
 
 
