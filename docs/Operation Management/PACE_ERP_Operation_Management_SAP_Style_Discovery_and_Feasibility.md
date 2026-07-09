@@ -13552,3 +13552,67 @@ Minor excess held in FOR_REPROCESS (not dispatched today). Deferred recognition 
 - [ ] Scenario 3 — settlement/write-off policy for unapproved, non-separable variance
 - [ ] Salvage/Excess stock blending workflow and valuation (Scenario 4 mechanism)
 
+---
+
+## Section 105 — Stock Posting Engine: document_number / item_number Design (LOCKED — 2026-07-09)
+
+### Problem discovered (via Inward QA usage-decision live testing)
+
+`erp_inventory.stock_document.document_number` had a bare `UNIQUE` constraint. Several
+callers of `erp_inventory.post_stock_movement()` legitimately call it **more than once**
+under the same business document number — e.g.:
+- Inward QA's RELEASE/BLOCK/REJECT/FOR_REPROCESS usage decision: one `OUT` call from
+  `QUALITY_INSPECTION` + one `IN` call to the target stock type, both using `qa_number`.
+- Inward QA partial decisions: multiple decision-line batches over time, all under the
+  same `qa_number`.
+- RTV's `isDirectPath` (Gate-16.7): block-out + block-in + return-to-vendor, three calls,
+  all under the same `rtv_number`.
+
+Every second-or-later call collided (`23505 duplicate key`) and failed **after the first
+call had already committed** — leaving stock moved out of its source stock type with no
+matching credit into the target (a real, silent stock-integrity gap). This went
+undetected because the Inward QA path had two earlier, independent bugs
+(`plantId` undefined; then a GRN-shape assumption crash) that always prevented execution
+from ever reaching the second `post_stock_movement()` call until both were fixed in the
+same session — see `OM-GATE-InwardQA-Redesign-Spec.md` and the Inward QA implementation
+log entries for 2026-07-08/09.
+
+### Root cause
+
+The schema modeled `stock_document` as if one document_number = exactly one movement —
+there was no SAP-style separation between a document **header** and its **items**.
+
+### Decision: adopt SAP MKPF/MSEG structure (LOCKED)
+
+`erp_inventory.stock_document` now has an `item_number` column. The business document
+number (`qa_number`, `grn_number`, `rtv_number`, `so_number`, etc. — always the caller's
+own business document, never a separately-generated material-document number) stays the
+document **header** identity, exactly as every handler already treats it. Each
+`post_stock_movement()` call is one **item** under that header, mirroring SAP's
+MKPF (header, document number) / MSEG (item, item number 0001, 0002, ...) split.
+
+**Mechanics (`post_stock_movement()`, both overloads — with and without `p_plant_id`):**
+- Constraint is `UNIQUE (document_number, item_number)`, not `UNIQUE (document_number)`.
+- The function locks existing rows for that `document_number` (`FOR UPDATE`) and computes
+  `item_number := MAX(item_number) + 1` (defaulting to 1 for a brand-new document number)
+  — entirely internal to the RPC.
+- **No caller anywhere in the codebase needed to change.** GRN, RTV, STO, Sales Order,
+  Opening Stock, and Physical Inventory all keep reusing their own document number across
+  multiple movement calls exactly as before, and now get correct non-colliding items for
+  free — including the RTV `isDirectPath` triple-call, fixed without touching
+  `rtv.handlers.ts`.
+
+### Why this over the alternative (per-caller document-number suffixing)
+
+A narrower fix (suffix each call's document number, e.g. `qa_number-1-OUT`) was
+implemented first and works, but is a workaround scoped to one caller and leaves the same
+latent bug live in every other handler that calls `post_stock_movement()` more than once
+per document. The engine-level `item_number` fix was chosen instead specifically so every
+current and future caller is correct by construction — this is now the permanent design,
+not a QA-specific patch.
+
+### Implementation reference
+- Migration: `supabase/migrations/20260709025725_stock_document_item_number.sql`
+- Verified live: two calls under one test document number correctly received
+  `item_number` 1 and 2; the test posting was reversed afterward (net effect zero).
+

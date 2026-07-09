@@ -437,6 +437,7 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - Work Context = runtime functional role (menu recomputes when changed)
 - Default Deny — permission না থাকলে access নেই
 - Companion screens menu_master এ নেই — route-only
+- `stock_document.document_number` = business document (SAP MKPF header), UNIQUE শুধু `(document_number, item_number)` জোড়ায় — `post_stock_movement()` নিজে item_number বসায়, caller কখনো suffix বানাবে না (দেখো Section 8C)
 
 ---
 
@@ -505,6 +506,20 @@ MCP change শুধু যে DB তে run করা হয় সেখান
 
 ### Enforcement
 Code review এ নতুন `for`/`for...of` loop এ `await` দেখলে সাথে সাথে জিজ্ঞেস করো — এটা INDEPENDENT (batch করতে হবে) না DEPENDENT (comment আছে কিনা চেক করো)। শুধু prose rule যথেষ্ট না, review এ actively গ্রেপ করে ধরতে হবে।
+
+---
+
+## 8C. Stock Posting Engine — document_number / item_number (Mandatory — LOCKED 2026-07-09)
+
+**কেন:** Inward QA usage-decision লাইভ testing-এ ধরা পড়ে — `erp_inventory.stock_document.document_number`-এ আগে bare `UNIQUE` constraint ছিল, কিন্তু `post_stock_movement()`-কে অনেক caller-ই **একই business document number দিয়ে একাধিকবার** call করে (Inward QA-র RELEASE/BLOCK/REJECT/FOR_REPROCESS decision-এ OUT+IN দুইটা call; partial decision-এ multiple batch; RTV-র `isDirectPath`-এ ৩টা call — সবই নিজ নিজ document number দিয়ে বারবার)। দ্বিতীয়/পরবর্তী call-ই সবসময় `23505 duplicate key`-এ fail করতো — **প্রথম call ততক্ষণে commit হয়ে গেছে**, ফলে stock এক জায়গা থেকে বেরিয়ে গিয়ে আর কোথাও credit হয়নি (silent stock-integrity gap)। বিস্তারিত: feasibility doc Section 105।
+
+### সমাধান (SAP MKPF/MSEG মডেল, LOCKED)
+- `stock_document`-এ `item_number` column, constraint এখন `UNIQUE(document_number, item_number)`
+- `post_stock_movement()` (দুই overload-ই — `p_plant_id` সহ ও ছাড়া) নিজে থেকেই `MAX(item_number)+1` বসায় (row lock দিয়ে, concurrent call serialize করার জন্য) — **caller কখনো item_number/suffix handle করবে না**
+- `document_number` সবসময় caller-এর নিজের business document number-ই থাকবে (qa_number, grn_number, rtv_number, so_number...) — এটাকে unique রাখার জন্য কখনো suffix (`-OUT`, `-1` ইত্যাদি) জোড়া লাগানো **নিষিদ্ধ**, engine নিজেই সেটা handle করে
+
+### নতুন কোনো handler লেখার সময়
+`post_stock_movement()`-কে একই document_number দিয়ে একাধিকবার call করা সম্পূর্ণ safe — প্রতিটা call আলাদা item হিসেবে বসবে, কোনো collision হবে না। Migration: `supabase/migrations/20260709025725_stock_document_item_number.sql`।
 
 ---
 

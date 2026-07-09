@@ -247,6 +247,18 @@ ALTER TABLE erp_procurement.inward_qa_test_line
 
 GRN inward (unchanged): **P101** → QUALITY_INSPECTION if `qa_required_on_inward = true`, else straight to UNRESTRICTED (no QA doc created).
 
+### 9.1 document_number / item_number (LOCKED 2026-07-09 — stock posting engine, not QA-specific)
+
+RELEASE/BLOCK/REJECT/FOR_REPROCESS each call `post_stock_movement()` twice (OUT then IN)
+under the same `qa_number`, and partial decisions call it again under the same `qa_number`
+in later batches. This is now safe: `stock_document` has an `item_number` column
+(`UNIQUE(document_number, item_number)`, SAP MKPF/MSEG-style), and `post_stock_movement()`
+auto-assigns the next item internally. Handlers always pass the bare business document
+number (`qa_number` here) — never suffix it. Full rationale, the bug that surfaced it, and
+why this was fixed at the engine level instead of per-caller: see feasibility doc
+**Section 105** and `CLAUDE.md` **Section 8C**. Migration:
+`supabase/migrations/20260709025725_stock_document_item_number.sql`.
+
 ---
 
 ## 10. Out of Scope (this phase)
