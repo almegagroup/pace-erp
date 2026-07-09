@@ -18,31 +18,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS prodshade_pack_config_dedup_idx
     COALESCE(fill_qty, -1)
   );
 
--- ── Register production resources in ERP menu master when missing ───────────
-INSERT INTO erp_menu.menu_master
-  (menu_code, resource_code, title, description, route_path, menu_type, universe, is_system, display_order, is_active, tx_code)
-VALUES
-  ('SA_OM_PACK_CODE_MASTER', 'SA_OM_PACK_CODE_MASTER', 'Pack Code Master', 'SA pack code catalog and prodshade pack config', '/sa/om/pack-code-master', 'PAGE', 'ADMIN', false, 310, true, 'OM08'),
-  ('SA_PROD_BATCH_SERIES', 'SA_PROD_BATCH_SERIES', 'Production Batch Series', 'SA and Manager batch number series setup', '/sa/production/batch-series', 'PAGE', 'ADMIN', false, 320, true, 'PR17'),
-  ('SA_PROD_SEGMENT_LOCATIONS', 'SA_PROD_SEGMENT_LOCATIONS', 'Segment Location Config', 'SA and Manager segment location setup', '/sa/production/segment-locations', 'PAGE', 'ADMIN', false, 330, true, 'PR18'),
-  ('PROD_STROKE_MASTER', 'PROD_STROKE_MASTER', 'Stroke Master', 'Prodshade stroke create and edit', '/dashboard/production/stroke-master', 'PAGE', 'ACL', false, 20, true, 'PR01'),
-  ('PROD_STROKE_APPROVAL', 'PROD_STROKE_APPROVAL', 'Stroke Approval', 'Stroke approval and revert', '/dashboard/production/stroke-approval', 'PAGE', 'ACL', false, 25, true, 'PR02'),
-  ('PROD_PLAN_FEED', 'PROD_PLAN_FEED', 'Plan Feed', 'Factory order planning and maintenance', '/dashboard/production/plan-feed', 'PAGE', 'ACL', false, 10, true, 'PR00'),
-  ('PROD_PO_CREATE', 'PROD_PO_CREATE', 'Production PO Create', 'Create process and packing orders', '/dashboard/production/po-create', 'PAGE', 'ACL', false, 40, true, 'PR09'),
-  ('PROD_PO_EDIT', 'PROD_PO_EDIT', 'Production PO Edit', 'Edit process and packing order lines', '/dashboard/production/po-edit', 'PAGE', 'ACL', false, 45, true, 'PR10'),
-  ('PROD_QA_QUEUE', 'PROD_QA_QUEUE', 'Production QA Queue', 'Approve or reject process orders', '/dashboard/production/qa-queue', 'PAGE', 'ACL', false, 50, true, 'PR16'),
-  ('PROD_BATCH_RELEASE', 'PROD_BATCH_RELEASE', 'Batch Release', 'Release process order batch numbers', '/dashboard/production/batch-release', 'PAGE', 'ACL', false, 55, true, 'PR17'),
-  ('PROD_PO_FINAL', 'PROD_PO_FINAL', 'Production PO Final', 'Finalize process and packing orders', '/dashboard/production/po-final', 'PAGE', 'ACL', false, 60, true, 'PR11'),
-  ('PROD_PO_VERIFY', 'PROD_PO_VERIFY', 'Production PO Verify', 'Verify process orders', '/dashboard/production/po-verify', 'PAGE', 'ACL', false, 65, true, 'PR12'),
-  ('PROD_REVERSAL', 'PROD_REVERSAL', 'Production Reversal', 'Reverse process and packing orders', '/dashboard/production/reversal', 'PAGE', 'ACL', false, 70, true, 'PR15'),
-  ('PROD_ORDER_LIST', 'PROD_ORDER_LIST', 'Production Order List', 'Process and packing order overview list', '/dashboard/production/order-list', 'PAGE', 'ACL', false, 75, true, 'PR13'),
-  ('PROD_CHANGE_BOM_ITEM', 'PROD_CHANGE_BOM_ITEM', 'Change BOM Item', 'Create stroke BOM change requests', '/dashboard/production/change-bom-item', 'PAGE', 'ACL', false, 80, true, 'PR03'),
-  ('PROD_CHANGE_BOM_ITEM_APPROVAL', 'PROD_CHANGE_BOM_ITEM_APPROVAL', 'Change BOM Item Approval', 'Approve stroke BOM change requests', '/dashboard/production/change-bom-approval', 'PAGE', 'ACL', false, 85, true, 'PR04'),
-  ('PROD_PACK_BOM_CREATE', 'PROD_PACK_BOM_CREATE', 'Pack BOM Create', 'Create pack BOMs', '/dashboard/production/pack-bom-create', 'PAGE', 'ACL', false, 90, true, 'PR05'),
-  ('PROD_PACK_BOM_APPROVAL', 'PROD_PACK_BOM_APPROVAL', 'Pack BOM Approval', 'Approve pack BOMs', '/dashboard/production/pack-bom-approval', 'PAGE', 'ACL', false, 95, true, 'PR06'),
-  ('PROD_CHANGE_PACK_BOM', 'PROD_CHANGE_PACK_BOM', 'Change Pack BOM', 'Create pack BOM change requests', '/dashboard/production/change-pack-bom', 'PAGE', 'ACL', false, 100, true, 'PR07'),
-  ('PROD_CHANGE_PACK_BOM_APPROVAL', 'PROD_CHANGE_PACK_BOM_APPROVAL', 'Change Pack BOM Approval', 'Approve pack BOM change requests', '/dashboard/production/change-pack-bom-approval', 'PAGE', 'ACL', false, 105, true, 'PR08')
-ON CONFLICT (menu_code) DO NOTHING;
+-- ── erp_menu.menu_master already has rows for all 20 resources below (verified ──
+-- against dev before applying this migration — tx_codes OM08/OM09/OM10/PR00-PR17
+-- are already assigned there). erp_menu.menu_master also has no UNIQUE constraint
+-- on menu_code, only on tx_code, so an ON CONFLICT (menu_code) upsert here is both
+-- unnecessary and unsafe (would error, and if it didn't, would collide on tx_code
+-- with the pre-existing rows). Only acl.menu_master needs the backfill.
 
 -- ── Mirror resources into ACL menu master ────────────────────────────────────
 INSERT INTO acl.menu_master (menu_code, display_name)

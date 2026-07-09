@@ -495,12 +495,12 @@ export async function deletePackConfigHandler(req: Request, ctx: ProdHandlerCont
           .schema("erp_production")
           .from("pack_bom")
           .select("id", { count: "exact", head: true })
-          .eq("sku_material_id", resolved.fgMaterialId) as Promise<{ count?: number }>,
+          .eq("sku_material_id", resolved.fgMaterialId),
         serviceRoleClient
           .schema("erp_production")
           .from("packing_order")
           .select("id", { count: "exact", head: true })
-          .eq("material_id", resolved.fgMaterialId) as Promise<{ count?: number }>,
+          .eq("material_id", resolved.fgMaterialId),
       ]);
 
       if ((bomCountResult.count ?? 0) > 0) {
