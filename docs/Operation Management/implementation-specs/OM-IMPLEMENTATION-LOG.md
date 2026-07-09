@@ -2069,6 +2069,84 @@ Reported via screenshots: PO Create 403, page reload/flicker on every field sele
 
 ---
 
+## Session Polish — 2026-07-08/09 (API Latency Root-Cause Fix — Batch vs Sequential DB Loops)
+
+**Date:** 2026-07-08 → 2026-07-09
+**Implemented by:** Claude (investigation, audit direction, 5 handler fixes, all verification) + Codex CLI (initial PO batching pass, HR/Procurement/Admin/OM batching passes)
+**Commits:** `79cd103` → `a276c9c` → `7f8f38b` → `d7484d0`* → `92977f5` → `af7d8b7`
+**Reference:** `docs/Codex-Audit-Sequential-Loops.md` (full audit), `CLAUDE.md` §8B (locked rule)
+
+\* `d7484d0` is authored under a different session's commit message ("docs: lock Stock Reclassification...") — see part G below for why.
+
+### Scope
+User reported PO confirm and vendor-material list pages were slow, and asked whether it was just Render free-tier cold starts. It was not — traced to a widespread codebase pattern of `for`/`for...of` loops making one DB/RPC round-trip per row instead of batching. Fixed the worst offender first (PO confirm), then had Codex audit the entire ERP for the same pattern, locked a permanent classification rule in `CLAUDE.md`, and worked through the full audit list.
+
+---
+
+### A — Root Cause: Sequential Per-Row DB Loops, Not Hosting Tier
+
+Traced PO confirm slowness to `createCsnsForPo()` in `po.handlers.ts`: a `for` loop over PO lines doing 4 sequential DB round-trips per line (existing-CSN check → `generateProcurementDocNumber` RPC → material-category lookup → insert), plus similar sequential lookups in `buildPoLinesForInsert()` and the per-material PO creation loop in `createPOHandler()`. Confirmed the `generate_doc_number`/`generate_company_doc_number`/`generate_material_pace_code` RPCs all use a single atomic `UPDATE ... RETURNING` (not `SELECT MAX()` + separate write), so they are safe to call in parallel — this became the load-bearing fact for every batching decision that followed.
+
+### B — Full-ERP Audit (Codex CLI)
+
+Ran `codex exec` (audit-only, no code changes) to scan `supabase/functions` and `frontend/src` for every loop making one DB/API call per row instead of a set-based query. Found **~50 such loops** across Admin, HR, OM, Procurement, Production, and Session modules. Classified each as:
+- **INDEPENDENT** — one iteration's DB work doesn't depend on another's outcome → must batch (`.in()` reads, `Promise.all` independent writes)
+- **DEPENDENT** — stock/balance posting where order matters (RM/PM issue, GRN reversal, RTV/STO dispatch, opening stock, PI differences, QA usage-decision) → must stay sequential
+
+Output: `docs/Codex-Audit-Sequential-Loops.md` — file:line, round-trip count, INDEPENDENT/DEPENDENT classification, severity, per module.
+
+### C — CLAUDE.md §8B — Batch vs Sequential Loop Rule (LOCKED)
+
+Added as a permanent mandatory rule (not a blanket "batch everything" — that would have broken the DEPENDENT stock-posting loops): every new per-row loop must be classified before deciding sequential vs batched; DEPENDENT loops require a `// DEPENDENT: <why>` comment so they don't get "optimized" into a race condition later. Also locks the atomic `UPDATE ... RETURNING` pattern as mandatory for any future counter/doc-number function.
+
+### D — Fixes Applied
+
+| Commit | Module | What |
+|---|---|---|
+| `79cd103` | Procurement (`po.handlers.ts`) | Batched `createCsnsForPo` (existing-CSN + material-category lookups via `.in()`, doc-number+insert parallelized), `buildPoLinesForInsert` (cost-center + ASL/UOM batched), `createPOHandler` per-material loop (payment-term batched, header+line insert parallelized) |
+| `a276c9c` | HR (`leave.handlers.ts`, `out_work.handlers.ts`, `workflow_scope.ts`) | Work-context map now one `.in("company_id", ...)` across all companies instead of per-company; per-date leave/out-work RPC upserts parallelized after confirming (from the RPC's own SQL) neither maintains a running balance |
+| `7f8f38b` | OM, Procurement, Production, Session | `material.handlers.ts` bulk create/update/CSV-import; `sales_order.handlers.ts` invoice total recompute; `pack_bom.handlers.ts` + `stroke_change_request.handlers.ts` change-request apply; `session.admin_revoke.ts` cluster force-revoke; new migration `20260709120000_vendor_material_search_trgm_indexes.sql` (pg_trgm GIN indexes so existing leading-wildcard `ilike` search can use an index — no code change needed) |
+| `d7484d0`* | Procurement (remaining) | `l2_masters.handlers.ts`, `gate_entry.handlers.ts`, `invoice_verification.handlers.ts`, `sales_order.handlers.ts` (DC-line batch), `sto.handlers.ts` (CSN creation mirrors the `po.handlers.ts` pattern) batched; `// DEPENDENT:` comments added (zero logic change) to the ~10 confirmed stock-posting loops in `grn.handlers.ts`, `inward_qa.handlers.ts`, `opening_stock.handlers.ts`, `physical_inventory.handlers.ts`, `rtv.handlers.ts`, `sales_order.handlers.ts`, `sto.handlers.ts` |
+| `92977f5` | Admin (`SACapabilityGovernance.jsx`, `SAMaterialMaster.jsx`, `SAVendorMaster.jsx`) | Capability-matrix save, pack-content bulk removal, and material/vendor bulk activate-deactivate parallelized with `Promise.all` |
+| `af7d8b7` | OM (`material.handlers.ts`, `vendor.handlers.ts`, `vendor_material_info.handlers.ts`) | Bulk delete (materials + vendors) and CSV company-mapping import parallelized with per-id result ordering preserved; VMI UOM validation batched to one `.in()` query |
+
+### E — Atomicity Bug Found in `createPOHandler` (fixed before Codex's own commit)
+
+Codex's first pass parallelized per-material PO creation (`Promise.all` across all requested materials in an order-group), but the per-material validation (payment term / freight term / GST terms / rebate basis) ran *inside* each parallel task, alongside the DB writes. This meant a validation failure on material #2 no longer stopped material #3+ from being created (unlike the original sequential loop, which stopped immediately) — could leave an unpredictable partial set of POs in an order-group on failure. Fixed by moving all per-material validation into a synchronous pre-pass that runs to completion *before* any `Promise.all` write starts — a bad material now blocks the whole batch before anything is written, matching the atomicity the original sequential code implicitly had.
+
+### F — Compile Bug Found in Codex's STO Batching (caught by independent `deno check`)
+
+Codex's Procurement batch referenced a `getPaymentTermRowsByIds()` helper in `sto.handlers.ts` that only existed in `po.handlers.ts` — would have failed to load at deploy time. Codex's own self-check missed this (its sandbox couldn't resolve `@supabase/supabase-js` to run `deno check` at all). Caught by running `deno check` independently before committing; added the missing batched helper to `sto.handlers.ts` and reverified clean.
+
+### G — Git Index Race Condition (operational finding, not a code bug)
+
+Mid-session, discovered a **second Claude/Codex session was working on this same repo concurrently** (found via an unexpected commit `a91ce0e` fixing an unrelated Inward QA ACL route bug — see the QA Redesign chronology above). Later, staging 10 files for the Procurement batch (`git add` then `git commit`) raced against the other session's own `git commit`: since `.git/index` is a single shared file per working directory with no session isolation, the other session's plain `git commit` (run between this session's `add` and `commit`) picked up everything staged at that moment — including this session's 10 files — into their own commit `d7484d0` ("docs: lock Stock Reclassification..."). Content was verified byte-identical to what was intended (confirmed the `getPaymentTermRowsByIds` fix from part F was present in `HEAD`), so no work was lost — only the commit message/attribution is wrong for those 10 files. Did not rewrite history (no amend/rebase) since the other session was still active. **Risk for future sessions:** avoid `git add` + `git commit` as two separate tool calls when another agent may be committing in the same working tree around the same time; prefer committing immediately after staging, or confirm `git log` shows the expected commit right after.
+
+### Files changed (all commits, aggregate)
+
+| File | Change |
+|------|--------|
+| `CLAUDE.md` | +Section 8B (Batch vs Sequential Loop Rule) |
+| `docs/Codex-Audit-Sequential-Loops.md` | New — full-ERP audit, ~50 loops classified |
+| `supabase/functions/api/_core/procurement/po.handlers.ts` | CSN creation, PO-line prep, per-material PO creation batched; atomicity fix |
+| `supabase/functions/api/_shared/workflow_scope.ts` | +`loadActiveCompanyWorkContextsByCompany()` |
+| `supabase/functions/api/_core/hr/leave.handlers.ts`, `out_work.handlers.ts` | Work-context map + per-date RPC batched |
+| `supabase/functions/api/_core/om/material.handlers.ts` | Bulk create/update/CSV-import (name-dedup via in-memory index), delete, mapping import batched |
+| `supabase/functions/api/_core/om/vendor.handlers.ts` | Bulk delete batched |
+| `supabase/functions/api/_core/om/vendor_material_info.handlers.ts` | UOM validation batched; leading-wildcard search now index-backed (migration, no code change) |
+| `supabase/functions/api/_core/procurement/sales_order.handlers.ts` | Invoice total recompute + DC-line batch; `DEPENDENT` comment on issue-stock loop |
+| `supabase/functions/api/_core/production/pack_bom.handlers.ts`, `stroke_change_request.handlers.ts` | Change-request apply batched (dedupe-then-parallelize) |
+| `supabase/functions/api/_core/session/session.admin_revoke.ts` | Cluster force-revoke parallelized |
+| `supabase/functions/api/_core/procurement/l2_masters.handlers.ts`, `gate_entry.handlers.ts`, `invoice_verification.handlers.ts`, `sto.handlers.ts` | Batched; `sto.handlers.ts` also gained the missing `getPaymentTermRowsByIds()` helper |
+| `supabase/functions/api/_core/procurement/grn.handlers.ts`, `inward_qa.handlers.ts`, `opening_stock.handlers.ts`, `physical_inventory.handlers.ts`, `rtv.handlers.ts` | `DEPENDENT:` comments only, zero logic change |
+| `frontend/src/admin/sa/screens/SACapabilityGovernance.jsx`, `SAMaterialMaster.jsx`, `SAVendorMaster.jsx` | Bulk-action loops parallelized |
+| `supabase/migrations/20260709120000_vendor_material_search_trgm_indexes.sql` | New — pg_trgm GIN indexes, applied to dev |
+
+### বাকি আছে
+None — all 9 audit-derived tasks complete, verified (independent `deno check`/eslint on every touched file, logic review for order-sensitivity), and pushed to `origin/dev`.
+
+---
+
 *Last Updated: 2026-07-09*
 *Next: Assign `CAP_PROC_GATE_SECURITY` to a real work context; resolve PROC_GATE_REPORT sidebar visibility; continue QA Redesign (Codex task brief); Gate-27 design*
 
