@@ -184,7 +184,7 @@ export default function ChangeBomItemPage() {
       </ErpSectionCard>
 
       {selectedStrokeId && (
-        <ErpSectionCard title="RM / INT Lines — Current vs Proposed">
+        <ErpSectionCard title="RM / INT Lines — Current vs Proposed" className="overflow-x-visible">
           {loadingLines ? (
             <p className="text-slate-400 text-sm py-4 text-center">Loading…</p>
           ) : changeLines.length === 0 ? (

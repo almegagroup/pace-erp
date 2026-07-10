@@ -354,7 +354,8 @@ export default function StrokeMasterPage() {
         title="New Stroke Master"
         onClose={() => setDrawerOpen(false)}
         initialFocusRef={firstInputRef}
-        width="min(680px, calc(100vw - 24px))"
+        side="center"
+        width="min(1480px, calc(100vw - 24px))"
         actions={renderDrawerActions([
           { label: "Save Draft", tone: "primary", onClick: handleCreate, disabled: saving || isDuplicateBlocked },
           { label: "Cancel", tone: "neutral", onClick: () => setDrawerOpen(false) },
@@ -459,7 +460,8 @@ export default function StrokeMasterPage() {
         visible={drawerOpen && drawerMode === "detail"}
         title={detail ? `Stroke #${detail.stroke_number}` : "Loading…"}
         onClose={() => setDrawerOpen(false)}
-        width="min(680px, calc(100vw - 24px))"
+        side="center"
+        width="min(1480px, calc(100vw - 24px))"
         actions={renderDrawerActions(detail ? [
           ...(detail.status === "DRAFT" ? [
             { label: "Save", tone: "neutral", onClick: handleSaveDraft, disabled: saving },

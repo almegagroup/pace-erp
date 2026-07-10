@@ -269,7 +269,7 @@ export default function StrokeApprovalPage() {
         </div>
       </ErpSectionCard>
 
-      <ErpSectionCard title={`Strokes (${strokes.length})`}>
+      <ErpSectionCard title={`Strokes (${strokes.length})`} className="overflow-x-visible">
         {strokesQ.isLoading ? (
           <p className="text-slate-500 text-sm py-4 text-center">Loading…</p>
         ) : strokes.length === 0 ? (
