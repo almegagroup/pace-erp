@@ -88,155 +88,7 @@ export function Field({ label, required, hint, children }) {
   );
 }
 
-// ── Shared RM/INT Lines editor ──────────────────────────────────────────────
-function getGroupAlternateLabels(selectedGroup, currentMaterialId, materialLabelById) {
-  const members = Array.isArray(selectedGroup?.members) ? selectedGroup.members : [];
-  return members
-    .filter((m) => m?.material_id && m.material_id !== currentMaterialId)
-    .map((m) => {
-      if (m?.material?.pace_code || m?.material?.material_name) {
-        return `${m.material?.pace_code ?? "—"} — ${m.material?.material_name ?? ""}`;
-      }
-      return materialLabelById.get(m.material_id) ?? "Unknown material";
-    });
-}
-
-export function StrokeLinesEditor({ lines, setLines, materialsByType, groups, storageLocationOptions, onCreateGroup, onAddMember, disabled }) {
-  function addLine() { setLines((l) => [...l, { ...EMPTY_LINE }]); }
-  function removeLine(i) { setLines((l) => l.filter((_, idx) => idx !== i)); }
-  function updateLine(i, patch) {
-    setLines((l) => l.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
-  }
-
-  const sum = dosageSumOf(lines);
-  const materialLabelById = new Map(
-    [...(materialsByType.RM ?? []), ...(materialsByType.INT ?? [])]
-      .map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]),
-  );
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-2">
-        <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">RM / INT Lines</p>
-        <span className={`text-xs font-mono px-2 py-0.5 rounded ${Math.abs(sum - 100) < 0.01 ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-          Σ {sum.toFixed(2)}% / 100%
-        </span>
-      </div>
-
-      {lines.map((line, i) => {
-        const itemOptions = (materialsByType[line.line_material_type] ?? []).map((m) => ({
-          value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
-        }));
-        const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
-        const selectedGroup = groups.find((g) => g.id === line.material_group_id);
-        const alternateLabels = getGroupAlternateLabels(selectedGroup, line.material_id, materialLabelById);
-
-        return (
-          <div key={i} className="border border-slate-200 rounded p-2 mb-2 bg-slate-50/40">
-            <div className="flex gap-2 items-center mb-1.5">
-              <ErpComboboxField
-                className="w-28"
-                value={line.line_material_type}
-                onChange={(v) => updateLine(i, { line_material_type: v, material_id: "" })}
-                options={[{ value: "RM", label: "RM" }, { value: "INT", label: "INT" }]}
-                hideBlank
-                disabled={disabled}
-              />
-              <div className="flex-1">
-                <ErpComboboxField
-                  value={line.material_id}
-                  onChange={(v) => updateLine(i, { material_id: v })}
-                  options={itemOptions}
-                  placeholder="-- Select material --"
-                  disabled={disabled}
-                />
-              </div>
-              <input
-                className="border border-slate-300 rounded px-2 py-1 text-sm w-24 font-mono text-right"
-                placeholder="Dosage %"
-                type="number" step="0.01" min="0" max="100"
-                value={line.dosage_pct}
-                onChange={(e) => updateLine(i, { dosage_pct: e.target.value })}
-                disabled={disabled}
-              />
-              {!disabled && (
-                <button type="button" onClick={() => removeLine(i)} className="text-rose-400 hover:text-rose-600 text-sm px-1">✕</button>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2 mb-1.5 pl-1">
-              <span className="text-xs text-slate-500 whitespace-nowrap">Default Storage Location</span>
-              <div className="flex-1 max-w-xs">
-                <ErpComboboxField
-                  value={line.default_storage_location_id}
-                  onChange={(v) => updateLine(i, { default_storage_location_id: v })}
-                  options={storageLocationOptions}
-                  placeholder="-- Select company first --"
-                  emptyStateLabel="No storage locations mapped to this company"
-                  disabled={disabled}
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 pl-1">
-              <label className="text-xs text-slate-500 flex items-center gap-1">
-                <input
-                  type="checkbox"
-                  checked={line.has_alternate}
-                  disabled={disabled}
-                  onChange={(e) => updateLine(i, { has_alternate: e.target.checked, material_group_id: e.target.checked ? line.material_group_id : "" })}
-                />
-                Has Alternate?
-              </label>
-              {line.has_alternate && (
-                <div className="flex-1 flex items-center gap-2">
-                  <div className="flex-1">
-                    <ErpComboboxField
-                      value={line.material_group_id}
-                      onChange={(v) => updateLine(i, { material_group_id: v })}
-                      options={groupOptions}
-                      placeholder="-- Select group --"
-                      disabled={disabled}
-                    />
-                  </div>
-                  {!disabled && (
-                    <button
-                      type="button"
-                      className="text-sky-600 hover:text-sky-800 text-xs underline whitespace-nowrap"
-                      onClick={() => onCreateGroup((newGroupId) => updateLine(i, { material_group_id: newGroupId }))}
-                    >
-                      + New Group
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {line.has_alternate && selectedGroup && (
-              <div className="mt-1.5 pl-1 text-xs text-slate-500">
-                Alternates: {alternateLabels.length === 0 ? "No alternate members configured in PM04 yet." : alternateLabels.join(", ")}
-                {!disabled && (
-                  <button
-                    type="button"
-                    className="text-sky-600 hover:text-sky-800 underline ml-2"
-                    onClick={() => onAddMember(selectedGroup.id)}
-                  >
-                    + Add member
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      {!disabled && (
-        <button type="button" onClick={addLine} className="text-sky-600 hover:text-sky-800 text-xs underline">+ Add line</button>
-      )}
-    </div>
-  );
-}
-
-// ── RM/INT Lines as a real table (Stroke Approval — CSN Tracker density) ───
+// ── RM/INT Lines as a real table (Stroke Master / Stroke Approval — CSN Tracker density) ───
 // Same underlying data shape as StrokeLinesEditor (flat ids); ErpComboboxField
 // shows the resolved label even when disabled, so read-only rows (APPROVED /
 // DEACTIVATED strokes) need no separate server-nested-object rendering path.
@@ -389,6 +241,127 @@ export function StrokeLinesTable({ lines, setLines, materialsByType, groups, sto
         <button type="button" onClick={addLine} className="text-sky-600 hover:text-sky-800 text-xs underline mt-2">+ Add line</button>
       )}
     </div>
+  );
+}
+
+// ── Change BOM Item (PR03/PR04) — Current vs Proposed comparison table ─────
+// Dosage% is never shown/editable here — per 83.3 PR03/PR04 lock, Change BOM
+// Item only substitutes Item / Has Alternate / Material Group. `lines` shape:
+// { stroke_line_id, line_material_type, current_material_id, current_group_id,
+//   dosage_pct, new_material_id, new_has_alternate, new_group_id }
+export function ChangeBomLinesTable({ lines, setLines, materialsByType, groups, onCreateGroup, onAddMember, editable }) {
+  function updateLine(i, patch) {
+    setLines((l) => l.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
+  }
+
+  const materialLabelById = new Map(
+    [...(materialsByType.RM ?? []), ...(materialsByType.INT ?? [])]
+      .map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]),
+  );
+  const groupLabelById = new Map(groups.map((g) => [g.id, `${g.group_code} — ${g.group_name}`]));
+
+  const th = "text-left py-1.5 px-2 border-b text-[10px] uppercase tracking-wide text-slate-500 font-semibold";
+  const td = "py-1.5 px-2 align-top";
+
+  return (
+    <table className="w-full text-sm border-collapse">
+      <thead>
+        <tr className="bg-slate-50">
+          <th className={th}>#</th>
+          <th className={th}>Type</th>
+          <th className={`${th} min-w-[180px]`}>Current item</th>
+          <th className={th}>Current group</th>
+          <th className={`${th} text-right`}>Dosage %</th>
+          <th className={`${th} min-w-[200px]`}>New item</th>
+          <th className={th}>Alternate?</th>
+          <th className={`${th} min-w-[150px]`}>New group</th>
+          <th className={`${th} min-w-[160px]`}>Members</th>
+        </tr>
+      </thead>
+      <tbody>
+        {lines.map((line, i) => {
+          const itemOptions = (materialsByType[line.line_material_type] ?? []).map((m) => ({
+            value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
+          }));
+          const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
+          const selectedGroup = groups.find((g) => g.id === line.new_group_id);
+          const changedItem = line.new_material_id && line.new_material_id !== line.current_material_id;
+          const changedGroup = Boolean(line.new_has_alternate) !== Boolean(line.current_group_id) || line.new_group_id !== line.current_group_id;
+
+          return (
+            <tr key={line.stroke_line_id ?? i} className={`border-b border-slate-100 ${changedItem || changedGroup ? "bg-sky-50/60" : ""}`}>
+              <td className={`${td} text-slate-400`}>{i + 1}</td>
+              <td className={`${td} text-slate-500`}>{line.line_material_type}</td>
+              <td className={td}>{materialLabelById.get(line.current_material_id) ?? "—"}</td>
+              <td className={`${td} text-slate-500`}>{line.current_group_id ? (groupLabelById.get(line.current_group_id) ?? "—") : "—"}</td>
+              <td className={`${td} text-right font-mono`}>{Number(line.dosage_pct ?? 0).toFixed(2)}%</td>
+              <td className={td}>
+                {editable ? (
+                  <ErpComboboxField
+                    value={line.new_material_id}
+                    onChange={(v) => updateLine(i, { new_material_id: v })}
+                    options={itemOptions}
+                    placeholder="-- Keep current --"
+                  />
+                ) : (
+                  <span className={changedItem ? "font-semibold text-sky-700" : "text-slate-400"}>
+                    {line.new_material_id ? (materialLabelById.get(line.new_material_id) ?? "—") : "Unchanged"}
+                  </span>
+                )}
+              </td>
+              <td className={td}>
+                {editable ? (
+                  <input
+                    type="checkbox"
+                    checked={Boolean(line.new_has_alternate)}
+                    onChange={(e) => updateLine(i, { new_has_alternate: e.target.checked, new_group_id: e.target.checked ? line.new_group_id : "" })}
+                  />
+                ) : (
+                  <span className={changedGroup ? "font-semibold text-sky-700" : "text-slate-400"}>{line.new_has_alternate ? "Yes" : "No"}</span>
+                )}
+              </td>
+              <td className={td}>
+                {line.new_has_alternate ? (
+                  editable ? (
+                    <div className="flex items-center gap-1.5">
+                      <ErpComboboxField
+                        value={line.new_group_id}
+                        onChange={(v) => updateLine(i, { new_group_id: v })}
+                        options={groupOptions}
+                        placeholder="-- Select --"
+                      />
+                      <button
+                        type="button"
+                        className="text-sky-600 hover:text-sky-800 text-[10px] underline whitespace-nowrap"
+                        onClick={() => onCreateGroup((newGroupId) => updateLine(i, { new_group_id: newGroupId }))}
+                      >
+                        + New
+                      </button>
+                    </div>
+                  ) : (
+                    <span>{groupLabelById.get(line.new_group_id) ?? "—"}</span>
+                  )
+                ) : <span className="text-slate-400">—</span>}
+              </td>
+              <td className={`${td} text-xs text-slate-500`}>
+                {line.new_has_alternate && selectedGroup ? (
+                  <>
+                    {(selectedGroup.members ?? []).length === 0
+                      ? "none yet"
+                      : selectedGroup.members.map((m) => materialLabelById.get(m.material_id) ?? "—").join(", ")}
+                    {editable && (
+                      <button type="button" className="text-sky-600 hover:text-sky-800 underline ml-1" onClick={() => onAddMember(selectedGroup.id)}>
+                        + Add
+                      </button>
+                    )}
+                  </>
+                ) : "—"}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 

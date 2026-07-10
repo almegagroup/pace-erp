@@ -29,7 +29,7 @@ import { listCompaniesForOm, listMaterials, listUoms, listMaterialCategoryGroups
 import {
   MATERIAL_TYPE_OPTIONS, PO_TYPE_OPTIONS_BY_MATERIAL_TYPE, EMPTY_LINE,
   friendlyStrokeErr, dosageSumOf, renderDrawerActions, Field,
-  StrokeLinesEditor, GroupCreateModal, MemberAddModal,
+  StrokeLinesTable, GroupCreateModal, MemberAddModal,
 } from "./strokeShared.jsx";
 
 const STATUS_BADGE = {
@@ -442,7 +442,7 @@ export default function StrokeMasterPage() {
             </Field>
           </div>
 
-          <StrokeLinesEditor
+          <StrokeLinesTable
             lines={lines}
             setLines={setLines}
             materialsByType={lineMaterialsByType}
@@ -497,7 +497,7 @@ export default function StrokeMasterPage() {
             </div>
 
             {detail.status === "DRAFT" && detailEditLines ? (
-              <StrokeLinesEditor
+              <StrokeLinesTable
                 lines={detailEditLines}
                 setLines={setDetailEditLines}
                 materialsByType={lineMaterialsByType}
