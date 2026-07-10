@@ -85,6 +85,24 @@ async function getMaterialById(id: string): Promise<Record<string, unknown> | nu
   return (data as Record<string, unknown> | null) ?? null;
 }
 
+async function getMaterialMapByIds(ids: string[]): Promise<Map<string, Record<string, unknown>>> {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, Record<string, unknown>>();
+  if (uniqueIds.length === 0) return map;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("id, pace_code, material_name")
+    .in("id", uniqueIds);
+  if (error) throw new Error("OM_MATERIAL_LOOKUP_FAILED");
+
+  for (const row of (data ?? []) as Record<string, unknown>[]) {
+    map.set(String(row.id), row);
+  }
+  return map;
+}
+
 function materialErrorResponse(
   req: Request,
   ctx: OmHandlerContext,
@@ -1331,10 +1349,26 @@ export async function listMaterialCategoryGroupsHandler(
 
     if (error) throw new Error("OM_CATEGORY_GROUP_LIST_FAILED");
 
-    const enriched = (data ?? []).map((g: Record<string, unknown>) => ({
-      ...g,
-      member_count: Array.isArray(g.members) ? (g.members as unknown[]).length : 0,
-    }));
+    const groups = (data ?? []) as Record<string, unknown>[];
+    const materialMap = await getMaterialMapByIds(
+      groups.flatMap((g) =>
+        Array.isArray(g.members)
+          ? (g.members as Record<string, unknown>[]).map((m) => String(m.material_id ?? ""))
+          : []
+      ),
+    );
+
+    const enriched = groups.map((g: Record<string, unknown>) => {
+      const members = Array.isArray(g.members) ? (g.members as Record<string, unknown>[]) : [];
+      return {
+        ...g,
+        members: members.map((member) => ({
+          ...member,
+          material: materialMap.get(String(member.material_id ?? "")) ?? null,
+        })),
+        member_count: members.length,
+      };
+    });
 
     return okResponse({ data: enriched }, ctx.request_id, req);
   } catch (err) {

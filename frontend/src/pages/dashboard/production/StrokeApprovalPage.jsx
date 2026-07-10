@@ -21,10 +21,10 @@ import {
   listStrokeMasters, getStrokeMaster, updateStrokeMaster,
   approveStrokeMaster, revertStrokeMaster, rejectStrokeMaster, deactivateStrokeMaster,
 } from "./prodApi.js";
-import { listUoms, listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
+import { listUoms, listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, listStorageLocations } from "../om/omApi.js";
 import {
   PO_TYPE_OPTIONS_BY_MATERIAL_TYPE, friendlyStrokeErr, dosageSumOf, Field,
-  StrokeLinesEditor, GroupCreateModal, MemberAddModal,
+  StrokeLinesEditor, GroupCreateModal,
 } from "./strokeShared.jsx";
 
 const STATUS_COLORS = {
@@ -52,8 +52,6 @@ export default function StrokeApprovalPage() {
 
   const [groupModal, setGroupModal] = useState(null);
   const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
-  const [memberModal, setMemberModal] = useState(null);
-  const [memberMaterialId, setMemberMaterialId] = useState("");
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -72,8 +70,8 @@ export default function StrokeApprovalPage() {
 
   const uomsQ = useQuery({ queryKey: ["om-uoms"], queryFn: () => listUoms({ is_active: true, limit: 500 }), select: (d) => d?.data ?? [] });
   const groupsQ = useQuery({ queryKey: ["om-material-groups"], queryFn: () => listMaterialCategoryGroups(), select: (d) => d?.data ?? [] });
-  const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 200 }), select: (d) => d?.data ?? [] });
-  const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 200 }), select: (d) => d?.data ?? [] });
+  const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 500 }), select: (d) => d?.data ?? [] });
+  const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 500 }), select: (d) => d?.data ?? [] });
   const storageLocationsQ = useQuery({
     queryKey: ["om-storage-locations", expandedCompanyId],
     queryFn: () => listStorageLocations({ company_id: expandedCompanyId, is_active: true }),
@@ -138,17 +136,6 @@ export default function StrokeApprovalPage() {
       toast("Material group created.");
       groupModal?.onCreated?.(newGroup.id);
       setGroupModal(null);
-    } catch (err) { toast(friendlyStrokeErr(err.code) || err.message, "error"); }
-  }
-
-  async function handleAddMember() {
-    if (!memberMaterialId) { toast("Select a material first.", "error"); return; }
-    try {
-      await addMaterialCategoryMember({ group_id: memberModal, material_id: memberMaterialId });
-      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
-      toast("Member added.");
-      setMemberModal(null);
-      setMemberMaterialId("");
     } catch (err) { toast(friendlyStrokeErr(err.code) || err.message, "error"); }
   }
 
@@ -404,16 +391,15 @@ export default function StrokeApprovalPage() {
                               )}
                             </div>
 
-                            <StrokeLinesEditor
-                              lines={editLines}
-                              setLines={setEditLines}
-                              materialsByType={lineMaterialsByType}
-                              groups={groups}
-                              storageLocationOptions={storageLocationOptions}
-                              onCreateGroup={openCreateGroupModal}
-                              onAddMember={(groupId) => setMemberModal(groupId)}
-                              disabled={s.status !== "DRAFT"}
-                            />
+                              <StrokeLinesEditor
+                                lines={editLines}
+                                setLines={setEditLines}
+                                materialsByType={lineMaterialsByType}
+                                groups={groups}
+                                storageLocationOptions={storageLocationOptions}
+                                onCreateGroup={openCreateGroupModal}
+                                disabled={s.status !== "DRAFT"}
+                              />
 
                             <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
                               <button type="button" className="h-8 border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setExpandedId("")}>
@@ -480,14 +466,6 @@ export default function StrokeApprovalPage() {
         onCreate={handleCreateGroup}
       />
 
-      <MemberAddModal
-        open={Boolean(memberModal)}
-        memberMaterialId={memberMaterialId}
-        setMemberMaterialId={setMemberMaterialId}
-        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
-        onCancel={() => setMemberModal(null)}
-        onAdd={handleAddMember}
-      />
     </ErpScreenScaffold>
   );
 }

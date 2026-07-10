@@ -25,11 +25,11 @@ import {
   updateStrokeMaster, approveStrokeMaster, revertStrokeMaster,
   rejectStrokeMaster, deactivateStrokeMaster,
 } from "./prodApi.js";
-import { listCompaniesForOm, listMaterials, listUoms, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
+import { listCompaniesForOm, listMaterials, listUoms, listMaterialCategoryGroups, createMaterialCategoryGroup, listStorageLocations } from "../om/omApi.js";
 import {
   MATERIAL_TYPE_OPTIONS, PO_TYPE_OPTIONS_BY_MATERIAL_TYPE, EMPTY_LINE,
   friendlyStrokeErr, dosageSumOf, renderDrawerActions, Field,
-  StrokeLinesEditor, GroupCreateModal, MemberAddModal,
+  StrokeLinesEditor, GroupCreateModal,
 } from "./strokeShared.jsx";
 
 const STATUS_BADGE = {
@@ -63,8 +63,6 @@ export default function StrokeMasterPage() {
   // Inline "create group" mini-form state
   const [groupModal, setGroupModal] = useState(null); // { onCreated } | null
   const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
-  const [memberModal, setMemberModal] = useState(null); // groupId | null
-  const [memberMaterialId, setMemberMaterialId] = useState("");
 
   const firstInputRef = useRef(null);
 
@@ -77,9 +75,9 @@ export default function StrokeMasterPage() {
   const companiesQ = useQuery({ queryKey: ["om-companies"], queryFn: () => listCompaniesForOm() });
   const uomsQ = useQuery({ queryKey: ["om-uoms"], queryFn: () => listUoms({ is_active: true, limit: 500 }), select: (d) => d?.data ?? [] });
   const groupsQ = useQuery({ queryKey: ["om-material-groups"], queryFn: () => listMaterialCategoryGroups(), select: (d) => d?.data ?? [] });
-  const sfgMaterialsQ = useQuery({ queryKey: ["om-materials", "SFG"], queryFn: () => listMaterials({ material_type: "SFG", limit: 200 }), select: (d) => d?.data ?? [] });
-  const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 200 }), select: (d) => d?.data ?? [] });
-  const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 200 }), select: (d) => d?.data ?? [] });
+  const sfgMaterialsQ = useQuery({ queryKey: ["om-materials", "SFG"], queryFn: () => listMaterials({ material_type: "SFG", limit: 500 }), select: (d) => d?.data ?? [] });
+  const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 500 }), select: (d) => d?.data ?? [] });
+  const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 500 }), select: (d) => d?.data ?? [] });
 
   // Storage locations are scoped to whichever company is in play: the create
   // form's company while creating, or the stroke's own (immutable) company
@@ -160,17 +158,6 @@ export default function StrokeMasterPage() {
       toast("Material group created.");
       groupModal?.onCreated?.(newGroup.id);
       setGroupModal(null);
-    } catch (err) { toast(friendlyErr(err.code) || err.message, "error"); }
-  }
-
-  async function handleAddMember() {
-    if (!memberMaterialId) { toast("Select a material first.", "error"); return; }
-    try {
-      await addMaterialCategoryMember({ group_id: memberModal, material_id: memberMaterialId });
-      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
-      toast("Member added.");
-      setMemberModal(null);
-      setMemberMaterialId("");
     } catch (err) { toast(friendlyErr(err.code) || err.message, "error"); }
   }
 
@@ -409,7 +396,6 @@ export default function StrokeMasterPage() {
             groups={groups}
             storageLocationOptions={storageLocationOptions}
             onCreateGroup={openCreateGroupModal}
-            onAddMember={(groupId) => setMemberModal(groupId)}
           />
         </form>
       </DrawerBase>
@@ -464,7 +450,6 @@ export default function StrokeMasterPage() {
                 groups={groups}
                 storageLocationOptions={storageLocationOptions}
                 onCreateGroup={openCreateGroupModal}
-                onAddMember={(groupId) => setMemberModal(groupId)}
               />
             ) : (
               <div>
@@ -517,14 +502,6 @@ export default function StrokeMasterPage() {
         onCreate={handleCreateGroup}
       />
 
-      <MemberAddModal
-        open={Boolean(memberModal)}
-        memberMaterialId={memberMaterialId}
-        setMemberMaterialId={setMemberMaterialId}
-        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
-        onCancel={() => setMemberModal(null)}
-        onAdd={handleAddMember}
-      />
     </ErpScreenScaffold>
   );
 }
