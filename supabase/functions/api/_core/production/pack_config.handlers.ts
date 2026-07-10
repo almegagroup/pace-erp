@@ -38,8 +38,11 @@ function normalizeNullableNumber(value: unknown): string {
   return Number.isFinite(n) ? String(n) : "";
 }
 
-function buildFgSku(shadeCode: string, packCode: string, variant: string): string {
-  return [shadeCode, packCode, variant].filter(Boolean).join("-");
+function buildFgSku(prodshadeCode: string, packCode: string, variant: string): string {
+  const base = `${normalizeNullableString(prodshadeCode)}${normalizeNullableString(packCode)}`;
+  const normalizedVariant = normalizeNullableString(variant);
+  if (!base) return "";
+  return normalizedVariant ? `${base}-${normalizedVariant}` : base;
 }
 
 async function resolvePackCodeRow(packCodeId: string): Promise<JsonRecord | null> {
@@ -60,7 +63,7 @@ async function resolveProdshadeRow(materialId: string): Promise<JsonRecord | nul
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, shade_code, material_name, production_mode, external_code")
+    .select("id, shade_code, material_name, document_name, production_mode, external_code")
     .eq("id", materialId)
     .maybeSingle();
   if (error) {
@@ -86,13 +89,13 @@ async function resolveFgMaterial(materialId: string, packCodeId: string, variant
     return { fgMaterialId: null, fgPaceCode: null, skuString: null, packCodeRow, prodshade };
   }
 
-  const shadeCode = normalizeNullableString(prodshade.shade_code);
+  const prodshadeCode = normalizeNullableString(prodshade.external_code);
   const packCode = normalizeNullableString(packCodeRow.pack_code);
-  if (!shadeCode || !packCode) {
+  if (!prodshadeCode || !packCode) {
     return { fgMaterialId: null, fgPaceCode: null, skuString: null, packCodeRow, prodshade };
   }
 
-  const skuString = buildFgSku(shadeCode, packCode, variant);
+  const skuString = buildFgSku(prodshadeCode, packCode, variant);
   const { data: existingFg, error } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
@@ -135,6 +138,7 @@ async function ensureFgMaterialForConfig(
   const shadeCode = normalizeNullableString(prodshade.shade_code);
   const packCode = normalizeNullableString(packCodeRow.pack_code);
   const prodMode = normalizeNullableString(prodshade.production_mode ?? "");
+  const prodshadeDescription = normalizeNullableString(prodshade.document_name ?? prodshade.material_name ?? skuString);
 
   const fgCountResult = await serviceRoleClient
     .schema("erp_master")
@@ -145,11 +149,10 @@ async function ensureFgMaterialForConfig(
   const nextNum = (fgCountResult.count ?? 0) + 1;
   const newPaceCode = `FG-${String(nextNum).padStart(5, "0")}`;
   const packCodeDesc = normalizeNullableString(packCodeRow.description ?? packCodeRow.pack_name ?? packCode);
-  const materialName = String(prodshade.material_name ?? skuString);
 
   const isMtoOrHps = prodMode === "LIQUID_ADMIX" || prodMode === "LIQUID_HPS";
-  const humanName = isMtoOrHps ? skuString : packCodeDesc || skuString;
-  const docName = isMtoOrHps ? (packCodeDesc || skuString) : skuString;
+  const humanName = isMtoOrHps ? skuString : (prodshadeDescription || skuString);
+  const docName = isMtoOrHps ? (prodshadeDescription || packCodeDesc || skuString) : skuString;
   const shortName = skuString.length > 50 ? skuString.slice(0, 50) : skuString;
 
   const { data: newFg, error: fgInsertErr } = await serviceRoleClient
@@ -158,7 +161,7 @@ async function ensureFgMaterialForConfig(
     .insert({
       pace_code: newPaceCode,
       external_code: skuString,
-      material_name: humanName || materialName,
+      material_name: humanName || skuString,
       short_name: shortName,
       material_type: "FG",
       base_uom_code: "KG",
@@ -350,7 +353,7 @@ export async function listApprovedProdshadesHandler(req: Request, ctx: ProdHandl
     const { data: materials, error: matErr } = await serviceRoleClient
       .schema("erp_master")
       .from("material_master")
-      .select("id, shade_code, material_name, external_code")
+      .select("id, shade_code, material_name, document_name, external_code")
       .in("id", materialIds);
     if (matErr) {
       console.error("[pack_config.listApprovedProdshades] material query failed:", JSON.stringify(matErr));
@@ -362,9 +365,10 @@ export async function listApprovedProdshadesHandler(req: Request, ctx: ProdHandl
         material_id: String(m.id),
         shade_code: normalizeNullableString(m.shade_code),
         material_name: normalizeNullableString(m.material_name),
+        document_name: normalizeNullableString(m.document_name),
         external_code: normalizeNullableString(m.external_code),
       }))
-      .sort((a, b) => a.shade_code.localeCompare(b.shade_code));
+      .sort((a, b) => a.external_code.localeCompare(b.external_code));
 
     return okResponse({ data: items }, ctx.request_id, req);
   } catch (err) {
@@ -408,7 +412,7 @@ export async function listPackConfigsHandler(req: Request, ctx: ProdHandlerConte
       const { data: mats, error: matErr } = await serviceRoleClient
         .schema("erp_master")
         .from("material_master")
-        .select("id, shade_code, material_name, external_code")
+        .select("id, shade_code, material_name, document_name, external_code, production_mode")
         .in("id", matIds);
       if (matErr) {
         console.error("[pack_config.listPackConfigs] material query failed:", JSON.stringify(matErr));
@@ -421,14 +425,18 @@ export async function listPackConfigsHandler(req: Request, ctx: ProdHandlerConte
       const material = (matMap.get(String(row.material_id ?? "")) ?? {}) as JsonRecord;
       const packCode = (row.pack_code ?? {}) as JsonRecord;
       const skuString = buildFgSku(
-        normalizeNullableString(material.shade_code),
+        normalizeNullableString(material.external_code),
         normalizeNullableString(packCode.pack_code),
         normalizeNullableString(row.variant),
       );
+      const prodshadeDescription = normalizeNullableString(material.document_name ?? material.material_name);
+      const prodMode = normalizeNullableString(material.production_mode);
+      const isMtoOrHps = prodMode === "LIQUID_ADMIX" || prodMode === "LIQUID_HPS";
       return {
         ...row,
-        prodshade_display: normalizeNullableString(material.shade_code) || null,
+        prodshade_display: normalizeNullableString(material.external_code) || normalizeNullableString(material.shade_code) || null,
         fg_sku: skuString || null,
+        fg_material_name: isMtoOrHps ? (skuString || null) : (prodshadeDescription || skuString || null),
       };
     });
 

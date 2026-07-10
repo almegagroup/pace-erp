@@ -48,8 +48,11 @@ function getErrorMessage(error) {
 
 function prodshadeLabel(prodshade) {
   if (!prodshade) return "";
+  const externalCode = String(prodshade.external_code ?? "").trim();
   const shadeCode = String(prodshade.shade_code ?? "").trim();
-  const materialName = String(prodshade.material_name ?? "").trim();
+  const materialName = String(prodshade.document_name ?? prodshade.material_name ?? "").trim();
+  if (externalCode && materialName) return `${externalCode} — ${materialName}`;
+  if (externalCode) return externalCode;
   if (shadeCode && materialName) return `${shadeCode} — ${materialName}`;
   if (shadeCode) return shadeCode;
   if (materialName) return materialName;
@@ -423,6 +426,7 @@ export default function SAPackCodeMasterPage() {
                     <th className="border-b px-3 py-2 text-right">Fill Qty</th>
                     <th className="border-b px-3 py-2 text-left">BOM Required</th>
                     <th className="border-b px-3 py-2 text-left">FG SKU</th>
+                    <th className="border-b px-3 py-2 text-left">FG Material Name</th>
                     <th className="border-b px-3 py-2 text-left">Status</th>
                     <th className="border-b px-3 py-2 text-center">Delete</th>
                   </tr>
@@ -445,6 +449,7 @@ export default function SAPackCodeMasterPage() {
                         )}
                       </td>
                       <td className="px-3 py-2 font-mono text-slate-700">{cfg.fg_sku || "—"}</td>
+                      <td className="px-3 py-2 text-slate-700">{cfg.fg_material_name || "—"}</td>
                       <td className="px-3 py-2">
                         {cfg.active !== false ? (
                           <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Active</span>

@@ -21,10 +21,10 @@ import {
   listStrokeMasters, getStrokeMaster, updateStrokeMaster,
   approveStrokeMaster, revertStrokeMaster, rejectStrokeMaster, deactivateStrokeMaster,
 } from "./prodApi.js";
-import { listUoms, listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, listStorageLocations } from "../om/omApi.js";
+import { listUoms, listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
 import {
   PO_TYPE_OPTIONS_BY_MATERIAL_TYPE, friendlyStrokeErr, dosageSumOf, Field,
-  StrokeLinesEditor, GroupCreateModal,
+  StrokeLinesEditor, GroupCreateModal, MemberAddModal,
 } from "./strokeShared.jsx";
 
 const STATUS_COLORS = {
@@ -52,6 +52,8 @@ export default function StrokeApprovalPage() {
 
   const [groupModal, setGroupModal] = useState(null);
   const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
+  const [memberModal, setMemberModal] = useState(null);
+  const [memberMaterialId, setMemberMaterialId] = useState("");
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -136,6 +138,17 @@ export default function StrokeApprovalPage() {
       toast("Material group created.");
       groupModal?.onCreated?.(newGroup.id);
       setGroupModal(null);
+    } catch (err) { toast(friendlyStrokeErr(err.code) || err.message, "error"); }
+  }
+
+  async function handleAddMember() {
+    if (!memberMaterialId) { toast("Select a material first.", "error"); return; }
+    try {
+      await addMaterialCategoryMember({ group_id: memberModal, material_id: memberMaterialId });
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Member added.");
+      setMemberModal(null);
+      setMemberMaterialId("");
     } catch (err) { toast(friendlyStrokeErr(err.code) || err.message, "error"); }
   }
 
@@ -398,6 +411,7 @@ export default function StrokeApprovalPage() {
                                 groups={groups}
                                 storageLocationOptions={storageLocationOptions}
                                 onCreateGroup={openCreateGroupModal}
+                                onAddMember={(groupId) => setMemberModal(groupId)}
                                 disabled={s.status !== "DRAFT"}
                               />
 
@@ -464,6 +478,15 @@ export default function StrokeApprovalPage() {
         setGroupForm={setGroupForm}
         onCancel={() => setGroupModal(null)}
         onCreate={handleCreateGroup}
+      />
+
+      <MemberAddModal
+        open={Boolean(memberModal)}
+        memberMaterialId={memberMaterialId}
+        setMemberMaterialId={setMemberMaterialId}
+        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
+        onCancel={() => setMemberModal(null)}
+        onAdd={handleAddMember}
       />
 
     </ErpScreenScaffold>

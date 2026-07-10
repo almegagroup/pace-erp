@@ -25,11 +25,11 @@ import {
   updateStrokeMaster, approveStrokeMaster, revertStrokeMaster,
   rejectStrokeMaster, deactivateStrokeMaster,
 } from "./prodApi.js";
-import { listCompaniesForOm, listMaterials, listUoms, listMaterialCategoryGroups, createMaterialCategoryGroup, listStorageLocations } from "../om/omApi.js";
+import { listCompaniesForOm, listMaterials, listUoms, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
 import {
   MATERIAL_TYPE_OPTIONS, PO_TYPE_OPTIONS_BY_MATERIAL_TYPE, EMPTY_LINE,
   friendlyStrokeErr, dosageSumOf, renderDrawerActions, Field,
-  StrokeLinesEditor, GroupCreateModal,
+  StrokeLinesEditor, GroupCreateModal, MemberAddModal,
 } from "./strokeShared.jsx";
 
 const STATUS_BADGE = {
@@ -63,6 +63,8 @@ export default function StrokeMasterPage() {
   // Inline "create group" mini-form state
   const [groupModal, setGroupModal] = useState(null); // { onCreated } | null
   const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
+  const [memberModal, setMemberModal] = useState(null); // groupId | null
+  const [memberMaterialId, setMemberMaterialId] = useState("");
 
   const firstInputRef = useRef(null);
 
@@ -158,6 +160,17 @@ export default function StrokeMasterPage() {
       toast("Material group created.");
       groupModal?.onCreated?.(newGroup.id);
       setGroupModal(null);
+    } catch (err) { toast(friendlyErr(err.code) || err.message, "error"); }
+  }
+
+  async function handleAddMember() {
+    if (!memberMaterialId) { toast("Select a material first.", "error"); return; }
+    try {
+      await addMaterialCategoryMember({ group_id: memberModal, material_id: memberMaterialId });
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Member added.");
+      setMemberModal(null);
+      setMemberMaterialId("");
     } catch (err) { toast(friendlyErr(err.code) || err.message, "error"); }
   }
 
@@ -396,6 +409,7 @@ export default function StrokeMasterPage() {
             groups={groups}
             storageLocationOptions={storageLocationOptions}
             onCreateGroup={openCreateGroupModal}
+            onAddMember={(groupId) => setMemberModal(groupId)}
           />
         </form>
       </DrawerBase>
@@ -450,6 +464,7 @@ export default function StrokeMasterPage() {
                 groups={groups}
                 storageLocationOptions={storageLocationOptions}
                 onCreateGroup={openCreateGroupModal}
+                onAddMember={(groupId) => setMemberModal(groupId)}
               />
             ) : (
               <div>
@@ -500,6 +515,15 @@ export default function StrokeMasterPage() {
         setGroupForm={setGroupForm}
         onCancel={() => setGroupModal(null)}
         onCreate={handleCreateGroup}
+      />
+
+      <MemberAddModal
+        open={Boolean(memberModal)}
+        memberMaterialId={memberMaterialId}
+        setMemberMaterialId={setMemberMaterialId}
+        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
+        onCancel={() => setMemberModal(null)}
+        onAdd={handleAddMember}
       />
 
     </ErpScreenScaffold>

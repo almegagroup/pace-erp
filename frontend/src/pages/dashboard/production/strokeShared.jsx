@@ -101,7 +101,7 @@ function getGroupAlternateLabels(selectedGroup, currentMaterialId, materialLabel
     });
 }
 
-export function StrokeLinesEditor({ lines, setLines, materialsByType, groups, storageLocationOptions, onCreateGroup, disabled }) {
+export function StrokeLinesEditor({ lines, setLines, materialsByType, groups, storageLocationOptions, onCreateGroup, onAddMember, disabled }) {
   function addLine() { setLines((l) => [...l, { ...EMPTY_LINE }]); }
   function removeLine(i) { setLines((l) => l.filter((_, idx) => idx !== i)); }
   function updateLine(i, patch) {
@@ -215,7 +215,15 @@ export function StrokeLinesEditor({ lines, setLines, materialsByType, groups, st
             {line.has_alternate && selectedGroup && (
               <div className="mt-1.5 pl-1 text-xs text-slate-500">
                 Alternates: {alternateLabels.length === 0 ? "No alternate members configured in PM04 yet." : alternateLabels.join(", ")}
-                <span className="ml-2 text-slate-400">Manage members in Material Group Master (PM04).</span>
+                {!disabled && (
+                  <button
+                    type="button"
+                    className="text-sky-600 hover:text-sky-800 underline ml-2"
+                    onClick={() => onAddMember(selectedGroup.id)}
+                  >
+                    + Add member
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -250,6 +258,31 @@ export function GroupCreateModal({ open, groupForm, setGroupForm, onCancel, onCr
       <div className="flex justify-end gap-2 mt-1">
         <button type="button" className="text-xs text-slate-500 px-3 py-1" onClick={onCancel}>Cancel</button>
         <button type="button" className="text-xs bg-sky-600 text-white rounded px-3 py-1" onClick={onCreate}>Create</button>
+      </div>
+    </BlockingLayer>
+  );
+}
+
+export function MemberAddModal({ open, memberMaterialId, setMemberMaterialId, materialOptions, onCancel, onAdd }) {
+  return (
+    <BlockingLayer
+      visible={open}
+      onEscape={onCancel}
+      overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
+      dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 320, display: "flex", flexDirection: "column", gap: 12 }}
+    >
+      <p className="text-sm font-semibold text-slate-700">Add Alternate Member</p>
+      <Field label="Material">
+        <ErpComboboxField
+          value={memberMaterialId}
+          onChange={setMemberMaterialId}
+          options={materialOptions}
+          placeholder="Type to search..."
+        />
+      </Field>
+      <div className="flex justify-end gap-2 mt-1">
+        <button type="button" className="text-xs text-slate-500 px-3 py-1" onClick={onCancel}>Cancel</button>
+        <button type="button" className="text-xs bg-sky-600 text-white rounded px-3 py-1" onClick={onAdd}>Add</button>
       </div>
     </BlockingLayer>
   );
