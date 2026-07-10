@@ -38,11 +38,21 @@ function normalizeNullableNumber(value: unknown): string {
   return Number.isFinite(n) ? String(n) : "";
 }
 
+function usesSkuAsFgName(productionMode: unknown): boolean {
+  const normalized = normalizeNullableString(productionMode).toUpperCase();
+  return normalized === "MTO"
+    || normalized === "HPS"
+    || normalized === "MTEST"
+    || normalized === "LIQUID_ADMIX"
+    || normalized === "LIQUID_HPS";
+}
+
 function buildFgSku(prodshadeCode: string, packCode: string, variant: string): string {
-  const base = `${normalizeNullableString(prodshadeCode)}${normalizeNullableString(packCode)}`;
-  const normalizedVariant = normalizeNullableString(variant);
-  if (!base) return "";
-  return normalizedVariant ? `${base}-${normalizedVariant}` : base;
+  return [
+    normalizeNullableString(prodshadeCode),
+    normalizeNullableString(packCode),
+    normalizeNullableString(variant),
+  ].join("");
 }
 
 async function resolvePackCodeRow(packCodeId: string): Promise<JsonRecord | null> {
@@ -148,11 +158,9 @@ async function ensureFgMaterialForConfig(
 
   const nextNum = (fgCountResult.count ?? 0) + 1;
   const newPaceCode = `FG-${String(nextNum).padStart(5, "0")}`;
-  const packCodeDesc = normalizeNullableString(packCodeRow.description ?? packCodeRow.pack_name ?? packCode);
-
-  const isMtoOrHps = prodMode === "LIQUID_ADMIX" || prodMode === "LIQUID_HPS";
-  const humanName = isMtoOrHps ? skuString : (prodshadeDescription || skuString);
-  const docName = isMtoOrHps ? (prodshadeDescription || packCodeDesc || skuString) : skuString;
+  const useSkuName = usesSkuAsFgName(prodMode);
+  const humanName = useSkuName ? skuString : (prodshadeDescription || skuString);
+  const docName = useSkuName ? (prodshadeDescription || null) : skuString;
   const shortName = skuString.length > 50 ? skuString.slice(0, 50) : skuString;
 
   const { data: newFg, error: fgInsertErr } = await serviceRoleClient
@@ -430,13 +438,12 @@ export async function listPackConfigsHandler(req: Request, ctx: ProdHandlerConte
         normalizeNullableString(row.variant),
       );
       const prodshadeDescription = normalizeNullableString(material.document_name ?? material.material_name);
-      const prodMode = normalizeNullableString(material.production_mode);
-      const isMtoOrHps = prodMode === "LIQUID_ADMIX" || prodMode === "LIQUID_HPS";
+      const useSkuName = usesSkuAsFgName(material.production_mode);
       return {
         ...row,
         prodshade_display: normalizeNullableString(material.external_code) || normalizeNullableString(material.shade_code) || null,
         fg_sku: skuString || null,
-        fg_material_name: isMtoOrHps ? (skuString || null) : (prodshadeDescription || skuString || null),
+        fg_material_name: useSkuName ? (skuString || null) : (prodshadeDescription || skuString || null),
       };
     });
 
