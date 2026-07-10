@@ -1896,7 +1896,7 @@ export default function MenuShell() {
           position: "fixed",
           inset: 0,
           background: "rgba(15, 23, 42, 0.22)",
-          zIndex: 999998,
+          zIndex: 1003000,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",

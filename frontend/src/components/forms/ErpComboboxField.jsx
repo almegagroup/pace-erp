@@ -60,6 +60,7 @@ export default function ErpComboboxField({
   hideBlank = false,
   inputProps = {},
   disabled = false,
+  dropdownZIndex = 1000200,
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -249,7 +250,7 @@ export default function ErpComboboxField({
           <ul
             ref={listRef}
             role="listbox"
-            style={{ position: "fixed", top: panelRect.top, left: panelRect.left, width: panelRect.width, zIndex: 1000050 }}
+            style={{ position: "fixed", top: panelRect.top, left: panelRect.left, width: panelRect.width, zIndex: dropdownZIndex }}
             className="max-h-48 overflow-y-auto border border-slate-400 bg-white shadow-md"
           >
             {filtered.map((opt, idx) => (
@@ -283,7 +284,7 @@ export default function ErpComboboxField({
       {open && panelRect && filtered.length === 0 &&
         createPortal(
           <div
-            style={{ position: "fixed", top: panelRect.top, left: panelRect.left, width: panelRect.width, zIndex: 1000050 }}
+            style={{ position: "fixed", top: panelRect.top, left: panelRect.left, width: panelRect.width, zIndex: dropdownZIndex }}
             className="border border-slate-400 bg-white px-2 py-2 text-xs text-slate-400 shadow-md"
           >
             {emptyStateLabel}
