@@ -13,6 +13,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -269,9 +270,12 @@ export async function listStrokeMastersHandler(
     }
 
     const rows = (data ?? []) as JsonRecord[];
-    const [materialMap, slocMap] = await Promise.all([
+    const [materialMap, slocMap, userDisplayMap] = await Promise.all([
       getMaterialMapByIds(rows.map((r) => String(r.prodshade_material_id ?? ""))),
       getStorageLocationMapByIds(rows.map((r) => String(r.default_storage_location_id ?? ""))),
+      resolveUserDisplayNames(rows.flatMap((r) => [
+        String(r.created_by ?? ""), String(r.approved_by ?? ""), String(r.deactivated_by ?? ""),
+      ])),
     ]);
 
     return okResponse({
@@ -279,6 +283,9 @@ export async function listStrokeMastersHandler(
         ...row,
         material: materialMap.get(String(row.prodshade_material_id ?? "")) ?? null,
         default_storage_location: slocMap.get(String(row.default_storage_location_id ?? "")) ?? null,
+        created_by_display: userDisplayMap.get(String(row.created_by ?? "")) ?? null,
+        approved_by_display: userDisplayMap.get(String(row.approved_by ?? "")) ?? null,
+        deactivated_by_display: userDisplayMap.get(String(row.deactivated_by ?? "")) ?? null,
       })),
     }, ctx.request_id, req);
   } catch (err) {
@@ -330,7 +337,7 @@ export async function getStrokeMasterHandler(
     }
     const lines = (lineRows ?? []) as JsonRecord[];
 
-    const [materialMap, groupMap, slocMap] = await Promise.all([
+    const [materialMap, groupMap, slocMap, userDisplayMap] = await Promise.all([
       getMaterialMapByIds([
         String(stroke.prodshade_material_id ?? ""),
         ...lines.map((l) => String(l.material_id ?? "")),
@@ -340,6 +347,9 @@ export async function getStrokeMasterHandler(
         String(stroke.default_storage_location_id ?? ""),
         ...lines.map((l) => String(l.default_storage_location_id ?? "")),
       ]),
+      resolveUserDisplayNames([
+        String(stroke.created_by ?? ""), String(stroke.approved_by ?? ""), String(stroke.deactivated_by ?? ""),
+      ]),
     ]);
 
     return okResponse({
@@ -347,6 +357,9 @@ export async function getStrokeMasterHandler(
         ...stroke,
         material: materialMap.get(String(stroke.prodshade_material_id ?? "")) ?? null,
         default_storage_location: slocMap.get(String(stroke.default_storage_location_id ?? "")) ?? null,
+        created_by_display: userDisplayMap.get(String(stroke.created_by ?? "")) ?? null,
+        approved_by_display: userDisplayMap.get(String(stroke.approved_by ?? "")) ?? null,
+        deactivated_by_display: userDisplayMap.get(String(stroke.deactivated_by ?? "")) ?? null,
         lines: lines.map((l) => ({
           ...l,
           material: materialMap.get(String(l.material_id ?? "")) ?? null,
@@ -526,6 +539,16 @@ export async function updateStrokeMasterHandler(
     };
     if (body.default_storage_location_id !== undefined) {
       patch.default_storage_location_id = toTrimmedString(body.default_storage_location_id) || null;
+    }
+    // PO Type is editable up to Approve (only Material Type / Prodshade / Stroke
+    // Number are locked once a Stroke exists).
+    if (body.po_type !== undefined) {
+      const poType = toUpperTrimmedString(body.po_type);
+      const materialType = existing.material_type as string;
+      if (!poType || !PO_TYPES_BY_MATERIAL_TYPE[materialType].has(poType)) {
+        return strokeError(req, ctx, "PROD_STROKE_PO_TYPE_INVALID", 400, `po_type must be one of ${[...PO_TYPES_BY_MATERIAL_TYPE[materialType]].join(", ")} for material_type ${materialType}`);
+      }
+      patch.po_type = poType;
     }
     // Prod/Shade code can still be corrected while the Material Master hasn't
     // been created yet (new-Prodshade strokes, prodshade_material_id still null).
