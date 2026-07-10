@@ -38,6 +38,37 @@ function poErr(req: Request, ctx: ProdHandlerContext, code: string, status: numb
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
 }
 
+function createdOkResponse(data: unknown, requestId: string, req?: Request): Response {
+  const response = okResponse(data, requestId, req);
+  return new Response(response.body, { status: 201, headers: response.headers });
+}
+
+async function getMaterialMapByIds(
+  materialIds: string[],
+  logPrefix: string,
+  errorCode: string,
+  selectColumns: string,
+): Promise<Map<string, JsonRecord>> {
+  const matIds = [...new Set(materialIds.filter(Boolean))];
+  const matMap = new Map<string, JsonRecord>();
+  if (matIds.length === 0) return matMap;
+
+  const { data: mats, error: matErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select(selectColumns)
+    .in("id", matIds);
+  if (matErr) {
+    console.error(`${logPrefix} material query failed:`, JSON.stringify(matErr));
+    throw new Error(errorCode);
+  }
+
+  for (const mat of (mats ?? []) as JsonRecord[]) {
+    matMap.set(String(mat.id), mat);
+  }
+  return matMap;
+}
+
 async function fetchProcessOrder(id: string): Promise<JsonRecord | null> {
   const { data, error } = await serviceRoleClient
     .schema("erp_production").from("process_order")
@@ -47,16 +78,31 @@ async function fetchProcessOrder(id: string): Promise<JsonRecord | null> {
 }
 
 async function fetchOrderLines(orderId: string): Promise<JsonRecord[]> {
-  const { data } = await serviceRoleClient
+  const { data, error } = await serviceRoleClient
     .schema("erp_production").from("process_order_line")
     .select(`
       id, material_id, planned_qty, actual_qty, uom_code,
-      issue_sloc_id, is_rm, display_order, stock_ledger_id,
-      material:erp_master.material_master!material_id(id, pace_code, material_name, base_uom_code, production_mode)
+      issue_sloc_id, is_rm, display_order, stock_ledger_id
     `)
     .eq("process_order_id", orderId)
     .order("display_order");
-  return (data ?? []) as JsonRecord[];
+  if (error) {
+    console.error("[process_order.fetchOrderLines] line query failed:", JSON.stringify(error));
+    throw new Error("PROD_PO_FETCH_FAILED");
+  }
+
+  const lines = (data ?? []) as JsonRecord[];
+  const materialMap = await getMaterialMapByIds(
+    lines.map((line) => String(line.material_id ?? "")),
+    "[process_order.fetchOrderLines]",
+    "PROD_PO_FETCH_FAILED",
+    "id, pace_code, material_name, base_uom_code, production_mode",
+  );
+
+  return lines.map((line) => ({
+    ...line,
+    material: materialMap.get(String(line.material_id ?? "")) ?? null,
+  }));
 }
 
 // Returns UNRESTRICTED balance per material in a company.
@@ -188,21 +234,39 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
         material_id, stroke_master_id, batch_number,
         planned_qty, actual_qty, status,
         qa_decided_by, qa_decided_at,
-        batch_started_at, finalized_at, verified_at, created_by, created_at,
-        material:erp_master.material_master!material_id(id, pace_code, material_name, shade_code)
+        batch_started_at, finalized_at, verified_at, created_by, created_at
       `, { count: "exact" })
-      .order("created_at", { ascending: false })
-      .range((page - 1) * perPage, page * perPage - 1);
+      .order("created_at", { ascending: false });
 
     if (companyId) query = query.eq("company_id", companyId);
     if (status) query = query.eq("status", status);
     if (poType) query = query.eq("po_type", poType);
 
-    const { data, error, count } = await query;
-    if (error) throw new Error("PROD_PO_LIST_FAILED");
+    const { data, error, count } = await ((query as typeof query & {
+      range: (from: number, to: number) => typeof query;
+    }).range((page - 1) * perPage, page * perPage - 1)) as {
+      data: unknown;
+      error: unknown;
+      count?: number;
+    };
+    if (error) {
+      console.error("[process_order.listProcessOrders] query failed:", JSON.stringify(error));
+      throw new Error("PROD_PO_LIST_FAILED");
+    }
+
+    const rows = (data ?? []) as JsonRecord[];
+    const materialMap = await getMaterialMapByIds(
+      rows.map((row) => String(row.material_id ?? "")),
+      "[process_order.listProcessOrders]",
+      "PROD_PO_LIST_FAILED",
+      "id, pace_code, material_name, shade_code",
+    );
 
     return okResponse({
-      data: data ?? [],
+      data: rows.map((row) => ({
+        ...row,
+        material: materialMap.get(String(row.material_id ?? "")) ?? null,
+      })),
       pagination: { page, per_page: perPage, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / perPage) },
     }, ctx.request_id, req);
   } catch (err) {
@@ -221,14 +285,24 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
     const { data: po, error } = await serviceRoleClient
       .schema("erp_production").from("process_order")
       .select(`
-        *, material:erp_master.material_master!material_id(id, pace_code, material_name, shade_code),
+        *,
         stroke:stroke_master!stroke_master_id(id, stroke_number, description, status)
       `)
       .eq("id", id).maybeSingle();
 
-    if (error) throw new Error("PROD_PO_FETCH_FAILED");
+    if (error) {
+      console.error("[process_order.getProcessOrder] query failed:", JSON.stringify(error));
+      throw new Error("PROD_PO_FETCH_FAILED");
+    }
     if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Process order not found");
 
+    const poRow = po as JsonRecord;
+    const materialMap = await getMaterialMapByIds(
+      [String(poRow.material_id ?? "")],
+      "[process_order.getProcessOrder]",
+      "PROD_PO_FETCH_FAILED",
+      "id, pace_code, material_name, shade_code",
+    );
     const lines = await fetchOrderLines(id);
     const { data: packOrders } = await serviceRoleClient
       .schema("erp_production").from("packing_order")
@@ -236,7 +310,14 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
       .eq("process_order_id", id)
       .neq("status", "REVERSED");
 
-    return okResponse({ data: { ...(po as JsonRecord), lines, packing_orders: packOrders ?? [] } }, ctx.request_id, req);
+    return okResponse({
+      data: {
+        ...poRow,
+        material: materialMap.get(String(poRow.material_id ?? "")) ?? null,
+        lines,
+        packing_orders: packOrders ?? [],
+      },
+    }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PO_FETCH_FAILED";
     return poErr(req, ctx, code, 500, "Process order fetch failed");
@@ -368,7 +449,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       await serviceRoleClient.schema("erp_production").from("process_order_line").insert(manualRows);
     }
 
-    return okResponse({ id: poId, po_number: poNumber }, ctx.request_id, req, 201);
+    return createdOkResponse({ id: poId, po_number: poNumber }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PO_CREATE_FAILED";
     return poErr(req, ctx, code, 500, `Process order create failed: ${err instanceof Error ? err.message : ""}`);
@@ -751,7 +832,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
     // Cannot reverse if active packing orders exist
     const { count } = await serviceRoleClient.schema("erp_production").from("packing_order")
       .select("id", { count: "exact", head: true })
-      .eq("process_order_id", id).neq("status", "REVERSED");
+      .eq("process_order_id", id).neq("status", "REVERSED") as { count?: number };
     if ((count ?? 0) > 0) {
       return poErr(req, ctx, "PROD_PO_HAS_PACKING_ORDERS", 422, "Reverse all Packing Orders first");
     }

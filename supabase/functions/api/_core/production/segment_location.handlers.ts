@@ -20,10 +20,37 @@ import {
   toUpperTrimmedString,
 } from "./production.shared.ts";
 
+type JsonRecord = Record<string, unknown>;
+
 const VALID_SEGMENTS = new Set(["ADMIX","HPS","IWC","POWDER","INT"]);
 
 function segErr(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
+}
+
+async function getStorageLocationMapByIds(
+  locationIds: string[],
+  logPrefix: string,
+  errorCode: string,
+): Promise<Map<string, JsonRecord>> {
+  const ids = [...new Set(locationIds.filter(Boolean))];
+  const slocMap = new Map<string, JsonRecord>();
+  if (ids.length === 0) return slocMap;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_master")
+    .select("id, code, name")
+    .in("id", ids);
+  if (error) {
+    console.error(`${logPrefix} storage location query failed:`, JSON.stringify(error));
+    throw new Error(errorCode);
+  }
+
+  for (const row of (data ?? []) as JsonRecord[]) {
+    slocMap.set(String(row.id), row);
+  }
+  return slocMap;
 }
 
 // GET /api/production/segment-locations?company_id=
@@ -37,17 +64,37 @@ export async function listSegmentLocationsHandler(req: Request, ctx: ProdHandler
       .schema("erp_production").from("production_segment_location_config")
       .select(`
         id, company_id, segment_code, active, created_at, last_updated_at,
-        rm_sloc:erp_inventory.storage_location_master!rm_sloc_id(id, code, name),
-        pm_sloc:erp_inventory.storage_location_master!pm_sloc_id(id, code, name),
-        shopfloor_sloc:erp_inventory.storage_location_master!shopfloor_sloc_id(id, code, name),
-        fg_sloc:erp_inventory.storage_location_master!fg_sloc_id(id, code, name)
+        rm_sloc_id, pm_sloc_id, shopfloor_sloc_id, fg_sloc_id
       `)
       .order("segment_code");
 
     if (companyId) query = query.eq("company_id", companyId);
     const { data, error } = await query;
-    if (error) throw new Error("PROD_SEG_LOC_LIST_FAILED");
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+    if (error) {
+      console.error("[segment_location.listSegmentLocations] query failed:", JSON.stringify(error));
+      throw new Error("PROD_SEG_LOC_LIST_FAILED");
+    }
+
+    const rows = (data ?? []) as JsonRecord[];
+    const slocMap = await getStorageLocationMapByIds(
+      rows.flatMap((row) => [
+        String(row.rm_sloc_id ?? ""),
+        String(row.pm_sloc_id ?? ""),
+        String(row.shopfloor_sloc_id ?? ""),
+        String(row.fg_sloc_id ?? ""),
+      ]),
+      "[segment_location.listSegmentLocations]",
+      "PROD_SEG_LOC_LIST_FAILED",
+    );
+    return okResponse({
+      data: rows.map((row) => ({
+        ...row,
+        rm_sloc: slocMap.get(String(row.rm_sloc_id ?? "")) ?? null,
+        pm_sloc: slocMap.get(String(row.pm_sloc_id ?? "")) ?? null,
+        shopfloor_sloc: slocMap.get(String(row.shopfloor_sloc_id ?? "")) ?? null,
+        fg_sloc: slocMap.get(String(row.fg_sloc_id ?? "")) ?? null,
+      })),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_SEG_LOC_LIST_FAILED";
     return segErr(req, ctx, code, 500, "Segment location list failed");

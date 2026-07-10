@@ -31,6 +31,36 @@ function foErr(req: Request, ctx: ProdHandlerContext, code: string, status: numb
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
 }
 
+function createdOkResponse(data: unknown, requestId: string, req?: Request): Response {
+  const response = okResponse(data, requestId, req);
+  return new Response(response.body, { status: 201, headers: response.headers });
+}
+
+async function getMaterialMapByIds(
+  materialIds: string[],
+  logPrefix: string,
+  errorCode: string,
+): Promise<Map<string, JsonRecord>> {
+  const matIds = [...new Set(materialIds.filter(Boolean))];
+  const matMap = new Map<string, JsonRecord>();
+  if (matIds.length === 0) return matMap;
+
+  const { data: mats, error: matErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("id, pace_code, material_name")
+    .in("id", matIds);
+  if (matErr) {
+    console.error(`${logPrefix} material query failed:`, JSON.stringify(matErr));
+    throw new Error(errorCode);
+  }
+
+  for (const mat of (mats ?? []) as JsonRecord[]) {
+    matMap.set(String(mat.id), mat);
+  }
+  return matMap;
+}
+
 // GET /api/production/plan-feed?company_id=&status=&party_id=&page=&per_page=
 export async function listPlanFeedHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
@@ -47,22 +77,39 @@ export async function listPlanFeedHandler(req: Request, ctx: ProdHandlerContext)
       .select(`
         id, company_id, fo_number, party_id, party_name, sku, material_id,
         description, ordered_qty_kg, pack_qty, order_date,
-        scheduled_delivery_date, status, cancelled_at, created_by, created_at, last_updated_at,
-        material:erp_master.material_master!material_id(id, pace_code, material_name)
+        scheduled_delivery_date, status, cancelled_at, created_by, created_at, last_updated_at
       `, { count: "exact" })
       .order("order_date", { ascending: false })
-      .order("scheduled_delivery_date")
-      .range((page - 1) * perPage, page * perPage - 1);
+      .order("scheduled_delivery_date");
 
     if (companyId) query = query.eq("company_id", companyId);
     if (status) query = query.eq("status", status);
     if (partyId) query = query.eq("party_id", partyId);
 
-    const { data, error, count } = await query;
-    if (error) throw new Error("PROD_PLAN_FEED_LIST_FAILED");
+    const { data, error, count } = await ((query as typeof query & {
+      range: (from: number, to: number) => typeof query;
+    }).range((page - 1) * perPage, page * perPage - 1)) as {
+      data: unknown;
+      error: unknown;
+      count?: number;
+    };
+    if (error) {
+      console.error("[plan_feed.listPlanFeed] query failed:", JSON.stringify(error));
+      throw new Error("PROD_PLAN_FEED_LIST_FAILED");
+    }
+
+    const rows = (data ?? []) as JsonRecord[];
+    const materialMap = await getMaterialMapByIds(
+      rows.map((row) => String(row.material_id ?? "")),
+      "[plan_feed.listPlanFeed]",
+      "PROD_PLAN_FEED_LIST_FAILED",
+    );
 
     return okResponse({
-      data: data ?? [],
+      data: rows.map((row) => ({
+        ...row,
+        material: materialMap.get(String(row.material_id ?? "")) ?? null,
+      })),
       pagination: { page, per_page: perPage, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / perPage) },
     }, ctx.request_id, req);
   } catch (err) {
@@ -80,15 +127,22 @@ export async function getPlanFeedHandler(req: Request, ctx: ProdHandlerContext):
 
     const { data, error } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
-      .select(`
-        *,
-        material:erp_master.material_master!material_id(id, pace_code, material_name)
-      `)
+      .select(`*`)
       .eq("id", id)
       .maybeSingle();
 
-    if (error) throw new Error("PROD_PLAN_FEED_FETCH_FAILED");
+    if (error) {
+      console.error("[plan_feed.getPlanFeed] query failed:", JSON.stringify(error));
+      throw new Error("PROD_PLAN_FEED_FETCH_FAILED");
+    }
     if (!data) return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, "FO not found");
+
+    const row = data as JsonRecord;
+    const materialMap = await getMaterialMapByIds(
+      [String(row.material_id ?? "")],
+      "[plan_feed.getPlanFeed]",
+      "PROD_PLAN_FEED_FETCH_FAILED",
+    );
 
     const { data: packingOrders } = await serviceRoleClient
       .schema("erp_production").from("packing_order")
@@ -99,7 +153,13 @@ export async function getPlanFeedHandler(req: Request, ctx: ProdHandlerContext):
       .eq("plan_feed_id", id)
       .neq("status", "REVERSED");
 
-    return okResponse({ data: { ...(data as JsonRecord), packing_orders: packingOrders ?? [] } }, ctx.request_id, req);
+    return okResponse({
+      data: {
+        ...row,
+        material: materialMap.get(String(row.material_id ?? "")) ?? null,
+        packing_orders: packingOrders ?? [],
+      },
+    }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_FETCH_FAILED";
     return foErr(req, ctx, code, 500, "Plan feed fetch failed");
@@ -156,7 +216,7 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
       }
       throw error;
     }
-    return okResponse({ id: (data as JsonRecord).id }, ctx.request_id, req, 201);
+    return createdOkResponse({ id: (data as JsonRecord).id }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_CREATE_FAILED";
     return foErr(req, ctx, code, 500, "Plan feed create failed");
@@ -184,7 +244,7 @@ export async function updatePlanFeedHandler(req: Request, ctx: ProdHandlerContex
     const { count } = await serviceRoleClient
       .schema("erp_production").from("packing_order")
       .select("id", { count: "exact", head: true })
-      .eq("plan_feed_id", id).neq("status", "REVERSED");
+      .eq("plan_feed_id", id).neq("status", "REVERSED") as { count?: number };
     if ((count ?? 0) > 0) {
       return foErr(req, ctx, "PROD_PLAN_FEED_LOCKED", 422, "FO is edit-locked — Packing Orders exist");
     }
@@ -231,7 +291,7 @@ export async function cancelPlanFeedHandler(req: Request, ctx: ProdHandlerContex
 
     const { count } = await serviceRoleClient.schema("erp_production").from("packing_order")
       .select("id", { count: "exact", head: true })
-      .eq("plan_feed_id", id).neq("status", "REVERSED");
+      .eq("plan_feed_id", id).neq("status", "REVERSED") as { count?: number };
     if ((count ?? 0) > 0) {
       return foErr(req, ctx, "PROD_PLAN_FEED_HAS_PACKING_ORDERS", 422,
         "Cannot cancel — delink all Packing Orders first");

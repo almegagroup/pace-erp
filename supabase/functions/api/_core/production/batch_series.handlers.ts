@@ -27,6 +27,36 @@ function batchError(req: Request, ctx: ProdHandlerContext, code: string, status:
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
 }
 
+function createdOkResponse(data: unknown, requestId: string, req?: Request): Response {
+  const response = okResponse(data, requestId, req);
+  return new Response(response.body, { status: 201, headers: response.headers });
+}
+
+async function getMaterialMapByIds(
+  materialIds: string[],
+  logPrefix: string,
+  errorCode: string,
+): Promise<Map<string, JsonRecord>> {
+  const matIds = [...new Set(materialIds.filter(Boolean))];
+  const matMap = new Map<string, JsonRecord>();
+  if (matIds.length === 0) return matMap;
+
+  const { data: mats, error: matErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("id, pace_code, material_name, shade_code")
+    .in("id", matIds);
+  if (matErr) {
+    console.error(`${logPrefix} material query failed:`, JSON.stringify(matErr));
+    throw new Error(errorCode);
+  }
+
+  for (const mat of (mats ?? []) as JsonRecord[]) {
+    matMap.set(String(mat.id), mat);
+  }
+  return matMap;
+}
+
 // GET /api/production/batch-series?company_id=
 export async function listBatchSeriesHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
@@ -38,17 +68,29 @@ export async function listBatchSeriesHandler(req: Request, ctx: ProdHandlerConte
       .schema("erp_production").from("batch_number_series")
       .select(`
         id, company_id, prodshade_material_id, batch_type, prefix,
-        current_count, fy_reset, active, created_at,
-        material:erp_master.material_master!prodshade_material_id(
-          id, pace_code, material_name, shade_code
-        )
+        current_count, fy_reset, active, created_at
       `)
       .order("batch_type").order("prefix");
 
     if (companyId) query = query.eq("company_id", companyId);
     const { data, error } = await query;
-    if (error) throw new Error("PROD_BATCH_SERIES_LIST_FAILED");
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+    if (error) {
+      console.error("[batch_series.listBatchSeries] query failed:", JSON.stringify(error));
+      throw new Error("PROD_BATCH_SERIES_LIST_FAILED");
+    }
+
+    const rows = (data ?? []) as JsonRecord[];
+    const materialMap = await getMaterialMapByIds(
+      rows.map((row) => String(row.prodshade_material_id ?? "")),
+      "[batch_series.listBatchSeries]",
+      "PROD_BATCH_SERIES_LIST_FAILED",
+    );
+    return okResponse({
+      data: rows.map((row) => ({
+        ...row,
+        material: materialMap.get(String(row.prodshade_material_id ?? "")) ?? null,
+      })),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BATCH_SERIES_LIST_FAILED";
     return batchError(req, ctx, code, 500, "Batch series list failed");
@@ -91,7 +133,7 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
       }
       throw error;
     }
-    return okResponse({ id: (data as JsonRecord).id }, ctx.request_id, req, 201);
+    return createdOkResponse({ id: (data as JsonRecord).id }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BATCH_SERIES_CREATE_FAILED";
     return batchError(req, ctx, code, 500, "Batch series create failed");

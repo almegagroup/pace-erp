@@ -2255,3 +2255,56 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Done in this pass (unblocks Pack Code Master):** rewrote `listApprovedProdshadesHandler` and `listPackConfigsHandler` in `pack_config.handlers.ts` to two-query batch joins (material embed removed, intra-schema `pack_code` embed kept).
 
 **Remaining (follow-up — Codex brief):** the other 24 embeds across 7 files. `stroke_master.handlers.ts` is being actively expanded by a concurrent session — coordinate / let that session fix its own file's embeds.
+---
+
+## Gate-27.2 - Cross-Schema Embed Removal Follow-Up
+
+**Task Brief:** `docs/Operation Management/implementation-specs/CODEX-GATE27.2-XSCHEMA-EMBED-TASK-BRIEF.md`
+**Status:** DONE
+**Date:** 2026-07-10
+
+**Implemented:**
+- Replaced all in-scope production cross-schema PostgREST embeds with batched two-query joins and reconstructed the original nested alias keys so frontend response shapes remain unchanged.
+- Left every same-schema embed in place (`pack_code`, `process_order`, `stroke`, `pack_bom`, `pack_bom_line`), and did not touch `stroke_master.handlers.ts` or `pack_config.handlers.ts` per brief.
+- Added `console.error(..., JSON.stringify(error))` before each new throw introduced by the cross-schema join path so PostgREST/Postgres failures are visible in logs.
+
+**Embeds fixed by file:**
+- `supabase/functions/api/_core/production/process_order.handlers.ts`
+  - `material:erp_master.material_master!material_id` in `fetchOrderLines`, `listProcessOrdersHandler`, `getProcessOrderHandler`
+- `supabase/functions/api/_core/production/packing_order.handlers.ts`
+  - `material:erp_master.material_master!material_id` in `listPackingOrdersHandler`, `getPackingOrderHandler`, `packing_order_line` fetch inside `getPackingOrderHandler`, `finalizePackingOrderHandler`, `reversePackingOrderHandler`
+- `supabase/functions/api/_core/production/pack_bom.handlers.ts`
+  - `sku:erp_master.material_master!sku_material_id` in `listPackBomsHandler`, `getPackBomHandler`, `listPackBomChangeRequestsHandler`
+  - `material:erp_master.material_master!material_id` in nested `pack_bom_line` fetch inside `getPackBomHandler`
+- `supabase/functions/api/_core/production/plan_feed.handlers.ts`
+  - `material:erp_master.material_master!material_id` in `listPlanFeedHandler`, `getPlanFeedHandler`
+- `supabase/functions/api/_core/production/stroke_change_request.handlers.ts`
+  - `material:erp_master.material_master!material_id` in nested `stroke_line` fetch inside `getStrokeChangeRequestHandler`
+  - `old_material:erp_master.material_master!old_material_id` and `new_material:erp_master.material_master!new_material_id` in `getStrokeChangeRequestHandler`
+- `supabase/functions/api/_core/production/batch_series.handlers.ts`
+  - `material:erp_master.material_master!prodshade_material_id` in `listBatchSeriesHandler`
+- `supabase/functions/api/_core/production/segment_location.handlers.ts`
+  - `rm_sloc`, `pm_sloc`, `shopfloor_sloc`, `fg_sloc` embeds from `erp_inventory.storage_location_master` in `listSegmentLocationsHandler`, replaced with one batched storage-location lookup keyed by the union of all four FK columns
+
+**Consumer field check:**
+- Re-checked consumer reads for the reconstructed aliases via repo grep. The response fields currently read by consumers remain present: `material.pace_code`, `material.material_name`, `material.base_uom_code`, `material.production_mode`, `sku.pace_code`, `sku.material_name`, `sku.pack_code`, `old_material.material_name`, `new_material.material_name`, and `*.code` for segment-location aliases.
+- No extra consumer-driven fields had to be added beyond the original embed column lists from the handlers.
+
+**Verification run:**
+- Cross-schema embed grep over the in-scope files is clean; remaining production cross-schema embeds are only in `stroke_master.handlers.ts`, which was intentionally left untouched.
+- `deno check` was run on each edited handler. After local cleanup of file-anchored query-builder/status-signature typing issues in these handlers, the remaining failures are only the known pre-existing shared typing errors in `supabase/functions/api/_shared/serviceRoleClient.ts`, `supabase/functions/api/_shared/canonical_access.ts`, and `supabase/functions/api/_pipeline/context.ts`.
+- Manual loop audit of the new code paths confirmed no new per-row awaited DB reads were introduced. Each related-table lookup is a single batched `.in(...)` fetch per target table per handler.
+
+**Files touched:**
+- `supabase/functions/api/_core/production/process_order.handlers.ts`
+- `supabase/functions/api/_core/production/packing_order.handlers.ts`
+- `supabase/functions/api/_core/production/pack_bom.handlers.ts`
+- `supabase/functions/api/_core/production/plan_feed.handlers.ts`
+- `supabase/functions/api/_core/production/stroke_change_request.handlers.ts`
+- `supabase/functions/api/_core/production/batch_series.handlers.ts`
+- `supabase/functions/api/_core/production/segment_location.handlers.ts`
+- `docs/Operation Management/implementation-specs/OM-IMPLEMENTATION-LOG.md`
+
+**Explicitly untouched:**
+- `supabase/functions/api/_core/production/stroke_master.handlers.ts`
+- `supabase/functions/api/_core/production/pack_config.handlers.ts`

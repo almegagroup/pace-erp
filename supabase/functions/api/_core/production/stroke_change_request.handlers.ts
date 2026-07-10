@@ -32,6 +32,36 @@ function crError(
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
 }
 
+function createdOkResponse(data: unknown, requestId: string, req?: Request): Response {
+  const response = okResponse(data, requestId, req);
+  return new Response(response.body, { status: 201, headers: response.headers });
+}
+
+async function getMaterialMapByIds(
+  materialIds: string[],
+  logPrefix: string,
+  errorCode: string,
+): Promise<Map<string, JsonRecord>> {
+  const matIds = [...new Set(materialIds.filter(Boolean))];
+  const matMap = new Map<string, JsonRecord>();
+  if (matIds.length === 0) return matMap;
+
+  const { data: mats, error: matErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("id, pace_code, material_name")
+    .in("id", matIds);
+  if (matErr) {
+    console.error(`${logPrefix} material query failed:`, JSON.stringify(matErr));
+    throw new Error(errorCode);
+  }
+
+  for (const mat of (mats ?? []) as JsonRecord[]) {
+    matMap.set(String(mat.id), mat);
+  }
+  return matMap;
+}
+
 // GET /api/production/stroke-change-requests
 export async function listStrokeChangeRequestsHandler(
   req: Request,
@@ -86,15 +116,17 @@ export async function getStrokeChangeRequestHandler(
         stroke:stroke_master!stroke_master_id(
           prodshade_material_id, stroke_number, description,
           lines:stroke_line(
-            id, material_id, alternate_material_id, dosage_pct, display_order,
-            material:erp_master.material_master!material_id(id, pace_code, material_name)
+            id, material_id, alternate_material_id, dosage_pct, display_order
           )
         )
       `)
       .eq("id", id)
       .maybeSingle();
 
-    if (error) throw new Error("PROD_SCR_FETCH_FAILED");
+    if (error) {
+      console.error("[stroke_change_request.getStrokeChangeRequest] query failed:", JSON.stringify(error));
+      throw new Error("PROD_SCR_FETCH_FAILED");
+    }
     if (!data) return crError(req, ctx, "PROD_SCR_NOT_FOUND", 404, "Change request not found");
 
     // Fetch change request lines with old/new material details
@@ -105,16 +137,47 @@ export async function getStrokeChangeRequestHandler(
         id, change_request_id, stroke_line_id, display_order,
         old_material_id, new_material_id,
         old_has_alternate, new_has_alternate,
-        old_group_id, new_group_id,
-        old_material:erp_master.material_master!old_material_id(id, pace_code, material_name),
-        new_material:erp_master.material_master!new_material_id(id, pace_code, material_name)
+        old_group_id, new_group_id
       `)
       .eq("change_request_id", id)
       .order("display_order");
 
-    if (lErr) throw new Error("PROD_SCR_LINES_FAILED");
+    if (lErr) {
+      console.error("[stroke_change_request.getStrokeChangeRequest] change line query failed:", JSON.stringify(lErr));
+      throw new Error("PROD_SCR_LINES_FAILED");
+    }
 
-    return okResponse({ data: { ...(data as JsonRecord), change_lines: lines ?? [] } }, ctx.request_id, req);
+    const row = data as JsonRecord;
+    const stroke = (row.stroke ?? null) as JsonRecord | null;
+    const strokeLines = ((stroke?.lines ?? []) as JsonRecord[]);
+    const changeLines = (lines ?? []) as JsonRecord[];
+    const materialMap = await getMaterialMapByIds(
+      [
+        ...strokeLines.map((line) => String(line.material_id ?? "")),
+        ...changeLines.map((line) => String(line.old_material_id ?? "")),
+        ...changeLines.map((line) => String(line.new_material_id ?? "")),
+      ],
+      "[stroke_change_request.getStrokeChangeRequest]",
+      "PROD_SCR_FETCH_FAILED",
+    );
+
+    return okResponse({
+      data: {
+        ...row,
+        stroke: stroke ? {
+          ...stroke,
+          lines: strokeLines.map((line) => ({
+            ...line,
+            material: materialMap.get(String(line.material_id ?? "")) ?? null,
+          })),
+        } : null,
+        change_lines: changeLines.map((line) => ({
+          ...line,
+          old_material: materialMap.get(String(line.old_material_id ?? "")) ?? null,
+          new_material: materialMap.get(String(line.new_material_id ?? "")) ?? null,
+        })),
+      },
+    }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_SCR_FETCH_FAILED";
     return crError(req, ctx, code, 500, "Stroke change request fetch failed");
@@ -166,7 +229,7 @@ export async function createStrokeChangeRequestHandler(
       .from("stroke_change_request")
       .select("id", { count: "exact", head: true })
       .eq("stroke_master_id", strokeMasterId)
-      .eq("status", "DRAFT");
+      .eq("status", "DRAFT") as { count?: number };
 
     if ((draftCount ?? 0) > 0) {
       return crError(req, ctx, "PROD_SCR_ALREADY_PENDING", 409, "A pending change request already exists for this stroke");
@@ -211,7 +274,7 @@ export async function createStrokeChangeRequestHandler(
 
     if (lErr) throw new Error("PROD_SCR_LINES_INSERT_FAILED");
 
-    return okResponse({ id: (cr as JsonRecord).id }, ctx.request_id, req, 201);
+    return createdOkResponse({ id: (cr as JsonRecord).id }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_SCR_CREATE_FAILED";
     return crError(req, ctx, code, 500, "Stroke change request create failed");

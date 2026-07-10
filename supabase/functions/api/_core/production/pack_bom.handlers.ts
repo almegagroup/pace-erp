@@ -33,6 +33,37 @@ function bomError(
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
 }
 
+function createdOkResponse(data: unknown, requestId: string, req?: Request): Response {
+  const response = okResponse(data, requestId, req);
+  return new Response(response.body, { status: 201, headers: response.headers });
+}
+
+async function getMaterialMapByIds(
+  materialIds: string[],
+  logPrefix: string,
+  errorCode: string,
+  selectColumns: string,
+): Promise<Map<string, JsonRecord>> {
+  const matIds = [...new Set(materialIds.filter(Boolean))];
+  const matMap = new Map<string, JsonRecord>();
+  if (matIds.length === 0) return matMap;
+
+  const { data: mats, error: matErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select(selectColumns)
+    .in("id", matIds);
+  if (matErr) {
+    console.error(`${logPrefix} material query failed:`, JSON.stringify(matErr));
+    throw new Error(errorCode);
+  }
+
+  for (const mat of (mats ?? []) as JsonRecord[]) {
+    matMap.set(String(mat.id), mat);
+  }
+  return matMap;
+}
+
 // ── PACK BOM ──────────────────────────────────────────────────────────────────
 
 // GET /api/production/pack-boms
@@ -50,10 +81,7 @@ export async function listPackBomsHandler(
       .schema("erp_production")
       .from("pack_bom")
       .select(`
-        id, sku_material_id, status, created_by, created_at, approved_by, approved_at,
-        sku:erp_master.material_master!sku_material_id(
-          id, pace_code, material_name, material_type, pack_code, shade_code
-        )
+        id, sku_material_id, status, created_by, created_at, approved_by, approved_at
       `)
       .order("created_at", { ascending: false });
 
@@ -61,8 +89,24 @@ export async function listPackBomsHandler(
     if (skuMaterialId) query = query.eq("sku_material_id", skuMaterialId);
 
     const { data, error } = await query;
-    if (error) throw new Error("PROD_BOM_LIST_FAILED");
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+    if (error) {
+      console.error("[pack_bom.listPackBoms] query failed:", JSON.stringify(error));
+      throw new Error("PROD_BOM_LIST_FAILED");
+    }
+
+    const rows = (data ?? []) as JsonRecord[];
+    const skuMap = await getMaterialMapByIds(
+      rows.map((row) => String(row.sku_material_id ?? "")),
+      "[pack_bom.listPackBoms]",
+      "PROD_BOM_LIST_FAILED",
+      "id, pace_code, material_name, material_type, pack_code, shade_code",
+    );
+    return okResponse({
+      data: rows.map((row) => ({
+        ...row,
+        sku: skuMap.get(String(row.sku_material_id ?? "")) ?? null,
+      })),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BOM_LIST_FAILED";
     return bomError(req, ctx, code, 500, "Pack BOM list failed");
@@ -84,20 +128,44 @@ export async function getPackBomHandler(
       .from("pack_bom")
       .select(`
         id, sku_material_id, status, created_by, created_at, approved_by, approved_at, reject_reason,
-        sku:erp_master.material_master!sku_material_id(
-          id, pace_code, material_name, material_type, pack_code, shade_code
-        ),
         lines:pack_bom_line(
-          id, pack_bom_id, line_type, material_id, qty, uom_code, has_alternate, material_group_id, display_order,
-          material:erp_master.material_master!material_id(id, pace_code, material_name, base_uom_code)
+          id, pack_bom_id, line_type, material_id, qty, uom_code, has_alternate, material_group_id, display_order
         )
       `)
       .eq("id", id)
       .maybeSingle();
 
-    if (error) throw new Error("PROD_BOM_FETCH_FAILED");
+    if (error) {
+      console.error("[pack_bom.getPackBom] query failed:", JSON.stringify(error));
+      throw new Error("PROD_BOM_FETCH_FAILED");
+    }
     if (!data) return bomError(req, ctx, "PROD_BOM_NOT_FOUND", 404, "Pack BOM not found");
-    return okResponse({ data }, ctx.request_id, req);
+
+    const bom = data as JsonRecord;
+    const lines = ((bom.lines ?? []) as JsonRecord[]);
+    const skuMap = await getMaterialMapByIds(
+      [String(bom.sku_material_id ?? "")],
+      "[pack_bom.getPackBom]",
+      "PROD_BOM_FETCH_FAILED",
+      "id, pace_code, material_name, material_type, pack_code, shade_code",
+    );
+    const lineMaterialMap = await getMaterialMapByIds(
+      lines.map((line) => String(line.material_id ?? "")),
+      "[pack_bom.getPackBom]",
+      "PROD_BOM_FETCH_FAILED",
+      "id, pace_code, material_name, base_uom_code",
+    );
+
+    return okResponse({
+      data: {
+        ...bom,
+        sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null,
+        lines: lines.map((line) => ({
+          ...line,
+          material: lineMaterialMap.get(String(line.material_id ?? "")) ?? null,
+        })),
+      },
+    }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BOM_FETCH_FAILED";
     return bomError(req, ctx, code, 500, "Pack BOM fetch failed");
@@ -139,7 +207,7 @@ export async function createPackBomHandler(
       .from("pack_bom")
       .select("id", { count: "exact", head: true })
       .eq("sku_material_id", skuMaterialId)
-      .in("status", ["DRAFT", "ACTIVE"]);
+      .in("status", ["DRAFT", "ACTIVE"]) as { count?: number };
 
     if ((existingCount ?? 0) > 0) {
       return bomError(req, ctx, "PROD_BOM_ALREADY_EXISTS", 409, "A DRAFT or ACTIVE Pack BOM already exists for this SKU");
@@ -203,11 +271,10 @@ export async function createPackBomHandler(
       if (lErr) throw new Error("PROD_BOM_LINES_INSERT_FAILED");
     }
 
-    return okResponse(
+    return createdOkResponse(
       { id: bomId, status: initialStatus, auto_approved: !bomRequired },
       ctx.request_id,
       req,
-      201,
     );
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BOM_CREATE_FAILED";
@@ -368,7 +435,7 @@ export async function createPackBomChangeRequestHandler(
       .from("pack_bom_change_request")
       .select("id", { count: "exact", head: true })
       .eq("pack_bom_id", id)
-      .eq("status", "DRAFT");
+      .eq("status", "DRAFT") as { count?: number };
 
     if ((draftCount ?? 0) > 0) {
       return bomError(req, ctx, "PROD_BCR_ALREADY_PENDING", 409, "A pending change request already exists for this BOM");
@@ -405,7 +472,7 @@ export async function createPackBomChangeRequestHandler(
 
     if (lErr) throw new Error("PROD_BCR_LINES_INSERT_FAILED");
 
-    return okResponse({ id: crId }, ctx.request_id, req, 201);
+    return createdOkResponse({ id: crId }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BCR_CREATE_FAILED";
     return bomError(req, ctx, code, 500, "Pack BOM change request create failed");
@@ -429,8 +496,7 @@ export async function listPackBomChangeRequestsHandler(
       .select(`
         id, pack_bom_id, status, created_by, created_at, approved_by, approved_at, reject_reason,
         bom:pack_bom!pack_bom_id(
-          id, sku_material_id, status,
-          sku:erp_master.material_master!sku_material_id(id, pace_code, material_name, pack_code)
+          id, sku_material_id, status
         )
       `)
       .order("created_at", { ascending: false });
@@ -439,8 +505,27 @@ export async function listPackBomChangeRequestsHandler(
     if (packBomId) query = query.eq("pack_bom_id", packBomId);
 
     const { data, error } = await query;
-    if (error) throw new Error("PROD_BCR_LIST_FAILED");
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+    if (error) {
+      console.error("[pack_bom.listPackBomChangeRequests] query failed:", JSON.stringify(error));
+      throw new Error("PROD_BCR_LIST_FAILED");
+    }
+
+    const rows = (data ?? []) as JsonRecord[];
+    const skuMap = await getMaterialMapByIds(
+      rows.map((row) => String(((row.bom as JsonRecord | null)?.sku_material_id) ?? "")),
+      "[pack_bom.listPackBomChangeRequests]",
+      "PROD_BCR_LIST_FAILED",
+      "id, pace_code, material_name, pack_code",
+    );
+    return okResponse({
+      data: rows.map((row) => {
+        const bom = ((row.bom ?? null) as JsonRecord | null);
+        return {
+          ...row,
+          bom: bom ? { ...bom, sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null } : null,
+        };
+      }),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BCR_LIST_FAILED";
     return bomError(req, ctx, code, 500, "Pack BOM change request list failed");
