@@ -50,7 +50,10 @@ async function getStrokeMaster(id: string): Promise<JsonRecord | null> {
     .select("*")
     .eq("id", id)
     .maybeSingle();
-  if (error) throw new Error("PROD_STROKE_LOOKUP_FAILED");
+  if (error) {
+    console.error("[stroke_master.getStrokeMaster] lookup failed:", JSON.stringify(error));
+    throw new Error("PROD_STROKE_LOOKUP_FAILED");
+  }
   return (data as JsonRecord | null) ?? null;
 }
 
@@ -101,7 +104,10 @@ async function ensureProdshadeMaterial(params: {
     .eq("material_type", params.materialType)
     .eq("external_code", externalCode)
     .maybeSingle();
-  if (lookupErr) throw new Error("PROD_PRODSHADE_MATERIAL_LOOKUP_FAILED");
+  if (lookupErr) {
+    console.error("[stroke_master.ensureProdshadeMaterial] lookup failed:", JSON.stringify(lookupErr));
+    throw new Error("PROD_PRODSHADE_MATERIAL_LOOKUP_FAILED");
+  }
 
   let materialId: string;
   if (existing) {
@@ -111,7 +117,10 @@ async function ensureProdshadeMaterial(params: {
       "generate_material_pace_code",
       { p_material_type: params.materialType },
     );
-    if (paceErr || !paceCode) throw new Error("PROD_PRODSHADE_PACE_CODE_FAILED");
+    if (paceErr || !paceCode) {
+      console.error("[stroke_master.ensureProdshadeMaterial] pace code rpc failed:", JSON.stringify(paceErr));
+      throw new Error("PROD_PRODSHADE_PACE_CODE_FAILED");
+    }
 
     const shortName = externalCode.length > 50 ? externalCode.slice(0, 50) : externalCode;
     const { data: newMat, error: insertErr } = await serviceRoleClient
@@ -141,7 +150,10 @@ async function ensureProdshadeMaterial(params: {
       })
       .select("id")
       .single();
-    if (insertErr || !newMat) throw new Error("PROD_PRODSHADE_MATERIAL_CREATE_FAILED");
+    if (insertErr || !newMat) {
+      console.error("[stroke_master.ensureProdshadeMaterial] material insert failed:", JSON.stringify(insertErr));
+      throw new Error("PROD_PRODSHADE_MATERIAL_CREATE_FAILED");
+    }
     materialId = String((newMat as JsonRecord).id);
   }
 
@@ -200,9 +212,13 @@ export async function listStrokeMastersHandler(
     if (status) query = query.eq("status", status);
 
     const { data, error } = await query;
-    if (error) throw new Error("PROD_STROKE_LIST_FAILED");
+    if (error) {
+      console.error("[stroke_master.listStrokeMasters] query failed:", JSON.stringify(error));
+      throw new Error("PROD_STROKE_LIST_FAILED");
+    }
     return okResponse({ data: data ?? [] }, ctx.request_id, req);
   } catch (err) {
+    console.error("[stroke_master.listStrokeMasters] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_LIST_FAILED";
     return strokeError(req, ctx, code, 500, "Stroke master list failed");
   }
@@ -243,10 +259,14 @@ export async function getStrokeMasterHandler(
       .eq("id", id)
       .maybeSingle();
 
-    if (error) throw new Error("PROD_STROKE_FETCH_FAILED");
+    if (error) {
+      console.error("[stroke_master.getStrokeMaster] query failed:", JSON.stringify(error));
+      throw new Error("PROD_STROKE_FETCH_FAILED");
+    }
     if (!data) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Stroke master not found");
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
+    console.error("[stroke_master.getStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_FETCH_FAILED";
     return strokeError(req, ctx, code, 500, "Stroke master fetch failed");
   }
@@ -348,6 +368,7 @@ export async function createStrokeMasterHandler(
       if (smErr.code === "23505") {
         return strokeError(req, ctx, "PROD_STROKE_EXISTS", 409, "Stroke number already exists for this prodshade");
       }
+      console.error("[stroke_master.createStrokeMaster] insert failed:", JSON.stringify(smErr));
       throw smErr;
     }
 
@@ -356,11 +377,15 @@ export async function createStrokeMasterHandler(
         .schema("erp_production")
         .from("stroke_line")
         .insert(buildLineRows(sm.id as string, lines));
-      if (lErr) throw new Error("PROD_STROKE_LINE_INSERT_FAILED");
+      if (lErr) {
+        console.error("[stroke_master.createStrokeMaster] line insert failed:", JSON.stringify(lErr));
+        throw new Error("PROD_STROKE_LINE_INSERT_FAILED");
+      }
     }
 
     return okResponse({ id: sm.id }, ctx.request_id, req, 201);
   } catch (err) {
+    console.error("[stroke_master.createStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_CREATE_FAILED";
     return strokeError(req, ctx, code, 500, "Stroke master create failed");
   }
@@ -428,11 +453,15 @@ export async function updateStrokeMasterHandler(
     if (lines.length > 0) {
       const { error: lErr } = await serviceRoleClient.schema("erp_production").from("stroke_line")
         .insert(buildLineRows(id, lines));
-      if (lErr) throw new Error("PROD_STROKE_LINE_UPDATE_FAILED");
+      if (lErr) {
+        console.error("[stroke_master.updateStrokeMaster] line insert failed:", JSON.stringify(lErr));
+        throw new Error("PROD_STROKE_LINE_UPDATE_FAILED");
+      }
     }
 
     return okResponse({ id }, ctx.request_id, req);
   } catch (err) {
+    console.error("[stroke_master.updateStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_UPDATE_FAILED";
     return strokeError(req, ctx, code, 500, "Stroke master update failed");
   }
@@ -497,11 +526,13 @@ export async function approveStrokeMasterHandler(
       if ((error as { code?: string }).code === "23505") {
         return strokeError(req, ctx, "PROD_STROKE_EXISTS", 409, "Stroke number already exists for this prodshade");
       }
+      console.error("[stroke_master.approveStrokeMaster] update failed:", JSON.stringify(error));
       throw new Error("PROD_STROKE_APPROVE_FAILED");
     }
 
     return okResponse({ id, status: "APPROVED", prodshade_material_id: materialId }, ctx.request_id, req);
   } catch (err) {
+    console.error("[stroke_master.approveStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_APPROVE_FAILED";
     return strokeError(req, ctx, code, 500, "Stroke approve failed");
   }
@@ -526,10 +557,14 @@ export async function rejectStrokeMasterHandler(
 
     await serviceRoleClient.schema("erp_production").from("stroke_line").delete().eq("stroke_master_id", id);
     const { error } = await serviceRoleClient.schema("erp_production").from("stroke_master").delete().eq("id", id);
-    if (error) throw new Error("PROD_STROKE_REJECT_FAILED");
+    if (error) {
+      console.error("[stroke_master.rejectStrokeMaster] delete failed:", JSON.stringify(error));
+      throw new Error("PROD_STROKE_REJECT_FAILED");
+    }
 
     return okResponse({ id, deleted: true }, ctx.request_id, req);
   } catch (err) {
+    console.error("[stroke_master.rejectStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_REJECT_FAILED";
     return strokeError(req, ctx, code, 500, "Stroke reject failed");
   }
@@ -557,10 +592,14 @@ export async function deactivateStrokeMasterHandler(
     const { error } = await serviceRoleClient.schema("erp_production").from("stroke_master")
       .update({ status: "DEACTIVATED", deactivated_by: ctx.auth_user_id, deactivated_at: now, last_updated_at: now, last_updated_by: ctx.auth_user_id })
       .eq("id", id);
-    if (error) throw new Error("PROD_STROKE_DEACTIVATE_FAILED");
+    if (error) {
+      console.error("[stroke_master.deactivateStrokeMaster] update failed:", JSON.stringify(error));
+      throw new Error("PROD_STROKE_DEACTIVATE_FAILED");
+    }
 
     return okResponse({ id, status: "DEACTIVATED" }, ctx.request_id, req);
   } catch (err) {
+    console.error("[stroke_master.deactivateStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_DEACTIVATE_FAILED";
     return strokeError(req, ctx, code, 500, "Stroke deactivate failed");
   }
@@ -597,6 +636,7 @@ export async function revertStrokeMasterHandler(
 
     return okResponse({ id, status: "DRAFT" }, ctx.request_id, req);
   } catch (err) {
+    console.error("[stroke_master.revertStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_REVERT_FAILED";
     return strokeError(req, ctx, code, 500, "Stroke revert failed");
   }
