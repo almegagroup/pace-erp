@@ -7951,6 +7951,15 @@ P261 → PM consumed FROM pm_sloc (e.g. P003 for Liquid)
 101  → SFG receipt  TO   shopfloor_sloc (e.g. S003)
 ```
 
+**101 → Quality Inspection hold (LOCKED — 2026-07-11):**
+
+`movement_type_master` defines P101's default target as `QUALITY_INSPECTION`, not `UNRESTRICTED` — matching GRN's Inward QA pattern (vendor receipt → QI hold → QA usage decision → Unrestricted). This DOES apply to MTO/HPS/MTS SFG output. It does **not** apply to:
+- **INT** — P101 posts straight to Unrestricted (no QI hold)
+- **MTEST** — P101 posts straight to Unrestricted (no QI hold)
+- **Packing PO's FG (SKU) receipt** — posts straight to Unrestricted (no QI hold)
+
+**Release mechanism for MTO/HPS/MTS:** No separate QA-release screen — the Verify (PR12) action itself is performed by QA, so QI → Unrestricted release happens automatically within the same Verify transaction. **However, a separate "SFG Result Recording" page is still needed** to log the lab/quality test result for that batch (distinct from the qty-verify action itself) — likely reuses the existing Inward QA test-method infrastructure (`qa_test_method_master` / `qa_category_test_config`), but needs its own design pass, not yet detailed.
+
 **P261 Issue Location — Default Chain:**
 
 ```
@@ -8264,13 +8273,21 @@ Process PO Standard Save → system creates a **Reservation Document** per compo
 **Available Stock formula (display on PR09 component line grid):**
 
 ```
-Available = stock_snapshot(UNRESTRICTED, material, plant)
-          − SUM(open_reservations.balance_qty WHERE material = X AND plant = Y)
+Available = stock_snapshot(UNRESTRICTED, material, plant, storage_location)
+          − SUM(open_reservations.balance_qty WHERE material = X AND plant = Y AND storage_location = Z)
 ```
 
-Open reservations = all OPEN + PARTIAL reservation documents across ALL Process POs for that material+plant. Sources include:
-1. Process PO Standard save reservations
-2. Delivery schedule / dispatch pick window reservations (future — same table, same formula)
+> Reservation is keyed by **material + plant + storage location** (not just material + plant) — it nets against the Unrestricted balance of the exact location being picked from.
+
+**Reservation sources (LOCKED — 2026-07-11) — all five, resolved:**
+
+| Source | Reserve starts | Reserve ends (released) |
+|---|---|---|
+| Process PO | Standard save | Verify (P261 issue) |
+| Packing PO | Standard-equivalent save | Final (P261 issue) |
+| Sales Order | Dispatch Instruction created | P601 (GI for Dispatch) posted |
+| STO (Plant Transfer Order) | Dispatch Instruction created (same document type reused from Sales) | P601 posted |
+| Location Transfer (P311) | Transfer created | Transfer posted |
 
 **Reservation lifecycle:**
 

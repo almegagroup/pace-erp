@@ -381,6 +381,13 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - Cross-PO RM/PM derivation (Process PO batch → multiple Packing POs) — resolved: ratio of qty drawn ÷ batch total
 - See feasibility doc Section 104.7 for full detail — full costing session still required
 
+**83.5 — Reservation sources + 101 QI-hold exceptions (LOCKED — 2026-07-11):**
+- Reservation now keyed by material+plant+**storage location** (not just material+plant)
+- 5 reservation sources resolved: Process PO (Standard→Verify), Packing PO (Standard-equiv→Final), Sales Order (Dispatch Instruction created→P601), STO (same Dispatch Instruction doc type→P601), Location Transfer/P311 (created→posted)
+- P101 (production output receipt) defaults to QUALITY_INSPECTION per movement_type_master — applies to MTO/HPS/MTS SFG output. Exceptions posting straight to Unrestricted: INT, MTEST, Packing PO's FG(SKU) receipt
+- MTO/HPS/MTS: no separate QA-release screen — Verify (PR12) IS the QA action, so QI→Unrestricted auto-releases in the same transaction. Still need a separate "SFG Result Recording" page for lab/quality test results (backlog, not yet designed — likely reuses qa_test_method_master/qa_category_test_config)
+- INT has NO batch number, NO Standard/Final/Verify — single-page create+complete action (confirmed: uses Stroke like MTO/HPS, Machine mandatory, output storage location = Stroke's own default_storage_location_id, movement type reuses P101)
+
 **83.4 — Two-layer Stock vs AP Reco/Costing model (LOCKED — 2026-07-11):**
 - Corrects an earlier three-way split: Costing is NOT a separate layer from AP Reco — "costing" in this business means what gets billed/recognized to Asian Paints (APL), so Costing = Reco
 - **Stock/Physical layer:** Actual Material (post-substitution) + Actual Qty (full physical, matches P261) — never filtered by approval
