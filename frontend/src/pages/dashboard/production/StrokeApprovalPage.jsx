@@ -64,6 +64,7 @@ export default function StrokeApprovalPage() {
   const [editForm, setEditForm] = useState(null);
   const [editLines, setEditLines] = useState(null);
   const [editLoading, setEditLoading] = useState(false);
+  const [attemptedSave, setAttemptedSave] = useState(false);
 
   const [groupModal, setGroupModal] = useState(null);
   const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
@@ -112,16 +113,27 @@ export default function StrokeApprovalPage() {
     setExpandedId(row.id);
     setEditForm(null);
     setEditLines(null);
+    setAttemptedSave(false);
     setEditLoading(true);
     try {
       const detail = await getStrokeMaster(row.id);
+      // If this stroke predates the mandatory-storage-location rule, prefill
+      // from any prior stroke on the same Prodshade — user can still override.
+      let defaultStorageLocationId = detail.default_storage_location_id ?? "";
+      if (!defaultStorageLocationId && detail.prodshade_material_id) {
+        try {
+          const priorRaw = await listStrokeMasters({ company_id: row.company_id, material_id: detail.prodshade_material_id });
+          const prior = (Array.isArray(priorRaw) ? priorRaw : priorRaw?.data ?? []).find((s) => s.id !== row.id && s.default_storage_location_id);
+          if (prior) defaultStorageLocationId = prior.default_storage_location_id;
+        } catch { /* prefill is best-effort only */ }
+      }
       setEditForm({
         po_type: detail.po_type ?? "",
         description: detail.description ?? "",
         base_uom_code: detail.base_uom_code ?? "",
         conversion_uom_code: detail.conversion_uom_code ?? "",
         conversion_factor: detail.conversion_factor ?? "",
-        default_storage_location_id: detail.default_storage_location_id ?? "",
+        default_storage_location_id: defaultStorageLocationId,
       });
       setEditLines((detail.lines ?? []).map((l) => ({
         line_material_type: l.line_material_type ?? "RM",
@@ -174,6 +186,11 @@ export default function StrokeApprovalPage() {
   // Save = Approve: PATCH the edited header+lines, then Approve in one action.
   async function handleSaveApprove(row) {
     if (!editForm || !editLines) return;
+    setAttemptedSave(true);
+    if (!editForm.default_storage_location_id) {
+      toast("Default Storage Location is required.", "error");
+      return;
+    }
     const sum = dosageSumOf(editLines);
     if (Math.abs(sum - 100) > 0.01) { toast(`Dosage must sum to 100. Current: ${sum.toFixed(2)}%`, "error"); return; }
     setSaving(true);
@@ -380,13 +397,17 @@ export default function StrokeApprovalPage() {
                               ) : null}
 
                               {s.status === "DRAFT" ? (
-                                <Field label="Default Storage Location (Output)">
+                                <Field label="Default Storage Location (Output)" required>
                                   <ErpComboboxField
                                     value={editForm.default_storage_location_id}
                                     onChange={(v) => setEditForm((f) => ({ ...f, default_storage_location_id: v }))}
                                     options={storageLocationOptions}
                                     emptyStateLabel="No storage locations mapped to this company"
+                                    className={attemptedSave && !editForm.default_storage_location_id ? "ring-2 ring-rose-400 rounded" : ""}
                                   />
+                                  {attemptedSave && !editForm.default_storage_location_id && (
+                                    <p className="text-[11px] font-medium text-rose-600 mt-1">Required.</p>
+                                  )}
                                 </Field>
                               ) : (
                                 <div>

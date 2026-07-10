@@ -42,6 +42,7 @@ export const STROKE_ERRORS = {
   PROD_STROKE_MATERIAL_TYPE_INVALID: "Material Type must be SFG or INT.",
   PROD_STROKE_PO_TYPE_INVALID: "PO Type is not valid for the selected Material Type.",
   PROD_STROKE_BASE_UOM_REQUIRED: "Base UOM is required.",
+  PROD_STROKE_STORAGE_LOCATION_REQUIRED: "Default Storage Location is required.",
   PROD_STROKE_NO_LINES: "Cannot approve a stroke with no RM/INT lines.",
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required for this action.",
 };

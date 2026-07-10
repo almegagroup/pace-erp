@@ -7415,6 +7415,23 @@ Dosage% is not shown (no dosage change allowed in Change BOM Item flow).
 
 ---
 
+#### Default Storage Location (Output) — Mandatory Field Rule (LOCKED — 2026-07-11)
+
+**Applies to:** Stroke Master header field `default_storage_location_id`, on both PR01 (Create/Edit at DRAFT) and PR02 (Approval — Manager edits header at DRAFT).
+
+| Rule | Detail |
+|---|---|
+| Mandatory | Cannot Save/Approve with this field blank — for both SFG and INT material_type strokes |
+| Validation UI | Blank field shown with red border/error state; Save button blocked until filled |
+| Backend enforcement | `createStrokeMasterHandler` / `updateStrokeMasterHandler` reject with an error code if blank — frontend validation is not sufficient on its own |
+| **Auto-prefill from prior entry** | If the selected Prodshade material (existing SFG/INT material_id) already has at least one other `stroke_master` row for the same company (any status), the new Stroke's Default Storage Location auto-fills from that prior entry's value |
+| **Override allowed** | Auto-prefilled value is a suggestion only — user can change it before saving |
+| New Prodshade (not-yet-existing material) | No prior entry exists — field starts blank, still mandatory, no auto-prefill possible |
+
+> **Why this exists:** Discovered 2026-07-11 during live testing — the field was added to the schema (Section 8B backlog item) but never made mandatory, so most existing strokes ended up with a NULL Default Storage Location, which silently breaks downstream Verify-phase FG receipt posting (P101 needs a valid storage location). Auto-prefill from a prior Stroke on the same Prodshade reduces repetitive data entry — most strokes on the same Prodshade land in the same shopfloor location.
+
+---
+
 ### 83.4 — Process PO and Packing PO (Two-Order Model)
 
 **Updated: 2026-06-11**

@@ -381,6 +381,12 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - Cross-PO RM/PM derivation (Process PO batch → multiple Packing POs) — resolved: ratio of qty drawn ÷ batch total
 - See feasibility doc Section 104.7 for full detail — full costing session still required
 
+**83.3 — Default Storage Location mandatory + auto-prefill (LOCKED — 2026-07-11):**
+- `default_storage_location_id` on Stroke Master header is now mandatory for both SFG and INT — was optional, most existing strokes ended up NULL (found via live DB check on CMP003: 4 of 5 APPROVED strokes had NULL header storage location, would silently break Verify-phase P101 posting)
+- Auto-prefill: selecting an existing Prodshade material that already has ≥1 prior stroke_master row (any status, same company) prefills the new Stroke's Default Storage Location from that prior entry — user can still override
+- Applies to both PR01 (StrokeMasterPage.jsx create/edit) and PR02 (StrokeApprovalPage.jsx header edit at DRAFT)
+- Dev data fix (MCP, not migration): backfilled CMP003's 5 existing APPROVED strokes to S003 (Construction Chemical Shop Floor) since they predate this rule
+
 **83.7 — Batch Number Series correction (LOCKED — 2026-07-11, business owner override of 2026-06-10 version):**
 - HPS moves from per-Prodshade to company-level — MTO/HPS/MTEST are now all company-level (no Prodshade scoping)
 - IWC + Powder unified under one "MTS" batch_type, per-Prodshade (Powder no longer manual-entry-only)

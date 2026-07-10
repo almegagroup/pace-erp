@@ -51,6 +51,7 @@ export default function StrokeMasterPage() {
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailEditLines, setDetailEditLines] = useState(null);
+  const [attemptedSave, setAttemptedSave] = useState(false);
 
   const [form, setForm] = useState({
     company_id: "", material_type: "SFG", po_type: "", prodshade_mode: "existing",
@@ -135,6 +136,7 @@ export default function StrokeMasterPage() {
 
   function openCreate() {
     setDrawerMode("create");
+    setAttemptedSave(false);
     setForm({
       company_id: "", material_type: "SFG", po_type: "", prodshade_mode: "existing",
       prodshade_material_id: "", prod_code: "", shade_code: "",
@@ -145,8 +147,23 @@ export default function StrokeMasterPage() {
     setDrawerOpen(true);
   }
 
+  // Existing Prodshade already used in another Stroke for this company? Prefill
+  // Default Storage Location from that prior entry — user can still override.
+  function handleProdshadeSelect(materialId) {
+    setForm((f) => {
+      if (f.default_storage_location_id) return { ...f, prodshade_material_id: materialId };
+      const prior = createCheckStrokes.find((s) => String(s.prodshade_material_id ?? "") === String(materialId));
+      return {
+        ...f,
+        prodshade_material_id: materialId,
+        default_storage_location_id: prior?.default_storage_location_id ? String(prior.default_storage_location_id) : f.default_storage_location_id,
+      };
+    });
+  }
+
   async function openDetail(id) {
     setDrawerMode("detail");
+    setAttemptedSave(false);
     setDetail(null);
     setDetailEditLines(null);
     setDetailLoading(true);
@@ -209,11 +226,16 @@ export default function StrokeMasterPage() {
       toast("Prod Code and Shade Code are required for a new Prodshade.", "error");
       return false;
     }
+    if (!f.default_storage_location_id) {
+      toast("Default Storage Location is required.", "error");
+      return false;
+    }
     return true;
   }
 
   async function handleCreate(e) {
     e.preventDefault();
+    setAttemptedSave(true);
     if (isDuplicateBlocked) {
       toast("Duplicate blocked: this Prodshade + Stroke Number combination already exists.", "error");
       return;
@@ -247,6 +269,11 @@ export default function StrokeMasterPage() {
   }
 
   async function handleSaveDraft() {
+    setAttemptedSave(true);
+    if (!detail.default_storage_location_id) {
+      toast("Default Storage Location is required.", "error");
+      return;
+    }
     const sum = dosageSumOf(detailEditLines);
     if (Math.abs(sum - 100) > 0.01) { toast(`Dosage must sum to 100. Current: ${sum.toFixed(2)}%`, "error"); return; }
     setSaving(true);
@@ -390,7 +417,7 @@ export default function StrokeMasterPage() {
                   </label>
                 </div>
                 {form.prodshade_mode === "existing" ? (
-                  <ErpComboboxField value={form.prodshade_material_id} onChange={(v) => setForm((f) => ({ ...f, prodshade_material_id: v }))} options={prodshadeOptions} emptyStateLabel="No materials of this type yet" />
+                  <ErpComboboxField value={form.prodshade_material_id} onChange={handleProdshadeSelect} options={prodshadeOptions} emptyStateLabel="No materials of this type yet" />
                 ) : (
                   <div className="flex gap-2">
                     <input className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-1/2 font-mono uppercase" value={form.prod_code} onChange={(e) => setForm((f) => ({ ...f, prod_code: e.target.value }))} placeholder="Prod code" />
@@ -431,7 +458,7 @@ export default function StrokeMasterPage() {
             <Field label="Conversion Factor" hint="e.g. KG per Litre (density-based).">
               <input className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-full" type="number" step="0.0001" min="0" value={form.conversion_factor} onChange={(e) => setForm((f) => ({ ...f, conversion_factor: e.target.value }))} placeholder="Optional" />
             </Field>
-            <Field label="Default Storage Location (Output)" hint="Company-mapped locations only. Process PO Verify posts SFG/INT output here.">
+            <Field label="Default Storage Location (Output)" required hint="Company-mapped locations only. Process PO Verify posts SFG/INT output here.">
               <ErpComboboxField
                 value={form.default_storage_location_id}
                 onChange={(v) => setForm((f) => ({ ...f, default_storage_location_id: v }))}
@@ -439,7 +466,11 @@ export default function StrokeMasterPage() {
                 placeholder={form.company_id ? "-- Select --" : "-- Select Company first --"}
                 emptyStateLabel="No storage locations mapped to this company"
                 disabled={!form.company_id}
+                className={attemptedSave && !form.default_storage_location_id ? "ring-2 ring-rose-400 rounded" : ""}
               />
+              {attemptedSave && !form.default_storage_location_id && (
+                <p className="text-[11px] font-medium text-rose-600 mt-1">Required.</p>
+              )}
             </Field>
           </div>
 
@@ -492,7 +523,24 @@ export default function StrokeMasterPage() {
               <div><span className="text-slate-400 text-xs">Material Type</span><p>{detail.material_type}</p></div>
               <div><span className="text-slate-400 text-xs">PO Type</span><p>{detail.po_type}</p></div>
               <div><span className="text-slate-400 text-xs">Base UOM / Conversion</span><p>{detail.base_uom_code ?? "—"}{detail.conversion_uom_code ? ` → ${detail.conversion_uom_code} (× ${detail.conversion_factor})` : ""}</p></div>
-              <div><span className="text-slate-400 text-xs">Default Storage Location (Output)</span><p>{detail.default_storage_location ? `${detail.default_storage_location.code} — ${detail.default_storage_location.name}` : "—"}</p></div>
+              {detail.status === "DRAFT" ? (
+                <div>
+                  <span className="text-slate-400 text-xs">Default Storage Location (Output) <span className="text-rose-500">*</span></span>
+                  <ErpComboboxField
+                    value={detail.default_storage_location_id ?? ""}
+                    onChange={(v) => setDetail((d) => ({ ...d, default_storage_location_id: v }))}
+                    options={storageLocationOptions}
+                    placeholder="-- Select --"
+                    emptyStateLabel="No storage locations mapped to this company"
+                    className={attemptedSave && !detail.default_storage_location_id ? "ring-2 ring-rose-400 rounded" : ""}
+                  />
+                  {attemptedSave && !detail.default_storage_location_id && (
+                    <p className="text-[11px] font-medium text-rose-600 mt-1">Required.</p>
+                  )}
+                </div>
+              ) : (
+                <div><span className="text-slate-400 text-xs">Default Storage Location (Output)</span><p>{detail.default_storage_location ? `${detail.default_storage_location.code} — ${detail.default_storage_location.name}` : "—"}</p></div>
+              )}
               <div><span className="text-slate-400 text-xs">Description</span><p>{detail.description ?? "—"}</p></div>
               {detail.approved_by && <div><span className="text-slate-400 text-xs">Approved</span><p>{detail.approved_at?.slice(0, 10)}</p></div>}
               {detail.deactivated_by && <div><span className="text-slate-400 text-xs">Deactivated</span><p>{detail.deactivated_at?.slice(0, 10)}</p></div>}

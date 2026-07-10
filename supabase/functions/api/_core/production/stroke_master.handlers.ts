@@ -421,6 +421,9 @@ export async function createStrokeMasterHandler(
     if (conversionFactor != null && !(conversionFactor > 0)) {
       return strokeError(req, ctx, "PROD_STROKE_CONVERSION_FACTOR_INVALID", 400, "conversion_factor must be > 0 when provided");
     }
+    if (!defaultStorageLocationId) {
+      return strokeError(req, ctx, "PROD_STROKE_STORAGE_LOCATION_REQUIRED", 400, "default_storage_location_id required");
+    }
 
     const lineErrorCode = validateLines(lines);
     if (lineErrorCode) {
@@ -537,8 +540,14 @@ export async function updateStrokeMasterHandler(
       last_updated_at: new Date().toISOString(),
       last_updated_by: ctx.auth_user_id,
     };
+    const effectiveStorageLocationId = body.default_storage_location_id !== undefined
+      ? toTrimmedString(body.default_storage_location_id) || null
+      : (existing.default_storage_location_id as string | null);
+    if (!effectiveStorageLocationId) {
+      return strokeError(req, ctx, "PROD_STROKE_STORAGE_LOCATION_REQUIRED", 400, "default_storage_location_id required");
+    }
     if (body.default_storage_location_id !== undefined) {
-      patch.default_storage_location_id = toTrimmedString(body.default_storage_location_id) || null;
+      patch.default_storage_location_id = effectiveStorageLocationId;
     }
     // PO Type is editable up to Approve (only Material Type / Prodshade / Stroke
     // Number are locked once a Stroke exists).
