@@ -577,12 +577,16 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, "Must be QA_APPROVED to start batch");
     }
 
+    // INT is mapped to MTO here as a placeholder — per 83.5, INT has no batch
+    // number at all (simple cycle, no Standard/Final/Verify); INT should never
+    // reach startBatchHandler once it gets its own dedicated simple-cycle path.
     const batchTypeMap: Record<string, string> = {
-      "MTO": "MTO", "HPS": "HPS", "MTS": "IWC", "INT": "MTO", "MTEST": "MTEST",
+      "MTO": "MTO", "HPS": "HPS", "MTS": "MTS", "INT": "MTO", "MTEST": "MTEST",
     };
     const batchType = batchTypeMap[po.po_type as string] ?? "MTO";
-    // Per-prodshade series for HPS and IWC
-    const prodshadeId = (batchType === "HPS" || batchType === "IWC")
+    // MTS (IWC+Powder) is the only per-Prodshade series — MTO/HPS/MTEST are
+    // company-level (83.7, corrected 2026-07-11).
+    const prodshadeId = batchType === "MTS"
       ? (po.material_id as string | null)
       : null;
 

@@ -68,7 +68,7 @@ export async function listBatchSeriesHandler(req: Request, ctx: ProdHandlerConte
       .schema("erp_production").from("batch_number_series")
       .select(`
         id, company_id, prodshade_material_id, batch_type, prefix,
-        current_count, fy_reset, active, created_at
+        current_count, active, created_at
       `)
       .order("batch_type").order("prefix");
 
@@ -105,12 +105,16 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
     const companyId = toTrimmedString(body.company_id);
     const batchType = toUpperTrimmedString(body.batch_type);
     const prefix = toTrimmedString(body.prefix);
-    const materialId = toTrimmedString(body.prodshade_material_id) || null;
-    const fyReset = body.fy_reset !== false;
+    // MTS (IWC+Powder) is per-Prodshade; MTO/HPS/MTEST are company-level (83.7, corrected 2026-07-11).
+    const isCompanyLevel = batchType === "MTO" || batchType === "HPS" || batchType === "MTEST";
+    const materialId = isCompanyLevel ? null : (toTrimmedString(body.prodshade_material_id) || null);
 
-    const VALID_TYPES = new Set(["MTO","HPS","IWC","MTEST"]);
+    const VALID_TYPES = new Set(["MTO","HPS","MTS","MTEST"]);
     if (!companyId || !VALID_TYPES.has(batchType) || !prefix) {
       return batchError(req, ctx, "PROD_BATCH_SERIES_INVALID", 400, "company_id, batch_type, prefix required");
+    }
+    if (!isCompanyLevel && !materialId) {
+      return batchError(req, ctx, "PROD_BATCH_SERIES_PRODSHADE_REQUIRED", 400, "prodshade_material_id required for MTS");
     }
 
     const { data, error } = await serviceRoleClient
@@ -121,7 +125,6 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
         batch_type: batchType,
         prefix,
         current_count: 0,
-        fy_reset: fyReset,
         active: true,
         created_by: ctx.auth_user_id,
       })
@@ -150,8 +153,11 @@ export async function updateBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
     const body = await parseBody(req);
     const updates: JsonRecord = { last_updated_at: new Date().toISOString() };
     if (body.prefix !== undefined) updates.prefix = toTrimmedString(body.prefix);
-    if (body.fy_reset !== undefined) updates.fy_reset = body.fy_reset === true || body.fy_reset === "true";
     if (body.active !== undefined) updates.active = body.active === true || body.active === "true";
+    if (body.current_count !== undefined) {
+      const n = Number(body.current_count);
+      if (Number.isInteger(n) && n >= 0 && n <= 99999) updates.current_count = n;
+    }
 
     const { error } = await serviceRoleClient
       .schema("erp_production").from("batch_number_series")
@@ -165,15 +171,16 @@ export async function updateBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
 }
 
 // Internal: generate next batch number for a Process Order.
-// Called from process_order.handlers.ts at Start Batch.
+// Called from process_order.handlers.ts at Start Batch (MTO/HPS/MTS) or PO
+// save (MTEST). Wraps 99999 -> 1 on overflow — no financial-year reset
+// (83.7, corrected 2026-07-11, business owner override).
 export async function generateBatchNumber(
   companyId: string,
   batchType: string,
   prodshadeId: string | null,
 ): Promise<string> {
-  // For MTO and MTEST: company-level (no prodshade)
-  // For HPS and IWC: per-prodshade
-  const isCompanyLevel = batchType === "MTO" || batchType === "MTEST";
+  // MTO/HPS/MTEST: company-level (no prodshade). MTS (IWC+Powder): per-prodshade.
+  const isCompanyLevel = batchType === "MTO" || batchType === "HPS" || batchType === "MTEST";
   const effectiveProdshadeId = isCompanyLevel ? null : prodshadeId;
 
   let query = serviceRoleClient
@@ -195,8 +202,9 @@ export async function generateBatchNumber(
   }
 
   const series = data as JsonRecord;
-  const nextCount = Number(series.current_count) + 1;
-  const paddedCount = String(nextCount).padStart(4, "0");
+  const currentCount = Number(series.current_count);
+  const nextCount = currentCount >= 99999 ? 1 : currentCount + 1;
+  const paddedCount = String(nextCount).padStart(5, "0");
   const batchNumber = `${series.prefix}${paddedCount}`;
 
   await serviceRoleClient.schema("erp_production").from("batch_number_series")

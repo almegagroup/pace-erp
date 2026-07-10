@@ -381,6 +381,14 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - Cross-PO RM/PM derivation (Process PO batch → multiple Packing POs) — resolved: ratio of qty drawn ÷ batch total
 - See feasibility doc Section 104.7 for full detail — full costing session still required
 
+**83.7 — Batch Number Series correction (LOCKED — 2026-07-11, business owner override of 2026-06-10 version):**
+- HPS moves from per-Prodshade to company-level — MTO/HPS/MTEST are now all company-level (no Prodshade scoping)
+- IWC + Powder unified under one "MTS" batch_type, per-Prodshade (Powder no longer manual-entry-only)
+- No financial-year reset — `fy_reset` column dropped entirely (was never actually implemented, was misleading). Batch number wraps `99999` → `1` on overflow, 5-digit zero-padded format
+- Migration: `20260710183331_gate27_batch_series_mts_rename_drop_fy_reset.sql` — renamed `IWC`→`MTS` in `batch_type` CHECK constraint, dropped `fy_reset` column (dev had zero existing rows, no data backfill needed)
+- Fixed alongside: `active`/`is_active` field-name mismatch (Active toggle silently did nothing), `current_count` edit was silently dropped by backend, SA config page had raw-UUID company/prodshade inputs (now comboboxes)
+- Files: `supabase/functions/api/_core/production/batch_series.handlers.ts`, `process_order.handlers.ts` (startBatchHandler batchTypeMap), `frontend/src/admin/sa/screens/SAProductionBatchSeriesPage.jsx`
+
 **⚠️ PENDING (next session):**
 - P261 issue location override — not yet confirmed by user
 - S003 → F003 transfer trigger — who, when (not yet discussed)
