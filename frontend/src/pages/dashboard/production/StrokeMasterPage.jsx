@@ -19,6 +19,7 @@ import React, { useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import BlockingLayer from "../../../components/layer/BlockingLayer.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import {
   listStrokeMasters, getStrokeMaster, createStrokeMaster,
@@ -702,44 +703,49 @@ export default function StrokeMasterPage() {
         ) : null}
       </DrawerBase>
 
-      {/* Inline "Create Group" modal */}
-      {groupModal && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-[1000100]" onClick={() => setGroupModal(null)}>
-          <div className="bg-white rounded shadow-lg p-4 w-80 flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
-            <p className="text-sm font-semibold text-slate-700">New Material Group</p>
-            <Field label="Group Name" required>
-              <input className="border border-slate-300 rounded px-2 py-1 text-sm h-7 w-full" value={groupForm.group_name} onChange={(e) => setGroupForm((f) => ({ ...f, group_name: e.target.value }))} />
-            </Field>
-            <Field label="Description">
-              <input className="border border-slate-300 rounded px-2 py-1 text-sm h-7 w-full" value={groupForm.description} onChange={(e) => setGroupForm((f) => ({ ...f, description: e.target.value }))} />
-            </Field>
-            <div className="flex justify-end gap-2 mt-1">
-              <button type="button" className="text-xs text-slate-500 px-3 py-1" onClick={() => setGroupModal(null)}>Cancel</button>
-              <button type="button" className="text-xs bg-sky-600 text-white rounded px-3 py-1" onClick={handleCreateGroup}>Create</button>
-            </div>
-          </div>
+      {/* Inline "Create Group" modal — its own BlockingLayer so it registers as
+          the top layer; otherwise the underlying drawer's global focusin
+          handler (BlockingLayer.jsx onFocusIn) keeps yanking focus back to
+          itself since a plain fixed div isn't part of its layer stack. */}
+      <BlockingLayer
+        visible={Boolean(groupModal)}
+        onEscape={() => setGroupModal(null)}
+        overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
+        dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 320, display: "flex", flexDirection: "column", gap: 12 }}
+      >
+        <p className="text-sm font-semibold text-slate-700">New Material Group</p>
+        <Field label="Group Name" required>
+          <input className="border border-slate-300 rounded px-2 py-1 text-sm h-7 w-full" value={groupForm.group_name} onChange={(e) => setGroupForm((f) => ({ ...f, group_name: e.target.value }))} />
+        </Field>
+        <Field label="Description">
+          <input className="border border-slate-300 rounded px-2 py-1 text-sm h-7 w-full" value={groupForm.description} onChange={(e) => setGroupForm((f) => ({ ...f, description: e.target.value }))} />
+        </Field>
+        <div className="flex justify-end gap-2 mt-1">
+          <button type="button" className="text-xs text-slate-500 px-3 py-1" onClick={() => setGroupModal(null)}>Cancel</button>
+          <button type="button" className="text-xs bg-sky-600 text-white rounded px-3 py-1" onClick={handleCreateGroup}>Create</button>
         </div>
-      )}
+      </BlockingLayer>
 
-      {/* Inline "Add member" modal */}
-      {memberModal && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-[1000100]" onClick={() => setMemberModal(null)}>
-          <div className="bg-white rounded shadow-lg p-4 w-80 flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
-            <p className="text-sm font-semibold text-slate-700">Add Alternate Member</p>
-            <Field label="Material">
-              <ErpComboboxField
-                value={memberMaterialId}
-                onChange={setMemberMaterialId}
-                options={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
-              />
-            </Field>
-            <div className="flex justify-end gap-2 mt-1">
-              <button type="button" className="text-xs text-slate-500 px-3 py-1" onClick={() => setMemberModal(null)}>Cancel</button>
-              <button type="button" className="text-xs bg-sky-600 text-white rounded px-3 py-1" onClick={handleAddMember}>Add</button>
-            </div>
-          </div>
+      {/* Inline "Add member" modal — same reasoning, own BlockingLayer. */}
+      <BlockingLayer
+        visible={Boolean(memberModal)}
+        onEscape={() => setMemberModal(null)}
+        overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
+        dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 320, display: "flex", flexDirection: "column", gap: 12 }}
+      >
+        <p className="text-sm font-semibold text-slate-700">Add Alternate Member</p>
+        <Field label="Material">
+          <ErpComboboxField
+            value={memberMaterialId}
+            onChange={setMemberMaterialId}
+            options={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
+          />
+        </Field>
+        <div className="flex justify-end gap-2 mt-1">
+          <button type="button" className="text-xs text-slate-500 px-3 py-1" onClick={() => setMemberModal(null)}>Cancel</button>
+          <button type="button" className="text-xs bg-sky-600 text-white rounded px-3 py-1" onClick={handleAddMember}>Add</button>
         </div>
-      )}
+      </BlockingLayer>
     </ErpScreenScaffold>
   );
 }
