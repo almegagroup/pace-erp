@@ -7465,7 +7465,7 @@ Dosage% is not shown (no dosage change allowed in Change BOM Item flow).
 
 - Covers formulation/stroke-based RM production only
 - Consumes RM components (NO PM — packing is always separate)
-- FO number = informal reference at creation (optional) — formal FO link is on Packing PO
+- ~~FO number = informal reference at creation (optional)~~ **Corrected 2026-07-11: Process PO header does NOT carry any FO reference field, informal or otherwise** — FO link exists only on Packing PO (formal, post-Verify)
 - Created at: Standard phase
 
 #### Packing PO
@@ -7634,6 +7634,8 @@ Step 5: Save
 **IWC (MTS):** Standard → Start Batch → Final → Verify (**no QA Online Approval**)
 **INT Process PO:** simple cycle only (no QA approval, no batch number — see 83.5)
 **MTEST:** one-step cycle — fully manual (see 83.4 PO Types)
+
+> **Confirmed 2026-07-11:** MTEST is single-action like INT — no separate Standard/Final/Verify stages, one page/one save completes it. Unlike INT, MTEST **does** get a batch number (company-level series, generated at that single save — per 83.7). No stroke, no BOM for MTEST either way — RM lines entered fully manually.
 
 **Process PO Status Flow (MTO/HPS):**
 
@@ -7958,7 +7960,9 @@ P261 → PM consumed FROM pm_sloc (e.g. P003 for Liquid)
 - **MTEST** — P101 posts straight to Unrestricted (no QI hold)
 - **Packing PO's FG (SKU) receipt** — posts straight to Unrestricted (no QI hold)
 
-**Release mechanism for MTO/HPS/MTS:** No separate QA-release screen — the Verify (PR12) action itself is performed by QA, so QI → Unrestricted release happens automatically within the same Verify transaction. **However, a separate "SFG Result Recording" page is still needed** to log the lab/quality test result for that batch (distinct from the qty-verify action itself) — likely reuses the existing Inward QA test-method infrastructure (`qa_test_method_master` / `qa_category_test_config`), but needs its own design pass, not yet detailed.
+**Release mechanism for MTO/HPS/MTS:** No separate QA-release screen — the Verify (PR12) action itself is performed by QA, so QI → Unrestricted release happens automatically within the same Verify transaction. **However, a separate "SFG Result Recording" page is still needed** to log the lab/quality test result for that batch (distinct from the qty-verify action itself).
+
+> **Confirmed 2026-07-11:** SFG Result Recording is an **exact identical mechanism to the existing Inward QA page** — same `qa_test_method_master` / `qa_category_test_config` infrastructure, same UI/workflow pattern — only the context changes (SFG batch from Process PO Verify, instead of vendor GRN). Build it as a direct clone of Inward QA's mechanism, not a fresh design.
 
 **P261 Issue Location — Default Chain:**
 

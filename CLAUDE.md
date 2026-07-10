@@ -381,6 +381,12 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - Cross-PO RM/PM derivation (Process PO batch → multiple Packing POs) — resolved: ratio of qty drawn ÷ batch total
 - See feasibility doc Section 104.7 for full detail — full costing session still required
 
+**83.4 — Process PO FO field removed, MTEST lifecycle, SFG Result Recording (LOCKED — 2026-07-11):**
+- Process PO header does NOT carry any FO reference (not even informal) — corrects the earlier "FO number = informal reference at creation" text. FO link exists only on Packing PO
+- MTEST confirmed single-action like INT (no Standard/Final/Verify stages) — but unlike INT, MTEST DOES get a batch number (company-level, at that single save)
+- SFG Result Recording page = exact identical mechanism to the existing Inward QA page (same qa_test_method_master/qa_category_test_config infra, same workflow) — build as a direct clone, not a fresh design
+- STO/Location Transfer reservation implementation details deferred to later
+
 **83.5 — Reservation sources + 101 QI-hold exceptions (LOCKED — 2026-07-11):**
 - Reservation now keyed by material+plant+**storage location** (not just material+plant)
 - 5 reservation sources resolved: Process PO (Standard→Verify), Packing PO (Standard-equiv→Final), Sales Order (Dispatch Instruction created→P601), STO (same Dispatch Instruction doc type→P601), Location Transfer/P311 (created→posted)
