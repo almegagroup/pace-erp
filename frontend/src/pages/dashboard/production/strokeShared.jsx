@@ -97,6 +97,10 @@ export function StrokeLinesEditor({ lines, setLines, materialsByType, groups, st
   }
 
   const sum = dosageSumOf(lines);
+  const materialLabelById = new Map(
+    [...(materialsByType.RM ?? []), ...(materialsByType.INT ?? [])]
+      .map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]),
+  );
 
   return (
     <div>
@@ -200,7 +204,7 @@ export function StrokeLinesEditor({ lines, setLines, materialsByType, groups, st
                 Members: {(selectedGroup.members ?? []).length === 0
                   ? "none yet"
                   : selectedGroup.members
-                      .map((m) => m.material_id)
+                      .map((m) => materialLabelById.get(m.material_id) ?? "—")
                       .join(", ")}
                 {!disabled && (
                   <button

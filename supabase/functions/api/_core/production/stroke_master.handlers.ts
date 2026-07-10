@@ -557,9 +557,13 @@ export async function updateStrokeMasterHandler(
       if (body.shade_code !== undefined) patch.shade_code = toUpperTrimmedString(body.shade_code) || null;
     }
 
-    await serviceRoleClient.schema("erp_production").from("stroke_master")
+    const { error: updateErr } = await serviceRoleClient.schema("erp_production").from("stroke_master")
       .update(patch)
       .eq("id", id);
+    if (updateErr) {
+      console.error("[stroke_master.updateStrokeMaster] header update failed:", JSON.stringify(updateErr));
+      throw new Error("PROD_STROKE_UPDATE_FAILED");
+    }
 
     // Replace all lines
     await serviceRoleClient.schema("erp_production").from("stroke_line").delete().eq("stroke_master_id", id);
@@ -743,9 +747,13 @@ export async function revertStrokeMasterHandler(
       return strokeError(req, ctx, "PROD_STROKE_IN_USE", 409, "Cannot revert — active Process Orders reference this stroke");
     }
 
-    await serviceRoleClient.schema("erp_production").from("stroke_master")
+    const { error: revertErr } = await serviceRoleClient.schema("erp_production").from("stroke_master")
       .update({ status: "DRAFT", approved_by: null, approved_at: null, last_updated_at: new Date().toISOString(), last_updated_by: ctx.auth_user_id })
       .eq("id", id);
+    if (revertErr) {
+      console.error("[stroke_master.revertStrokeMaster] update failed:", JSON.stringify(revertErr));
+      throw new Error("PROD_STROKE_REVERT_FAILED");
+    }
 
     return okResponse({ id, status: "DRAFT" }, ctx.request_id, req);
   } catch (err) {
