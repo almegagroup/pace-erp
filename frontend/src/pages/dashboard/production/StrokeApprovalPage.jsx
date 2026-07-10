@@ -13,10 +13,13 @@
  *          Location, RM/INT lines) is editable here. Save = Approve.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
+import { useMenu } from "../../../context/useMenu.js";
 import {
   listStrokeMasters, getStrokeMaster, updateStrokeMaster,
   approveStrokeMaster, revertStrokeMaster, rejectStrokeMaster, deactivateStrokeMaster,
@@ -24,7 +27,7 @@ import {
 import { listUoms, listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
 import {
   PO_TYPE_OPTIONS_BY_MATERIAL_TYPE, friendlyStrokeErr, dosageSumOf, Field,
-  StrokeLinesEditor, GroupCreateModal, MemberAddModal,
+  StrokeLinesTable, GroupCreateModal, MemberAddModal,
 } from "./strokeShared.jsx";
 
 const STATUS_COLORS = {
@@ -41,8 +44,20 @@ function prodshadeLabel(s) {
 
 export default function StrokeApprovalPage() {
   const qc = useQueryClient();
+  const { runtimeContext } = useMenu();
+  const availableCompanies = buildTransactionCompanyList(runtimeContext);
+  const companyLabelById = new Map(availableCompanies.map((c) => [c.id, `${c.company_code} — ${c.company_name}`]));
   const [companyId, setCompanyId] = useState("");
-  const [statusFilter, setStatusFilter] = useState("DRAFT");
+  const [companyInitialized, setCompanyInitialized] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("");
+
+  useEffect(() => {
+    if (companyInitialized) return;
+    const defaultId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (!defaultId) return;
+    setCompanyId(defaultId);
+    setCompanyInitialized(true);
+  }, [companyInitialized, runtimeContext]);
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState("");
@@ -229,14 +244,13 @@ export default function StrokeApprovalPage() {
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
-        <div className="flex gap-3 flex-wrap">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Company ID</label>
-            <input
-              className="border border-slate-300 rounded px-2 py-1 text-sm w-64"
-              placeholder="Filter by company…"
+        <div className="flex gap-3 flex-wrap items-end">
+          <div className="w-64">
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
               value={companyId}
-              onChange={(e) => setCompanyId(e.target.value)}
+              onChange={setCompanyId}
+              label="Company"
             />
           </div>
           <div className="flex flex-col gap-1">
@@ -265,6 +279,7 @@ export default function StrokeApprovalPage() {
             <thead>
               <tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
                 <th className="text-left py-2 px-3 border-b w-8"></th>
+                <th className="text-left py-2 px-3 border-b">Company</th>
                 <th className="text-left py-2 px-3 border-b">Prodshade</th>
                 <th className="text-left py-2 px-3 border-b">Stroke #</th>
                 <th className="text-left py-2 px-3 border-b">PO Type</th>
@@ -282,6 +297,7 @@ export default function StrokeApprovalPage() {
                     onClick={() => toggleExpand(s)}
                   >
                     <td className="py-2 px-3 text-slate-400">{expandedId === s.id ? "▲" : "▼"}</td>
+                    <td className="py-2 px-3 text-slate-500">{companyLabelById.get(s.company_id) ?? "—"}</td>
                     <td className="py-2 px-3 font-medium">{prodshadeLabel(s)}</td>
                     <td className="py-2 px-3 font-mono font-semibold">{s.stroke_number}</td>
                     <td className="py-2 px-3 text-slate-500">{s.po_type ?? "—"}</td>
@@ -296,7 +312,7 @@ export default function StrokeApprovalPage() {
                   </tr>
                   {expandedId === s.id && (
                     <tr className="border-b border-slate-200 bg-slate-50/60">
-                      <td colSpan={8} className="p-4">
+                      <td colSpan={9} className="p-4">
                         {editLoading ? (
                           <p className="text-slate-400 text-sm py-4 text-center">Loading…</p>
                         ) : editForm && editLines ? (
@@ -404,7 +420,7 @@ export default function StrokeApprovalPage() {
                               )}
                             </div>
 
-                              <StrokeLinesEditor
+                              <StrokeLinesTable
                                 lines={editLines}
                                 setLines={setEditLines}
                                 materialsByType={lineMaterialsByType}

@@ -236,6 +236,162 @@ export function StrokeLinesEditor({ lines, setLines, materialsByType, groups, st
   );
 }
 
+// ── RM/INT Lines as a real table (Stroke Approval — CSN Tracker density) ───
+// Same underlying data shape as StrokeLinesEditor (flat ids); ErpComboboxField
+// shows the resolved label even when disabled, so read-only rows (APPROVED /
+// DEACTIVATED strokes) need no separate server-nested-object rendering path.
+export function StrokeLinesTable({ lines, setLines, materialsByType, groups, storageLocationOptions, onCreateGroup, onAddMember, disabled }) {
+  function addLine() { setLines((l) => [...l, { ...EMPTY_LINE }]); }
+  function removeLine(i) { setLines((l) => l.filter((_, idx) => idx !== i)); }
+  function updateLine(i, patch) {
+    setLines((l) => l.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
+  }
+
+  const sum = dosageSumOf(lines);
+  const materialLabelById = new Map(
+    [...(materialsByType.RM ?? []), ...(materialsByType.INT ?? [])]
+      .map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]),
+  );
+
+  const th = "text-left py-1.5 px-2 border-b text-[10px] uppercase tracking-wide text-slate-500 font-semibold";
+  const td = "py-1.5 px-2 align-top";
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">RM / INT Lines</p>
+        <span className={`text-xs font-mono px-2 py-0.5 rounded ${Math.abs(sum - 100) < 0.01 ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+          Σ {sum.toFixed(2)}% / 100%
+        </span>
+      </div>
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="bg-slate-50">
+            <th className={th}>#</th>
+            <th className={th}>Type</th>
+            <th className={`${th} min-w-[200px]`}>Material</th>
+            <th className={`${th} text-right`}>Dosage %</th>
+            <th className={`${th} min-w-[160px]`}>Storage Location</th>
+            <th className={th}>Alternate?</th>
+            <th className={`${th} min-w-[150px]`}>Group</th>
+            <th className={`${th} min-w-[180px]`}>Members</th>
+            {!disabled && <th className={th}></th>}
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((line, i) => {
+            const itemOptions = (materialsByType[line.line_material_type] ?? []).map((m) => ({
+              value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
+            }));
+            const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
+            const selectedGroup = groups.find((g) => g.id === line.material_group_id);
+
+            return (
+              <tr key={i} className="border-b border-slate-100">
+                <td className={`${td} text-slate-400`}>{i + 1}</td>
+                <td className={td}>
+                  <ErpComboboxField
+                    className="w-20"
+                    value={line.line_material_type}
+                    onChange={(v) => updateLine(i, { line_material_type: v, material_id: "" })}
+                    options={[{ value: "RM", label: "RM" }, { value: "INT", label: "INT" }]}
+                    hideBlank
+                    disabled={disabled}
+                  />
+                </td>
+                <td className={td}>
+                  <ErpComboboxField
+                    value={line.material_id}
+                    onChange={(v) => updateLine(i, { material_id: v })}
+                    options={itemOptions}
+                    placeholder="-- Select material --"
+                    disabled={disabled}
+                  />
+                </td>
+                <td className={`${td} text-right`}>
+                  <input
+                    className="border border-slate-300 rounded px-2 py-1 text-sm w-20 font-mono text-right"
+                    type="number" step="0.01" min="0" max="100"
+                    value={line.dosage_pct}
+                    onChange={(e) => updateLine(i, { dosage_pct: e.target.value })}
+                    disabled={disabled}
+                  />
+                </td>
+                <td className={td}>
+                  <ErpComboboxField
+                    value={line.default_storage_location_id}
+                    onChange={(v) => updateLine(i, { default_storage_location_id: v })}
+                    options={storageLocationOptions}
+                    placeholder="-- Select --"
+                    emptyStateLabel="No locations mapped"
+                    disabled={disabled}
+                  />
+                </td>
+                <td className={td}>
+                  <input
+                    type="checkbox"
+                    checked={line.has_alternate}
+                    disabled={disabled}
+                    onChange={(e) => updateLine(i, { has_alternate: e.target.checked, material_group_id: e.target.checked ? line.material_group_id : "" })}
+                  />
+                </td>
+                <td className={td}>
+                  {line.has_alternate ? (
+                    <div className="flex items-center gap-1.5">
+                      <ErpComboboxField
+                        value={line.material_group_id}
+                        onChange={(v) => updateLine(i, { material_group_id: v })}
+                        options={groupOptions}
+                        placeholder="-- Select --"
+                        disabled={disabled}
+                      />
+                      {!disabled && (
+                        <button
+                          type="button"
+                          className="text-sky-600 hover:text-sky-800 text-[10px] underline whitespace-nowrap"
+                          onClick={() => onCreateGroup((newGroupId) => updateLine(i, { material_group_id: newGroupId }))}
+                        >
+                          + New
+                        </button>
+                      )}
+                    </div>
+                  ) : <span className="text-slate-400">—</span>}
+                </td>
+                <td className={`${td} text-xs text-slate-500`}>
+                  {line.has_alternate && selectedGroup ? (
+                    <>
+                      {(selectedGroup.members ?? []).length === 0
+                        ? "none yet"
+                        : selectedGroup.members.map((m) => materialLabelById.get(m.material_id) ?? "—").join(", ")}
+                      {!disabled && (
+                        <button
+                          type="button"
+                          className="text-sky-600 hover:text-sky-800 underline ml-1"
+                          onClick={() => onAddMember(selectedGroup.id)}
+                        >
+                          + Add
+                        </button>
+                      )}
+                    </>
+                  ) : "—"}
+                </td>
+                {!disabled && (
+                  <td className={td}>
+                    <button type="button" onClick={() => removeLine(i)} className="text-rose-400 hover:text-rose-600 text-sm px-1">✕</button>
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {!disabled && (
+        <button type="button" onClick={addLine} className="text-sky-600 hover:text-sky-800 text-xs underline mt-2">+ Add line</button>
+      )}
+    </div>
+  );
+}
+
 // ── Shared "Create Group" / "Add Member" modals ─────────────────────────────
 // Each is its own BlockingLayer so it registers as the top layer — otherwise
 // a parent DrawerBase's global focusin handler keeps yanking focus back to
