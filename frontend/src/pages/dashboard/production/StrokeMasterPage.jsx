@@ -73,6 +73,12 @@ export default function StrokeMasterPage() {
     queryFn: () => listStrokeMasters({ company_id: companyFilter || undefined, status: statusFilter || undefined }),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
+  const createCompanyStrokesQ = useQuery({
+    queryKey: ["prod-stroke-masters-create-check", form.company_id],
+    queryFn: () => listStrokeMasters({ company_id: form.company_id || undefined }),
+    select: (d) => Array.isArray(d) ? d : d?.data ?? [],
+    enabled: Boolean(form.company_id),
+  });
 
   const companiesQ = useQuery({ queryKey: ["om-companies"], queryFn: () => listCompaniesForOm() });
   const uomsQ = useQuery({ queryKey: ["om-uoms"], queryFn: () => listUoms({ is_active: true, limit: 500 }), select: (d) => d?.data ?? [] });
@@ -105,6 +111,22 @@ export default function StrokeMasterPage() {
   const prodshadeOptions = (prodshadeMaterialsByType[form.material_type] ?? []).map((m) => ({
     value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
   }));
+
+  const createCheckStrokes = createCompanyStrokesQ.data ?? [];
+  const normalizedStrokeNumber = String(form.stroke_number ?? "").trim();
+  const normalizedProdCode = String(form.prod_code ?? "").trim().toUpperCase();
+  const normalizedShadeCode = String(form.shade_code ?? "").trim().toUpperCase();
+  const duplicateStroke = !form.company_id || !normalizedStrokeNumber
+    ? null
+    : createCheckStrokes.find((stroke) => {
+        if (String(stroke.stroke_number ?? "").trim() !== normalizedStrokeNumber) return false;
+        if (form.prodshade_mode === "existing") {
+          return String(stroke.prodshade_material_id ?? "") === String(form.prodshade_material_id ?? "");
+        }
+        return String(stroke.prod_code ?? "").trim().toUpperCase() === normalizedProdCode
+          && String(stroke.shade_code ?? "").trim().toUpperCase() === normalizedShadeCode;
+      }) ?? null;
+  const isDuplicateBlocked = Boolean(duplicateStroke);
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -192,6 +214,10 @@ export default function StrokeMasterPage() {
 
   async function handleCreate(e) {
     e.preventDefault();
+    if (isDuplicateBlocked) {
+      toast("Duplicate blocked: this Prodshade + Stroke Number combination already exists.", "error");
+      return;
+    }
     if (!validateHeader(form)) return;
     const sum = dosageSumOf(lines);
     if (lines.some((l) => l.material_id) && Math.abs(sum - 100) > 0.01) {
@@ -330,7 +356,7 @@ export default function StrokeMasterPage() {
         initialFocusRef={firstInputRef}
         width="min(680px, calc(100vw - 24px))"
         actions={renderDrawerActions([
-          { label: "Save Draft", tone: "primary", onClick: handleCreate, disabled: saving },
+          { label: "Save Draft", tone: "primary", onClick: handleCreate, disabled: saving || isDuplicateBlocked },
           { label: "Cancel", tone: "neutral", onClick: () => setDrawerOpen(false) },
         ])}
       >
@@ -373,10 +399,24 @@ export default function StrokeMasterPage() {
                 {form.prodshade_mode === "new" && (
                   <p className="text-[11px] text-slate-400">Material Master ({form.material_type}) will be created automatically when this stroke is Approved — not on Save Draft.</p>
                 )}
+                {isDuplicateBlocked && (
+                  <p className="text-[11px] font-medium text-rose-600">
+                    Duplicate blocked: this Prodshade + Stroke Number combination already exists.
+                  </p>
+                )}
               </div>
             </Field>
             <Field label="Stroke Number" required>
-              <input ref={firstInputRef} className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono h-7 w-full" value={form.stroke_number} onChange={(e) => setForm((f) => ({ ...f, stroke_number: e.target.value }))} placeholder="Numeric only" required />
+              <input
+                ref={firstInputRef}
+                className={`border rounded px-2 py-1.5 text-sm font-mono h-7 w-full ${
+                  isDuplicateBlocked ? "border-rose-500 bg-rose-50 text-rose-700" : "border-slate-300"
+                }`}
+                value={form.stroke_number}
+                onChange={(e) => setForm((f) => ({ ...f, stroke_number: e.target.value }))}
+                placeholder="Numeric only"
+                required
+              />
             </Field>
             <Field label="Description">
               <input className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-full" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Optional" />
