@@ -223,7 +223,7 @@ export default function GateEntryDetailPage() {
             <ErpDenseGrid
               columns={[
                 { key: "line_number", label: "Line", width: "70px" },
-                { key: "material_name", label: "Material", width: "220px", render: (row) => row.material_name || row.material_id || "—" },
+                { key: "material_name", label: "Material", width: "220px", render: (row) => row.material_name || "—" },
                 {
                   key: "linked_csn",
                   label: "CSN",

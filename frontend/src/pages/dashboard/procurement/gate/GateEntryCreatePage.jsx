@@ -237,23 +237,39 @@ export default function GateEntryCreatePage() {
     setSaving(true);
     try {
       const gw = Number(grossWeight);
+      // Gross weight is captured once per vehicle (weighbridge reading), not per line.
+      // Split it across lines proportionally by received qty (SAP-style) instead of
+      // repeating the vehicle total on every line — the last line absorbs any
+      // rounding remainder so the per-line values always sum back to gw exactly.
+      const qtyTotal = activeLines.reduce((sum, l) => sum + (Number(l.rcvQty) || 0), 0);
+      let allocatedGrossWeight = 0;
       const created = await createGateEntry({
         company_id: companyId,
         entry_date: entryDate,
         entry_time: time12to24(entryTime, ampm),
         vehicle_number: vehicleNumber.trim().toUpperCase(),
         gross_weight: gw,
-        lines: activeLines.map((l) => {
+        lines: activeLines.map((l, index) => {
           const isBulk = ["BULK", "TANKER"].includes((l.po.delivery_type || "").toUpperCase());
+          const rcvQty = Number(l.rcvQty) || 0;
+          let lineGrossWeight;
+          if (index === activeLines.length - 1) {
+            lineGrossWeight = Number((gw - allocatedGrossWeight).toFixed(4));
+          } else if (qtyTotal > 0) {
+            lineGrossWeight = Number(((gw * rcvQty) / qtyTotal).toFixed(4));
+          } else {
+            lineGrossWeight = Number((gw / activeLines.length).toFixed(4));
+          }
+          allocatedGrossWeight += lineGrossWeight;
           return {
             csn_id: isBulk ? null : (l.csn?.id || null),
             po_line_id: isBulk ? (l.poLine?.id || "") : (l.csn?.po_line_id || ""),
             material_id: isBulk ? (l.poLine?.material_id || "") : (l.csn?.material_id || ""),
-            ge_qty: Number(l.rcvQty),
+            ge_qty: rcvQty,
             uom_code: isBulk ? (l.poLine?.uom_code || l.poLine?.po_uom_code || "") : (l.csn?.po_uom_code || ""),
             challan_or_invoice_no: l.lrNumber.trim() || null,
             rst_number: l.lrDate || null,
-            gross_weight: gw,
+            gross_weight: lineGrossWeight,
           };
         }),
       });

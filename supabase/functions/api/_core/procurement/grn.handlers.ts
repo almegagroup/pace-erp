@@ -252,9 +252,9 @@ async function resolveStorageLocationName(slocId: string | null): Promise<{ loca
   if (!slocId) return { location_code: null, location_name: null };
   const { data } = await serviceRoleClient
     .schema("erp_inventory").from("storage_location_master")
-    .select("location_code, location_name")
+    .select("code, name")
     .eq("id", slocId).maybeSingle();
-  return { location_code: data?.location_code ?? null, location_name: data?.location_name ?? null };
+  return { location_code: data?.code ?? null, location_name: data?.name ?? null };
 }
 
 async function resolveTransporterName(transporterId: string | null): Promise<string | null> {
@@ -315,7 +315,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
         : { data: [], error: null },
       slocIds.length > 0
         ? serviceRoleClient.schema("erp_inventory").from("storage_location_master")
-            .select("id, location_code, location_name").in("id", slocIds)
+            .select("id, code, name").in("id", slocIds)
         : { data: [], error: null },
     ]);
     const matMap = new Map((matResp.data ?? []).map((m: JsonRecord) => [m.id, m]));
@@ -327,8 +327,8 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
         ...l,
         pace_code: mat?.pace_code ?? null,
         material_name: mat?.material_name ?? null,
-        location_code: sloc?.location_code ?? null,
-        location_name: sloc?.location_name ?? null,
+        location_code: sloc?.code ?? null,
+        location_name: sloc?.name ?? null,
       };
     });
   }
@@ -415,6 +415,17 @@ export async function getGELinesForGRNHandler(
           .in("id", csnIds)
       : { data: [] };
 
+    // Bulk-resolve the transporter name for whichever transporter the CSN carries,
+    // so the GRN create form can show it pre-filled instead of an apparently-empty field.
+    const csnTransporterIds = [...new Set(
+      (csnResp.data ?? []).map((c: JsonRecord) => String(c.domestic_transporter_id ?? c.transporter_id ?? "")).filter(Boolean)
+    )];
+    const csnTransporterResp = csnTransporterIds.length > 0
+      ? await serviceRoleClient.schema("erp_master").from("transporter_master")
+          .select("id, transporter_code, transporter_name").in("id", csnTransporterIds)
+      : { data: [] };
+    const csnTransporterMap = new Map((csnTransporterResp.data ?? []).map((t: JsonRecord) => [t.id, t]));
+
     // Bulk fetch vendors via PO chain (gate_entry has no vendor_id column)
     const vendorIds = [...new Set((poResp.data ?? []).map((p: JsonRecord) => String(p.vendor_id ?? "")).filter(Boolean))];
     const vendorResp = vendorIds.length > 0
@@ -457,6 +468,8 @@ export async function getGELinesForGRNHandler(
       const po = poLine ? poMap.get(String(poLine.po_id)) : null;
       const vendor = po ? vendorMap.get(String(po.vendor_id)) : null;
       const csn = l.csn_id ? csnMap.get(String(l.csn_id)) : null;
+      const csnTransporterId = csn?.domestic_transporter_id ?? csn?.transporter_id ?? null;
+      const csnTransporter = csnTransporterId ? csnTransporterMap.get(String(csnTransporterId)) : null;
       const existingGrn = grnByLineId.get(String(l.id));
       const lineGrnStatus = existingGrn && existingGrn.status === "POSTED"
         ? "DONE"
@@ -484,7 +497,10 @@ export async function getGELinesForGRNHandler(
         csn_invoice_number: csn?.invoice_number ?? null,
         csn_invoice_date: csn?.invoice_date ?? null,
         csn_bl_number: csn?.bl_number ?? null,
-        csn_transporter_id: csn?.domestic_transporter_id ?? csn?.transporter_id ?? null,
+        csn_transporter_id: csnTransporterId,
+        csn_transporter_name: csnTransporter
+          ? `${csnTransporter.transporter_code} — ${csnTransporter.transporter_name}`
+          : null,
         csn_lr_number: csn?.lr_number ?? null,
         csn_lr_date: csn?.lr_date ?? null,
         line_grn_status: lineGrnStatus,

@@ -194,7 +194,7 @@ async function hydrateGateEntry(gateEntryId: string): Promise<JsonRecord> {
       : Promise.resolve({ data: [], error: null }),
     matIds.length > 0
       ? serviceRoleClient.schema("erp_master").from("material_master")
-          .select("id, material_code, material_name")
+          .select("id, pace_code, material_name")
           .in("id", matIds)
       : Promise.resolve({ data: [], error: null }),
     serviceRoleClient.schema("erp_procurement").from("gate_exit_inbound")
@@ -204,6 +204,7 @@ async function hydrateGateEntry(gateEntryId: string): Promise<JsonRecord> {
   ]);
 
   if (csns.error) throw new Error("CSN_FETCH_FAILED");
+  if (mats.error) throw new Error("MATERIAL_FETCH_FAILED");
   if (gateExitResp.error) throw new Error("GATE_EXIT_FETCH_FAILED");
 
   const matMap = new Map<string, JsonRecord>();
@@ -217,7 +218,7 @@ async function hydrateGateEntry(gateEntryId: string): Promise<JsonRecord> {
       const mat = matMap.get(String(line.material_id));
       return {
         ...line,
-        material_name: mat ? `${mat.material_code} — ${mat.material_name}` : null,
+        material_name: mat ? `${mat.pace_code} — ${mat.material_name}` : null,
         linked_csn: (csns.data ?? []).find((csn: JsonRecord) => String(csn.id) === String(line.csn_id)) ?? null,
       };
     }),
@@ -1077,7 +1078,7 @@ export async function gateReportHandler(
     let geQuery = serviceRoleClient
       .schema("erp_procurement")
       .from("gate_entry")
-      .select("id, ge_number, ge_date, company_id, ge_type, status, remarks")
+      .select("id, ge_number, ge_date, company_id, ge_type, status, remarks, vehicle_number")
       .order("ge_date", { ascending: false });
 
     if (companyId) geQuery = geQuery.eq("company_id", companyId);
@@ -1121,7 +1122,7 @@ export async function gateReportHandler(
       ? await serviceRoleClient
           .schema("erp_procurement")
           .from("goods_receipt")
-          .select("id, gate_entry_line_id, grn_number, grn_date, vendor_id")
+          .select("id, gate_entry_line_id, grn_number, grn_date, vendor_id, invoice_number")
           .in("gate_entry_line_id", lineIds)
       : { data: [] };
     const grnByLineMap = new Map(
@@ -1176,6 +1177,7 @@ export async function gateReportHandler(
         ge_type: ge.ge_type,
         ge_status: ge.status,
         ge_remarks: ge.remarks ?? null,
+        vehicle_number: ge.vehicle_number ?? null,
         line_number: line.line_number,
         material_code: mat?.pace_code ?? null,
         material_name: mat?.material_name ?? null,
@@ -1187,6 +1189,7 @@ export async function gateReportHandler(
         vendor_name: vendor?.vendor_name ?? null,
         grn_number: grn ? (grn as JsonRecord).grn_number : null,
         grn_date: grnDate,
+        invoice_number: grn ? (grn as JsonRecord).invoice_number ?? null : null,
         gex_number: gex ? (gex as JsonRecord).exit_number : null,
         gex_date: gexDate,
         tare_weight: gex ? (gex as JsonRecord).tare_weight : null,

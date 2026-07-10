@@ -312,7 +312,7 @@ export async function getProcurementPlanningHandler(
       const { data, error } = await serviceRoleClient
         .schema("erp_master")
         .from("material_master")
-        .select("id, material_code, material_name, base_uom_code")
+        .select("id, pace_code, material_name, base_uom_code")
         .in("id", materialIds);
 
       if (error) {
@@ -356,7 +356,7 @@ export async function getProcurementPlanningHandler(
 
       return {
         material_id: rowMaterialId,
-        material_code: toTrimmedString(material?.material_code),
+        material_code: toTrimmedString(material?.pace_code),
         material_name: toTrimmedString(material?.material_name),
         base_uom_code: toTrimmedString(material?.base_uom_code),
         company_id: rowCompanyId,

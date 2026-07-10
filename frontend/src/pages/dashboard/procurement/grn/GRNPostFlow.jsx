@@ -205,7 +205,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const [gstPct, setGstPct] = useState(_saved.gstPct ?? "");
   const [transporterId, setTransporterId] = useState(_saved.transporterId ?? (geLine.csn_transporter_id ?? ""));
   const [transporterSearch, setTransporterSearch] = useState("");
-  const [transporterName, setTransporterName] = useState(_saved.transporterName ?? "");
+  const [transporterName, setTransporterName] = useState(_saved.transporterName ?? (geLine.csn_transporter_name ?? ""));
   const [lrNumber, setLrNumber] = useState(_saved.lrNumber ?? (geLine.csn_lr_number ?? ""));
   const [lrDate, setLrDate] = useState(_saved.lrDate ?? (geLine.csn_lr_date ?? ""));
   const [batchLotNumber, setBatchLotNumber] = useState(_saved.batchLotNumber ?? "");

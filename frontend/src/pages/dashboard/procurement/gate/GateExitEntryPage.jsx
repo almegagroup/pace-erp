@@ -73,6 +73,7 @@ export default function GateExitEntryPage() {
   const [ampm, setAmpm] = useState(initTimeState.ampm);
   const [tareWeight, setTareWeight] = useState("");
   const [remarks, setRemarks] = useState("");
+  const [successExit, setSuccessExit] = useState(null);
 
   const hasGateExit = Boolean(detail?.gate_exit_inbound?.id);
   const geStatus = String(detail?.status || "").toUpperCase();
@@ -123,6 +124,7 @@ export default function GateExitEntryPage() {
     setAmpm(t.ampm);
     setTareWeight("");
     setRemarks("");
+    setSuccessExit(null);
     geInputRef.current?.focus();
   }
 
@@ -147,8 +149,8 @@ export default function GateExitEntryPage() {
         tare_weight: tareWeight ? Number(tareWeight) : null,
         remarks: remarks.trim() || null,
       });
-      setNotice(`Gate Exit ${result.exit_number} created. ${detail.ge_number} is now gate exited.`);
       setDetail((current) => ({ ...current, gate_exit_inbound: result }));
+      setSuccessExit({ number: result.exit_number || "—", geNumber: detail.ge_number });
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "GEX_CREATE_FAILED");
     } finally {
@@ -165,6 +167,10 @@ export default function GateExitEntryPage() {
 
   useEffect(() => {
     function onKey(e) {
+      if (successExit) {
+        if (e.key === "Escape" || e.key === "Enter") { e.preventDefault(); resetForm(); }
+        return;
+      }
       if (e.key === "F4") {
         const active = document.activeElement;
         if (active && active.type === "date") {
@@ -179,7 +185,7 @@ export default function GateExitEntryPage() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [successExit]);
 
   return (
     <ErpScreenScaffold
@@ -397,7 +403,7 @@ export default function GateExitEntryPage() {
               <ErpDenseGrid
                 columns={[
                   { key: "line_number", label: "Line", width: "70px" },
-                  { key: "material_name", label: "Material", width: "220px", render: (row) => row.material_name || row.material_id || "—" },
+                  { key: "material_name", label: "Material", width: "220px", render: (row) => row.material_name || "—" },
                   { key: "linked_csn", label: "CSN", width: "140px", render: (row) => row.linked_csn?.csn_number || row.csn_id || "—" },
                   { key: "ge_qty", label: "Received Qty", width: "110px" },
                   { key: "uom_code", label: "UOM", width: "90px" },
@@ -412,6 +418,38 @@ export default function GateExitEntryPage() {
           </>
         )}
       </div>
+
+      {/* Success Modal — mirrors the GE-creation confirmation popup */}
+      {successExit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-[340px] overflow-hidden border border-slate-300 bg-white shadow-xl">
+            <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.1em] text-emerald-700">
+                Gate exit created
+              </p>
+            </div>
+            <div className="px-5 py-5">
+              <p className="mb-1 text-xs text-slate-500">Exit number</p>
+              <p className="font-mono text-[28px] font-semibold tracking-wider text-slate-900">
+                {successExit.number}
+              </p>
+              <p className="mt-3 text-xs text-slate-500">
+                {successExit.geNumber} is now gate exited. Note this number, then close to look up the next GE.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3">
+              <button
+                type="button"
+                className="h-9 border border-sky-700 bg-sky-600 px-4 text-sm font-semibold text-white"
+                onClick={resetForm}
+                autoFocus
+              >
+                Close (Enter / Esc)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </ErpScreenScaffold>
   );
 }

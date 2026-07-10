@@ -61,7 +61,7 @@ export default function GateReportPage() {
     const q = search.toLowerCase();
     return allRows.filter((r) =>
       [r.ge_number, r.material_code, r.material_name, r.vendor_name, r.vendor_code,
-       r.grn_number, r.gex_number, r.ge_type, r.ge_status]
+       r.grn_number, r.gex_number, r.ge_type, r.ge_status, r.vehicle_number, r.invoice_number]
         .some((v) => String(v ?? "").toLowerCase().includes(q))
     );
   }, [allRows, search]);
@@ -145,11 +145,13 @@ export default function GateReportPage() {
             columns={[
               { key: "ge_number",       label: "GE Number",     width: "120px" },
               { key: "company_code",    label: "Company",       width: "90px",  render: (r) => r.company_code || "—" },
+              { key: "vehicle_number",  label: "Vehicle No.",   width: "110px", render: (r) => r.vehicle_number || "—" },
               { key: "vendor",          label: "Vendor",        width: "180px", render: (r) => r.vendor_name ? `${r.vendor_code || ""} — ${r.vendor_name}`.replace(/^ — /, "") : "—" },
               { key: "material_code",   label: "Material Code", width: "120px", render: (r) => r.material_code || "—" },
               { key: "material_name",   label: "Material Name", render: (r) => r.material_name || "—" },
               { key: "ge_qty",          label: "Qty",           width: "90px",  render: (r) => r.ge_qty != null ? `${Number(r.ge_qty).toFixed(3)} ${r.uom_code || ""}`.trim() : "—" },
               { key: "grn_number",      label: "GRN No.",       width: "110px", render: (r) => r.grn_number || "—" },
+              { key: "invoice_number",  label: "Invoice No.",   width: "120px", render: (r) => r.invoice_number || "—" },
               { key: "gex_number",      label: "GEX No.",       width: "110px", render: (r) => r.gex_number || "—" },
               { key: "ge_date",         label: "GE Date",       width: "100px" },
               { key: "grn_date",        label: "GRN Date",      width: "100px", render: (r) => r.grn_date || "—" },
