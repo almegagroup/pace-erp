@@ -38,15 +38,6 @@ function normalizeNullableNumber(value: unknown): string {
   return Number.isFinite(n) ? String(n) : "";
 }
 
-function usesSkuAsFgName(productionMode: unknown): boolean {
-  const normalized = normalizeNullableString(productionMode).toUpperCase();
-  return normalized === "MTO"
-    || normalized === "HPS"
-    || normalized === "MTEST"
-    || normalized === "LIQUID_ADMIX"
-    || normalized === "LIQUID_HPS";
-}
-
 function buildFgSku(prodshadeCode: string, packCode: string, variant: string): string {
   return [
     normalizeNullableString(prodshadeCode),
@@ -138,7 +129,21 @@ async function ensureFgMaterialForConfig(
   if (!resolved.prodshade || !resolved.packCodeRow || !resolved.skuString) {
     return { fgMaterialId: null, fgPaceCode: null };
   }
+  const prodshadeDescription = normalizeNullableString(
+    resolved.prodshade.document_name ?? resolved.prodshade.material_name ?? resolved.skuString,
+  );
+  const desiredDocName = prodshadeDescription || null;
   if (resolved.fgMaterialId) {
+    await serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .update({
+        external_code: resolved.skuString,
+        material_name: resolved.skuString,
+        short_name: resolved.skuString.length > 50 ? resolved.skuString.slice(0, 50) : resolved.skuString,
+        document_name: desiredDocName,
+      })
+      .eq("id", resolved.fgMaterialId);
     return { fgMaterialId: resolved.fgMaterialId, fgPaceCode: resolved.fgPaceCode };
   }
 
@@ -147,8 +152,6 @@ async function ensureFgMaterialForConfig(
   const skuString = resolved.skuString;
   const shadeCode = normalizeNullableString(prodshade.shade_code);
   const packCode = normalizeNullableString(packCodeRow.pack_code);
-  const prodMode = normalizeNullableString(prodshade.production_mode ?? "");
-  const prodshadeDescription = normalizeNullableString(prodshade.document_name ?? prodshade.material_name ?? skuString);
 
   const fgCountResult = await serviceRoleClient
     .schema("erp_master")
@@ -158,9 +161,6 @@ async function ensureFgMaterialForConfig(
 
   const nextNum = (fgCountResult.count ?? 0) + 1;
   const newPaceCode = `FG-${String(nextNum).padStart(5, "0")}`;
-  const useSkuName = usesSkuAsFgName(prodMode);
-  const humanName = useSkuName ? skuString : (prodshadeDescription || skuString);
-  const docName = useSkuName ? (prodshadeDescription || null) : skuString;
   const shortName = skuString.length > 50 ? skuString.slice(0, 50) : skuString;
 
   const { data: newFg, error: fgInsertErr } = await serviceRoleClient
@@ -169,7 +169,7 @@ async function ensureFgMaterialForConfig(
     .insert({
       pace_code: newPaceCode,
       external_code: skuString,
-      material_name: humanName || skuString,
+      material_name: skuString,
       short_name: shortName,
       material_type: "FG",
       base_uom_code: "KG",
@@ -186,7 +186,7 @@ async function ensureFgMaterialForConfig(
       qa_required_on_fg: true,
       bom_exists: false,
       delivery_tolerance_enabled: false,
-      document_name: docName || null,
+      document_name: desiredDocName,
       created_by: ctx.auth_user_id,
     })
     .select("id, pace_code")
@@ -437,13 +437,11 @@ export async function listPackConfigsHandler(req: Request, ctx: ProdHandlerConte
         normalizeNullableString(packCode.pack_code),
         normalizeNullableString(row.variant),
       );
-      const prodshadeDescription = normalizeNullableString(material.document_name ?? material.material_name);
-      const useSkuName = usesSkuAsFgName(material.production_mode);
       return {
         ...row,
         prodshade_display: normalizeNullableString(material.external_code) || normalizeNullableString(material.shade_code) || null,
         fg_sku: skuString || null,
-        fg_material_name: useSkuName ? (skuString || null) : (prodshadeDescription || skuString || null),
+        fg_material_name: skuString || null,
       };
     });
 
