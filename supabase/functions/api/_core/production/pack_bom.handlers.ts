@@ -10,6 +10,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -64,6 +65,25 @@ async function getMaterialMapByIds(
   return matMap;
 }
 
+// PostgREST's select parser does not support the alias:schema.table!fk(...)
+// cross-schema embed syntax (PGRST100) — batch-fetch by id and merge in JS.
+async function getGroupMapByIds(ids: string[]): Promise<Map<string, JsonRecord>> {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (uniqueIds.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_category_group")
+    .select("id, group_code, group_name")
+    .in("id", uniqueIds);
+  if (error) {
+    console.error("[pack_bom.getGroupMapByIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BOM_GROUP_BATCH_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  return map;
+}
+
 // ── PACK BOM ──────────────────────────────────────────────────────────────────
 
 // GET /api/production/pack-boms
@@ -101,10 +121,15 @@ export async function listPackBomsHandler(
       "PROD_BOM_LIST_FAILED",
       "id, pace_code, material_name, material_type, pack_code, shade_code",
     );
+    const userDisplayMap = await resolveUserDisplayNames(rows.flatMap((r) => [
+      String(r.created_by ?? ""), String(r.approved_by ?? ""),
+    ]));
     return okResponse({
       data: rows.map((row) => ({
         ...row,
         sku: skuMap.get(String(row.sku_material_id ?? "")) ?? null,
+        created_by_display: userDisplayMap.get(String(row.created_by ?? "")) ?? null,
+        approved_by_display: userDisplayMap.get(String(row.approved_by ?? "")) ?? null,
       })),
     }, ctx.request_id, req);
   } catch (err) {
@@ -143,26 +168,33 @@ export async function getPackBomHandler(
 
     const bom = data as JsonRecord;
     const lines = ((bom.lines ?? []) as JsonRecord[]);
-    const skuMap = await getMaterialMapByIds(
-      [String(bom.sku_material_id ?? "")],
-      "[pack_bom.getPackBom]",
-      "PROD_BOM_FETCH_FAILED",
-      "id, pace_code, material_name, material_type, pack_code, shade_code",
-    );
-    const lineMaterialMap = await getMaterialMapByIds(
-      lines.map((line) => String(line.material_id ?? "")),
-      "[pack_bom.getPackBom]",
-      "PROD_BOM_FETCH_FAILED",
-      "id, pace_code, material_name, base_uom_code",
-    );
+    const [skuMap, lineMaterialMap, groupMap, userDisplayMap] = await Promise.all([
+      getMaterialMapByIds(
+        [String(bom.sku_material_id ?? "")],
+        "[pack_bom.getPackBom]",
+        "PROD_BOM_FETCH_FAILED",
+        "id, pace_code, material_name, material_type, pack_code, shade_code",
+      ),
+      getMaterialMapByIds(
+        lines.map((line) => String(line.material_id ?? "")),
+        "[pack_bom.getPackBom]",
+        "PROD_BOM_FETCH_FAILED",
+        "id, pace_code, material_name, base_uom_code",
+      ),
+      getGroupMapByIds(lines.map((line) => String(line.material_group_id ?? ""))),
+      resolveUserDisplayNames([String(bom.created_by ?? ""), String(bom.approved_by ?? "")]),
+    ]);
 
     return okResponse({
       data: {
         ...bom,
         sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null,
+        created_by_display: userDisplayMap.get(String(bom.created_by ?? "")) ?? null,
+        approved_by_display: userDisplayMap.get(String(bom.approved_by ?? "")) ?? null,
         lines: lines.map((line) => ({
           ...line,
           material: lineMaterialMap.get(String(line.material_id ?? "")) ?? null,
+          material_group: groupMap.get(String(line.material_group_id ?? "")) ?? null,
         })),
       },
     }, ctx.request_id, req);
@@ -517,18 +549,134 @@ export async function listPackBomChangeRequestsHandler(
       "PROD_BCR_LIST_FAILED",
       "id, pace_code, material_name, pack_code",
     );
+    const userDisplayMap = await resolveUserDisplayNames(rows.flatMap((r) => [
+      String(r.created_by ?? ""), String(r.approved_by ?? ""),
+    ]));
     return okResponse({
       data: rows.map((row) => {
         const bom = ((row.bom ?? null) as JsonRecord | null);
         return {
           ...row,
           bom: bom ? { ...bom, sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null } : null,
+          created_by_display: userDisplayMap.get(String(row.created_by ?? "")) ?? null,
+          approved_by_display: userDisplayMap.get(String(row.approved_by ?? "")) ?? null,
         };
       }),
     }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BCR_LIST_FAILED";
     return bomError(req, ctx, code, 500, "Pack BOM change request list failed");
+  }
+}
+
+// GET /api/production/pack-bom-change-requests/:id
+// Was missing entirely — PR08 previously approved with no visibility into the
+// actual proposed ADD/REMOVE/EDIT lines (drawer just showed the change_request
+// id). Mirrors getStrokeChangeRequestHandler's Current-vs-Proposed shape.
+export async function getPackBomChangeRequestHandler(
+  req: Request,
+  ctx: ProdHandlerContext,
+): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const id = getIdFromPath(req);
+    if (!id) return bomError(req, ctx, "PROD_BCR_ID_MISSING", 400, "Change request ID required");
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_production")
+      .from("pack_bom_change_request")
+      .select("id, pack_bom_id, status, created_by, created_at, approved_by, approved_at, reject_reason")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (error) {
+      console.error("[pack_bom.getPackBomChangeRequest] query failed:", JSON.stringify(error));
+      throw new Error("PROD_BCR_FETCH_FAILED");
+    }
+    if (!data) return bomError(req, ctx, "PROD_BCR_NOT_FOUND", 404, "Change request not found");
+    const row = data as JsonRecord;
+    const packBomId = String(row.pack_bom_id ?? "");
+
+    const [bomRes, lineRes, changeLineRes] = await Promise.all([
+      serviceRoleClient.schema("erp_production").from("pack_bom")
+        .select("id, sku_material_id, status")
+        .eq("id", packBomId).maybeSingle(),
+      serviceRoleClient.schema("erp_production").from("pack_bom_line")
+        .select("id, line_type, material_id, qty, uom_code, has_alternate, material_group_id, display_order")
+        .eq("pack_bom_id", packBomId).order("display_order"),
+      serviceRoleClient.schema("erp_production").from("pack_bom_change_request_line")
+        .select("id, change_request_id, action, bom_line_id, material_id, qty, uom_code, has_alternate, material_group_id, display_order")
+        .eq("change_request_id", id).order("display_order"),
+    ]);
+
+    if (bomRes.error) {
+      console.error("[pack_bom.getPackBomChangeRequest] bom query failed:", JSON.stringify(bomRes.error));
+      throw new Error("PROD_BCR_FETCH_FAILED");
+    }
+    if (lineRes.error) {
+      console.error("[pack_bom.getPackBomChangeRequest] bom line query failed:", JSON.stringify(lineRes.error));
+      throw new Error("PROD_BCR_FETCH_FAILED");
+    }
+    if (changeLineRes.error) {
+      console.error("[pack_bom.getPackBomChangeRequest] change line query failed:", JSON.stringify(changeLineRes.error));
+      throw new Error("PROD_BCR_LINES_FAILED");
+    }
+
+    const bom = bomRes.data as JsonRecord | null;
+    const bomLines = ((lineRes.data ?? []) as JsonRecord[]).filter((l) => l.line_type === "INPUT");
+    const changeLines = (changeLineRes.data ?? []) as JsonRecord[];
+    const bomLineMap = new Map(bomLines.map((l) => [String(l.id), l]));
+
+    const [skuMap, materialMap, groupMap, userDisplayMap] = await Promise.all([
+      getMaterialMapByIds(
+        [String(bom?.sku_material_id ?? "")],
+        "[pack_bom.getPackBomChangeRequest]",
+        "PROD_BCR_FETCH_FAILED",
+        "id, pace_code, material_name, pack_code",
+      ),
+      getMaterialMapByIds(
+        [
+          ...bomLines.map((l) => String(l.material_id ?? "")),
+          ...changeLines.map((l) => String(l.material_id ?? "")),
+        ],
+        "[pack_bom.getPackBomChangeRequest]",
+        "PROD_BCR_FETCH_FAILED",
+        "id, pace_code, material_name, base_uom_code",
+      ),
+      getGroupMapByIds([
+        ...bomLines.map((l) => String(l.material_group_id ?? "")),
+        ...changeLines.map((l) => String(l.material_group_id ?? "")),
+      ]),
+      resolveUserDisplayNames([String(row.created_by ?? ""), String(row.approved_by ?? "")]),
+    ]);
+
+    return okResponse({
+      data: {
+        ...row,
+        created_by_display: userDisplayMap.get(String(row.created_by ?? "")) ?? null,
+        approved_by_display: userDisplayMap.get(String(row.approved_by ?? "")) ?? null,
+        bom: bom ? { ...bom, sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null } : null,
+        change_lines: changeLines.map((line) => {
+          const currentLine = bomLineMap.get(String(line.bom_line_id ?? ""));
+          return {
+            ...line,
+            material: materialMap.get(String(line.material_id ?? "")) ?? null,
+            material_group: groupMap.get(String(line.material_group_id ?? "")) ?? null,
+            old_material_id: currentLine ? currentLine.material_id ?? null : null,
+            old_material: currentLine ? materialMap.get(String(currentLine.material_id ?? "")) ?? null : null,
+            old_qty: currentLine ? currentLine.qty ?? null : null,
+            old_uom_code: currentLine ? currentLine.uom_code ?? null : null,
+            old_has_alternate: currentLine ? Boolean(currentLine.material_group_id) : false,
+            old_group_id: currentLine ? currentLine.material_group_id ?? null : null,
+            old_group: currentLine ? groupMap.get(String(currentLine.material_group_id ?? "")) ?? null : null,
+          };
+        }),
+      },
+    }, ctx.request_id, req);
+  } catch (err) {
+    console.error("[pack_bom.getPackBomChangeRequestHandler] request_id:", ctx.request_id, "error:", err);
+    const code = err instanceof Error ? err.message : "PROD_BCR_FETCH_FAILED";
+    return bomError(req, ctx, code, 500, "Pack BOM change request fetch failed");
   }
 }
 

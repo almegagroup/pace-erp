@@ -3,14 +3,18 @@
  * File-Path: frontend/src/pages/dashboard/production/PackBomApprovalPage.jsx
  * Gate: 27 | Domain: PRODUCTION
  * Purpose: L1 Manager Procurement approves Pack BOMs with BOM Required = Yes.
- *          Can edit PM lines before approving. Reject returns BOM to DRAFT for revision.
+ *          Can edit PM lines before approving. Reject returns BOM to DRAFT
+ *          for revision. Expandable inline row (same pattern as Stroke
+ *          Approval) — DrawerBase's descriptor-array `actions` prop crashes
+ *          with React error #31.
  */
 
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import { listPackBoms, getPackBom, approvePackBom, rejectPackBom } from "./prodApi.js";
+import { listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember } from "../om/omApi.js";
+import { PackBomLinesTable, GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 
 const STATUS_COLORS = {
   DRAFT:  "bg-amber-100 text-amber-800",
@@ -26,15 +30,20 @@ function friendly(code) { return ERRORS[code] ?? code; }
 
 export default function PackBomApprovalPage() {
   const qc = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState("DRAFT");
+  const [statusFilter, setStatusFilter] = useState("");
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [expandedId, setExpandedId] = useState("");
   const [detail, setDetail] = useState(null);
   const [editedLines, setEditedLines] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [rejectMode, setRejectMode] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+
+  const [groupModal, setGroupModal] = useState(null);
+  const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
+  const [memberModal, setMemberModal] = useState(null);
+  const [memberMaterialId, setMemberMaterialId] = useState("");
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -47,44 +56,80 @@ export default function PackBomApprovalPage() {
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
 
-  async function openDetail(id) {
+  const pmMaterialsQ = useQuery({ queryKey: ["om-materials", "PM"], queryFn: () => listMaterials({ material_type: "PM", limit: 500 }), select: (d) => d?.data ?? [] });
+  const groupsQ = useQuery({ queryKey: ["om-material-groups"], queryFn: () => listMaterialCategoryGroups(), select: (d) => d?.data ?? [] });
+  const pmMaterials = pmMaterialsQ.data ?? [];
+  const groups = groupsQ.data ?? [];
+
+  async function toggleExpand(row) {
+    if (expandedId === row.id) {
+      setExpandedId("");
+      setDetail(null);
+      setEditedLines([]);
+      return;
+    }
+    setExpandedId(row.id);
     setDetail(null);
     setEditedLines([]);
     setRejectMode(false);
     setRejectReason("");
     setDetailLoading(true);
-    setDrawerOpen(true);
     try {
-      const d = await getPackBom(id);
+      const d = await getPackBom(row.id);
       setDetail(d);
       setEditedLines(
         (d.lines ?? [])
           .filter((l) => l.line_type === "INPUT")
           .map((l) => ({
-            id: l.id,
-            line_type: "INPUT",
+            _key: l.id,
             material_id: l.material_id ?? "",
-            material_pace: l.material?.pace_code ?? "",
             qty: String(l.qty ?? ""),
-            uom_code: l.uom_code ?? "KG",
-            has_alternate: Boolean(l.has_alternate),
-          }))
+            uom_code: l.uom_code ?? "",
+            has_alternate: Boolean(l.material_group_id),
+            material_group_id: l.material_group_id ?? "",
+          })),
       );
     } catch {
       toast("Failed to load Pack BOM detail.", "error");
-      setDrawerOpen(false);
+      setExpandedId("");
     } finally {
       setDetailLoading(false);
     }
   }
 
-  function updateEditedLine(idx, field, value) {
-    setEditedLines((prev) =>
-      prev.map((l, i) => i === idx ? { ...l, [field]: value } : l)
-    );
+  function openCreateGroupModal(onCreated) {
+    setGroupForm({ group_name: "", description: "" });
+    setGroupModal({ onCreated });
   }
 
-  async function handleApprove() {
+  async function handleCreateGroup() {
+    if (!groupForm.group_name.trim()) { toast("Group name required.", "error"); return; }
+    try {
+      const res = await createMaterialCategoryGroup(groupForm);
+      const newGroup = res?.data ?? res;
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Material group created.");
+      groupModal?.onCreated?.(newGroup.id);
+      setGroupModal(null);
+    } catch (err) { toast(friendly(err.code) || err.message, "error"); }
+  }
+
+  async function handleAddMember() {
+    if (!memberMaterialId) { toast("Select a material first.", "error"); return; }
+    try {
+      await addMaterialCategoryMember({ group_id: memberModal, material_id: memberMaterialId });
+      await qc.invalidateQueries({ queryKey: ["om-material-groups"] });
+      toast("Member added.");
+      setMemberModal(null);
+      setMemberMaterialId("");
+    } catch (err) { toast(friendly(err.code) || err.message, "error"); }
+  }
+
+  async function invalidate() {
+    await qc.invalidateQueries({ queryKey: ["pack-boms-approval"] });
+  }
+
+  async function handleApprove(row) {
     if (!detail) return;
     setSaving(true);
     try {
@@ -96,51 +141,36 @@ export default function PackBomApprovalPage() {
           qty: Number(l.qty),
           uom_code: l.uom_code,
           has_alternate: l.has_alternate,
+          material_group_id: l.has_alternate ? (l.material_group_id || null) : null,
         })),
       ];
-      await approvePackBom(detail.id, { lines: linesToSend });
+      await approvePackBom(row.id, { lines: linesToSend });
       toast("Pack BOM approved and activated.");
-      setDrawerOpen(false);
-      qc.invalidateQueries({ queryKey: ["pack-boms-approval"] });
+      setExpandedId("");
+      await invalidate();
     } catch (err) {
-      toast(friendly(err.message), "error");
+      toast(friendly(err.code) || err.message, "error");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleReject() {
-    if (!detail || !rejectReason.trim()) {
-      toast("Enter a reject reason.", "error");
-      return;
-    }
+  async function handleReject(row) {
+    if (!rejectReason.trim()) { toast("Enter a reject reason.", "error"); return; }
     setSaving(true);
     try {
-      await rejectPackBom(detail.id, { reason: rejectReason.trim() });
+      await rejectPackBom(row.id, { reason: rejectReason.trim() });
       toast("Pack BOM rejected — returned to Procurement for revision.");
-      setDrawerOpen(false);
-      qc.invalidateQueries({ queryKey: ["pack-boms-approval"] });
+      setExpandedId("");
+      await invalidate();
     } catch (err) {
-      toast(friendly(err.message), "error");
+      toast(friendly(err.code) || err.message, "error");
     } finally {
       setSaving(false);
     }
   }
 
   const boms = bomsQ.data ?? [];
-
-  const drawerActions = detail?.status === "DRAFT"
-    ? rejectMode
-      ? [
-          { label: "Confirm Reject", tone: "danger", onClick: handleReject, disabled: saving },
-          { label: "Cancel", tone: "neutral", onClick: () => setRejectMode(false) },
-        ]
-      : [
-          { label: "Approve", tone: "primary", onClick: handleApprove, disabled: saving },
-          { label: "Reject…", tone: "neutral", onClick: () => setRejectMode(true) },
-          { label: "Close", tone: "neutral", onClick: () => setDrawerOpen(false) },
-        ]
-    : [{ label: "Close", tone: "neutral", onClick: () => setDrawerOpen(false) }];
 
   return (
     <ErpScreenScaffold
@@ -149,19 +179,17 @@ export default function PackBomApprovalPage() {
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
-        <div className="flex gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Status</label>
-            <select
-              className="border border-slate-300 rounded px-2 py-1 text-sm"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
-              <option value="">All</option>
-              <option value="DRAFT">Draft</option>
-              <option value="ACTIVE">Active</option>
-            </select>
-          </div>
+        <div className="flex flex-col gap-1 w-40">
+          <label className="text-xs text-slate-500">Status</label>
+          <select
+            className="border border-slate-300 rounded px-2 py-1 text-sm"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+          >
+            <option value="">All</option>
+            <option value="DRAFT">Draft</option>
+            <option value="ACTIVE">Active</option>
+          </select>
         </div>
       </ErpSectionCard>
 
@@ -174,6 +202,7 @@ export default function PackBomApprovalPage() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+                <th className="text-left py-2 px-3 border-b w-8"></th>
                 <th className="text-left py-2 px-3 border-b">SKU Code</th>
                 <th className="text-left py-2 px-3 border-b">SKU Name</th>
                 <th className="text-left py-2 px-3 border-b">Pack Code</th>
@@ -184,138 +213,144 @@ export default function PackBomApprovalPage() {
             </thead>
             <tbody>
               {boms.map((b) => (
-                <tr
-                  key={b.id}
-                  className="hover:bg-sky-50 cursor-pointer border-b border-slate-100 transition-colors"
-                  onClick={() => openDetail(b.id)}
-                >
-                  <td className="py-2 px-3 font-mono font-medium">{b.sku?.pace_code ?? "—"}</td>
-                  <td className="py-2 px-3 text-slate-500">{b.sku?.material_name ?? "—"}</td>
-                  <td className="py-2 px-3 text-slate-500">{b.sku?.pack_code ?? "—"}</td>
-                  <td className="py-2 px-3 text-slate-400 text-xs font-mono">{b.created_by?.slice(0, 8)}…</td>
-                  <td className="py-2 px-3 text-slate-400 text-xs">{b.created_at?.slice(0, 10)}</td>
-                  <td className="py-2 px-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[b.status] ?? "bg-slate-100 text-slate-600"}`}>
-                      {b.status}
-                    </span>
-                  </td>
-                </tr>
+                <React.Fragment key={b.id}>
+                  <tr
+                    className="hover:bg-sky-50 cursor-pointer border-b border-slate-100 transition-colors"
+                    onClick={() => toggleExpand(b)}
+                  >
+                    <td className="py-2 px-3 text-slate-400">{expandedId === b.id ? "▲" : "▼"}</td>
+                    <td className="py-2 px-3 font-mono font-medium">{b.sku?.pace_code ?? "—"}</td>
+                    <td className="py-2 px-3 text-slate-500">{b.sku?.material_name ?? "—"}</td>
+                    <td className="py-2 px-3 text-slate-500">{b.sku?.pack_code ?? "—"}</td>
+                    <td className="py-2 px-3 text-slate-500">{b.created_by_display ?? "—"}</td>
+                    <td className="py-2 px-3 text-slate-400 text-xs">{b.created_at?.slice(0, 10)}</td>
+                    <td className="py-2 px-3">
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[b.status] ?? "bg-slate-100 text-slate-600"}`}>
+                        {b.status}
+                      </span>
+                    </td>
+                  </tr>
+                  {expandedId === b.id && (
+                    <tr className="border-b border-slate-200 bg-slate-50/60">
+                      <td colSpan={7} className="p-4">
+                        {detailLoading ? (
+                          <p className="text-slate-400 text-sm py-4 text-center">Loading…</p>
+                        ) : detail ? (
+                          <div className="flex flex-col gap-4">
+                            <div className="grid grid-cols-3 gap-3 text-sm">
+                              <div>
+                                <span className="text-slate-400 text-xs block mb-0.5">SKU</span>
+                                <p className="font-mono font-semibold">{detail.sku?.pace_code ?? "—"}</p>
+                              </div>
+                              <div>
+                                <span className="text-slate-400 text-xs block mb-0.5">Material Name</span>
+                                <p>{detail.sku?.material_name ?? "—"}</p>
+                              </div>
+                              <div>
+                                <span className="text-slate-400 text-xs block mb-0.5">Pack Code</span>
+                                <p className="font-mono">{detail.sku?.pack_code ?? "—"}</p>
+                              </div>
+                              {detail.reject_reason && (
+                                <div className="col-span-3 bg-amber-50 border border-amber-200 rounded p-2 text-amber-700 text-xs">
+                                  <strong>Previous rejection:</strong> {detail.reject_reason}
+                                </div>
+                              )}
+                            </div>
+
+                            <div>
+                              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">PM Input Lines (editable)</p>
+                              <PackBomLinesTable
+                                lines={editedLines}
+                                setLines={setEditedLines}
+                                materials={pmMaterials}
+                                groups={groups}
+                                onCreateGroup={openCreateGroupModal}
+                                onAddMember={(groupId) => setMemberModal(groupId)}
+                                disabled={b.status !== "DRAFT"}
+                              />
+                            </div>
+
+                            {rejectMode && (
+                              <div className="flex flex-col gap-1">
+                                <label className="text-xs font-semibold text-slate-600">Rejection Reason</label>
+                                <textarea
+                                  className="border border-slate-300 rounded px-2 py-1.5 text-sm w-full h-20 resize-none"
+                                  placeholder="Explain why this Pack BOM is being rejected…"
+                                  value={rejectReason}
+                                  onChange={(e) => setRejectReason(e.target.value)}
+                                />
+                              </div>
+                            )}
+
+                            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                              <button type="button" className="h-8 border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setExpandedId("")}>
+                                Close
+                              </button>
+                              {b.status === "DRAFT" && (
+                                rejectMode ? (
+                                  <>
+                                    <button type="button" className="h-8 border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50" onClick={() => setRejectMode(false)}>
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={saving}
+                                      className="h-8 border border-rose-600 bg-white px-4 text-sm font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                                      onClick={() => handleReject(b)}
+                                    >
+                                      Confirm Reject
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={saving}
+                                      className="h-8 border border-rose-600 bg-white px-4 text-sm font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                                      onClick={() => setRejectMode(true)}
+                                    >
+                                      Reject…
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={saving}
+                                      className="h-8 border border-sky-600 bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+                                      onClick={() => handleApprove(b)}
+                                    >
+                                      Approve
+                                    </button>
+                                  </>
+                                )
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
         )}
       </ErpSectionCard>
 
-      <DrawerBase
-        visible={drawerOpen}
-        title={detail ? `Pack BOM — ${detail.sku?.pace_code ?? "?"}` : "Loading…"}
-        onClose={() => setDrawerOpen(false)}
-        width="min(700px, calc(100vw - 24px))"
-        actions={drawerActions}
-      >
-        {detailLoading ? (
-          <p className="text-slate-400 text-sm p-6 text-center">Loading…</p>
-        ) : detail ? (
-          <div className="p-4 flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">SKU</span>
-                <p className="font-mono font-semibold">{detail.sku?.pace_code ?? "—"}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Status</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[detail.status] ?? "bg-slate-100 text-slate-600"}`}>
-                  {detail.status}
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Material Name</span>
-                <p>{detail.sku?.material_name ?? "—"}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Pack Code</span>
-                <p className="font-mono">{detail.sku?.pack_code ?? "—"}</p>
-              </div>
-              {detail.reject_reason && (
-                <div className="col-span-2 bg-amber-50 border border-amber-200 rounded p-2 text-amber-700 text-xs">
-                  <strong>Previous rejection:</strong> {detail.reject_reason}
-                </div>
-              )}
-            </div>
+      <GroupCreateModal
+        open={Boolean(groupModal)}
+        groupForm={groupForm}
+        setGroupForm={setGroupForm}
+        onCancel={() => setGroupModal(null)}
+        onCreate={handleCreateGroup}
+      />
 
-            {rejectMode && (
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-semibold text-slate-600">Rejection Reason</label>
-                <textarea
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm w-full h-20 resize-none"
-                  placeholder="Explain why this Pack BOM is being rejected…"
-                  value={rejectReason}
-                  onChange={(e) => setRejectReason(e.target.value)}
-                />
-              </div>
-            )}
-
-            <div>
-              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">PM Input Lines (editable)</p>
-              {editedLines.length === 0 ? (
-                <p className="text-slate-400 text-sm">No PM lines.</p>
-              ) : (
-                <table className="w-full text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 uppercase tracking-wide">
-                      <th className="text-left py-1.5 px-2 border-b">#</th>
-                      <th className="text-left py-1.5 px-2 border-b">Material</th>
-                      <th className="text-right py-1.5 px-2 border-b">Qty</th>
-                      <th className="text-left py-1.5 px-2 border-b">UOM</th>
-                      <th className="text-left py-1.5 px-2 border-b">Has Alt.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {editedLines.map((l, i) => (
-                      <tr key={l.id ?? i} className="border-b border-slate-100">
-                        <td className="py-1.5 px-2 text-slate-400">{i + 1}</td>
-                        <td className="py-1.5 px-2">
-                          <input
-                            className="border border-slate-300 rounded px-1.5 py-0.5 text-xs font-mono w-52"
-                            value={l.material_id}
-                            onChange={(e) => updateEditedLine(i, "material_id", e.target.value)}
-                          />
-                          {l.material_pace && <span className="text-slate-400 ml-1">{l.material_pace}</span>}
-                        </td>
-                        <td className="py-1.5 px-2">
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.001"
-                            className="border border-slate-300 rounded px-1.5 py-0.5 text-xs text-right w-20"
-                            value={l.qty}
-                            onChange={(e) => updateEditedLine(i, "qty", e.target.value)}
-                          />
-                        </td>
-                        <td className="py-1.5 px-2">
-                          <input
-                            className="border border-slate-300 rounded px-1.5 py-0.5 text-xs w-14 uppercase"
-                            value={l.uom_code}
-                            onChange={(e) => updateEditedLine(i, "uom_code", e.target.value.toUpperCase())}
-                          />
-                        </td>
-                        <td className="py-1.5 px-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={l.has_alternate}
-                            onChange={(e) => updateEditedLine(i, "has_alternate", e.target.checked)}
-                            className="accent-sky-600"
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        ) : null}
-      </DrawerBase>
+      <MemberAddModal
+        open={Boolean(memberModal)}
+        memberMaterialId={memberMaterialId}
+        setMemberMaterialId={setMemberMaterialId}
+        materialOptions={pmMaterials.map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
+        onCancel={() => setMemberModal(null)}
+        onAdd={handleAddMember}
+      />
     </ErpScreenScaffold>
   );
 }

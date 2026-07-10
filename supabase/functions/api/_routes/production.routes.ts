@@ -83,6 +83,7 @@ import {
   rejectPackBomHandler,
   createPackBomChangeRequestHandler,
   listPackBomChangeRequestsHandler,
+  getPackBomChangeRequestHandler,
   approvePackBomChangeRequestHandler,
   rejectPackBomChangeRequestHandler,
 } from "../_core/production/pack_bom.handlers.ts";
@@ -290,6 +291,9 @@ export async function dispatchProductionRoutes(
   }
 
   // Pack BOM Change Requests /:id actions (PR07/PR08)
+  if (/^\/api\/production\/pack-bom-change-requests\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getPackBomChangeRequestHandler(req, ctx);
+  }
   if (/^\/api\/production\/pack-bom-change-requests\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
     return await approvePackBomChangeRequestHandler(req, ctx);
   }

@@ -365,6 +365,279 @@ export function ChangeBomLinesTable({ lines, setLines, materialsByType, groups, 
   );
 }
 
+// ── Pack BOM (PR05/PR06) — PM Input Lines table ─────────────────────────────
+// Same mechanism as Stroke Master RM lines (material_category_group alternates)
+// but PM-only, no Dosage%, absolute Qty per outer pack unit, UOM auto-derived
+// from the selected PM material's base_uom_code (locked spec: not editable).
+export function PackBomLinesTable({ lines, setLines, materials, groups, onCreateGroup, onAddMember, disabled }) {
+  function addLine() {
+    setLines((l) => [...l, { _key: Math.random().toString(36).slice(2), material_id: "", qty: "", uom_code: "", has_alternate: false, material_group_id: "" }]);
+  }
+  function removeLine(key) { setLines((l) => l.filter((row) => row._key !== key)); }
+  function updateLine(key, patch) {
+    setLines((l) => l.map((row) => (row._key === key ? { ...row, ...patch } : row)));
+  }
+  function updateMaterial(key, materialId) {
+    const mat = materials.find((m) => m.id === materialId);
+    updateLine(key, { material_id: materialId, uom_code: mat?.base_uom_code ?? "" });
+  }
+
+  const materialOptions = materials.map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }));
+  const materialLabelById = new Map(materials.map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]));
+  const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
+
+  const th = "text-left py-1.5 px-2 border-b text-[10px] uppercase tracking-wide text-slate-500 font-semibold";
+  const td = "py-1.5 px-2 align-top";
+
+  return (
+    <div>
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="bg-slate-50">
+            <th className={th}>#</th>
+            <th className={`${th} min-w-[220px]`}>PM Material</th>
+            <th className={`${th} text-right`}>Qty</th>
+            <th className={th}>UOM</th>
+            <th className={th}>Alternate?</th>
+            <th className={`${th} min-w-[150px]`}>Group</th>
+            <th className={`${th} min-w-[180px]`}>Members</th>
+            {!disabled && <th className={th}></th>}
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((line, i) => {
+            const selectedGroup = groups.find((g) => g.id === line.material_group_id);
+            return (
+              <tr key={line._key ?? i} className="border-b border-slate-100">
+                <td className={`${td} text-slate-400`}>{i + 1}</td>
+                <td className={td}>
+                  <ErpComboboxField
+                    value={line.material_id}
+                    onChange={(v) => updateMaterial(line._key, v)}
+                    options={materialOptions}
+                    placeholder="-- Select PM material --"
+                    disabled={disabled}
+                  />
+                </td>
+                <td className={`${td} text-right`}>
+                  <input
+                    className="border border-slate-300 rounded px-2 py-1 text-sm w-24 font-mono text-right"
+                    type="number" step="0.001" min="0"
+                    value={line.qty}
+                    onChange={(e) => updateLine(line._key, { qty: e.target.value })}
+                    disabled={disabled}
+                  />
+                </td>
+                <td className={`${td} text-slate-500`}>{line.uom_code || "—"}</td>
+                <td className={td}>
+                  <input
+                    type="checkbox"
+                    checked={line.has_alternate}
+                    disabled={disabled}
+                    onChange={(e) => updateLine(line._key, { has_alternate: e.target.checked, material_group_id: e.target.checked ? line.material_group_id : "" })}
+                  />
+                </td>
+                <td className={td}>
+                  {line.has_alternate ? (
+                    <div className="flex items-center gap-1.5">
+                      <ErpComboboxField
+                        value={line.material_group_id}
+                        onChange={(v) => updateLine(line._key, { material_group_id: v })}
+                        options={groupOptions}
+                        placeholder="-- Select --"
+                        disabled={disabled}
+                      />
+                      {!disabled && (
+                        <button
+                          type="button"
+                          className="text-sky-600 hover:text-sky-800 text-[10px] underline whitespace-nowrap"
+                          onClick={() => onCreateGroup((newGroupId) => updateLine(line._key, { material_group_id: newGroupId }))}
+                        >
+                          + New
+                        </button>
+                      )}
+                    </div>
+                  ) : <span className="text-slate-400">—</span>}
+                </td>
+                <td className={`${td} text-xs text-slate-500`}>
+                  {line.has_alternate && selectedGroup ? (
+                    <>
+                      {(selectedGroup.members ?? []).length === 0
+                        ? "none yet"
+                        : selectedGroup.members.map((m) => materialLabelById.get(m.material_id) ?? "—").join(", ")}
+                      {!disabled && (
+                        <button type="button" className="text-sky-600 hover:text-sky-800 underline ml-1" onClick={() => onAddMember(selectedGroup.id)}>+ Add</button>
+                      )}
+                    </>
+                  ) : "—"}
+                </td>
+                {!disabled && (
+                  <td className={td}>
+                    <button type="button" onClick={() => removeLine(line._key)} className="text-rose-400 hover:text-rose-600 text-sm px-1">✕</button>
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {!disabled && (
+        <button type="button" onClick={addLine} className="text-sky-600 hover:text-sky-800 text-xs underline mt-2">+ Add PM Line</button>
+      )}
+    </div>
+  );
+}
+
+const CHANGE_ACTION_COLORS = { ADD: "bg-emerald-100 text-emerald-800", REMOVE: "bg-rose-100 text-rose-800", EDIT: "bg-sky-100 text-sky-800" };
+
+// ── Change Pack BOM (PR07/PR08) — action-aware ADD/REMOVE/EDIT lines table ──
+// Unlike Stroke's fixed 1:1 substitution model, Pack BOM changes are free-form
+// CRUD on PM rows (add new / remove existing / edit qty or substitute item).
+// `lines` shape: { _key, action, bom_line_id, old_material_id, material_id,
+//   qty, uom_code, has_alternate, material_group_id, marked_remove }
+export function PackBomChangeLinesTable({ lines, setLines, materials, groups, onCreateGroup, onAddMember, editable }) {
+  function updateLine(key, patch) {
+    setLines((l) => l.map((row) => (row._key === key ? { ...row, ...patch } : row)));
+  }
+  function toggleRemove(key) {
+    setLines((l) => l.map((row) => {
+      if (row._key !== key) return row;
+      const nowRemoved = !row.marked_remove;
+      return { ...row, marked_remove: nowRemoved, action: nowRemoved ? "REMOVE" : (row.bom_line_id ? "EDIT" : "ADD") };
+    }));
+  }
+  function deleteAddedRow(key) { setLines((l) => l.filter((row) => row._key !== key)); }
+  function addLine() {
+    setLines((l) => [...l, {
+      _key: `new-${Math.random().toString(36).slice(2)}`,
+      action: "ADD", bom_line_id: null, old_material_id: "",
+      material_id: "", qty: "", uom_code: "", has_alternate: false, material_group_id: "", marked_remove: false,
+    }]);
+  }
+  function updateMaterial(key, materialId) {
+    const mat = materials.find((m) => m.id === materialId);
+    updateLine(key, { material_id: materialId, uom_code: mat?.base_uom_code ?? "" });
+  }
+
+  const materialOptions = materials.map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }));
+  const materialLabelById = new Map(materials.map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]));
+  const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
+
+  const th = "text-left py-1.5 px-2 border-b text-[10px] uppercase tracking-wide text-slate-500 font-semibold";
+  const td = "py-1.5 px-2 align-top";
+
+  return (
+    <div>
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="bg-slate-50">
+            <th className={th}>#</th>
+            <th className={th}>Action</th>
+            <th className={`${th} min-w-[180px]`}>Current Material</th>
+            <th className={`${th} min-w-[200px]`}>Proposed Material</th>
+            <th className={`${th} text-right`}>Qty</th>
+            <th className={th}>UOM</th>
+            <th className={th}>Alternate?</th>
+            <th className={`${th} min-w-[150px]`}>Group</th>
+            <th className={`${th} min-w-[160px]`}>Members</th>
+            {editable && <th className={th}></th>}
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((line, i) => {
+            const removed = line.marked_remove || line.action === "REMOVE";
+            const isAdd = line.action === "ADD";
+            const rowEditable = editable && !removed;
+            const selectedGroup = groups.find((g) => g.id === line.material_group_id);
+
+            return (
+              <tr key={line._key ?? i} className={`border-b border-slate-100 ${removed ? "opacity-50 bg-rose-50" : isAdd ? "bg-emerald-50/60" : ""}`}>
+                <td className={`${td} text-slate-400`}>{i + 1}</td>
+                <td className={td}>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${CHANGE_ACTION_COLORS[line.action] ?? ""}`}>{line.action}</span>
+                </td>
+                <td className={td}>
+                  {isAdd ? <span className="text-slate-400">— (new line)</span> : (materialLabelById.get(line.old_material_id) ?? "—")}
+                </td>
+                <td className={td}>
+                  {rowEditable ? (
+                    <ErpComboboxField
+                      value={line.material_id}
+                      onChange={(v) => updateMaterial(line._key, v)}
+                      options={materialOptions}
+                      placeholder="-- Select PM material --"
+                    />
+                  ) : removed ? (
+                    <span className="text-slate-400 line-through">{materialLabelById.get(line.material_id) ?? materialLabelById.get(line.old_material_id) ?? "—"}</span>
+                  ) : (
+                    <span>{materialLabelById.get(line.material_id) ?? "—"}</span>
+                  )}
+                </td>
+                <td className={`${td} text-right`}>
+                  <input
+                    className="border border-slate-300 rounded px-2 py-1 text-sm w-20 font-mono text-right disabled:bg-slate-50"
+                    type="number" step="0.001" min="0"
+                    value={line.qty}
+                    disabled={!rowEditable}
+                    onChange={(e) => updateLine(line._key, { qty: e.target.value })}
+                  />
+                </td>
+                <td className={`${td} text-slate-500`}>{line.uom_code || "—"}</td>
+                <td className={td}>
+                  <input
+                    type="checkbox"
+                    checked={line.has_alternate}
+                    disabled={!rowEditable}
+                    onChange={(e) => updateLine(line._key, { has_alternate: e.target.checked, material_group_id: e.target.checked ? line.material_group_id : "" })}
+                  />
+                </td>
+                <td className={td}>
+                  {line.has_alternate ? (
+                    rowEditable ? (
+                      <div className="flex items-center gap-1.5">
+                        <ErpComboboxField value={line.material_group_id} onChange={(v) => updateLine(line._key, { material_group_id: v })} options={groupOptions} placeholder="-- Select --" />
+                        <button type="button" className="text-sky-600 hover:text-sky-800 text-[10px] underline whitespace-nowrap" onClick={() => onCreateGroup((newGroupId) => updateLine(line._key, { material_group_id: newGroupId }))}>+ New</button>
+                      </div>
+                    ) : (
+                      <span>{groupOptions.find((g) => g.value === line.material_group_id)?.label ?? "—"}</span>
+                    )
+                  ) : <span className="text-slate-400">—</span>}
+                </td>
+                <td className={`${td} text-xs text-slate-500`}>
+                  {line.has_alternate && selectedGroup ? (
+                    <>
+                      {(selectedGroup.members ?? []).length === 0
+                        ? "none yet"
+                        : selectedGroup.members.map((m) => materialLabelById.get(m.material_id) ?? "—").join(", ")}
+                      {rowEditable && (
+                        <button type="button" className="text-sky-600 hover:text-sky-800 underline ml-1" onClick={() => onAddMember(selectedGroup.id)}>+ Add</button>
+                      )}
+                    </>
+                  ) : "—"}
+                </td>
+                {editable && (
+                  <td className={td}>
+                    {isAdd ? (
+                      <button type="button" className="text-rose-500 hover:text-rose-700 text-xs" onClick={() => deleteAddedRow(line._key)}>Delete</button>
+                    ) : (
+                      <button type="button" className={`text-xs ${removed ? "text-slate-500 hover:text-slate-700" : "text-rose-500 hover:text-rose-700"}`} onClick={() => toggleRemove(line._key)}>
+                        {removed ? "Undo" : "Remove"}
+                      </button>
+                    )}
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {editable && (
+        <button type="button" onClick={addLine} className="text-sky-600 hover:text-sky-800 text-xs underline mt-2">+ Add PM Line</button>
+      )}
+    </div>
+  );
+}
+
 // ── Shared "Create Group" / "Add Member" modals ─────────────────────────────
 // Each is its own BlockingLayer so it registers as the top layer — otherwise
 // a parent DrawerBase's global focusin handler keeps yanking focus back to

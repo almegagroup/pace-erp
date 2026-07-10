@@ -116,5 +116,6 @@ export const approvePackBom = (id, body) => fetchProd("POST", `/api/production/p
 export const rejectPackBom = (id, body) => fetchProd("POST", `/api/production/pack-boms/${id}/reject`, body);
 export const createPackBomChangeRequest = (id, body) => fetchProd("POST", `/api/production/pack-boms/${id}/change-request`, body);
 export const listPackBomChangeRequests = (p) => fetchProd("GET", "/api/production/pack-bom-change-requests", undefined, p);
+export const getPackBomChangeRequest = (id) => fetchProd("GET", `/api/production/pack-bom-change-requests/${id}`);
 export const approvePackBomChangeRequest = (id, body) => fetchProd("POST", `/api/production/pack-bom-change-requests/${id}/approve`, body ?? {});
 export const rejectPackBomChangeRequest = (id, body) => fetchProd("POST", `/api/production/pack-bom-change-requests/${id}/reject`, body);
