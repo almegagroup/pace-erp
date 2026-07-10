@@ -43,6 +43,63 @@ function strokeError(
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
 }
 
+// PostgREST's select parser does not support the alias:schema.table!fk(...)
+// cross-schema embed syntax (PGRST100 "failed to parse select parameter") —
+// batch-fetch related rows by id and merge in JS instead.
+async function getMaterialMapByIds(ids: string[]): Promise<Map<string, JsonRecord>> {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (uniqueIds.length === 0) return map;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("id, pace_code, material_name, shade_code, pack_code, base_uom_code")
+    .in("id", uniqueIds);
+  if (error) {
+    console.error("[stroke_master.getMaterialMapByIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_STROKE_MATERIAL_BATCH_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  return map;
+}
+
+async function getMaterialGroupMapByIds(ids: string[]): Promise<Map<string, JsonRecord>> {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (uniqueIds.length === 0) return map;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_category_group")
+    .select("id, group_code, group_name")
+    .in("id", uniqueIds);
+  if (error) {
+    console.error("[stroke_master.getMaterialGroupMapByIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_STROKE_GROUP_BATCH_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  return map;
+}
+
+async function getStorageLocationMapByIds(ids: string[]): Promise<Map<string, JsonRecord>> {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (uniqueIds.length === 0) return map;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_master")
+    .select("id, code, name")
+    .in("id", uniqueIds);
+  if (error) {
+    console.error("[stroke_master.getStorageLocationMapByIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_STROKE_SLOC_BATCH_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) map.set(String(row.id), row);
+  return map;
+}
+
 async function getStrokeMaster(id: string): Promise<JsonRecord | null> {
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
@@ -197,13 +254,7 @@ export async function listStrokeMastersHandler(
         material_type, po_type, base_uom_code, conversion_uom_code, conversion_factor,
         default_storage_location_id,
         status, created_by, created_at, approved_by, approved_at,
-        deactivated_by, deactivated_at, last_updated_at, last_updated_by,
-        material:erp_master.material_master!prodshade_material_id(
-          id, pace_code, material_name, shade_code, pack_code
-        ),
-        default_storage_location:erp_inventory.storage_location_master!default_storage_location_id(
-          id, code, name
-        )
+        deactivated_by, deactivated_at, last_updated_at, last_updated_by
       `)
       .order("created_at", { ascending: false });
 
@@ -216,7 +267,20 @@ export async function listStrokeMastersHandler(
       console.error("[stroke_master.listStrokeMasters] query failed:", JSON.stringify(error));
       throw new Error("PROD_STROKE_LIST_FAILED");
     }
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+
+    const rows = (data ?? []) as JsonRecord[];
+    const [materialMap, slocMap] = await Promise.all([
+      getMaterialMapByIds(rows.map((r) => String(r.prodshade_material_id ?? ""))),
+      getStorageLocationMapByIds(rows.map((r) => String(r.default_storage_location_id ?? ""))),
+    ]);
+
+    return okResponse({
+      data: rows.map((row) => ({
+        ...row,
+        material: materialMap.get(String(row.prodshade_material_id ?? "")) ?? null,
+        default_storage_location: slocMap.get(String(row.default_storage_location_id ?? "")) ?? null,
+      })),
+    }, ctx.request_id, req);
   } catch (err) {
     console.error("[stroke_master.listStrokeMasters] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_LIST_FAILED";
@@ -242,19 +306,7 @@ export async function getStrokeMasterHandler(
         material_type, po_type, base_uom_code, conversion_uom_code, conversion_factor,
         default_storage_location_id,
         status, created_by, created_at, approved_by, approved_at,
-        deactivated_by, deactivated_at,
-        material:erp_master.material_master!prodshade_material_id(
-          id, pace_code, material_name, shade_code, pack_code
-        ),
-        default_storage_location:erp_inventory.storage_location_master!default_storage_location_id(
-          id, code, name
-        ),
-        lines:stroke_line(
-          id, material_id, line_material_type, material_group_id, default_storage_location_id, dosage_pct, display_order,
-          material:erp_master.material_master!material_id(id, pace_code, material_name, base_uom_code),
-          material_group:erp_master.material_category_group!material_group_id(id, group_code, group_name),
-          default_storage_location:erp_inventory.storage_location_master!default_storage_location_id(id, code, name)
-        )
+        deactivated_by, deactivated_at
       `)
       .eq("id", id)
       .maybeSingle();
@@ -264,7 +316,45 @@ export async function getStrokeMasterHandler(
       throw new Error("PROD_STROKE_FETCH_FAILED");
     }
     if (!data) return strokeError(req, ctx, "PROD_STROKE_NOT_FOUND", 404, "Stroke master not found");
-    return okResponse({ data }, ctx.request_id, req);
+    const stroke = data as JsonRecord;
+
+    const { data: lineRows, error: linesErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("stroke_line")
+      .select("id, material_id, line_material_type, material_group_id, default_storage_location_id, dosage_pct, display_order")
+      .eq("stroke_master_id", id)
+      .order("display_order");
+    if (linesErr) {
+      console.error("[stroke_master.getStrokeMaster] lines query failed:", JSON.stringify(linesErr));
+      throw new Error("PROD_STROKE_LINES_FETCH_FAILED");
+    }
+    const lines = (lineRows ?? []) as JsonRecord[];
+
+    const [materialMap, groupMap, slocMap] = await Promise.all([
+      getMaterialMapByIds([
+        String(stroke.prodshade_material_id ?? ""),
+        ...lines.map((l) => String(l.material_id ?? "")),
+      ]),
+      getMaterialGroupMapByIds(lines.map((l) => String(l.material_group_id ?? ""))),
+      getStorageLocationMapByIds([
+        String(stroke.default_storage_location_id ?? ""),
+        ...lines.map((l) => String(l.default_storage_location_id ?? "")),
+      ]),
+    ]);
+
+    return okResponse({
+      data: {
+        ...stroke,
+        material: materialMap.get(String(stroke.prodshade_material_id ?? "")) ?? null,
+        default_storage_location: slocMap.get(String(stroke.default_storage_location_id ?? "")) ?? null,
+        lines: lines.map((l) => ({
+          ...l,
+          material: materialMap.get(String(l.material_id ?? "")) ?? null,
+          material_group: groupMap.get(String(l.material_group_id ?? "")) ?? null,
+          default_storage_location: slocMap.get(String(l.default_storage_location_id ?? "")) ?? null,
+        })),
+      },
+    }, ctx.request_id, req);
   } catch (err) {
     console.error("[stroke_master.getStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_FETCH_FAILED";
