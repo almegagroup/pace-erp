@@ -381,6 +381,12 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - Cross-PO RM/PM derivation (Process PO batch → multiple Packing POs) — resolved: ratio of qty drawn ÷ batch total
 - See feasibility doc Section 104.7 for full detail — full costing session still required
 
+**83.4 — Two-layer Stock vs AP Reco/Costing model (LOCKED — 2026-07-11):**
+- Corrects an earlier three-way split: Costing is NOT a separate layer from AP Reco — "costing" in this business means what gets billed/recognized to Asian Paints (APL), so Costing = Reco
+- **Stock/Physical layer:** Actual Material (post-substitution) + Actual Qty (full physical, matches P261) — never filtered by approval
+- **AP Reco = Costing layer:** Formulation Material (always, ignores substitution) + AP Approved Qty (from Yes/No/Partial toggle) — this is what APL is billed for
+- The gap between the two layers (material substitution cost diff + qty variance) is entirely PACE's own exposure, never passed to APL — rate/booking mechanics for this gap still NOT locked, ties into open 104.7 scenarios, needs dedicated Section 104 session
+
 **83.3 — Default Storage Location mandatory + auto-prefill (LOCKED — 2026-07-11):**
 - `default_storage_location_id` on Stroke Master header is now mandatory for both SFG and INT — was optional, most existing strokes ended up NULL (found via live DB check on CMP003: 4 of 5 APPROVED strokes had NULL header storage location, would silently break Verify-phase P101 posting)
 - Auto-prefill: selecting an existing Prodshade material that already has ≥1 prior stroke_master row (any status, same company) prefills the new Stroke's Default Storage Location from that prior entry — user can still override

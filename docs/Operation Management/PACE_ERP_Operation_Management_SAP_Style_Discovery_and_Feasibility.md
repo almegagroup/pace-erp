@@ -8332,6 +8332,18 @@ BOM qty change (PR10 Edit)  → Reservation Document Required Qty updated
 **AP Reconciliation:** Always references Formulation Material column — what the stroke/BOM called for.
 **Actual consumption / costing:** References Actual Material column — what was physically issued.
 
+**Two-layer model (LOCKED — 2026-07-11) — corrects an earlier three-way split:**
+
+| Layer | Material | Qty | Purpose |
+|---|---|---|---|
+| **Stock/Physical** | Actual (X1 if substituted, else X) | **Actual Qty** (full, matches P261 posting) | PACE's own inventory truth — never filtered by approval status |
+| **AP Reco = Costing** (what's billed/recognized to APL) | **Formulation** (X, always — substitution has no effect here) | **AP Approved Qty** (from the Yes/No/Partial toggle) | What Asian Paints is billed/recognizes — never the raw actual |
+
+> **Costing is not a separate third layer** — it *is* AP Reco, since "costing" in this business means "what gets costed/billed to APL." Both use Formulation Material + AP Approved Qty, not Actual Material + Actual Qty.
+
+**The gap between the two layers is PACE's own exposure, never passed to APL:**
+Whatever PACE physically issued/produced (Stock Layer: Actual Material + Actual Qty) minus what APL is billed for (Reco/Costing Layer: Formulation Material + AP Approved Qty) — covering both a potential material-substitution cost difference and a quantity variance — is entirely PACE's own cost to absorb. **Rate/valuation mechanics for this gap are NOT yet locked** — ties directly into the open Section 104.7 costing scenarios (unapproved deviation, small separable excess) — a dedicated Section 104 costing session is still required to decide how this gets booked (loss vs deferred/Salvage vs something else).
+
 ---
 
 #### Packing PO — Lifecycle Design (LOCKED — 2026-07-05)
