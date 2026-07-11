@@ -2336,3 +2336,33 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Not yet proven clean end-to-end (data prerequisites — next):** a *live* zero-error Process PO create still needs (a) `production_segment_location_config` seeded for the test company, and (b) opening stock for the chosen stroke's RM lines (else Standard availability hard-block → 422 per §83.5). Both are MCP business-data jobs (dev + prod separately), tracked as the immediate next step before live verification.
 
 **Files:** `frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx`
+
+---
+
+## Gate-27.5 — QA Queue (PR16) field/display fix — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.5-QAQUEUE-FIELD-FIX-TASK-BRIEF.md` · **Codex-run during Claude downtime** · **Date:** 2026-07-11
+
+**Implemented (Codex):** `listProcessOrdersHandler` now batch-resolves `stroke_number` (from `stroke_master`) and `created_by_display` (via shared `resolveUserDisplayNames`), attached additively. `QAQueuePage.jsx` reads correct fields (`po_type`, `planned_qty`, `stroke_number`, `created_by_display`), all raw-UUID `.slice(0,8)` fallbacks removed, Dosage% shows interim `--`.
+
+**Claude verification:** field contract matches list handler; `resolveUserDisplayNames(ids)` signature confirmed (auth_user_id → code/name); both resolutions batched (`.in()`, §8B); no route/ACL/migration/`fetchOrderLines`/`getProcessOrder` change (on brief); no mojibake; handler `deno check` clean. Minor cosmetic: Codex used ASCII `--` for empty cells instead of `—` (followed the brief's mojibake-avoidance note) — left as-is.
+**Files:** `process_order.handlers.ts` (list only), `QAQueuePage.jsx`.
+
+---
+
+## Gate-27.4 — Reservation (reserve@Standard, clear@Prune) + availability netting + Prune endpoint — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.4-RESERVATION-PRUNE-TASK-BRIEF.md` · **Codex-run during Claude downtime** · **Date:** 2026-07-11
+
+**Implemented (Codex):**
+- Migration `20260711100000_gate27_reservation_document_and_prune.sql` — `erp_production.reservation_document` (generic 5-source, generated `balance_qty`, status CHECK, FKs, indexes, service_role grants) + `reservation_number_seq` + `process_order` prune columns + `CANCELLED` added to status CHECK. Idempotent.
+- `createProcessOrderHandler` — captures inserted lines (both stroke-prepopulate + manual paths via `.select()`), batch-inserts one OPEN reservation per line (storage location resolved from line override → segment config → NULL).
+- `checkStockAvailability` — subtracts OPEN/PARTIAL reservation `balance_qty` at interim material+company granularity (location-ready, commented).
+- New `pruneProcessOrderHandler` (STANDARD→CANCELLED, reason mandatory, cancels linked reservations) + route + `route-acl-registry` entry (`PROD_PO_EDIT/EDIT`, same as sibling process-order writes).
+
+**Claude verification:** migration **applied to Dev via MCP** and confirmed (table + prune cols + CANCELLED constraint present); scope exactly on brief (backend only, no Verify/Final/reverse/frontend change, no issue-at-Verify); reservations & cancels are single batched statements (§8B); schema-first (§16); `console.error` before every new throw; `deno check` clean on the handler; ACL resource `PROD_PO_EDIT` confirmed pre-existing (used by lines/start-batch routes). Availability-netting interim granularity accepted (segment config still empty).
+**Files:** migration (new), `process_order.handlers.ts`, `production.routes.ts`, `route-acl-registry.ts`.
+
+**⚠️ Still pending live proof:** a zero-error end-to-end Standard create + reserve + prune needs MCP data setup — seed `production_segment_location_config` + opening stock for the test stroke's RMs (Dev). Until then a stroke-based create may 422 on the (correct) availability hard-block.
+
+**⚠️ Note:** Codex also auto-generated briefs `CODEX-GATE27.6…27.13` + `CODEX-GATE27-BRIEF-STATUS` during downtime — these are Codex-authored and **NOT yet reviewed by Claude**; do not run any of them until Claude reviews for out-of-plan design.

@@ -938,6 +938,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROD_REVERSAL", action: "APPROVE" } },
   },
   {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/prune$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
+  },
+  {
     pattern: /^\/api\/production\/packing-orders\/[^/]+$/,
     methods: { GET: { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" } },
   },

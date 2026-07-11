@@ -163,12 +163,12 @@ export default function QAQueuePage() {
                 >
                   <td className="py-2 px-3 font-mono font-semibold text-sky-700">{o.po_number ?? o.id?.slice(0, 8)}</td>
                   <td className="py-2 px-3">
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{o.prod_type}</span>
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{o.po_type ?? "--"}</span>
                   </td>
-                  <td className="py-2 px-3">{o.material?.pace_code ?? o.prodshade_material_id?.slice(0, 8)}</td>
-                  <td className="py-2 px-3 font-mono text-slate-500">{o.stroke?.stroke_number ?? o.stroke_master_id?.slice(0, 8) ?? "—"}</td>
-                  <td className="py-2 px-3 text-right font-mono">{Number(o.planned_qty_kg ?? 0).toLocaleString()}</td>
-                  <td className="py-2 px-3 text-slate-500">{o.created_by ?? "—"}</td>
+                  <td className="py-2 px-3">{o.material?.pace_code ?? "--"}</td>
+                  <td className="py-2 px-3 font-mono text-slate-500">{o.stroke_number ?? "--"}</td>
+                  <td className="py-2 px-3 text-right font-mono">{Number(o.planned_qty ?? 0).toLocaleString()}</td>
+                  <td className="py-2 px-3 text-slate-500">{o.created_by_display ?? "--"}</td>
                   <td className="py-2 px-3 text-slate-400 text-xs">{o.created_at?.slice(0, 16)?.replace("T", " ")}</td>
                 </tr>
               ))}
@@ -195,19 +195,19 @@ export default function QAQueuePage() {
               </div>
               <div>
                 <span className="text-slate-400 text-xs block mb-0.5">Production Type</span>
-                <p>{detail.prod_type}</p>
+                <p>{detail.po_type ?? "--"}</p>
               </div>
               <div>
                 <span className="text-slate-400 text-xs block mb-0.5">Prodshade</span>
-                <p>{detail.material?.pace_code ?? detail.prodshade_material_id?.slice(0, 8)}</p>
+                <p>{detail.material?.pace_code ?? "--"}</p>
               </div>
               <div>
                 <span className="text-slate-400 text-xs block mb-0.5">Stroke Number</span>
-                <p className="font-mono">{detail.stroke?.stroke_number ?? "—"}</p>
+                <p className="font-mono">{detail.stroke?.stroke_number ?? "--"}</p>
               </div>
               <div>
                 <span className="text-slate-400 text-xs block mb-0.5">Planned Qty (KG)</span>
-                <p className="font-mono">{Number(detail.planned_qty_kg ?? 0).toLocaleString()}</p>
+                <p className="font-mono">{Number(detail.planned_qty ?? 0).toLocaleString()}</p>
               </div>
               <div>
                 <span className="text-slate-400 text-xs block mb-0.5">Planned Start</span>
@@ -238,8 +238,8 @@ export default function QAQueuePage() {
                     {detail.lines.map((l, i) => (
                       <tr key={l.id ?? i} className="border-b border-slate-100">
                         <td className="py-1.5 px-2 text-slate-400">{i + 1}</td>
-                        <td className="py-1.5 px-2">{l.material?.pace_code ?? l.material_id?.slice(0, 8)}</td>
-                        <td className="py-1.5 px-2 text-right font-mono">{Number(l.dosage_pct ?? 0).toFixed(2)}%</td>
+                        <td className="py-1.5 px-2">{l.material?.pace_code ?? "--"}</td>
+                        <td className="py-1.5 px-2 text-right font-mono">--</td>
                         <td className="py-1.5 px-2 text-right font-mono">{Number(l.planned_qty ?? 0).toFixed(3)}</td>
                       </tr>
                     ))}

@@ -11,6 +11,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -126,6 +127,24 @@ async function checkStockAvailability(
     const mid = row.material_id as string;
     const qty = Number(row.quantity ?? 0);
     available.set(mid, (available.get(mid) ?? 0) + ((row.direction as string) === "IN" ? qty : -qty));
+  }
+
+  // Interim granularity: company+material only, until segment config seeds real line storage locations.
+  const { data: reservationRows, error: reservationErr } = await serviceRoleClient
+    .schema("erp_production")
+    .from("reservation_document")
+    .select("material_id, balance_qty")
+    .eq("company_id", companyId)
+    .in("material_id", matIds)
+    .in("status", ["OPEN", "PARTIAL"]);
+  if (reservationErr) {
+    console.error("[process_order.checkStockAvailability] reservation query failed:", JSON.stringify(reservationErr));
+    throw new Error("PROD_PO_STOCK_CHECK_FAILED");
+  }
+  for (const row of (reservationRows ?? []) as JsonRecord[]) {
+    const mid = row.material_id as string;
+    const qty = Number(row.balance_qty ?? 0);
+    available.set(mid, (available.get(mid) ?? 0) - qty);
   }
 
   // Find INT materials and credit their planned output from active (not-yet-VERIFIED) INT POs
@@ -261,11 +280,43 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
       "PROD_PO_LIST_FAILED",
       "id, pace_code, material_name, shade_code",
     );
+    const strokeIds = [...new Set(
+      rows.map((row) => String(row.stroke_master_id ?? "").trim()).filter(Boolean),
+    )];
+    const createdByIds = [...new Set(
+      rows.map((row) => String(row.created_by ?? "").trim()).filter(Boolean),
+    )];
+    const strokeNumberById = new Map<string, string>();
+    if (strokeIds.length > 0) {
+      const { data: strokes, error: strokeErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("stroke_master")
+        .select("id, stroke_number")
+        .in("id", strokeIds);
+      if (strokeErr) {
+        console.error("[process_order.listProcessOrders] stroke query failed:", JSON.stringify(strokeErr));
+        throw new Error("PROD_PO_LIST_FAILED");
+      }
+      for (const stroke of (strokes ?? []) as JsonRecord[]) {
+        strokeNumberById.set(String(stroke.id), String(stroke.stroke_number ?? ""));
+      }
+    }
+    let createdByDisplayMap = new Map<string, string>();
+    if (createdByIds.length > 0) {
+      try {
+        createdByDisplayMap = await resolveUserDisplayNames(createdByIds);
+      } catch (error) {
+        console.error("[process_order.listProcessOrders] created-by resolution failed:", JSON.stringify(error));
+        throw new Error("PROD_PO_LIST_FAILED");
+      }
+    }
 
     return okResponse({
       data: rows.map((row) => ({
         ...row,
         material: materialMap.get(String(row.material_id ?? "")) ?? null,
+        stroke_number: strokeNumberById.get(String(row.stroke_master_id ?? "")) || null,
+        created_by_display: createdByDisplayMap.get(String(row.created_by ?? "")) || null,
       })),
       pagination: { page, per_page: perPage, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / perPage) },
     }, ctx.request_id, req);
@@ -408,6 +459,8 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     if (poInsErr) throw new Error("PROD_PO_CREATE_FAILED");
     const poId = (po as JsonRecord).id as string;
 
+    const insertedLines: JsonRecord[] = [];
+
     // Pre-populate lines from stroke dosage BOM
     if (strokeId && poType !== "MTEST") {
       const { data: strokeLines } = await serviceRoleClient
@@ -427,9 +480,13 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
           is_rm: true,
           display_order: sl.display_order,
         }));
-        const { error: lineErr } = await serviceRoleClient
-          .schema("erp_production").from("process_order_line").insert(lineRows);
+        const { data: createdLines, error: lineErr } = await serviceRoleClient
+          .schema("erp_production")
+          .from("process_order_line")
+          .insert(lineRows)
+          .select("id, material_id, planned_qty, issue_sloc_id, is_rm, uom_code");
         if (lineErr) throw new Error("PROD_PO_LINE_PREPOPULATE_FAILED");
+        insertedLines.push(...((createdLines ?? []) as JsonRecord[]));
       }
     }
 
@@ -446,13 +503,108 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         is_rm: l.is_rm !== false,
         display_order: 1000 + idx,
       }));
-      await serviceRoleClient.schema("erp_production").from("process_order_line").insert(manualRows);
+      const { data: createdManualLines, error: manualErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("process_order_line")
+        .insert(manualRows)
+        .select("id, material_id, planned_qty, issue_sloc_id, is_rm, uom_code");
+      if (manualErr) {
+        console.error("[process_order.createProcessOrder] manual line insert failed:", JSON.stringify(manualErr));
+        throw new Error("PROD_PO_LINE_PREPOPULATE_FAILED");
+      }
+      insertedLines.push(...((createdManualLines ?? []) as JsonRecord[]));
+    }
+
+    if (insertedLines.length > 0) {
+      const segConfig = await getSegmentLocConfig(companyId, segmentCode);
+      const reservationRows = insertedLines.map((line) => ({
+        source_type: "PROCESS_PO",
+        source_id: poId,
+        source_line_id: line.id,
+        company_id: companyId,
+        material_id: line.material_id,
+        storage_location_id: line.issue_sloc_id
+          ?? ((line.is_rm ? segConfig?.rm_sloc_id : segConfig?.pm_sloc_id) ?? null),
+        required_qty: line.planned_qty,
+        uom_code: toTrimmedString(line.uom_code) || "KG",
+        required_by_date: toTrimmedString(body.planned_start_date) || null,
+        status: "OPEN",
+        created_by: ctx.auth_user_id,
+      }));
+      const { error: reservationErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("reservation_document")
+        .insert(reservationRows);
+      if (reservationErr) {
+        console.error("[process_order.createProcessOrder] reservation insert failed:", JSON.stringify(reservationErr));
+        throw new Error("PROD_PO_CREATE_FAILED");
+      }
     }
 
     return createdOkResponse({ id: poId, po_number: poNumber }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PO_CREATE_FAILED";
     return poErr(req, ctx, code, 500, `Process order create failed: ${err instanceof Error ? err.message : ""}`);
+  }
+}
+
+// POST /api/production/process-orders/:id/prune
+export async function pruneProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const id = getIdFromPath(req);
+    if (!id) return poErr(req, ctx, "PROD_PO_ID_MISSING", 400, "ID required");
+
+    const po = await fetchProcessOrder(id);
+    if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Process order not found");
+    if (po.status !== "STANDARD") {
+      return poErr(req, ctx, "PROD_PO_PRUNE_STATUS_INVALID", 422, "Prune allowed only at STANDARD");
+    }
+
+    const body = await parseBody(req);
+    const reason = toTrimmedString(body.reason);
+    if (!reason) {
+      return poErr(req, ctx, "PROD_PO_PRUNE_REASON_REQUIRED", 400, "Prune reason required");
+    }
+
+    const now = new Date().toISOString();
+    const { error: updateErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("process_order")
+      .update({
+        status: "CANCELLED",
+        prune_reason: reason,
+        pruned_by: ctx.auth_user_id,
+        pruned_at: now,
+        last_updated_at: now,
+        last_updated_by: ctx.auth_user_id,
+      })
+      .eq("id", id);
+    if (updateErr) {
+      console.error("[process_order.pruneProcessOrder] process order update failed:", JSON.stringify(updateErr));
+      throw new Error("PROD_PO_PRUNE_FAILED");
+    }
+
+    const { error: reservationErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("reservation_document")
+      .update({
+        status: "CANCELLED",
+        last_updated_by: ctx.auth_user_id,
+        last_updated_at: now,
+      })
+      .eq("source_type", "PROCESS_PO")
+      .eq("source_id", id)
+      .neq("status", "CANCELLED");
+    if (reservationErr) {
+      console.error("[process_order.pruneProcessOrder] reservation cancel failed:", JSON.stringify(reservationErr));
+      throw new Error("PROD_PO_PRUNE_FAILED");
+    }
+
+    return okResponse({ id, status: "CANCELLED" }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PO_PRUNE_FAILED";
+    return poErr(req, ctx, code, 500, "Prune failed");
   }
 }
 

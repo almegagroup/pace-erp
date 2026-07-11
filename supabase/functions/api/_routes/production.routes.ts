@@ -58,6 +58,7 @@ import {
   finalizeProcessOrderHandler,
   verifyProcessOrderHandler,
   reverseProcessOrderHandler,
+  pruneProcessOrderHandler,
 } from "../_core/production/process_order.handlers.ts";
 import {
   listPackingOrdersHandler,
@@ -246,6 +247,9 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/process-orders\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
     return await reverseProcessOrderHandler(req, ctx);
+  }
+  if (/^\/api\/production\/process-orders\/[^/]+\/prune$/.test(pathname) && req.method === "POST") {
+    return await pruneProcessOrderHandler(req, ctx);
   }
 
   // Packing Orders /:id actions
