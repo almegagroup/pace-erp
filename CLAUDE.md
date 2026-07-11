@@ -387,6 +387,13 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - SFG Result Recording page = exact identical mechanism to the existing Inward QA page (same qa_test_method_master/qa_category_test_config infra, same workflow) — build as a direct clone, not a fresh design
 - STO/Location Transfer reservation implementation details deferred to later
 
+**83.4 — process_order_line_reco table for Reco/Costing layer (LOCKED — 2026-07-11):**
+- stock_ledger has no "Approved"/"AP Approved Qty" concept — Reco/Costing needs its own table
+- One data-entry action (Final/Verify/COR6 Correction) writes both universes at once: Actual -> stock_ledger, AP Approved -> process_order_line_reco
+- Fully denormalized/flat (COID-style) — company/po_number/batch_number/po_type/prodshade/stroke/machine/segment duplicated onto every line row, no joins needed for Reco reporting
+- No dedicated OUTPUT row — Actual Output/AP Approved/Variance are always SUM() of INPUT rows
+- Directly feeds the 104.7 cross-PO derivation formula (ratio of qty drawn ÷ batch total) for dispatch-level costing
+
 **83.5 — Stock check severity per stage (LOCKED — 2026-07-11, deliberately stricter than SAP):**
 - Standard: hard block if any line short on Available (Unrestricted@location − open reservations) vs Standard Qty — SAP's default is a soft warning that still allows save, we chose stricter to stop unnecessary Process Orders being created
 - Final: hard block only for INT shortfall (linked INT PO must be VERIFIED, not just planned) — no general RM/PM re-check, already physically consumed by then

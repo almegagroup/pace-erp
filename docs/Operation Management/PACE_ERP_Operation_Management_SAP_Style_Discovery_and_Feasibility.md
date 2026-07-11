@@ -8383,6 +8383,33 @@ BOM qty change (PR10 Edit)  → Reservation Document Required Qty updated
 **The gap between the two layers is PACE's own exposure, never passed to APL:**
 Whatever PACE physically issued/produced (Stock Layer: Actual Material + Actual Qty) minus what APL is billed for (Reco/Costing Layer: Formulation Material + AP Approved Qty) — covering both a potential material-substitution cost difference and a quantity variance — is entirely PACE's own cost to absorb. **Rate/valuation mechanics for this gap are NOT yet locked** — ties directly into the open Section 104.7 costing scenarios (unapproved deviation, small separable excess) — a dedicated Section 104 costing session is still required to decide how this gets booked (loss vs deferred/Salvage vs something else).
 
+**`erp_production.process_order_line_reco` — the Reco/Costing layer's storage (LOCKED — 2026-07-11):**
+
+Stock movements alone cannot carry the Reco/Costing layer — `stock_ledger` only knows what physically moved (Actual Material, Actual Qty), it has no concept of "Approved" or "AP Approved Qty" at all. So this data needs its own table. One data-entry action (Final / Verify / COR6 Correction) writes to **both universes at once** — Actual → `stock_ledger`, AP Approved → this table — never two separate entries.
+
+**Fully denormalized (COID-style flat list) — no joins required for Reco/Costing reporting:**
+
+| Column | Purpose |
+|---|---|
+| `company_id`, `po_number`, `batch_number`, `po_type`, `prodshade_material_id`, `stroke_number`, `machine_id`, `segment_code`, `batch_started_at`, `verified_at` | Batch/PO context, duplicated onto every line row |
+| `process_order_id`, `process_order_line_id` | Traceability FKs only — not relied on for queries |
+| `material_id` | Formulation Material (never changes) |
+| `line_material_type` | RM / INT |
+| `dosage_pct` | Formulation dosage% (blank for added lines) |
+| `actual_material_id` | Substitute material, NULL = same as formulation |
+| `storage_location_id` | Issue location |
+| `standard_qty` | Std Qty |
+| `actual_qty` | **Net** Actual — Final entry + all subsequent COR6 corrections summed |
+| `approved_status` | YES / NO / PARTIAL |
+| `ap_approved_qty` | **Net** AP Approved Qty |
+| `variance_qty` | actual_qty − ap_approved_qty |
+| `is_formulation_line` | true = original Stroke/BOM line, false = added at Final/Verify |
+| `last_updated_at`, `last_updated_by` | Audit |
+
+No dedicated OUTPUT row — Actual Output / AP Approved Qty (Output) / Variance (Output) are always `SUM()` of this table's INPUT rows for that `process_order_id`, computed live (matches the Final/Verify header design above).
+
+**Feeds directly into the 104.7 cross-PO derivation formula:** "ratio of qty drawn ÷ batch total" — when a Packing PO draws a partial qty from a batch, multiplying that ratio against this table's `ap_approved_qty` per RM/INT line gives the recognized component cost for that specific dispatch, with no re-derivation needed.
+
 ---
 
 #### Packing PO — Lifecycle Design (LOCKED — 2026-07-05)
