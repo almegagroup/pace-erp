@@ -7656,7 +7656,7 @@ VERIFIED (PR12 — stock movements posted)
 ```
 
 **PR10 Edit** available only at: **QA_APPROVED** status only (before Start Batch)
-**Pruning** available at: STANDARD (before QA submit), QA_APPROVED via PR10 (before Start Batch) — reservation cancelled on prune
+**Pruning (corrected — LOCKED 2026-07-12, resolves a same-doc conflict with the dedicated "PO Prune" rule below):** Prune is **STANDARD-only**, matching the later 2026-07-04 "PO Prune" lock — this line's earlier "QA_APPROVED via PR10" phrasing was stale/imprecise and is struck. **PR10 does not carry a Prune action.** To cancel a QA_APPROVED (or later) PO entirely: run **CORS** first (returns it to STANDARD, cancelling reservations / voiding the batch as applicable), then Prune from STANDARD if the PO should not be reused.
 
 ---
 
