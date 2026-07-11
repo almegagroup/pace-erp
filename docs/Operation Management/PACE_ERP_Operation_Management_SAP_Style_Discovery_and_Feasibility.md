@@ -9029,6 +9029,8 @@ Pack Code | Variant   | Fill Size(s)     | BOM Required | Actions
 | `PR07` | Change Pack BOM | Procurement |
 | `PR08` | Change Pack BOM Approval | L1 Manager Procurement |
 
+**Company scope — corrected 2026-07-11:** Pack BOM is **company-wise**, not global (supersedes the earlier assumption that it was SKU-only/company-agnostic). Reason: the OUTPUT (SKU) line's Storage Location is company-specific (`storage_location_plant_map`), so one global BOM per SKU can't carry a single storage-location value across multiple companies packing the same SKU. Procurement selects Company from their own accessible-company list (same `TransactionCompanySelector` pattern as Stroke Master — dropdown for multi-company users, locked for single-company). `pack_bom` needs a `company_id` column; unique key becomes (company_id, sku_material_id) instead of sku_material_id alone. Prodshade Pack Config (OM08 Tab 2 — which pack codes are valid for a Prodshade) stays global/company-agnostic — only Pack BOM itself (PR05-08, the actual recipe) is company-scoped.
+
 **Lifecycle:**
 ```
 PR05 Create → DRAFT
@@ -9051,6 +9053,7 @@ PR08 Approve → BOM lines live update
 
 | Field | Notes |
 |---|---|
+| **Company** | Procurement selects from their accessible-company list (added 2026-07-11 — see company-scope correction above) |
 | FG SKU | Select from Material Master (material_type = FG, SA-linked only) |
 | Material Type | Auto = FG (display only — Pack BOM always for FG) |
 | PO Type | Auto-derived from SKU (display only — no separate field) |
@@ -9059,7 +9062,16 @@ PR08 Approve → BOM lines live update
 
 No Stroke Number. No Dosage%. No Conversion UOM / Factor. No Prod+Shade manual entry.
 
-**Lines — SAP OUTPUT/INPUT model:**
+**OUTPUT/INPUT rows — mandatory, auto-populated, never removable (LOCKED — 2026-07-11):**
+
+Regardless of BOM Required Yes/No, these two rows always exist (only PM lines are optional/zero for 599/000/001):
+
+| Row | Fields |
+|---|---|
+| **OUTPUT (SKU)** | Material Code/Name/Description (auto) · Qty = 1 (BOM Required=Yes) / blank (599/000/001) · UOM = outer pack unit · **Storage Location — user enters** (first place this gets set for the SKU, company-specific) · Movement Type = **P101** |
+| **INPUT (SFG/Prodshade)** | Material Code/Name/Description (auto, derived from the SKU's own `shade_code`+`pack_code` matched against `prodshade_pack_config` → the linked Prodshade material) · Qty = UOM-conversion-derived KG (BOM Required=Yes) / blank (599/000/001) · UOM = KG · Storage Location — **read-only**, pulled from that Prodshade's Stroke Master Default Storage Location for this company (mandatory field, per 83.3) · Movement Type = **P261** |
+
+**Lines — SAP OUTPUT/INPUT model (PM lines, in addition to the two mandatory rows above):**
 
 | Type | Material | Qty | UOM | Editable |
 |---|---|---|---|---|

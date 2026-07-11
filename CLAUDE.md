@@ -381,6 +381,13 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - Cross-PO RM/PM derivation (Process PO batch → multiple Packing POs) — resolved: ratio of qty drawn ÷ batch total
 - See feasibility doc Section 104.7 for full detail — full costing session still required
 
+**83.15 — Pack BOM is company-wise + mandatory OUTPUT/INPUT rows (LOCKED — 2026-07-11, corrects "global" assumption):**
+- Pack BOM (PR05-08) is company-scoped after all — the OUTPUT row's Storage Location is company-specific, one global BOM per SKU can't carry a single location value across companies. `pack_bom` needs `company_id`; unique key becomes (company_id, sku_material_id). Prodshade Pack Config (OM08 Tab 2) stays global — only Pack BOM itself moved to company-wise
+- OUTPUT (SKU) and INPUT (SFG/Prodshade) rows are mandatory and auto-populated in every Pack BOM regardless of BOM Required Yes/No — only PM lines are optional/zero for 599/000/001. Previously my PackBomCreatePage.jsx implementation never created the SFG INPUT row at all — real gap, not yet fixed
+- SFG material for a given SKU is derived by matching the SKU's own shade_code+pack_code against prodshade_pack_config -> linked Prodshade material (no direct FK exists on material_master)
+- OUTPUT row Storage Location is user-entered (first place it's set for that SKU); INPUT (SFG) row Storage Location is read-only, pulled from that Prodshade's Stroke Master Default Storage Location (mandatory since 83.3)
+- Movement types: OUTPUT=P101, INPUT(SFG)=P261 (both already-existing codes, no new ones)
+
 **83.4 — Packing PO FG receipt reuses P101/P102, no new P231/P232 codes (LOCKED — 2026-07-11):**
 - Corrected across the whole feasibility doc (13 occurrences, several sections predating this session): Packing PO's FG receipt at Final was documented as movement type "P231" with a "P232" reversal — neither code exists in `movement_type_master` and was never going to be created. Reuses existing P101 (receipt)/P102 (reversal), same codes Process PO's SFG output and INT's output already use
 - Packing PO's FG receipt is one of the already-locked P101 QI-hold exceptions (posts straight to Unrestricted, no P321 needed) — this correction doesn't change that
