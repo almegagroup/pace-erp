@@ -8404,11 +8404,15 @@ Stock movements alone cannot carry the Reco/Costing layer — `stock_ledger` onl
 | `ap_approved_qty` | **Net** AP Approved Qty |
 | `variance_qty` | actual_qty − ap_approved_qty |
 | `is_formulation_line` | true = original Stroke/BOM line, false = added at Final/Verify |
+| `is_voided` | false = current attempt (default). Set true by CORS — see below |
+| `voided_at` | Set by CORS, NULL otherwise |
 | `last_updated_at`, `last_updated_by` | Audit |
 
-No dedicated OUTPUT row — Actual Output / AP Approved Qty (Output) / Variance (Output) are always `SUM()` of this table's INPUT rows for that `process_order_id`, computed live (matches the Final/Verify header design above).
+No dedicated OUTPUT row — Actual Output / AP Approved Qty (Output) / Variance (Output) are always `SUM()` of this table's INPUT rows **where `is_voided = false`** for that `process_order_id`, computed live (matches the Final/Verify header design above).
 
 **Feeds directly into the 104.7 cross-PO derivation formula:** "ratio of qty drawn ÷ batch total" — when a Packing PO draws a partial qty from a batch, multiplying that ratio against this table's `ap_approved_qty` per RM/INT line gives the recognized component cost for that specific dispatch, with no re-derivation needed.
+
+**CORS behavior = append, not reset-in-place (LOCKED — 2026-07-11):** When a VERIFIED (or FINAL) Process PO is CORS'd back to STANDARD, existing `process_order_line_reco` rows for that PO are **not cleared or deleted** — they're marked `is_voided = true` / `voided_at = now()`, preserving that attempt's Actual/AP-Approved/Variance numbers as history. When the PO is re-run and reaches Final/Verify again, **new rows are inserted** for that fresh attempt (`is_voided = false`). Reco/Costing reporting always filters `is_voided = false` for current truth; audit/trace queries can see every prior voided attempt. Matches the same "nothing is truly deleted" principle already locked for Prune, soft-reject Change Requests, and RELEASED batch numbers.
 
 ---
 

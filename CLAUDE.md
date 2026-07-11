@@ -387,6 +387,10 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - SFG Result Recording page = exact identical mechanism to the existing Inward QA page (same qa_test_method_master/qa_category_test_config infra, same workflow) — build as a direct clone, not a fresh design
 - STO/Location Transfer reservation implementation details deferred to later
 
+**83.4 — CORS reversal set + process_order_line_reco append behavior (LOCKED — 2026-07-11):**
+- VERIFIED->STANDARD CORS now reverses 3 movements (P262, then P322 Unrestricted->QA, then P102) not 2 — original 2026-07-04 design predates the P321 usage-decision step
+- process_order_line_reco is append-on-CORS, not reset-in-place: existing rows get is_voided=true/voided_at set (history preserved), a fresh Final/Verify run inserts new rows. Reporting filters is_voided=false; audit can see all attempts. Matches the "nothing truly deleted" principle used for Prune/soft-reject/RELEASED batch numbers
+
 **83.4 — process_order_line_reco table for Reco/Costing layer (LOCKED — 2026-07-11):**
 - stock_ledger has no "Approved"/"AP Approved Qty" concept — Reco/Costing needs its own table
 - One data-entry action (Final/Verify/COR6 Correction) writes both universes at once: Actual -> stock_ledger, AP Approved -> process_order_line_reco
