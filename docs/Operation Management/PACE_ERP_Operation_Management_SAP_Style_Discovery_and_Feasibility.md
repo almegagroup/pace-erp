@@ -7712,6 +7712,8 @@ Role-based actions (same screen, different capabilities):
 
 Reject flow: QA enters reason → PO immediately PRUNED → disappears from active queue.
 
+**Sort order (confirmed 2026-07-11):** Pending/newest requests sink toward the top; Approved/Rejected historical rows sink down — both QA and Production always see the latest pending item first without scrolling. (created_at descending, pending-status rows prioritized over resolved ones.)
+
 ---
 
 **Phase 3 — Start Batch (Production action, post-QA approval)**
