@@ -1,8 +1,11 @@
 /*
  * File-ID: 27.FE-PR09
  * File-Path: frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx
- * Gate: 27 | Domain: PRODUCTION
+ * Gate: 27
+ * Phase: 27
+ * Domain: FRONT
  * Purpose: Create new Process PO or Packing PO (Standard Create — both PO types).
+ * Authority: Frontend
  */
 
 import React, { useState } from "react";
@@ -21,11 +24,13 @@ const ERRORS = {
 function friendly(code) { return ERRORS[code] ?? code; }
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
+const PROCESS_SEGMENTS = ["ADMIX", "HPS", "IWC", "POWDER", "INT"];
 const TABS = ["Process PO", "Packing PO"];
 
 const EMPTY_PROCESS = {
   company_id: "",
   prod_type: "MTO",
+  segment_code: "",
   prodshade_material_id: "",
   stroke_master_id: "",
   planned_qty_kg: "",
@@ -68,6 +73,10 @@ export default function ProductionPOCreatePage() {
       toast("Company ID, Prodshade Material ID, and Planned Qty are required.", "error");
       return;
     }
+    if (!processForm.segment_code) {
+      toast("Segment is required.", "error");
+      return;
+    }
     if (processForm.prod_type !== "MTEST" && !processForm.stroke_master_id) {
       toast("Stroke Master ID is required for non-MTEST orders.", "error");
       return;
@@ -76,7 +85,8 @@ export default function ProductionPOCreatePage() {
     try {
       const body = {
         company_id: processForm.company_id,
-        prod_type: processForm.prod_type,
+        po_type: processForm.prod_type,
+        segment_code: processForm.segment_code,
         prodshade_material_id: processForm.prodshade_material_id,
         planned_qty_kg: parseFloat(processForm.planned_qty_kg),
         planned_start_date: processForm.planned_start_date || undefined,
@@ -169,6 +179,20 @@ export default function ProductionPOCreatePage() {
                 >
                   {PROCESS_TYPES.map((t) => (
                     <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-slate-600 font-medium">Segment <span className="text-rose-500">*</span></label>
+                <select
+                  className="border border-slate-300 rounded px-2 py-1.5 text-sm"
+                  value={processForm.segment_code}
+                  onChange={(e) => updateProcess("segment_code", e.target.value)}
+                  required
+                >
+                  <option value="">Select segment</option>
+                  {PROCESS_SEGMENTS.map((segment) => (
+                    <option key={segment} value={segment}>{segment}</option>
                   ))}
                 </select>
               </div>

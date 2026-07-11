@@ -197,3 +197,8 @@ This file is Codex's own work log for the Claude+Codex workflow, used to record 
 - Updated `supabase/functions/api/_core/om/vendor.handlers.ts` so bulk vendor deletes keep the existing per-id result granularity but no longer await each delete serially.
 - Updated `supabase/functions/api/_core/om/vendor_material_info.handlers.ts` so VMI create/update UOM validation now loads all distinct requested UOM codes in one `.in("code", ...)` query and checks membership in memory instead of querying one code at a time.
 - Safe because every touched iteration is independent: one delete targets one master row and reports its own outcome, one CSV mapping row upserts one `(material_id, company_id)` pair without depending on another row's completion, and each requested UOM code validation is a pure existence check against shared master data.
+
+### 2026-07-11 11:06 IST
+- Task: Fixed the Process PO create frontend 400 blocker on PR09.
+- Changes: Updated `frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx` so the Process PO form state now includes `segment_code`, added a required Segment dropdown after Production Type with the locked options `ADMIX`, `HPS`, `IWC`, `POWDER`, and `INT`, changed the create payload to send `po_type` instead of `prod_type` plus the new `segment_code`, and completed the file header with `Phase` and `Authority`.
+- Notes: Scope stayed frontend-only and single-file; the Packing PO path was left functionally untouched. `npm.cmd run lint -- src/pages/dashboard/production/ProductionPOCreatePage.jsx` still executed the repo-wide ESLint script and failed on many pre-existing unrelated errors outside this file, so verification here relied on the targeted grep checks plus file read-through for the touched screen.

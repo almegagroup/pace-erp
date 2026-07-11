@@ -2313,3 +2313,26 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Explicitly untouched:**
 - `supabase/functions/api/_core/production/stroke_master.handlers.ts`
 - `supabase/functions/api/_core/production/pack_config.handlers.ts`
+
+---
+
+## Gate-27.3 — Process PO Create 400 Fix (PR09)
+
+**Task Brief:** `docs/Operation Management/implementation-specs/CODEX-GATE27.3-PROCESSPO-CREATE-FIX-TASK-BRIEF.md`
+**Status:** DONE (Codex implemented, Claude verified)
+**Date:** 2026-07-11
+
+**Root cause (diagnosed by Claude):** `ProductionPOCreatePage.jsx` sent `prod_type` (backend `createProcessOrderHandler` reads `po_type`) and never sent `segment_code` (backend hard-requires `VALID_SEGMENTS`) → guaranteed `PROD_PO_INVALID` 400 on every Process PO create. Backend already accepts `prodshade_material_id`/`planned_qty_kg`/`stroke_master_id` aliases, so it is a pure frontend fix.
+
+**Implemented (Codex):** frontend-only, single file — added required Segment dropdown (ADMIX/HPS/IWC/POWDER/INT, manual because `production_mode` is NULL on all materials so it can't be auto-derived), `segment_code` in `EMPTY_PROCESS` + validation guard, changed create payload key `prod_type`→`po_type` and added `segment_code`, completed the file header with `Phase`/`Authority` (Constitution §9). Packing tab left out of scope (needs its own §83.4 PR09-Packing rebuild).
+
+**Claude verification pass:**
+- Diff exactly on-spec: 26 insertions / 2 deletions, Process-tab only. Field contract re-confirmed against `createProcessOrderHandler` — `po_type` + `segment_code` are exactly what it validates; the guaranteed 400 is resolved by construction.
+- ESLint clean (exit 0) on the touched file.
+- **Fixed 2 Codex encoding-corruption artifacts:** Codex's PowerShell write mangled two em-dashes (`—`→`â€"` mojibake) at the page title (line ~137) and the Packing-tab FO placeholder (line ~329) — both would render as UI garbage and line 329 violated "Packing tab untouched." Repaired both to clean `—` via a byte-safe node script; re-scan clean.
+- **Reverted 1 unrequested drift:** Codex reformatted the `ERRORS` object's column alignment (not requested in the brief) — restored to original.
+- Confirmed no backend / routes / `prodApi.js` / migration changes; Packing tab now byte-identical to pre-Codex.
+
+**Not yet proven clean end-to-end (data prerequisites — next):** a *live* zero-error Process PO create still needs (a) `production_segment_location_config` seeded for the test company, and (b) opening stock for the chosen stroke's RM lines (else Standard availability hard-block → 422 per §83.5). Both are MCP business-data jobs (dev + prod separately), tracked as the immediate next step before live verification.
+
+**Files:** `frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx`
