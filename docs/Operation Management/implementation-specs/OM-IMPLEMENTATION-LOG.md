@@ -2448,3 +2448,27 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 - ACL: new routes correctly reuse the pre-existing `PROD_BATCH_RELEASE` resource code (same one the menu system already used) — no invented resource codes; no duplicate route patterns.
 
 **Files:** migration `20260711190000_gate27_batch_number_instance.sql`, `batch_series.handlers.ts`, `process_order.handlers.ts`, `production.routes.ts`, `route-acl-registry.ts`, `prodApi.js`, `QAQueuePage.jsx`, `BatchNumberReleasePage.jsx` (new), `AppRouter.jsx`.
+
+---
+
+## Gate-27.16 — SFG Result Recording (Inward QA clone) — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.16-SFG-RESULT-RECORDING-TASK-BRIEF.md` · **Date:** 2026-07-11
+
+**Implemented (Codex):** New `erp_production.sfg_qa_document`/`sfg_qa_test_line`/`sfg_qa_decision_line` tables (mirroring `erp_procurement.inward_qa_*` shape) + `SFG_QA` document-number series row. New `sfg_qa.handlers.ts` cloned from `inward_qa.handlers.ts`: list eligible VERIFIED MTO/HPS/MTS Process POs (lazily creating one `sfg_qa_document` per PO on first list), add/update test-line results with LSL/USL-driven auto pass/fail, submit partial-allowed usage decisions (RELEASE/BLOCK/REJECT/SCRAP/FOR_REPROCESS) — **no stock posting anywhere**. New `SfgResultRecordingPage.jsx` cloned from Procurement's Inward QA page, reusing the exact same `qa_test_method_master`/`qa_category_test_config` MCT/OTHR mandatory-test-gating logic, routed + menu-registered.
+
+**Claude verification pass:**
+- Confirmed `erp_master.qa_test_method` and `qa_category_test_config` exist (initial empty-result read was a false alarm — the MCP tool only surfaces the last statement's result when multiple statements are sent in one call, not a missing table).
+- Confirmed the `movement_type_code` CHECK's literal `'FOR_REPROCESS'` value (rather than the P905 code registered in `movement_type_master`) is **correct**, by reading the real Inward QA handler's own write-site logic (`config.dbDecision === "FOR_REPROCESS" ? "FOR_REPROCESS" : config.movementType`) — the source page itself special-cases this, so the clone is faithful, not a bug.
+- Verified `getIdFromPath(req, 5)` (custom segment index for the nested test-line-update route) against the real route path segments and the helper's actual signature — correct.
+- **Verified the MCT/OTHR mandatory-test-gating logic (anyMctFail, failedMctMethods, confirm-to-override) is a genuine line-for-line clone** of the real Procurement Inward QA page (grepped and confirmed identical variable names/behavior there) — not new invented business logic.
+- No `postStockMovement` call anywhere in the new handler file (grepped, confirmed) — matches the brief's "no second stock posting" requirement.
+- ESLint surfaced 3 `react-hooks/set-state-in-effect` errors + 1 `useEffectEvent` deps warning in the new page — **confirmed these are not new**: ran ESLint against the actual Procurement `QAQueuePage.jsx` being cloned and got the identical error count/rule, proving this is an inherited repo-wide lint profile from the clone source, not a Gate-27.16 regression. Also confirmed `useEffectEvent` is already used in 2 other existing pages (`CSNTrackerPage.jsx`, the cloned `QAQueuePage.jsx` itself) — an established pattern, not a risky new API.
+- No unauthorized doc edits, no mojibake. `deno check`: 0 file-anchored errors on all 3 touched/new backend files.
+- Migration applied to Dev via MCP: all 3 tables + the `SFG_QA` document-number series row confirmed present.
+
+**Files:** migration `20260711203000_gate27_sfg_result_recording.sql`, `sfg_qa.handlers.ts` (new), `production.routes.ts`, `route-acl-registry.ts`, `prodApi.js`, `SfgResultRecordingPage.jsx` (new), `AppRouter.jsx`, `operationScreens.js`.
+
+---
+
+**Gate-27 Process PO chain — checklist status after 27.6/27.14/27.15/27.16 (all Codex-run, Claude-verified):** Storage location authority, location-aware stock check/reservation, PR16/PR17, and SFG Result Recording are now done. Remaining before Packing PO per the user's own sequencing (2026-07-11 chat): none outstanding from this checklist — next up is Packing PO's own full brief.

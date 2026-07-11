@@ -674,6 +674,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROD_SFG_RESULT_RECORDING: {
+    screen_code: "PROD_SFG_RESULT_RECORDING",
+    route: "/dashboard/production/sfg-result-recording",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROD_BATCH_RELEASE: {
     screen_code: "PROD_BATCH_RELEASE",
     route: "/dashboard/production/batch-release",

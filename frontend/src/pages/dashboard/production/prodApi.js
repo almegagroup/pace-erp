@@ -105,6 +105,13 @@ export const finalizeProcessOrder = (id, body) => fetchProd("POST", `/api/produc
 export const verifyProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/verify`, body);
 export const reverseProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/reverse`, body);
 
+// —— SFG QA Result Recording ————————————————————————————————————————————————————————
+export const listSfgQaDocuments = (p) => fetchProd("GET", "/api/production/sfg-qa-documents", undefined, p);
+export const getSfgQaDocument = (id) => fetchProd("GET", `/api/production/sfg-qa-documents/${id}`);
+export const addSfgQaTestLine = (id, body) => fetchProd("POST", `/api/production/sfg-qa-documents/${id}/test-lines`, body);
+export const updateSfgQaTestLine = (id, lineId, body) => fetchProd("PUT", `/api/production/sfg-qa-documents/${id}/test-lines/${lineId}`, body);
+export const submitSfgQaDecision = (id, body) => fetchProd("POST", `/api/production/sfg-qa-documents/${id}/decision`, body);
+
 // ── Packing Orders ────────────────────────────────────────────────────────────
 export const listPackingOrders = (p) => fetchProd("GET", "/api/production/packing-orders", undefined, p);
 export const getPackingOrder = (id) => fetchProd("GET", `/api/production/packing-orders/${id}`);

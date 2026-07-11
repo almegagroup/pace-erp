@@ -93,6 +93,13 @@ import {
   approvePackBomChangeRequestHandler,
   rejectPackBomChangeRequestHandler,
 } from "../_core/production/pack_bom.handlers.ts";
+import {
+  listSfgQaDocumentsHandler,
+  getSfgQaDocumentHandler,
+  addSfgQaTestLineHandler,
+  updateSfgQaTestLineHandler,
+  submitSfgQaDecisionHandler,
+} from "../_core/production/sfg_qa.handlers.ts";
 
 export async function dispatchProductionRoutes(
   routeKey: string,
@@ -170,6 +177,10 @@ export async function dispatchProductionRoutes(
       return await listPackingOrdersHandler(req, ctx);
     case "POST:/api/production/packing-orders":
       return await createPackingOrderHandler(req, ctx);
+
+    // SFG QA Result Recording
+    case "GET:/api/production/sfg-qa-documents":
+      return await listSfgQaDocumentsHandler(req, ctx);
 
     // Stroke Change Requests (PR03/PR04)
     case "GET:/api/production/stroke-change-requests":
@@ -268,6 +279,20 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/process-orders\/[^/]+\/prune$/.test(pathname) && req.method === "POST") {
     return await pruneProcessOrderHandler(req, ctx);
+  }
+
+  // SFG QA /:id actions
+  if (/^\/api\/production\/sfg-qa-documents\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getSfgQaDocumentHandler(req, ctx);
+  }
+  if (/^\/api\/production\/sfg-qa-documents\/[^/]+\/test-lines$/.test(pathname) && req.method === "POST") {
+    return await addSfgQaTestLineHandler(req, ctx);
+  }
+  if (/^\/api\/production\/sfg-qa-documents\/[^/]+\/test-lines\/[^/]+$/.test(pathname) && req.method === "PUT") {
+    return await updateSfgQaTestLineHandler(req, ctx);
+  }
+  if (/^\/api\/production\/sfg-qa-documents\/[^/]+\/decision$/.test(pathname) && req.method === "POST") {
+    return await submitSfgQaDecisionHandler(req, ctx);
   }
 
   // Packing Orders /:id actions

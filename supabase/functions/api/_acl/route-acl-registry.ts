@@ -274,6 +274,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/production/process-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
   "GET:/api/production/packing-orders":              { skipAcl: false, resourceCode: "PROD_ORDER_LIST", action: "VIEW" },
   "POST:/api/production/packing-orders":             { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+  "GET:/api/production/sfg-qa-documents":            { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "VIEW" },
   "GET:/api/production/stroke-change-requests":      { skipAcl: false, resourceCode: "PROD_CHANGE_BOM_ITEM_APPROVAL", action: "VIEW" },
   "POST:/api/production/stroke-change-requests":     { skipAcl: false, resourceCode: "PROD_CHANGE_BOM_ITEM", action: "WRITE" },
   "GET:/api/production/pack-boms":                   { skipAcl: false, resourceCode: "PROD_PACK_BOM_CREATE", action: "VIEW" },
@@ -954,6 +955,24 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/production\/process-orders\/[^/]+\/prune$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+\/test-lines$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+\/test-lines\/[^/]+$/,
+    methods: {
+      PUT: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "EDIT" },
+    },
+  },
+  {
+    pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+\/decision$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "APPROVE" } },
   },
   {
     pattern: /^\/api\/production\/packing-orders\/[^/]+$/,
