@@ -7069,6 +7069,8 @@ material_uom_conversion row     = Base UOM → Conversion UOM, with Conversion F
 material_master.shade_code / pack_code — NOT used in this flow (left as-is, unused columns per 2026-06-30 discussion)
 ```
 
+**`external_code` / `external_sku` — reporting-only fields, never a business-logic dependency (LOCKED — 2026-07-11):** `material_master.external_code` is populated **only** by the Prod+Shade flow above (SFG/INT records at Stroke Master creation). It is **not** populated for RM/PM materials as a rule (a handful of RM rows may carry an incidental value from data migration/import — this is not systematic and must never be relied upon). No current backend handler, availability check, reservation, or posting logic may key off `external_code`/`external_sku` for RM/PM materials, and no UI label for an RM/PM material should assume it is present. These two columns exist purely so a **future report** can look up/display a material by its external/customer-facing code when one happens to exist — today, tomorrow, or never, depending on when that data gets populated has zero effect on any workflow. Where an RM/PM material label is needed anywhere in the app, use `pace_code — material_name` (the pattern `materialLabel()` already uses in the Production Final/Verify pages), never `external_code`.
+
 ---
 
 #### RM Lines (LOCKED — 2026-06-30, revised 2026-06-30)

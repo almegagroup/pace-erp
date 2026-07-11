@@ -458,6 +458,8 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 
 **Packing PO storage-location authority (LOCKED — 2026-07-11):** No segment-config-style default lookup for Packing PO at all — every line's SLoc comes from Pack BOM (SFG/INPUT row = Stroke's default location per 83.15; FG/OUTPUT row = user-entered when Pack BOM was set up) or manual entry for BOM-not-required pack types. Stock check always runs against the SLoc value present on the line at that moment — see §83.4 PR09 Packing PO mode in the feasibility doc.
 
+**`external_code`/`external_sku` are reporting-only, never a business-logic dependency (LOCKED — 2026-07-11):** See feasibility doc §83.3 for the full note. Only populated systematically for SFG/INT (Prod+Shade combo at Stroke Master creation) — RM/PM must never be assumed to have it, and no handler/UI may key off it for RM/PM. Use `pace_code — material_name` for RM/PM labels, always.
+
 **🚧 Gate-27 IMPLEMENTATION IN PROGRESS (started 2026-07-11) — READ THIS ON SESSION START:**
 Design is locked; now implementing via the Claude/Codex loop. The full ordered task sequence, Codex run command, guardrails, and Claude verification protocol live in **`docs/Operation Management/implementation-specs/GATE27-CODEX-DRIVER-GUIDE.md`** — read it before touching Gate-27 code.
 - ✅ **27.3** Process PO Create 400 fix — DONE + committed `25b450e`.
