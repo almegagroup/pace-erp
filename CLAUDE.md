@@ -462,15 +462,22 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 
 **`external_code`/`external_sku` are reporting-only, never a business-logic dependency (LOCKED — 2026-07-11):** See feasibility doc §83.3 for the full note. Only populated systematically for SFG/INT (Prod+Shade combo at Stroke Master creation) — RM/PM must never be assumed to have it, and no handler/UI may key off it for RM/PM. Use `pace_code — material_name` for RM/PM labels, always.
 
-**🚧 Gate-27 IMPLEMENTATION IN PROGRESS (started 2026-07-11) — READ THIS ON SESSION START:**
-Design is locked; now implementing via the Claude/Codex loop. The full ordered task sequence, Codex run command, guardrails, and Claude verification protocol live in **`docs/Operation Management/implementation-specs/GATE27-CODEX-DRIVER-GUIDE.md`** — read it before touching Gate-27 code.
-- ✅ **27.3** Process PO Create 400 fix — DONE + committed `25b450e`.
-- ✅ **27.4** Reservation + Prune — DONE + committed `b93f462` (Codex-run, Claude-verified, migration applied to Dev).
-- ✅ **27.5** QA Queue (PR16) field/R-01 display fix — DONE + committed `b93f462`.
-- ✅ **27.6** Process PO full chain (Standard→QA→PR10 Edit→Start Batch→Final→Verify→CORS + reco table) — DONE + committed `26ef4d8` (Codex-run, Claude-verified — 2 issues caught+fixed: unauthorized doc edits reverted, CORS reason-mandatory gap closed).
-- 🔴 **Immediate follow-up (before more Gate-27 work):** the 2 code fixes above (P101 location authority + production_mode→material_type) still need to land in `process_order.handlers.ts`.
-- ⚪ 27.11 (PR16 full rebuild + real PR17), 27.13 (MTEST page polish), Packing PO (still broken/ID-based, not yet rebuilt) — not yet briefed.
-- On return: verify any Codex-run tasks per the driver guide §4, apply migrations to Dev via MCP, update `OM-IMPLEMENTATION-LOG.md`, then continue.
+**83.9 — MTEST exempt from mandatory Machine (LOCKED — 2026-07-11):**
+- `MTEST` does not require machine assignment — `machine_id` stays optional/null for MTEST only
+- Machine remains mandatory for `MTO`, `HPS`, `MTS`, and `INT` — already implemented correctly (`REQUIRED_MACHINE_TYPES` in `process_order.handlers.ts`)
+
+**✅ Gate-27 Process PO chain — FULLY CLOSED OUT (2026-07-11).** Standard → QA → PR10 Edit → Start Batch → INT-complete → Final → Verify → CORS, location-aware stock/reservation, PR16/PR17 rebuild, SFG Result Recording (PR18) + Concrete Trial test group, sidebar-visibility fix — all done, Codex-run, Claude-verified, committed (`26ef4d8`, `17a845d`, `0256b5e`, `b319c50`, `107c335`, `23c3c18`, `a226ef0`, `8b00fa3`, `2d15b72`). Full detail: `OM-IMPLEMENTATION-LOG.md` Gate-27.6/27.14/27.15/27.16/27.17 entries.
+
+**➡️ Next: Packing PO.** Still broken/ID-based create (list/get/create/update-lines only — no Standard→Final lifecycle, no QA, no batch, no reservation). This is the next full brief to write.
+
+**⚠️ Still open (not blockers, revisit later):**
+- MTS stroke-selection mechanism at Process PO create (83.3) — deferred; current manual-pick UI (same as MTO/HPS) stays as interim behavior, no schema/backend impact either way
+- FG Costing System (83.13 → Section 104) — dedicated session deferred ~1 week, after the full Process PO + Packing PO production cycle is built (see §104.6 for the query checklist, including 3 new items added 2026-07-11)
+- SFG Result Recording page detail — already built as a direct Inward QA clone (Gate-27.16); no further design gap
+- Admix FG SKU creation timing (83.12, SOD-deferred) — to be discussed alongside Packing PO
+- Pack BOM company-wise scope + mandatory SFG INPUT row (locked in feasibility §83.15) — **still not implemented in code**; `pack_bom` has no `company_id` column yet and `PackBomCreatePage.jsx` still never creates the SFG INPUT row (only OUTPUT+PM) — real gap, needs its own brief
+
+**⚠️ Known risk (2026-07-11):** two Claude/Codex sessions running against this same working directory concurrently can clobber each other's uncommitted doc edits — a `git checkout` run by one session to revert Codex's unauthorized doc edits silently wiped this session's own legitimate, user-approved edits to the same files (MTEST-machine note + §104.6 queries, both lost once and re-applied above). Commit doc-only locks promptly instead of leaving them uncommitted when another session may be active.
 
 ---
 

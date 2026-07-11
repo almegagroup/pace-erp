@@ -8768,6 +8768,8 @@ User reviews → confirms → movement posted
 - Plant users see only machines assigned to their plant
 - At Process PO creation: machine field is mandatory, cannot save without selection
 
+**MTEST exception (LOCKED — 2026-07-11):** `MTEST` does not require machine assignment — `machine_id` stays optional/null for MTEST. Machine is mandatory for `MTO`, `HPS`, `MTS`, and `INT` only. (Already implemented correctly in `process_order.handlers.ts`'s `REQUIRED_MACHINE_TYPES = new Set(["MTO", "HPS", "MTS", "INT"])` as part of Gate-27.6 — this note just records the decision in the SSOT doc after a concurrent `git checkout` during that same Gate-27.6 verification pass wiped an earlier attempt to record it.)
+
 ---
 
 ### 83.10 — Under / Over Delivery Tolerance
@@ -13526,6 +13528,11 @@ The following topics need formal discovery and locking:
 - [ ] IWC and Powder costing — same framework or separate?
 - [ ] Financial year close — WAR reset rules
 - [ ] AP rate disputes — system handling
+
+**Added while building Gate-27 (2026-07-11) — surfaced by locked mechanics that didn't exist when this list was first written:**
+- [ ] `process_order_line_reco` is append-not-reset on CORS (voided rows kept, `is_voided=true`) — should Scenario 3/4 deviation analysis ever look at voided attempts, or only the current non-voided attempt?
+- [ ] INT materials never reach AP/dispatch (internally consumed) — does INT get any AP Reco layer at all, or WAR-only costing with zero Reco rows? Needs an explicit yes/no, not an assumption.
+- [ ] Machine (Gate-27.6, now mandatory on `MTO`/`HPS`/`MTS`/`INT`) is currently pure traceability, no costing weight (matches 83.9 "no capacity/usage intelligence") — confirm this stays true, i.e. machine never enters any cost-allocation formula.
 
 ---
 
