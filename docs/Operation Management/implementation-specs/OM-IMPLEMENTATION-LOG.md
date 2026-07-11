@@ -2508,3 +2508,21 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Verification:** `deno check` clean, no mojibake, grepped for every remaining `TEST_GROUPS`/`test_group ===` reference in the file to confirm nothing else needed updating.
 
 **Files:** `supabase/functions/api/_core/procurement/qa_test_method.handlers.ts`.
+
+---
+
+## Gate-27.16 follow-up — PR18 menu/ACL setup + unresolved sidebar-visibility gap
+
+**Date:** 2026-07-11 · **Type:** MCP business-data setup (not a Codex task, no migration)
+
+**Done (MCP, Dev only — user replicates on Prod separately per standing instruction):**
+- `erp_menu.menu_master` row: `menu_code`/`resource_code = PROD_SFG_RESULT_RECORDING`, `tx_code = PR18`, `route_path = /dashboard/production/sfg-result-recording`.
+- `acl.menu_master` mirror row (same `menu_code`).
+- `acl.capability_menu_actions`: `CAP_PROD_OPERATOR` → `VIEW`/`WRITE`/`EDIT`/`APPROVE`, `allowed=true` (same pattern as `PROD_BATCH_RELEASE`/PR17).
+- Ran `acl.capture_acl_version_source(...)` then `acl.generate_acl_snapshot(...)` for all 4 active company ACL versions, to try to refresh the snapshot.
+
+**⚠️ Unresolved — flagged, not silently left out:** `acl.precomputed_acl_view` still shows **zero rows** for `resource_code = 'PROD_SFG_RESULT_RECORDING'` after both regeneration calls, even though the identically-shaped `PROD_BATCH_RELEASE` resource (same `CAP_PROD_OPERATOR` capability) correctly shows 36 ALLOW rows. Root cause not yet found — the capture/generate mechanism for this ACL system is more involved than the two functions tried; needs a deeper look at how `acl.menu_master`/`capability_menu_actions` actually feed into `generate_acl_snapshot()` before it will correctly enumerate PR18.
+
+**Practical impact — confirmed NOT an HTTP-error risk:** The SFG Result Recording page's actual API calls (list/get/test-line/decision) are gated by `PROD_QA_QUEUE` (registered in Gate-27.16), which already resolves broadly ALLOW in Dev — verified live via `precomputed_acl_view`. So the page works with zero 400/403/500 if reached directly by URL; the only open gap is that it may not yet appear as a sidebar link for users until the snapshot issue above is resolved.
+
+**Completes when:** next session investigates the ACL capture/generate mechanism for `acl.menu_master`-sourced resources specifically (compare against how `PROD_BATCH_RELEASE`'s row was originally seeded — it may have gone through a different/additional step this entry's MCP calls didn't replicate).
