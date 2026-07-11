@@ -7676,6 +7676,58 @@ VERIFIED (PR12 — stock movements posted)
 
 ---
 
+#### PR09 — Standard Create: Page-by-Page UI Spec (LOCKED — 2026-07-11, applies to MTO/HPS/MTS)
+
+> **Why this subsection exists:** this exact page-by-page flow was confirmed in chat (including two mockup rounds, `process_po_standard_flow_mockup` and `_v2`) but was never transcribed into this doc — a real doc-first-workflow miss. Recovered verbatim from session transcript on 2026-07-11 after the built PR09 page was found not to match (missing Material Table entirely, an unrequested "Segment" field, no gated 3-page flow).
+
+**Page 1 — Company / PO Type / Material:**
+- Company — dropdown if multi-company user, locked/auto if single-company
+- PO Type — MTO / HPS / MTS / MTEST / INT
+- Material — dropdown, filtered by PO Type (approved SFG/INT for MTO/HPS/MTS/INT; SFG/INT/SKU for MTEST since it's an ad-hoc test batch on any item)
+- → Enter/Next
+
+**Page 2 — Stroke gate:**
+- MTO/HPS/MTS — Stroke list for that Material+PO Type, **mandatory select** (even if only one Stroke exists, user must click it — no auto-select), cannot proceed without selecting
+- MTEST — Stroke list shown only if one exists for that material (optional, can skip)
+- SKU (MTEST-only path) — no Stroke concept, goes straight to Page 3
+
+**Page 3 — Header + Material Table:**
+
+Header fields (all carried over from Page 1/2 are read-only):
+| Field | Source / State |
+|---|---|
+| PO Number | Blank — generated on save |
+| Company, PO Type, Prodshade/Material | Read-only, from Page 1 |
+| Stroke Number | Read-only, from Page 2 |
+| Description | Read-only, inherited from the Stroke's own description |
+| **Machine** | Dropdown, company-mapped (Name + Code), **mandatory** for MTO/HPS/MTS/INT (see 83.9 MTEST exception) |
+| **Batch Size** | Input — this is the Standard/Planned Qty |
+| Batch Number | Blank ("—") — not generated until Start Batch |
+| Status | Badge — STANDARD (later reflects QA/FINAL/VERIFIED/edited/pruned states) |
+| Output reference block | Material Code / Name / Description / External Code / Storage Location (user-visible reference only) / Movement Type = **P101** |
+| Notes | **Not needed** — explicitly dropped |
+| FO Number | **Not on this header at all** — superseded by the later 2026-07-11 correction that Process PO carries no FO reference, formal or informal (FO link lives only on Packing PO) |
+| **Segment** (`segment_code`) | Backend-required classification field (`VALID_SEGMENTS` = ADMIX/HPS/IWC/POWDER/INT, stored on `process_order` for reco/context purposes) but **must never be a manually-typed user-facing dropdown** — auto-derive from PO Type (MTO→ADMIX, HPS→HPS, INT→INT; MTS→ user picks only because IWC vs POWDER is genuinely ambiguous from PO Type alone). Never discussed as a visible field anywhere in the session — its current appearance as a blank mandatory combobox on the live page is a pure implementation leak, not a design element |
+
+Material Table (RM/INT lines, Standard-phase column behavior):
+| # | Column | Standard-phase behavior |
+|---|---|---|
+| 1 | # | Row number |
+| 2 | Material Type (RM/INT) | Read-only |
+| 3 | Formulation Material | Read-only, from Stroke |
+| 4 | Dosage % | Read-only, from Stroke |
+| 5 | Actual Material | Editable dropdown, registered-alternate-only, default blank ("(same)") |
+| 6 | Storage Location | Editable — default from the Stroke line's own `default_storage_location_id` (not segment config — see 83.4 Storage Location Integration correction), override allowed |
+| 7 | Standard Qty | Read-only, auto = Dosage% × Batch Size |
+| 8 | Movement Type | Read-only, always 261 |
+| 9 | **Available Stock** | `Unrestricted@location − Σ(other POs' OPEN/PARTIAL reservation @ same location)` — **row turns red and Save is blocked** if Available < Standard Qty for any line (added in mockup v2, 2026-07-11, per the already-locked stock-check-severity rule) |
+
+No **+ Add Row** at Standard (RM edit not allowed at Standard — quantities come from formulation source; new-row addition is Final/Verify only). No Actual Qty / Approved / AP Approved / Variance columns at Standard (Final/Verify only). The output (Prodshade) row does **not** appear in this table — it is shown only in the header's output reference block.
+
+Save behavior: if any line's Available Stock < Standard Qty, block save with a message; otherwise save succeeds, PO Number generates, and the PO proceeds to → QA Queue (PR16) for MTO/HPS (or BATCH_STARTED directly for MTS, per the PO-type branching already locked elsewhere in this section).
+
+---
+
 **Phase 2 — QA Online Approval (between Standard and Final)**
 
 ```
