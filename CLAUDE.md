@@ -459,6 +459,14 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - 83.6, 83.8–83.12 review and lock
 - Section 104 dedicated costing session (see 104.7 open items above)
 
+**🚧 Gate-27 IMPLEMENTATION IN PROGRESS (started 2026-07-11) — READ THIS ON SESSION START:**
+Design is locked; now implementing via the Claude/Codex loop. The full ordered task sequence, Codex run command, guardrails, and Claude verification protocol live in **`docs/Operation Management/implementation-specs/GATE27-CODEX-DRIVER-GUIDE.md`** — read it before touching Gate-27 code.
+- ✅ **27.3** Process PO Create 400 fix — DONE + committed `25b450e`.
+- 🟢 **27.4** Reservation + Prune (migration + backend) — brief written & ready (`CODEX-GATE27.4-...`); has 1 open interim decision (material+company netting vs per-location) — default proceed.
+- 🟢 **27.5** QA Queue (PR16) field/R-01 display fix — brief written & ready (`CODEX-GATE27.5-...`).
+- ⚪ 27.6–27.13 — sequence listed in the driver guide; briefs to be written on return.
+- On return: verify any Codex-run tasks per the driver guide §4, apply migrations to Dev via MCP, update `OM-IMPLEMENTATION-LOG.md`, then continue.
+
 ---
 
 ## 7. Workflow Plan (Dev → Prod)
