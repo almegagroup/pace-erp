@@ -48,25 +48,29 @@ Legend: ✅ done · 🟢 brief written, ready to run · ⚪ brief not yet writte
 | # | ID | Title | Locked ref | Migration? | Brief | Status |
 |---|----|-------|-----------|-----------|-------|--------|
 | — | 27.3 | Process PO Create 400 fix (send po_type + segment_code) | §83.4 | no | `CODEX-GATE27.3-PROCESSPO-CREATE-FIX-TASK-BRIEF.md` | ✅ DONE + committed `25b450e` |
-| 1 | 27.4 | Reservation (reserve@Standard, clear@Prune) + availability netting + Prune endpoint | §83.5, §83.4 | **yes** | `CODEX-GATE27.4-RESERVATION-PRUNE-TASK-BRIEF.md` | 🟢 READY (see open decision below) |
-| 2 | 27.5 | QA Queue (PR16) field-mismatch fix — list shows blank/zero/raw-UUID today | §83.4 (PR16) | no | `CODEX-GATE27.5-QAQUEUE-FIELD-FIX-TASK-BRIEF.md` | 🟢 READY |
-| 3 | 27.6 | `machine_id` on process_order + machine at Standard + QA-checks-machine | §83.4 (Phase-2 QA), §83.9 | yes | — | ⚪ |
-| 4 | 27.7 | po_type branching: MTS skips QA; INT & MTEST single-action handlers (not 5-stage) | §83.4, §83.5 | no | — | ⚪ |
-| 5 | 27.8 | `process_order_line` draft/substitution cols + Final = data-entry-only + INT-VERIFIED hard check | §83.4 (Final), §83.5 | yes | — | ⚪ |
-| 6 | 27.9 | Verify posting P261→P101(QI)→P321 + `process_order_line_reco` table + commit@Verify | §83.4 (Verify, P321), §83.5 (reco table) | yes | — | ⚪ |
-| 7 | 27.10 | CORS full reversal: 3 movements (P262 + P322 + P102) + reco append-not-reset | §83.4 (PR15), §83.5 (CORS append) | maybe | — | ⚪ |
-| 8 | 27.11 | PR16 expandable QA-queue rebuild + PR17 Batch Number Release page | §83.4 (PR16/PR17) | no | — | ⚪ |
-| 9 | 27.12 | PR09/PR11/PR12 frontend rebuilds (comboboxes/R-01, Final & Verify line tables, red-if-short grid) | §83.4 (line tables), Constitution Rule 1/Rule 5 | no | — | ⚪ |
-| 10 | 27.13 | INT single-action page + MTEST single-action page | §83.5 (INT), §83.4 (MTEST) | no | — | ⚪ |
+| — | 27.4 | Reservation (reserve@Standard, clear@Prune) + availability netting + Prune endpoint | §83.5, §83.4 | yes | `CODEX-GATE27.4-RESERVATION-PRUNE-TASK-BRIEF.md` | ✅ DONE + committed `b93f462` (Codex-run during downtime, Claude-verified, migration applied to Dev) |
+| — | 27.5 | QA Queue (PR16) field-mismatch fix — list shows blank/zero/raw-UUID today | §83.4 (PR16) | no | `CODEX-GATE27.5-QAQUEUE-FIELD-FIX-TASK-BRIEF.md` | ✅ DONE + committed `b93f462` (Codex-run during downtime, Claude-verified) |
+| 1 | 27.6 | **Consolidated brief** — Process PO full chain: Standard (machine + po_type branching) → QA Approve/Reject (cascade-to-PRUNED fix) → PR10 Edit (new) → Start Batch (MTS-skip-QA fix) → INT complete-int (new) → Final (Approved/AP-Approved/Variance/substitution) → Verify (QI hold + P321 auto-release + reservation-issue + `process_order_line_reco` commit) → CORS (3-movement P262+P322+P102 + reservation reinstate + reco void) — DB+BE+FE | §83.3 (substitution registry), §83.4 (whole lifecycle), §83.5 (reservation/reco/INT), §83.7 (batch), §83.9 (machine) | **yes** | `CODEX-GATE27.6-PROCESSPO-FULL-CHAIN-TASK-BRIEF.md` | 🟢 READY — **supersedes the old separate 27.6–27.10/27.12(partial) stub rows below**, which are now merged into this one brief. **User confirmed:** INT/MTEST completion sets `status='VERIFIED'` (reuse, no new status value). |
+
+**~~Old stub rows (superseded by 27.6 above — do not use separately)~~:** machine_id (was 27.6), po_type branching (was 27.7), Final draft cols (was 27.8), Verify posting + reco table (was 27.9), CORS reversal (was 27.10) — all merged into the one consolidated `CODEX-GATE27.6-PROCESSPO-FULL-CHAIN-TASK-BRIEF.md`.
+
+**Still separate, not yet briefed (deliberately out of the 27.6 consolidated brief's scope — see its §4):**
+| # | ID | Title | Locked ref | Status |
+|---|----|-------|-----------|--------|
+| 2 | 27.11 | PR16 expandable QA-queue full rebuild (batch# column, sort order, formulation grid) + PR17 Batch Number Release true design (note: existing `BatchReleasePage.jsx` is NOT actually PR17 — it's a differently-purposed "Manager triggers Start Batch" page; leave it alone until this item) | §83.4 (PR16/PR17) | ⚪ |
+| 3 | 27.13 | Polished dedicated MTEST page (functionally MTEST already works via the existing create endpoint per 27.6 §2.1 — this would just be a nicer dedicated UI) | §83.4 (MTEST) | ⚪ |
+
+**⚠️ Codex self-authored 7 briefs during the downtime this guide describes (`CODEX-GATE27.6` through `27.13` old-numbering + a `BRIEF-STATUS` doc) without being asked to.** These were **NOT reviewed by Claude** and are **superseded/replaced** by the reviewed `CODEX-GATE27.6-PROCESSPO-FULL-CHAIN-TASK-BRIEF.md` above. **Do not run any Codex-self-authored brief** — per the project's standing rule, Codex must only implement what a Claude-reviewed brief locks, never design its own scope. If you still have those files, they can be deleted once Claude confirms 27.6 (this consolidated one) covers their intent (Claude will reconcile on return).
 
 **Data setup (MCP, Claude on return — Dev only; user does Prod later):** seed `production_segment_location_config` for the test company; populate `production_mode` on materials; load opening stock for test strokes' RMs. Needed before any *live* zero-error run of the Standard→Verify chain.
 
-> Items 3–10 have no brief yet. Preferred path: Claude writes each brief on return (keeps drift low). If continuing without Claude, point Codex at the row's **Locked ref** section of `PACE_ERP_Operation_Management_SAP_Style_Discovery_and_Feasibility.md` and enforce the §1 guardrails — but expect Claude to review harder. Respect dependencies: 27.8 needs 27.7; 27.9 needs 27.8; 27.10 needs 27.9. 27.5 is independent (can run anytime). 27.6 is independent of 27.4.
-
 ---
 
-## 3. Open decision blocking 27.4 run
-Availability netting in 27.4 is written to net at **material + company** level (interim) because segment config is empty → line storage locations are NULL, so per-location netting (the §83.5 formula) can't compute yet. The table/index are location-ready; when segment config is seeded the query switches to per-location with no schema change. **Default = proceed with the interim** (recommended). Run 27.4 as-is unless you want to seed segment config first.
+## 3. Open decisions
+
+- **Resolved (2026-07-11):** Availability netting (Gate-27.4) nets at **material + company** level (interim, segment config empty) — done, no longer open.
+- **Resolved (2026-07-11):** INT/MTEST single-action completion sets `process_order.status = 'VERIFIED'` (user-confirmed, reuse not new value) — locked into `CODEX-GATE27.6-PROCESSPO-FULL-CHAIN-TASK-BRIEF.md`.
+- **Open, flagged inside 27.6's brief itself (§3.1):** whether a reusable `ErpSelectionScreen` component already exists in this codebase for the Constitution Rule-5 criteria-first PO-create pattern — Codex is instructed to check and fall back gracefully (log a follow-up) rather than build a new shared component under this brief.
 
 ---
 
