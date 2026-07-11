@@ -1,259 +1,380 @@
 /*
  * File-ID: 27.FE-PR11
  * File-Path: frontend/src/pages/dashboard/production/ProductionPOFinalPage.jsx
- * Gate: 27 | Domain: PRODUCTION
- * Purpose: Enter actual quantities for Process or Packing PO (COR6-Final).
+ * Gate: 27
+ * Phase: 27
+ * Domain: PRODUCTION
+ * Purpose: Process PO final data-entry screen for PR11.
+ * Authority: Frontend
  */
 
-import React, { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import React, { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import { getProcessOrder, finalizeProcessOrder, getPackingOrder, finalizePackingOrder } from "./prodApi.js";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import { useCompaniesForOmQuery, useMaterialOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { finalizeProcessOrder, getProcessOrder, listProcessOrders } from "./prodApi.js";
 
-const STATUS_COLORS = {
-  STANDARD:      "bg-slate-100 text-slate-700",
-  QA_APPROVED:   "bg-sky-100 text-sky-700",
-  QA_REJECTED:   "bg-rose-100 text-rose-700",
-  BATCH_STARTED: "bg-amber-100 text-amber-800",
-  FINAL:         "bg-purple-100 text-purple-700",
-  VERIFIED:      "bg-emerald-100 text-emerald-700",
-  REVERSED:      "bg-slate-100 text-slate-500",
-};
+function companyLabel(company) {
+  return [company.company_code, company.company_name].filter(Boolean).join(" - ");
+}
 
-const ERRORS = {
-  PROD_PO_NOT_FOUND:             "Order not found.",
-  PROD_PO_FINALIZE_NOT_ALLOWED:  "Finalize is only allowed from BATCH_STARTED status.",
-  PROD_PACKING_FINALIZE_NOT_ALLOWED: "Packing PO finalize is only allowed from STANDARD status.",
-  PROD_MANAGER_OR_SA_REQUIRED:   "Manager or SA access required.",
-};
-function friendly(code) { return ERRORS[code] ?? code; }
+function orderLabel(order) {
+  return [order.po_number, order.material?.material_name, order.po_type].filter(Boolean).join(" - ");
+}
 
-const TABS = ["Process PO", "Packing PO"];
+function materialLabel(material) {
+  return [material?.pace_code, material?.material_name].filter(Boolean).join(" - ");
+}
 
-function LoadAndFinalizePanel({ label, fetcher, finalizer, allowedStatus, qKey }) {
+function computeRowValues(row) {
+  const planned = Number(row.planned_qty || 0);
+  const actual = Number(row.actual_qty || 0);
+  const autoYes = Math.abs(actual - planned) < 0.0001;
+  const approved = autoYes ? "YES" : (row.approved_status || "YES");
+  let apApproved = actual;
+  let variance = 0;
+  if (!autoYes) {
+    if (approved === "NO") {
+      apApproved = planned;
+      variance = actual - planned;
+    } else if (approved === "PARTIAL") {
+      apApproved = Number(row.ap_approved_qty || 0);
+      variance = actual - apApproved;
+    } else {
+      apApproved = actual;
+    }
+  }
+  return { planned, actual, autoYes, approved, apApproved, variance };
+}
+
+function makeDraftRow(line) {
+  return {
+    key: line.id,
+    id: line.id,
+    material_id: line.material_id,
+    material_label: materialLabel(line.material),
+    dosage_pct: line.dosage_pct ?? "",
+    registered_alternate_material_id: line.registered_alternate_material_id || "",
+    registered_alternate_material_label: materialLabel(line.registered_alternate_material),
+    actual_material_id: line.actual_material_id || "",
+    sloc_label: line.issue_storage_location?.location_code || line.issue_storage_location?.location_name || "--",
+    planned_qty: String(line.planned_qty ?? 0),
+    actual_qty: String(line.actual_qty ?? line.planned_qty ?? 0),
+    approved_status: line.approved_status || "YES",
+    ap_approved_qty: String(line.ap_approved_qty ?? line.actual_qty ?? line.planned_qty ?? 0),
+    variance_qty: String(line.variance_qty ?? 0),
+    is_formulation_line: line.is_formulation_line !== false,
+  };
+}
+
+export default function ProductionPOFinalPage() {
   const qc = useQueryClient();
-  const [poInput, setPoInput] = useState("");
-  const [order, setOrder] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [companyId, setCompanyId] = useState("");
+  const [orderId, setOrderId] = useState("");
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
-  const [actualLines, setActualLines] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [rows, setRows] = useState([]);
+
+  const companiesQ = useCompaniesForOmQuery();
+  const companyOptions = useMemo(
+    () => (companiesQ.data ?? []).map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
+    [companiesQ.data],
+  );
+
+  const ordersQ = useQuery({
+    queryKey: ["production-final-orders", companyId],
+    queryFn: () => listProcessOrders({ company_id: companyId || undefined, status: "BATCH_STARTED", per_page: 100 }),
+    enabled: Boolean(companyId),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const orderOptions = useMemo(
+    () => (ordersQ.data ?? []).map((order) => ({ value: order.id, label: orderLabel(order) || order.po_number || "Process PO" })),
+    [ordersQ.data],
+  );
+
+  const detailQ = useQuery({
+    queryKey: ["production-final-detail", orderId],
+    queryFn: () => getProcessOrder(orderId),
+    enabled: Boolean(orderId),
+  });
+  const materialQ = useMaterialOptionsQuery({ status: "ACTIVE", limit: 500 });
+  const materialOptions = useMemo(
+    () => (materialQ.materials ?? []).map((material) => ({ value: material.id, label: materialLabel(material) || "Material" })),
+    [materialQ.materials],
+  );
+
+  const po = detailQ.data ?? null;
+  useEffect(() => {
+    setRows((po?.lines ?? []).map(makeDraftRow));
+  }, [po]);
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
   }
 
-  async function handleLoad() {
-    if (!poInput.trim()) { toast("Enter an order ID.", "error"); return; }
-    setLoading(true);
-    setOrder(null);
-    setActualLines([]);
-    try {
-      const data = await fetcher(poInput.trim());
-      setOrder(data);
-      setActualLines((data.lines ?? []).map((l) => ({ ...l, actual_qty: "" })));
-    } catch (err) {
-      toast(friendly(err.message), "error");
-    } finally {
-      setLoading(false);
-    }
+  function updateRow(key, patch) {
+    setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
   }
 
-  function updateActual(i, val) {
-    setActualLines((ls) => ls.map((l, idx) => idx === i ? { ...l, actual_qty: val } : l));
+  function addRow() {
+    setRows((current) => [...current, {
+      key: `new-${Date.now()}`,
+      id: "",
+      material_id: "",
+      material_label: "",
+      dosage_pct: "",
+      registered_alternate_material_id: "",
+      registered_alternate_material_label: "",
+      actual_material_id: "",
+      sloc_label: "--",
+      planned_qty: "0",
+      actual_qty: "0",
+      approved_status: "YES",
+      ap_approved_qty: "0",
+      variance_qty: "0",
+      is_formulation_line: false,
+    }]);
   }
 
-  async function handleFinalize() {
-    if (!order) return;
-    if (order.status !== allowedStatus) {
-      toast(`Cannot finalize from status ${order.status}. Expected: ${allowedStatus}.`, "error");
-      return;
-    }
+  async function handleSave() {
+    if (!po || po.status !== "BATCH_STARTED") return;
     setSaving(true);
     try {
-      await finalizer(order.id, {
-        actual_lines: actualLines.map((l) => ({
-          line_id: l.id,
-          actual_qty: parseFloat(l.actual_qty) || 0,
-        })),
+      const inputRows = rows.map((row) => {
+        const values = computeRowValues(row);
+        return {
+          id: row.id || undefined,
+          material_id: row.id ? undefined : row.material_id || undefined,
+          dosage_pct: row.dosage_pct === "" ? undefined : Number(row.dosage_pct),
+          actual_material_id: row.actual_material_id || undefined,
+          actual_qty: values.actual,
+          approved_status: values.autoYes ? undefined : row.approved_status,
+          ap_approved_qty: values.autoYes ? undefined : (row.approved_status === "PARTIAL" ? Number(row.ap_approved_qty || 0) : undefined),
+          is_rm: true,
+        };
       });
-      toast(`${label} finalized successfully.`);
-      setOrder(null);
-      setPoInput("");
-      setActualLines([]);
-      qc.invalidateQueries({ queryKey: [qKey] });
-    } catch (err) {
-      toast(friendly(err.message), "error");
+      const outputActualQty = rows.reduce((sum, row) => sum + computeRowValues(row).apApproved, 0);
+      await finalizeProcessOrder(po.id, {
+        actual_qty: outputActualQty,
+        lines: inputRows,
+      });
+      toast("Process PO saved as FINAL.");
+      qc.invalidateQueries({ queryKey: ["process-orders"] });
+      qc.invalidateQueries({ queryKey: ["production-final-detail", po.id] });
+    } catch (error) {
+      toast(error.message || "Final save failed.", "error");
     } finally {
       setSaving(false);
     }
   }
 
-  const canFinalize = order && order.status === allowedStatus;
-
-  return (
-    <div className="flex flex-col gap-4">
-      {notice.msg && (
-        <div className={`rounded px-3 py-2 text-sm ${notice.tone === "error" ? "bg-rose-50 text-rose-700 border border-rose-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
-          {notice.msg}
-        </div>
-      )}
-
-      <div className="flex gap-2 items-end max-w-lg">
-        <div className="flex flex-col gap-1 flex-1">
-          <label className="text-xs text-slate-600 font-medium">{label} ID</label>
-          <input
-            className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-            placeholder="Enter order ID…"
-            value={poInput}
-            onChange={(e) => setPoInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleLoad()}
-          />
-        </div>
-        <button
-          onClick={handleLoad}
-          disabled={loading}
-          className="bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded transition-colors"
-        >
-          {loading ? "Loading…" : "Load"}
-        </button>
-      </div>
-
-      {order && (
-        <>
-          <div className="grid grid-cols-3 gap-3 bg-slate-50 rounded p-4 text-sm">
-            <div>
-              <span className="text-slate-400 text-xs block mb-0.5">Order Number</span>
-              <p className="font-mono font-semibold">{order.po_number ?? order.id?.slice(0, 8)}</p>
-            </div>
-            <div>
-              <span className="text-slate-400 text-xs block mb-0.5">Type</span>
-              <p>{order.prod_type ?? "—"}</p>
-            </div>
-            <div>
-              <span className="text-slate-400 text-xs block mb-0.5">Status</span>
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[order.status] ?? ""}`}>
-                {order.status?.replace(/_/g, " ")}
-              </span>
-            </div>
-            <div>
-              <span className="text-slate-400 text-xs block mb-0.5">Batch Number</span>
-              <p className="font-mono">{order.batch_number ?? "—"}</p>
-            </div>
-            <div>
-              <span className="text-slate-400 text-xs block mb-0.5">Planned Qty (KG)</span>
-              <p className="font-mono">{order.planned_qty_kg ?? "—"}</p>
-            </div>
-          </div>
-
-          {!canFinalize && (
-            <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-800">
-              Cannot finalize — current status is <strong>{order.status}</strong>. Expected status: <strong>{allowedStatus}</strong>.
-            </div>
-          )}
-
-          {canFinalize && (
-            <>
-              {actualLines.length === 0 ? (
-                <p className="text-slate-400 text-sm">No lines on this order.</p>
-              ) : (
-                <div>
-                  <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">Actual Quantities</p>
-                  <table className="w-full text-sm border-collapse mb-4">
-                    <thead>
-                      <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
-                        <th className="text-left py-2 px-3 border-b">#</th>
-                        <th className="text-left py-2 px-3 border-b">Material</th>
-                        <th className="text-right py-2 px-3 border-b">Planned Qty</th>
-                        <th className="text-right py-2 px-3 border-b">Actual Qty</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {actualLines.map((line, i) => (
-                        <tr key={line.id ?? i} className="border-b border-slate-100">
-                          <td className="py-2 px-3 text-slate-400">{i + 1}</td>
-                          <td className="py-2 px-3">{line.material?.pace_code ?? line.material_id?.slice(0, 8)}</td>
-                          <td className="py-2 px-3 text-right font-mono text-slate-500">
-                            {Number(line.planned_qty ?? 0).toFixed(3)}
-                          </td>
-                          <td className="py-2 px-3 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.001"
-                              className="border border-slate-300 rounded px-2 py-0.5 text-sm font-mono text-right w-32"
-                              placeholder="0.000"
-                              value={line.actual_qty}
-                              onChange={(e) => updateActual(i, e.target.value)}
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              <button
-                onClick={handleFinalize}
-                disabled={saving}
-                className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-medium px-5 py-2 rounded transition-colors w-fit"
-              >
-                {saving ? "Finalizing…" : `Finalize ${label}`}
-              </button>
-            </>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-export default function ProductionPOFinalPage() {
-  const [activeTab, setActiveTab] = useState(0);
+  const outputApprovedQty = rows.reduce((sum, row) => sum + computeRowValues(row).apApproved, 0);
+  const outputActualQty = rows.reduce((sum, row) => sum + computeRowValues(row).actual, 0);
+  const outputVariance = outputActualQty - outputApprovedQty;
 
   return (
     <ErpScreenScaffold
-      title="Production PO Final — PR11"
-      subtitle="Enter actual quantities for Process or Packing PO (COR6-Final)"
+      title="Production PO Final - PR11"
+      subtitle="Final data entry before stock posting"
+      notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
-      <ErpSectionCard>
-        <div className="flex gap-0 border-b border-slate-200 mb-6">
-          {TABS.map((tab, i) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(i)}
-              className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === i
-                  ? "border-purple-600 text-purple-700"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
+      <ErpSectionCard title="Select Process PO">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-slate-600">Company</label>
+            <ErpComboboxField
+              value={companyId}
+              onChange={(value) => {
+                setCompanyId(value);
+                setOrderId("");
+              }}
+              options={companyOptions}
+              placeholder="-- Select company --"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-slate-600">Process PO</label>
+            <ErpComboboxField
+              value={orderId}
+              onChange={setOrderId}
+              options={orderOptions}
+              placeholder="-- Select process PO --"
+              emptyStateLabel={ordersQ.isLoading ? "Loading process orders..." : "No BATCH_STARTED process POs"}
+              disabled={!companyId}
+            />
+          </div>
         </div>
-
-        {activeTab === 0 && (
-          <LoadAndFinalizePanel
-            label="Process Order"
-            fetcher={getProcessOrder}
-            finalizer={finalizeProcessOrder}
-            allowedStatus="BATCH_STARTED"
-            qKey="process-orders"
-          />
-        )}
-        {activeTab === 1 && (
-          <LoadAndFinalizePanel
-            label="Packing Order"
-            fetcher={getPackingOrder}
-            finalizer={finalizePackingOrder}
-            allowedStatus="STANDARD"
-            qKey="packing-orders"
-          />
-        )}
       </ErpSectionCard>
+
+      {po && (
+        <ErpSectionCard title="PR11 Final">
+          {po.status !== "BATCH_STARTED" ? (
+            <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              This Process PO is blocked for Final. Only `BATCH_STARTED` is allowed.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="grid flex-1 gap-3 md:grid-cols-3 text-sm">
+                  <div><span className="block text-xs text-slate-400">PO #</span><p className="font-mono font-semibold text-sky-700">{po.po_number || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Batch #</span><p className="font-mono">{po.batch_number || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Status</span><p>{po.status || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Machine</span><p>{po.machine?.machine_name || po.machine?.machine_code || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Stroke #</span><p>{po.stroke?.stroke_number || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Prodshade</span><p>{materialLabel(po.material) || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Description</span><p>{po.stroke?.description || po.material?.material_name || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Type</span><p>{po.po_type || "--"}</p></div>
+                  <div><span className="block text-xs text-slate-400">Std Size</span><p className="font-mono">{Number(po.planned_qty || 0).toLocaleString()}</p></div>
+                </div>
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="rounded bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
+                >
+                  {saving ? "Saving..." : "Save as Final"}
+                </button>
+              </div>
+
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Input</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[1100px] border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                        <th className="border-b px-3 py-2 text-left">Formulation Material</th>
+                        <th className="border-b px-3 py-2 text-right">Dosage%</th>
+                        <th className="border-b px-3 py-2 text-left">Actual Material</th>
+                        <th className="border-b px-3 py-2 text-left">SLoc</th>
+                        <th className="border-b px-3 py-2 text-right">Std</th>
+                        <th className="border-b px-3 py-2 text-right">Actual</th>
+                        <th className="border-b px-3 py-2 text-left">Approved</th>
+                        <th className="border-b px-3 py-2 text-right">AP Appr</th>
+                        <th className="border-b px-3 py-2 text-right">Var</th>
+                        <th className="border-b px-3 py-2 text-left">Mvt</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row) => {
+                        const values = computeRowValues(row);
+                        const actualMaterialOptions = row.registered_alternate_material_id
+                          ? [
+                              { value: "", label: "(same)" },
+                              { value: row.registered_alternate_material_id, label: row.registered_alternate_material_label || "Registered alternate" },
+                            ]
+                          : [{ value: "", label: "(same)" }];
+                        return (
+                          <tr key={row.key} className="border-b border-slate-100">
+                            <td className="px-3 py-2">
+                              {row.id ? (
+                                row.material_label || "--"
+                              ) : (
+                                <ErpComboboxField
+                                  value={row.material_id}
+                                  onChange={(value) => {
+                                    const selected = (materialQ.materials ?? []).find((material) => material.id === value);
+                                    updateRow(row.key, {
+                                      material_id: value,
+                                      material_label: materialLabel(selected),
+                                    });
+                                  }}
+                                  options={materialOptions}
+                                  placeholder="-- Select material --"
+                                  emptyStateLabel={materialQ.isLoading ? "Loading materials..." : "No materials"}
+                                />
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">{row.dosage_pct === "" ? "--" : Number(row.dosage_pct).toFixed(3)}</td>
+                            <td className="px-3 py-2">
+                              <ErpComboboxField
+                                value={row.actual_material_id}
+                                onChange={(value) => updateRow(row.key, { actual_material_id: value })}
+                                options={actualMaterialOptions}
+                                placeholder="(same)"
+                                disabled={!row.id || !row.registered_alternate_material_id}
+                              />
+                            </td>
+                            <td className="px-3 py-2">{row.sloc_label}</td>
+                            <td className="px-3 py-2 text-right font-mono">{values.planned.toFixed(3)}</td>
+                            <td className="px-3 py-2 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.001"
+                                className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                value={row.actual_qty}
+                                onChange={(event) => updateRow(row.key, { actual_qty: event.target.value })}
+                              />
+                            </td>
+                            <td className="px-3 py-2">
+                              {values.autoYes && row.id ? (
+                                <span className="inline-flex rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">* YES</span>
+                              ) : (
+                                <ErpComboboxField
+                                  value={row.approved_status}
+                                  onChange={(value) => updateRow(row.key, { approved_status: value })}
+                                  options={["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }))}
+                                  hideBlank
+                                />
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right">
+                              {row.approved_status === "PARTIAL" && !values.autoYes ? (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.001"
+                                  className="w-24 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                                  value={row.ap_approved_qty}
+                                  onChange={(event) => updateRow(row.key, { ap_approved_qty: event.target.value })}
+                                />
+                              ) : (
+                                <span className="font-mono">{values.apApproved.toFixed(3)}</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono">{values.variance.toFixed(3)}</td>
+                            <td className="px-3 py-2">261</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <button onClick={addRow} className="mt-2 text-sm font-medium text-sky-700 hover:underline">+ Add Row</button>
+              </div>
+
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Output</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[700px] border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                        <th className="border-b px-3 py-2 text-left">Material</th>
+                        <th className="border-b px-3 py-2 text-right">Std</th>
+                        <th className="border-b px-3 py-2 text-right">Actual</th>
+                        <th className="border-b px-3 py-2 text-right">AP Appr</th>
+                        <th className="border-b px-3 py-2 text-right">Var</th>
+                        <th className="border-b px-3 py-2 text-left">Mvt</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td className="border-b border-slate-100 px-3 py-2">{materialLabel(po.material) || "--"}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{Number(po.planned_qty || 0).toFixed(3)}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputActualQty.toFixed(3)}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputApprovedQty.toFixed(3)}</td>
+                        <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{outputVariance.toFixed(3)}</td>
+                        <td className="border-b border-slate-100 px-3 py-2">101</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+        </ErpSectionCard>
+      )}
     </ErpScreenScaffold>
   );
 }

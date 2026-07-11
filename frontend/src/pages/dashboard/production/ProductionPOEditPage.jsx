@@ -1,234 +1,235 @@
 /*
  * File-ID: 27.FE-PR10
  * File-Path: frontend/src/pages/dashboard/production/ProductionPOEditPage.jsx
- * Gate: 27 | Domain: PRODUCTION
- * Purpose: Edit Process PO (qty adjustments + machine assignment) when status = QA_APPROVED or BATCH_STARTED.
+ * Gate: 27
+ * Phase: 27
+ * Domain: PRODUCTION
+ * Purpose: Edit Process PO machine and planned quantities only for PR10.
+ * Authority: Frontend
  */
 
-import React, { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import React, { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import { getProcessOrder, updateProcessOrderLines } from "./prodApi.js";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { editProcessOrder, getProcessOrder, listProcessOrders } from "./prodApi.js";
+import { listMachines } from "../om/omApi.js";
 
 const EDITABLE_STATUSES = ["QA_APPROVED", "BATCH_STARTED"];
 
-const STATUS_COLORS = {
-  STANDARD:     "bg-slate-100 text-slate-700",
-  QA_APPROVED:  "bg-sky-100 text-sky-700",
-  QA_REJECTED:  "bg-rose-100 text-rose-700",
-  BATCH_STARTED:"bg-amber-100 text-amber-800",
-  FINAL:        "bg-purple-100 text-purple-700",
-  VERIFIED:     "bg-emerald-100 text-emerald-700",
-  REVERSED:     "bg-slate-100 text-slate-500",
-  CANCELLED:    "bg-slate-100 text-slate-500",
-};
+function companyLabel(company) {
+  return [company.company_code, company.company_name].filter(Boolean).join(" - ");
+}
 
-const ERRORS = {
-  PROD_PO_NOT_FOUND:            "Process Order not found.",
-  PROD_PO_EDIT_NOT_ALLOWED:     "Editing is only allowed when status is QA_APPROVED or BATCH_STARTED.",
-  PROD_MANAGER_OR_SA_REQUIRED:  "Manager or SA access required.",
-};
-function friendly(code) { return ERRORS[code] ?? code; }
+function machineLabel(machine) {
+  return [machine.machine_code, machine.machine_name].filter(Boolean).join(" - ");
+}
+
+function orderLabel(order) {
+  return [order.po_number, order.material?.material_name, order.po_type].filter(Boolean).join(" - ");
+}
 
 export default function ProductionPOEditPage() {
   const qc = useQueryClient();
-  const [poInput, setPoInput] = useState("");
-  const [po, setPo] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [companyId, setCompanyId] = useState("");
+  const [orderId, setOrderId] = useState("");
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
-  const [editedLines, setEditedLines] = useState([]);
+  const [saving, setSaving] = useState(false);
   const [machineId, setMachineId] = useState("");
+  const [lineDrafts, setLineDrafts] = useState([]);
+
+  const companiesQ = useCompaniesForOmQuery();
+  const companyOptions = useMemo(
+    () => (companiesQ.data ?? []).map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
+    [companiesQ.data],
+  );
+
+  const ordersQ = useQuery({
+    queryKey: ["production-edit-orders", companyId],
+    queryFn: () => listProcessOrders({
+      company_id: companyId || undefined,
+      po_type_in: "MTO,HPS,MTS,INT",
+      per_page: 100,
+    }),
+    enabled: Boolean(companyId),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const orderOptions = useMemo(
+    () => (ordersQ.data ?? []).map((order) => ({ value: order.id, label: orderLabel(order) || order.po_number || "Process PO" })),
+    [ordersQ.data],
+  );
+
+  const detailQ = useQuery({
+    queryKey: ["production-edit-detail", orderId],
+    queryFn: () => getProcessOrder(orderId),
+    enabled: Boolean(orderId),
+  });
+
+  const machinesQ = useQuery({
+    queryKey: ["production-edit-machines", detailQ.data?.company_id],
+    queryFn: () => listMachines({ company_id: detailQ.data.company_id, active: true }),
+    enabled: Boolean(detailQ.data?.company_id),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const machineOptions = useMemo(
+    () => (machinesQ.data ?? []).map((machine) => ({ value: machine.id, label: machineLabel(machine) || "Machine" })),
+    [machinesQ.data],
+  );
+
+  const po = detailQ.data ?? null;
+  const canEdit = Boolean(po && EDITABLE_STATUSES.includes(po.status));
+
+  useEffect(() => {
+    if (!po) {
+      setMachineId("");
+      setLineDrafts([]);
+      return;
+    }
+    setMachineId(po.machine_id || "");
+    setLineDrafts((po.lines ?? []).map((line) => ({
+      id: line.id,
+      materialLabel: [line.material?.pace_code, line.material?.material_name].filter(Boolean).join(" - ") || "Material",
+      planned_qty: String(line.planned_qty ?? 0),
+    })));
+  }, [po]);
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
   }
 
-  async function handleLoad() {
-    if (!poInput.trim()) { toast("Enter a Process Order ID.", "error"); return; }
-    setLoading(true);
-    setPo(null);
-    setEditedLines([]);
-    setMachineId("");
-    try {
-      const data = await getProcessOrder(poInput.trim());
-      setPo(data);
-      setEditedLines((data.lines ?? []).map((l) => ({ ...l, edited_qty: l.planned_qty ?? "" })));
-      setMachineId(data.machine_id ?? "");
-    } catch (err) {
-      toast(friendly(err.message), "error");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function updateLineQty(i, val) {
-    setEditedLines((ls) => ls.map((l, idx) => idx === i ? { ...l, edited_qty: val } : l));
-  }
-
   async function handleSave() {
-    if (!po) return;
-    if (!EDITABLE_STATUSES.includes(po.status)) {
-      toast(`Cannot edit PO with status ${po.status}. Only QA_APPROVED or BATCH_STARTED.`, "error");
-      return;
-    }
+    if (!po || !canEdit) return;
     setSaving(true);
     try {
-      await updateProcessOrderLines(po.id, {
+      await editProcessOrder(po.id, {
         machine_id: machineId || undefined,
-        lines: editedLines.map((l) => ({
-          line_id: l.id,
-          planned_qty: parseFloat(l.edited_qty) || 0,
+        lines: lineDrafts.map((line) => ({
+          id: line.id,
+          planned_qty: Number(line.planned_qty || 0),
         })),
       });
-      toast("Process Order updated successfully.");
+      toast("Process PO updated.");
       qc.invalidateQueries({ queryKey: ["process-orders"] });
-      // Reload to get fresh data
-      const updated = await getProcessOrder(po.id);
-      setPo(updated);
-      setEditedLines((updated.lines ?? []).map((l) => ({ ...l, edited_qty: l.planned_qty ?? "" })));
-    } catch (err) {
-      toast(friendly(err.message), "error");
+      qc.invalidateQueries({ queryKey: ["production-edit-detail", po.id] });
+    } catch (error) {
+      toast(error.message || "Edit failed.", "error");
     } finally {
       setSaving(false);
     }
   }
 
-  const canEdit = po && EDITABLE_STATUSES.includes(po.status);
-
   return (
     <ErpScreenScaffold
-      title="Production PO Edit — PR10"
-      subtitle="Edit Process PO qty adjustments and machine assignment"
+      title="Production PO Edit - PR10"
+      subtitle="Machine and planned quantity edit only"
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
-      <ErpSectionCard title="Load Process Order">
-        <div className="flex gap-2 items-end max-w-lg">
-          <div className="flex flex-col gap-1 flex-1">
-            <label className="text-xs text-slate-600 font-medium">Process Order ID (UUID or PO Number)</label>
-            <input
-              className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-              placeholder="Enter PO ID or number…"
-              value={poInput}
-              onChange={(e) => setPoInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleLoad()}
+      <ErpSectionCard title="Select Process PO">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-slate-600">Company</label>
+            <ErpComboboxField
+              value={companyId}
+              onChange={(value) => {
+                setCompanyId(value);
+                setOrderId("");
+              }}
+              options={companyOptions}
+              placeholder="-- Select company --"
             />
           </div>
-          <button
-            onClick={handleLoad}
-            disabled={loading}
-            className="bg-slate-700 hover:bg-slate-800 disabled:opacity-50 text-white text-sm font-medium px-4 py-1.5 rounded transition-colors"
-          >
-            {loading ? "Loading…" : "Load"}
-          </button>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-slate-600">Process PO</label>
+            <ErpComboboxField
+              value={orderId}
+              onChange={setOrderId}
+              options={orderOptions}
+              placeholder="-- Select process PO --"
+              emptyStateLabel={ordersQ.isLoading ? "Loading process orders..." : "No process orders for this company"}
+              disabled={!companyId}
+            />
+          </div>
         </div>
       </ErpSectionCard>
 
       {po && (
-        <>
-          <ErpSectionCard title="PO Header">
-            <div className="grid grid-cols-3 gap-4 text-sm">
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">PO Number</span>
-                <p className="font-mono font-semibold">{po.po_number ?? po.id?.slice(0, 8)}</p>
+        <ErpSectionCard title="PR10 Edit">
+          <div className="mb-4 grid gap-4 md:grid-cols-3 text-sm">
+            <div>
+              <span className="block text-xs text-slate-400">PO #</span>
+              <p className="font-mono font-semibold text-sky-700">{po.po_number || "--"}</p>
+            </div>
+            <div>
+              <span className="block text-xs text-slate-400">Type</span>
+              <p>{po.po_type || "--"}</p>
+            </div>
+            <div>
+              <span className="block text-xs text-slate-400">Status</span>
+              <p>{po.status || "--"}</p>
+            </div>
+          </div>
+
+          {!canEdit ? (
+            <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              This Process PO is blocked for PR10 edit. Only `QA_APPROVED` and `BATCH_STARTED` are allowed.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="max-w-md flex flex-col gap-1">
+                <label className="text-xs font-medium text-slate-600">Machine</label>
+                <ErpComboboxField
+                  value={machineId}
+                  onChange={setMachineId}
+                  options={machineOptions}
+                  placeholder="-- Select machine --"
+                  emptyStateLabel={machinesQ.isLoading ? "Loading machines..." : "No active machines for this company"}
+                />
               </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Type</span>
-                <p className="font-medium">{po.prod_type}</p>
+
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                      <th className="border-b px-3 py-2 text-left">Material</th>
+                      <th className="border-b px-3 py-2 text-right">Planned Qty</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lineDrafts.map((line) => (
+                      <tr key={line.id} className="border-b border-slate-100">
+                        <td className="px-3 py-2">{line.materialLabel}</td>
+                        <td className="px-3 py-2 text-right">
+                          <input
+                            type="number"
+                            min="0.001"
+                            step="0.001"
+                            className="w-28 rounded border border-slate-300 px-2 py-1 text-right font-mono text-sm"
+                            value={line.planned_qty}
+                            onChange={(event) => setLineDrafts((current) => current.map((entry) => (
+                              entry.id === line.id ? { ...entry, planned_qty: event.target.value } : entry
+                            )))}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Status</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[po.status] ?? ""}`}>
-                  {po.status?.replace(/_/g, " ")}
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Prodshade</span>
-                <p>{po.material?.pace_code ?? po.prodshade_material_id?.slice(0, 8)}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Planned Qty (KG)</span>
-                <p className="font-mono">{po.planned_qty_kg}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Batch Number</span>
-                <p className="font-mono">{po.batch_number ?? "—"}</p>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+                >
+                  {saving ? "Saving..." : "Save PR10 Edit"}
+                </button>
               </div>
             </div>
-
-            {!canEdit && (
-              <div className="mt-4 bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-800">
-                This PO cannot be edited in its current status (<strong>{po.status}</strong>). Editing is only allowed when status is QA_APPROVED or BATCH_STARTED.
-              </div>
-            )}
-          </ErpSectionCard>
-
-          {canEdit && (
-            <>
-              <ErpSectionCard title="Machine Assignment">
-                <div className="flex flex-col gap-1 max-w-sm">
-                  <label className="text-xs text-slate-600 font-medium">Machine ID</label>
-                  <input
-                    className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-                    placeholder="Machine UUID (optional)"
-                    value={machineId}
-                    onChange={(e) => setMachineId(e.target.value)}
-                  />
-                </div>
-              </ErpSectionCard>
-
-              <ErpSectionCard title="RM Line Qty Adjustments">
-                {editedLines.length === 0 ? (
-                  <p className="text-slate-400 text-sm">No RM lines on this order.</p>
-                ) : (
-                  <>
-                    <table className="w-full text-sm border-collapse mb-4">
-                      <thead>
-                        <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
-                          <th className="text-left py-2 px-3 border-b">#</th>
-                          <th className="text-left py-2 px-3 border-b">Material</th>
-                          <th className="text-right py-2 px-3 border-b">Original Qty</th>
-                          <th className="text-right py-2 px-3 border-b">Adjusted Qty</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {editedLines.map((line, i) => (
-                          <tr key={line.id ?? i} className="border-b border-slate-100">
-                            <td className="py-2 px-3 text-slate-400">{i + 1}</td>
-                            <td className="py-2 px-3">{line.material?.pace_code ?? line.material_id?.slice(0, 8)}</td>
-                            <td className="py-2 px-3 text-right font-mono text-slate-500">
-                              {Number(line.planned_qty ?? 0).toFixed(3)}
-                            </td>
-                            <td className="py-2 px-3 text-right">
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.001"
-                                className="border border-slate-300 rounded px-2 py-0.5 text-sm font-mono text-right w-28"
-                                value={line.edited_qty}
-                                onChange={(e) => updateLineQty(i, e.target.value)}
-                              />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleSave}
-                        disabled={saving}
-                        className="bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded transition-colors"
-                      >
-                        {saving ? "Saving…" : "Save Changes"}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </ErpSectionCard>
-            </>
           )}
-        </>
+        </ErpSectionCard>
       )}
     </ErpScreenScaffold>
   );

@@ -4,24 +4,17 @@
  * Gate: 27
  * Phase: 27
  * Domain: FRONT
- * Purpose: Create new Process PO or Packing PO (Standard Create — both PO types).
+ * Purpose: Create new Process PO or Packing PO (Standard Create - both PO types).
  * Authority: Frontend
  */
 
-import React, { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import React, { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import { createProcessOrder, createPackingOrder } from "./prodApi.js";
-
-const ERRORS = {
-  PROD_PO_STROKE_REQUIRED:          "Stroke Master ID is required for this production type.",
-  PROD_PO_PRODSHADE_REQUIRED:       "Prodshade Material ID is required.",
-  PROD_PO_INVALID_TYPE:             "Invalid production type selected.",
-  PROD_PO_PROCESS_ORDER_NOT_FOUND:  "Process Order not found.",
-  PROD_PO_PACK_CODE_REQUIRED:       "Pack Code Config ID is required.",
-  PROD_MANAGER_OR_SA_REQUIRED:      "Manager or SA access required.",
-};
-function friendly(code) { return ERRORS[code] ?? code; }
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { createProcessOrder, createPackingOrder, listApprovedProdshades, listStrokeMasters } from "./prodApi.js";
+import { listMachines } from "../om/omApi.js";
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
 const PROCESS_SEGMENTS = ["ADMIX", "HPS", "IWC", "POWDER", "INT"];
@@ -29,10 +22,11 @@ const TABS = ["Process PO", "Packing PO"];
 
 const EMPTY_PROCESS = {
   company_id: "",
-  prod_type: "MTO",
+  po_type: "MTO",
   segment_code: "",
   prodshade_material_id: "",
   stroke_master_id: "",
+  machine_id: "",
   planned_qty_kg: "",
   planned_start_date: "",
   notes: "",
@@ -46,6 +40,23 @@ const EMPTY_PACKING = {
   fo_id: "",
 };
 
+function companyLabel(company) {
+  return [company.company_code, company.company_name].filter(Boolean).join(" - ");
+}
+
+function prodshadeLabel(item) {
+  return [item.external_code, item.shade_code, item.material_name].filter(Boolean).join(" - ");
+}
+
+function strokeLabel(stroke) {
+  const prodshade = stroke.material?.external_code || stroke.material?.shade_code || "Prodshade";
+  return `${prodshade} - stroke #${stroke.stroke_number}${stroke.description ? ` - ${stroke.description}` : ""}`;
+}
+
+function machineLabel(machine) {
+  return [machine.machine_code, machine.machine_name].filter(Boolean).join(" - ");
+}
+
 export default function ProductionPOCreatePage() {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState(0);
@@ -54,79 +65,134 @@ export default function ProductionPOCreatePage() {
   const [processForm, setProcessForm] = useState({ ...EMPTY_PROCESS });
   const [packingForm, setPackingForm] = useState({ ...EMPTY_PACKING });
 
+  const companiesQ = useCompaniesForOmQuery();
+  const companies = companiesQ.data ?? [];
+  const companyOptions = useMemo(
+    () => companies.map((company) => ({ value: company.id, label: companyLabel(company) || "Unnamed company" })),
+    [companies],
+  );
+
+  const prodshadesQ = useQuery({
+    queryKey: ["production-create-prodshades"],
+    queryFn: () => listApprovedProdshades({}),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const prodshadeOptions = useMemo(
+    () => (prodshadesQ.data ?? []).map((item) => ({ value: item.material_id, label: prodshadeLabel(item) || "Prodshade" })),
+    [prodshadesQ.data],
+  );
+
+  const strokesQ = useQuery({
+    queryKey: ["production-create-strokes", processForm.company_id, processForm.prodshade_material_id],
+    queryFn: () => listStrokeMasters({
+      company_id: processForm.company_id || undefined,
+      material_id: processForm.prodshade_material_id || undefined,
+      status: "APPROVED",
+    }),
+    enabled: Boolean(processForm.company_id && processForm.prodshade_material_id && processForm.po_type !== "MTEST"),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const strokeOptions = useMemo(
+    () => (strokesQ.data ?? []).map((stroke) => ({ value: stroke.id, label: strokeLabel(stroke) })),
+    [strokesQ.data],
+  );
+
+  const machinesQ = useQuery({
+    queryKey: ["production-create-machines", processForm.company_id],
+    queryFn: () => listMachines({ company_id: processForm.company_id, active: true }),
+    enabled: Boolean(processForm.company_id),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const machineOptions = useMemo(
+    () => (machinesQ.data ?? []).map((machine) => ({ value: machine.id, label: machineLabel(machine) || "Machine" })),
+    [machinesQ.data],
+  );
+
+  const machineRequired = ["MTO", "HPS", "MTS", "INT"].includes(processForm.po_type);
+
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
   }
 
-  function updateProcess(field, val) {
-    setProcessForm((f) => ({ ...f, [field]: val }));
+  function updateProcess(field, value) {
+    setProcessForm((current) => {
+      const next = { ...current, [field]: value };
+      if (field === "company_id") {
+        next.stroke_master_id = "";
+        next.machine_id = "";
+      }
+      if (field === "prodshade_material_id") {
+        next.stroke_master_id = "";
+      }
+      return next;
+    });
   }
 
-  function updatePacking(field, val) {
-    setPackingForm((f) => ({ ...f, [field]: val }));
+  function updatePacking(field, value) {
+    setPackingForm((current) => ({ ...current, [field]: value }));
   }
 
-  async function handleCreateProcess(e) {
-    e.preventDefault();
-    if (!processForm.company_id || !processForm.prodshade_material_id || !processForm.planned_qty_kg) {
-      toast("Company ID, Prodshade Material ID, and Planned Qty are required.", "error");
+  async function handleCreateProcess(event) {
+    event.preventDefault();
+    if (!processForm.company_id || !processForm.prodshade_material_id || !processForm.planned_qty_kg || !processForm.segment_code) {
+      toast("Company, segment, prodshade, and planned qty are required.", "error");
       return;
     }
-    if (!processForm.segment_code) {
-      toast("Segment is required.", "error");
+    if (machineRequired && !processForm.machine_id) {
+      toast("Machine is required for this Process PO type.", "error");
       return;
     }
-    if (processForm.prod_type !== "MTEST" && !processForm.stroke_master_id) {
-      toast("Stroke Master ID is required for non-MTEST orders.", "error");
+    if (processForm.po_type !== "MTEST" && !processForm.stroke_master_id) {
+      toast("Stroke is required for non-MTEST Process POs.", "error");
       return;
     }
+
     setSaving(true);
     try {
-      const body = {
+      const payload = {
         company_id: processForm.company_id,
-        po_type: processForm.prod_type,
+        po_type: processForm.po_type,
         segment_code: processForm.segment_code,
         prodshade_material_id: processForm.prodshade_material_id,
-        planned_qty_kg: parseFloat(processForm.planned_qty_kg),
+        machine_id: processForm.machine_id || undefined,
+        stroke_master_id: processForm.po_type === "MTEST" ? undefined : processForm.stroke_master_id,
+        planned_qty_kg: Number(processForm.planned_qty_kg),
         planned_start_date: processForm.planned_start_date || undefined,
         notes: processForm.notes || undefined,
       };
-      if (processForm.prod_type !== "MTEST") {
-        body.stroke_master_id = processForm.stroke_master_id;
-      }
-      const result = await createProcessOrder(body);
-      toast(`Process PO created successfully.${result?.po_number ? ` PO: ${result.po_number}` : ""}`);
+      const result = await createProcessOrder(payload);
+      toast(`Process PO created${result?.po_number ? `: ${result.po_number}` : "."}`);
       setProcessForm({ ...EMPTY_PROCESS });
       qc.invalidateQueries({ queryKey: ["process-orders"] });
-    } catch (err) {
-      toast(friendly(err.message), "error");
+    } catch (error) {
+      toast(error.message || "Process PO create failed.", "error");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleCreatePacking(e) {
-    e.preventDefault();
+  async function handleCreatePacking(event) {
+    event.preventDefault();
     if (!packingForm.company_id || !packingForm.process_order_id || !packingForm.pack_code_config_id || !packingForm.planned_qty_kg) {
-      toast("Company ID, Process Order ID, Pack Code Config ID, and Planned Qty are required.", "error");
+      toast("Packing PO fields are still ID-based here and all required values must be filled.", "error");
       return;
     }
     setSaving(true);
     try {
-      const body = {
+      const payload = {
         company_id: packingForm.company_id,
         process_order_id: packingForm.process_order_id,
         pack_code_config_id: packingForm.pack_code_config_id,
-        planned_qty_kg: parseFloat(packingForm.planned_qty_kg),
+        planned_qty_kg: Number(packingForm.planned_qty_kg),
         fo_id: packingForm.fo_id || undefined,
       };
-      const result = await createPackingOrder(body);
-      toast(`Packing PO created successfully.${result?.po_number ? ` PO: ${result.po_number}` : ""}`);
+      const result = await createPackingOrder(payload);
+      toast(`Packing PO created${result?.po_number ? `: ${result.po_number}` : "."}`);
       setPackingForm({ ...EMPTY_PACKING });
       qc.invalidateQueries({ queryKey: ["packing-orders"] });
-    } catch (err) {
-      toast(friendly(err.message), "error");
+    } catch (error) {
+      toast(error.message || "Packing PO create failed.", "error");
     } finally {
       setSaving(false);
     }
@@ -134,21 +200,18 @@ export default function ProductionPOCreatePage() {
 
   return (
     <ErpScreenScaffold
-      title="Production PO Create — PR09"
-      subtitle="Create new Process PO or Packing PO"
+      title="Production PO Create - PR09"
+      subtitle="Create Process or Packing production orders"
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
-      {/* Tab Bar */}
       <ErpSectionCard>
-        <div className="flex gap-0 border-b border-slate-200 mb-4">
-          {TABS.map((tab, i) => (
+        <div className="mb-4 flex gap-0 border-b border-slate-200">
+          {TABS.map((tab, index) => (
             <button
               key={tab}
-              onClick={() => setActiveTab(i)}
+              onClick={() => setActiveTab(index)}
               className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === i
-                  ? "border-sky-600 text-sky-700"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
+                activeTab === index ? "border-sky-600 text-sky-700" : "border-transparent text-slate-500 hover:text-slate-700"
               }`}
             >
               {tab}
@@ -156,115 +219,127 @@ export default function ProductionPOCreatePage() {
           ))}
         </div>
 
-        {/* Process PO Tab */}
         {activeTab === 0 && (
-          <form onSubmit={handleCreateProcess} className="flex flex-col gap-4 max-w-2xl">
-            <div className="grid grid-cols-2 gap-4">
+          <form onSubmit={handleCreateProcess} className="flex max-w-4xl flex-col gap-4">
+            <div className="grid gap-4 md:grid-cols-2">
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">Company ID <span className="text-rose-500">*</span></label>
-                <input
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm"
-                  placeholder="UUID"
+                <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
+                <ErpComboboxField
                   value={processForm.company_id}
-                  onChange={(e) => updateProcess("company_id", e.target.value)}
-                  required
+                  onChange={(value) => updateProcess("company_id", value)}
+                  options={companyOptions}
+                  placeholder="-- Select company --"
+                  emptyStateLabel={companiesQ.isLoading ? "Loading companies..." : "No companies available"}
                 />
               </div>
+
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">Production Type <span className="text-rose-500">*</span></label>
-                <select
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm"
-                  value={processForm.prod_type}
-                  onChange={(e) => updateProcess("prod_type", e.target.value)}
-                >
-                  {PROCESS_TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
+                <label className="text-xs font-medium text-slate-600">Production Type <span className="text-rose-500">*</span></label>
+                <ErpComboboxField
+                  value={processForm.po_type}
+                  onChange={(value) => updateProcess("po_type", value)}
+                  options={PROCESS_TYPES.map((type) => ({ value: type, label: type }))}
+                  hideBlank
+                />
               </div>
+
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">Segment <span className="text-rose-500">*</span></label>
-                <select
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm"
+                <label className="text-xs font-medium text-slate-600">Segment <span className="text-rose-500">*</span></label>
+                <ErpComboboxField
                   value={processForm.segment_code}
-                  onChange={(e) => updateProcess("segment_code", e.target.value)}
-                  required
-                >
-                  <option value="">Select segment</option>
-                  {PROCESS_SEGMENTS.map((segment) => (
-                    <option key={segment} value={segment}>{segment}</option>
-                  ))}
-                </select>
+                  onChange={(value) => updateProcess("segment_code", value)}
+                  options={PROCESS_SEGMENTS.map((segment) => ({ value: segment, label: segment }))}
+                  placeholder="-- Select segment --"
+                />
               </div>
+
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">Prodshade Material ID <span className="text-rose-500">*</span></label>
-                <input
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-                  placeholder="UUID"
+                <label className="text-xs font-medium text-slate-600">Prodshade Material <span className="text-rose-500">*</span></label>
+                <ErpComboboxField
                   value={processForm.prodshade_material_id}
-                  onChange={(e) => updateProcess("prodshade_material_id", e.target.value)}
-                  required
+                  onChange={(value) => updateProcess("prodshade_material_id", value)}
+                  options={prodshadeOptions}
+                  placeholder="-- Select prodshade --"
+                  emptyStateLabel={prodshadesQ.isLoading ? "Loading prodshades..." : "No approved prodshades yet"}
                 />
               </div>
+
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">
-                  Stroke Master ID
-                  {processForm.prod_type !== "MTEST" && <span className="text-rose-500"> *</span>}
-                  {processForm.prod_type === "MTEST" && <span className="text-slate-400 ml-1">(not required for MTEST)</span>}
+                <label className="text-xs font-medium text-slate-600">
+                  Stroke
+                  {processForm.po_type !== "MTEST" ? <span className="text-rose-500"> *</span> : <span className="text-slate-400"> (hidden for MTEST in doc; existing manual-line UI is not present in this repo)</span>}
                 </label>
-                <input
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-                  placeholder="UUID"
+                <ErpComboboxField
                   value={processForm.stroke_master_id}
-                  onChange={(e) => updateProcess("stroke_master_id", e.target.value)}
-                  disabled={processForm.prod_type === "MTEST"}
+                  onChange={(value) => updateProcess("stroke_master_id", value)}
+                  options={strokeOptions}
+                  placeholder={processForm.po_type === "MTEST" ? "-- Not required --" : "-- Select stroke --"}
+                  emptyStateLabel={strokesQ.isLoading ? "Loading strokes..." : "No approved strokes for this company + prodshade"}
+                  disabled={processForm.po_type === "MTEST"}
                 />
               </div>
+
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">Planned Qty (KG) <span className="text-rose-500">*</span></label>
+                <label className="text-xs font-medium text-slate-600">
+                  Machine
+                  {machineRequired ? <span className="text-rose-500"> *</span> : <span className="text-slate-400"> (not required for MTEST)</span>}
+                </label>
+                <ErpComboboxField
+                  value={processForm.machine_id}
+                  onChange={(value) => updateProcess("machine_id", value)}
+                  options={machineOptions}
+                  placeholder={machineRequired ? "-- Select machine --" : "-- Optional --"}
+                  emptyStateLabel={machinesQ.isLoading ? "Loading machines..." : "No active machines for this company"}
+                  disabled={!processForm.company_id || !machineRequired}
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-slate-600">Planned Qty (KG) <span className="text-rose-500">*</span></label>
                 <input
                   type="number"
                   min="0.01"
                   step="0.01"
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-                  placeholder="e.g. 500"
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
                   value={processForm.planned_qty_kg}
-                  onChange={(e) => updateProcess("planned_qty_kg", e.target.value)}
+                  onChange={(event) => updateProcess("planned_qty_kg", event.target.value)}
                   required
                 />
               </div>
+
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">Planned Start Date</label>
+                <label className="text-xs font-medium text-slate-600">Planned Start Date</label>
                 <input
                   type="date"
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm"
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                   value={processForm.planned_start_date}
-                  onChange={(e) => updateProcess("planned_start_date", e.target.value)}
+                  onChange={(event) => updateProcess("planned_start_date", event.target.value)}
                 />
               </div>
-              <div className="flex flex-col gap-1 col-span-2">
-                <label className="text-xs text-slate-600 font-medium">Notes</label>
+
+              <div className="flex flex-col gap-1 md:col-span-2">
+                <label className="text-xs font-medium text-slate-600">Notes</label>
                 <textarea
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm resize-none"
                   rows={3}
-                  placeholder="Optional notes"
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm resize-none"
                   value={processForm.notes}
-                  onChange={(e) => updateProcess("notes", e.target.value)}
+                  onChange={(event) => updateProcess("notes", event.target.value)}
                 />
               </div>
             </div>
+
             <div className="flex gap-2 pt-2">
               <button
                 type="submit"
                 disabled={saving}
-                className="bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded transition-colors"
+                className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
               >
-                {saving ? "Creating…" : "Create Process PO"}
+                {saving ? "Creating..." : "Create Process PO"}
               </button>
               <button
                 type="button"
                 onClick={() => setProcessForm({ ...EMPTY_PROCESS })}
-                className="text-slate-500 hover:text-slate-700 text-sm px-4 py-2 rounded border border-slate-300 transition-colors"
+                className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
               >
                 Clear
               </button>
@@ -272,78 +347,70 @@ export default function ProductionPOCreatePage() {
           </form>
         )}
 
-        {/* Packing PO Tab */}
         {activeTab === 1 && (
-          <form onSubmit={handleCreatePacking} className="flex flex-col gap-4 max-w-2xl">
-            <div className="grid grid-cols-2 gap-4">
+          <form onSubmit={handleCreatePacking} className="flex max-w-2xl flex-col gap-4">
+            <div className="grid gap-4 md:grid-cols-2">
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">Company ID <span className="text-rose-500">*</span></label>
+                <label className="text-xs font-medium text-slate-600">Company ID <span className="text-rose-500">*</span></label>
                 <input
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm"
-                  placeholder="UUID"
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                   value={packingForm.company_id}
-                  onChange={(e) => updatePacking("company_id", e.target.value)}
+                  onChange={(event) => updatePacking("company_id", event.target.value)}
                   required
                 />
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">
-                  Process Order ID <span className="text-rose-500">*</span>
-                  <span className="text-slate-400 ml-1 font-normal">(must be VERIFIED)</span>
-                </label>
+                <label className="text-xs font-medium text-slate-600">Process Order ID <span className="text-rose-500">*</span></label>
                 <input
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-                  placeholder="UUID"
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                   value={packingForm.process_order_id}
-                  onChange={(e) => updatePacking("process_order_id", e.target.value)}
+                  onChange={(event) => updatePacking("process_order_id", event.target.value)}
                   required
                 />
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">Pack Code Config ID <span className="text-rose-500">*</span></label>
+                <label className="text-xs font-medium text-slate-600">Pack Code Config ID <span className="text-rose-500">*</span></label>
                 <input
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-                  placeholder="UUID"
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                   value={packingForm.pack_code_config_id}
-                  onChange={(e) => updatePacking("pack_code_config_id", e.target.value)}
+                  onChange={(event) => updatePacking("pack_code_config_id", event.target.value)}
                   required
                 />
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-600 font-medium">Planned Qty (KG) <span className="text-rose-500">*</span></label>
+                <label className="text-xs font-medium text-slate-600">Planned Qty (KG) <span className="text-rose-500">*</span></label>
                 <input
                   type="number"
                   min="0.01"
                   step="0.01"
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-                  placeholder="e.g. 200"
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
                   value={packingForm.planned_qty_kg}
-                  onChange={(e) => updatePacking("planned_qty_kg", e.target.value)}
+                  onChange={(event) => updatePacking("planned_qty_kg", event.target.value)}
                   required
                 />
               </div>
-              <div className="flex flex-col gap-1 col-span-2">
-                <label className="text-xs text-slate-600 font-medium">FO ID <span className="text-slate-400 font-normal">(optional)</span></label>
+              <div className="flex flex-col gap-1 md:col-span-2">
+                <label className="text-xs font-medium text-slate-600">FO ID</label>
                 <input
-                  className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-                  placeholder="UUID — link to Factory Order"
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm"
                   value={packingForm.fo_id}
-                  onChange={(e) => updatePacking("fo_id", e.target.value)}
+                  onChange={(event) => updatePacking("fo_id", event.target.value)}
                 />
               </div>
             </div>
+
             <div className="flex gap-2 pt-2">
               <button
                 type="submit"
                 disabled={saving}
-                className="bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded transition-colors"
+                className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
               >
-                {saving ? "Creating…" : "Create Packing PO"}
+                {saving ? "Creating..." : "Create Packing PO"}
               </button>
               <button
                 type="button"
                 onClick={() => setPackingForm({ ...EMPTY_PACKING })}
-                className="text-slate-500 hover:text-slate-700 text-sm px-4 py-2 rounded border border-slate-300 transition-colors"
+                className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
               >
                 Clear
               </button>

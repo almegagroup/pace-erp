@@ -914,6 +914,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { PATCH: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
   },
   {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/edit$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
+  },
+  {
     pattern: /^\/api\/production\/process-orders\/[^/]+\/qa-approve$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "APPROVE" } },
   },
@@ -931,6 +935,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/production\/process-orders\/[^/]+\/verify$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_VERIFY", action: "APPROVE" } },
+  },
+  {
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/complete-int$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_VERIFY", action: "APPROVE" } },
   },
   {

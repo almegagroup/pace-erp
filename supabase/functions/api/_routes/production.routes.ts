@@ -52,9 +52,11 @@ import {
   getProcessOrderHandler,
   createProcessOrderHandler,
   updateProcessOrderLinesHandler,
+  editProcessOrderHandler,
   qaApproveProcessOrderHandler,
   qaRejectProcessOrderHandler,
   startBatchHandler,
+  completeIntProcessOrderHandler,
   finalizeProcessOrderHandler,
   verifyProcessOrderHandler,
   reverseProcessOrderHandler,
@@ -230,11 +232,17 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/process-orders\/[^/]+\/lines$/.test(pathname) && req.method === "PATCH") {
     return await updateProcessOrderLinesHandler(req, ctx);
   }
+  if (/^\/api\/production\/process-orders\/[^/]+\/edit$/.test(pathname) && req.method === "PATCH") {
+    return await editProcessOrderHandler(req, ctx);
+  }
   if (/^\/api\/production\/process-orders\/[^/]+\/qa-approve$/.test(pathname) && req.method === "POST") {
     return await qaApproveProcessOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/process-orders\/[^/]+\/qa-reject$/.test(pathname) && req.method === "POST") {
     return await qaRejectProcessOrderHandler(req, ctx);
+  }
+  if (/^\/api\/production\/process-orders\/[^/]+\/complete-int$/.test(pathname) && req.method === "POST") {
+    return await completeIntProcessOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/process-orders\/[^/]+\/start-batch$/.test(pathname) && req.method === "POST") {
     return await startBatchHandler(req, ctx);

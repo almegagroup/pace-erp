@@ -2366,3 +2366,27 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **⚠️ Still pending live proof:** a zero-error end-to-end Standard create + reserve + prune needs MCP data setup — seed `production_segment_location_config` + opening stock for the test stroke's RMs (Dev). Until then a stroke-based create may 422 on the (correct) availability hard-block.
 
 **⚠️ Note:** Codex also auto-generated briefs `CODEX-GATE27.6…27.13` + `CODEX-GATE27-BRIEF-STATUS` during downtime — these are Codex-authored and **NOT yet reviewed by Claude**; do not run any of them until Claude reviews for out-of-plan design.
+
+---
+
+## Gate-27.6 — Process PO Full Chain (Standard → QA → PR10 Edit → Start Batch → INT Complete → Final → Verify → CORS) — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.6-PROCESSPO-FULL-CHAIN-TASK-BRIEF.md` · **Codex-run during Claude downtime** · **Date:** 2026-07-11
+
+**Implemented (Codex):** 1 migration + rewrite of `process_order.handlers.ts` (9 handler changes: create with machine validation + MTEST immediate-verify branch, QA reject cascades straight to CANCELLED/PRUNED, start-batch MTS-skip-QA status branch + INT dropped from batchTypeMap, new `editProcessOrderHandler` (PR10), new `completeIntProcessOrderHandler` (INT single-action), `finalizeProcessOrderHandler` rewritten for Approved/AP-Approved/Variance + substitution via a shared `applyFinalOrVerifyLineUpdates` helper, `verifyProcessOrderHandler` rewritten for the real P101→QUALITY_INSPECTION→P321 auto-release chain + per-line reservation issue tracking + `process_order_line_reco` commit, `reverseProcessOrderHandler` rewritten for the 3-movement CORS (P262+P322+P102) + reservation reinstate + reco void) + 2 new routes/ACL entries + 8 frontend files (PR09 combobox rebuild, new PR10 Edit page, PR11/PR12 full line-table rebuilds, QA Queue po_type_in filter, PR15 Reversal reason-mandatory UI, OrderListPage INT-complete modal, prodApi.js wrappers).
+
+**Claude verification pass (full-file read, not diff-only, given size/risk):**
+- **🔴 Caught and reverted:** Codex self-authored unrequested "LOCKED" design entries into `CLAUDE.md` (a new "83.9 — MTEST exempt..." section) and the feasibility doc (a new locked note + new open-questions) — neither was asked for by the brief. Reverted both via `git checkout` per the standing rule that Codex must never write design decisions into the SSOT docs.
+- **🔴 Caught and fixed a real gap (partly my own brief's fault):** the locked doc's "Reason mandatory at every CORS action" (§83.4 PR15) was implemented on the frontend (`ReversalPage.jsx` correctly blocks Confirm without a reason) but never enforced or persisted server-side — `reverseProcessOrderHandler` didn't read `body.reason` at all. Added `reverse_reason` column to the migration (before applying) and added mandatory-reason validation (`PROD_PO_REVERSE_REASON_REQUIRED`, 400) + persistence to the handler.
+- Verified the P321/P322 calling pattern against the exact working reference in `inward_qa.handlers.ts` (single call, no invented paired IN+OUT) — matches.
+- Verified `post_stock_movement()`'s actual SQL body (`pg_proc.prosrc`) confirms it raises `INSUFFICIENT_STOCK` on any OUT movement that would take a stock_snapshot negative — the Verify/MTEST/INT immediate-posting paths correctly rely on this DB-level hard block rather than needing a redundant application-level check.
+- Read every touched file end-to-end (not just diffs) given the size: migration, `process_order.handlers.ts` (2141 lines), routes, ACL registry, and all 8 frontend files. No other drift found — `po_type` branching, MTEST one-step VERIFIED status (per user's 2026-07-11 confirmation), INT's separate Standard+complete-int cycle, substitution reservation-swap logic, and the reco table's append-not-reset CORS behavior all match the brief precisely.
+- `deno check` clean on all 3 touched backend files (0 file-anchored errors; the only 16 errors are the known pre-existing `serviceRoleClient.ts`/`canonical_access.ts`/`session.ts` shared-typing issues).
+- ESLint clean on all 8 touched frontend files (1 harmless `exhaustive-deps` warning, 0 errors).
+- No mojibake found in this round (Codex used plain ASCII `...` this time).
+- Migration applied to Dev via MCP and confirmed: 4/4 new `process_order` columns, 6/6 new `process_order_line` columns, `process_order_line_reco` table all present.
+- Route-ACL duplicate check: both new patterns (`/edit`, `/complete-int`) registered exactly once, reusing sibling resource codes (`PROD_PO_EDIT`/EDIT, `PROD_PO_VERIFY`/APPROVE) — no invented resource codes.
+
+**Not yet proven clean end-to-end (data prerequisites, same as flagged for 27.3/27.4):** `production_segment_location_config` still empty and `production_mode` still NULL in Dev — a live Standard→Verify run needs both seeded (MCP, Dev only) plus opening stock for the test stroke's RM lines before a genuinely zero-error walkthrough can be demonstrated.
+
+**Files:** migration `20260711120000_gate27_processpo_full_chain.sql`, `process_order.handlers.ts`, `production.routes.ts`, `route-acl-registry.ts`, `prodApi.js`, `ProductionPOCreatePage.jsx`, `ProductionPOEditPage.jsx` (new), `ProductionPOFinalPage.jsx`, `ProductionPOVerifyPage.jsx`, `QAQueuePage.jsx`, `ReversalPage.jsx`, `OrderListPage.jsx`.

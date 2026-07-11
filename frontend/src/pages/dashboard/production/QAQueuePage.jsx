@@ -40,6 +40,7 @@ export default function QAQueuePage() {
     queryFn: () => listProcessOrders({
       company_id: companyId || undefined,
       status: "STANDARD",
+      po_type_in: "MTO,HPS",
     }),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
     refetchInterval: 30000, // Auto-refresh every 30 seconds
@@ -161,7 +162,7 @@ export default function QAQueuePage() {
                   className="hover:bg-sky-50 cursor-pointer border-b border-slate-100 transition-colors"
                   onClick={() => openDetail(o.id)}
                 >
-                  <td className="py-2 px-3 font-mono font-semibold text-sky-700">{o.po_number ?? o.id?.slice(0, 8)}</td>
+                  <td className="py-2 px-3 font-mono font-semibold text-sky-700">{o.po_number ?? "--"}</td>
                   <td className="py-2 px-3">
                     <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{o.po_type ?? "--"}</span>
                   </td>
@@ -179,7 +180,7 @@ export default function QAQueuePage() {
 
       <DrawerBase
         visible={drawerOpen}
-        title={detail ? `QA Review — ${detail.po_number ?? detail.id?.slice(0, 8)}` : "Loading…"}
+        title={detail ? `QA Review — ${detail.po_number ?? "--"}` : "Loading…"}
         onClose={() => setDrawerOpen(false)}
         width="min(600px, calc(100vw - 24px))"
         actions={drawerActions}
@@ -191,7 +192,7 @@ export default function QAQueuePage() {
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div>
                 <span className="text-slate-400 text-xs block mb-0.5">PO Number</span>
-                <p className="font-mono font-semibold">{detail.po_number ?? detail.id?.slice(0, 8)}</p>
+                <p className="font-mono font-semibold">{detail.po_number ?? "--"}</p>
               </div>
               <div>
                 <span className="text-slate-400 text-xs block mb-0.5">Production Type</span>

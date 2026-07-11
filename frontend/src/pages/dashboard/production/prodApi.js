@@ -85,12 +85,14 @@ export const listProcessOrders = (p) => fetchProd("GET", "/api/production/proces
 export const getProcessOrder = (id) => fetchProd("GET", `/api/production/process-orders/${id}`);
 export const createProcessOrder = (body) => fetchProd("POST", "/api/production/process-orders", body);
 export const updateProcessOrderLines = (id, body) => fetchProd("PATCH", `/api/production/process-orders/${id}/lines`, body);
+export const editProcessOrder = (id, body) => fetchProd("PATCH", `/api/production/process-orders/${id}/edit`, body);
 export const qaApproveProcessOrder = (id) => fetchProd("POST", `/api/production/process-orders/${id}/qa-approve`);
 export const qaRejectProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/qa-reject`, body);
 export const startBatch = (id) => fetchProd("POST", `/api/production/process-orders/${id}/start-batch`);
+export const completeIntProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/complete-int`, body);
 export const finalizeProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/finalize`, body);
 export const verifyProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/verify`, body);
-export const reverseProcessOrder = (id) => fetchProd("POST", `/api/production/process-orders/${id}/reverse`);
+export const reverseProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/reverse`, body);
 
 // ── Packing Orders ────────────────────────────────────────────────────────────
 export const listPackingOrders = (p) => fetchProd("GET", "/api/production/packing-orders", undefined, p);
