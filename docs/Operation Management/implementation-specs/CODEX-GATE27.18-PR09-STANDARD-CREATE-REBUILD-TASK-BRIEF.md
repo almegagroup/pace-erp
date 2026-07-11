@@ -11,7 +11,7 @@
 
 ## Why this brief exists
 
-Live click-through testing (business owner, against the deployed dev environment) found PR09's Process PO tab does not match the locked design at all — flat single form, no gated navigation, an unrequested "Segment" field always shown, and two dropdowns (Prodshade, Machine) permanently empty due to live 403 errors. Root cause: the exact PR09 page-by-page flow was confirmed in chat and mockup-approved but never written into the feasibility doc until now — a genuine doc-first-workflow miss, not a Codex implementation error. The underlying mechanism-level design (Reservation, stock-check severity, Alternate Material substitution) WAS already correctly built — this brief does not touch that backend logic, only the two auth bugs and the frontend page shape.
+Live click-through testing (business owner, against the deployed dev environment) found PR09's Process PO tab does not match the locked design at all — flat single form, no gated navigation, an unrequested "Segment" field always shown, and two dropdowns (Prodshade, Machine) permanently empty due to live 403 errors. Root cause: the exact PR09 page-by-page flow was confirmed in chat and mockup-approved but never written into the feasibility doc until now — a genuine doc-first-workflow miss, not a Codex implementation error. The underlying mechanism-level design (Reservation, stock-check severity, Alternate Material substitution) WAS already correctly built, with one confirmed exception fixed in Change 3 below — this brief otherwise does not touch that backend logic, only the auth bugs, the availability-check bug, and the frontend page shape.
 
 **Explicit instruction from the business owner: implement the full locked 3-page design as written below. Do not substitute a "simpler equivalent" single-page structure — that shortcut was proposed and explicitly rejected.**
 
@@ -42,7 +42,17 @@ Current entry:
 
 ---
 
-## Change 3 — Rebuild `ProductionPOCreatePage.jsx`'s Process PO tab (Packing PO tab untouched)
+## Change 3 — Fix availability check to use Actual Material, not Formulation Material
+
+**File:** `supabase/functions/api/_core/production/process_order.handlers.ts` (`checkStockAvailability` / `computeAvailabilityRows`, and the `availabilityPreviewProcessOrderHandler` code path feeding it)
+
+Confirmed bug: this availability-check path always keys the stock lookup off each line's Formulation `material_id`, never `actual_material_id`. Substitution exists precisely for cases where the Formulation Material isn't available at the plant — checking the Formulation Material's own (possibly zero) stock instead of the substitute's real stock either wrongly blocks a valid save or misses a real shortage on the material actually being consumed. Stock *posting* (P261, elsewhere in this file) already correctly resolves `actual_material_id || material_id` — this fix only needs to make the availability-check path use the same resolution: for each line, if `actual_material_id` is set, check that material's stock; otherwise check `material_id` as today.
+
+This is a shared backend fix, not PR09-specific — it also affects PR10's edit-time preview once that page exists. Fix it once, here, so both benefit.
+
+---
+
+## Change 4 — Rebuild `ProductionPOCreatePage.jsx`'s Process PO tab (Packing PO tab untouched)
 
 **File:** `frontend/src/pages/dashboard/production/ProductionPOCreatePage.jsx`
 
@@ -100,9 +110,9 @@ Save behavior on success: unchanged from today (PO Number generates, form resets
 
 ## Hard rules
 
-1. Backend: only the two named auth checks change. No new resource codes invented for Change 1. No change to machine create/update/toggle authorization for Change 2.
+1. Backend: only the two named auth checks (Change 1, 2) and the one named availability-check fix (Change 3) change. No new resource codes invented for Change 1. No change to machine create/update/toggle authorization for Change 2.
 2. Frontend: Packing PO tab is completely out of scope — zero changes to it.
-3. Do not touch `process_order.handlers.ts`, migrations, or any Reservation/availability-preview backend logic — all of that is already correct per Gate-27.6/27.14 and this brief is frontend-plus-two-small-backend-auth-fixes only.
+3. Do not touch anything else in `process_order.handlers.ts`, or any migration — Reservation/availability-preview backend logic is already correct per Gate-27.6/27.14 apart from the one Change 3 fix; this brief is frontend-plus-three-scoped-backend-fixes only.
 4. No raw UUIDs anywhere in the rebuilt page (R-01) — all dropdowns must show resolved labels, which the existing code already does correctly; preserve that.
 5. Data fetching stays on `useQuery` — do not introduce `useEffect` + manual fetch anywhere new.
 6. Do not add fields, pages, or behavior beyond what is listed above. If something feels missing that isn't in this brief or the referenced doc subsection, stop and flag it rather than guessing.
@@ -123,6 +133,7 @@ Save behavior on success: unchanged from today (PO Number generates, form resets
 5. Confirm the Material Table has all 9 columns, and Actual Material is editable and saves correctly at Standard (not just Final/Verify).
 6. Confirm Create is blocked (not just visually warned) when any line is short on Available.
 7. Confirm the Packing PO tab is byte-for-byte unchanged.
+8. Confirm a line with an Actual Material substitute shows Available Stock for that substitute material, not the Formulation Material — test with a Formulation Material that has zero/low stock and a substitute that has plenty, and verify the line is not wrongly marked short.
 
 ## Log + commit
 
