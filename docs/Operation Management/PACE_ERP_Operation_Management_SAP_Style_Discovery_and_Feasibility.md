@@ -8260,6 +8260,14 @@ Step 3: Before Final phase — INT must be complete
 
 > In-Transit and QA stock are excluded at PO creation — physically not available yet. Only unrestricted stock (+ INT planned output for INT materials) counts for reservation.
 
+**Stock check severity per stage (LOCKED — 2026-07-11) — deliberately stricter than SAP default:**
+
+| Stage | Check | Severity |
+|---|---|---|
+| **Standard (PO Create)** | Available (Unrestricted @ location − open reservations) vs Standard Qty, per line | **Hard block** — cannot save if any line is short (SAP's own default here is a soft warning that still allows save; we chose stricter to avoid unnecessary Process Orders being created for material that isn't actually available) |
+| **Final** | INT-only: linked INT material's Process PO must be VERIFIED (not just planned) | Hard block for INT shortfall only — no general RM/PM stock re-check (already physically consumed on the shop floor by Final) |
+| **Verify (P261 posting)** | DB/ledger-level — no negative stock allowed | **Hard block**, matches SAP's real enforcement point (Goods Issue) — this is non-negotiable regardless of what passed at Standard |
+
 ---
 
 #### Material Reservation Mechanism (LOCKED — 2026-06-30)

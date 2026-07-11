@@ -387,6 +387,11 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - SFG Result Recording page = exact identical mechanism to the existing Inward QA page (same qa_test_method_master/qa_category_test_config infra, same workflow) — build as a direct clone, not a fresh design
 - STO/Location Transfer reservation implementation details deferred to later
 
+**83.5 — Stock check severity per stage (LOCKED — 2026-07-11, deliberately stricter than SAP):**
+- Standard: hard block if any line short on Available (Unrestricted@location − open reservations) vs Standard Qty — SAP's default is a soft warning that still allows save, we chose stricter to stop unnecessary Process Orders being created
+- Final: hard block only for INT shortfall (linked INT PO must be VERIFIED, not just planned) — no general RM/PM re-check, already physically consumed by then
+- Verify (P261): DB/ledger hard block, no negative stock — matches SAP's real enforcement point (Goods Issue), non-negotiable
+
 **83.4 — Verify Usage Decision = P321 (LOCKED — 2026-07-11):**
 - MTO/HPS/MTS Verify posts 3 ledger entries in one transaction: P261 (RM/PM/INT issue) → P101 (SFG receipt IN to QUALITY_INSPECTION) → P321 "QA → Unrestricted" (auto-release, same code Inward QA's Release decision uses)
 - INT/MTEST skip P321 — their P101 targets Unrestricted directly
