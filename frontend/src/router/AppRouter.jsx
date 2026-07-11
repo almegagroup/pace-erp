@@ -186,7 +186,7 @@ import OrderListPage from "../pages/dashboard/production/OrderListPage.jsx";
 import BatchVariancePage from "../pages/dashboard/production/BatchVariancePage.jsx";
 import ReversalPage from "../pages/dashboard/production/ReversalPage.jsx";
 import ProductionQAQueuePage from "../pages/dashboard/production/QAQueuePage.jsx";
-import BatchReleasePage from "../pages/dashboard/production/BatchReleasePage.jsx";
+import BatchNumberReleasePage from "../pages/dashboard/production/BatchNumberReleasePage.jsx";
 
 export default function AppRouter() {
   return (
@@ -750,7 +750,7 @@ export default function AppRouter() {
                   <Route path="production/batch-variance" element={<BatchVariancePage />} />
                   <Route path="production/reversal" element={<ReversalPage />} />
                   <Route path="production/qa-queue" element={<ProductionQAQueuePage />} />
-                  <Route path="production/batch-release" element={<BatchReleasePage />} />
+                  <Route path="production/batch-release" element={<BatchNumberReleasePage />} />
                 </Route>
               </Route>
 

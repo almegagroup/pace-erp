@@ -57,6 +57,8 @@ export const deletePackConfig = (id) => fetchProd("DELETE", `/api/production/pac
 export const listBatchSeries = (p) => fetchProd("GET", "/api/production/batch-series", undefined, p);
 export const createBatchSeries = (body) => fetchProd("POST", "/api/production/batch-series", body);
 export const updateBatchSeries = (id, body) => fetchProd("PATCH", `/api/production/batch-series/${id}`, body);
+export const listBatchNumbers = (p) => fetchProd("GET", "/api/production/batch-numbers", undefined, p);
+export const releaseBatchNumber = (id, body) => fetchProd("POST", `/api/production/batch-numbers/${id}/release`, body);
 
 // ── Segment Location Config ───────────────────────────────────────────────────
 export const listSegmentLocations = (p) => fetchProd("GET", "/api/production/segment-locations", undefined, p);
@@ -97,7 +99,7 @@ export const updateProcessOrderLines = (id, body) => fetchProd("PATCH", `/api/pr
 export const editProcessOrder = (id, body) => fetchProd("PATCH", `/api/production/process-orders/${id}/edit`, body);
 export const qaApproveProcessOrder = (id) => fetchProd("POST", `/api/production/process-orders/${id}/qa-approve`);
 export const qaRejectProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/qa-reject`, body);
-export const startBatch = (id) => fetchProd("POST", `/api/production/process-orders/${id}/start-batch`);
+export const startBatch = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/start-batch`, body ?? {});
 export const completeIntProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/complete-int`, body);
 export const finalizeProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/finalize`, body);
 export const verifyProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/verify`, body);

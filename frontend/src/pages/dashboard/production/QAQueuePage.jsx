@@ -1,247 +1,426 @@
 /*
  * File-ID: 27.FE-PR16
  * File-Path: frontend/src/pages/dashboard/production/QAQueuePage.jsx
- * Gate: 27 | Domain: PRODUCTION
- * Purpose: QA Approval Queue — Process POs waiting for QA approval (status=STANDARD).
+ * Gate: 27
+ * Phase: 27
+ * Domain: PRODUCTION
+ * Purpose: QA Approval Queue rebuilt as the locked inline expandable queue for PR16.
+ * Authority: Frontend
  */
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
-import DrawerBase from "../../../components/layer/DrawerBase.jsx";
-import { listProcessOrders, getProcessOrder, qaApproveProcessOrder, qaRejectProcessOrder } from "./prodApi.js";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import ModalBase from "../../../components/layer/ModalBase.jsx";
+import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import {
+  getProcessOrder,
+  listBatchNumbers,
+  listProcessOrders,
+  qaApproveProcessOrder,
+  qaRejectProcessOrder,
+  startBatch,
+} from "./prodApi.js";
 
-const ERRORS = {
-  PROD_PO_NOT_FOUND:            "Process Order not found.",
-  PROD_PO_QA_NOT_ALLOWED:       "QA action is only allowed for STANDARD status orders.",
-  PROD_QA_REJECT_REASON_MISSING:"Rejection reason is required.",
-  PROD_MANAGER_OR_SA_REQUIRED:  "QA Manager or SA access required.",
+const ERROR_MESSAGES = {
+  PROD_PO_NOT_FOUND: "Process Order not found.",
+  PROD_PO_QA_NOT_ALLOWED: "QA action is only allowed for STANDARD status orders.",
+  PROD_QA_REJECT_REASON_MISSING: "Rejection reason is required.",
+  PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
+  PROD_BATCH_SERIES_NOT_FOUND: "Batch number series not configured for this company/type.",
+  PROD_BATCH_RELEASED_AVAILABLE: "Released batch numbers are available. Pick one or skip to generate new.",
+  PROD_BATCH_NUMBER_RELEASE_NOT_FOUND: "The selected released batch number is no longer available.",
 };
-function friendly(code) { return ERRORS[code] ?? code; }
+
+function friendlyError(error) {
+  return ERROR_MESSAGES[error?.code] ?? ERROR_MESSAGES[error?.message] ?? error?.message ?? "Action failed.";
+}
+
+function companyLabel(company) {
+  return [company.company_code, company.company_name].filter(Boolean).join(" - ");
+}
+
+function materialLabel(material) {
+  return [material?.pace_code, material?.material_name].filter(Boolean).join(" - ");
+}
+
+function machineLabel(machine) {
+  return [machine?.machine_code, machine?.machine_name].filter(Boolean).join(" - ");
+}
+
+function statusTone(status) {
+  if (status === "STANDARD") return "bg-amber-100 text-amber-800";
+  if (status === "QA_APPROVED") return "bg-sky-100 text-sky-700";
+  if (status === "BATCH_STARTED") return "bg-emerald-100 text-emerald-700";
+  if (status === "CANCELLED") return "bg-slate-100 text-slate-500";
+  return "bg-slate-100 text-slate-600";
+}
 
 export default function QAQueuePage() {
   const qc = useQueryClient();
   const [companyId, setCompanyId] = useState("");
+  const [expandedOrderId, setExpandedOrderId] = useState("");
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [detail, setDetail] = useState(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [rejectMode, setRejectMode] = useState(false);
+  const [rejectOrderId, setRejectOrderId] = useState("");
   const [rejectReason, setRejectReason] = useState("");
+  const [startBatchOrder, setStartBatchOrder] = useState(null);
+
+  const companiesQ = useCompaniesForOmQuery();
+  const companyOptions = useMemo(
+    () => (companiesQ.data ?? []).map((company) => ({ value: company.id, label: companyLabel(company) || "Company" })),
+    [companiesQ.data],
+  );
+
+  const queueQ = useQuery({
+    queryKey: ["qa-queue", companyId],
+    queryFn: () => listProcessOrders({
+      company_id: companyId || undefined,
+      po_type_in: "MTO,HPS",
+      per_page: 100,
+    }),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+    refetchInterval: 30000,
+  });
+
+  const detailQ = useQuery({
+    queryKey: ["qa-queue-detail", expandedOrderId],
+    queryFn: () => getProcessOrder(expandedOrderId),
+    enabled: Boolean(expandedOrderId),
+  });
+
+  const releasedBatchQ = useQuery({
+    queryKey: ["qa-queue-released-batches", startBatchOrder?.company_id, startBatchOrder?.po_type],
+    queryFn: () => listBatchNumbers({
+      company_id: startBatchOrder?.company_id,
+      po_type: startBatchOrder?.po_type,
+      status: "RELEASED",
+    }),
+    enabled: Boolean(startBatchOrder?.company_id && startBatchOrder?.po_type),
+  });
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
     setTimeout(() => setNotice({ msg: "", tone: "success" }), 3500);
   }
 
-  const queueQ = useQuery({
-    queryKey: ["qa-queue", companyId],
-    queryFn: () => listProcessOrders({
-      company_id: companyId || undefined,
-      status: "STANDARD",
-      po_type_in: "MTO,HPS",
-    }),
-    select: (d) => Array.isArray(d) ? d : d?.data ?? [],
-    refetchInterval: 30000, // Auto-refresh every 30 seconds
-  });
-
-  async function openDetail(id) {
-    setDetail(null);
-    setRejectMode(false);
-    setRejectReason("");
-    setDetailLoading(true);
-    setDrawerOpen(true);
-    try {
-      const d = await getProcessOrder(id);
-      setDetail(d);
-    } catch {
-      toast("Failed to load order detail.", "error");
-      setDrawerOpen(false);
-    } finally {
-      setDetailLoading(false);
-    }
-  }
-
-  async function handleApprove() {
-    if (!detail) return;
+  async function handleApprove(orderId) {
     setSaving(true);
     try {
-      await qaApproveProcessOrder(detail.id);
+      await qaApproveProcessOrder(orderId);
       toast("Process Order approved by QA.");
-      setDrawerOpen(false);
       qc.invalidateQueries({ queryKey: ["qa-queue"] });
-    } catch (err) {
-      toast(friendly(err.message), "error");
+      qc.invalidateQueries({ queryKey: ["qa-queue-detail", orderId] });
+    } catch (error) {
+      toast(friendlyError(error), "error");
     } finally {
       setSaving(false);
     }
   }
 
   async function handleReject() {
-    if (!detail) return;
-    if (!rejectReason.trim()) { toast("Rejection reason is required.", "error"); return; }
+    if (!rejectOrderId) return;
+    if (!rejectReason.trim()) {
+      toast("Rejection reason is required.", "error");
+      return;
+    }
     setSaving(true);
     try {
-      await qaRejectProcessOrder(detail.id, { reason: rejectReason.trim() });
+      await qaRejectProcessOrder(rejectOrderId, { reason: rejectReason.trim() });
       toast("Process Order rejected.");
-      setDrawerOpen(false);
+      setRejectOrderId("");
+      setRejectReason("");
       qc.invalidateQueries({ queryKey: ["qa-queue"] });
-    } catch (err) {
-      toast(friendly(err.message), "error");
+      qc.invalidateQueries({ queryKey: ["qa-queue-detail", rejectOrderId] });
+    } catch (error) {
+      toast(friendlyError(error), "error");
     } finally {
       setSaving(false);
     }
   }
 
-  const queue = queueQ.data ?? [];
+  async function handleStartBatch(order, batchNumberInstanceId) {
+    setSaving(true);
+    try {
+      const result = await startBatch(
+        order.id,
+        batchNumberInstanceId ? { batch_number_instance_id: batchNumberInstanceId } : { skip_released_batch: true },
+      );
+      toast(`Batch ${result?.batch_number ?? "—"} started for ${order.po_number ?? "Process PO"}.`);
+      setStartBatchOrder(null);
+      qc.invalidateQueries({ queryKey: ["qa-queue"] });
+      qc.invalidateQueries({ queryKey: ["process-orders"] });
+      qc.invalidateQueries({ queryKey: ["qa-queue-detail", order.id] });
+      qc.invalidateQueries({ queryKey: ["qa-queue-released-batches", order.company_id, order.po_type] });
+    } catch (error) {
+      toast(friendlyError(error), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
 
-  const drawerActions = detail
-    ? [
-        ...(detail.status === "STANDARD"
-          ? [
-              { label: "Approve", tone: "primary", onClick: handleApprove, disabled: saving },
-              rejectMode
-                ? { label: "Confirm Reject", tone: "danger", onClick: handleReject, disabled: saving || !rejectReason.trim() }
-                : { label: "Reject…", tone: "neutral", onClick: () => setRejectMode(true) },
-            ]
-          : []),
-        { label: "Close", tone: "neutral", onClick: () => setDrawerOpen(false) },
-      ]
-    : [{ label: "Close", tone: "neutral", onClick: () => setDrawerOpen(false) }];
+  const queue = useMemo(() => {
+    const rows = [...(queueQ.data ?? [])];
+    rows.sort((left, right) => {
+      const leftRank = left.status === "STANDARD" ? 0 : 1;
+      const rightRank = right.status === "STANDARD" ? 0 : 1;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      return new Date(right.created_at ?? 0).getTime() - new Date(left.created_at ?? 0).getTime();
+    });
+    return rows;
+  }, [queueQ.data]);
+
+  const detailLines = detailQ.data?.lines ?? [];
+  const releasedBatches = releasedBatchQ.data ?? [];
 
   return (
     <ErpScreenScaffold
-      title="QA Queue — PR16"
-      subtitle="Process Orders awaiting QA approval (status = STANDARD)"
+      title="QA Queue - PR16"
+      subtitle="Inline expandable Process PO queue for QA approval and batch start"
       notice={notice.msg ? { message: notice.msg, tone: notice.tone } : null}
     >
       <ErpSectionCard title="Filters">
-        <div className="flex gap-3 flex-wrap items-end">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Company ID</label>
-            <input
-              className="border border-slate-300 rounded px-2 py-1 text-sm w-64"
-              placeholder="Filter by company…"
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex min-w-[260px] flex-col gap-1">
+            <label className="text-xs text-slate-500">Company</label>
+            <ErpComboboxField
               value={companyId}
-              onChange={(e) => setCompanyId(e.target.value)}
+              onChange={(value) => {
+                setCompanyId(value);
+                setExpandedOrderId("");
+              }}
+              options={companyOptions}
+              placeholder="-- Select company --"
+              emptyStateLabel={companiesQ.isLoading ? "Loading companies..." : "No companies"}
             />
           </div>
-          <div className="text-xs text-slate-400 pb-1">
-            Auto-refreshes every 30 seconds
-          </div>
+          <div className="pb-1 text-xs text-slate-400">Auto-refreshes every 30 seconds</div>
         </div>
       </ErpSectionCard>
 
-      <ErpSectionCard title={`Pending QA Approval (${queue.length})`}>
+      <ErpSectionCard title={`Queue (${queue.length})`}>
         {queueQ.isLoading ? (
-          <p className="text-slate-500 text-sm py-4 text-center">Loading…</p>
+          <p className="py-4 text-center text-sm text-slate-500">Loading...</p>
         ) : queue.length === 0 ? (
-          <div className="py-10 text-center">
-            <div className="text-3xl mb-2">✓</div>
-            <p className="text-slate-500 text-sm">No orders pending QA approval.</p>
-            <p className="text-slate-400 text-xs mt-1">All STANDARD orders have been processed.</p>
-          </div>
+          <p className="py-8 text-center text-sm text-slate-400">No MTO/HPS Process Orders found for this queue.</p>
         ) : (
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
-                <th className="text-left py-2 px-3 border-b">PO Number</th>
-                <th className="text-left py-2 px-3 border-b">Type</th>
-                <th className="text-left py-2 px-3 border-b">Prodshade</th>
-                <th className="text-left py-2 px-3 border-b">Stroke #</th>
-                <th className="text-right py-2 px-3 border-b">Planned Qty (KG)</th>
-                <th className="text-left py-2 px-3 border-b">Created By</th>
-                <th className="text-left py-2 px-3 border-b">Created At</th>
-              </tr>
-            </thead>
-            <tbody>
-              {queue.map((o) => (
-                <tr
-                  key={o.id}
-                  className="hover:bg-sky-50 cursor-pointer border-b border-slate-100 transition-colors"
-                  onClick={() => openDetail(o.id)}
-                >
-                  <td className="py-2 px-3 font-mono font-semibold text-sky-700">{o.po_number ?? "--"}</td>
-                  <td className="py-2 px-3">
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{o.po_type ?? "--"}</span>
-                  </td>
-                  <td className="py-2 px-3">{o.material?.pace_code ?? "--"}</td>
-                  <td className="py-2 px-3 font-mono text-slate-500">{o.stroke_number ?? "--"}</td>
-                  <td className="py-2 px-3 text-right font-mono">{Number(o.planned_qty ?? 0).toLocaleString()}</td>
-                  <td className="py-2 px-3 text-slate-500">{o.created_by_display ?? "--"}</td>
-                  <td className="py-2 px-3 text-slate-400 text-xs">{o.created_at?.slice(0, 16)?.replace("T", " ")}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1220px] border-collapse text-sm">
+              <thead>
+                <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+                  <th className="border-b px-3 py-2 text-left">PO Number</th>
+                  <th className="border-b px-3 py-2 text-left">Batch #</th>
+                  <th className="border-b px-3 py-2 text-left">Prodshade</th>
+                  <th className="border-b px-3 py-2 text-left">Stroke</th>
+                  <th className="border-b px-3 py-2 text-left">Machine</th>
+                  <th className="border-b px-3 py-2 text-right">Target Qty</th>
+                  <th className="border-b px-3 py-2 text-left">Created By</th>
+                  <th className="border-b px-3 py-2 text-left">Status</th>
+                  <th className="border-b px-3 py-2 text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {queue.map((order) => {
+                  const expanded = expandedOrderId === order.id;
+                  return (
+                    <React.Fragment key={order.id}>
+                      <tr
+                        className="cursor-pointer border-b border-slate-100 transition-colors hover:bg-sky-50"
+                        onClick={() => setExpandedOrderId((current) => current === order.id ? "" : order.id)}
+                      >
+                        <td className="px-3 py-2 font-mono font-semibold text-sky-700">{order.po_number ?? "--"}</td>
+                        <td className="px-3 py-2 font-mono text-slate-500">{order.batch_number ?? "—"}</td>
+                        <td className="px-3 py-2">{materialLabel(order.material) || "--"}</td>
+                        <td className="px-3 py-2 font-mono text-slate-500">{order.stroke_number ?? "--"}</td>
+                        <td className="px-3 py-2">{machineLabel(order.machine) || "--"}</td>
+                        <td className="px-3 py-2 text-right font-mono">{Number(order.planned_qty ?? 0).toFixed(3)}</td>
+                        <td className="px-3 py-2">{order.created_by_display ?? "--"}</td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex rounded px-2 py-1 text-xs font-medium ${statusTone(order.status)}`}>
+                            {order.status ?? "--"}
+                          </span>
+                        </td>
+                        <td
+                          className="px-3 py-2 text-right"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <div className="flex justify-end gap-2">
+                            {order.status === "STANDARD" && (
+                              <>
+                                <button
+                                  onClick={() => handleApprove(order.id)}
+                                  disabled={saving}
+                                  className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setRejectOrderId(order.id);
+                                    setRejectReason("");
+                                  }}
+                                  disabled={saving}
+                                  className="rounded border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                                >
+                                  Reject
+                                </button>
+                              </>
+                            )}
+                            {order.status === "QA_APPROVED" && (
+                              <button
+                                onClick={() => setStartBatchOrder(order)}
+                                disabled={saving}
+                                className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                              >
+                                Start Batch
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr className="bg-slate-50/80">
+                          <td colSpan={9} className="px-4 py-4">
+                            {detailQ.isLoading ? (
+                              <p className="text-sm text-slate-500">Loading line details...</p>
+                            ) : detailQ.data?.id !== order.id ? (
+                              <p className="text-sm text-slate-400">Select a row to load its component grid.</p>
+                            ) : (
+                              <div className="rounded border border-slate-200 bg-white">
+                                <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
+                                  Component Grid
+                                </div>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full min-w-[920px] border-collapse text-sm">
+                                    <thead>
+                                      <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                                        <th className="border-b px-3 py-2 text-left">Formulation Material</th>
+                                        <th className="border-b px-3 py-2 text-right">Dosage%</th>
+                                        <th className="border-b px-3 py-2 text-left">Actual Material</th>
+                                        <th className="border-b px-3 py-2 text-right">Dosage%</th>
+                                        <th className="border-b px-3 py-2 text-right">Planned Qty</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {detailLines.map((line) => (
+                                        <tr key={line.id} className="border-b border-slate-100">
+                                          <td className="px-3 py-2">{materialLabel(line.material) || "--"}</td>
+                                          <td className="px-3 py-2 text-right font-mono">{Number(line.dosage_pct ?? 0).toFixed(3)}</td>
+                                          <td className="px-3 py-2">{materialLabel(line.actual_material) || materialLabel(line.material) || "--"}</td>
+                                          <td className="px-3 py-2 text-right font-mono">{Number(line.dosage_pct ?? 0).toFixed(3)}</td>
+                                          <td className="px-3 py-2 text-right font-mono">{Number(line.planned_qty ?? 0).toFixed(3)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </ErpSectionCard>
 
-      <DrawerBase
-        visible={drawerOpen}
-        title={detail ? `QA Review — ${detail.po_number ?? "--"}` : "Loading…"}
-        onClose={() => setDrawerOpen(false)}
-        width="min(600px, calc(100vw - 24px))"
-        actions={drawerActions}
+      <ModalBase
+        visible={Boolean(rejectOrderId)}
+        title="Reject Process PO"
+        onEscape={() => {
+          setRejectOrderId("");
+          setRejectReason("");
+        }}
+        actions={(
+          <>
+            <button
+              onClick={() => {
+                setRejectOrderId("");
+                setRejectReason("");
+              }}
+              className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleReject}
+              disabled={saving || !rejectReason.trim()}
+              className="rounded bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+            >
+              Confirm Reject
+            </button>
+          </>
+        )}
       >
-        {detailLoading ? (
-          <p className="text-slate-400 text-sm p-6 text-center">Loading…</p>
-        ) : detail ? (
-          <div className="p-4 flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">PO Number</span>
-                <p className="font-mono font-semibold">{detail.po_number ?? "--"}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Production Type</span>
-                <p>{detail.po_type ?? "--"}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Prodshade</span>
-                <p>{detail.material?.pace_code ?? "--"}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Stroke Number</span>
-                <p className="font-mono">{detail.stroke?.stroke_number ?? "--"}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Planned Qty (KG)</span>
-                <p className="font-mono">{Number(detail.planned_qty ?? 0).toLocaleString()}</p>
-              </div>
-              <div>
-                <span className="text-slate-400 text-xs block mb-0.5">Planned Start</span>
-                <p>{detail.planned_start_date ?? "—"}</p>
-              </div>
-              {detail.notes && (
-                <div className="col-span-2">
-                  <span className="text-slate-400 text-xs block mb-0.5">Notes</span>
-                  <p className="text-slate-600">{detail.notes}</p>
-                </div>
-              )}
+        <div className="flex flex-col gap-2">
+          <label className="text-xs font-medium text-rose-600">
+            Reason <span className="text-rose-500">*</span>
+          </label>
+          <textarea
+            rows={4}
+            className="resize-none rounded border border-rose-300 px-3 py-2 text-sm"
+            value={rejectReason}
+            onChange={(event) => setRejectReason(event.target.value)}
+            placeholder="Explain why this Process PO is being rejected..."
+          />
+        </div>
+      </ModalBase>
+
+      <ModalBase
+        visible={Boolean(startBatchOrder)}
+        title="Start Batch"
+        onEscape={() => setStartBatchOrder(null)}
+        width="min(560px, calc(100vw - 32px))"
+        actions={(
+          <button
+            onClick={() => setStartBatchOrder(null)}
+            className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600"
+          >
+            Close
+          </button>
+        )}
+      >
+        {startBatchOrder && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              {releasedBatchQ.isLoading
+                ? "Checking released batch numbers..."
+                : releasedBatches.length > 0
+                  ? "Released batch numbers are available for this Company + PO Type. Pick one or skip to auto-generate."
+                  : "No released batch numbers are available. Generate a new one."}
             </div>
 
-            {/* RM Lines */}
-            {(detail.lines ?? []).length > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">RM Lines (from Stroke)</p>
-                <table className="w-full text-sm border-collapse">
+            {releasedBatches.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-sm">
                   <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-xs">
-                      <th className="text-left py-1.5 px-2 border-b">#</th>
-                      <th className="text-left py-1.5 px-2 border-b">Material</th>
-                      <th className="text-right py-1.5 px-2 border-b">Dosage %</th>
-                      <th className="text-right py-1.5 px-2 border-b">Planned Qty (KG)</th>
+                    <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                      <th className="border-b px-3 py-2 text-left">Batch Number</th>
+                      <th className="border-b px-3 py-2 text-left">PO Type</th>
+                      <th className="border-b px-3 py-2 text-left">Voided Date</th>
+                      <th className="border-b px-3 py-2 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {detail.lines.map((l, i) => (
-                      <tr key={l.id ?? i} className="border-b border-slate-100">
-                        <td className="py-1.5 px-2 text-slate-400">{i + 1}</td>
-                        <td className="py-1.5 px-2">{l.material?.pace_code ?? "--"}</td>
-                        <td className="py-1.5 px-2 text-right font-mono">--</td>
-                        <td className="py-1.5 px-2 text-right font-mono">{Number(l.planned_qty ?? 0).toFixed(3)}</td>
+                    {releasedBatches.map((row) => (
+                      <tr key={row.id} className="border-b border-slate-100">
+                        <td className="px-3 py-2 font-mono">{row.batch_number ?? "--"}</td>
+                        <td className="px-3 py-2">{row.po_type ?? "--"}</td>
+                        <td className="px-3 py-2">{row.voided_date ? String(row.voided_date).slice(0, 16).replace("T", " ") : "—"}</td>
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            onClick={() => handleStartBatch(startBatchOrder, row.id)}
+                            disabled={saving}
+                            className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+                          >
+                            Use This Batch
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -249,29 +428,18 @@ export default function QAQueuePage() {
               </div>
             )}
 
-            {/* Reject input */}
-            {rejectMode && detail.status === "STANDARD" && (
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-rose-600 font-medium">Rejection Reason <span className="text-rose-500">*</span></label>
-                <textarea
-                  className="border border-rose-300 rounded px-2 py-1.5 text-sm resize-none"
-                  rows={3}
-                  placeholder="Explain why this order is being rejected…"
-                  value={rejectReason}
-                  onChange={(e) => setRejectReason(e.target.value)}
-                  autoFocus
-                />
-                <button
-                  onClick={() => { setRejectMode(false); setRejectReason(""); }}
-                  className="text-xs text-slate-400 hover:text-slate-600 w-fit"
-                >
-                  Cancel rejection
-                </button>
-              </div>
-            )}
+            <div className="flex justify-end">
+              <button
+                onClick={() => handleStartBatch(startBatchOrder, null)}
+                disabled={saving}
+                className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                Skip, Generate New
+              </button>
+            </div>
           </div>
-        ) : null}
-      </DrawerBase>
+        )}
+      </ModalBase>
     </ErpScreenScaffold>
   );
 }

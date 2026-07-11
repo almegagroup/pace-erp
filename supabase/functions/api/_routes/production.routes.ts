@@ -34,6 +34,8 @@ import {
   listBatchSeriesHandler,
   createBatchSeriesHandler,
   updateBatchSeriesHandler,
+  listBatchNumbersHandler,
+  releaseBatchNumberHandler,
 } from "../_core/production/batch_series.handlers.ts";
 import {
   listSegmentLocationsHandler,
@@ -132,6 +134,8 @@ export async function dispatchProductionRoutes(
       return await listBatchSeriesHandler(req, ctx);
     case "POST:/api/production/batch-series":
       return await createBatchSeriesHandler(req, ctx);
+    case "GET:/api/production/batch-numbers":
+      return await listBatchNumbersHandler(req, ctx);
 
     // Segment Location Config
     case "GET:/api/production/segment-locations":
@@ -199,6 +203,9 @@ export async function dispatchProductionRoutes(
   // Batch Series /:id
   if (/^\/api\/production\/batch-series\/[^/]+$/.test(pathname) && req.method === "PATCH") {
     return await updateBatchSeriesHandler(req, ctx);
+  }
+  if (/^\/api\/production\/batch-numbers\/[^/]+\/release$/.test(pathname) && req.method === "POST") {
+    return await releaseBatchNumberHandler(req, ctx);
   }
 
   // Stroke Masters /:id

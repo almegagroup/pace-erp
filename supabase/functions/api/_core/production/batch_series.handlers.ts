@@ -10,9 +10,11 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
+  assertManagerOrSARole,
   assertSARole,
   assertProdReadRole,
   parseBody,
@@ -22,6 +24,22 @@ import {
 } from "./production.shared.ts";
 
 type JsonRecord = Record<string, unknown>;
+type BatchNumberInstanceRow = {
+  id: string;
+  company_id: string;
+  po_type: string;
+  prodshade_material_id: string | null;
+  batch_number: string;
+  status: "ACTIVE" | "VOIDED" | "RELEASED";
+  source_process_order_id: string | null;
+  voided_at: string | null;
+  released_by: string | null;
+  released_at: string | null;
+  release_reason: string | null;
+  created_at: string;
+  last_updated_at: string;
+  last_updated_by: string | null;
+};
 
 function batchError(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
@@ -55,6 +73,196 @@ async function getMaterialMapByIds(
     matMap.set(String(mat.id), mat);
   }
   return matMap;
+}
+
+async function getMachineMapByIds(
+  machineIds: string[],
+  logPrefix: string,
+  errorCode: string,
+): Promise<Map<string, JsonRecord>> {
+  const ids = [...new Set(machineIds.filter(Boolean))];
+  const machineMap = new Map<string, JsonRecord>();
+  if (ids.length === 0) return machineMap;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_master")
+    .select("id, machine_code, machine_name")
+    .in("id", ids);
+  if (error) {
+    console.error(`${logPrefix} machine query failed:`, JSON.stringify(error));
+    throw new Error(errorCode);
+  }
+
+  for (const row of (data ?? []) as JsonRecord[]) {
+    machineMap.set(String(row.id), row);
+  }
+  return machineMap;
+}
+
+async function listBatchNumberInstances(params: {
+  companyId?: string | null;
+  status?: string | null;
+  poType?: string | null;
+}): Promise<BatchNumberInstanceRow[]> {
+  let query = serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .select(`
+      id, company_id, po_type, prodshade_material_id, batch_number, status,
+      source_process_order_id, voided_at, released_by, released_at, release_reason,
+      created_at, last_updated_at, last_updated_by
+    `)
+    .order("created_at", { ascending: false });
+
+  if (params.companyId) query = query.eq("company_id", params.companyId);
+  if (params.status) query = query.eq("status", params.status);
+  if (params.poType) query = query.eq("po_type", params.poType);
+
+  const { data, error } = await query;
+  if (error) {
+    console.error("[batch_series.listBatchNumberInstances] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BATCH_NUMBER_LIST_FAILED");
+  }
+  return ((data ?? []) as JsonRecord[]).map((row) => ({
+    id: String(row.id),
+    company_id: String(row.company_id),
+    po_type: String(row.po_type),
+    prodshade_material_id: toTrimmedString(row.prodshade_material_id) || null,
+    batch_number: String(row.batch_number),
+    status: String(row.status) as BatchNumberInstanceRow["status"],
+    source_process_order_id: toTrimmedString(row.source_process_order_id) || null,
+    voided_at: toTrimmedString(row.voided_at) || null,
+    released_by: toTrimmedString(row.released_by) || null,
+    released_at: toTrimmedString(row.released_at) || null,
+    release_reason: toTrimmedString(row.release_reason) || null,
+    created_at: String(row.created_at),
+    last_updated_at: String(row.last_updated_at),
+    last_updated_by: toTrimmedString(row.last_updated_by) || null,
+  }));
+}
+
+export async function findReleasedBatchNumberInstances(
+  companyId: string,
+  poType: string,
+): Promise<BatchNumberInstanceRow[]> {
+  return await listBatchNumberInstances({ companyId, status: "RELEASED", poType });
+}
+
+export async function activateReleasedBatchNumberInstance(params: {
+  instanceId: string;
+  companyId: string;
+  poType: string;
+  prodshadeMaterialId: string | null;
+  processOrderId: string;
+  authUserId: string;
+}): Promise<BatchNumberInstanceRow | null> {
+  const now = new Date().toISOString();
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .update({
+      status: "ACTIVE",
+      source_process_order_id: params.processOrderId,
+      prodshade_material_id: params.prodshadeMaterialId,
+      released_by: null,
+      released_at: null,
+      release_reason: null,
+      last_updated_at: now,
+      last_updated_by: params.authUserId,
+    })
+    .eq("id", params.instanceId)
+    .eq("company_id", params.companyId)
+    .eq("po_type", params.poType)
+    .eq("status", "RELEASED")
+    .select(`
+      id, company_id, po_type, prodshade_material_id, batch_number, status,
+      source_process_order_id, voided_at, released_by, released_at, release_reason,
+      created_at, last_updated_at, last_updated_by
+    `)
+    .maybeSingle();
+  if (error) {
+    console.error("[batch_series.activateReleasedBatchNumberInstance] update failed:", JSON.stringify(error));
+    throw new Error("PROD_BATCH_NUMBER_RELEASE_USE_FAILED");
+  }
+  if (!data) return null;
+  return {
+    id: String((data as JsonRecord).id),
+    company_id: String((data as JsonRecord).company_id),
+    po_type: String((data as JsonRecord).po_type),
+    prodshade_material_id: toTrimmedString((data as JsonRecord).prodshade_material_id) || null,
+    batch_number: String((data as JsonRecord).batch_number),
+    status: "ACTIVE",
+    source_process_order_id: toTrimmedString((data as JsonRecord).source_process_order_id) || null,
+    voided_at: toTrimmedString((data as JsonRecord).voided_at) || null,
+    released_by: null,
+    released_at: null,
+    release_reason: null,
+    created_at: String((data as JsonRecord).created_at),
+    last_updated_at: String((data as JsonRecord).last_updated_at),
+    last_updated_by: toTrimmedString((data as JsonRecord).last_updated_by) || null,
+  };
+}
+
+export async function upsertBatchNumberInstanceForProcessOrder(params: {
+  companyId: string;
+  poType: string;
+  prodshadeMaterialId: string | null;
+  batchNumber: string;
+  processOrderId: string;
+  authUserId: string;
+  status: "ACTIVE" | "VOIDED";
+  voidedAt?: string | null;
+}): Promise<void> {
+  const now = new Date().toISOString();
+  const payload = {
+    company_id: params.companyId,
+    po_type: params.poType,
+    prodshade_material_id: params.prodshadeMaterialId,
+    batch_number: params.batchNumber,
+    status: params.status,
+    source_process_order_id: params.processOrderId,
+    voided_at: params.status === "VOIDED" ? (params.voidedAt ?? now) : null,
+    last_updated_at: now,
+    last_updated_by: params.authUserId,
+  };
+
+  const { data: existing, error: existingErr } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .select("id")
+    .eq("company_id", params.companyId)
+    .eq("batch_number", params.batchNumber)
+    .maybeSingle();
+  if (existingErr) {
+    console.error("[batch_series.upsertBatchNumberInstanceForProcessOrder] lookup failed:", JSON.stringify(existingErr));
+    throw new Error("PROD_BATCH_NUMBER_UPSERT_FAILED");
+  }
+
+  if (existing) {
+    const { error } = await serviceRoleClient
+      .schema("erp_production")
+      .from("batch_number_instance")
+      .update(payload)
+      .eq("id", String((existing as JsonRecord).id));
+    if (error) {
+      console.error("[batch_series.upsertBatchNumberInstanceForProcessOrder] update failed:", JSON.stringify(error));
+      throw new Error("PROD_BATCH_NUMBER_UPSERT_FAILED");
+    }
+    return;
+  }
+
+  const { error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .insert({
+      ...payload,
+      created_at: now,
+    });
+  if (error) {
+    console.error("[batch_series.upsertBatchNumberInstanceForProcessOrder] insert failed:", JSON.stringify(error));
+    throw new Error("PROD_BATCH_NUMBER_UPSERT_FAILED");
+  }
 }
 
 // GET /api/production/batch-series?company_id=
@@ -167,6 +375,145 @@ export async function updateBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BATCH_SERIES_UPDATE_FAILED";
     return batchError(req, ctx, code, 500, "Batch series update failed");
+  }
+}
+
+export async function listBatchNumbersHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "") || null;
+    const status = toUpperTrimmedString(url.searchParams.get("status") ?? "") || null;
+    const poType = toUpperTrimmedString(url.searchParams.get("po_type") ?? "") || null;
+
+    const rows = await listBatchNumberInstances({ companyId, status, poType });
+    const processOrderIds = [...new Set(rows.map((row) => row.source_process_order_id).filter(Boolean))];
+    let orderMap = new Map<string, JsonRecord>();
+    if (processOrderIds.length > 0) {
+      const { data, error } = await serviceRoleClient
+        .schema("erp_production")
+        .from("process_order")
+        .select("id, material_id, stroke_master_id, machine_id")
+        .in("id", processOrderIds);
+      if (error) {
+        console.error("[batch_series.listBatchNumbers] process-order query failed:", JSON.stringify(error));
+        throw new Error("PROD_BATCH_NUMBER_LIST_FAILED");
+      }
+      orderMap = new Map(((data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+    }
+
+    const materialMap = await getMaterialMapByIds(
+      rows.map((row) => row.prodshade_material_id || String(orderMap.get(row.source_process_order_id || "")?.material_id ?? "")).filter(Boolean),
+      "[batch_series.listBatchNumbers]",
+      "PROD_BATCH_NUMBER_LIST_FAILED",
+    );
+
+    const strokeIds = [...new Set(rows.map((row) => String(orderMap.get(row.source_process_order_id || "")?.stroke_master_id ?? "")).filter(Boolean))];
+    const strokeMap = new Map<string, JsonRecord>();
+    if (strokeIds.length > 0) {
+      const { data, error } = await serviceRoleClient
+        .schema("erp_production")
+        .from("stroke_master")
+        .select("id, stroke_number")
+        .in("id", strokeIds);
+      if (error) {
+        console.error("[batch_series.listBatchNumbers] stroke query failed:", JSON.stringify(error));
+        throw new Error("PROD_BATCH_NUMBER_LIST_FAILED");
+      }
+      for (const row of (data ?? []) as JsonRecord[]) {
+        strokeMap.set(String(row.id), row);
+      }
+    }
+
+    const machineMap = await getMachineMapByIds(
+      rows.map((row) => String(orderMap.get(row.source_process_order_id || "")?.machine_id ?? "")).filter(Boolean),
+      "[batch_series.listBatchNumbers]",
+      "PROD_BATCH_NUMBER_LIST_FAILED",
+    );
+    const releasedByDisplayMap = await resolveUserDisplayNames(rows.map((row) => row.released_by || "").filter(Boolean));
+
+    return okResponse({
+      data: rows.map((row) => {
+        const sourceOrder = row.source_process_order_id ? orderMap.get(row.source_process_order_id) ?? null : null;
+        const prodshadeMaterialId = row.prodshade_material_id || toTrimmedString(sourceOrder?.material_id) || "";
+        return {
+          id: row.id,
+          batch_number: row.batch_number,
+          po_type: row.po_type,
+          voided_date: row.voided_at,
+          status: row.status,
+          released_at: row.released_at,
+          released_by: row.released_by,
+          released_by_display: row.released_by ? (releasedByDisplayMap.get(row.released_by) || null) : null,
+          reason: row.release_reason,
+          previous_prodshade: materialMap.get(prodshadeMaterialId) ?? null,
+          previous_stroke_number: toTrimmedString(strokeMap.get(String(sourceOrder?.stroke_master_id ?? ""))?.stroke_number) || null,
+          machine: machineMap.get(String(sourceOrder?.machine_id ?? "")) ?? null,
+        };
+      }),
+    }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_BATCH_NUMBER_LIST_FAILED";
+    return batchError(req, ctx, code, 500, "Batch number list failed");
+  }
+}
+
+export async function releaseBatchNumberHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertManagerOrSARole(ctx);
+    const id = getIdFromPath(req);
+    if (!id) return batchError(req, ctx, "PROD_BATCH_NUMBER_ID_MISSING", 400, "ID required");
+
+    const body = await parseBody(req);
+    const reason = toTrimmedString(body.reason);
+    if (!reason) {
+      return batchError(req, ctx, "PROD_BATCH_NUMBER_REASON_REQUIRED", 400, "reason required");
+    }
+
+    const now = new Date().toISOString();
+    const { data, error } = await serviceRoleClient
+      .schema("erp_production")
+      .from("batch_number_instance")
+      .update({
+        status: "RELEASED",
+        released_by: ctx.auth_user_id,
+        released_at: now,
+        release_reason: reason,
+        last_updated_at: now,
+        last_updated_by: ctx.auth_user_id,
+      })
+      .eq("id", id)
+      .eq("status", "VOIDED")
+      .select("id, batch_number, status, released_by, released_at, release_reason")
+      .maybeSingle();
+    if (error) {
+      console.error("[batch_series.releaseBatchNumber] update failed:", JSON.stringify(error));
+      throw new Error("PROD_BATCH_NUMBER_RELEASE_FAILED");
+    }
+    if (!data) {
+      return batchError(req, ctx, "PROD_BATCH_NUMBER_NOT_VOIDED", 422, "Only VOIDED batch numbers can be released");
+    }
+
+    let releasedByDisplay: string | null = null;
+    try {
+      const displayMap = await resolveUserDisplayNames([ctx.auth_user_id]);
+      releasedByDisplay = displayMap.get(ctx.auth_user_id) || null;
+    } catch (displayErr) {
+      console.error("[batch_series.releaseBatchNumber] display-name resolution failed:", JSON.stringify(displayErr));
+    }
+
+    return okResponse({
+      id: String((data as JsonRecord).id),
+      batch_number: String((data as JsonRecord).batch_number),
+      status: String((data as JsonRecord).status),
+      released_by: ctx.auth_user_id,
+      released_by_display: releasedByDisplay,
+      released_at: String((data as JsonRecord).released_at),
+      reason: String((data as JsonRecord).release_reason ?? reason),
+    }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_BATCH_NUMBER_RELEASE_FAILED";
+    return batchError(req, ctx, code, 500, "Batch number release failed");
   }
 }
 

@@ -2430,3 +2430,21 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Consequence for data prerequisites:** `production_segment_location_config` seeding is **no longer needed at all** (superseded by this brief) — the only remaining Dev prerequisite for a live zero-error Standard→Verify run is **opening stock** for the test stroke's RM materials at their resolved storage locations.
 
 **Files:** `process_order.handlers.ts`, `production.routes.ts`, `route-acl-registry.ts`, `prodApi.js`, `ProductionPOCreatePage.jsx`, `ProductionPOFinalPage.jsx`, `ProductionPOVerifyPage.jsx`, migration `20260711140000_gate27_location_aware_stock_check.sql` (no-op).
+
+---
+
+## Gate-27.15 — PR16 QA Queue Rebuild + Real PR17 Batch Number Release — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.15-PR16-PR17-REBUILD-TASK-BRIEF.md` · **Date:** 2026-07-11
+
+**Implemented (Codex):** PR16 (`QAQueuePage.jsx`) rebuilt into the locked inline-expandable CSN-tracker-style queue (collapsed row incl. Batch #, Prodshade, Stroke, Machine, Target Qty, Created By, Status; click-to-expand component grid; pending-first client-side sort; Approve/Reject on STANDARD, Start Batch on QA_APPROVED). New real PR17: `erp_production.batch_number_instance` table (VOIDED/RELEASED/ACTIVE lifecycle, company-scoped unique batch numbers), `listBatchNumbersHandler`/`releaseBatchNumberHandler` in `batch_series.handlers.ts` (reason-mandatory release, batched display resolution for prodshade/stroke/machine/released-by), `startBatchHandler` extended to check for RELEASED numbers by Company+PO Type before auto-generating and to record VOIDED instances on CORS reversal, new `BatchNumberReleasePage.jsx` (new file, real PR17 UI). `/dashboard/production/batch-release` route repointed from the legacy `BatchReleasePage.jsx` to the new page; that old file itself was left untouched per brief.
+
+**Claude verification pass:**
+- **Confirmed the route swap is correct, not a regression:** queried `erp_menu.menu_master` directly — the menu entry for this exact route already had `tx_code = 'PR17'`, `title = 'Batch Number Release'` *before* this change. The legacy `BatchReleasePage.jsx` was squatting on a menu slot that was always meant to be real PR17; repointing it is a bug fix, and its "Manager triggers Start Batch" capability is now covered inline by the rebuilt PR16's own Start Batch action (confirmed in Codex's log notes) — nothing is functionally lost.
+- **Found and fixed a real bug:** the "Skip, Generate New" button in the Start Batch modal always sent an empty body when no released number was picked; the backend treated "no instance id + released options exist" as *always* an error (409 `PROD_BATCH_RELEASED_AVAILABLE`), regardless of whether the user had explicitly chosen to skip. This meant the skip button was unusable exactly when it mattered (whenever released numbers existed). Fixed by adding a `skip_released_batch` flag: backend only blocks when no instance id **and** no skip flag **and** released options exist; frontend's skip button now sends `{ skip_released_batch: true }`.
+- **Found and fixed a minor correctness gap:** the new PR17 page queried `listBatchNumbers` with no status filter, which returns ACTIVE rows too (batch numbers currently in live use) — the locked design says PR17 shows only VOIDED/RELEASED. Added a client-side filter (`row.status === "VOIDED" || row.status === "RELEASED"`) rather than changing the shared list endpoint's contract.
+- No unauthorized doc edits, no mojibake. `deno check`: 0 file-anchored errors on all 3 touched backend files. ESLint: 1 pre-existing `AppRouter.jsx` unused-`lazy`-import error confirmed via `git stash` to predate this change (not Codex's, not fixed, out of scope).
+- Migration applied to Dev via MCP; `batch_number_instance` table existence confirmed.
+- ACL: new routes correctly reuse the pre-existing `PROD_BATCH_RELEASE` resource code (same one the menu system already used) — no invented resource codes; no duplicate route patterns.
+
+**Files:** migration `20260711190000_gate27_batch_number_instance.sql`, `batch_series.handlers.ts`, `process_order.handlers.ts`, `production.routes.ts`, `route-acl-registry.ts`, `prodApi.js`, `QAQueuePage.jsx`, `BatchNumberReleasePage.jsx` (new), `AppRouter.jsx`.

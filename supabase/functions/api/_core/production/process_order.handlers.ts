@@ -24,7 +24,12 @@ import {
   parseNonNegativeNumber,
   getIdFromPath,
 } from "./production.shared.ts";
-import { generateBatchNumber } from "./batch_series.handlers.ts";
+import {
+  activateReleasedBatchNumberInstance,
+  findReleasedBatchNumberInstances,
+  generateBatchNumber,
+  upsertBatchNumberInstanceForProcessOrder,
+} from "./batch_series.handlers.ts";
 import { generateCompanyDocNumber } from "./production.utils.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -944,8 +949,10 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
     );
 
     const strokeIds = [...new Set(rows.map((row) => String(row.stroke_master_id ?? "")).filter(Boolean))];
+    const machineIds = [...new Set(rows.map((row) => String(row.machine_id ?? "")).filter(Boolean))];
     const createdByIds = [...new Set(rows.map((row) => String(row.created_by ?? "")).filter(Boolean))];
     const strokeNumberById = new Map<string, string>();
+    const machineById = new Map<string, JsonRecord>();
 
     if (strokeIds.length > 0) {
       const { data: strokes, error: strokeErr } = await serviceRoleClient
@@ -959,6 +966,21 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
       }
       for (const stroke of (strokes ?? []) as JsonRecord[]) {
         strokeNumberById.set(String(stroke.id), String(stroke.stroke_number ?? ""));
+      }
+    }
+
+    if (machineIds.length > 0) {
+      const { data: machines, error: machineErr } = await serviceRoleClient
+        .schema("erp_master")
+        .from("machine_master")
+        .select("id, machine_code, machine_name")
+        .in("id", machineIds);
+      if (machineErr) {
+        console.error("[process_order.listProcessOrders] machine query failed:", JSON.stringify(machineErr));
+        throw new Error("PROD_PO_LIST_FAILED");
+      }
+      for (const machine of (machines ?? []) as JsonRecord[]) {
+        machineById.set(String(machine.id), machine);
       }
     }
 
@@ -977,6 +999,7 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
         ...row,
         material: materialMap.get(String(row.material_id ?? "")) ?? null,
         stroke_number: strokeNumberById.get(String(row.stroke_master_id ?? "")) || null,
+        machine: machineById.get(String(row.machine_id ?? "")) ?? null,
         created_by_display: createdByDisplayMap.get(String(row.created_by ?? "")) || null,
       })),
       pagination: { page, per_page: perPage, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / perPage) },
@@ -1316,6 +1339,16 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         throw new Error("PROD_PO_CREATE_FAILED");
       }
 
+      await upsertBatchNumberInstanceForProcessOrder({
+        companyId,
+        poType: "MTEST",
+        prodshadeMaterialId: null,
+        batchNumber,
+        processOrderId: poId,
+        authUserId: ctx.auth_user_id,
+        status: "ACTIVE",
+      });
+
       return createdOkResponse({
         id: poId,
         po_number: poNumber,
@@ -1606,8 +1639,33 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Unsupported po_type for batch start: ${po.po_type}`);
     }
 
+    const body = await parseBody(req);
+    const selectedBatchNumberInstanceId = toTrimmedString(body.batch_number_instance_id) || null;
+    const skipReleasedBatch = body.skip_released_batch === true;
+    const companyId = String(po.company_id);
     const prodshadeId = batchType === "MTS" ? String(po.material_id ?? "") : null;
-    const batchNumber = await generateBatchNumber(String(po.company_id), batchType, prodshadeId);
+    const releasedOptions = await findReleasedBatchNumberInstances(companyId, batchType);
+    let batchNumber = "";
+
+    if (selectedBatchNumberInstanceId) {
+      const reused = await activateReleasedBatchNumberInstance({
+        instanceId: selectedBatchNumberInstanceId,
+        companyId,
+        poType: batchType,
+        prodshadeMaterialId: prodshadeId,
+        processOrderId: id,
+        authUserId: ctx.auth_user_id,
+      });
+      if (!reused) {
+        return poErr(req, ctx, "PROD_BATCH_NUMBER_RELEASE_NOT_FOUND", 422, "Selected released batch number is no longer available");
+      }
+      batchNumber = reused.batch_number;
+    } else if (releasedOptions.length > 0 && !skipReleasedBatch) {
+      // Caller hasn't explicitly chosen to skip yet — surface the choice instead of silently picking one.
+      return poErr(req, ctx, "PROD_BATCH_RELEASED_AVAILABLE", 409, "Released batch numbers are available for this company and PO type");
+    } else {
+      batchNumber = await generateBatchNumber(companyId, batchType, prodshadeId);
+    }
     const now = new Date().toISOString();
 
     const { error } = await serviceRoleClient
@@ -1626,6 +1684,16 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
       console.error("[process_order.startBatch] update failed:", JSON.stringify(error));
       throw new Error("PROD_PO_START_BATCH_FAILED");
     }
+
+    await upsertBatchNumberInstanceForProcessOrder({
+      companyId,
+      poType: batchType,
+      prodshadeMaterialId: prodshadeId,
+      batchNumber,
+      processOrderId: id,
+      authUserId: ctx.auth_user_id,
+      status: "ACTIVE",
+    });
 
     return okResponse({ id, status: "BATCH_STARTED", batch_number: batchNumber }, ctx.request_id, req);
   } catch (err) {
@@ -2333,6 +2401,22 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
     if (poUpdateErr) {
       console.error("[process_order.reverse] process-order update failed:", JSON.stringify(poUpdateErr));
       throw new Error("PROD_PO_REVERSE_FAILED");
+    }
+
+    const batchNumber = toTrimmedString(po.batch_number);
+    if (batchNumber) {
+      const batchType = toUpperTrimmedString(po.po_type);
+      const prodshadeMaterialId = batchType === "MTS" ? String(po.material_id ?? "") : null;
+      await upsertBatchNumberInstanceForProcessOrder({
+        companyId: String(po.company_id),
+        poType: batchType,
+        prodshadeMaterialId,
+        batchNumber,
+        processOrderId: id,
+        authUserId: ctx.auth_user_id,
+        status: "VOIDED",
+        voidedAt: now,
+      });
     }
 
     return okResponse({ id, status: "REVERSED", ledger_entries: ledgerEntries }, ctx.request_id, req);
