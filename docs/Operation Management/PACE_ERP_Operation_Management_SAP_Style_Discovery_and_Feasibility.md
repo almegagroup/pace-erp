@@ -8385,7 +8385,9 @@ Whatever PACE physically issued/produced (Stock Layer: Actual Material + Actual 
 
 **`erp_production.process_order_line_reco` — the Reco/Costing layer's storage (LOCKED — 2026-07-11):**
 
-Stock movements alone cannot carry the Reco/Costing layer — `stock_ledger` only knows what physically moved (Actual Material, Actual Qty), it has no concept of "Approved" or "AP Approved Qty" at all. So this data needs its own table. One data-entry action (Final / Verify / COR6 Correction) writes to **both universes at once** — Actual → `stock_ledger`, AP Approved → this table — never two separate entries.
+Stock movements alone cannot carry the Reco/Costing layer — `stock_ledger` only knows what physically moved (Actual Material, Actual Qty), it has no concept of "Approved" or "AP Approved Qty" at all. So this data needs its own table. One data-entry action (Verify / COR6 Correction) writes to **both universes at once** — Actual → `stock_ledger`, AP Approved → this table — never two separate entries.
+
+**Write timing (LOCKED — 2026-07-11): `process_order_line_reco` is only written at Verify, never at Final.** Final is Production's draft entry (Actual Qty, Approved toggle) — those values live as live/draft columns on `process_order_line` itself and are still fully editable by QA at Verify. Only when QA saves Verify (stock actually posts, P261/P101/P321) does the data become "official" and get committed into `process_order_line_reco`. The Final page's header auto-sum (Actual Output / AP Approved / Variance) reads live off `process_order_line`'s draft columns while still at Final/BATCH_STARTED-Final status — it only starts reading from `process_order_line_reco` once the PO reaches VERIFIED.
 
 **Fully denormalized (COID-style flat list) — no joins required for Reco/Costing reporting:**
 

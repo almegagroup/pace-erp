@@ -387,6 +387,11 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - SFG Result Recording page = exact identical mechanism to the existing Inward QA page (same qa_test_method_master/qa_category_test_config infra, same workflow) — build as a direct clone, not a fresh design
 - STO/Location Transfer reservation implementation details deferred to later
 
+**83.4 — process_order_line_reco write timing = Verify only (LOCKED — 2026-07-11):**
+- Final's draft entry (Actual Qty, Approved toggle) lives as draft columns on process_order_line itself (needs approved_status/ap_approved_qty/variance_qty added — actual_qty already exists on that table), still editable by QA at Verify
+- process_order_line_reco only gets written when Verify actually saves/posts stock — Final never writes to it
+- Final page's header auto-sum reads from process_order_line's draft columns; only switches to reading process_order_line_reco once status = VERIFIED
+
 **83.4 — CORS reversal set + process_order_line_reco append behavior (LOCKED — 2026-07-11):**
 - VERIFIED->STANDARD CORS now reverses 3 movements (P262, then P322 Unrestricted->QA, then P102) not 2 — original 2026-07-04 design predates the P321 usage-decision step
 - process_order_line_reco is append-on-CORS, not reset-in-place: existing rows get is_voided=true/voided_at set (history preserved), a fresh Final/Verify run inserts new rows. Reporting filters is_voided=false; audit can see all attempts. Matches the "nothing truly deleted" principle used for Prune/soft-reject/RELEASED batch numbers
