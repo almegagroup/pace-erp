@@ -2390,3 +2390,21 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Not yet proven clean end-to-end (data prerequisites, same as flagged for 27.3/27.4):** `production_segment_location_config` still empty and `production_mode` still NULL in Dev — a live Standard→Verify run needs both seeded (MCP, Dev only) plus opening stock for the test stroke's RM lines before a genuinely zero-error walkthrough can be demonstrated.
 
 **Files:** migration `20260711120000_gate27_processpo_full_chain.sql`, `process_order.handlers.ts`, `production.routes.ts`, `route-acl-registry.ts`, `prodApi.js`, `ProductionPOCreatePage.jsx`, `ProductionPOEditPage.jsx` (new), `ProductionPOFinalPage.jsx`, `ProductionPOVerifyPage.jsx`, `QAQueuePage.jsx`, `ReversalPage.jsx`, `OrderListPage.jsx`.
+
+---
+
+## Gate-27.6 Correction — P101 Output Location Authority + INT-Detection Bug Fix
+
+**Date:** 2026-07-11 · **By:** Claude (direct fix, no Codex round-trip — small, well-understood, high-confidence)
+
+**Trigger:** User questioned why `production_segment_location_config` was needed at all, pointing out (a) Stroke Master's `default_storage_location_id` was already made mandatory specifically for this purpose, and (b) `material_master`'s Material Type field already carries RM/PM/FG/SFG/INT. Both were confirmed correct via live DB check.
+
+**Fix 1 — Design conflict resolved (business owner decision):** P101 receipt location (Verify, INT-complete) now resolves via a new `resolveOutputStorageLocationId(strokeMasterId, segConfig)` helper — stroke's `default_storage_location_id` wins whenever a stroke exists (MTO/HPS/MTS/INT), falling back to segment config's `shopfloor_sloc_id` only for MTEST (which has no stroke). Segment config's `rm_sloc_id`/`pm_sloc_id` are unaffected (still govern P261 RM/PM issue defaults). This was already locked for INT specifically in an earlier 2026-07-11 session note but the original §83.4 text and the Gate-27.6 implementation both missed it; now corrected and generalized to all stroke-based types per business owner instruction. Feasibility doc §83.4 "Storage Location Integration" and CLAUDE.md updated with the correction before this code change (design-doc-first).
+
+**Fix 2 — Real bug, not a data gap:** `material_master.production_mode` is NULL on every row in Dev; the actual classification lives in `material_type` (confirmed: RM=48, PM=41, FG=8, SFG=4, INT=1). All INT-detection logic (`checkStockAvailability`'s planned-output credit, `finalizeProcessOrderHandler`'s INT-dependency check, Verify's reco `line_material_type`) was checking the wrong column and would never have fired. Replaced all `production_mode === "INT"` checks with `material_type === "INT"`.
+
+**Bonus locked (same conversation):** Packing PO's storage-location model — no segment-config-style default lookup at all; every line's SLoc comes from Pack BOM (already-locked §83.15 rule: SFG/INPUT row = Stroke default location, FG/OUTPUT row = user-entered) or manual entry for BOM-not-required pack types; stock check always runs against the SLoc value present on the line. Recorded in feasibility doc for when Packing PO's own brief is written (not yet — Packing PO create is still broken/ID-based).
+
+**Verification:** `deno check` on `process_order.handlers.ts` — 0 file-anchored errors (unchanged from before, only pre-existing shared-typing errors remain). Grep confirms zero remaining `production_mode` references in the file.
+
+**Files:** `process_order.handlers.ts`, feasibility doc (§83.4 Storage Location Integration + Packing PO PR09 section), `CLAUDE.md`. No migration needed (both fixes are logic-only, no schema change).

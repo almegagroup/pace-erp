@@ -7953,8 +7953,12 @@ Process PO inherits all 4 locations from its segment at creation time.
 ```
 P261 → RM consumed FROM rm_sloc (e.g. R003 for Liquid)
 P261 → PM consumed FROM pm_sloc (e.g. P003 for Liquid)
-101  → SFG receipt  TO   shopfloor_sloc (e.g. S003)
+101  → SFG receipt  TO   stroke_master.default_storage_location_id (NOT segment config's shopfloor_sloc — see correction below)
 ```
+
+**Correction — SFG/FG output (P101) location authority (LOCKED — 2026-07-11, business owner override):** The output/receipt location for P101 (SFG receipt at Verify, and the equivalent INT/MTEST completion receipt) is **`stroke_master.default_storage_location_id`** — NOT `production_segment_location_config.shopfloor_sloc_id`. This was already locked for INT specifically earlier the same day ("INT... output storage location = Stroke's own default_storage_location_id" — see §83.3's Default Storage Location mandatory-field lock, whose own stated rationale is exactly this P101 posting need) but this original 2026-06-11 section was never updated to match, and it was missed for MTO/HPS/MTS in the Gate-27.6 implementation as a result. The business owner has now confirmed the same rule applies uniformly across **MTO/HPS/MTS/INT/MTEST** — every stroke has a mandatory default output location (per §83.3), so that is always the correct and simplest source of truth, no segment-level config needed for this specific value.
+
+**What segment config still governs (unchanged):** `rm_sloc_id`/`pm_sloc_id` still default the P261 RM/PM issue location (per-line override still allowed at Standard, unchanged). `shopfloor_sloc_id` and `fg_sloc_id` remain relevant only for the separate S003→F003 transfer step below (not yet implemented) — they are no longer read for the P101 receipt posting itself.
 
 **101 → Quality Inspection hold (LOCKED — 2026-07-11):**
 
@@ -8469,6 +8473,8 @@ PO Type = PMTO / PHPS / PMTS / PTEST triggers Packing PO behavior.
 | Std Qty | = Total Packing Qty (KG) |
 | SLoc | S003 (editable) |
 | Movement Type | P261 |
+
+**Packing PO storage-location + stock-check authority (LOCKED — 2026-07-11):** Packing PO does not use any segment-config-style default-location lookup at all. Every line's SLoc comes straight from Pack BOM (SFG/INPUT row's location = that Prodshade's Stroke Master Default Storage Location, per the already-locked §83.15 Pack BOM rule; FG/OUTPUT row's location = whatever was user-entered when the Pack BOM was set up) or, for BOM-not-required pack types (599/000/001), whatever the user manually enters at Standard. **Stock availability check always runs against exactly the SLoc value present on that line at that moment** — there is no separate company/segment default chain for Packing PO, unlike Process PO's RM/PM issue locations.
 
 **INPUT — PM lines:**
 

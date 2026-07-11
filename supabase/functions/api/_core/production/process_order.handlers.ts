@@ -203,7 +203,7 @@ async function fetchOrderLines(orderId: string, strokeMasterId: string | null = 
       materialIds,
       "[process_order.fetchOrderLines]",
       "PROD_PO_FETCH_FAILED",
-      "id, pace_code, material_name, base_uom_code, production_mode, shade_code",
+      "id, pace_code, material_name, base_uom_code, material_type, shade_code",
     ),
     getStorageLocationMapByIds(
       slocIds,
@@ -301,6 +301,30 @@ async function getSegmentLocConfig(companyId: string, segmentCode: string): Prom
     throw new Error("PROD_PO_FETCH_FAILED");
   }
   return (data as JsonRecord | null) ?? null;
+}
+
+// P101 SFG/FG receipt location authority (LOCKED 2026-07-11): stroke_master.default_storage_location_id
+// wins whenever a stroke exists (MTO/HPS/MTS/INT); segment config's shopfloor_sloc_id is only a fallback
+// for stroke-less orders (MTEST). Segment config's rm_sloc_id/pm_sloc_id are unaffected by this correction.
+async function resolveOutputStorageLocationId(
+  strokeMasterId: string | null,
+  segConfig: JsonRecord | null,
+): Promise<string | null> {
+  if (strokeMasterId) {
+    const { data, error } = await serviceRoleClient
+      .schema("erp_production")
+      .from("stroke_master")
+      .select("default_storage_location_id")
+      .eq("id", strokeMasterId)
+      .maybeSingle();
+    if (error) {
+      console.error("[process_order.resolveOutputStorageLocationId] stroke query failed:", JSON.stringify(error));
+      throw new Error("PROD_PO_FETCH_FAILED");
+    }
+    const slocId = toTrimmedString((data as JsonRecord | null)?.default_storage_location_id);
+    if (slocId) return slocId;
+  }
+  return toTrimmedString(segConfig?.shopfloor_sloc_id) || null;
 }
 
 async function postStockMovement(params: {
@@ -651,7 +675,7 @@ async function checkStockAvailability(
   const { data: matRows, error: matErr } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, production_mode")
+    .select("id, material_type")
     .in("id", matIds);
   if (matErr) {
     console.error("[process_order.checkStockAvailability] material query failed:", JSON.stringify(matErr));
@@ -660,7 +684,7 @@ async function checkStockAvailability(
 
   const intMats = new Set(
     ((matRows ?? []) as JsonRecord[])
-      .filter((row) => row.production_mode === "INT")
+      .filter((row) => row.material_type === "INT")
       .map((row) => String(row.id)),
   );
 
@@ -1540,9 +1564,9 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
     if (!segConfig) {
       return poErr(req, ctx, "PROD_PO_SEG_LOC_MISSING", 422, `Segment location config not found for ${po.segment_code}. Configure it first.`);
     }
-    const shopfloorSlocId = toTrimmedString(segConfig.shopfloor_sloc_id) || null;
+    const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, segConfig);
     if (!shopfloorSlocId) {
-      return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Shopfloor storage location not configured for this segment");
+      return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
     }
 
     const today = todayIso();
@@ -1703,7 +1727,7 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
     const intNeeded = new Map<string, number>();
     for (const line of allLines) {
       const material = line.material as JsonRecord | null;
-      if (material?.production_mode === "INT") {
+      if (material?.material_type === "INT") {
         const materialId = String(line.material_id);
         const qty = Number(line.actual_qty ?? line.planned_qty ?? 0);
         intNeeded.set(materialId, (intNeeded.get(materialId) ?? 0) + qty);
@@ -1797,9 +1821,9 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       return poErr(req, ctx, "PROD_PO_SEG_LOC_MISSING", 422, `Segment location config not found for ${po.segment_code}. Configure it first.`);
     }
 
-    const shopfloorSlocId = toTrimmedString(segConfig.shopfloor_sloc_id) || null;
+    const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, segConfig);
     if (!shopfloorSlocId) {
-      return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Shopfloor storage location not configured for this segment");
+      return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
     }
 
     const today = todayIso();
@@ -1924,7 +1948,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       process_order_id: po.id,
       process_order_line_id: line.id,
       material_id: line.material_id,
-      line_material_type: (line.material as JsonRecord | null)?.production_mode === "INT" ? "INT" : "RM",
+      line_material_type: (line.material as JsonRecord | null)?.material_type === "INT" ? "INT" : "RM",
       dosage_pct: line.dosage_pct ?? null,
       actual_material_id: line.actual_material_id ?? null,
       storage_location_id: line.issue_sloc_id ?? (line.is_rm ? segConfig.rm_sloc_id : segConfig.pm_sloc_id) ?? null,
@@ -2058,7 +2082,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
         ledgerEntries.push({ line_id: line.id, movement: "P262", direction: "IN", ...posting });
       }
 
-      const shopfloorSlocId = toTrimmedString(segConfig.shopfloor_sloc_id) || null;
+      const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, segConfig);
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
 
       if (po.qi_release_stock_ledger_id && shopfloorSlocId) {

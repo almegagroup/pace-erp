@@ -452,19 +452,20 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - Fixed alongside: `active`/`is_active` field-name mismatch (Active toggle silently did nothing), `current_count` edit was silently dropped by backend, SA config page had raw-UUID company/prodshade inputs (now comboboxes)
 - Files: `supabase/functions/api/_core/production/batch_series.handlers.ts`, `process_order.handlers.ts` (startBatchHandler batchTypeMap), `frontend/src/admin/sa/screens/SAProductionBatchSeriesPage.jsx`
 
-**⚠️ PENDING (next session):**
-- P261 issue location override — not yet confirmed by user
-- S003 → F003 transfer trigger — who, when (not yet discussed)
-- 83.4 Process PO / Packing PO header + line fields (not yet discussed)
-- 83.6, 83.8–83.12 review and lock
-- Section 104 dedicated costing session (see 104.7 open items above)
+**83.4/83.3 — SFG/FG output (P101) location authority corrected (LOCKED — 2026-07-11, business owner override):** P101 receipt location (Verify, and INT/MTEST completion) is `stroke_master.default_storage_location_id` — **not** `production_segment_location_config.shopfloor_sloc_id`. This was already locked for INT specifically (see 83.5 line above) but the original §83.4 "Storage Location Integration" text (2026-06-11) was never corrected to match, and Gate-27.6's implementation missed it for MTO/HPS/MTS too. Business owner confirmed the rule is uniform across MTO/HPS/MTS/INT/MTEST — every stroke has a mandatory default output location (83.3), so segment config is not needed for this value. Segment config's `rm_sloc_id`/`pm_sloc_id` still govern P261 RM/PM issue defaults (unchanged). **Code fix pending** — `process_order.handlers.ts`'s `verifyProcessOrderHandler`, `completeIntProcessOrderHandler`, and the MTEST branch of `createProcessOrderHandler` all currently read `segConfig.shopfloor_sloc_id` for the P101 target and need to switch to the stroke's `default_storage_location_id`.
+
+**Bug found (not a design gap) — INT detection checks the wrong column (2026-07-11):** `checkStockAvailability()`, `finalizeProcessOrderHandler`'s INT-dependency check, and the Verify reco `line_material_type` classification all filter on `material.production_mode === "INT"` — but `production_mode` is NULL on every material in Dev. The real classification lives in `material_master.material_type` (confirmed populated: RM=48, PM=41, FG=8, SFG=4, INT=1). Code fix pending — replace `production_mode` checks with `material_type = 'INT'`.
+
+**Packing PO storage-location authority (LOCKED — 2026-07-11):** No segment-config-style default lookup for Packing PO at all — every line's SLoc comes from Pack BOM (SFG/INPUT row = Stroke's default location per 83.15; FG/OUTPUT row = user-entered when Pack BOM was set up) or manual entry for BOM-not-required pack types. Stock check always runs against the SLoc value present on the line at that moment — see §83.4 PR09 Packing PO mode in the feasibility doc.
 
 **🚧 Gate-27 IMPLEMENTATION IN PROGRESS (started 2026-07-11) — READ THIS ON SESSION START:**
 Design is locked; now implementing via the Claude/Codex loop. The full ordered task sequence, Codex run command, guardrails, and Claude verification protocol live in **`docs/Operation Management/implementation-specs/GATE27-CODEX-DRIVER-GUIDE.md`** — read it before touching Gate-27 code.
 - ✅ **27.3** Process PO Create 400 fix — DONE + committed `25b450e`.
-- 🟢 **27.4** Reservation + Prune (migration + backend) — brief written & ready (`CODEX-GATE27.4-...`); has 1 open interim decision (material+company netting vs per-location) — default proceed.
-- 🟢 **27.5** QA Queue (PR16) field/R-01 display fix — brief written & ready (`CODEX-GATE27.5-...`).
-- ⚪ 27.6–27.13 — sequence listed in the driver guide; briefs to be written on return.
+- ✅ **27.4** Reservation + Prune — DONE + committed `b93f462` (Codex-run, Claude-verified, migration applied to Dev).
+- ✅ **27.5** QA Queue (PR16) field/R-01 display fix — DONE + committed `b93f462`.
+- ✅ **27.6** Process PO full chain (Standard→QA→PR10 Edit→Start Batch→Final→Verify→CORS + reco table) — DONE + committed `26ef4d8` (Codex-run, Claude-verified — 2 issues caught+fixed: unauthorized doc edits reverted, CORS reason-mandatory gap closed).
+- 🔴 **Immediate follow-up (before more Gate-27 work):** the 2 code fixes above (P101 location authority + production_mode→material_type) still need to land in `process_order.handlers.ts`.
+- ⚪ 27.11 (PR16 full rebuild + real PR17), 27.13 (MTEST page polish), Packing PO (still broken/ID-based, not yet rebuilt) — not yet briefed.
 - On return: verify any Codex-run tasks per the driver guide §4, apply migrations to Dev via MCP, update `OM-IMPLEMENTATION-LOG.md`, then continue.
 
 ---
