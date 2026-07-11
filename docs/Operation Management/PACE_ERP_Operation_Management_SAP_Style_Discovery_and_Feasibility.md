@@ -8097,10 +8097,10 @@ Material + Batch Number + Packing PO ref + FO ref (NULL or populated) + Qty + Lo
 
 | Rule | Detail |
 |---|---|
-| Available at | QA_APPROVED and BATCH_STARTED — closes after Final is saved (VERIFIED = no PR10) |
-| Status after edit | **Stays QA_APPROVED / BATCH_STARTED** — no re-approval needed |
-| **RM Qty change** | ✅ **Only this** — Standard Qty auto-recalculates, reservation document auto-updates |
-| **Machine assignment** | ✅ **Only this** — can change machine while batch is approved/started |
+| Available at | **QA_APPROVED only** — closes the moment Start Batch is clicked (corrected 2026-07-12; struck the earlier "and BATCH_STARTED" claim, which conflicted with this same section's own status-flow summary. Once BATCH_STARTED, no PR10 — the batch is physically committed) |
+| Status after edit | **Stays QA_APPROVED** — no re-approval needed |
+| **RM Qty change** | ✅ **Only this** — recalculates every line's Standard Qty (Dosage% × new Batch Size) and auto-updates each line's reservation Required Qty to match, live |
+| **Machine assignment** | ✅ **Only this** — can change machine while still QA_APPROVED |
 | Stroke change | ❌ Blocked |
 | Alternate material | ❌ Blocked — handled at Final via Actual Material column |
 | SLoc change | ❌ Blocked — set at Standard, editable at Final/Verify |
