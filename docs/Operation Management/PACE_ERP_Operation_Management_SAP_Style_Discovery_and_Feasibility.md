@@ -8177,10 +8177,13 @@ Search key = **Company + PO Type** (NOT Prodshade — Prodshade was wrong, that'
 | Previous Prodshade | Prodshade of the voided PO |
 | Previous Stroke | Stroke number of the voided PO |
 | Machine Name | Machine assigned on the voided PO |
+| **Status** | VOIDED / RELEASED — row stays in the list after release, doesn't disappear *(added 2026-07-11)* |
+| **Released By** | Blank until released, then the releasing Manager's name *(added 2026-07-11)* |
+| **Reason** | Blank until released, then the mandatory reason text *(added 2026-07-11)* |
 
-**Action:** Row select → **[Release]** button → **Reason mandatory (text field)** → Batch number: VOIDED → **RELEASED**
+**Action:** Row select (only VOIDED rows are selectable) → **[Release]** button → modal opens, **Reason mandatory (text field)** → Confirm → Batch number: VOIDED → **RELEASED**, row updates in place (Status/Released By/Reason populate) rather than disappearing.
 
-> Released batch numbers appear in Start Batch drawer for same Company + PO Type. Once assigned to a new PO (RELEASED + ACTIVE), they no longer appear in the drawer.
+> Released batch numbers appear in Start Batch drawer for same Company + PO Type. Once assigned to a new PO (RELEASED + ACTIVE), they no longer appear in the drawer (but this PR17 table keeps showing them as RELEASED history).
 
 ---
 
