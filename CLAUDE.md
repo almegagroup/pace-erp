@@ -387,6 +387,11 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - SFG Result Recording page = exact identical mechanism to the existing Inward QA page (same qa_test_method_master/qa_category_test_config infra, same workflow) — build as a direct clone, not a fresh design
 - STO/Location Transfer reservation implementation details deferred to later
 
+**83.4 — Verify Usage Decision = P321 (LOCKED — 2026-07-11):**
+- MTO/HPS/MTS Verify posts 3 ledger entries in one transaction: P261 (RM/PM/INT issue) → P101 (SFG receipt IN to QUALITY_INSPECTION) → P321 "QA → Unrestricted" (auto-release, same code Inward QA's Release decision uses)
+- INT/MTEST skip P321 — their P101 targets Unrestricted directly
+- Deferred/not designed: QA later routing a partial qty to Blocked instead (P323/P344) — acknowledged, doesn't change the P321 design
+
 **83.5 — Reservation sources + 101 QI-hold exceptions (LOCKED — 2026-07-11):**
 - Reservation now keyed by material+plant+**storage location** (not just material+plant)
 - 5 reservation sources resolved: Process PO (Standard→Verify), Packing PO (Standard-equiv→Final), Sales Order (Dispatch Instruction created→P601), STO (same Dispatch Instruction doc type→P601), Location Transfer/P311 (created→posted)

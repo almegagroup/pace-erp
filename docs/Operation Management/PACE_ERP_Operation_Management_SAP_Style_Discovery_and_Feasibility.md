@@ -7965,6 +7965,10 @@ P261 → PM consumed FROM pm_sloc (e.g. P003 for Liquid)
 
 **Release mechanism for MTO/HPS/MTS:** No separate QA-release screen — the Verify (PR12) action itself is performed by QA, so QI → Unrestricted release happens automatically within the same Verify transaction. **However, a separate "SFG Result Recording" page is still needed** to log the lab/quality test result for that batch (distinct from the qty-verify action itself).
 
+**Usage Decision movement type = P321 (LOCKED — 2026-07-11):** The auto-release is posted as `movement_type_master` code **P321 "QA → Unrestricted"** — the same Usage-Decision "Release" code GRN's Inward QA already uses. So a MTO/HPS/MTS Verify posts three ledger entries in one transaction: P261 (RM/PM/INT issue) → P101 (SFG receipt, IN to QUALITY_INSPECTION) → **P321** (QI → Unrestricted, immediate auto-release). INT/MTEST skip P321 entirely since their P101 targets Unrestricted directly.
+
+> **Deferred (not designed yet):** QA may later want to take a *partial* qty from that same batch and route it to Blocked instead of Unrestricted (e.g. `P323 "QA → Blocked"` or a post-release `P344`) — acknowledged as a future capability, does not change the P321 auto-release design above.
+
 > **Confirmed 2026-07-11:** SFG Result Recording is an **exact identical mechanism to the existing Inward QA page** — same `qa_test_method_master` / `qa_category_test_config` infrastructure, same UI/workflow pattern — only the context changes (SFG batch from Process PO Verify, instead of vendor GRN). Build it as a direct clone of Inward QA's mechanism, not a fresh design.
 
 **P261 Issue Location — Default Chain:**
