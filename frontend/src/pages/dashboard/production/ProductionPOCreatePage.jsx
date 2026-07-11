@@ -8,12 +8,19 @@
  * Authority: Frontend
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery } from "../../../hooks/queries/useOmMasterQueries.js";
-import { createProcessOrder, createPackingOrder, listApprovedProdshades, listStrokeMasters } from "./prodApi.js";
+import { useCompaniesForOmQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import {
+  availabilityPreviewProcessOrder,
+  createProcessOrder,
+  createPackingOrder,
+  getStrokeMaster,
+  listApprovedProdshades,
+  listStrokeMasters,
+} from "./prodApi.js";
 import { listMachines } from "../om/omApi.js";
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
@@ -57,6 +64,10 @@ function machineLabel(machine) {
   return [machine.machine_code, machine.machine_name].filter(Boolean).join(" - ");
 }
 
+function storageLocationLabel(location) {
+  return [location.code || location.location_code, location.name || location.location_name].filter(Boolean).join(" - ");
+}
+
 export default function ProductionPOCreatePage() {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState(0);
@@ -64,6 +75,8 @@ export default function ProductionPOCreatePage() {
   const [saving, setSaving] = useState(false);
   const [processForm, setProcessForm] = useState({ ...EMPTY_PROCESS });
   const [packingForm, setPackingForm] = useState({ ...EMPTY_PACKING });
+  const [lineLocationOverrides, setLineLocationOverrides] = useState({});
+  const [debouncedCreatePreview, setDebouncedCreatePreview] = useState([]);
 
   const companiesQ = useCompaniesForOmQuery();
   const companies = companiesQ.data ?? [];
@@ -96,6 +109,11 @@ export default function ProductionPOCreatePage() {
     () => (strokesQ.data ?? []).map((stroke) => ({ value: stroke.id, label: strokeLabel(stroke) })),
     [strokesQ.data],
   );
+  const strokeDetailQ = useQuery({
+    queryKey: ["production-create-stroke-detail", processForm.stroke_master_id],
+    queryFn: () => getStrokeMaster(processForm.stroke_master_id),
+    enabled: Boolean(processForm.stroke_master_id && processForm.po_type !== "MTEST"),
+  });
 
   const machinesQ = useQuery({
     queryKey: ["production-create-machines", processForm.company_id],
@@ -107,8 +125,81 @@ export default function ProductionPOCreatePage() {
     () => (machinesQ.data ?? []).map((machine) => ({ value: machine.id, label: machineLabel(machine) || "Machine" })),
     [machinesQ.data],
   );
+  const storageLocationQ = useStorageLocationOptionsQuery(
+    { company_id: processForm.company_id || undefined },
+    { enabled: Boolean(processForm.company_id) },
+  );
+  const storageLocationOptions = useMemo(
+    () => (storageLocationQ.storageLocations ?? []).map((location) => ({
+      value: location.id,
+      label: storageLocationLabel(location) || "Storage Location",
+    })),
+    [storageLocationQ.storageLocations],
+  );
 
   const machineRequired = ["MTO", "HPS", "MTS", "INT"].includes(processForm.po_type);
+  const strokeLines = Array.isArray(strokeDetailQ.data?.lines) ? strokeDetailQ.data.lines : [];
+  const strokePreviewRows = useMemo(
+    () => strokeLines.map((line) => {
+      const selectedStorageLocationId = lineLocationOverrides[line.material_id]
+        || line.default_storage_location_id
+        || "";
+      const plannedQty = (Number(line.dosage_pct ?? 0) / 100) * Number(processForm.planned_qty_kg || 0);
+      return {
+        material_id: line.material_id,
+        material_label: prodshadeLabel(line.material || {}) || line.material?.material_name || "--",
+        dosage_pct: Number(line.dosage_pct ?? 0),
+        planned_qty: plannedQty,
+        default_storage_location_id: line.default_storage_location_id || "",
+        storage_location_id: selectedStorageLocationId,
+      };
+    }),
+    [lineLocationOverrides, processForm.planned_qty_kg, strokeLines],
+  );
+
+  useEffect(() => {
+    setLineLocationOverrides({});
+  }, [processForm.company_id, processForm.po_type, processForm.stroke_master_id]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedCreatePreview(
+        strokePreviewRows
+          .filter((row) => row.storage_location_id && row.storage_location_id !== row.default_storage_location_id)
+          .map((row) => ({
+            material_id: row.material_id,
+            storage_location_id: row.storage_location_id,
+          })),
+      );
+    }, 400);
+    return () => window.clearTimeout(timeoutId);
+  }, [strokePreviewRows]);
+
+  const availabilityPreviewQ = useQuery({
+    queryKey: [
+      "production-create-availability-preview",
+      processForm.company_id,
+      processForm.stroke_master_id,
+      processForm.planned_qty_kg,
+      debouncedCreatePreview,
+    ],
+    queryFn: () => availabilityPreviewProcessOrder({
+      company_id: processForm.company_id,
+      stroke_master_id: processForm.stroke_master_id,
+      planned_qty: processForm.planned_qty_kg,
+      overrides: debouncedCreatePreview,
+    }),
+    enabled: Boolean(
+      processForm.company_id
+      && processForm.po_type !== "MTEST"
+      && processForm.stroke_master_id
+      && Number(processForm.planned_qty_kg || 0) > 0,
+    ),
+  });
+  const availabilityByKey = useMemo(
+    () => new Map((availabilityPreviewQ.data ?? []).map((row) => [`${row.material_id}::${row.storage_location_id}`, row])),
+    [availabilityPreviewQ.data],
+  );
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -160,6 +251,12 @@ export default function ProductionPOCreatePage() {
         planned_qty_kg: Number(processForm.planned_qty_kg),
         planned_start_date: processForm.planned_start_date || undefined,
         notes: processForm.notes || undefined,
+        line_location_overrides: strokePreviewRows
+          .filter((row) => row.storage_location_id && row.storage_location_id !== row.default_storage_location_id)
+          .map((row) => ({
+            material_id: row.material_id,
+            storage_location_id: row.storage_location_id,
+          })),
       };
       const result = await createProcessOrder(payload);
       toast(`Process PO created${result?.po_number ? `: ${result.po_number}` : "."}`);
@@ -327,6 +424,56 @@ export default function ProductionPOCreatePage() {
                 />
               </div>
             </div>
+
+            {processForm.po_type !== "MTEST" && processForm.company_id && processForm.prodshade_material_id && processForm.stroke_master_id && Number(processForm.planned_qty_kg || 0) > 0 && (
+              <div className="rounded-lg border border-slate-200 bg-white">
+                <div className="border-b border-slate-200 px-4 py-3">
+                  <h3 className="text-sm font-semibold text-slate-800">RM Location Preview</h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[980px] border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                        <th className="border-b px-3 py-2 text-left">Formulation Material</th>
+                        <th className="border-b px-3 py-2 text-right">Dosage%</th>
+                        <th className="border-b px-3 py-2 text-right">Planned Qty</th>
+                        <th className="border-b px-3 py-2 text-left">Storage Location</th>
+                        <th className="border-b px-3 py-2 text-right">Available</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {strokePreviewRows.map((row) => {
+                        const availability = row.storage_location_id
+                          ? availabilityByKey.get(`${row.material_id}::${row.storage_location_id}`) ?? null
+                          : null;
+                        const isShort = Boolean(availability?.short);
+                        return (
+                          <tr key={row.material_id} className={isShort ? "bg-rose-50" : "border-b border-slate-100"}>
+                            <td className="border-b border-slate-100 px-3 py-2">{row.material_label || "--"}</td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{row.dosage_pct.toFixed(3)}</td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{row.planned_qty.toFixed(3)}</td>
+                            <td className="border-b border-slate-100 px-3 py-2">
+                              <ErpComboboxField
+                                value={row.storage_location_id}
+                                onChange={(value) => {
+                                  setLineLocationOverrides((current) => ({ ...current, [row.material_id]: value }));
+                                }}
+                                options={storageLocationOptions}
+                                placeholder="-- Select storage location --"
+                                emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                              />
+                            </td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
+                              {availability ? availability.available_qty.toFixed(3) : "--"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             <div className="flex gap-2 pt-2">
               <button

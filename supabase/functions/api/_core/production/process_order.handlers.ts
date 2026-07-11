@@ -29,6 +29,14 @@ import { generateCompanyDocNumber } from "./production.utils.ts";
 
 type JsonRecord = Record<string, unknown>;
 type StockPostingResult = { stock_document_id: string; stock_ledger_id: string };
+type AvailabilityNeed = { materialId: string; storageLocationId: string; qty: number };
+type AvailabilityRow = {
+  material_id: string;
+  storage_location_id: string;
+  needed_qty: number;
+  available_qty: number;
+  short: boolean;
+};
 
 const VALID_PO_TYPES = new Set(["MTO", "HPS", "MTS", "INT", "MTEST"]);
 const VALID_SEGMENTS = new Set(["ADMIX", "HPS", "IWC", "POWDER", "INT"]);
@@ -288,43 +296,19 @@ async function resetReservationsForProcessOrder(id: string, userId: string, now:
   }
 }
 
-async function getSegmentLocConfig(companyId: string, segmentCode: string): Promise<JsonRecord | null> {
+async function resolveOutputStorageLocationId(strokeMasterId: string | null): Promise<string | null> {
+  if (!strokeMasterId) return null;
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
-    .from("production_segment_location_config")
-    .select("rm_sloc_id, pm_sloc_id, shopfloor_sloc_id, fg_sloc_id")
-    .eq("company_id", companyId)
-    .eq("segment_code", segmentCode)
+    .from("stroke_master")
+    .select("default_storage_location_id")
+    .eq("id", strokeMasterId)
     .maybeSingle();
   if (error) {
-    console.error("[process_order.getSegmentLocConfig] query failed:", JSON.stringify(error));
+    console.error("[process_order.resolveOutputStorageLocationId] stroke query failed:", JSON.stringify(error));
     throw new Error("PROD_PO_FETCH_FAILED");
   }
-  return (data as JsonRecord | null) ?? null;
-}
-
-// P101 SFG/FG receipt location authority (LOCKED 2026-07-11): stroke_master.default_storage_location_id
-// wins whenever a stroke exists (MTO/HPS/MTS/INT); segment config's shopfloor_sloc_id is only a fallback
-// for stroke-less orders (MTEST). Segment config's rm_sloc_id/pm_sloc_id are unaffected by this correction.
-async function resolveOutputStorageLocationId(
-  strokeMasterId: string | null,
-  segConfig: JsonRecord | null,
-): Promise<string | null> {
-  if (strokeMasterId) {
-    const { data, error } = await serviceRoleClient
-      .schema("erp_production")
-      .from("stroke_master")
-      .select("default_storage_location_id")
-      .eq("id", strokeMasterId)
-      .maybeSingle();
-    if (error) {
-      console.error("[process_order.resolveOutputStorageLocationId] stroke query failed:", JSON.stringify(error));
-      throw new Error("PROD_PO_FETCH_FAILED");
-    }
-    const slocId = toTrimmedString((data as JsonRecord | null)?.default_storage_location_id);
-    if (slocId) return slocId;
-  }
-  return toTrimmedString(segConfig?.shopfloor_sloc_id) || null;
+  return toTrimmedString((data as JsonRecord | null)?.default_storage_location_id) || null;
 }
 
 async function postStockMovement(params: {
@@ -382,10 +366,25 @@ async function fetchProductionMaterialBaseUom(materialId: string): Promise<strin
   return String((data as JsonRecord | null)?.base_uom_code ?? "KG");
 }
 
-function getIssueStorageLocationId(line: JsonRecord, segConfig: JsonRecord): string | null {
-  return toTrimmedString(
-    line.issue_sloc_id || (line.is_rm ? segConfig.rm_sloc_id : segConfig.pm_sloc_id),
-  ) || null;
+function getIssueStorageLocationId(line: JsonRecord): string | null {
+  return toTrimmedString(line.issue_sloc_id) || null;
+}
+
+function buildAvailabilityKey(materialId: string, storageLocationId: string): string {
+  return `${materialId}::${storageLocationId}`;
+}
+
+function buildLineLocationOverrideMap(overrides: unknown): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!Array.isArray(overrides)) return map;
+  for (const entry of overrides as JsonRecord[]) {
+    const materialId = toTrimmedString(entry.material_id);
+    const storageLocationId = toTrimmedString(entry.storage_location_id);
+    if (materialId && storageLocationId) {
+      map.set(materialId, storageLocationId);
+    }
+  }
+  return map;
 }
 
 function computeApprovalValues(
@@ -475,9 +474,34 @@ async function applyFinalOrVerifyLineUpdates(params: {
       const registeredAlternateId = toTrimmedString(
         strokeAlternates.get(String(existingLine.material_id))?.alternate_material_id,
       ) || null;
+      const nextStorageLocationId = toTrimmedString(bodyLine.storage_location_id) || null;
+      const currentStorageLocationId = toTrimmedString(existingLine.issue_sloc_id) || null;
 
       if (!nextActualMaterialId || nextActualMaterialId === String(existingLine.material_id)) {
         nextActualMaterialId = null;
+      }
+
+      if (nextStorageLocationId && nextStorageLocationId !== currentStorageLocationId) {
+        const reservation = existingReservationMap.get(String(existingLine.id)) ?? null;
+        if (reservation && RESERVATION_OPEN_STATUSES.includes(String(reservation.status ?? ""))) {
+          const { error: reservationLocationErr } = await serviceRoleClient
+            .schema("erp_production")
+            .from("reservation_document")
+            .update({
+              storage_location_id: nextStorageLocationId,
+              last_updated_by: ctx.auth_user_id,
+              last_updated_at: now,
+            })
+            .eq("id", reservation.id as string);
+          if (reservationLocationErr) {
+            console.error("[process_order.applyFinalOrVerifyLineUpdates] reservation location update failed:", JSON.stringify(reservationLocationErr));
+            throw new Error("PROD_PO_LINE_UPDATE_FAILED");
+          }
+          existingReservationMap.set(String(existingLine.id), {
+            ...reservation,
+            storage_location_id: nextStorageLocationId,
+          });
+        }
       }
 
       if (nextActualMaterialId !== currentActualMaterialId) {
@@ -513,7 +537,7 @@ async function applyFinalOrVerifyLineUpdates(params: {
               source_line_id: existingLine.id,
               company_id: po.company_id,
               material_id: swapMaterialId,
-              storage_location_id: reservation.storage_location_id ?? existingLine.issue_sloc_id ?? null,
+              storage_location_id: nextStorageLocationId ?? reservation.storage_location_id ?? currentStorageLocationId ?? null,
               required_qty: reservation.required_qty,
               uom_code: reservation.uom_code ?? existingLine.uom_code ?? "KG",
               required_by_date: plannedStartDate,
@@ -543,6 +567,7 @@ async function applyFinalOrVerifyLineUpdates(params: {
           ap_approved_qty: approval.ap_approved_qty,
           variance_qty: approval.variance_qty,
           actual_material_id: nextActualMaterialId,
+          issue_sloc_id: nextStorageLocationId ?? currentStorageLocationId,
         })
         .eq("id", existingLine.id as string)
         .eq("process_order_id", orderId);
@@ -568,7 +593,7 @@ async function applyFinalOrVerifyLineUpdates(params: {
         planned_qty: 0,
         actual_qty: actualQty,
         uom_code: toTrimmedString(bodyLine.uom_code) || "KG",
-        issue_sloc_id: null,
+        issue_sloc_id: toTrimmedString(bodyLine.storage_location_id) || null,
         is_rm: bodyLine.is_rm !== false,
         display_order: nextDisplayOrder++,
         dosage_pct: parseNonNegativeNumber(bodyLine.dosage_pct),
@@ -602,7 +627,7 @@ async function applyFinalOrVerifyLineUpdates(params: {
         source_line_id: insertedLineRecord.id,
         company_id: po.company_id,
         material_id: materialId,
-        storage_location_id: null,
+        storage_location_id: toTrimmedString(insertedLineRecord.issue_sloc_id) || null,
         required_qty: 0,
         uom_code: toTrimmedString(insertedLineRecord.uom_code) || "KG",
         required_by_date: plannedStartDate,
@@ -629,20 +654,24 @@ async function applyFinalOrVerifyLineUpdates(params: {
   };
 }
 
-async function checkStockAvailability(
+async function computeAvailabilityRows(
   companyId: string,
-  needed: Map<string, number>,
-): Promise<{ material_id: string; needed: number; available: number }[]> {
-  const matIds = Array.from(needed.keys());
-  if (matIds.length === 0) return [];
+  needed: Map<string, AvailabilityNeed>,
+): Promise<AvailabilityRow[]> {
+  const needs = Array.from(needed.values()).filter((entry) => entry.materialId && entry.storageLocationId && entry.qty > 0);
+  if (needs.length === 0) return [];
+
+  const materialIds = [...new Set(needs.map((entry) => entry.materialId))];
+  const locationIds = [...new Set(needs.map((entry) => entry.storageLocationId))];
 
   const { data: ledgerRows, error: ledgerErr } = await serviceRoleClient
     .schema("erp_inventory")
     .from("stock_ledger")
-    .select("material_id, direction, quantity")
+    .select("material_id, storage_location_id, direction, quantity")
     .eq("company_id", companyId)
     .eq("stock_type_code", "UNRESTRICTED")
-    .in("material_id", matIds);
+    .in("material_id", materialIds)
+    .in("storage_location_id", locationIds);
   if (ledgerErr) {
     console.error("[process_order.checkStockAvailability] ledger query failed:", JSON.stringify(ledgerErr));
     throw new Error("PROD_PO_STOCK_CHECK_FAILED");
@@ -650,33 +679,34 @@ async function checkStockAvailability(
 
   const available = new Map<string, number>();
   for (const row of (ledgerRows ?? []) as JsonRecord[]) {
-    const mid = String(row.material_id);
+    const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
     const qty = Number(row.quantity ?? 0);
-    available.set(mid, (available.get(mid) ?? 0) + (String(row.direction) === "IN" ? qty : -qty));
+    available.set(key, (available.get(key) ?? 0) + (String(row.direction) === "IN" ? qty : -qty));
   }
 
   const { data: reservationRows, error: reservationErr } = await serviceRoleClient
     .schema("erp_production")
     .from("reservation_document")
-    .select("material_id, balance_qty")
+    .select("material_id, storage_location_id, balance_qty")
     .eq("company_id", companyId)
-    .in("material_id", matIds)
+    .in("material_id", materialIds)
+    .in("storage_location_id", locationIds)
     .in("status", RESERVATION_OPEN_STATUSES);
   if (reservationErr) {
     console.error("[process_order.checkStockAvailability] reservation query failed:", JSON.stringify(reservationErr));
     throw new Error("PROD_PO_STOCK_CHECK_FAILED");
   }
   for (const row of (reservationRows ?? []) as JsonRecord[]) {
-    const mid = String(row.material_id);
+    const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
     const qty = Number(row.balance_qty ?? 0);
-    available.set(mid, (available.get(mid) ?? 0) - qty);
+    available.set(key, (available.get(key) ?? 0) - qty);
   }
 
   const { data: matRows, error: matErr } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
     .select("id, material_type")
-    .in("id", matIds);
+    .in("id", materialIds);
   if (matErr) {
     console.error("[process_order.checkStockAvailability] material query failed:", JSON.stringify(matErr));
     throw new Error("PROD_PO_STOCK_CHECK_FAILED");
@@ -692,7 +722,7 @@ async function checkStockAvailability(
     const { data: intPOs, error: intErr } = await serviceRoleClient
       .schema("erp_production")
       .from("process_order")
-      .select("material_id, planned_qty, actual_qty")
+      .select("material_id, planned_qty, actual_qty, stroke_master_id")
       .eq("company_id", companyId)
       .eq("po_type", "INT")
       .in("status", ["STANDARD", "QA_APPROVED", "BATCH_STARTED", "FINAL"])
@@ -702,21 +732,164 @@ async function checkStockAvailability(
       throw new Error("PROD_PO_STOCK_CHECK_FAILED");
     }
 
+    const strokeIds = [...new Set(
+      ((intPOs ?? []) as JsonRecord[])
+        .map((row) => toTrimmedString(row.stroke_master_id))
+        .filter(Boolean),
+    )];
+    const strokeLocationMap = new Map<string, string>();
+    if (strokeIds.length > 0) {
+      const { data: strokeRows, error: strokeErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("stroke_master")
+        .select("id, default_storage_location_id")
+        .in("id", strokeIds);
+      if (strokeErr) {
+        console.error("[process_order.checkStockAvailability] int stroke query failed:", JSON.stringify(strokeErr));
+        throw new Error("PROD_PO_STOCK_CHECK_FAILED");
+      }
+      for (const strokeRow of (strokeRows ?? []) as JsonRecord[]) {
+        const strokeId = String(strokeRow.id);
+        const storageLocationId = toTrimmedString(strokeRow.default_storage_location_id);
+        if (strokeId && storageLocationId) {
+          strokeLocationMap.set(strokeId, storageLocationId);
+        }
+      }
+    }
+
     for (const row of (intPOs ?? []) as JsonRecord[]) {
-      const mid = String(row.material_id);
+      const storageLocationId = strokeLocationMap.get(toTrimmedString(row.stroke_master_id) || "");
+      if (!storageLocationId) continue;
+      const key = buildAvailabilityKey(String(row.material_id), storageLocationId);
       const qty = Number(row.actual_qty ?? row.planned_qty ?? 0);
-      available.set(mid, (available.get(mid) ?? 0) + qty);
+      available.set(key, (available.get(key) ?? 0) + qty);
     }
   }
 
-  const short: { material_id: string; needed: number; available: number }[] = [];
-  for (const [mid, neededQty] of needed.entries()) {
-    const avail = available.get(mid) ?? 0;
-    if (avail < neededQty - EPSILON) {
-      short.push({ material_id: mid, needed: neededQty, available: Math.max(0, avail) });
+  return Array.from(needed.entries()).map(([, entry]) => {
+    const key = buildAvailabilityKey(entry.materialId, entry.storageLocationId);
+    const availableQty = Math.max(0, available.get(key) ?? 0);
+    return {
+      material_id: entry.materialId,
+      storage_location_id: entry.storageLocationId,
+      needed_qty: entry.qty,
+      available_qty: availableQty,
+      short: availableQty < entry.qty - EPSILON,
+    };
+  });
+}
+
+async function checkStockAvailability(
+  companyId: string,
+  needed: Map<string, AvailabilityNeed>,
+): Promise<AvailabilityRow[]> {
+  const rows = await computeAvailabilityRows(companyId, needed);
+  return rows.filter((row) => row.short);
+}
+
+export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const strokeMasterId = toTrimmedString(url.searchParams.get("stroke_master_id") ?? "");
+    const processOrderId = toTrimmedString(url.searchParams.get("process_order_id") ?? "");
+    const plannedQty = parsePositiveNumber(url.searchParams.get("planned_qty") ?? "");
+    const overridesRaw = url.searchParams.get("overrides") ?? "[]";
+
+    if (!companyId) {
+      return poErr(req, ctx, "PROD_PO_INVALID", 400, "company_id required");
     }
+
+    let overrides: JsonRecord[] = [];
+    try {
+      const parsed = JSON.parse(overridesRaw);
+      overrides = Array.isArray(parsed) ? (parsed as JsonRecord[]) : [];
+    } catch {
+      return poErr(req, ctx, "PROD_PO_INVALID", 400, "overrides must be valid JSON");
+    }
+
+    const needed = new Map<string, AvailabilityNeed>();
+
+    if (processOrderId) {
+      const po = await fetchProcessOrder(processOrderId);
+      if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Process order not found");
+      const lines = await fetchOrderLines(processOrderId, toTrimmedString(po.stroke_master_id) || null);
+      const lineOverrides = new Map<string, JsonRecord>();
+      const additionalOverrides: JsonRecord[] = [];
+
+      for (const entry of overrides) {
+        const lineId = toTrimmedString(entry.line_id);
+        if (lineId) lineOverrides.set(lineId, entry);
+        else additionalOverrides.push(entry);
+      }
+
+      for (const line of lines) {
+        const override = lineOverrides.get(String(line.id)) ?? null;
+        const materialId = toTrimmedString(override?.material_id) || String(line.material_id);
+        const storageLocationId = toTrimmedString(override?.storage_location_id) || toTrimmedString(line.issue_sloc_id) || null;
+        const qty = parseNonNegativeNumber(override?.qty ?? line.actual_qty ?? line.planned_qty);
+        if (!materialId || !storageLocationId || qty === null || qty <= 0) continue;
+        const key = buildAvailabilityKey(materialId, storageLocationId);
+        const current = needed.get(key);
+        needed.set(key, {
+          materialId,
+          storageLocationId,
+          qty: (current?.qty ?? 0) + qty,
+        });
+      }
+
+      for (const entry of additionalOverrides) {
+        const materialId = toTrimmedString(entry.material_id);
+        const storageLocationId = toTrimmedString(entry.storage_location_id);
+        const qty = parseNonNegativeNumber(entry.qty);
+        if (!materialId || !storageLocationId || qty === null || qty <= 0) continue;
+        const key = buildAvailabilityKey(materialId, storageLocationId);
+        const current = needed.get(key);
+        needed.set(key, {
+          materialId,
+          storageLocationId,
+          qty: (current?.qty ?? 0) + qty,
+        });
+      }
+    } else {
+      if (!strokeMasterId || !plannedQty) {
+        return poErr(req, ctx, "PROD_PO_INVALID", 400, "stroke_master_id and planned_qty required when process_order_id is absent");
+      }
+      const overrideMap = buildLineLocationOverrideMap(overrides);
+      const { data: strokeLines, error: strokeLinesErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("stroke_line")
+        .select("material_id, dosage_pct, default_storage_location_id")
+        .eq("stroke_master_id", strokeMasterId);
+      if (strokeLinesErr) {
+        console.error("[process_order.availabilityPreview] stroke-line query failed:", JSON.stringify(strokeLinesErr));
+        throw new Error("PROD_PO_STOCK_CHECK_FAILED");
+      }
+
+      for (const strokeLine of (strokeLines ?? []) as JsonRecord[]) {
+        const materialId = String(strokeLine.material_id);
+        const storageLocationId = overrideMap.get(materialId)
+          ?? toTrimmedString(strokeLine.default_storage_location_id)
+          ?? null;
+        if (!storageLocationId) continue;
+        const qty = (Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty;
+        const key = buildAvailabilityKey(materialId, storageLocationId);
+        const current = needed.get(key);
+        needed.set(key, {
+          materialId,
+          storageLocationId,
+          qty: (current?.qty ?? 0) + qty,
+        });
+      }
+    }
+
+    const rows = await computeAvailabilityRows(companyId, needed);
+    return okResponse({ data: rows }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PO_STOCK_CHECK_FAILED";
+    return poErr(req, ctx, code, 500, "Availability preview failed");
   }
-  return short;
 }
 
 export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -883,7 +1056,9 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const machineId = toTrimmedString(body.machine_id) || null;
     const plannedQty = parsePositiveNumber(body.planned_qty ?? body.planned_qty_kg);
     const plannedStartDate = toTrimmedString(body.planned_start_date) || null;
+    const outputStorageLocationId = toTrimmedString(body.output_storage_location_id) || null;
     const notes = toTrimmedString(body.notes);
+    const lineLocationOverrideMap = buildLineLocationOverrideMap(body.line_location_overrides);
 
     if (!companyId || !VALID_PO_TYPES.has(poType) || !VALID_SEGMENTS.has(segmentCode) || !materialId || !plannedQty) {
       return poErr(req, ctx, "PROD_PO_INVALID", 400, "company_id, po_type, segment_code, material_id, planned_qty required");
@@ -916,7 +1091,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const { data: strokeLines, error: strokeLinesErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
-        .select("material_id, dosage_pct")
+        .select("material_id, dosage_pct, default_storage_location_id")
         .eq("stroke_master_id", strokeId);
       if (strokeLinesErr) {
         console.error("[process_order.createProcessOrder] stroke-line query failed:", JSON.stringify(strokeLinesErr));
@@ -924,17 +1099,27 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       }
 
       if ((strokeLines ?? []).length > 0) {
-        const needed = new Map<string, number>();
+        const needed = new Map<string, AvailabilityNeed>();
         for (const strokeLine of (strokeLines ?? []) as JsonRecord[]) {
-          const mid = String(strokeLine.material_id);
+          const materialId = String(strokeLine.material_id);
+          const storageLocationId = lineLocationOverrideMap.get(materialId)
+            ?? toTrimmedString(strokeLine.default_storage_location_id)
+            ?? null;
+          if (!storageLocationId) continue;
           const qty = (Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty;
-          needed.set(mid, (needed.get(mid) ?? 0) + qty);
+          const key = buildAvailabilityKey(materialId, storageLocationId);
+          const current = needed.get(key);
+          needed.set(key, {
+            materialId,
+            storageLocationId,
+            qty: (current?.qty ?? 0) + qty,
+          });
         }
 
         const short = await checkStockAvailability(companyId, needed);
         if (short.length > 0) {
           const detail = short
-            .map((row) => `${row.material_id.slice(0, 8)} (need ${row.needed.toFixed(3)}, have ${row.available.toFixed(3)})`)
+            .map((row) => `${row.material_id.slice(0, 8)} @ ${row.storage_location_id.slice(0, 8)} (need ${row.needed_qty.toFixed(3)}, have ${row.available_qty.toFixed(3)})`)
             .join("; ");
           return poErr(req, ctx, "PROD_PO_INSUFFICIENT_STOCK", 422, `Insufficient UNRESTRICTED stock for ${short.length} material(s): ${detail}`);
         }
@@ -977,7 +1162,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const { data: strokeLines, error: strokeLineErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
-        .select("material_id, dosage_pct, display_order")
+        .select("material_id, dosage_pct, display_order, default_storage_location_id")
         .eq("stroke_master_id", strokeId)
         .order("display_order");
       if (strokeLineErr) {
@@ -992,7 +1177,9 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
           planned_qty: Number(((Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty).toFixed(4)),
           actual_qty: null,
           uom_code: "KG",
-          issue_sloc_id: null,
+          issue_sloc_id: lineLocationOverrideMap.get(String(strokeLine.material_id))
+            ?? toTrimmedString(strokeLine.default_storage_location_id)
+            ?? null,
           is_rm: true,
           display_order: strokeLine.display_order,
           dosage_pct: strokeLine.dosage_pct,
@@ -1012,6 +1199,15 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     }
 
     const manualLines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    if (poType === "MTEST") {
+      if (!outputStorageLocationId) {
+        return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 400, "Storage location required for MTEST - segment config is not used for this type");
+      }
+      const missingLineLocation = manualLines.some((line) => !toTrimmedString(line.storage_location_id));
+      if (missingLineLocation) {
+        return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 400, "Storage location required for MTEST - segment config is not used for this type");
+      }
+    }
     if (manualLines.length > 0) {
       const manualRows = manualLines.map((line, index) => ({
         process_order_id: poId,
@@ -1019,7 +1215,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         planned_qty: parsePositiveNumber(line.planned_qty) ?? 0,
         actual_qty: null,
         uom_code: toTrimmedString(line.uom_code) || "KG",
-        issue_sloc_id: toTrimmedString(line.issue_sloc_id) || null,
+        issue_sloc_id: toTrimmedString(line.storage_location_id || line.issue_sloc_id) || null,
         is_rm: line.is_rm !== false,
         display_order: 1000 + index,
         dosage_pct: parseNonNegativeNumber(line.dosage_pct),
@@ -1038,15 +1234,6 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     }
 
     if (poType === "MTEST") {
-      const segConfig = await getSegmentLocConfig(companyId, segmentCode);
-      if (!segConfig) {
-        return poErr(req, ctx, "PROD_PO_SEG_LOC_MISSING", 422, `Segment location config not found for ${segmentCode}. Configure it first.`);
-      }
-      const shopfloorSlocId = toTrimmedString(segConfig.shopfloor_sloc_id) || null;
-      if (!shopfloorSlocId) {
-        return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Shopfloor storage location not configured for this segment");
-      }
-
       const batchNumber = await generateBatchNumber(companyId, "MTEST", null);
       const lines = await fetchOrderLines(poId, null);
       const postedBy = ctx.auth_user_id;
@@ -1056,9 +1243,9 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       for (const line of lines) {
         const issueQty = Number(line.planned_qty ?? 0);
         if (issueQty <= 0) continue;
-        const slocId = getIssueStorageLocationId(line, segConfig);
+        const slocId = getIssueStorageLocationId(line);
         if (!slocId) {
-          return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 422, `Storage location missing for ${line.material_id}`);
+          return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 400, "Storage location required for MTEST - segment config is not used for this type");
         }
         const baseUom = String((line.material as JsonRecord | null)?.base_uom_code ?? line.uom_code ?? "KG");
         const posting = await postStockMovement({
@@ -1099,7 +1286,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         postingDate: today,
         movementTypeCode: "P101",
         companyId,
-        storageLocationId: shopfloorSlocId,
+        storageLocationId: outputStorageLocationId,
         materialId,
         quantity: plannedQty,
         baseUomCode: fgUom,
@@ -1139,15 +1326,13 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     }
 
     if (insertedLines.length > 0) {
-      const segConfig = await getSegmentLocConfig(companyId, segmentCode);
       const reservationRows = insertedLines.map((line) => ({
         source_type: "PROCESS_PO",
         source_id: poId,
         source_line_id: line.id,
         company_id: companyId,
         material_id: line.material_id,
-        storage_location_id: line.issue_sloc_id
-          ?? ((line.is_rm ? segConfig?.rm_sloc_id : segConfig?.pm_sloc_id) ?? null),
+        storage_location_id: line.issue_sloc_id ?? null,
         required_qty: line.planned_qty,
         uom_code: toTrimmedString(line.uom_code) || "KG",
         required_by_date: plannedStartDate,
@@ -1560,11 +1745,7 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
         .map((line) => [toTrimmedString(line.id), parseNonNegativeNumber(line.actual_qty)]),
     );
 
-    const segConfig = await getSegmentLocConfig(String(po.company_id), String(po.segment_code));
-    if (!segConfig) {
-      return poErr(req, ctx, "PROD_PO_SEG_LOC_MISSING", 422, `Segment location config not found for ${po.segment_code}. Configure it first.`);
-    }
-    const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, segConfig);
+    const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
     if (!shopfloorSlocId) {
       return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
     }
@@ -1579,7 +1760,7 @@ export async function completeIntProcessOrderHandler(req: Request, ctx: ProdHand
       const actualQty = lineOverrideMap.has(String(line.id))
         ? Number(lineOverrideMap.get(String(line.id)) ?? 0)
         : Number(line.planned_qty ?? 0);
-      const slocId = getIssueStorageLocationId(line, segConfig);
+      const slocId = getIssueStorageLocationId(line);
       if (!slocId) {
         return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 422, `Storage location missing for ${line.material_id}`);
       }
@@ -1816,12 +1997,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     if (applyResult.response) return applyResult.response;
 
     const lines = applyResult.lines ?? await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
-    const segConfig = await getSegmentLocConfig(String(po.company_id), String(po.segment_code));
-    if (!segConfig) {
-      return poErr(req, ctx, "PROD_PO_SEG_LOC_MISSING", 422, `Segment location config not found for ${po.segment_code}. Configure it first.`);
-    }
-
-    const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, segConfig);
+    const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
     if (!shopfloorSlocId) {
       return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
     }
@@ -1836,7 +2012,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const actualQty = Number(line.actual_qty ?? line.planned_qty ?? 0);
       if (actualQty <= 0) continue;
 
-      const slocId = getIssueStorageLocationId(line, segConfig);
+      const slocId = getIssueStorageLocationId(line);
       if (!slocId) {
         return poErr(req, ctx, "PROD_PO_SLOC_MISSING", 422, `Storage location missing for ${String((line.material as JsonRecord | null)?.pace_code ?? line.material_id)}`);
       }
@@ -1951,7 +2127,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       line_material_type: (line.material as JsonRecord | null)?.material_type === "INT" ? "INT" : "RM",
       dosage_pct: line.dosage_pct ?? null,
       actual_material_id: line.actual_material_id ?? null,
-      storage_location_id: line.issue_sloc_id ?? (line.is_rm ? segConfig.rm_sloc_id : segConfig.pm_sloc_id) ?? null,
+      storage_location_id: line.issue_sloc_id ?? null,
       standard_qty: line.planned_qty ?? null,
       actual_qty: Number(line.actual_qty ?? line.planned_qty ?? 0),
       approved_status: line.approved_status ?? "YES",
@@ -2045,16 +2221,12 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       const lines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
       const today = todayIso();
       const revDocNum = `${po.po_number}-REV`;
-      const segConfig = await getSegmentLocConfig(String(po.company_id), String(po.segment_code));
-      if (!segConfig) {
-        return poErr(req, ctx, "PROD_PO_SEG_LOC_MISSING", 422, `Segment location config not found for ${po.segment_code}. Configure it first.`);
-      }
 
       // DEPENDENT: each P262 reversal must follow the original issue lines one by one.
       for (const line of lines) {
         const actualQty = Number(line.actual_qty ?? 0);
         if (actualQty <= 0) continue;
-        const slocId = getIssueStorageLocationId(line, segConfig);
+        const slocId = getIssueStorageLocationId(line);
         if (!slocId) continue;
 
         const movementMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
@@ -2082,7 +2254,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
         ledgerEntries.push({ line_id: line.id, movement: "P262", direction: "IN", ...posting });
       }
 
-      const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, segConfig);
+      const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null);
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
 
       if (po.qi_release_stock_ledger_id && shopfloorSlocId) {

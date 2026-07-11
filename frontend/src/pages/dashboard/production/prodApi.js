@@ -82,6 +82,15 @@ export const getPlanFeedSummary = (p) => fetchProd("GET", "/api/production/plan-
 
 // ── Process Orders ────────────────────────────────────────────────────────────
 export const listProcessOrders = (p) => fetchProd("GET", "/api/production/process-orders", undefined, p);
+export const availabilityPreviewProcessOrder = (params = {}) => fetchProd(
+  "GET",
+  "/api/production/process-orders/availability-preview",
+  undefined,
+  {
+    ...params,
+    overrides: Array.isArray(params.overrides) ? JSON.stringify(params.overrides) : params.overrides,
+  },
+);
 export const getProcessOrder = (id) => fetchProd("GET", `/api/production/process-orders/${id}`);
 export const createProcessOrder = (body) => fetchProd("POST", "/api/production/process-orders", body);
 export const updateProcessOrderLines = (id, body) => fetchProd("PATCH", `/api/production/process-orders/${id}/lines`, body);

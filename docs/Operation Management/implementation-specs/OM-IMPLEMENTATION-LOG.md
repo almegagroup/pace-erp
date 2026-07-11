@@ -2408,3 +2408,25 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Verification:** `deno check` on `process_order.handlers.ts` — 0 file-anchored errors (unchanged from before, only pre-existing shared-typing errors remain). Grep confirms zero remaining `production_mode` references in the file.
 
 **Files:** `process_order.handlers.ts`, feasibility doc (§83.4 Storage Location Integration + Packing PO PR09 section), `CLAUDE.md`. No migration needed (both fixes are logic-only, no schema change).
+
+---
+
+## Gate-27.14 — Storage Location Rearchitecture (retire segment config) — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.14-STORAGE-LOCATION-REARCHITECTURE-TASK-BRIEF.md` · **Date:** 2026-07-11
+
+**Implemented (Codex):** `production_segment_location_config` fully retired from Process PO code paths (table left in place, unused, not dropped). `getSegmentLocConfig` deleted; `resolveOutputStorageLocationId`/`getIssueStorageLocationId` simplified to stroke-only sources (no segment fallback). RM line `issue_sloc_id` now populated from `stroke_line.default_storage_location_id` at create (was hardcoded null — a real pre-existing bug now fixed), overridable via new `line_location_overrides`. Stock availability + reservation netting rewritten to composite-key on `material_id + storage_location_id` (`computeAvailabilityRows`/`AvailabilityNeed`/`AvailabilityRow`), including INT planned-output credit now resolved per the INT PO's own stroke location. New read-only `GET /api/production/process-orders/availability-preview` endpoint (two modes: pre-create via stroke_master_id, or against an existing process_order_id) backs a new PR09 "RM Location Preview" grid with editable per-line SLoc combobox and rose-highlight-if-short, and PR11/PR12's SLoc cell changed from read-only text to an editable combobox with the same live short-highlight, submitting `storage_location_id` per line (backend updates the line's `issue_sloc_id` and the matching reservation row's location in-place — not a cancel/recreate). MTEST now requires request-supplied `output_storage_location_id` + per-line `storage_location_id` instead of segment config.
+
+**Claude verification pass:**
+- Read the full 380-line backend diff plus all 4 frontend file diffs (not spot-checked) given this touches core stock/availability logic.
+- Confirmed the new exact-route `GET .../process-orders/availability-preview` is registered in the `switch` block *before* the pattern-based `if (/^\/api\/production\/process-orders\/[^/]+$/...)` check — the switch's unconditional `return` means no routing collision with the `:id` pattern route, verified by reading dispatch order directly.
+- Confirmed `getStrokeMaster` (frontend) and its backend handler were pre-existing (not invented) and already return `lines[].default_storage_location_id` + `lines[].material` — the new PR09 grid correctly consumes real, already-shipped data.
+- Confirmed `useStorageLocationOptionsQuery` was pre-existing (reused, not invented).
+- No unauthorized doc edits this round (unlike Gate-27.6 — CLAUDE.md/feasibility doc untouched).
+- Minor cosmetic-only note (not fixed, not worth a round-trip): PR09's RM grid reuses `prodshadeLabel()` for RM material names, which reads a field (`external_code`) that doesn't exist on RM materials — degrades gracefully to `shade_code — material_name`, never a raw UUID, so left as-is.
+- `deno check`: 0 file-anchored errors. ESLint: 0 errors (2 pre-existing-style `exhaustive-deps` warnings). No mojibake.
+- Migration is a correct no-op (documents why no schema change was needed) — nothing to apply to Dev.
+
+**Consequence for data prerequisites:** `production_segment_location_config` seeding is **no longer needed at all** (superseded by this brief) — the only remaining Dev prerequisite for a live zero-error Standard→Verify run is **opening stock** for the test stroke's RM materials at their resolved storage locations.
+
+**Files:** `process_order.handlers.ts`, `production.routes.ts`, `route-acl-registry.ts`, `prodApi.js`, `ProductionPOCreatePage.jsx`, `ProductionPOFinalPage.jsx`, `ProductionPOVerifyPage.jsx`, migration `20260711140000_gate27_location_aware_stock_check.sql` (no-op).

@@ -50,6 +50,7 @@ import {
 import {
   listProcessOrdersHandler,
   getProcessOrderHandler,
+  availabilityPreviewProcessOrderHandler,
   createProcessOrderHandler,
   updateProcessOrderLinesHandler,
   editProcessOrderHandler,
@@ -155,6 +156,8 @@ export async function dispatchProductionRoutes(
     // Process Orders
     case "GET:/api/production/process-orders":
       return await listProcessOrdersHandler(req, ctx);
+    case "GET:/api/production/process-orders/availability-preview":
+      return await availabilityPreviewProcessOrderHandler(req, ctx);
     case "POST:/api/production/process-orders":
       return await createProcessOrderHandler(req, ctx);
 

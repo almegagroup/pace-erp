@@ -12,8 +12,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { useCompaniesForOmQuery, useMaterialOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
-import { getProcessOrder, listProcessOrders, verifyProcessOrder } from "./prodApi.js";
+import { useCompaniesForOmQuery, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
+import { availabilityPreviewProcessOrder, getProcessOrder, listProcessOrders, verifyProcessOrder } from "./prodApi.js";
 
 function companyLabel(company) {
   return [company.company_code, company.company_name].filter(Boolean).join(" - ");
@@ -25,6 +25,10 @@ function orderLabel(order) {
 
 function materialLabel(material) {
   return [material?.pace_code, material?.material_name].filter(Boolean).join(" - ");
+}
+
+function storageLocationLabel(location) {
+  return [location.code || location.location_code, location.name || location.location_name].filter(Boolean).join(" - ");
 }
 
 function computeRowValues(row) {
@@ -58,7 +62,7 @@ function makeDraftRow(line) {
     registered_alternate_material_id: line.registered_alternate_material_id || "",
     registered_alternate_material_label: materialLabel(line.registered_alternate_material),
     actual_material_id: line.actual_material_id || "",
-    sloc_label: line.issue_storage_location?.location_code || line.issue_storage_location?.location_name || "--",
+    issue_sloc_id: line.issue_sloc_id || line.issue_storage_location?.id || "",
     planned_qty: String(line.planned_qty ?? 0),
     actual_qty: String(line.actual_qty ?? line.planned_qty ?? 0),
     approved_status: line.approved_status || "YES",
@@ -75,6 +79,7 @@ export default function ProductionPOVerifyPage() {
   const [notice, setNotice] = useState({ msg: "", tone: "success" });
   const [saving, setSaving] = useState(false);
   const [rows, setRows] = useState([]);
+  const [debouncedPreviewRows, setDebouncedPreviewRows] = useState([]);
 
   const companiesQ = useCompaniesForOmQuery();
   const companyOptions = useMemo(
@@ -104,11 +109,47 @@ export default function ProductionPOVerifyPage() {
     () => (materialQ.materials ?? []).map((material) => ({ value: material.id, label: materialLabel(material) || "Material" })),
     [materialQ.materials],
   );
+  const storageLocationQ = useStorageLocationOptionsQuery(
+    { company_id: companyId || undefined },
+    { enabled: Boolean(companyId) },
+  );
+  const storageLocationOptions = useMemo(
+    () => (storageLocationQ.storageLocations ?? []).map((location) => ({
+      value: location.id,
+      label: storageLocationLabel(location) || "Storage Location",
+    })),
+    [storageLocationQ.storageLocations],
+  );
 
   const po = detailQ.data ?? null;
   useEffect(() => {
     setRows((po?.lines ?? []).map(makeDraftRow));
   }, [po]);
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedPreviewRows(rows.map((row) => ({
+        line_id: row.id || undefined,
+        material_id: row.actual_material_id || row.material_id,
+        storage_location_id: row.issue_sloc_id || undefined,
+        qty: Number(row.actual_qty || 0),
+      })));
+    }, 400);
+    return () => window.clearTimeout(timeoutId);
+  }, [rows]);
+
+  const availabilityPreviewQ = useQuery({
+    queryKey: ["production-verify-availability-preview", companyId, orderId, debouncedPreviewRows],
+    queryFn: () => availabilityPreviewProcessOrder({
+      company_id: companyId,
+      process_order_id: orderId,
+      overrides: debouncedPreviewRows,
+    }),
+    enabled: Boolean(companyId && orderId),
+  });
+  const availabilityByKey = useMemo(
+    () => new Map((availabilityPreviewQ.data ?? []).map((row) => [`${row.material_id}::${row.storage_location_id}`, row])),
+    [availabilityPreviewQ.data],
+  );
 
   function toast(msg, tone = "success") {
     setNotice({ msg, tone });
@@ -129,7 +170,7 @@ export default function ProductionPOVerifyPage() {
       registered_alternate_material_id: "",
       registered_alternate_material_label: "",
       actual_material_id: "",
-      sloc_label: "--",
+      issue_sloc_id: "",
       planned_qty: "0",
       actual_qty: "0",
       approved_status: "YES",
@@ -150,6 +191,7 @@ export default function ProductionPOVerifyPage() {
           material_id: row.id ? undefined : row.material_id || undefined,
           dosage_pct: row.dosage_pct === "" ? undefined : Number(row.dosage_pct),
           actual_material_id: row.actual_material_id || undefined,
+          storage_location_id: row.issue_sloc_id || undefined,
           actual_qty: values.actual,
           approved_status: values.autoYes ? undefined : row.approved_status,
           ap_approved_qty: values.autoYes ? undefined : (row.approved_status === "PARTIAL" ? Number(row.ap_approved_qty || 0) : undefined),
@@ -260,6 +302,11 @@ export default function ProductionPOVerifyPage() {
                     <tbody>
                       {rows.map((row) => {
                         const values = computeRowValues(row);
+                        const previewMaterialId = row.actual_material_id || row.material_id;
+                        const availability = row.issue_sloc_id
+                          ? availabilityByKey.get(`${previewMaterialId}::${row.issue_sloc_id}`) ?? null
+                          : null;
+                        const isShort = Boolean(availability && values.actual > Number(availability.available_qty ?? 0));
                         const actualMaterialOptions = row.registered_alternate_material_id
                           ? [
                               { value: "", label: "(same)" },
@@ -267,7 +314,7 @@ export default function ProductionPOVerifyPage() {
                             ]
                           : [{ value: "", label: "(same)" }];
                         return (
-                          <tr key={row.key} className="border-b border-slate-100">
+                          <tr key={row.key} className={isShort ? "bg-rose-50" : "border-b border-slate-100"}>
                             <td className="px-3 py-2">
                               {row.id ? (
                                 row.material_label || "--"
@@ -297,7 +344,15 @@ export default function ProductionPOVerifyPage() {
                                 disabled={Boolean(!row.registered_alternate_material_id)}
                               />
                             </td>
-                            <td className="px-3 py-2">{row.sloc_label}</td>
+                            <td className="px-3 py-2">
+                              <ErpComboboxField
+                                value={row.issue_sloc_id}
+                                onChange={(value) => updateRow(row.key, { issue_sloc_id: value })}
+                                options={storageLocationOptions}
+                                placeholder="-- Select storage location --"
+                                emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                              />
+                            </td>
                             <td className="px-3 py-2 text-right font-mono">{values.planned.toFixed(3)}</td>
                             <td className="px-3 py-2 text-right">
                               <input
