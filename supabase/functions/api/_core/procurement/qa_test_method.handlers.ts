@@ -24,7 +24,10 @@ type QATestMethodHandlerContext = {
 // available to any QA-capable role; edit/delete requires manager-level (incl. DIRECTOR).
 const QA_ALLOWED_ROLES = ["SA", "DIRECTOR", "PROCUREMENT_HEAD", "QA_OFFICER", "STORE_MANAGER"];
 const QA_MANAGER_ROLES = ["SA", "DIRECTOR", "PROCUREMENT_HEAD", "STORE_MANAGER"];
-const TEST_GROUPS = new Set(["MCT", "OTHR"]);
+// Gate-27.17: widened to include CT (Concrete Trial) for SFG Result Recording. This handler
+// is shared with Procurement's Inward QA page, which never renders a CT section, so no
+// behavior changes there — this only unblocks the SFG page's own Concrete Trial group.
+const TEST_GROUPS = new Set(["MCT", "OTHR", "CT"]);
 
 class ApiError extends Error {
   status: number;
@@ -111,7 +114,7 @@ export async function listTestMethodsHandler(
 
     if (testGroup) {
       if (!TEST_GROUPS.has(testGroup)) {
-        throw new ApiError(400, "test_group must be MCT or OTHR");
+        throw new ApiError(400, "test_group must be MCT, OTHR, or CT");
       }
       query = query.eq("test_group", testGroup);
     }
@@ -147,7 +150,7 @@ export async function createTestMethodHandler(
     const methodName = toTrimmedString(body.method_name);
 
     if (!companyId) throw new ApiError(400, "company_id is required");
-    if (!TEST_GROUPS.has(testGroup)) throw new ApiError(400, "test_group must be MCT or OTHR");
+    if (!TEST_GROUPS.has(testGroup)) throw new ApiError(400, "test_group must be MCT, OTHR, or CT");
     if (!methodName) throw new ApiError(400, "method_name is required");
 
     const { data: existing, error: existingError } = await serviceRoleClient

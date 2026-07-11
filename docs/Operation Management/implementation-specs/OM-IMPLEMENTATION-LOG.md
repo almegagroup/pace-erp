@@ -2494,3 +2494,17 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 ---
 
 **Gate-27 Process PO chain — fully closed out.** Next per user's sequencing: Packing PO (currently broken/ID-based create, no rebuilt lifecycle) is the next area of work.
+
+---
+
+## Gate-27.17 — Follow-up fix: shared `qa_test_method.handlers.ts` still rejected `CT`
+
+**Date:** 2026-07-11 (same-day follow-up, found by user pushing back on the verification)
+
+**Root cause:** Gate-27.17's migration correctly widened the DB `CHECK` constraint, and the SFG frontend correctly added a Concrete Trial section — but neither the brief nor Codex's implementation touched `supabase/functions/api/_core/procurement/qa_test_method.handlers.ts`, a **shared** backend file (Procurement-owned, but called by both Inward QA and the new SFG Result Recording page via `procurementApi.js`). This file has its own independent `TEST_GROUPS = new Set(["MCT", "OTHR"])` allow-list, checked on both `listTestMethodsHandler` and `createTestMethodHandler`. Result: the SFG page's Concrete Trial section would 400 on load (`listQaTestMethods({ test_group: "CT" })`) and on "+Add Method" — the feature was non-functional end-to-end despite the schema/frontend changes landing cleanly. This was a scoping miss in the Gate-27.17 brief (mine), not a Codex implementation error — the brief explicitly restricted scope to "1 migration + 1 frontend file" and never asked Codex to check this shared handler.
+
+**Fix (Claude, direct — no Codex round-trip, single-line-class change):** Widened `TEST_GROUPS` to `["MCT", "OTHR", "CT"]` and updated both error messages accordingly. Confirmed the delete-eligibility rule (`Only MCT methods can be deleted`) needs no change — it already matches the frontend's own `group === "MCT"` gate on the Remove button, so `CT` is correctly excluded from deletion exactly like `OTHR` always was, with no code change needed there.
+
+**Verification:** `deno check` clean, no mojibake, grepped for every remaining `TEST_GROUPS`/`test_group ===` reference in the file to confirm nothing else needed updating.
+
+**Files:** `supabase/functions/api/_core/procurement/qa_test_method.handlers.ts`.
