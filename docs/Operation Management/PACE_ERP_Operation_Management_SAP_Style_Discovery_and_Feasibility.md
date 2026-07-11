@@ -7976,6 +7976,10 @@ P261 → PM consumed FROM pm_sloc (e.g. P003 for Liquid)
 > **Deferred (not designed yet):** QA may later want to take a *partial* qty from that same batch and route it to Blocked instead of Unrestricted (e.g. `P323 "QA → Blocked"` or a post-release `P344`) — acknowledged as a future capability, does not change the P321 auto-release design above.
 
 > **Confirmed 2026-07-11:** SFG Result Recording is an **exact identical mechanism to the existing Inward QA page** — same `qa_test_method_master` / `qa_category_test_config` infrastructure, same UI/workflow pattern — only the context changes (SFG batch from Process PO Verify, instead of vendor GRN). Build it as a direct clone of Inward QA's mechanism, not a fresh design.
+>
+> **TX Code: PR18** (LOCKED 2026-07-11) — registered in `erp_menu.menu_master`/`acl.menu_master` as `PROD_SFG_RESULT_RECORDING`, route `/dashboard/production/sfg-result-recording`.
+>
+> **Third test category — "Concrete Trial" (LOCKED — 2026-07-11):** Alongside the existing MCT (mandatory) and OTHR (optional) groups, SFG Result Recording adds a **third group, "Concrete Trial" (`CT`)** — optional, same behavior as OTHR (does not gate decision submission, no pass/fail-blocks-release logic). Uses the exact same shared `qa_test_method`/`qa_category_test_config` category-driven method-template mechanism already used for MCT/OTHR (same tables, same company + material_category scoping). **Scoped to the SFG Result Recording page only** — Procurement's Inward QA page (RM/PM materials) is not touched and its own frontend hardcodes only MCT/OTHR sections, so a new `test_group` value being allowed at the schema level has no visible effect there.
 
 **P261 Issue Location — Default Chain:**
 
