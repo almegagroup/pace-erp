@@ -468,7 +468,13 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 
 **✅ Gate-27 Process PO chain — FULLY CLOSED OUT (2026-07-11).** Standard → QA → PR10 Edit → Start Batch → INT-complete → Final → Verify → CORS, location-aware stock/reservation, PR16/PR17 rebuild, SFG Result Recording (PR18) + Concrete Trial test group, sidebar-visibility fix — all done, Codex-run, Claude-verified, committed (`26ef4d8`, `17a845d`, `0256b5e`, `b319c50`, `107c335`, `23c3c18`, `a226ef0`, `8b00fa3`, `2d15b72`). Full detail: `OM-IMPLEMENTATION-LOG.md` Gate-27.6/27.14/27.15/27.16/27.17 entries.
 
-**➡️ Next: Packing PO.** Still broken/ID-based create (list/get/create/update-lines only — no Standard→Final lifecycle, no QA, no batch, no reservation). This is the next full brief to write.
+**➡️ Sequencing locked (2026-07-11, user decision):** Packing PO (full Standard→Final cycle, no Verify — Verify is Process PO only) → **then** FG Opening Stock (Liquid, 1 July go-live) → **then** Dispatch module (L5). Do not jump ahead of this order.
+
+**Next: Packing PO.** Still broken/ID-based create (list/get/create/update-lines only — no Standard→Final lifecycle, no QA, no batch, no reservation). This is the next full brief to write. Small prerequisite: Pack BOM company-wise + mandatory SFG INPUT row gap (below) should land first since Packing PO's PM/SFG auto-population depends on it.
+
+**⚠️ Heads-up for the next two items in the sequence — neither is implementation-ready yet, both need a design pass first (same discipline as Gate-27):**
+- **FG Opening Stock (Liquid):** only *directionally* decided — reuses existing P561/P563/P565 movement types (Gate-19, already built for RM/PM), phased by section (Liquid 1-Jul, Powder later). No locked field-level/workflow design yet — e.g. does FG opening stock need a Batch Number per lot (FG is batch-tracked per §83.7), which storage location (F003?), manual batch entry or reuse of the production batch series. Needs its own doc-first session before any brief.
+- **Dispatch module (L5):** per Layer table (CLAUDE.md §9), only ~51% designed, explicitly flagged **"🔴 Partial — Formal L5 session required."** This is the least-ready of the three — expect a full dedicated design session, not just a implementation brief, before Codex can touch it.
 
 **⚠️ Still open (not blockers, revisit later):**
 - MTS stroke-selection mechanism at Process PO create (83.3) — deferred; current manual-pick UI (same as MTO/HPS) stays as interim behavior, no schema/backend impact either way
