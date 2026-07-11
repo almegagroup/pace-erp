@@ -2526,3 +2526,20 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 **Practical impact — confirmed NOT an HTTP-error risk:** The SFG Result Recording page's actual API calls (list/get/test-line/decision) are gated by `PROD_QA_QUEUE` (registered in Gate-27.16), which already resolves broadly ALLOW in Dev — verified live via `precomputed_acl_view`. So the page works with zero 400/403/500 if reached directly by URL; the only open gap is that it may not yet appear as a sidebar link for users until the snapshot issue above is resolved.
 
 **Completes when:** next session investigates the ACL capture/generate mechanism for `acl.menu_master`-sourced resources specifically (compare against how `PROD_BATCH_RELEASE`'s row was originally seeded — it may have gone through a different/additional step this entry's MCP calls didn't replicate).
+
+---
+
+## Gate-27.16 follow-up — RESOLVED: PR18 sidebar-visibility gap
+
+**Date:** 2026-07-11 (same-day resolution of the gap flagged in the previous entry)
+
+**Root cause found:** `acl.capture_acl_version_source()` is a **one-time bootstrap function** — it checks `IF v_source_captured_at IS NOT NULL THEN RETURN; END IF;` and no-ops immediately for any ACL version that was already captured (all 4 active Dev versions were, long ago). So it never re-copies live `acl.capability_menu_actions` rows into the version-scoped `acl.version_capability_menu_actions` table that `generate_acl_snapshot()` actually reads from (confirmed by reading both functions' source directly via `pg_proc.prosrc`). My earlier attempt to "recapture" therefore did nothing, explaining the persistent empty `precomputed_acl_view` result.
+
+**Fix (MCP, Dev):**
+1. Inserted the missing row directly into `acl.version_capability_menu_actions` for all 4 active `acl_version_id`s (mirroring exactly what `capture_acl_version_source` would have copied).
+2. Re-ran `acl.generate_acl_snapshot(...)` for all 4 companies — confirmed `PROD_SFG_RESULT_RECORDING` now shows 36 ALLOW rows (VIEW/WRITE/EDIT/APPROVE), matching `PROD_BATCH_RELEASE`'s pattern exactly.
+3. Ran `erp_menu.generate_menu_snapshot(auth_user_id, company_id, 'ACL')` in a loop for all 9 DIRECTOR test users × 4 companies (36 combos) — confirmed `erp_menu.menu_snapshot` now has 36 rows for `menu_code = 'PROD_SFG_RESULT_RECORDING'`.
+
+**Status: RESOLVED.** PR18 will now appear in the sidebar for all Dev DIRECTOR test users across all 4 companies.
+
+**Note for future new-menu-resource setup (any future PR-code addition):** inserting into `acl.menu_master` + `acl.capability_menu_actions` alone is **not sufficient** if the target ACL version(s) were already captured — `capture_acl_version_source()` will silently no-op. Must also manually insert into `acl.version_capability_menu_actions` (and equivalent `version_*` tables for role-based grants/overrides if used) for each affected `acl_version_id`, then run `generate_acl_snapshot()` + `erp_menu.generate_menu_snapshot()` per user. This same gap likely affects PR17 (`PROD_BATCH_RELEASE`) — but that one already showed 36 ALLOW rows in `precomputed_acl_view`/presumably already worked, meaning it either predates its own ACL version's capture, or someone already applied this same version-table fix for it previously (not traced further — out of scope here, noted as a pattern to watch for, not confirmed broken).
