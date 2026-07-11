@@ -7699,9 +7699,10 @@ Header fields (all carried over from Page 1/2 are read-only):
 | Field | Source / State |
 |---|---|
 | PO Number | Blank — generated on save |
-| Company, PO Type, Prodshade/Material | Read-only, from Page 1 |
+| Company, PO Type | Read-only, from Page 1 |
+| **Prodshade** | Read-only, from Page 1 — displays the selected material's `material_master.material_name` |
+| **Description** | Read-only, from Page 1 — displays the selected material's `material_master.document_name` (per §83.15's per-production-type mapping, `material_name`/`document_name` hold SKU vs human-readable text in swapped roles for MTO/HPS vs MTS — these two header fields always read the same two columns regardless of which semantic content lands in which for that type) |
 | Stroke Number | Read-only, from Page 2 |
-| Description | Read-only, inherited from the Stroke's own description |
 | **Machine** | Dropdown, company-mapped (Name + Code), **mandatory** for MTO/HPS/MTS/INT (see 83.9 MTEST exception) |
 | **Batch Size** | Input — this is the Standard/Planned Qty |
 | Batch Number | Blank ("—") — not generated until Start Batch |
