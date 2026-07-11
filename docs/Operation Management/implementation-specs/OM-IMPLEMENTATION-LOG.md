@@ -2472,3 +2472,25 @@ Intra-schema embeds are fine (verified `pack_code:pack_code_master!pack_code_id`
 ---
 
 **Gate-27 Process PO chain — checklist status after 27.6/27.14/27.15/27.16 (all Codex-run, Claude-verified):** Storage location authority, location-aware stock check/reservation, PR16/PR17, and SFG Result Recording are now done. Remaining before Packing PO per the user's own sequencing (2026-07-11 chat): none outstanding from this checklist — next up is Packing PO's own full brief.
+
+---
+
+## Gate-27.17 — SFG Result Recording: Concrete Trial third test group — VERIFIED
+
+**Task Brief:** `CODEX-GATE27.17-SFG-QA-CONCRETE-TRIAL-TASK-BRIEF.md` · **Date:** 2026-07-11
+
+**Implemented (Codex):** Migration widens `erp_master.qa_test_method.test_group` CHECK to `MCT/OTHR/CT`. `SfgResultRecordingPage.jsx` (only file touched) adds `ctConfigs`/`ctMethodsQuery`/`ctMethods` mirroring MCT/OTHR exactly, a third "Concrete Trial (optional)" render column (grid now 3-wide), and maps `CT` → `test_type: "OTHER"` alongside OTHR. MCT-only gating logic (`anyMctFail`, `allMctFilled`, `decisionSubmitDisabled`) left completely untouched, confirmed by diff.
+
+**Claude verification pass:**
+- Confirmed the constraint name (`qa_test_method_test_group_check`) live before applying — Codex was honest in its log that its sandbox had no DB access to verify this itself and used the brief's own snippet as-is; independently confirmed correct via MCP both before and after applying.
+- Confirmed zero diff on Procurement's `QAQueuePage.jsx` (git status clean on that file) and zero touches to gating logic.
+- ESLint: same pre-existing inherited errors as Gate-27.16 (no new issues from this diff). No mojibake.
+- Migration applied to Dev via MCP; constraint widened and confirmed (`MCT`, `OTHR`, `CT` all allowed).
+
+**Also this session (MCP, not part of this brief):** Fixed a real gap from Gate-27.16 — the SFG Result Recording screen had no `erp_menu.menu_master`/`acl.menu_master` row, so it had no TX code and wouldn't appear in any sidebar. Registered as **PR18** (`PROD_SFG_RESULT_RECORDING`) with `CAP_PROD_OPERATOR` mapped to VIEW/WRITE/EDIT/APPROVE, matching the PR17 pattern. This was an oversight in the original Gate-27.16 brief (mine), not something Codex could have known to add.
+
+**Files:** migration `20260711220000_gate27_sfg_qa_concrete_trial.sql`, `SfgResultRecordingPage.jsx`.
+
+---
+
+**Gate-27 Process PO chain — fully closed out.** Next per user's sequencing: Packing PO (currently broken/ID-based create, no rebuilt lifecycle) is the next area of work.

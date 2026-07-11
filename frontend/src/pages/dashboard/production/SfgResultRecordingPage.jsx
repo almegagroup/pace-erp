@@ -350,6 +350,11 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
     queryFn: () => listQaTestMethods({ company_id: companyId, test_group: "MCT" }),
     enabled: Boolean(companyId),
   });
+  const ctMethodsQuery = useQuery({
+    queryKey: ["production", "sfg-qa-test-methods", companyId, "CT"],
+    queryFn: () => listQaTestMethods({ company_id: companyId, test_group: "CT" }),
+    enabled: Boolean(companyId),
+  });
   const othrMethodsQuery = useQuery({
     queryKey: ["production", "sfg-qa-test-methods", companyId, "OTHR"],
     queryFn: () => listQaTestMethods({ company_id: companyId, test_group: "OTHR" }),
@@ -364,6 +369,10 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
   const mctMethods = useMemo(
     () => (Array.isArray(mctMethodsQuery.data) ? mctMethodsQuery.data : []),
     [mctMethodsQuery.data],
+  );
+  const ctMethods = useMemo(
+    () => (Array.isArray(ctMethodsQuery.data) ? ctMethodsQuery.data : []),
+    [ctMethodsQuery.data],
   );
   const othrMethods = useMemo(
     () => (Array.isArray(othrMethodsQuery.data) ? othrMethodsQuery.data : []),
@@ -384,6 +393,7 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
   const isMutable = remainingQty > 0.000001 && ["PENDING", "IN_PROGRESS"].includes(publicStatus);
 
   const mctConfigs = useMemo(() => categoryConfigs.filter((c) => c.qa_test_method?.test_group === "MCT"), [categoryConfigs]);
+  const ctConfigs = useMemo(() => categoryConfigs.filter((c) => c.qa_test_method?.test_group === "CT"), [categoryConfigs]);
   const othrConfigs = useMemo(() => categoryConfigs.filter((c) => c.qa_test_method?.test_group === "OTHR"), [categoryConfigs]);
 
   function testLineForMethod(methodId) {
@@ -430,7 +440,7 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
     const value = resultDrafts[config.test_method_id];
     if (value === undefined) return;
     const existingLine = testLineForMethod(config.test_method_id);
-    const testType = config.qa_test_method?.test_group === "OTHR" ? "OTHER" : "MCT";
+    const testType = ["OTHR", "CT"].includes(config.qa_test_method?.test_group) ? "OTHER" : "MCT";
     setSaving(true);
     setError("");
     try {
@@ -625,7 +635,11 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
       <div className="grid gap-2 rounded border border-slate-200 bg-white p-2">
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-600">
-            {group === "MCT" ? "MCT (mandatory)" : "OTHR (optional)"}
+            {group === "MCT"
+              ? "MCT (mandatory)"
+              : group === "CT"
+              ? "Concrete Trial (optional)"
+              : "OTHR (optional)"}
           </span>
           <button
             type="button"
@@ -820,9 +834,10 @@ function SfgQaExpandedPanel({ row, companyId, roleCode, onChanged, onCollapse })
           <div className="grid gap-2">
             <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Test Results - {materialCategory || "No category on material"}</p>
             {materialCategory ? (
-              <div className="grid gap-2 lg:grid-cols-2">
+              <div className="grid gap-2 lg:grid-cols-3">
                 {renderMethodGroup("MCT", mctConfigs, mctMethods)}
                 {renderMethodGroup("OTHR", othrConfigs, othrMethods)}
+                {renderMethodGroup("CT", ctConfigs, ctMethods)}
               </div>
             ) : (
               <p className="text-[11px] text-slate-400">This prodshade has no material category set, so test config cannot be resolved.</p>
