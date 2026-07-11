@@ -7680,7 +7680,9 @@ VERIFIED (PR12 — stock movements posted)
 
 > **Why this subsection exists:** this exact page-by-page flow was confirmed in chat (including two mockup rounds, `process_po_standard_flow_mockup` and `_v2`) but was never transcribed into this doc — a real doc-first-workflow miss. Recovered verbatim from session transcript on 2026-07-11 after the built PR09 page was found not to match (missing Material Table entirely, an unrequested "Segment" field, no gated 3-page flow).
 
-**Page 1 — Company / PO Type / Material:**
+**Order-family selector (LOCKED — 2026-07-12, resolves an ambiguity found while mocking up Page 1):** this create page genuinely serves both Process PO and Packing PO (per the SAP Equivalent Mapping table's "PR09/PR11/PR12/PR15 serve both" note), but the two families' actual input fields are entirely different (Process PO: Stroke/Machine/Batch Size/Material Table; Packing PO: Pack Code/Fill Qty/Number of Packs/PM items per §83.4's own Packing PO section) — they cannot share one PO Type dropdown. Resolution: a **Process PO / Packing PO selector comes first** (the live app's existing tab pattern is directionally correct here), and only then does the family-specific PO Type dropdown + flow described below appear. This subsection specs the **Process PO** side only (MTO/HPS/MTS/MTEST/INT); Packing PO's own Standard flow is separate, not yet designed at this page-by-page level, and is the next full brief after this Process PO fix per the locked sequencing.
+
+**Page 1 — Company / PO Type / Material (Process PO side):**
 - Company — dropdown if multi-company user, locked/auto if single-company
 - PO Type — MTO / HPS / MTS / MTEST / INT
 - Material — dropdown, filtered by PO Type (approved SFG/INT for MTO/HPS/MTS/INT; SFG/INT/SKU for MTEST since it's an ad-hoc test batch on any item)
