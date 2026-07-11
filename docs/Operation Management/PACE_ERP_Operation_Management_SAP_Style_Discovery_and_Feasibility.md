@@ -7698,7 +7698,8 @@ QA Reject  → Status = QA_REJECTED → PRUNED immediately (no edit, no reuse)
 
 CSN Tracker-style expandable queue. Same page, role-based buttons via work context capability.
 
-- **Collapsed row:** PO Number | Prodshade | Stroke | Machine | Target Qty | Created By | Status
+- **Collapsed row:** PO Number | **Batch #** | Prodshade | Stroke | Machine | Target Qty | Created By | Status
+  - Batch # shows "—" at QA_PENDING/QA_APPROVED (not generated yet), populates once Start Batch runs (BATCH_STARTED). Same value repeated above the expanded component grid for consistency. *(added 2026-07-11 — not in the original 2026-07-03 column list)*
 - **Expanded row:** Full component grid — Formulation Material | Dosage% | Actual Material | Dosage% | Planned Qty (all read-only)
 
 Role-based actions (same screen, different capabilities):
