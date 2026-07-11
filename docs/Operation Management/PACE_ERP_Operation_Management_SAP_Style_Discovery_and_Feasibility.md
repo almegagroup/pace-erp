@@ -6905,7 +6905,7 @@ FO arrives → Process PO + Packing PO created (Standard phase)
     ↓
 Standard → QA Online Approval → Start Batch → Final → Verify
     ↓
-P261 (RM from R003) + P261 (PM from P003) + P231 (FG → S003)
+P261 (RM from R003) + P261 (PM from P003) + P101 (FG → S003)
     ↓
 S003 → F003 Transfer (per Packing PO qty)
     ↓
@@ -6934,7 +6934,7 @@ Produce in advance (no FO needed)
     ↓
 Standard → QA Online Approval → Start Batch → Final → Verify
     ↓
-P261 (RM from R003) + P261 (PM from P003) + P231 (FG → S003)
+P261 (RM from R003) + P261 (PM from P003) + P101 (FG → S003)
     ↓
 S003 → F003 Transfer (per Packing PO qty) → FG stock builds in F003
     ↓
@@ -6966,7 +6966,7 @@ Standard (Process PO only — no Packing PO at this stage)
     ↓
 Start Batch → Final → Verify  [no QA Online Approval]
     ↓
-P261 (RM from R003) + P261 (PM from P003) + P231 (FG → S003)
+P261 (RM from R003) + P261 (PM from P003) + P101 (FG → S003)
     ↓
 S003 → F003 Transfer → FG liquid stock builds in F003
     ↓
@@ -7474,7 +7474,7 @@ Dosage% is not shown (no dosage change allowed in Change BOM Item flow).
 - Linked to Process PO by explicit link (mandatory)
 - PM items: added manually (Admix/PMTO) or auto-populated from Pack BOM (Hypershot/IWC/Powder)
 - SO number = reference field — SO links to **FO** (not directly to Packing PO)
-- Goods movements: P261 (SFG + PM issue) + P231 (FG receipt) at Final save. Reversal via P262 (COR6 Correction) or CORS.
+- Goods movements: P261 (SFG + PM issue) + P101 (FG receipt) at Final save. Reversal via P262 (COR6 Correction) or CORS.
 
 **Packing PO creation timing (by type):**
 
@@ -7504,7 +7504,7 @@ Standard phase:
 Final phase:
   Process PO: data entry only — no movements yet
   Packing PO: terminal step — movements posted at Final save
-    → P261 (SFG from S003, batch-specific) + P261 (PM from pm_sloc) + P231 (FG → F003)
+    → P261 (SFG from S003, batch-specific) + P261 (PM from pm_sloc) + P101 (FG → F003)
 
 Verify phase (Process PO only — Packing PO has no Verify):
   Process PO verified → P261 (RM consumed) + P101 (SFG → S003)
@@ -7519,7 +7519,7 @@ Standard phase:
   1. Process PO created only (no Packing PO at this stage)
 
 Final → Verify:
-  P261 (RM consumed) + P231 (FG → S003) → S003 → F003
+  P261 (RM consumed) + P101 (FG → S003) → S003 → F003
 
 When dispatch needed:
   Packing PO created as per requirement → linked to Process PO
@@ -7567,7 +7567,7 @@ Step 3: Create new Packing PO → per barrel = actual total qty (e.g. 230 KG)
 | When | Action |
 |---|---|
 | Any stage (Standard / Final / Verify) | Delink existing Packing PO → **PRUNE** → create new Packing PO → relink |
-| Stock postings exist (PM consumed / P231 posted) | System auto-reverses all postings before PRUNE |
+| Stock postings exist (PM consumed / P101 posted) | System auto-reverses all postings before PRUNE |
 | Process PO | Always stable — never changed when pack type changes |
 | Authorization | Manager level (L3+) required for pack type change after Verify |
 | Audit trail | Mandatory — who changed, when, old pack type, new pack type |
@@ -7772,7 +7772,7 @@ QA matches entered actuals against physical batch paper
 | Actual qty edit | ✅ Allowed — QA can correct Final entries |
 | New item add | ✅ Allowed |
 | Wrong formulation discovered | QA does NOT save → instructs user to prune Final → prune Standard → create new PO |
-| Stock movement | ✅ Happens here — P261 (RM consumed) + PM consumed + P231 (FG receipt) |
+| Stock movement | ✅ Happens here — P261 (RM consumed) + PM consumed + P101 (FG receipt) |
 
 ---
 
@@ -7856,7 +7856,7 @@ Production (at Final) or QA (at Verify) can add materials not present in the ori
 
 **Stock movements (at Verify, not Final):**
 - P261 posts **full Actual Qty** for each INPUT line — Stock Layer is never filtered by AP approval status.
-- P231 posts **full Actual Output** for OUTPUT line.
+- P101 posts **full Actual Output** for OUTPUT line.
 - AP Approved columns are Reco Layer only — they never affect stock postings.
 
 **Verify phase (QA):**
@@ -8493,7 +8493,7 @@ PO Type = PMTO / PHPS / PMTS / PTEST triggers Packing PO behavior.
 |---|---|
 | FG SKU | Auto from Pack Code + Prodshade |
 | Std Qty | = Total Packing Qty (KG) |
-| Movement Type | P231 |
+| Movement Type | P101 |
 
 ---
 
@@ -8529,7 +8529,7 @@ PO Type = PMTO / PHPS / PMTS / PTEST triggers Packing PO behavior.
 | Actual Output | Editable by Production |
 | AP Approved Output | SUM(all INPUT AP Approved Qty) — auto-calculated |
 | Variance | Actual Output − AP Approved Output |
-| Movement Type | P231 |
+| Movement Type | P101 |
 
 **AP Approved Rules (same as Process PO):**
 
@@ -8546,7 +8546,7 @@ PO Type = PMTO / PHPS / PMTS / PTEST triggers Packing PO behavior.
 |---|---|---|
 | P261 | SFG (actual qty, from selected batch) | S003 → consumed |
 | P261 | Each PM line (actual qty) | pm_sloc → consumed |
-| P231 | FG (actual output qty) | → F003 |
+| P101 | FG (actual output qty) | → F003 |
 
 ---
 
@@ -9345,7 +9345,7 @@ Overview of all plan entries. Rows are sorted by Order Date and Scheduled Delive
 | Stock types (final Phase-1) | UNRESTRICTED, QUALITY_INSPECTION, BLOCKED, IN_TRANSIT, FOR_REPROCESS |
 | FG SKU structure | Product(4) + Shade(4) + Pack(3) = 11 chars. All FG types use same structure. |
 | FG master maintenance | Powder/Hypershot/IWC: SA upfront. Admix: deferred to SOD — decided at Process Order + Dispatch design. |
-| New movement types needed | P231/P232 (FG Receipt/Reversal), P267/P268 (Issue FOR_REPROCESS to Production/Reversal) |
+| New movement types needed | ~~P231/P232 (FG Receipt/Reversal)~~ **Corrected 2026-07-11: no new codes — FG Receipt/Reversal reuses existing P101/P102** (same as Process PO's SFG receipt), P267/P268 (Issue FOR_REPROCESS to Production/Reversal) still needed |
 
 ---
 
@@ -9371,7 +9371,7 @@ Overview of all plan entries. Rows are sorted by Order Date and Scheduled Delive
 - Material master: ✅ shade_code, pack_code, external_sku, production_mode all exist (Gate-12)
 - L2 Procurement (RM/PM): ✅ 100% ready — no changes needed for Liquid RM/PM procurement
 - FOR_REPROCESS movements P901–P906: ✅ exist (Gate-11)
-- **Missing:** P231/P232 (FG Receipt/Reversal from Production), P267/P268 (FOR_REPROCESS → Production Issue/Reversal) — to be added in Gate-27
+- **Missing:** ~~P231/P232 (FG Receipt/Reversal from Production)~~ **Corrected 2026-07-11: reuses existing P101/P102, no new codes needed**, P267/P268 (FOR_REPROCESS → Production Issue/Reversal) — still to be added in Gate-27
 
 **SAP Module mapping for PACE ERP (confirmed 2026-06-02):**
 MM + SD + PP + QM + WM + FI/CO + LE — adapted, not cloned. No PM, no PS, no full MRP in Phase-1.
@@ -13515,7 +13515,7 @@ The following topics need formal discovery and locking:
 
 ```
 Stock Layer  — always 100% physical actual. P261 consumes actual RM qty.
-               P231 receives actual FG/SFG qty. Never filtered or adjusted
+               P101 receives actual FG/SFG qty. Never filtered or adjusted
                based on AP approval status.
 
 Reco Layer   — entirely separate. Only AP-approved portion flows into Reco.

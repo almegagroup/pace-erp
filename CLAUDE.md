@@ -381,6 +381,11 @@ Scope: Stroke Master, Process PO, Packing PO, FG Declaration, Machine Assignment
 - Cross-PO RM/PM derivation (Process PO batch → multiple Packing POs) — resolved: ratio of qty drawn ÷ batch total
 - See feasibility doc Section 104.7 for full detail — full costing session still required
 
+**83.4 — Packing PO FG receipt reuses P101/P102, no new P231/P232 codes (LOCKED — 2026-07-11):**
+- Corrected across the whole feasibility doc (13 occurrences, several sections predating this session): Packing PO's FG receipt at Final was documented as movement type "P231" with a "P232" reversal — neither code exists in `movement_type_master` and was never going to be created. Reuses existing P101 (receipt)/P102 (reversal), same codes Process PO's SFG output and INT's output already use
+- Packing PO's FG receipt is one of the already-locked P101 QI-hold exceptions (posts straight to Unrestricted, no P321 needed) — this correction doesn't change that
+- Old "New movement types needed: P231/P232" notes from earlier discovery sessions (2026-06-01/02) struck through with a correction annotation rather than deleted, per doc-history convention
+
 **83.4 — Process PO FO field removed, MTEST lifecycle, SFG Result Recording (LOCKED — 2026-07-11):**
 - Process PO header does NOT carry any FO reference (not even informal) — corrects the earlier "FO number = informal reference at creation" text. FO link exists only on Packing PO
 - MTEST confirmed single-action like INT (no Standard/Final/Verify stages) — but unlike INT, MTEST DOES get a batch number (company-level, at that single save)
