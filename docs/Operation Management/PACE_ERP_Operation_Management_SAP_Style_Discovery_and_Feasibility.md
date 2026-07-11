@@ -8366,6 +8366,8 @@ Available = stock_snapshot(UNRESTRICTED, material, plant, storage_location)
 
 > Reservation is keyed by **material + plant + storage location** (not just material + plant) — it nets against the Unrestricted balance of the exact location being picked from.
 
+**"material" in this formula = Actual Material when one is substituted, never the Formulation Material (LOCKED — 2026-07-12).** Substitution exists precisely because the Formulation Material may not be available at the plant — checking that material's own (possibly-zero) stock instead of the substitute's real stock would either falsely block a save that should succeed, or worse, miss a genuine shortage on the material actually being consumed. This applies everywhere availability is evaluated against a line that has an `actual_material_id` set — PR09 create-time preview, PR10 edit-time preview, and any other stock-check surface for that line (Final's general checks are data-entry-only per the locked severity table, but this still governs anywhere a live availability number is shown or a hard block is evaluated). **Bug confirmed in current code:** `checkStockAvailability`/`computeAvailabilityRows` in `process_order.handlers.ts` never reads `actual_material_id` — it always keys off the line's Formulation `material_id`. Stock *posting* (P261) already correctly uses `actual_material_id` when present — only the availability-check path needs this fix.
+
 **Reservation sources (LOCKED — 2026-07-11) — all five, resolved:**
 
 | Source | Reserve starts | Reserve ends (released) |
