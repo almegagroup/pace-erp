@@ -2754,6 +2754,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       stockTypeCode: "UNRESTRICTED",
       direction: "IN",
       postedBy,
+      batchNumber,
     });
     ledgerEntries.push({ movement: "P321", direction: "IN", ...qiReleasePosting });
 
