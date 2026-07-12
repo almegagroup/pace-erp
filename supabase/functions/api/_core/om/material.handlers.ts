@@ -1218,17 +1218,19 @@ export async function createMaterialUomConversionHandler(
       .single();
 
     if (error) {
+      console.error("[material.createMaterialUomConversion] insert failed:", JSON.stringify(error));
       if (error.code === "23505") {
         return materialErrorResponse(req, ctx, "OM_UOM_CONVERSION_EXISTS", 409, "UOM conversion already exists");
       }
-      throw new Error("OM_UOM_CONVERSION_CREATE_FAILED");
+      throw new Error(error.message ? `OM_UOM_CONVERSION_CREATE_FAILED: ${error.message}` : "OM_UOM_CONVERSION_CREATE_FAILED");
     }
 
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
+    console.error("[material.createMaterialUomConversion] caught error:", err instanceof Error ? err.stack : String(err));
     const code = (err as Error).message || "OM_UOM_CONVERSION_CREATE_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("NOT_FOUND") ? 404 : code.includes("EXISTS") ? 409 : code.includes("INVALID") ? 400 : 500;
-    return materialErrorResponse(req, ctx, code, status, "Material UOM conversion create failed");
+    return materialErrorResponse(req, ctx, code, status, code);
   }
 }
 
@@ -1280,12 +1282,16 @@ export async function updateMaterialUomConversionHandler(
       .select("*")
       .single();
 
-    if (error || !data) throw new Error("OM_UOM_CONVERSION_UPDATE_FAILED");
+    if (error || !data) {
+      console.error("[material.updateMaterialUomConversion] update failed:", JSON.stringify(error));
+      throw new Error(error?.message ? `OM_UOM_CONVERSION_UPDATE_FAILED: ${error.message}` : "OM_UOM_CONVERSION_UPDATE_FAILED");
+    }
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
+    console.error("[material.updateMaterialUomConversion] caught error:", err instanceof Error ? err.stack : String(err));
     const code = (err as Error).message || "OM_UOM_CONVERSION_UPDATE_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
-    return materialErrorResponse(req, ctx, code, status, "Material UOM conversion update failed");
+    return materialErrorResponse(req, ctx, code, status, code);
   }
 }
 
