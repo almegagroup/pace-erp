@@ -10,7 +10,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen } from "../../../../navigation/screenStackEngine.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
@@ -99,7 +99,14 @@ function getStatusTone(status) {
 export default function OpeningStockDetailPage({ documentId: documentIdProp = "" }) {
   const navigate = useNavigate();
   const params = useParams();
-  const documentId = documentIdProp || params.id || "";
+  // NavigationStackBridge can replay the screen-stack entry's literal route
+  // ("/.../opening-stock/:id") when pushed without a `context.id` — the param
+  // ends up as the literal string ":id" instead of the real UUID. Fall back
+  // to the screen-stack context, same pattern PO/Material/Customer detail
+  // pages already use.
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const routeId = params.id && params.id !== ":id" ? params.id : "";
+  const documentId = documentIdProp || routeId || screenContext.id || "";
   const [entryMode, setEntryMode] = useState(ENTRY_MODES.SINGLE);
   const [singleForm, setSingleForm] = useState(createEmptySingleForm());
   const [bulkRows, setBulkRows] = useState([createBulkRow(1), createBulkRow(2), createBulkRow(3)]);

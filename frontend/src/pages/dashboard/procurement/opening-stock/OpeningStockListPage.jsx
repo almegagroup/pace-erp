@@ -9,7 +9,6 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -33,7 +32,6 @@ function formatDate(value) {
 }
 
 export default function OpeningStockListPage() {
-  const navigate = useNavigate();
   const [filters, setFilters] = useState({ company_id: "", status: "" });
   const [form, setForm] = useState({
     company_id: "",
@@ -109,8 +107,7 @@ export default function OpeningStockListPage() {
       setForm((current) => ({ ...current, notes: "" }));
       await Promise.all([documentQuery.refetch(), companiesQuery.refetch()]);
       if (created?.id) {
-        openScreen("PROC_OPENING_STOCK_DETAIL");
-        navigate(`/dashboard/procurement/opening-stock/${created.id}`);
+        openScreen("PROC_OPENING_STOCK_DETAIL", { context: { id: created.id } });
       }
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OPENING_STOCK_DOCUMENT_CREATE_FAILED");
@@ -254,8 +251,7 @@ export default function OpeningStockListPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          openScreen("PROC_OPENING_STOCK_DETAIL");
-                          navigate(`/dashboard/procurement/opening-stock/${row.id}`);
+                          openScreen("PROC_OPENING_STOCK_DETAIL", { context: { id: row.id } });
                         }}
                         className="border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700"
                       >
